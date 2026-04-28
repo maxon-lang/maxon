@@ -184,20 +184,24 @@ function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, Byte
 end 'readStdTypeTag'
 
 function writeMaxonType(project Project, buf ByteArray, t MaxonType)
-	let tag = match t 'toTag'
-		boolean gives 0
-		integer gives 1
-		float gives 2
-		named gives 3
-		string gives 4
-	end 'toTag'
-	writeDword(buf, value: tag)
-
-	if tag == 3 'writeNamed'
-		let name = t.nameOrEmpty(project)
-		writeString(buf, s: name)
-	end 'writeNamed'
+	// `unresolved` should never reach the cache: this serializer is only
+	// invoked for declaration-site types (struct fields, function signatures),
+	// and the parser fills those in with concrete primitives or named refs.
+	match t 'unresolvedGuard'
+		unresolved then panic("writeMaxonType: MaxonType.unresolved cannot be cached — declaration sites (struct fields, function signatures) reach this serializer with concrete types only")
+		boolean then writeDword(buf, value: 0)
+		integer then writeDword(buf, value: 1)
+		float then writeDword(buf, value: 2)
+		named then writeDwordAndName(project, buf: buf, t: t)
+		string then writeDword(buf, value: 4)
+	end 'unresolvedGuard'
 end 'writeMaxonType'
+
+function writeDwordAndName(project Project, buf ByteArray, t MaxonType)
+	writeDword(buf, value: 3)
+	let name = t.nameOrEmpty(project)
+	writeString(buf, s: name)
+end 'writeDwordAndName'
 
 function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let tag = readDword(buf, offset: offset)
@@ -317,7 +321,7 @@ function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnT
 	return (StdReturnType.value(inner), nextPos)
 end 'readStdReturnType'
 
-function writeConstantValue(buf ByteArray, cv ConstantValue)
+function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
 	let tag = match cv 'getTag'
 		stringValue gives 0
 		intValue gives 1
@@ -325,7 +329,10 @@ function writeConstantValue(buf ByteArray, cv ConstantValue)
 	writeDword(buf, value: tag)
 
 	match cv 'writeVal'
-		stringValue(value) then writeString(buf, s: value)
+		// Cache stores the resolved bytes, not the project-local
+		// StringId — the id space is per-Project and would be
+		// meaningless to a fresh project that loads the cache.
+		stringValue(stringId) then writeString(buf, s: project.strings.get(stringId))
 		intValue(value) then writeQword(buf, value: value)
 	end 'writeVal'
 end 'writeConstantValue'
@@ -493,7 +500,7 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	writeDword(buf, value: data.topLevelConstants.count())
 	for (name, cv) in data.topLevelConstants 'eachConst'
 		writeString(buf, s: name)
-		writeConstantValue(buf, cv: cv)
+		writeConstantValue(project, buf: buf, cv: cv)
 	end 'eachConst'
 
 	// Ensure parent directory (and any missing ancestors) exist
@@ -819,7 +826,8 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		if constTag == 0 'isString'
 			let (strVal, p15) = readString(buf, offset: pos)
 			pos = p15
-			try data.topLevelConstants.insert(name, value: ConstantValue.stringValue(strVal)) otherwise ignore
+			let stringId = project.strings.intern(strVal)
+			try data.topLevelConstants.insert(name, value: ConstantValue.stringValue(stringId)) otherwise ignore
 		end 'isString' else if constTag == 1 'isInt'
 			let intVal = readQword(buf, offset: pos)
 			pos = pos + 8

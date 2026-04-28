@@ -55,4 +55,13 @@ static class StringUtils {
   private static bool IsHexDigit(char c) =>
     c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F');
 
+  /// <summary>
+  /// Returns the first Unicode codepoint of a string, handling surrogate pairs.
+  /// Caller must guarantee the string is non-empty (the lexer's character-literal
+  /// production never produces an empty resolved value, so this is always safe at
+  /// match-pattern parse sites).
+  /// </summary>
+  public static int FirstCodepoint(string s) {
+    return char.ConvertToUtf32(s, 0);
+  }
 }

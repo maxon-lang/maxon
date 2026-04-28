@@ -71,6 +71,11 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		ret then return
 		printLiteral to panic then return
 		structAlloc to selfFieldStore then return
+		// Parser-emitted unresolved placeholders carry no callee names; they
+		// hold simple identifiers. DFE walks them as no-ops; TypeResolution
+		// will rewrite them before lowering.
+		unresolvedRead then return
+		unresolvedAssign then return
 		error then return
 	end 'op'
 end 'addCalleesFromOpIndex'

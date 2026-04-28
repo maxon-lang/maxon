@@ -616,14 +616,20 @@ otherwise_clause
                 'end' LABEL
 
 (* try block wraps multiple throwing calls under a shared handler. Inside the body,
-   bare calls to throwing functions do not require the `try` keyword. The handler
-   must contain a match on the error binding. *)
+   bare calls to throwing functions do not require the `try` keyword. The block-handler
+   form must contain a match on the error binding; the terminal forms either panic or
+   re-throw, and may bind `(e)` for use in the panic message or throw expression. *)
 try_block     = 'try' LABEL NEWLINE
                 body
                 'end' LABEL NEWLINE
-                'otherwise' '(' IDENTIFIER ')' LABEL NEWLINE
+                'otherwise' try_block_otherwise
+
+try_block_otherwise
+              = '(' IDENTIFIER ')' LABEL NEWLINE
                 body                                            (* must contain `match` on binding *)
                 'end' LABEL
+              | [ '(' IDENTIFIER ')' ] 'panic' '(' ( STRING | STRING_INTERP ) ')'   (* terminal panic *)
+              | [ '(' IDENTIFIER ')' ] 'throws' expression                          (* re-throw fixed error *)
 ```
 
 ---
@@ -767,6 +773,8 @@ match_expr    = 'match' expression LABEL NEWLINE
 
 match_expr_arm
               = match_patterns 'gives' expression
+              | match_patterns 'panic' '(' ( STRING | STRING_INTERP ) ')'   (* per-arm panic *)
+              | match_patterns 'throws' expression                          (* per-arm throw *)
               | 'default' 'gives' expression
               | 'default' 'throws' expression                     (* enum: throws error for unmatched cases *)
               | 'default' 'panic' '(' STRING ')'                  (* terminates with error message *)

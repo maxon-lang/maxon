@@ -52,6 +52,14 @@ export type Project
 	// stops re-allocating the same bytes for hot stdlib callees on every call.
 	export var calleeNames CalleeNameInterner
 
+	// String-literal interner. Every string literal the parser sees is
+	// interned at parse time and the IR carries the resulting StringId
+	// instead of raw bytes. Identical literals across files dedupe to a
+	// single id; cross-file string-constant references resolve by id at
+	// TypeResolution time. Lowering reads the bytes back via
+	// `strings.get(id)` when emitting the runtime payload.
+	export var strings StringInterner
+
 	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
 	// Populated by the TypeResolution pass as it drains unresolvedTypealiases.
 	// Read by lowering and the range-check pass; never written to directly by
@@ -133,6 +141,7 @@ export type Project
 			db: db,
 			typeNames: TypeNameInterner.create(),
 			calleeNames: CalleeNameInterner.create(),
+			strings: StringInterner.create(),
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
@@ -286,6 +295,50 @@ export type CalleeNameInterner
 		return existing
 	end 'intern'
 end 'CalleeNameInterner'
+
+// --- String literal interning ---
+// Every string literal the parser encounters is interned into a project-wide
+// table. The IR carries a `StringId` (a stable index into the table) instead
+// of raw String bytes — identical literals across files share a single id
+// and a single backing allocation. Top-level string constants
+// (`let MSG = "hello"`) record their content as a StringId so cross-file
+// references resolve through the interner, not the parser. Lowering recovers
+// the raw bytes via `project.strings.get(id)` when emitting the runtime
+// `globalAddr + length` tuple.
+
+export typealias StringId = int(0 to u64.max)
+
+export typealias StringIdMap = Map with(String, StringId)
+
+export type StringInterner
+	export var values StringArray
+	export var lookup StringIdMap
+
+	export static function create() returns StringInterner
+		return Self{values: StringArray.create(), lookup: StringIdMap.create()}
+	end 'create'
+
+	// Intern a string literal, returning its stable StringId. Identical
+	// content always returns the same id so equality checks reduce to id
+	// comparison and downstream consumers (printLiteral, panic, top-level
+	// constants) carry a single fixed-width id instead of variable-length
+	// String bytes.
+	export function intern(value String) returns StringId
+		let existing = try lookup.get(value) otherwise 'fresh'
+			let id = values.count()
+			values.push(value)
+			lookup.upsert(value, value: id)
+			return id
+		end 'fresh'
+		return existing
+	end 'intern'
+
+	// Resolve a StringId back to its raw bytes. Panics on an invalid id —
+	// the interner never hands out ids it can't resolve.
+	export function get(id StringId) returns String
+		return try values.get(id) otherwise panic("StringInterner: invalid id {id}")
+	end 'get'
+end 'StringInterner'
 
 export typealias VarSlotArray = Array with VarSlot
 
@@ -447,7 +500,9 @@ end 'UnresolvedTypealias'
 export typealias UnresolvedTypealiasMap = Map with(String, UnresolvedTypealias)
 
 export union ConstantValue
-	stringValue(value String)
+	// String-typed constants store an interned StringId (not raw bytes) so
+	// cross-file references resolve by identity through `project.strings`.
+	stringValue(stringId StringId)
 	intValue(value IntConstant)
 end 'ConstantValue'
 
@@ -517,6 +572,7 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		integer then return StdType.i64
 		float then return StdType.f64
 		named(id) then return resolveNamedIdToStdType(project, id: id)
+		unresolved then panic("resolveMaxonTypeToStd: MaxonType.unresolved survived past TypeResolution — pass should have replaced every unresolved with a concrete type before lowering")
 	end 'stringGuard'
 end 'resolveMaxonTypeToStd'
 

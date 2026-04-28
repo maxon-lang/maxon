@@ -1166,7 +1166,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		condBranch(condition, targetBlock) then arm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetBlock: targetBlock)
 		branch(targetBlock) then arm64HandleBranch(code, jumpFixups: jumpFixups, targetBlock: targetBlock)
 		branchLink(linkTarget) then arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: linkTarget)
-		printLiteral(data) then arm64EmitPrintLiteralInline(code, data: data, callFixups: callFixups)
+		printLiteral(stringId) then arm64EmitPrintLiteralInline(code, stringId: stringId, callFixups: callFixups)
 		printInt then arm64EmitPrintIntInline(code, callFixups: callFixups)
 		ret then arm64EmitRet(code)
 		syscall(resultSlot, number, argSlots) then arm64EmitSyscallOp(code, resultSlot: resultSlot, number: number, argSlots: argSlots)
@@ -1231,41 +1231,12 @@ end 'emitArm64PrologueOp'
 
 // --- Inline print operations (legacy path, uses callFixups) ---
 
-// printLiteral: B over data island, then ADR + BL mrt_write_stdout
-function arm64EmitPrintLiteralInline(code ByteArray, data String, callFixups Arm64CallFixupArray)
-	let dataBytes = data.toByteArray()
-	let dataLen = dataBytes.count()
-	if dataLen == 0 'empty'
-		return
-	end 'empty'
-
-	// B over data island (placeholder, patched after data)
-	let branchOverOffset = code.count()
-	arm64EmitBranch(code)
-
-	// Data island
-	let dataOffset = code.count()
-	code.append(dataBytes)
-
-	// Pad to 4-byte alignment
-	while code.count() mod 4 != 0 'align'
-		code.push(0)
-	end 'align'
-
-	// Patch branch to land here
-	let afterDataOffset = code.count()
-	arm64PatchBranch(code, instrOffset: branchOverOffset, targetOffset: afterDataOffset)
-
-	// ADR X0, data (PC-relative to data island start)
-	let adrOffset = code.count()
-	let adrRel = dataOffset - adrOffset
-	arm64EmitAdr(code, rd: 0, offset: adrRel)
-
-	// MOV X1, #dataLen
-	arm64EmitMovz(code, rd: 1, imm16: dataLen)
-
-	// BL mrt_write_stdout (via callFixup)
-	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: "mrt_write_stdout")
+// printLiteral: dead code today. The op never reaches the backend
+// because lowerMaxonToStd decomposes Maxon printLiteral into
+// globalAddr + constI64 + call mrt_write_stdout before the backend
+// pipeline runs. The arm is kept to keep the dialect match exhaustive.
+function arm64EmitPrintLiteralInline(code ByteArray, stringId StringId, callFixups Arm64CallFixupArray)
+	panic("ARM64 backend: arm64.printLiteral op should not reach the emitter (stringId={stringId}); lowerMaxonToStd was supposed to decompose this. code.count()={code.count()}, callFixups.count()={callFixups.count()}")
 end 'arm64EmitPrintLiteralInline'
 
 // printInt: value in X0, convert to string then print via callFixups

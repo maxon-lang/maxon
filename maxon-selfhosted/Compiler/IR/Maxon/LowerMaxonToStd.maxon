@@ -328,6 +328,7 @@ type MaxonToStdLowering
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
 			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
+			stringConst(result, stringId, _) then self.lowerStringConst(result, stringId: stringId, dstBlock: dstBlock)
 			varDecl(slotId, value, _, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
@@ -344,14 +345,21 @@ type MaxonToStdLowering
 			call(result, callee, callContext, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
 			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
 			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
-			printLiteral(data, _) then self.lowerPrintLiteral(data, dstBlock: dstBlock)
+			printLiteral(stringId, _) then self.lowerPrintLiteral(stringId, dstBlock: dstBlock)
 			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
-			panic(message, _) then self.lowerPanicToSys(message, dstBlock: dstBlock)
+			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
 			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
 			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
 			fieldStore(receiver, fieldName, value, _) then self.lowerFieldStore(receiver: receiver, fieldName: fieldName, value: value, dstBlock: dstBlock)
 			selfFieldLoad(result, fieldName, _) then self.lowerSelfFieldLoad(result, fieldName: fieldName, dstBlock: dstBlock)
 			selfFieldStore(fieldName, value, _) then self.lowerSelfFieldStore(fieldName: fieldName, value: value, dstBlock: dstBlock)
+			// `unresolvedRead`/`unresolvedAssign` are parser-emitted placeholders
+			// that the TypeResolution pass rewrites to globalLoad / globalStore /
+			// constant-substitute / unknownName diagnostic before lowering runs.
+			// Reaching here means the rewrite pass missed a site — pure compiler
+			// bug, not a user-facing condition.
+			unresolvedRead(_, name, _) then panic("lowerMaxonToStd: unresolvedRead '{name}' survived past TypeResolution")
+			unresolvedAssign(name, _, _) then panic("lowerMaxonToStd: unresolvedAssign '{name}' survived past TypeResolution")
 			// Error anchor: the parser already reported a diagnostic at this span,
 			// so we emit no Std op. `hasErrors(project)` will short-circuit the
 			// batch compile before codegen; the LSP consumes the op directly
@@ -370,6 +378,28 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerLiteral'
+
+	// Lower a maxon.stringConst op. The op carries an interned StringId
+	// for tracking purposes — TypeResolution's consumer-specialization
+	// walk pattern-matches on `stringConst` producers to rewrite
+	// downstream `printInt`/`cmp` consumers in place. The op itself
+	// produces no Std-level value: the bootstrap doesn't materialize a
+	// runtime String object, and any consumer that would need one is
+	// expected to have been specialized by TR. Define the result name as
+	// a placeholder ValueId so any downstream Std op that still
+	// references it (a varLoad chain whose terminal consumer was
+	// rewritten to printLiteral but whose intermediates remain) can be
+	// resolved without crashing the lowering walk.
+	function lowerStringConst(result ByteArray, stringId StringId, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		self.setValueType(resultId, t: MaxonType.string)
+		// stringId/dstBlock are referenced only via the trace string so
+		// the variable-must-be-used checker accepts this no-op. The op
+		// emits no Std code: TR's consumer-specialization walk has
+		// already rewritten every consumer (printInt/cmp/varDecl chain)
+		// into a form that uses the StringId directly.
+		logTrace(LogCategory.parser, message: () gives "lowerStringConst: stringId={stringId} dstBlock.id={dstBlock.id}")
+	end 'lowerStringConst'
 
 	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
@@ -896,6 +926,8 @@ type MaxonToStdLowering
 			methodCall then panic("lowerMaxonTerminatorToStd: methodCall as block terminator (parser bug)")
 			printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
 			structAlloc to selfFieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
+			unresolvedRead then panic("lowerMaxonTerminatorToStd: unresolvedRead as block terminator (parser bug)")
+			unresolvedAssign then panic("lowerMaxonTerminatorToStd: unresolvedAssign as block terminator (parser bug)")
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
@@ -930,19 +962,24 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern(structNameStr)))
 	end 'lowerStructAlloc'
 
-	// Lower printLiteral(data) to:
-	//   globalAddr(addrId, "__str_N")
+	// Lower printLiteral(stringId) to:
+	//   globalAddr(addrId, "__istr_N")
 	//   constI64(lenId, len)
 	//   call(_, "mrt_write_stdout", [addrId, lenId])
-	function lowerPrintLiteral(data String, dstBlock IrBlock)
+	// The StringId is resolved against `project.strings` to recover the
+	// raw bytes; the interner is the dedup key, so the rdata symbol name
+	// is derived directly from the id (`__istr_<stringId>`) via
+	// `addInternedString` rather than re-hashing the byte payload.
+	function lowerPrintLiteral(stringId StringId, dstBlock IrBlock)
+		let data = self.project.strings.get(stringId)
 		let dataBytes = data.toByteArray()
 		let dataLen = dataBytes.count()
 		if dataLen == 0 'empty'
 			return
 		end 'empty'
 
-		// Register data in global table
-		let name = addGlobalData(self.globalData, data: dataBytes)
+		// Register data in global table (id-keyed dedup, no byte hash)
+		let name = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
 
 		// globalAddr -> addrId
 		let addrId = allocValueId(self.funcIdRef)
@@ -980,10 +1017,11 @@ type MaxonToStdLowering
 	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
 	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
 	// stdlib and user-code compiles stay in disjoint link-time namespaces.
-	function lowerPanicToSys(message String, dstBlock IrBlock)
+	function lowerPanicToSys(stringId StringId, dstBlock IrBlock)
 		let nameStr = self.pipeline.nextPanicLabel()
 
 		// Build null-terminated message for global data
+		let message = self.project.strings.get(stringId)
 		var nullTermMsg = message.toByteArray()
 		nullTermMsg.push(0x0A)  // newline
 		nullTermMsg.push(0)  // null terminator

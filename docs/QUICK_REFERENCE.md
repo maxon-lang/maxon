@@ -364,6 +364,8 @@ end 'describe'
 
 `default throws` and `default panic("message")` are the only forms of `default` allowed on enum and union matches (E2046). For non-enum/non-union matches, `default` with arbitrary code is still valid.
 
+In a match *expression*, individual arms may also use `pattern panic("message")` or `pattern throws ErrorType.case` in place of `gives <expr>`. The arm terminates instead of producing a value, so the expression's result type is inferred only from the `gives` arms. A range pattern that covers exactly one value (`5 to 5`, `5 upto 6`, `red to red`, `'a' upto 'b'`) is rejected as E2027 — use the bare value instead.
+
 ## Types 
 
 ```maxon
@@ -657,7 +659,7 @@ end 'handler'
 
 // Multi-call try block — bare throwing calls inside the body route to the shared
 // handler. `e` is the thrown enum type (one error type in the body) or a synthesized
-// error union (two or more); the handler must contain a match on `e`.
+// error union (two or more); the block-handler form must contain a match on `e`.
 try 'work'
 		let a = readFile("a.txt")
 		let parsed = parseJson(a)
@@ -668,6 +670,12 @@ otherwise (e) 'h'
 				ParseError.syntax then print("bad json")
 		end 'k'
 end 'h'
+
+// Terminal forms — the body either succeeds or terminates the construct;
+// `(e)` is optional and may be referenced by the panic message or throw expression.
+try 'work' parseConfig() end 'work' otherwise panic("config bundled with binary")
+try 'work' parseConfig() end 'work' otherwise throws AppError.failed
+try 'work' parseConfig() end 'work' otherwise (e) throws AppError.wrap(e)
 
 // Propagate (only in throwing functions)
 let content = try readFile("x")   // propagates to caller

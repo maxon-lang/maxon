@@ -7363,74 +7363,125 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       isUnion = true;
     }
 
-    // 9. Expect `otherwise (binding) 'handler-label'`.
+    // 9. Expect `otherwise` clause. Three forms supported:
+    //      a) otherwise [(binding)] panic("...")            — terminal panic
+    //      b) otherwise [(binding)] throws ErrorType.case   — terminal throw
+    //      c) otherwise (binding) 'handler-label' ... end   — block handler with match
     if (!Check(TokenType.Otherwise)) {
       throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
-        "try block requires 'otherwise (binding) ...' clause",
+        "try block requires 'otherwise ...' clause",
         Current().Line, Current().Column);
     }
     Advance(); // consume 'otherwise'
-    if (!Check(TokenType.LeftParen)) {
-      throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
-        "try block 'otherwise' requires '(binding)'",
-        Current().Line, Current().Column);
+
+    Token? bindingToken = null;
+    if (Check(TokenType.LeftParen)) {
+      Advance(); // consume '('
+      bindingToken = Expect(TokenType.Identifier);
+      CheckReservedDeclName(bindingToken);
+      CheckNoSelfFieldShadow(bindingToken.Value, bindingToken.Line, bindingToken.Column);
+      Expect(TokenType.RightParen);
     }
-    Advance(); // consume '('
-    var bindingToken = Expect(TokenType.Identifier);
-    CheckReservedDeclName(bindingToken);
-    var bindingName = bindingToken.Value;
-    CheckNoSelfFieldShadow(bindingName, bindingToken.Line, bindingToken.Column);
-    Expect(TokenType.RightParen);
-    var handlerLabelToken = Expect(TokenType.CharacterLiteral);
-    var handlerLabel = handlerLabelToken.Value;
-    ExpectNewline();
 
     // 10. Add the shared error block and switch _currentBlock to it. All bare-throw failures
     //     in the body branched here.
     var errBlock = _currentFunction!.Body.AddBlock(sharedErrorBlockLabel);
     _currentBlock = errBlock;
 
-    // 11. Push handler scope; declare the binding. Snapshot variable keys before so we can
-    //     compute the handler-local set for scope-end cleanup (mirrors the legacy
-    //     EmitTryOtherwiseBlock pattern — without this, managed bindings declared in
-    //     the handler — including the typed-enum binding `e` for the single-enum case —
-    //     never get their decref emitted, leaking the heap object on assoc-value enums).
-    var handlerOuterScope = _variables.SnapshotKeys();
-    PushScope();
-    EmitTryBlockBindingDeclaration(bindingName, errorFlagVar, bindingType, isUnion, discriminantVar);
-
-    // 12. Parse the handler body. Track whether a `match` on the binding was encountered.
-    var savedMatchedBinding = _tryBlockMatchedBinding;
-    _tryBlockMatchedBinding = bindingName;
-    var savedMatchedFlag = _tryBlockBindingWasMatched;
-    _tryBlockBindingWasMatched = false;
-
-    ParseBodyUntilEndOrThrowEmpty(handlerLabel);
-
-    bool wasMatched = _tryBlockBindingWasMatched;
-    _tryBlockBindingWasMatched = savedMatchedFlag;
-    _tryBlockMatchedBinding = savedMatchedBinding;
-
-    if (!wasMatched) {
-      throw new CompileError(ErrorCode.SemanticTryBlockBindingNotMatched,
-        $"otherwise block must contain a match on the error binding '{bindingName}'",
-        handlerLabelToken.Line, handlerLabelToken.Column);
-    }
-
-    // 13. Emit scope cleanup for handler-local managed vars and branch the live tail to
-    //     the after-try continuation. The body may have branched into nested blocks
-    //     (e.g. match cmp/case blocks); the live tail is whichever block is current.
-    var handlerInnerScope = _variables.KeysSince(handlerOuterScope);
-    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      if (handlerInnerScope.Count > 0) {
-        _currentBlock.AddOp(new MaxonScopeEndOp(handlerInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    if (Check(TokenType.Panic) || Check(TokenType.Throws)) {
+      // Terminal panic/throws form. Optionally declare the binding so the panic message
+      // or throw expression can reference it; the standard unused-variable check
+      // (E3012) catches a declared-but-unused `e`.
+      bool pushedScope = false;
+      if (bindingToken != null) {
+        PushScope();
+        pushedScope = true;
+        EmitTryBlockBindingDeclaration(bindingToken.Value, errorFlagVar, bindingType, isUnion, discriminantVar);
+        _localVarLocations.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
       }
-      _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
-    }
-    PopScope();
-    if (isUnion) _unionBindingDiscriminantVar.Remove(bindingName);
 
-    ExpectEndLabel(handlerLabel);
+      if (Check(TokenType.Panic)) {
+        ParsePanic();
+      } else {
+        var throwsToken = Advance(); // consume 'throws'
+        var throwExpr = ParseExpression();
+        var errorValue = ResolveExprValue(throwExpr);
+        if (errorValue is not MaxonEnum enumVal) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            "throws requires an error enum value",
+            throwsToken.Line, throwsToken.Column);
+        }
+        if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwsToken)) {
+          _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+        }
+      }
+
+      if (pushedScope) {
+        // Both panic and throws are terminal — no live tail to branch from.
+        // Pop the scope so the variable tracker matches the IR's scope-end on the
+        // throw path (panic terminates without scope-end; that's the existing convention).
+        PopScope();
+        if (isUnion) _unionBindingDiscriminantVar.Remove(bindingToken!.Value);
+      }
+    } else if (Check(TokenType.CharacterLiteral)) {
+      // Block-handler form requires a binding (existing rule preserved).
+      if (bindingToken == null) {
+        throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
+          "try block 'otherwise' block-handler form requires '(binding)'",
+          Current().Line, Current().Column);
+      }
+      var bindingName = bindingToken.Value;
+      var handlerLabelToken = Advance(); // consume label
+      var handlerLabel = handlerLabelToken.Value;
+      ExpectNewline();
+
+      // 11. Push handler scope; declare the binding. Snapshot variable keys before so we can
+      //     compute the handler-local set for scope-end cleanup (mirrors the legacy
+      //     EmitTryOtherwiseBlock pattern — without this, managed bindings declared in
+      //     the handler — including the typed-enum binding `e` for the single-enum case —
+      //     never get their decref emitted, leaking the heap object on assoc-value enums).
+      var handlerOuterScope = _variables.SnapshotKeys();
+      PushScope();
+      EmitTryBlockBindingDeclaration(bindingName, errorFlagVar, bindingType, isUnion, discriminantVar);
+
+      // 12. Parse the handler body. Track whether a `match` on the binding was encountered.
+      var savedMatchedBinding = _tryBlockMatchedBinding;
+      _tryBlockMatchedBinding = bindingName;
+      var savedMatchedFlag = _tryBlockBindingWasMatched;
+      _tryBlockBindingWasMatched = false;
+
+      ParseBodyUntilEndOrThrowEmpty(handlerLabel);
+
+      bool wasMatched = _tryBlockBindingWasMatched;
+      _tryBlockBindingWasMatched = savedMatchedFlag;
+      _tryBlockMatchedBinding = savedMatchedBinding;
+
+      if (!wasMatched) {
+        throw new CompileError(ErrorCode.SemanticTryBlockBindingNotMatched,
+          $"otherwise block must contain a match on the error binding '{bindingName}'",
+          handlerLabelToken.Line, handlerLabelToken.Column);
+      }
+
+      // 13. Emit scope cleanup for handler-local managed vars and branch the live tail to
+      //     the after-try continuation. The body may have branched into nested blocks
+      //     (e.g. match cmp/case blocks); the live tail is whichever block is current.
+      var handlerInnerScope = _variables.KeysSince(handlerOuterScope);
+      if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+        if (handlerInnerScope.Count > 0) {
+          _currentBlock.AddOp(new MaxonScopeEndOp(handlerInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+        }
+        _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
+      }
+      PopScope();
+      if (isUnion) _unionBindingDiscriminantVar.Remove(bindingName);
+
+      ExpectEndLabel(handlerLabel);
+    } else {
+      throw new CompileError(ErrorCode.ParserOtherwiseBlockMissingBinding,
+        "try block 'otherwise' must be followed by 'panic(\"...\")', 'throws ErrorType.case', or '(binding) ' handler-label'",
+        Current().Line, Current().Column);
+    }
 
     // 14. Switch to the post-construct continuation.
     var afterBlock = _currentFunction!.Body.AddBlock(afterTryLabel);
@@ -11063,15 +11114,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             }
           }
 
+          // For enum range patterns, the comparison is always on ordinals — we always use
+          // IntRangeBound here so the single-value check catches both `red to red` and
+          // `red upto green` (adjacent ordinals).
+          var enumLower = new IntRangeBound(enumCase.Ordinal);
+          var enumUpper = new IntRangeBound(upperCase.Ordinal);
+          RejectSingleValueRange(enumLower, enumUpper, upperInclusive, rangeDisplayName, patternLine, patternCol);
           if (enumType.BackingType == IrType.F64) {
             patterns.Add(new RangePattern(
               new FloatRangeBound((double)enumCase.RawValue!),
               new FloatRangeBound((double)upperCase.RawValue!),
               upperInclusive, rangeDisplayName, patternLine, patternCol));
           } else {
-            patterns.Add(new RangePattern(
-              new IntRangeBound(enumCase.Ordinal),
-              new IntRangeBound(upperCase.Ordinal),
+            patterns.Add(new RangePattern(enumLower, enumUpper,
               upperInclusive, rangeDisplayName, patternLine, patternCol));
           }
         } else {
@@ -11226,6 +11281,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return patterns;
   }
 
+  /// <summary>
+  /// Rejects a match-range pattern that covers exactly one value — e.g. `5 to 5`,
+  /// `5 upto 6`, `red to red`, `red upto green` (when `green` is the case immediately
+  /// after `red`), `'a' to 'a'`, `'a' upto 'b'`. A single-value range is always a
+  /// mistake: the user either meant the bare value (`5`, `red`, `'a'`) or got the
+  /// bounds wrong. Empty ranges (`5 upto 5`, `5 upto 4`) are not flagged here.
+  /// Float ranges treat `upto` as never single-valued (no well-defined "next" float).
+  /// </summary>
+  private static void RejectSingleValueRange(RangeBound? lower, RangeBound? upper, bool upperInclusive,
+      string displayName, int patternLine, int patternCol) {
+    if (lower == null || upper == null) return; // open-ended bound; can't be single-value
+    bool isSingleValue = (lower, upper) switch {
+      (IntRangeBound l, IntRangeBound u) =>
+        upperInclusive ? l.Value == u.Value : l.Value + 1 == u.Value,
+      (FloatRangeBound l, FloatRangeBound u) =>
+        upperInclusive && l.Value == u.Value,
+      (CharRangeBound l, CharRangeBound u) => IsSingleValueCharRange(l, u, upperInclusive),
+      _ => throw new InvalidOperationException(
+        $"RejectSingleValueRange: mismatched RangeBound subtypes: lower={lower.GetType().Name}, upper={upper.GetType().Name}"),
+    };
+    if (isSingleValue) {
+      throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+        $"range pattern '{displayName}' covers a single value; use the bare value instead",
+        patternLine, patternCol);
+    }
+  }
+
+  /// <summary>
+  /// A char range covers a single value when:
+  ///   - inclusive: lower codepoint == upper codepoint, OR
+  ///   - exclusive: lower codepoint + 1 == upper codepoint.
+  /// CharRangeBound carries the resolved (escape-decoded) character as a string,
+  /// which is one Unicode codepoint per the lexer's character-literal contract.
+  /// </summary>
+  private static bool IsSingleValueCharRange(CharRangeBound lower, CharRangeBound upper, bool upperInclusive) {
+    int lowerCp = StringUtils.FirstCodepoint(lower.Value);
+    int upperCp = StringUtils.FirstCodepoint(upper.Value);
+    return upperInclusive ? lowerCp == upperCp : lowerCp + 1 == upperCp;
+  }
+
   private MatchPattern ParseIntPatternOrRange(long value, MaxonValueKind compareKind,
       HashSet<string> seenPatternKeys, int patternLine, int patternCol) {
     if (Check(TokenType.To) || Check(TokenType.Upto)) {
@@ -11246,6 +11341,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           $"duplicate pattern in match: '{displayName}'",
           patternLine, patternCol);
       }
+      RejectSingleValueRange(lower, upper, upperInclusive, displayName, patternLine, patternCol);
       return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
     }
     var display = value.ToString();
@@ -11278,6 +11374,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           $"duplicate pattern in match: '{displayName}'",
           patternLine, patternCol);
       }
+      RejectSingleValueRange(lower, upper, upperInclusive, displayName, patternLine, patternCol);
       return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
     }
     var display = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -11304,6 +11401,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           $"duplicate pattern in match: '{displayName}'",
           patternLine, patternCol);
       }
+      RejectSingleValueRange(lower, upper, upperInclusive, displayName, patternLine, patternCol);
       return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
     }
     var display = $"'{charValue}'";
@@ -11764,26 +11862,35 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Token defaultToken, string matchLabel, int caseIndex,
       List<IrBlock<MaxonOp>?> cmpBlocks, List<IrBlock<MaxonOp>> caseBlocks,
       List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
-    Advance(); // consume 'throws'
     var throwLabel = $"{matchLabel}.case{caseIndex}";
     cmpBlocks.Add(null);
     var throwBlock = _currentFunction!.Body.AddBlock(throwLabel);
     _currentBlock = throwBlock;
-    var throwExpr = ParseExpression();
-    var errorValue = ResolveExprValue(throwExpr);
-    if (errorValue is not MaxonEnum enumVal) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", defaultToken.Line, defaultToken.Column);
-    }
-    // Inside an active try block, route the error to the block's shared handler — do not
-    // emit ScopeEnd here (that would release managed vars the handler still needs live).
-    if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, defaultToken)) {
-      _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-      _currentBlock.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
-    }
+    EmitThrowsArmBody(defaultToken);
     caseBlocks.Add(throwBlock);
     caseIsDefault.Add(true);
     caseFallthrough?.Add(false);
     caseOuterScopes?.Add([]);
+  }
+
+  /// <summary>
+  /// Emits a `throws <error>` arm body into the current block. Caller positions
+  /// the cursor on the `throws` token and sets up the case body block.
+  /// Reused by `default throws` and per-arm `throws` in match expressions.
+  /// </summary>
+  private void EmitThrowsArmBody(Token armToken) {
+    Advance(); // consume 'throws'
+    var throwExpr = ParseExpression();
+    var errorValue = ResolveExprValue(throwExpr);
+    if (errorValue is not MaxonEnum enumVal) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", armToken.Line, armToken.Column);
+    }
+    // Inside an active try block, route the error to the block's shared handler — do not
+    // emit ScopeEnd here (that would release managed vars the handler still needs live).
+    if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, armToken)) {
+      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+    }
   }
 
   /// <summary>
@@ -11794,38 +11901,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Token defaultToken, string matchLabel, int caseIndex,
       List<IrBlock<MaxonOp>?> cmpBlocks, List<IrBlock<MaxonOp>> caseBlocks,
       List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
+    var panicLabel = $"{matchLabel}.case{caseIndex}";
+    cmpBlocks.Add(null);
+    var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
+    _currentBlock = panicBlock;
+    EmitPanicArmBody(defaultToken);
+    caseBlocks.Add(panicBlock);
+    caseIsDefault.Add(true);
+    caseFallthrough?.Add(false);
+    caseOuterScopes?.Add([]);
+  }
+
+  /// <summary>
+  /// Emits a `panic("message")` arm body into the current block. Caller positions
+  /// the cursor on the `panic` token and sets up the case body block.
+  /// Reused by `default panic` and per-arm `panic` in match expressions.
+  /// </summary>
+  private void EmitPanicArmBody(Token armToken) {
     Advance(); // consume 'panic'
     Expect(TokenType.LeftParen);
     var msgToken = Current();
 
     var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
-    var prefix = $"panic at {sourceFileName}:{defaultToken.Line}: ";
+    var prefix = $"panic at {sourceFileName}:{armToken.Line}: ";
 
-    var panicLabel = $"{matchLabel}.case{caseIndex}";
-    cmpBlocks.Add(null);
-    var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
-    _currentBlock = panicBlock;
-    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
 
     if (msgToken.Type == TokenType.StringInterp) {
       Advance(); // consume interpolated string
       Expect(TokenType.RightParen);
       var prefixedToken = new Token(TokenType.StringInterp, prefix + msgToken.Value + "\\n", msgToken.Line, msgToken.Column);
       var interpResult = EmitStringLiteralWithInterpolation(prefixedToken);
-      _currentBlock.AddOp(new MaxonPanicDynamicOp(interpResult));
+      _currentBlock!.AddOp(new MaxonPanicDynamicOp(interpResult));
     } else if (msgToken.Type == TokenType.StringLiteral) {
       Advance(); // consume string literal
       Expect(TokenType.RightParen);
       var message = prefix + msgToken.Value;
-      _currentBlock.AddOp(new MaxonPanicOp(message, _isStdlib));
+      _currentBlock!.AddOp(new MaxonPanicOp(message, _isStdlib));
     } else {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
     }
-
-    caseBlocks.Add(panicBlock);
-    caseIsDefault.Add(true);
-    caseFallthrough?.Add(false);
-    caseOuterScopes?.Add([]);
   }
 
   /// <summary>
@@ -12768,6 +12883,43 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
             caseLine, caseCol);
         }
         patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatternKeys, seenEnumCases, compareKind, structTypeName);
+      }
+
+      // Per-arm divergent forms: `pattern panic("...")` and `pattern throws X.case`.
+      // Mirrors the catch-all `default panic`/`default throws` already supported above:
+      // the arm terminates instead of producing a value, so the result variable is left
+      // untouched and the merge block sees a value only from `gives` arms.
+      bool armPanics = Check(TokenType.Panic);
+      bool armThrows = Check(TokenType.Throws);
+      if (armPanics || armThrows) {
+        var armToken = Current();
+        var armBodyLabel = $"{matchLabel}.case{caseIndex}";
+        var armCmpLabel = $"{matchLabel}.cmp{caseIndex}";
+        var armCmpBlock = _currentFunction!.Body.AddBlock(armCmpLabel);
+        var armBodyBlock = _currentFunction!.Body.AddBlock(armBodyLabel);
+        _currentBlock = armCmpBlock;
+        var armVarsBeforeCmp = _variables.SnapshotKeys();
+        var armCombinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind, structTypeName);
+        var armCmpTemps = _variables.KeysSince(armVarsBeforeCmp);
+        if (armCmpTemps.Count > 0) {
+          armCmpBlock.AddOp(new MaxonScopeEndOp(armCmpTemps) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          foreach (var t in armCmpTemps) _variables.Remove(t);
+        }
+        armCmpBlock.AddOp(new MaxonCondBrOp(armCombinedCmp, armBodyLabel, ""));
+        cmpBlocks.Add(armCmpBlock);
+
+        _currentBlock = armBodyBlock;
+        if (armPanics) {
+          EmitPanicArmBody(armToken);
+        } else {
+          EmitThrowsArmBody(armToken);
+        }
+
+        caseBlocks.Add(armBodyBlock);
+        caseIsDefault.Add(false);
+        caseIndex++;
+        SkipNewlines();
+        continue;
       }
 
       Expect(TokenType.Gives);

@@ -78,6 +78,12 @@ export function addGlobalData(table GlobalDataTable, data ByteArray) returns Str
 	// Deduplicate via the byte-payload → name map so identical strings
 	// share a single .rdata entry across the whole module. Hash lookup,
 	// not a per-entry scan.
+	//
+	// Callers that already hold a StringId (everything that flows through
+	// `project.strings`) should prefer `addInternedString`, which uses the
+	// id itself as the dedup key and skips the byte-payload hash entirely.
+	// This entry point remains for ad-hoc payloads that don't have an
+	// interner-backed identity.
 	let existingName = try table.valueDedup.get(data) otherwise 'fresh'
 		let id = table.nextStringId
 		table.nextStringId = table.nextStringId + 1
@@ -92,6 +98,24 @@ export function addGlobalData(table GlobalDataTable, data ByteArray) returns Str
 	end 'fresh'
 	return existingName
 end 'addGlobalData'
+
+// Register a string already interned in `project.strings` for emission
+// into the .rdata section. The interner's StringId is the dedup key —
+// identical content has one id, so checking `nameIndex` for the
+// canonical `__istr_<stringId>` symbol is enough; the byte-payload hash
+// in `valueDedup` is bypassed entirely. Idempotent: a second call with
+// the same id is an O(1) name-index hit and returns the existing symbol.
+export function addInternedString(table GlobalDataTable, stringId StringId, data ByteArray) returns String
+	let name = "__istr_{stringId}"
+	if table.nameIndex.contains(name) 'alreadyRegistered'
+		return name
+	end 'alreadyRegistered'
+	let newIdx = table.names.count() as MachineWord
+	table.names.push(name)
+	table.values.push(data)
+	table.nameIndex.upsert(name, value: newIdx)
+	return name
+end 'addInternedString'
 
 // Register global data with an explicit name (no auto-generated __str_N prefix).
 export function addNamedGlobalData(table GlobalDataTable, name String, data ByteArray)

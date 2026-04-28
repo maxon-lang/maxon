@@ -55,6 +55,17 @@ export union MaxonType
 	float
 	string
 	named(id TypeNameId)
+	// Placeholder for type-flow operands the parser cannot fill in without
+	// cross-declaration lookups. Produced by parser sites that previously
+	// peeked into `project.funcReturnTypes`, `project.structTypes`, etc.
+	// (call results, methodCall results, fieldLoad results, and the operand
+	// types those flow into — convert.fromType, cmp.leftType/rightType,
+	// call.argTypes, etc.). The TypeResolution pass walks every Maxon op
+	// after parsing finishes and replaces every `unresolved` with the
+	// concrete type derived from the now-fully-populated registries.
+	// Lowering must never see this arm — TypeResolution should have removed
+	// it. Lowering's match arms panic if they encounter it.
+	unresolved
 
 	// Render the source-level spelling of this type, or its display name
 	// for primitives. Used by diagnostic messages and IR printers — the
@@ -66,6 +77,7 @@ export union MaxonType
 			float gives "float"
 			string gives "String"
 			named(id) gives project.typeNames.get(id)
+			unresolved gives "<unresolved>"
 		end 'str'
 	end 'toString'
 
@@ -80,6 +92,7 @@ export union MaxonType
 			integer gives ""
 			float gives ""
 			string gives ""
+			unresolved gives ""
 		end 'name'
 	end 'nameOrEmpty'
 end 'MaxonType'
@@ -199,6 +212,13 @@ end 'MaxonErrorKind'
 export union MaxonOp
 	// Literals
 	literal(result ByteArray, value ParsedInt, valueType MaxonType, range SourceRange)
+	// String literal materialization. Carries an interned StringId into
+	// `project.strings`. Produced by TypeResolution when an
+	// `unresolvedRead` resolves to a string-typed top-level constant.
+	// Consumers downstream (printInt → printLiteral rewrite, cmp folding,
+	// varDecl with string-typed initializer) read the StringId back from
+	// the producer-type map. Result has type MaxonType.string.
+	stringConst(result ByteArray, stringId StringId, range SourceRange)
 	// Variables
 	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange)
 	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange)
@@ -258,15 +278,21 @@ export union MaxonOp
 	// parser-inferred per-arg metadata as `call` (see above).
 	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
 	ret(retVal ByteArray, range SourceRange)
-	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd)
-	printLiteral(data String, range SourceRange)
+	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd).
+	// `printLiteral` carries a StringId into `project.strings`; lowering
+	// recovers the bytes via `project.strings.get(stringId)` when emitting
+	// the runtime `globalAddr + length + mrt_write_stdout` tuple. The
+	// interner guarantees identical literals dedupe to a single id, so
+	// repeated `print("hello")` calls share one rdata entry without a
+	// separate dedup step at lowering.
+	printLiteral(stringId StringId, range SourceRange)
 	printInt(value ByteArray, range SourceRange)
 	// Range check panic (emitted by parser, lowered to std.system.globalAddr +
 	// std.call in lowerMaxonToStd). The panic-message label (`__panic_msg_N`)
 	// used by the Std dialect is assigned at lowering time from a lowering-
 	// pass-local counter, not from an SSA ValueId — the Maxon op itself just
-	// carries the message text.
-	panic(message String, range SourceRange)
+	// carries the interned id of the message text via `project.strings`.
+	panic(stringId StringId, range SourceRange)
 	// Struct operations. All carry source-level *names*, not pre-computed
 	// offsets/sizes — lowering walks `project.structTypes` to resolve.
 	//   - structAlloc: `structName` is the source-level type name. Lowering
@@ -285,6 +311,26 @@ export union MaxonOp
 	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, range SourceRange)
 	selfFieldLoad(result ByteArray, fieldName ByteArray, range SourceRange)
 	selfFieldStore(fieldName ByteArray, value ByteArray, range SourceRange)
+	// Parser-emitted placeholder for a bare or qualified name read whose
+	// kind the parser can't decide without cross-file knowledge:
+	//   - bare `name`   → may be a global var read or a top-level constant
+	//   - `Type.field`  → may be a global var read or a top-level constant
+	// `name` is the source-level identifier (with the dot present for the
+	// qualified form). TypeResolution rewrites this op to `globalLoad`,
+	// substitutes a literal value when it resolves to a top-level constant,
+	// or emits a `semanticUnknownName` diagnostic. Lowering must never see
+	// this op.
+	unresolvedRead(result ByteArray, name String, range SourceRange)
+	// Parser-emitted placeholder for an LHS write whose kind the parser
+	// can't decide without cross-file knowledge:
+	//   - bare `name = expr`        → may be a global var write
+	//   - `Type.field = expr`       → may be a global var write
+	// `name` is the source-level identifier (with the dot present for the
+	// qualified form). TypeResolution rewrites this op to `globalStore`,
+	// or emits a `semanticUnknownName` diagnostic. Top-level constants are
+	// not assignable, so a write that resolves to one becomes a diagnostic.
+	// Lowering must never see this op.
+	unresolvedAssign(name String, value ByteArray, range SourceRange)
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -306,6 +352,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 	let rb = "\}"
 	return match op 'print'
 		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {valueType.toString(project)}{rb}"
+		stringConst(result, stringId, _) gives "%{String.from(result)} = maxon.string_const \"{project.strings.get(stringId)}\" #{stringId}"
 		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {slotType.toString(project)}"
 		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {slotType.toString(project)}"
 		varStore(slotId, value, _) gives "maxon.var_store slot_{slotId}, %{String.from(value)}"
@@ -322,14 +369,16 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		call(result, callee, callContext, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		methodCall(result, receiver, methodName, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
-		printLiteral(data, _) gives "maxon.print_literal \"{data}\""
+		printLiteral(stringId, _) gives "maxon.print_literal \"{project.strings.get(stringId)}\" #{stringId}"
 		printInt(value, _) gives "maxon.print_int %{String.from(value)}"
-		panic(message, _) gives "maxon.panic \"{message}\""
+		panic(stringId, _) gives "maxon.panic \"{project.strings.get(stringId)}\" #{stringId}"
 		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
 		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
 		fieldStore(receiver, fieldName, value, _) gives "maxon.field_store %{String.from(receiver)}.{String.from(fieldName)}, %{String.from(value)}"
 		selfFieldLoad(result, fieldName, _) gives "%{String.from(result)} = maxon.self_field_load .{String.from(fieldName)}"
 		selfFieldStore(fieldName, value, _) gives "maxon.self_field_store .{String.from(fieldName)}, %{String.from(value)}"
+		unresolvedRead(result, name, _) gives "%{String.from(result)} = maxon.unresolved_read @{name}"
+		unresolvedAssign(name, value, _) gives "maxon.unresolved_assign @{name}, %{String.from(value)}"
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 	end 'print'
 end 'maxonOpToString'

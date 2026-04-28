@@ -157,13 +157,14 @@ end 'reportAliasNameUnresolved'
 // --- Cast / compare validation (unchanged from prior behavior) ---
 
 export function convertCastCategory(project Project, t MaxonType) returns CastCategory
-	return match t 'map'
-		boolean gives CastCategory.bool
-		integer gives CastCategory.int
-		float gives CastCategory.float
-		string gives CastCategory.string
-		named(id) gives namedIdCastCategory(project, id: id)
-	end 'map'
+	match t 'unresolvedGuard'
+		unresolved then panic("convertCastCategory: MaxonType.unresolved should have been resolved before reaching cast/compare validation")
+		boolean then return CastCategory.bool
+		integer then return CastCategory.int
+		float then return CastCategory.float
+		string then return CastCategory.string
+		named(id) then return namedIdCastCategory(project, id: id)
+	end 'unresolvedGuard'
 end 'convertCastCategory'
 
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
@@ -182,6 +183,7 @@ function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 		float then return true
 		boolean then return true
 		string then return true
+		unresolved then return false
 	end 'check'
 end 'maxonTypeIsKnown'
 
@@ -306,16 +308,905 @@ function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, l
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: 0, column: 0, filePath: filePath)
 end 'validateCompareOp'
 
+// --- Unresolved-name rewrites ---
+//
+// The parser emits `unresolvedRead` and `unresolvedAssign` ops when it sees a
+// bare or qualified identifier whose kind it cannot decide without
+// cross-declaration knowledge. This pass walks every such op and replaces it
+// with the concrete equivalent — `globalLoad`/`globalStore` for top-level vars,
+// `literal` substitution for top-level integer constants, or a
+// `semanticUnknownName` diagnostic when the name resolves to nothing the
+// project knows about. After this rewrite, lowering only ever sees concrete
+// op shapes; the unresolved* arms in LowerMaxonToStd are pure safety panics.
+
+function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
+	if let info = try project.globalVars.get(name) 'isGlobalVar'
+		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		return
+	end 'isGlobalVar'
+	if let constVal = try project.topLevelConstants.get(name) 'isConst'
+		match constVal 'inline'
+			intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range)
+			// String constants resolve to a `stringConst` op carrying the
+			// interned StringId. A follow-up walk pattern-matches on
+			// `stringConst` producers to specialize printInt/cmp consumers
+			// (printInt → printLiteral, cmp(stringConst, stringConst) →
+			// literal fold). Lowering panics if a stringConst op survives
+			// to its layer.
+			stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
+		end 'inline'
+		return
+	end 'isConst'
+	reportUnknownName(project, name: name, filePath: filePath)
+end 'rewriteUnresolvedRead'
+
+function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, range SourceRange)
+	try module.ops.set(opIdx, value: MaxonOp.literal(result, value: value, valueType: MaxonType.integer, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+end 'rewriteToLiteral'
+
+function rewriteToStringConst(module MaxonModule, opIdx OpIndex, result ByteArray, stringId StringId, range SourceRange)
+	try module.ops.set(opIdx, value: MaxonOp.stringConst(result, stringId: stringId, range: range)) otherwise panic("rewriteToStringConst: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+end 'rewriteToStringConst'
+
+function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
+	if let info = try project.globalVars.get(name) 'isGlobalVar'
+		try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+		return
+	end 'isGlobalVar'
+	if project.topLevelConstants.contains(name) 'isConst'
+		// Top-level constants are not assignable.
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Cannot assign to top-level constant '{name}'", line: 0, column: 0, filePath: filePath)
+		return
+	end 'isConst'
+	reportUnknownName(project, name: name, filePath: filePath)
+end 'rewriteUnresolvedAssign'
+
+function reportUnknownName(project Project, name String, filePath FilePath)
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined name '{name}'", line: 0, column: 0, filePath: filePath)
+end 'reportUnknownName'
+
+// --- Producer-type map for filling in MaxonType.unresolved operands ---
+//
+// Many parser-emitted ops carry MaxonType operands that are populated from
+// the producing op's result type (varDecl.slotType, convert.fromType,
+// cmp.leftType/rightType, call.argTypes, etc.). After Phase 2 of the
+// "no parser lookups" migration, the parser leaves those fields as
+// MaxonType.unresolved when the producing op's result type itself depended
+// on a cross-declaration lookup (call return type, methodCall return type,
+// fieldLoad type, etc.). This pass builds a name → MaxonType map by walking
+// every op once, then walks again replacing every MaxonType.unresolved
+// operand with the concrete type sourced from the map.
+
+export typealias ProducerTypeMap = Map with(ByteArray, MaxonType)
+export typealias SlotTypeMap = Map with(VarSlot, MaxonType)
+export typealias SlotTypeMapArray = Array with SlotTypeMap
+
+// Per-function map from a value-name (the result of a `stringConst` op)
+// to the StringId it carries. Used by the post-rewrite walk that
+// specializes `printInt(stringValueResult)` to `printLiteral(stringId)`
+// and folds `cmp` between two stringConsts to a literal. Slot-tracked
+// flow (varDecl(slot, stringConstResult); varLoad → printInt(varLoadResult))
+// is captured by also threading slot-id → StringId through the same map
+// indirected via slotTypes.
+export typealias StringIdNameMap = Map with(ByteArray, StringId)
+export typealias SlotStringIdMap = Map with(VarSlot, StringId)
+
+function recordResultType(producerTypes ProducerTypeMap, name ByteArray, t MaxonType)
+	if name.isEmpty() 'noName'
+		return
+	end 'noName'
+	producerTypes.upsert(name, value: t)
+end 'recordResultType'
+
+function lookupProducerType(producerTypes ProducerTypeMap, name ByteArray) returns MaxonType
+	return try producerTypes.get(name) otherwise MaxonType.unresolved
+end 'lookupProducerType'
+
+// Record a varDecl: store the slot's effective type (concrete if known,
+// otherwise the producer's recorded type from the value name) into the
+// slot-type map. Subsequent varLoads on the same slot read from this map.
+function recordVarDecl(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray, slotType MaxonType)
+	if not isUnresolvedType(slotType) 'haveType'
+		slotTypes.upsert(slotId, value: slotType)
+		return
+	end 'haveType'
+	let fromValue = lookupProducerType(producerTypes, name: value)
+	if not isUnresolvedType(fromValue) 'fromValue'
+		slotTypes.upsert(slotId, value: fromValue)
+	end 'fromValue'
+end 'recordVarDecl'
+
+// Record a varLoad: read the slot's recorded type. If the parser-stamped
+// slotType on the varLoad is concrete, use that; otherwise consult the
+// slot-type map.
+function recordVarLoad(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, result ByteArray, slotId VarSlot, slotType MaxonType)
+	if not isUnresolvedType(slotType) 'haveType'
+		recordResultType(producerTypes, name: result, t: slotType)
+		return
+	end 'haveType'
+	let fromSlot = try slotTypes.get(slotId) otherwise MaxonType.unresolved
+	recordResultType(producerTypes, name: result, t: fromSlot)
+end 'recordVarLoad'
+
+// Resolve a methodCall's result type by combining the receiver's resolved
+// type with the method name. Returns MaxonType.unresolved when the receiver
+// type isn't a known struct or the method isn't registered.
+function methodCallResultType(project Project, receiverType MaxonType, methodName ByteArray) returns MaxonType
+	let structName = maxonTypeStructName(project, t: receiverType)
+	if structName.isEmpty() 'noStruct'
+		return MaxonType.unresolved
+	end 'noStruct'
+	let qualifiedCallee = "{structName}.{String.from(methodName)}"
+	let returnType = try project.funcReturnTypes.get(qualifiedCallee) otherwise return MaxonType.unresolved
+	return match returnType 'unwrap'
+		void gives MaxonType.unresolved
+		value(inner) gives inner
+	end 'unwrap'
+end 'methodCallResultType'
+
+// Resolve a call's result type by qualifying the bare callee name and
+// looking it up in funcReturnTypes. Returns MaxonType.unresolved when the
+// callee isn't registered.
+function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String) returns MaxonType
+	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace)
+	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
+	return match returnType 'unwrap'
+		void gives MaxonType.unresolved
+		value(inner) gives inner
+	end 'unwrap'
+end 'callResultType'
+
+// Resolve a fieldLoad's result type by walking the receiver's struct fields.
+function fieldLoadResultType(project Project, receiverType MaxonType, fieldName ByteArray) returns MaxonType
+	let structName = maxonTypeStructName(project, t: receiverType)
+	if structName.isEmpty() 'noStruct'
+		return MaxonType.unresolved
+	end 'noStruct'
+	let structType = try project.structTypes.get(structName) otherwise return MaxonType.unresolved
+	let fieldIdx = try structType.fieldByName.get(String.from(fieldName)) otherwise return MaxonType.unresolved
+	let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.unresolved
+	return field.fieldType
+end 'fieldLoadResultType'
+
+// First-pass: walk ops per-function and record the result type of every
+// value-producing op. Names of types that depend on receiver types
+// (fieldLoad, methodCall) are resolved against the producer-type map being
+// built — this works because Maxon IR is in execution order, so producers
+// always precede consumers. Maps are per-function because parser-emitted
+// synthetic names ($t0, $t1, ...) reset between functions and collide if
+// pooled. slotTypes carries varDecl→slot-type so later varLoads can
+// recover the concrete slot type even when the parser emitted them with
+// `unresolved`.
+export typealias ProducerTypeMapArray = Array with ProducerTypeMap
+
+function buildProducerTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("buildProducerTypes: funcIdx < count but get failed")
+		var perFuncProducerTypes = ProducerTypeMap.create()
+		var perFuncSlotTypes = SlotTypeMap.create()
+		recordFuncOpResults(project, module: module, func: func, producerTypes: perFuncProducerTypes, slotTypes: perFuncSlotTypes)
+		producerTypesPerFunc.push(perFuncProducerTypes)
+		slotTypesPerFunc.push(perFuncSlotTypes)
+	end 'eachFunc'
+end 'buildProducerTypes'
+
+function recordFuncOpResults(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("recordFuncOpResults: opIdx OOB")
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, op: op)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termIdx = block.terminatorIndex()
+			let termOp = try module.ops.get(termIdx) otherwise panic("recordFuncOpResults: terminator OOB")
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, op: termOp)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'recordFuncOpResults'
+
+function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, op MaxonOp)
+	match op 'rec'
+		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
+		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.string)
+		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
+		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
+		varStore then return
+		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
+		globalStore then return
+		binop(result, _, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
+		unop(result, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
+		sqrt(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.float)
+		convert(result, _, _, toType, _, _) then recordResultType(producerTypes, name: result, t: toType)
+		cmp(result, _, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
+		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
+		condBr then return
+		br then return
+		call(result, callee, callContext, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace))
+		methodCall(result, receiver, methodName, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName))
+		ret then return
+		printLiteral then return
+		printInt then return
+		panic then return
+		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
+		fieldLoad(result, receiver, fieldName, _) then recordResultType(producerTypes, name: result, t: fieldLoadResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), fieldName: fieldName))
+		fieldStore then return
+		selfFieldLoad then return
+		selfFieldStore then return
+		unresolvedRead then return
+		unresolvedAssign then return
+		error then return
+	end 'rec'
+end 'recordOpResult'
+
+// Replace a MaxonType.unresolved with its concrete type from the producer
+// map. If the producer also has unresolved as its recorded type (rare —
+// happens when a fieldLoad's receiver type is itself unresolved), the
+// unresolved propagates and a downstream consumer (lowering or validation)
+// catches it.
+function fillType(producerTypes ProducerTypeMap, t MaxonType, source ByteArray) returns MaxonType
+	if not isUnresolvedType(t) 'concrete'
+		return t
+	end 'concrete'
+	return lookupProducerType(producerTypes, name: source)
+end 'fillType'
+
+// Second-pass: walk ops with the producer-type map and replace any
+// MaxonType.unresolved operand with the concrete type sourced from the
+// producer map. Op variants that don't carry MaxonType operands are
+// skipped.
+function fillUnresolvedTypes(module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("fillUnresolvedTypes: funcIdx < count but get failed")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: producerTypesPerFunc.get({funcIdx}) failed")
+		let slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: slotTypesPerFunc.get({funcIdx}) failed")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("fillUnresolvedTypes: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("fillUnresolvedTypes: opIdx OOB")
+				fillUnresolvedTypesForOp(module, opIdx: opIdx, op: op, producerTypes: producerTypes, slotTypes: slotTypes)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termIdx = block.terminatorIndex()
+				let termOp = try module.ops.get(termIdx) otherwise panic("fillUnresolvedTypes: terminator OOB")
+				fillUnresolvedTypesForOp(module, opIdx: termIdx, op: termOp, producerTypes: producerTypes, slotTypes: slotTypes)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'fillUnresolvedTypes'
+
+function fillUnresolvedTypesForOp(module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+	match op 'fill'
+		varDecl(slotId, value, slotType, range) then fillVarDecl(module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
+		varLoad(result, slotId, slotType, range) then fillVarLoad(module, opIdx: opIdx, result: result, slotId: slotId, slotType: slotType, range: range, slotTypes: slotTypes)
+		globalStore(name, value, slotType, range) then fillGlobalStore(module, opIdx: opIdx, name: name, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
+		convert(result, operand, fromType, toType, implicit, range) then fillConvert(module, opIdx: opIdx, result: result, operand: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, producerTypes: producerTypes)
+		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
+		binop(result, left, right, opKind, operandType, range) then fillBinop(module, opIdx: opIdx, result: result, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
+		unop(result, operand, opKind, operandType, range) then fillUnop(module, opIdx: opIdx, result: result, operand: operand, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
+		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
+		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) then fillMethodCall(module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
+		literal then return
+		stringConst then return
+		varStore then return
+		globalLoad then return
+		sqrt then return
+		refEq then return
+		condBr then return
+		br then return
+		ret then return
+		printLiteral then return
+		printInt then return
+		panic then return
+		structAlloc then return
+		fieldLoad then return
+		fieldStore then return
+		selfFieldLoad then return
+		selfFieldStore then return
+		unresolvedRead then return
+		unresolvedAssign then return
+		error then return
+	end 'fill'
+end 'fillUnresolvedTypesForOp'
+
+function fillVarDecl(module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	let filled = fillType(producerTypes, t: slotType, source: value)
+	if isUnresolvedType(filled) == isUnresolvedType(slotType) and not isUnresolvedType(slotType) 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+end 'fillVarDecl'
+
+function fillVarLoad(module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, slotTypes SlotTypeMap)
+	if not isUnresolvedType(slotType) 'noChange'
+		return
+	end 'noChange'
+	// Slot type was recorded by an earlier varDecl into the slot-type map.
+	// If still unresolved here, the slot's initializer also failed to resolve
+	// — leave it; downstream validation surfaces the unresolved chain.
+	let filled = try slotTypes.get(slotId) otherwise MaxonType.unresolved
+	if isUnresolvedType(filled) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+end 'fillVarLoad'
+
+function fillGlobalStore(module MaxonModule, opIdx OpIndex, name String, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	if not isUnresolvedType(slotType) 'noChange'
+		return
+	end 'noChange'
+	let filled = lookupProducerType(producerTypes, name: value)
+	if isUnresolvedType(filled) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: filled, range: range)) otherwise panic("fillGlobalStore: ops.set OOB at idx={opIdx}")
+end 'fillGlobalStore'
+
+function fillConvert(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange, producerTypes ProducerTypeMap)
+	if not isUnresolvedType(fromType) 'noChange'
+		return
+	end 'noChange'
+	let filledFrom = lookupProducerType(producerTypes, name: operand)
+	if isUnresolvedType(filledFrom) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	try module.ops.set(opIdx, value: MaxonOp.convert(result, operand: operand, fromType: filledFrom, toType: toType, implicit: implicit, range: range)) otherwise panic("fillConvert: ops.set OOB at idx={opIdx}")
+end 'fillConvert'
+
+function fillCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	let filledLeft = fillType(producerTypes, t: leftType, source: left)
+	let filledRight = fillType(producerTypes, t: rightType, source: right)
+	let filledOperand = pickOperandType(filledLeft, right: filledRight, current: operandType)
+	let unchanged = typesEqual(filledLeft, b: leftType) and typesEqual(filledRight, b: rightType) and typesEqual(filledOperand, b: operandType)
+	if unchanged 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: filledLeft, rightType: filledRight, operandType: filledOperand, range: range)) otherwise panic("fillCmp: ops.set OOB at idx={opIdx}")
+end 'fillCmp'
+
+function pickOperandType(left MaxonType, right MaxonType, current MaxonType) returns MaxonType
+	if not isUnresolvedType(current) 'keepCurrent'
+		return current
+	end 'keepCurrent'
+	if not isUnresolvedType(left) 'useLeft'
+		return left
+	end 'useLeft'
+	return right
+end 'pickOperandType'
+
+function fillBinop(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	if not isUnresolvedType(operandType) 'noChange'
+		return
+	end 'noChange'
+	let filledLeft = lookupProducerType(producerTypes, name: left)
+	if not isUnresolvedType(filledLeft) 'useLeft'
+		try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filledLeft, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
+		return
+	end 'useLeft'
+	let filledRight = lookupProducerType(producerTypes, name: right)
+	if not isUnresolvedType(filledRight) 'useRight'
+		try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filledRight, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
+	end 'useRight'
+end 'fillBinop'
+
+function fillUnop(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	let filled = fillType(producerTypes, t: operandType, source: operand)
+	if isUnresolvedType(filled) == isUnresolvedType(operandType) and not isUnresolvedType(operandType) 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.unop(result, operand: operand, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillUnop: ops.set OOB at idx={opIdx}")
+end 'fillUnop'
+
+// Walk a call/methodCall arg-types vector and fill any unresolved entries
+// from the producer-type map. Returns the (possibly new) arg-types vector
+// and whether any entry was actually filled in. Shared by fillCall and
+// fillMethodCall — the only difference between them was which op variant
+// to emit when something changes.
+function fillArgTypes(args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, callerName String) returns (MaxonTypeArray, bool)
+	var changed = false
+	var newArgTypes = MaxonTypeArray.create()
+	for i in 0 upto argTypes.count() 'each'
+		let argType = try argTypes.get(i) otherwise panic("{callerName}: argTypes.get({i}) failed (count={argTypes.count()})")
+		if isUnresolvedType(argType) 'fill'
+			let arg = try args.get(i) otherwise panic("{callerName}: args.get({i}) failed")
+			let filled = lookupProducerType(producerTypes, name: arg)
+			newArgTypes.push(filled)
+			if not isUnresolvedType(filled) 'wasFilled'
+				changed = true
+			end 'wasFilled'
+		end 'fill' else 'keep'
+			newArgTypes.push(argType)
+		end 'keep'
+	end 'each'
+	return (newArgTypes, changed)
+end 'fillArgTypes'
+
+function fillCall(module MaxonModule, opIdx OpIndex, result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
+	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillCall")
+	if not changed 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillCall: ops.set OOB at idx={opIdx}")
+end 'fillCall'
+
+function fillMethodCall(module MaxonModule, opIdx OpIndex, result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange, producerTypes ProducerTypeMap)
+	let (newArgTypes, changed) = fillArgTypes(args, argTypes: argTypes, producerTypes: producerTypes, callerName: "fillMethodCall")
+	if not changed 'noChange'
+		return
+	end 'noChange'
+	try module.ops.set(opIdx, value: MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillMethodCall: ops.set OOB at idx={opIdx}")
+end 'fillMethodCall'
+
+function isUnresolvedType(t MaxonType) returns bool
+	return match t 'check'
+		unresolved gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		named gives false
+	end 'check'
+end 'isUnresolvedType'
+
+// Structural equality on MaxonType. Used by fillCmp to detect whether a
+// fill-in actually changed the op (so we only rewrite when the op
+// substantively changed).
+function typesEqual(a MaxonType, b MaxonType) returns bool
+	return match a 'matchA'
+		boolean gives matchesBoolean(b)
+		integer gives matchesInteger(b)
+		float gives matchesFloat(b)
+		string gives matchesString(b)
+		named(idA) gives matchesNamed(b, idA: idA)
+		unresolved gives matchesUnresolved(b)
+	end 'matchA'
+end 'typesEqual'
+
+function matchesBoolean(b MaxonType) returns bool
+	return match b 'm'
+		boolean gives true
+		integer gives false
+		float gives false
+		string gives false
+		named gives false
+		unresolved gives false
+	end 'm'
+end 'matchesBoolean'
+
+function matchesInteger(b MaxonType) returns bool
+	return match b 'm'
+		integer gives true
+		boolean gives false
+		float gives false
+		string gives false
+		named gives false
+		unresolved gives false
+	end 'm'
+end 'matchesInteger'
+
+function matchesFloat(b MaxonType) returns bool
+	return match b 'm'
+		float gives true
+		boolean gives false
+		integer gives false
+		string gives false
+		named gives false
+		unresolved gives false
+	end 'm'
+end 'matchesFloat'
+
+function matchesString(b MaxonType) returns bool
+	return match b 'm'
+		string gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		named gives false
+		unresolved gives false
+	end 'm'
+end 'matchesString'
+
+function matchesNamed(b MaxonType, idA TypeNameId) returns bool
+	return match b 'm'
+		named(idB) gives idA == idB
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		unresolved gives false
+	end 'm'
+end 'matchesNamed'
+
+function matchesUnresolved(b MaxonType) returns bool
+	return match b 'm'
+		unresolved gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		named gives false
+	end 'm'
+end 'matchesUnresolved'
+
+// --- String-const consumer specialization ---
+//
+// After `unresolvedRead → stringConst` rewrites have run, the IR has
+// `stringConst` producer ops whose results flow into `printInt`, `cmp`,
+// or `varDecl/varLoad` chains. Lowering can't materialize a generic
+// String-typed value (no real String runtime in the bootstrap), so this
+// walk specializes the recognized consumers and removes the stringConst
+// ops in the same pass:
+//   - `printInt(stringValueResult)` → `printLiteral(stringId)`
+//   - `cmp(left, right, eq, …)` where both operands are stringConsts →
+//     fold to `literal(0/1, integer)` via the cmp's existing operands.
+//   - `varDecl(slot, stringConstResult, …)` records the slot's stringId
+//     so subsequent `varLoad(result, slot, …)` aliases re-thread the id
+//     into the consumer-rewrite chain.
+// stringConst ops whose result feeds an unrecognized consumer survive
+// to lowering and trigger a panic — that's a missing specialization,
+// not a user-facing condition.
+
+function specializeStringConstConsumers(module MaxonModule)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("specializeStringConstConsumers: funcIdx OOB")
+		specializeFuncStringConsts(module, func: func)
+	end 'eachFunc'
+end 'specializeStringConstConsumers'
+
+function specializeFuncStringConsts(module MaxonModule, func IrFunction)
+	var nameStringIds = StringIdNameMap.create()
+	var slotStringIds = SlotStringIdMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("specializeFuncStringConsts: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("specializeFuncStringConsts: opIdx OOB")
+			specializeOp(module, opIdx: opIdx, op: op, nameStringIds: nameStringIds, slotStringIds: slotStringIds)
+		end 'eachOp'
+	end 'eachBlock'
+end 'specializeFuncStringConsts'
+
+function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringIds StringIdNameMap, slotStringIds SlotStringIdMap)
+	match op 'specialize'
+		stringConst(result, stringId, _) then nameStringIds.upsert(result, value: stringId)
+		varDecl(slotId, value, _, _) then specializeVarDecl(slotStringIds, nameStringIds: nameStringIds, slotId: slotId, value: value)
+		varLoad(result, slotId, _, _) then specializeVarLoad(slotStringIds, nameStringIds: nameStringIds, result: result, slotId: slotId)
+		printInt(value, range) then specializePrintInt(module, opIdx: opIdx, value: value, range: range, nameStringIds: nameStringIds)
+		cmp(result, left, right, predicate, _, _, _, range) then specializeCmp(module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, range: range, nameStringIds: nameStringIds)
+		literal then return
+		varStore then return
+		globalLoad then return
+		globalStore then return
+		binop then return
+		unop then return
+		sqrt then return
+		convert then return
+		refEq then return
+		condBr then return
+		br then return
+		call then return
+		methodCall then return
+		ret then return
+		printLiteral then return
+		panic then return
+		structAlloc then return
+		fieldLoad then return
+		fieldStore then return
+		selfFieldLoad then return
+		selfFieldStore then return
+		unresolvedRead then return
+		unresolvedAssign then return
+		error then return
+	end 'specialize'
+end 'specializeOp'
+
+function specializeVarDecl(slotStringIds SlotStringIdMap, nameStringIds StringIdNameMap, slotId VarSlot, value ByteArray)
+	if let stringId = try nameStringIds.get(value) 'has'
+		slotStringIds.upsert(slotId, value: stringId)
+	end 'has'
+end 'specializeVarDecl'
+
+function specializeVarLoad(slotStringIds SlotStringIdMap, nameStringIds StringIdNameMap, result ByteArray, slotId VarSlot)
+	if let stringId = try slotStringIds.get(slotId) 'has'
+		nameStringIds.upsert(result, value: stringId)
+	end 'has'
+end 'specializeVarLoad'
+
+function specializePrintInt(module MaxonModule, opIdx OpIndex, value ByteArray, range SourceRange, nameStringIds StringIdNameMap)
+	if let stringId = try nameStringIds.get(value) 'isStringSource'
+		try module.ops.set(opIdx, value: MaxonOp.printLiteral(stringId, range: range)) otherwise panic("specializePrintInt: ops.set OOB at idx={opIdx}")
+	end 'isStringSource'
+end 'specializePrintInt'
+
+function specializeCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, range SourceRange, nameStringIds StringIdNameMap)
+	if let leftId = try nameStringIds.get(left) 'leftIsStr'
+		if let rightId = try nameStringIds.get(right) 'rightIsStr'
+			let folded = stringCmpFold(predicate, leftId: leftId, rightId: rightId)
+			try module.ops.set(opIdx, value: MaxonOp.literal(result, value: folded, valueType: MaxonType.integer, range: range)) otherwise panic("specializeCmp: ops.set OOB at idx={opIdx}")
+		end 'rightIsStr'
+	end 'leftIsStr'
+end 'specializeCmp'
+
+// Fold a compile-time string-vs-string comparison to 0/1. Only `eq`/`ne` are
+// valid: ordering predicates (`<`, `<=`, `>`, `>=`) on strings are a type
+// error caught upstream by validateCompareOp, so reaching this function with
+// one is a compiler bug.
+function stringCmpFold(predicate CmpPredicate, leftId StringId, rightId StringId) returns ParsedInt
+	let equal = leftId == rightId
+	return match predicate 'eval'
+		eq gives boolToInt(equal)
+		ne gives boolToInt(not equal)
+		lt panic("stringCmpFold: ordering predicate 'lt' on string operands should have been rejected by validateCompareOp")
+		le panic("stringCmpFold: ordering predicate 'le' on string operands should have been rejected by validateCompareOp")
+		gt panic("stringCmpFold: ordering predicate 'gt' on string operands should have been rejected by validateCompareOp")
+		ge panic("stringCmpFold: ordering predicate 'ge' on string operands should have been rejected by validateCompareOp")
+	end 'eval'
+end 'stringCmpFold'
+
+function boolToInt(b bool) returns ParsedInt
+	if b 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'boolToInt'
+
+// --- Reference-equality dispatch ---
+//
+// The parser emits a regular `cmp` op for every `==` / `!=`. After
+// fillUnresolvedTypes has run, both operand types are concrete and we
+// can decide whether to rewrite the cmp into a struct-`.equals()`
+// methodCall (for reference types) or leave it as a primitive cmp.
+// `is` / `is not` already emit `refEq` directly; that op carries no
+// types so a separate validation pass surfaces the
+// "non-reference operand" diagnostic by walking refEq ops here.
+
+function dispatchEqualityOps(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("dispatchEqualityOps: funcIdx OOB")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("dispatchEqualityOps: producerTypesPerFunc.get({funcIdx}) failed")
+		dispatchFuncEqualityOps(project, module: module, func: func, producerTypes: producerTypes, filePath: filePath)
+	end 'eachFunc'
+end 'dispatchEqualityOps'
+
+function dispatchFuncEqualityOps(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, filePath FilePath)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("dispatchFuncEqualityOps: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("dispatchFuncEqualityOps: opIdx OOB")
+			dispatchEqualityForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, filePath: filePath)
+		end 'eachOp'
+	end 'eachBlock'
+end 'dispatchFuncEqualityOps'
+
+function dispatchEqualityForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, filePath FilePath)
+	if op.name == "cmp" 'isCmp'
+		match op 'extract'
+			cmp(result, left, right, predicate, leftType, rightType, _, range) then maybeRewriteCmpToEquals(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, range: range)
+			default panic("unreachable: already checked name == cmp")
+		end 'extract'
+		return
+	end 'isCmp'
+	if op.name == "refEq" 'isRefEq'
+		match op 'extract'
+			refEq(_, left, right, _, range) then validateRefEqOperands(project, left: left, right: right, producerTypes: producerTypes, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == refEq")
+		end 'extract'
+	end 'isRefEq'
+end 'dispatchEqualityForOp'
+
+function maybeRewriteCmpToEquals(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, range SourceRange)
+	if not maxonTypeIsRef(project, t: leftType) 'leftPrim'
+		return
+	end 'leftPrim'
+	if not maxonTypeIsRef(project, t: rightType) 'rightPrim'
+		return
+	end 'rightPrim'
+	// Only `==` (eq) and `!=` (ne) dispatch to `.equals()`; ordering
+	// predicates (`<`, `<=`, `>`, `>=`) on struct types are a type error
+	// caught downstream by validateCompareOp, so we leave those cmps as-is.
+	let dispatch = match predicate 'classify'
+		eq gives 1 as ParsedInt   // dispatch as ==
+		ne gives -1 as ParsedInt  // dispatch as !=
+		lt gives 0 as ParsedInt   // not dispatched
+		le gives 0 as ParsedInt
+		gt gives 0 as ParsedInt
+		ge gives 0 as ParsedInt
+	end 'classify'
+	if dispatch == 0 'orderedOnRef'
+		return
+	end 'orderedOnRef'
+	let isEq = dispatch == 1
+	// Replace the cmp with a methodCall("equals"), and emit a follow-up
+	// bitNot for `!=`. Both ops share the same source range as the
+	// original cmp, anchored on the `==` / `!=` operator token.
+	var equalsArgs = ByteArrayArray.create()
+	equalsArgs.push(right)
+	let equalsLabels = StringArray.create()
+	var equalsArgTypes = MaxonTypeArray.create()
+	equalsArgTypes.push(rightType)
+	var equalsArgRanges = SourceRangeArray.create()
+	equalsArgRanges.push(range)
+	let methodName = project.calleeNames.intern("equals")
+	if isEq 'eqDispatch'
+		try module.ops.set(opIdx, value: MaxonOp.methodCall(result, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
+		return
+	end 'eqDispatch'
+	// `!=`: rewrite into the methodCall first, then append a bitNot op
+	// to negate its result. The bitNot ends up at the END of the ops
+	// array (later than any consumer), but the consumer doesn't reach
+	// the original `result` — it now reaches the bitNot's result. We
+	// achieve this by giving the methodCall an intermediate name and
+	// pointing the bitNot's result at the original `result`.
+	let intermediateName = freshIntermediateNameForCmp(result)
+	try module.ops.set(opIdx, value: MaxonOp.methodCall(intermediateName, receiver: left, methodName: methodName, args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: range)) otherwise panic("maybeRewriteCmpToEquals: ops.set OOB at idx={opIdx}")
+	// Insert bitNot directly after the methodCall in the same block.
+	insertBitNotAfter(module, opIdx: opIdx, result: result, operand: intermediateName, range: range)
+end 'maybeRewriteCmpToEquals'
+
+function freshIntermediateNameForCmp(result ByteArray) returns ByteArray
+	// Synthesize a name based on the original result so the value-name
+	// space stays roughly self-describing in IR dumps. The "$ne_"
+	// prefix marks it as the masked methodCall feeding a bitNot.
+	let synth = "$ne_{String.from(result)}"
+	return synth.toByteArray()
+end 'freshIntermediateNameForCmp'
+
+function insertBitNotAfter(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, range SourceRange)
+	// Append a bitNot op into the module's ops array AND register it in
+	// whichever block owned the original cmp. We find the block by
+	// scanning blockRefs — the cmp's index is in exactly one block's
+	// opRefs.
+	let bitNotIdx = module.ops.count()
+	module.ops.push(MaxonOp.unop(result, operand: operand, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: range))
+	for blockRef in 0 upto module.blocks.count() 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("insertBitNotAfter: blockRef OOB")
+		var insertPos = -1 as ParsedInt
+		for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
+			let ref = try block.opRefs.get(posIdx) otherwise panic("insertBitNotAfter: posIdx OOB")
+			if ref == opIdx 'foundCmp'
+				insertPos = posIdx
+				break
+			end 'foundCmp'
+		end 'eachOpRef'
+		if insertPos >= 0 'doInsert'
+			try block.opRefs.insert(insertPos + 1, value: bitNotIdx) otherwise panic("insertBitNotAfter: opRefs.insert OOB")
+			return
+		end 'doInsert'
+	end 'eachBlock'
+	panic("insertBitNotAfter: cmp op at idx={opIdx} not registered in any block")
+end 'insertBitNotAfter'
+
+// `is` / `is not` (refEq) requires both operands to be reference (struct)
+// types. Operand types come from the producer-type map built earlier in
+// this pass — by this point every cross-file struct ref has been resolved,
+// so the check can't false-negative the way the parser's pre-migration
+// version could.
+function validateRefEqOperands(project Project, left ByteArray, right ByteArray, producerTypes ProducerTypeMap, range SourceRange, filePath FilePath)
+	let leftType = lookupProducerType(producerTypes, name: left)
+	let rightType = lookupProducerType(producerTypes, name: right)
+	// Operand types still unresolved here means the producer chain itself
+	// failed to resolve (e.g., a missing struct that already produced its
+	// own diagnostic). Skip — the upstream error covers it.
+	if isUnresolvedType(leftType) or isUnresolvedType(rightType) 'unresolved'
+		return
+	end 'unresolved'
+	if maxonTypeIsRef(project, t: leftType) and maxonTypeIsRef(project, t: rightType) 'bothRef'
+		return
+	end 'bothRef'
+	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: range.line, column: range.column, filePath: filePath)
+end 'validateRefEqOperands'
+
+// --- Self-field validation ---
+//
+// The parser emits selfFieldLoad / selfFieldStore ops without checking
+// that the named field exists on the enclosing type. TypeResolution walks
+// every method body's ops, derives the enclosing type from `func.name`
+// (always `Type.method` for instance methods), and surfaces an "Unknown
+// field" diagnostic when the recorded field name isn't present in the
+// type's struct layout.
+
+function validateSelfFields(project Project, module MaxonModule, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateSelfFields: funcIdx OOB")
+		let typeName = enclosingTypeName(func.name)
+		if typeName.isEmpty() 'notMethod'
+			continue
+		end 'notMethod'
+		let structType = try project.structTypes.get(typeName) otherwise continue
+		validateFuncSelfFields(project, module: module, func: func, typeName: typeName, structType: structType, filePath: filePath)
+	end 'eachFunc'
+end 'validateSelfFields'
+
+function enclosingTypeName(funcName String) returns String
+	let dotIdx = try funcName.findLast(".") otherwise return ""
+	return funcName.slice(funcName.startIndex(), endIndex: dotIdx)
+end 'enclosingTypeName'
+
+function validateFuncSelfFields(project Project, module MaxonModule, func IrFunction, typeName String, structType StructType, filePath FilePath)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("validateSelfFields: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("validateSelfFields: opIdx OOB")
+			validateSelfFieldOp(project, op: op, typeName: typeName, structType: structType, filePath: filePath)
+		end 'eachOp'
+	end 'eachBlock'
+end 'validateFuncSelfFields'
+
+function validateSelfFieldOp(project Project, op MaxonOp, typeName String, structType StructType, filePath FilePath)
+	if op.name == "selfFieldLoad" 'isLoad'
+		match op 'extract'
+			selfFieldLoad(_, fieldName, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == selfFieldLoad")
+		end 'extract'
+		return
+	end 'isLoad'
+	if op.name == "selfFieldStore" 'isStore'
+		match op 'extract'
+			selfFieldStore(fieldName, _, range) then validateSelfField(project, fieldName: String.from(fieldName), typeName: typeName, structType: structType, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == selfFieldStore")
+		end 'extract'
+	end 'isStore'
+end 'validateSelfFieldOp'
+
+function validateSelfField(project Project, fieldName String, typeName String, structType StructType, range SourceRange, filePath FilePath)
+	if structType.fieldByName.contains(fieldName) 'known'
+		return
+	end 'known'
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldName}' in type '{typeName}'", line: range.line, column: range.column, filePath: filePath)
+end 'validateSelfField'
+
 // --- Pass entry ---
 
 // Drains the project-wide unresolved-typealias registry, then walks the
-// module's ops to validate convert / cmp endpoints. The typealias drain is
-// idempotent: only the first module's call does real work, every later
-// module-level call walks an empty map.
+// module's ops to (1) rewrite parser-emitted `unresolvedRead` /
+// `unresolvedAssign` placeholders to their concrete forms, (2) fill any
+// `MaxonType.unresolved` operands left by the parser using a
+// producer-type map, and (3) validate convert / cmp endpoints against the
+// now-fully-typed ops. The typealias drain is idempotent: only the first
+// module's call does real work, every later module-level call walks an
+// empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	resolveAllTypealiases(project)
 
-	for opIdx in 0 upto module.ops.count() 'eachOp'
+	for opIdx in 0 upto module.ops.count() 'rewriteUnresolved'
+		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
+		if op.name == "unresolvedRead" 'isUnresolvedRead'
+			match op 'extract'
+				unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
+				default panic("unreachable: already checked name == unresolvedRead")
+			end 'extract'
+		end 'isUnresolvedRead'
+		if op.name == "unresolvedAssign" 'isUnresolvedAssign'
+			match op 'extract'
+				unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
+				default panic("unreachable: already checked name == unresolvedAssign")
+			end 'extract'
+		end 'isUnresolvedAssign'
+	end 'rewriteUnresolved'
+
+	// Now that every unresolvedRead/Assign has been replaced with its concrete
+	// op shape (globalLoad/globalStore/literal), build per-function producer-
+	// type and slot-type maps and fill in any MaxonType.unresolved operands
+	// the parser left behind. Maps are per-function because parser-emitted
+	// synthetic names ($t0, $t1, ...) and slot ids reset between functions.
+	var producerTypesPerFunc = ProducerTypeMapArray.create()
+	var slotTypesPerFunc = SlotTypeMapArray.create()
+	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+	fillUnresolvedTypes(module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
+	// Specialize stringConst consumers (printInt → printLiteral, cmp folding,
+	// slot-aliased strings) before lowering — the bootstrap can't materialize
+	// a generic String-typed value.
+	specializeStringConstConsumers(module)
+
+	// Dispatch struct-vs-struct `==` / `!=` to `.equals()`, and validate
+	// `is` / `is not` operands. Runs after fillUnresolvedTypes so cmp
+	// operand types are concrete and refEq operand producers are reachable
+	// through the producer-type map.
+	dispatchEqualityOps(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+
+	validateSelfFields(project, module: module, filePath: filePath)
+
+	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'
 			match op 'extract'
@@ -329,5 +1220,5 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 				default panic("unreachable: already checked name == cmp")
 			end 'extract'
 		end 'isCmp'
-	end 'eachOp'
+	end 'validateOps'
 end 'runTypeResolution'

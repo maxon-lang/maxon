@@ -1720,7 +1720,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X64Register.rax)
 		movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
 		ucomisd then emitUcomisd(code)
-		printLiteral(data) then emitPrintLiteralInline(code, data: data, callFixups: callFixups)
+		printLiteral(stringId) then emitPrintLiteralInline(code, stringId: stringId, callFixups: callFixups)
 		printInt then emitPrintIntInline(code, callFixups: callFixups)
 		subRspImm(value) then emitSubRspImm(code, value: value)
 		addRspImm(value) then emitAddRspImm(code, value: value)
@@ -1789,38 +1789,12 @@ end 'emitX64Op'
 // --- Inline print operations (legacy path, uses callFixups) ---
 
 // printLiteral: jump over data island, then call mrt_write_stdout via callFixup
-function emitPrintLiteralInline(code ByteArray, data String, callFixups CallFixupArray)
-	let dataBytes = data.toByteArray()
-	let dataLen = dataBytes.count()
-	if dataLen == 0 'empty'
-		return
-	end 'empty'
-
-	// jmp over data island: jmp rel32
-	code.push(0xE9)
-	let jmpFixup = code.count()
-	writeDword(code, value: 0)
-
-	// Data island
-	let dataOffset = code.count()
-	code.append(dataBytes)
-
-	// Patch jump
-	let afterData = code.count()
-	patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
-
-	// lea rcx, [rip + offset_to_data]
-	code.append(b"\x48\x8d\x0d")
-	let leaEnd = code.count() + 4
-	let leaRel = dataOffset - leaEnd
-	writeDword(code, value: leaRel)
-
-	// mov rdx, dataLen
-	code.append(b"\x48\xc7\xc2")
-	writeDword(code, value: dataLen)
-
-	// call mrt_write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")
+// printLiteral: dead code today. The op never reaches the backend
+// because lowerMaxonToStd decomposes Maxon printLiteral into
+// globalAddr + constI64 + call mrt_write_stdout before the backend
+// pipeline runs. The arm is kept to keep the dialect match exhaustive.
+function emitPrintLiteralInline(code ByteArray, stringId StringId, callFixups CallFixupArray)
+	panic("X64 backend: x64.printLiteral op should not reach the emitter (stringId={stringId}); lowerMaxonToStd was supposed to decompose this. code.count()={code.count()}, callFixups.count()={callFixups.count()}")
 end 'emitPrintLiteralInline'
 
 // printInt: value in RAX, convert to string then print

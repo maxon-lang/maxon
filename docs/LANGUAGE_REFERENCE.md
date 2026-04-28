@@ -2790,6 +2790,7 @@ In this example, `arith to func` matches `arith`, `cf`, and `func` (inclusive). 
 - Range bounds are based on ordinal order (the order cases are declared in the enum).
 - Range patterns participate in exhaustiveness checking — they count toward full case coverage.
 - Overlapping patterns (a range that covers a case also matched explicitly, or two overlapping ranges) are reported as errors (E2027).
+- A range pattern that covers exactly one value is also rejected as E2027 — `red to red` and `red upto green` (when `green` is the case immediately after `red`) are mistakes; use the bare case name `red` instead.
 - Range patterns can be combined with `or` and with explicit case patterns in the same match.
 
 **Range Patterns:**
@@ -2828,6 +2829,8 @@ function charType(c Character) returns int
 		end 'classify'
 end 'charType'
 ```
+
+A range pattern that covers exactly one value is rejected as E2027 — `5 to 5`, `5 upto 6`, `'a' to 'a'`, and `'a' upto 'b'` (adjacent codepoints) are mistakes; use the bare value (`5`, `'a'`) instead.
 
 Range patterns can be combined with `or`:
 
@@ -2882,6 +2885,24 @@ end 'get'
 - `and fallthrough` is NOT allowed in match expressions
 - Block identifier required
 - Enum bindings work the same as in match statements
+
+#### Per-Arm `panic` and `throws`
+
+Because match expressions don't allow arbitrary statements in arm bodies, but you may still need a specific case to signal an unrecoverable error or throw a recoverable one, individual arms may use `panic("message")` or `throws ErrorType.case` in place of `gives <expr>`. The arm terminates instead of producing a value, so the match expression's result type is inferred only from the `gives` arms.
+
+```maxon
+let n = match c 'check'
+		red panic("red not allowed here")
+		green throws ColorError.unsupported
+		blue gives 42
+		default gives 0
+end 'check'
+```
+
+- `panic("...")` arms accept either a string literal or an interpolated string, just like the `panic` statement and `default panic`.
+- `throws ErrorType.case` arms require the enclosing function to declare `throws ErrorType` (the same rule as the `throw` statement and `default throws`).
+- A diverging arm covers its pattern for exhaustiveness purposes exactly like a `gives` arm.
+- This applies only to match *expressions* — match statements already accept `panic`/`throw` via the normal `then <statement>` form.
 
 ### Default Throws / Default Panic in Match
 
@@ -3301,14 +3322,46 @@ end 'handler'
 **Rules:**
 
 - The `try` body MUST contain at least one bare call to a throwing function (E3083).
-- The `otherwise` clause MUST bind the error to a name with `(e)` syntax and MUST contain a `match` on that binding (E3084).
+- The `otherwise` clause takes one of three forms:
+	- **Block handler** — `otherwise (e) 'handler' ... end 'handler'` MUST contain a `match` on the binding (E3084).
+	- **Terminal panic** — `otherwise [(e)] panic("message")` halts the program when the body throws.
+	- **Terminal throws** — `otherwise [(e)] throws ErrorType.case` re-throws a fixed error to the caller. The enclosing function must declare `throws ErrorType`.
+- The `(e)` binding is optional for the terminal forms. When supplied it has the same type as in the block-handler form (single enum or synthesized error union) and may be referenced inside the panic message's interpolation or inside the throw expression — for example, `otherwise (e) throws AppError.wrap(e)` to wrap the original error as a payload of the new error case. A binding declared but never read is rejected by the standard unused-variable check (E3012).
 - If the body throws calls of a single error enum type, `e` has that enum type and match patterns use bare case names (e.g. `notFound`).
 - If the body throws calls of two or more distinct error enum types, `e` has a synthesized error-union type. Each match arm targets a specific `EnumName.caseName` pair:
 	- Fully-qualified form `EnumName.caseName` is always accepted.
 	- Bare `caseName` is accepted only when the case name is unique across the union members. Shared names (e.g. two enums both with `notFound`) are rejected with E3085.
 - The match must be exhaustive across every `(EnumName, caseName)` pair unless a `default` arm is provided.
 - An explicit `try expr otherwise ...` inside the body still works for any single call — its error is consumed by its own handler and does not contribute to the synthesized union.
-- Nested try blocks compose: the inner block absorbs its own throws; the outer block sees only what its own bare calls throw.
+- Nested try blocks compose: the inner block absorbs its own throws; the outer block sees only what its own bare calls throw. A terminal `otherwise throws E.x` inside an inner try block routes through the outer block's shared error sink, just like a bare `throw`.
+
+#### Terminal Form Examples
+
+```maxon
+// Panic when the body throws — useful for unreachable error paths.
+try 'reading'
+		parseFile("data.json")
+end 'reading'
+otherwise panic("unreachable: data.json is bundled with the binary")
+
+// Re-throw a fixed error to the caller.
+function compute() returns int throws AppError
+		try 'work'
+				doStuff()
+		end 'work'
+		otherwise throws AppError.failed
+		return 0
+end 'compute'
+
+// Bind the original error and wrap it as the payload of the new error.
+function compute2() returns int throws AppError
+		try 'work'
+				doStuff()
+		end 'work'
+		otherwise (e) throws AppError.wrap(e)
+		return 0
+end 'compute2'
+```
 
 ### Conditional Try (if try)
 

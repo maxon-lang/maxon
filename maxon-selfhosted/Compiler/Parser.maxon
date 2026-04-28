@@ -561,18 +561,19 @@ export type Parser
 		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
 			// Distinguish `TypeName.field = expr` (qualified-global store) from
 			// other dot expressions (method calls, field access). The
-			// qualified-store form is exactly identifier-dot-identifier-equals
-			// AND the qualified name resolves to a known global var. Anything
-			// else falls through to expression parsing so method chains and
-			// field reads keep their existing handling.
+			// qualified-store form is exactly identifier-dot-identifier-equals.
+			// Whether the qualified name actually names a global var is checked
+			// at TypeResolution; the parser emits a single `unresolvedAssign`
+			// op for the qualified-store shape and lets the post-parse pass
+			// rewrite it to `globalStore` (or surface a diagnostic when no
+			// global declaration matches). Method calls and field reads stay
+			// on the expression path below.
 			let afterDot = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
 			let afterField = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
 			if afterDot.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'maybeQualified'
 				let qualifiedName = "{cursor.current().value}.{afterDot.value}"
-				if project.globalVars.contains(qualifiedName) 'isGlobalStore'
-					try parseGlobalAssignment(module, block: block, qualifiedName: qualifiedName)
-					return
-				end 'isGlobalStore'
+				try parseGlobalAssignment(module, block: block, qualifiedName: qualifiedName)
+				return
 			end 'maybeQualified'
 			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
 			_ = try parseExpression(module, block: block)
@@ -602,10 +603,11 @@ export type Parser
 
 		if fieldTok.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'isSelfFieldAssign'
 			let fieldName = fieldTok.value
-			if not scope.isSelfField(fieldName) 'badField'
-				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldName}' in type '{currentTypeName}'", line: fieldTok.line, column: fieldTok.column, filePath: filePath)
-				return
-			end 'badField'
+			// Field-existence validation is deferred to TypeResolution so the
+			// parser stays pure-record. TypeResolution walks every
+			// selfFieldStore op against the now-fully-resolved struct layout
+			// and surfaces the "Unknown field" diagnostic at the recorded
+			// source range when a field doesn't exist on the enclosing type.
 
 			// peeks above proved the self-dot-identifier-equals shape.
 			try expect(TokenKind.self)
@@ -624,11 +626,13 @@ export type Parser
 		_ = try parseExpression(module, block: block)
 	end 'parseSelfStatement'
 
-	// Parse `TypeName.fieldName = <expr>` for a registered static-field global.
-	// Caller has verified the qualified name is in project.globalVars.
+	// Parse `TypeName.fieldName = <expr>`. The store target is emitted as
+	// an `unresolvedAssign` op carrying the qualified name; TypeResolution
+	// rewrites it to `globalStore` once `project.globalVars` is known to be
+	// fully populated. Caller has proven identifier-dot-identifier-equals
+	// via peeks.
 	function parseGlobalAssignment(module MaxonModule, block IrBlock, qualifiedName String) throws ParserError
 		let nameToken = cursor.current()
-		// Caller has proven identifier-dot-identifier-equals via peeks.
 		try expect(TokenKind.identifier)
 		try expect(TokenKind.dot)
 		try expect(TokenKind.identifier)
@@ -637,29 +641,8 @@ export type Parser
 		let exprResult = try parseExpression(module, block: block)
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: cursor.current())
-		emitGlobalStore(module, block: emitBlock, qualifiedName: qualifiedName, valueName: exprName(exprResult), range: stmtRange)
+		module.appendOp(emitBlock, op: MaxonOp.unresolvedAssign(qualifiedName, value: exprName(exprResult), range: stmtRange))
 	end 'parseGlobalAssignment'
-
-	// Look up a registered global by its qualified name. Caller is expected to
-	// have already proved containment via `project.globalVars.contains(name)`;
-	// the failure path is a programmer-error panic with the call-site label.
-	function lookupGlobalVar(qualifiedName String, callSite String) returns GlobalVarInfo
-		return try project.globalVars.get(qualifiedName) otherwise panic("{callSite}: globalVars.contains('{qualifiedName}') succeeded but get failed")
-	end 'lookupGlobalVar'
-
-	// Emit a maxon.global_load op and return the synth result name. Used by both
-	// the bare-identifier and qualified-field read paths in parseIdentifierExpr.
-	function emitGlobalLoad(module MaxonModule, block IrBlock, qualifiedName String, slotType MaxonType, range SourceRange) returns ByteArray
-		let resultName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.globalLoad(resultName, name: qualifiedName, slotType: slotType, range: range))
-		return resultName
-	end 'emitGlobalLoad'
-
-	// Emit a maxon.global_store op for the given qualified name and value.
-	function emitGlobalStore(module MaxonModule, block IrBlock, qualifiedName String, valueName ByteArray, range SourceRange)
-		let info = lookupGlobalVar(qualifiedName, callSite: "emitGlobalStore")
-		module.appendOp(block, op: MaxonOp.globalStore(qualifiedName, value: valueName, slotType: info.slotType, range: range))
-	end 'emitGlobalStore'
 
 	// Reports an unexpected statement-level token and aborts the enclosing function
 	// body. Mirrors the C# bootstrap's throw-to-top-level behavior: one error is
@@ -726,7 +709,8 @@ export type Parser
 				synchronize()
 				return
 			end 'hasInterp'
-			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
+			let strId = project.strings.intern(valueToken.value)
+			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(strId)) otherwise 'dupConst1'
 				reportDuplicateConstant(nameToken)
 			end 'dupConst1'
 			logTrace(LogCategory.parser, message: () gives "parser: const string '{nameToken.value}'")
@@ -1324,7 +1308,8 @@ export type Parser
 
 		let fileName = filePath.filename()
 		let fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
-		module.appendOp(block, op: MaxonOp.panic(fullMsg, range: SourceRange.between(panicToken, last: rparenToken)))
+		let stringId = project.strings.intern(fullMsg)
+		module.appendOp(block, op: MaxonOp.panic(stringId, range: SourceRange.between(panicToken, last: rparenToken)))
 	end 'parsePanicStatement'
 
 	// --- If statement ---
@@ -1590,12 +1575,15 @@ export type Parser
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: cursor.current())
 		// A bare identifier on the LHS may name a top-level `var`. Locals
-		// shadow globals, so we check the scope first; only if no local binding
-		// exists do we treat it as a global store.
-		if not scope.contains(nameToken.value) and project.globalVars.contains(nameToken.value) 'globalWrite'
-			emitGlobalStore(module, block: emitBlock, qualifiedName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
+		// shadow globals, so we check the scope first; only if no local
+		// binding exists do we defer to TypeResolution. The parser emits a
+		// single `unresolvedAssign` op carrying the bare name; TypeResolution
+		// rewrites it to `globalStore` once `project.globalVars` is fully
+		// populated, or surfaces a diagnostic if nothing matches.
+		if not scope.contains(nameToken.value) 'maybeGlobalWrite'
+			module.appendOp(emitBlock, op: MaxonOp.unresolvedAssign(nameToken.value, value: exprName(exprResult), range: stmtRange))
 			return
-		end 'globalWrite'
+		end 'maybeGlobalWrite'
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
 			// Implicit self-load and field-store share the statement's range —
@@ -1631,11 +1619,23 @@ export type Parser
 		// short-circuit may have moved it off `block` to a merge block.
 		var emitBlock = currentBlock
 
+		// `let LOCAL = "literal"` registers LOCAL as a top-level string
+		// constant AND emits a `stringConst` op so subsequent reads of
+		// LOCAL (which go through scope → varLoad) can be specialized
+		// downstream by the consumer-rewrite walk in TypeResolution.
+		// Without the op, the slot would be undefined and varLoads of it
+		// would read garbage.
 		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
-			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprStringConstValue(exprResult))) otherwise 'dupConst3'
+			let stringId = exprStringConstId(exprResult)
+			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(stringId)) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			_ = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
+			let lastExprTokenStr = cursor.current()
+			let stmtRangeStr = SourceRange.between(kwToken, last: lastExprTokenStr)
+			let slotStr = defineVariableWithType(nameToken.value, varType: MaxonType.string)
+			let stringName = freshSynthName()
+			module.appendOp(emitBlock, op: MaxonOp.stringConst(stringName, stringId: stringId, range: stmtRangeStr))
+			module.appendOp(emitBlock, op: MaxonOp.varDecl(slotStr, value: stringName, slotType: MaxonType.string, range: stmtRangeStr))
 			return
 		end 'registerStringConst'
 
@@ -1717,39 +1717,36 @@ export type Parser
 	// the same way they would in a literal fragment.
 	function emitPrintForExpr(module MaxonModule, block IrBlock, exprResult ExprResult) throws ParserError
 		if exprIsStringConst(exprResult) 'isStringConst'
-			try emitFragmentLiteral(module, block: block, fragment: exprStringConstValue(exprResult))
+			emitInternedPrintLiteral(module, block: block, stringId: exprStringConstId(exprResult))
 			return
 		end 'isStringConst'
 		module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
 	end 'emitPrintForExpr'
 
-	// Lexer invariant: every stringInterpEnd is followed by a doubleStringLiteral
-	// fragment (possibly empty when the interpolation is adjacent to the closing
-	// `"`). Anything else means the lexer broke its contract — panic with caller
-	// context so the bug shows where it surfaced.
-	function assertFragmentAfterInterpEnd(callerName String, token Token)
-		if token.kind != TokenKind.doubleStringLiteral 'noFrag'
-			panic("{callerName}: expected doubleStringLiteral fragment after stringInterpEnd, got {token.kind.name}")
-		end 'noFrag'
-	end 'assertFragmentAfterInterpEnd'
-
-	// Decode escape sequences (`\n`, `\t`, `\\`, `\"`) in a string fragment and
-	// emit a printLiteral op. Empty fragments produce no op — the lexer emits a
-	// zero-width doubleStringLiteral whenever an interpolation butts up against
-	// the opening `"` or closing `"`, and we want the IR to reflect only the
-	// non-empty literal runs.
-	function emitFragmentLiteral(module MaxonModule, block IrBlock, fragment String) throws ParserError
-		let fragBytes = fragment.toByteArray()
-		let fragLen = fragBytes.count()
-		if fragLen == 0 'empty'
+	// Emit a printLiteral op for an already-interned StringId. Skips the
+	// op entirely for empty content so the IR reflects only the non-empty
+	// runs (matches the behavior of the legacy `emitFragmentLiteral` path).
+	function emitInternedPrintLiteral(module MaxonModule, block IrBlock, stringId StringId)
+		let content = project.strings.get(stringId)
+		if content.isEmpty() 'empty'
 			return
 		end 'empty'
+		module.appendOp(block, op: MaxonOp.printLiteral(stringId, range: SourceRange.none()))
+	end 'emitInternedPrintLiteral'
+
+	// Decode escape sequences in a raw string fragment and return the
+	// decoded bytes. Used at parse time to canonicalize string literals
+	// before interning so identical-after-decode literals share a single
+	// StringId (e.g. `"\n"` collapses to a single 0x0A byte).
+	function decodeStringEscapes(fragment String) returns ByteArray
+		let fragBytes = fragment.toByteArray()
+		let fragLen = fragBytes.count()
 		var buf = ByteArray.create()
 		var i = 0
 		while i < fragLen 'decode'
-			let ch = try fragBytes.get(i) otherwise panic("emitFragmentLiteral: loop guard i < fragLen just succeeded but get({i}) failed (fragLen={fragLen})")
+			let ch = try fragBytes.get(i) otherwise panic("decodeStringEscapes: loop guard i < fragLen just succeeded but get({i}) failed (fragLen={fragLen})")
 			if ch == '\\' and i + 1 < fragLen 'escape'
-				let next = try fragBytes.get(i + 1) otherwise panic("emitFragmentLiteral: i + 1 < fragLen just succeeded but get({i + 1}) failed (fragLen={fragLen})")
+				let next = try fragBytes.get(i + 1) otherwise panic("decodeStringEscapes: i + 1 < fragLen just succeeded but get({i + 1}) failed (fragLen={fragLen})")
 				if next == 'n' 'escN'
 					buf.push(10)
 					i = i + 2
@@ -1774,9 +1771,34 @@ export type Parser
 			buf.push(ch)
 			i = i + 1
 		end 'decode'
-		if not buf.isEmpty() 'flush'
-			module.appendOp(block, op: MaxonOp.printLiteral(String.from(buf), range: SourceRange.none()))
-		end 'flush'
+		return buf
+	end 'decodeStringEscapes'
+
+	// Lexer invariant: every stringInterpEnd is followed by a doubleStringLiteral
+	// fragment (possibly empty when the interpolation is adjacent to the closing
+	// `"`). Anything else means the lexer broke its contract — panic with caller
+	// context so the bug shows where it surfaced.
+	function assertFragmentAfterInterpEnd(callerName String, token Token)
+		if token.kind != TokenKind.doubleStringLiteral 'noFrag'
+			panic("{callerName}: expected doubleStringLiteral fragment after stringInterpEnd, got {token.kind.name}")
+		end 'noFrag'
+	end 'assertFragmentAfterInterpEnd'
+
+	// Decode escape sequences (`\n`, `\t`, `\\`, `\"`) in a string fragment and
+	// emit a printLiteral op. Empty fragments produce no op — the lexer emits a
+	// zero-width doubleStringLiteral whenever an interpolation butts up against
+	// the opening `"` or closing `"`, and we want the IR to reflect only the
+	// non-empty literal runs.
+	function emitFragmentLiteral(module MaxonModule, block IrBlock, fragment String) throws ParserError
+		if fragment.isEmpty() 'empty'
+			return
+		end 'empty'
+		let decoded = decodeStringEscapes(fragment)
+		if decoded.isEmpty() 'allDecodedAway'
+			return
+		end 'allDecodedAway'
+		let stringId = project.strings.intern(String.from(decoded))
+		module.appendOp(block, op: MaxonOp.printLiteral(stringId, range: SourceRange.none()))
 	end 'emitFragmentLiteral'
 
 	// --- Expression Parsing ---
@@ -1830,14 +1852,21 @@ export type Parser
 				continue
 			end 'shortCircuit'
 
-			// Compile-time string constant folding for ==
+			// Compile-time string constant folding for ==. The interner
+			// guarantees identical content shares one StringId, so id
+			// comparison is exact: equal ids ⇔ equal content (no value
+			// fetch needed). Mirrors the original semantics: when right
+			// isn't a stringConst, exprStringConstId returns the sentinel
+			// 0, which only matches a left whose own id is 0 (the empty
+			// string) — preserves the legacy "left vs `""`" comparison
+			// behavior.
 			if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
 				if exprIsStringConst(left) 'leftIsStr'
 					currentBlock = blk
 					let right = try parsePrimary(module, block: blk)
 					blk = currentBlock
 					var foldedLeft = 1
-					if exprStringConstValue(left) != exprStringConstValue(right) 'strNeq'
+					if exprStringConstId(left) != exprStringConstId(right) 'strNeq'
 						foldedLeft = 0
 					end 'strNeq'
 					let leftLitName = emitLiteral(module, block: blk, value: foldedLeft, valueType: MaxonType.integer)
@@ -1849,7 +1878,10 @@ export type Parser
 				end 'leftIsStr'
 			end 'checkStrFold'
 
-			// Reference identity: is / is not
+			// Reference identity: is / is not. The parser emits `refEq`
+			// unconditionally; TypeResolution validates that both operands
+			// are reference (struct) types after the registries are fully
+			// populated and surfaces E3005 when they aren't.
 			if opToken.kind == TokenKind.is 'isRefEq'
 				var negate = false
 				if cursor.current().kind == TokenKind.not 'isNot'
@@ -1859,9 +1891,6 @@ export type Parser
 				currentBlock = blk
 				let right = try parseExpressionBP(module, block: blk, minBP: bp)
 				blk = currentBlock
-				if not maxonTypeIsRef(project, t: exprType(left)) or not maxonTypeIsRef(project, t: exprType(right)) 'notRef'
-					reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
-				end 'notRef'
 				let resultName = freshSynthName()
 				module.appendOp(blk, op: MaxonOp.refEq(resultName, left: leftName, right: exprName(right), negate: negate, range: opRange))
 				left = ExprResult.direct(resultName, valueType: MaxonType.integer)
@@ -1873,37 +1902,32 @@ export type Parser
 			let right = try parseExpressionBP(module, block: blk, minBP: bp)
 			blk = currentBlock
 
-			// Dispatch == and != to .equals() call for reference types (content comparison)
-			if (opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and maxonTypeIsRef(project, t: exprType(left)) and maxonTypeIsRef(project, t: exprType(right)) 'refEquals'
-				let equalsResultName = freshSynthName()
-				var equalsArgs = ByteArrayArray.create()
-				equalsArgs.push(exprName(right))
-				let equalsLabels = StringArray.create()
-				var equalsArgTypes = MaxonTypeArray.create()
-				equalsArgTypes.push(exprType(right))
-				var equalsArgRanges = SourceRangeArray.create()
-				equalsArgRanges.push(opRange)
-				module.appendOp(blk, op: MaxonOp.methodCall(equalsResultName, receiver: leftName, methodName: project.calleeNames.intern("equals"), args: equalsArgs, argLabels: equalsLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: opRange))
-				if opToken.kind == TokenKind.bangEquals 'neq'
-					let notResultName = freshSynthName()
-					module.appendOp(blk, op: MaxonOp.unop(notResultName, operand: equalsResultName, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: opRange))
-					left = ExprResult.direct(notResultName, valueType: MaxonType.integer)
-				end 'neq' else 'eq'
-					left = ExprResult.direct(equalsResultName, valueType: MaxonType.integer)
-				end 'eq'
-				continue
-			end 'refEquals'
+			// `==`/`!=` between two reference (struct) values dispatches to
+			// `.equals()` for content comparison; primitives use a regular
+			// cmp. The parser doesn't probe `project.structTypes` to decide
+			// — TypeResolution walks every cmp op after registries are
+			// fully populated and rewrites struct-vs-struct cmps into the
+			// `methodCall("equals")` form, with a follow-up `bitNot` for
+			// `!=`. Until then, the parser emits a regular cmp and lets TR
+			// pattern-match.
 
+			// Materialize any parser-internal stringConst operands as real
+			// IR ops before threading their names into a binop/cmp. Without
+			// this, lowering's resolveName fails because parser-time
+			// stringConst values have no producer in the IR.
+			let materializedLeft = materializeStringConstIfNeeded(module, block: blk, expr: left, range: opRange)
+			let materializedRight = materializeStringConstIfNeeded(module, block: blk, expr: right, range: opRange)
+			let materializedLeftName = exprName(materializedLeft)
 			let resultName = freshSynthName()
 			// Pick an advisory operandType from whichever operand carries the
 			// most specific source-level type. lowerMaxonToStd sees the
 			// fully-resolved operand StdTypes and inserts int↔float promotions
 			// and picks the concrete opcodes. Left/right MaxonTypes are recorded
 			// separately on the cmp op so TypeResolution can diagnose E3005.
-			let leftExprType = exprType(left)
-			let rightExprType = exprType(right)
+			let leftExprType = exprType(materializedLeft)
+			let rightExprType = exprType(materializedRight)
 			let operandType = binOpOperandType(leftExprType, rightType: rightExprType, kind: opToken.kind)
-			emitBinaryOp(module, block: blk, kind: opToken.kind, resultName: resultName, leftName: leftName, rightName: exprName(right), leftType: leftExprType, rightType: rightExprType, operandType: operandType, range: opRange)
+			emitBinaryOp(module, block: blk, kind: opToken.kind, resultName: resultName, leftName: materializedLeftName, rightName: exprName(materializedRight), leftType: leftExprType, rightType: rightExprType, operandType: operandType, range: opRange)
 
 			// Comparison ops produce int (bool); arithmetic inherits the
 			// operand's source-level type so chained expressions stay
@@ -1951,6 +1975,7 @@ export type Parser
 			float gives false
 			boolean gives false
 			string gives false
+			unresolved gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -2188,13 +2213,14 @@ export type Parser
 			let memberNameBytes = memberName.toByteArray()
 
 			let receiverName = exprName(result)
-			let receiverType = exprType(result)
 
 			let afterMember = try cursor.peek(1) otherwise 'noMore'
 				let fieldLoadNameEof = freshSynthName()
 				module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadNameEof, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
-				let fieldTypeEof = lookupFieldTypeForChain(receiverType, fieldName: memberName)
-				result = ExprResult.direct(fieldLoadNameEof, valueType: fieldTypeEof)
+				// Field-load result type is filled in by TypeResolution from
+				// the receiver's resolved struct-field layout — the parser
+				// doesn't peek into `project.structTypes`.
+				result = ExprResult.direct(fieldLoadNameEof, valueType: MaxonType.unresolved)
 				break
 			end 'noMore'
 
@@ -2206,55 +2232,22 @@ export type Parser
 				let rparenToken = cursor.current()
 				let methodResultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
-				let methodReturnType = lookupMethodReturnTypeForChain(receiverType, methodName: memberName)
-				result = ExprResult.direct(methodResultName, valueType: methodReturnType)
+				// Method-call result type is filled in by TypeResolution from
+				// the resolved callee signature — the parser doesn't peek
+				// into `project.funcReturnTypes`.
+				result = ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
 				// Cursor AT `)`. Loop continues to check next for `.`.
 				continue
 			end 'isMethodCall'
 
 			let fieldLoadName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
-			let fieldType = lookupFieldTypeForChain(receiverType, fieldName: memberName)
-			result = ExprResult.direct(fieldLoadName, valueType: fieldType)
+			result = ExprResult.direct(fieldLoadName, valueType: MaxonType.unresolved)
 			// Cursor AT memberToken. Loop continues to peek next.
 		end 'postfixLoop'
 
 		return result
 	end 'parsePostfix'
-
-	// Look up the type of a field on the receiver's struct type. Used for
-	// parser-time type-flow propagation in postfix chains; lowering re-runs
-	// the same lookup when emitting field-load Std ops. Returns
-	// `MaxonType.integer` as a placeholder when the receiver isn't a known
-	// struct or the field doesn't exist — lowering will surface a real
-	// diagnostic.
-	function lookupFieldTypeForChain(receiverType MaxonType, fieldName String) returns MaxonType
-		let structName = maxonTypeStructName(project, t: receiverType)
-		if structName.isEmpty() 'noStruct'
-			return MaxonType.integer
-		end 'noStruct'
-		// structTypes / fieldByName / fields are sparse during parse; absent entries fall back to the
-		// MaxonType.integer placeholder (lowering re-checks and produces real diagnostics).
-		let structType = try project.structTypes.get(structName) otherwise return MaxonType.integer
-		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return MaxonType.integer
-		let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.integer
-		return field.fieldType
-	end 'lookupFieldTypeForChain'
-
-	// Look up the return type of `{receiverType}.methodName` for postfix
-	// type propagation. Same placeholder fallback as field lookup.
-	function lookupMethodReturnTypeForChain(receiverType MaxonType, methodName String) returns MaxonType
-		let structName = maxonTypeStructName(project, t: receiverType)
-		if structName.isEmpty() 'noStruct'
-			return MaxonType.integer
-		end 'noStruct'
-		let qualifiedCallee = "{structName}.{methodName}"
-		let returnType = try project.funcReturnTypes.get(qualifiedCallee) otherwise MaxonReturnType.void
-		return match returnType 'unwrap'
-			void gives MaxonType.integer
-			value(inner) gives inner
-		end 'unwrap'
-	end 'lookupMethodReturnTypeForChain'
 
 	// --- Primary expression parsing ---
 
@@ -2303,8 +2296,9 @@ export type Parser
 					let rparenToken = cursor.current()
 					let methodResultName = freshSynthName()
 					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
-					let methodReturnType = lookupMethodReturnTypeForChain(receiverVarType, methodName: memberToken.value)
-					return ExprResult.direct(methodResultName, valueType: methodReturnType)
+					// methodCall result type is filled in by TypeResolution
+					// from `funcReturnTypes` once registries are populated.
+					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
 				end 'isMethodOnLocal'
 				// Qualified static call: Type.method(...) — lowering resolves verbatim.
 				let calleeName = "{token.value}.{memberToken.value}"
@@ -2318,29 +2312,29 @@ export type Parser
 			end 'isDotCall'
 		end 'maybeDotCall'
 
-		// Qualified static-field read: TypeName.field, when the qualified name
-		// resolves to a registered static var (.data slot) or static let
-		// (compile-time constant). Methods take precedence above; this branch
-		// only fires when the next token after `.field` is NOT `(`.
-		if peekToken.kind == TokenKind.dot 'maybeQualifiedRead'
+		// Qualified static-field read: TypeName.field, where the qualified name
+		// names a registered static var (.data slot) or static let
+		// (compile-time integer constant). Methods take precedence above;
+		// this branch fires when the next token after `.field` is NOT `(`.
+		// The parser doesn't peek into `globalVars` / `topLevelConstants`;
+		// it emits a single `unresolvedRead` op for the qualified name and
+		// lets TypeResolution rewrite it to `globalLoad` (var) or `literal`
+		// (static let — always int per the static-let parser, see
+		// parseTopLevelStaticLet) once project registries are fully
+		// populated. Local-scoped receivers (`localVar.field`) must NOT
+		// take this path — they go through the field-load chain in the
+		// postfix walk. The `not scope.contains(token.value)` guard keeps
+		// local-scope reads on their normal path.
+		if peekToken.kind == TokenKind.dot and not scope.contains(token.value) 'maybeQualifiedRead'
 			let memberToken = try cursor.peek(2) otherwise Token.eof()
 			let afterMember = try cursor.peek(3) otherwise Token.eof()
 			if memberToken.kind == TokenKind.identifier and afterMember.kind != TokenKind.leftParen 'isFieldRead'
 				let qualifiedName = "{token.value}.{memberToken.value}"
-				if project.globalVars.contains(qualifiedName) 'isGlobalRead'
-					let info = lookupGlobalVar(qualifiedName, callSite: "parseIdentifierExpr.qualifiedRead")
-					// Advance to the field-name token, then stay AT it per the
-					// "exit AT last-consumed" primary-expression contract.
-					try expect(TokenKind.identifier)
-					try expect(TokenKind.dot)
-					let resultName = emitGlobalLoad(module, block: block, qualifiedName: qualifiedName, slotType: info.slotType, range: SourceRange.between(token, last: memberToken))
-					return ExprResult.direct(resultName, valueType: info.slotType)
-				end 'isGlobalRead'
-				if project.topLevelConstants.contains(qualifiedName) 'isStaticLet'
-					try expect(TokenKind.identifier)
-					try expect(TokenKind.dot)
-					return resolveConstant(module, block: block, name: qualifiedName)
-				end 'isStaticLet'
+				try expect(TokenKind.identifier)
+				try expect(TokenKind.dot)
+				let resultName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.unresolvedRead(resultName, name: qualifiedName, range: SourceRange.between(token, last: memberToken)))
+				return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
 			end 'isFieldRead'
 		end 'maybeQualifiedRead'
 
@@ -2406,25 +2400,28 @@ export type Parser
 		// Struct construction: TypeName{field: value, ...}
 		// Ranged-primitive construction (`Foo{42}`) was removed in favor of
 		// `42 as Foo`, so `Foo{...}` here unambiguously means struct literal.
-		// The structTypes registry probe was previously needed to distinguish
-		// the two forms; now `Foo{...}` is uniformly routed to parseStructLiteral
-		// regardless of whether `Foo` is registered as a struct, with the
-		// downstream code reporting an error if the name doesn't resolve to one.
-		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
+		// The parser doesn't peek into `structTypes`; the downstream lowering
+		// reports an error if the name doesn't resolve to a struct.
+		if peekToken.kind == TokenKind.leftBrace 'isStructLiteral'
 			return try parseStructLiteral(module, block: block, typeName: token.value, typeToken: token)
 		end 'isStructLiteral'
 
-		if project.topLevelConstants.contains(token.value) 'isConst'
-			return resolveConstant(module, block: block, name: token.value)
-		end 'isConst'
-
-		// Bare identifier may name a top-level `var`. Locals shadow globals:
-		// only resolve to a global when the name is unbound in the local scope.
-		if not scope.contains(token.value) and project.globalVars.contains(token.value) 'isGlobalRead'
-			let info = lookupGlobalVar(token.value, callSite: "parseIdentifierExpr.bareRead")
-			let resultName = emitGlobalLoad(module, block: block, qualifiedName: token.value, slotType: info.slotType, range: SourceRange.ofToken(token))
-			return ExprResult.direct(resultName, valueType: info.slotType)
-		end 'isGlobalRead'
+		// Bare identifier that isn't bound as a local: defer name resolution
+		// to TypeResolution. The `unresolvedRead` op is rewritten to
+		// `globalLoad` (for top-level `var`s), `literal` (for top-level int
+		// constants), or substituted with the interned StringId of a
+		// top-level string constant via `unresolvedRead`'s rewrite path —
+		// and TypeResolution handles the print/cmp consumers downstream by
+		// pattern-matching on the producer. The parser does not peek into
+		// `project.topLevelConstants`; the string-const peek that used to
+		// live here was a parse-time substitution that depended on
+		// same-file ordering of constant declarations, which the post-
+		// resolve pass eliminates.
+		if not scope.contains(token.value) 'isUnresolvedName'
+			let resultName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.unresolvedRead(resultName, name: token.value, range: SourceRange.ofToken(token)))
+			return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
+		end 'isUnresolvedName'
 
 		let slot = lookupVariable(token.value, token: token)
 		let name = freshSynthName()
@@ -2511,13 +2508,12 @@ export type Parser
 		return OptionalToken.some(nameToken)
 	end 'consumeArgLabel'
 
-	// Emit a function call op. The parser does NOT do callee dispatch or
-	// signature-driven arg slotting — those happen in LowerMaxonToStd —
-	// but it DOES read the resolved callee's declared return type so that
-	// the ExprResult's valueType propagates a real `MaxonType.named(...)`
-	// to downstream type-flow consumers (var slot inference, postfix
-	// chain typing). The lookup is a bare dictionary read and does not
-	// constitute cross-method resolution.
+	// Emit a function call op. The parser does NOT do callee dispatch,
+	// signature-driven arg slotting, or return-type resolution — TypeResolution
+	// fills in the call's result type from `funcReturnTypes` once the project
+	// registries are fully populated, and lowering performs the signature-
+	// driven arg slot fill. Result type is `MaxonType.unresolved` at parse
+	// time.
 	// `range` covers the call-site span (the callee name through the closing
 	// `)`); caller captures it before parsing arguments and passes it in.
 	// `callContext` tells lowering how to qualify the bare callee name:
@@ -2526,25 +2522,8 @@ export type Parser
 	function emitCallAndResult(module MaxonModule, block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
-		let resolvedCallee = qualifyCalleeForType(calleeName, callContext: callContext)
-		let returnType = try project.funcReturnTypes.get(resolvedCallee) otherwise MaxonReturnType.void
-		let resultType = match returnType 'unwrap'
-			void gives MaxonType.integer
-			value(inner) gives inner
-		end 'unwrap'
-		return ExprResult.direct(callName, valueType: resultType)
+		return ExprResult.direct(callName, valueType: MaxonType.unresolved)
 	end 'emitCallAndResult'
-
-	// Mirror of LowerMaxonToStd's call-resolution path for the parser's local
-	// use — only consulted to recover the callee's return type for
-	// ExprResult type-flow. Lowering re-runs the same probe order at the
-	// lowering boundary; keeping the two in sync is cheaper than threading
-	// the resolved name back from lowering for parse-time type inference.
-	// Delegates to the shared `qualifyCalleeForContext` so all three
-	// consumers (parser, DFE, lowering) cannot drift.
-	function qualifyCalleeForType(bare String, callContext CallContext) returns String
-		return qualifyCalleeForContext(project, bare: bare, callContext: callContext, currentNamespace: namespace)
-	end 'qualifyCalleeForType'
 
 	// entry: cursor AT type-name identifier (if not typeNameConsumed) OR AT `{`.
 	// exit:  cursor AT `}`.
@@ -2637,7 +2616,7 @@ export type Parser
 	function parseCharLiteralExpr(token Token) returns ExprResult throws ParserError
 		validateEscapes(token, kind: "character literal")
 		let dummy = freshSynthName()
-		return ExprResult.stringConst(dummy, value: "")
+		return ExprResult.stringConst(dummy, stringId: project.strings.intern(""))
 	end 'parseCharLiteralExpr'
 
 	// entry: cursor AT `Self`.
@@ -2741,10 +2720,12 @@ export type Parser
 	//       in expression position aren't representable as stringConst — we
 	//       report an error and return a dummy value so parsing continues.
 	function parseStringLiteral(token Token) returns ExprResult throws ParserError
-		// String literals don't emit an op in the Maxon IR today (they're
-		// constant-folded through `stringConst`), so there's no range to
-		// attach. When string literals acquire a backing op, the range
-		// comes from `SourceRange.ofToken(token)`.
+		// Returns `ExprResult.stringConst(name, stringId)` carrying the
+		// interned StringId of the decoded literal bytes. The parser does
+		// not emit a backing IR op here; callers that consume the
+		// stringConst at parse time (the `==` compile-time fold and the
+		// `let LOCAL = "literal"` constant registration) read the
+		// StringId directly off the ExprResult.
 		let peek = try cursor.peek(1) otherwise Token.eof()
 		if peek.kind == TokenKind.stringInterpStart 'hasInterp'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "string interpolation is only supported inside print()", line: token.line, column: token.column, filePath: filePath)
@@ -2753,12 +2734,30 @@ export type Parser
 			// next real token.
 			try skipInterpolatedRemainder()
 			let dummy = freshSynthName()
-			return ExprResult.stringConst(dummy, value: "")
+			return ExprResult.stringConst(dummy, stringId: project.strings.intern(""))
 		end 'hasInterp'
 		validateEscapes(token, kind: "string interpolation")
 		let name = freshSynthName()
-		return ExprResult.stringConst(name, value: token.value)
+		let decoded = decodeStringEscapes(token.value)
+		return ExprResult.stringConst(name, stringId: project.strings.intern(String.from(decoded)))
 	end 'parseStringLiteral'
+
+	// Materialize a parser-internal stringConst into a real IR op when its
+	// `name` is about to be referenced by an op operand (e.g. it survives
+	// past the compile-time fold path and ends up on either side of a cmp
+	// that didn't fold). Without the backing op, lowering's resolveName
+	// would fail with "parser did not bind this name". Idempotent: callers
+	// invoke this on every ExprResult before threading its name into a
+	// downstream op so the producer is guaranteed to be present in the IR.
+	function materializeStringConstIfNeeded(module MaxonModule, block IrBlock, expr ExprResult, range SourceRange) returns ExprResult
+		if not exprIsStringConst(expr) 'notStr'
+			return expr
+		end 'notStr'
+		let stringId = exprStringConstId(expr)
+		let name = exprName(expr)
+		module.appendOp(block, op: MaxonOp.stringConst(name, stringId: stringId, range: range))
+		return ExprResult.direct(name, valueType: MaxonType.string)
+	end 'materializeStringConstIfNeeded'
 
 	// Validate \xNN and \uNNNN escape sequences in `token.value`. Reports
 	// `lexerInvalidEscape` matching the C# bootstrap's diagnostic text:
@@ -3209,13 +3208,6 @@ export type Parser
 		return scope.declare(name, varType: varType, mutable: true)
 	end 'defineVariableWithType'
 
-	function getVariableStructType(name String) returns String
-		if not scope.contains(name) 'notFound'
-			return ""
-		end 'notFound'
-		return maxonTypeStructName(project, t: scope.getType(name))
-	end 'getVariableStructType'
-
 	function lookupVariable(name String, token Token) returns VarSlot
 		if let slot = try scope.lookup(name) 'found'
 			referencedVars.insert(element: name)
@@ -3224,15 +3216,6 @@ export type Parser
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
 		return 0
 	end 'lookupVariable'
-
-	function resolveConstant(module MaxonModule, block IrBlock, name String) returns ExprResult
-		let constVal = try project.topLevelConstants.get(name) otherwise return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
-
-		match constVal 'dispatch'
-			stringValue(v) then return ExprResult.stringConst(freshSynthName(), value: v)
-			intValue(v) then return ExprResult.direct(emitLiteral(module, block: block, value: v, valueType: MaxonType.integer), valueType: MaxonType.integer)
-		end 'dispatch'
-	end 'resolveConstant'
 
 	function parseScopedStatements(module MaxonModule, func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		scope.pushScope()
@@ -3257,6 +3240,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 		boolean gives false
 		named gives false
 		string gives false
+		unresolved gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -3267,6 +3251,7 @@ function maxonTypeIsBool(t MaxonType) returns bool
 		float gives false
 		named gives false
 		string gives false
+		unresolved gives false
 	end 'check'
 end 'maxonTypeIsBool'
 
@@ -3275,7 +3260,7 @@ end 'maxonTypeIsBool'
 // that aren't yet registered (forward references across files), we
 // conservatively return false; the TypeResolution pass catches truly-unknown
 // names after all files have been parsed.
-function maxonTypeIsRef(project Project, t MaxonType) returns bool
+export function maxonTypeIsRef(project Project, t MaxonType) returns bool
 	let nameStr = t.nameOrEmpty(project)
 	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
 end 'maxonTypeIsRef'
@@ -3418,8 +3403,11 @@ end 'computeOptimalIntType'
 export union ExprResult
 	// Computed value — already emitted as an op
 	direct(name ByteArray, valueType MaxonType)
-	// Compile-time string constant — for constant folding of == on strings
-	stringConst(name ByteArray, value String)
+	// Compile-time string constant — carries the interned StringId so
+	// downstream consumers (printLiteral emission, top-level constant
+	// registration, string-equality folding) reference the literal by its
+	// stable project-wide id rather than re-allocating its bytes.
+	stringConst(name ByteArray, stringId StringId)
 end 'ExprResult'
 
 // --- ExprResult helpers ---
@@ -3445,12 +3433,12 @@ function exprIsStringConst(expr ExprResult) returns bool
 	end 'check'
 end 'exprIsStringConst'
 
-function exprStringConstValue(expr ExprResult) returns String
-	return match expr 'getValue'
-		stringConst(_, value) gives value
-		direct gives ""
-	end 'getValue'
-end 'exprStringConstValue'
+function exprStringConstId(expr ExprResult) returns StringId
+	return match expr 'getId'
+		stringConst(_, stringId) gives stringId
+		direct gives 0
+	end 'getId'
+end 'exprStringConstId'
 
 // --- Context stacks for loops and match ---
 
