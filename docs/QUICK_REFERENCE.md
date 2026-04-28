@@ -32,9 +32,9 @@ if value == i32.max 'check'         // comparisons, arithmetic, etc.
 
 Construction and range checks:
 ```maxon
-var p = Port{8080}                  // construct with TypeName{value}
-var x = Port{70000}                 // compile error: out of range
-var y = Port{someExpression}        // runtime range check (panics on violation)
+var p = 8080 as Port                // cast a value into the ranged type
+var x = 70000 as Port               // compile error: out of range
+var y = someExpression as Port      // runtime range check (panics on violation)
 ```
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
@@ -459,7 +459,7 @@ type Pool uses T
 end 'Pool'
 // PoolA.Idx and PoolB.Idx are incompatible types
 // Use 'as' to explicitly convert: aIdx as PoolB.Idx
-// Construct with dot-syntax: PoolA.Idx{0}
+// Construct with dot-syntax: 0 as PoolA.Idx
 
 // Interface extensions: add methods to all conforming types
 extension Container

@@ -157,7 +157,11 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	var pipeline = PassPipeline.create(allModule, project: project, globalData: globalData, target: project.target, sourceFileName: sourceFileName, isStdlib: true)
 
 	// Phases 2-5: shared across all targets (through MIR)
+	// resolveTypes drains the unresolvedTypealiases registry (populated by
+	// the stdlib parse) into the resolved typealiases/typealiasRanges maps
+	// so lowerMaxonToStd can look up named types successfully.
 	// Skip semanticCheck — it requires main() which stdlib doesn't have
+	pipeline.addPass(PassKind.resolveTypes)
 	pipeline.addPass(PassKind.lowerMaxonToStd)
 	pipeline.addPass(PassKind.borrowCheck)
 	pipeline.addPass(PassKind.injectDrops)

@@ -48,7 +48,7 @@ function recurse(n Depth) returns Depth
 	var v = BigVec.create()
 	try v.set(2047, value: n) otherwise panic("test invariant: set OOB")
 	if n <= 0 'base'
-		return Depth{0}
+		return 0
 	end 'base'
 	return recurse(n - 1)
 end 'recurse'
@@ -1091,8 +1091,8 @@ utf8 "hello world\0"
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	let a = SmallInt{10}
-	let b = SmallInt{3}
+	let a = 10 as SmallInt
+	let b = 3 as SmallInt
 	return a + b
 end 'main'
 ```
@@ -1105,23 +1105,21 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
-    %2 = maxon.literal {value = 3 : i64}
-    %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
-    %4 = maxon.binop %1, %3 {op = add}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = u16}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at i32-unsigned-add.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
-    maxon.return %4
+    maxon.return %2
   }
 }
 === standard
@@ -1252,8 +1250,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	let a = SmallInt{20}
-	let b = SmallInt{3}
+	let a = 20 as SmallInt
+	let b = 3 as SmallInt
 	return a / b
 end 'main'
 ```
@@ -1266,23 +1264,21 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
-    %2 = maxon.literal {value = 3 : i64}
-    %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
-    %4 = maxon.binop %1, %3 {op = div}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = u16}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at i32-unsigned-div.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
-    maxon.return %4
+    maxon.return %2
   }
 }
 === standard
@@ -1291,7 +1287,7 @@ module {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.divsi %0, %1
+    %2 = arith.divui %0, %1
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.cmpi lt %2, %3
     %5 = arith.constant {value = 4294967295 : i64}
@@ -1313,8 +1309,8 @@ module {
     x64.prologue stack_size=16
     x64.mov rax, 20
     x64.mov rcx, 3
-    x64.cqo
-    x64.idiv rcx
+    x64.xor edx, edx
+    x64.div rcx
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
@@ -1414,8 +1410,8 @@ module {
 typealias Temp = int(-100000 to 100000)
 
 function main() returns ExitCode
-	let a = Temp{20}
-	let b = Temp{3}
+	let a = 20 as Temp
+	let b = 3 as Temp
 	return a / b
 end 'main'
 ```
@@ -1590,8 +1586,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	let a = SmallInt{10}
-	let b = SmallInt{3}
+	let a = 10 as SmallInt
+	let b = 3 as SmallInt
 	if a > b 'check'
 		return 1
 	end 'check'
@@ -1607,21 +1603,19 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
-    %2 = maxon.literal {value = 3 : i64}
-    %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
-    %4 = maxon.binop %1, %3 {op = gt}
-    maxon.cond_br %4 [then: check_0, else: check_0.after]
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = gt}
+    maxon.cond_br %2 [then: check_0, else: check_0.after]
   check_0:
-    %5 = maxon.literal {value = 1 : i64}
+    %3 = maxon.literal {value = 1 : i64}
     maxon.scope_end [a, b]
-    maxon.return %5
+    maxon.return %3
   check_0.after:
-    %6 = maxon.literal {value = 0 : i64}
+    %4 = maxon.literal {value = 0 : i64}
     maxon.scope_end [a, b]
-    maxon.return %6
+    maxon.return %4
   }
 }
 === standard
@@ -1722,8 +1716,8 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-	let a = SmallInt{20}
-	let b = SmallInt{3}
+	let a = 20 as SmallInt
+	let b = 3 as SmallInt
 	return a mod b
 end 'main'
 ```
@@ -1736,23 +1730,21 @@ module {
   func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    %1 = maxon.cast %0 {target = i16}
-    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1}
-    %2 = maxon.literal {value = 3 : i64}
-    %3 = maxon.cast %2 {target = i16}
-    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1}
-    %4 = maxon.binop %1, %3 {op = mod}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = mod} {optimalType = u16}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
-    maxon.return %4
+    maxon.return %2
   }
 }
 === standard
@@ -1761,7 +1753,7 @@ module {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.remsi %0, %1
+    %2 = arith.remui %0, %1
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.cmpi lt %2, %3
     %5 = arith.constant {value = 4294967295 : i64}
@@ -1783,8 +1775,8 @@ module {
     x64.prologue stack_size=16
     x64.mov rax, 20
     x64.mov rcx, 3
-    x64.cqo
-    x64.idiv rcx
+    x64.xor edx, edx
+    x64.div rcx
     x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
@@ -1886,8 +1878,8 @@ module {
 typealias BigInt = int(-1000000000000 to 1000000000000)
 
 function main() returns ExitCode
-	let a = BigInt{20}
-	let b = BigInt{3}
+	let a = 20 as BigInt
+	let b = 3 as BigInt
 	return a / b
 end 'main'
 ```
@@ -2044,8 +2036,8 @@ module {
 typealias Tiny = int(0 to 100)
 
 function main() returns ExitCode
-	let a = Tiny{21}
-	let b = Tiny{3}
+	let a = 21 as Tiny
+	let b = 3 as Tiny
 	return a / b
 end 'main'
 ```
@@ -2220,8 +2212,8 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let a = F{10.0}
-	let b = F{3.0}
+	let a = 10.0 as F
+	let b = 3.0 as F
 	return trunc(a + b)
 end 'main'
 ```
@@ -2383,8 +2375,8 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let a = F{3.0}
-	let b = F{5.0}
+	let a = 3.0 as F
+	let b = 5.0 as F
 	if a < b 'less'
 		return 1
 	end 'less'
@@ -2512,7 +2504,7 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let a = F{42.9}
+	let a = 42.9 as F
 	return trunc(a)
 end 'main'
 ```

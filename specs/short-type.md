@@ -29,7 +29,7 @@ Values in 16-bit storage are zero-extended (unsigned) or sign-extended (signed) 
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-	let arr = [U16{100}, U16{200}, U16{300}]
+	let arr = [100 as U16, 200 as U16, 300 as U16]
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(1) otherwise 0
 	let c = try arr.get(2) otherwise 0
@@ -48,7 +48,7 @@ typealias U16 = int(0 to 65535)
 typealias Result = int(0 to u32.max)
 
 function main() returns ExitCode
-	let arr = [U16{65535}, U16{0}, U16{1}]
+	let arr = [65535 as U16, 0 as U16, 1 as U16]
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(2) otherwise 0
 	let sum = a as Result + b as Result
@@ -66,7 +66,7 @@ end 'main'
 typealias I16 = int(-32768 to 32767)
 
 function main() returns ExitCode
-	let arr = [I16{100}, I16{-50}, I16{200}]
+	let arr = [100 as I16, -50 as I16, 200 as I16]
 	let a = try arr.get(0) otherwise 0
 	let c = try arr.get(2) otherwise 0
 	return a + c
@@ -79,11 +79,21 @@ end 'main'
 ### U16 Constant Array Rdata
 
 <!-- test: short-type.u16-rdata -->
+Narrow array-element storage flows through the collection-from-array
+syntax: when `U16Array = Array with U16`, the element type `U16`
+(`int(0 to 65535)`) propagates through `ParseFromExpression` →
+`EmitArrayLiteralElements` so each integer literal is range-checked at
+compile time and re-tagged with the optimal storage kind (i16/u16). The
+constant-folding pass then lifts the array into `.rdata` with the narrow
+element width, replacing what `U16{x}` per-element construction used to
+produce.
+
 ```maxon
 typealias U16 = int(0 to 65535)
+typealias U16Array = Array with U16
 
 function main() returns ExitCode
-	let arr = [U16{10}, U16{20}, U16{30}]
+	let arr = U16Array from [10, 20, 30]
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(1) otherwise 0
 	let c = try arr.get(2) otherwise 0
@@ -104,8 +114,8 @@ u16 10 20 30
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-	let a = U16{1000}
-	let b = U16{500}
+	let a = 1000 as U16
+	let b = 500 as U16
 	return a - b
 end 'main'
 ```
@@ -119,7 +129,7 @@ end 'main'
 ```maxon
 typealias U16 = int(0 to 65535)
 
-var counter = U16{42}
+var counter = 42 as U16
 
 function main() returns ExitCode
 	return counter
@@ -138,10 +148,10 @@ u16 42
 ```maxon
 typealias U16 = int(0 to 65535)
 
-var counter = U16{0}
+var counter = 0 as U16
 
 function main() returns ExitCode
-	counter = U16{99}
+	counter = 99 as U16
 	return counter
 end 'main'
 ```
@@ -156,8 +166,8 @@ end 'main'
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-	var arr = [U16{0}, U16{0}, U16{0}]
-	try arr.set(1, value: U16{42}) otherwise panic("test invariant: set OOB")
+	var arr = [0 as U16, 0 as U16, 0 as U16]
+	try arr.set(1, value: 42 as U16) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise 0
 	return v
 end 'main'

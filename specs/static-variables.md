@@ -602,7 +602,7 @@ Module-level var with a byte-sized ranged type.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
 
-var counter = SmallInt{42}
+var counter = 42 as SmallInt
 
 function main() returns ExitCode
 		return counter

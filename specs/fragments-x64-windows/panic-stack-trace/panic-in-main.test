@@ -3,11 +3,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Bounded = int(10 to 20)
 
 function getVal() returns Integer
-	return Integer{5}
+	return 5
 end
 
 function main() returns ExitCode
-	let b = Bounded{getVal()}
+	let b = getVal() as Bounded
 	return b as ExitCode
 end
 ---
@@ -54,6 +54,18 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rax, r8
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rdi
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
     x64.epilogue
     x64.ret
   }

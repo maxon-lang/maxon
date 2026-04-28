@@ -4652,19 +4652,89 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private object EvalConstUnary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     if (Check(TokenType.Minus)) {
       Advance();
-      var val = EvalConstPrimary(decls, evaluated, evaluating);
+      var val = EvalConstAsCast(decls, evaluated, evaluating);
       if (val is long l) return -l;
       if (val is double d) return -d;
       throw new InvalidOperationException($"Cannot negate {val?.GetType().Name}");
     }
     if (Check(TokenType.Not)) {
       Advance();
-      var val = EvalConstPrimary(decls, evaluated, evaluating);
+      var val = EvalConstAsCast(decls, evaluated, evaluating);
       if (val is bool b) return !b;
       if (val is long l) return ~l;
       throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
     }
-    return EvalConstPrimary(decls, evaluated, evaluating);
+    return EvalConstAsCast(decls, evaluated, evaluating);
+  }
+
+  // Apply zero or more `as TypeName` casts to a constant value. Each cast
+  // either re-tags the literal (no value change for simple casts), validates
+  // the value against a ranged-type bound (compile error on out-of-range), or
+  // both. Mirrors the runtime parser's `as`-cast handling but operates on
+  // already-evaluated constants instead of MaxonValues.
+  private object EvalConstAsCast(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var value = EvalConstPrimary(decls, evaluated, evaluating);
+    while (Check(TokenType.As)) {
+      var asToken = Advance(); // consume 'as'
+      // Attempt to recognize the target type. Built-in primitive keywords are
+      // accepted as identity casts (the runtime would emit a kind change, but
+      // a constant value carries the underlying type already). Identifier
+      // targets must resolve to a ranged primitive type for compile-time
+      // validation; anything else is a malformed const cast.
+      if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)) {
+        Advance();
+        // Identity cast at the const-eval level — the value stays as-is.
+        continue;
+      }
+      if (!Check(TokenType.Identifier)) {
+        throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name after 'as'", asToken.Line, asToken.Column);
+      }
+      var typeName = Current().Value;
+      string fullName = typeName;
+      // Allow dot-qualified per-instance ranged aliases (`Foo.Idx`).
+      if (PeekNext().Type == TokenType.Dot) {
+        Advance(); // consume outer
+        Advance(); // consume '.'
+        var innerTok = Expect(TokenType.Identifier);
+        fullName = $"{typeName}.{innerTok.Value}";
+      } else {
+        Advance();
+      }
+      if (!_typeRegistry.TryGetValue(fullName, out var ty) || ty is not IrRangedPrimitiveType ranged) {
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"'{fullName}' is not a ranged type usable in a const-expr 'as' cast",
+          asToken.Line, asToken.Column);
+      }
+      _usedTypeAliases.Add(typeName);
+      // Validate against the declared range.
+      if (ranged.IsFloatBased) {
+        double numericVal = value is long lv ? (double)lv : value is double dv ? dv : throw new CompileError(
+          ErrorCode.SemanticTypeMismatch, $"Cannot cast non-numeric value to '{ranged.Name}'", asToken.Line, asToken.Column);
+        var upperLimit = ranged.UpperInclusive ? ranged.FloatUpper : ranged.FloatUpper - 1;
+        if (numericVal < ranged.FloatLower || numericVal > upperLimit) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Value {numericVal} is outside the range of '{ranged.Name}' ({ranged.FormatRange()})",
+            asToken.Line, asToken.Column);
+        }
+      } else {
+        long numericVal = value is long lv ? lv : throw new CompileError(
+          ErrorCode.SemanticTypeMismatch, $"Cannot cast non-integer value to '{ranged.Name}'", asToken.Line, asToken.Column);
+        bool outOfRange;
+        if (ranged.IntLower >= 0) {
+          var upperLimit = ranged.UpperInclusive ? (ulong)ranged.IntUpper : (ulong)ranged.IntUpper - 1;
+          outOfRange = (ulong)numericVal < (ulong)ranged.IntLower || (ulong)numericVal > upperLimit;
+        } else {
+          var upperLimit = ranged.UpperInclusive ? ranged.IntUpper : ranged.IntUpper - 1;
+          outOfRange = numericVal < ranged.IntLower || numericVal > upperLimit;
+        }
+        if (outOfRange) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Value {numericVal} is outside the range of '{ranged.Name}' ({ranged.FormatRange()})",
+            asToken.Line, asToken.Column);
+        }
+      }
+    }
+    return value;
   }
 
   private object EvalConstPrimary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
@@ -4696,39 +4766,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     if (Check(TokenType.Identifier)) {
       var token = Advance();
-      // Handle ranged type construction: TypeName{expr}
-      if (Check(TokenType.LeftBrace) && _typeRegistry.TryGetValue(token.Value, out var rangedCheck) && rangedCheck is IrRangedPrimitiveType rangedConst) {
-        _usedTypeAliases.Add(token.Value);
-        Advance(); // consume '{'
-        var innerVal = EvalConstExpr(decls, evaluated, evaluating);
-        Expect(TokenType.RightBrace);
-        // Validate range at compile time
-        if (rangedConst.IsFloatBased) {
-          double numericVal = innerVal is long lv ? (double)lv : innerVal is double dv ? dv : throw new CompileError(
-            ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-numeric value", token.Line, token.Column);
-          var upperLimit = rangedConst.UpperInclusive ? rangedConst.FloatUpper : rangedConst.FloatUpper - 1;
-          if (numericVal < rangedConst.FloatLower || numericVal > upperLimit) {
-            throw new CompileError(ErrorCode.SemanticTypeMismatch,
-              $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
-          }
-        } else {
-          long numericVal = innerVal is long lv ? lv : throw new CompileError(
-            ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-integer value", token.Line, token.Column);
-          bool constOutOfRange;
-          if (rangedConst.IntLower >= 0) {
-            var upperLimit = rangedConst.UpperInclusive ? (ulong)rangedConst.IntUpper : (ulong)rangedConst.IntUpper - 1;
-            constOutOfRange = (ulong)numericVal < (ulong)rangedConst.IntLower || (ulong)numericVal > upperLimit;
-          } else {
-            var upperLimit = rangedConst.UpperInclusive ? rangedConst.IntUpper : rangedConst.IntUpper - 1;
-            constOutOfRange = numericVal < rangedConst.IntLower || numericVal > upperLimit;
-          }
-          if (constOutOfRange) {
-            throw new CompileError(ErrorCode.SemanticTypeMismatch,
-              $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
-          }
-        }
-        return innerVal;
-      }
+      // Ranged-primitive construction (`TypeName{expr}`) is no longer
+      // recognized in const expressions either; the equivalent is
+      // `expr as TypeName`, handled by EvalConstAsCast at the postfix
+      // level above EvalConstPrimary.
       // Handle sized type bound: u64.max, i32.min, etc.
       if (Check(TokenType.Dot) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Value is "min" or "max") {
         var sizedType = IrType.FromSizedName(token.Value);
@@ -12850,14 +12891,50 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var inputVal = ResolveExprValue(lhs);
       var sourceKind = DetermineValueKind(inputVal);
       ValidateCast(sourceKind, targetKind, asToken);
-      var castOp = new MaxonCastOp(inputVal, targetKind);
-      _currentBlock!.AddOp(castOp);
+      // When casting to a ranged type, validate the input against its
+      // declared range — compile-time check for literals (errors out-of-range
+      // as SemanticTypeMismatch), runtime check otherwise. This makes
+      // `value as Score` carry the same range-safety guarantee that
+      // `Score{value}` construction syntax used to provide; the construction
+      // syntax was removed in favor of unifying ranged-primitive coercion
+      // through `as`. Run this BEFORE emitting MaxonCastOp so the
+      // literal-detection scan in ValidateAndEmitRangeCheck matches against
+      // the literal op's Result.
+      //
+      // Note: unlike ParseRangedPrimitiveConstruction, the `as` path does
+      // NOT re-tag the result as Short for i16/u16 optimal backings. The
+      // existing type system flows ranged values around at the i64 base
+      // kind, and re-tagging here ripples into tuple-element widths,
+      // struct-field call types, and arithmetic in ways the rest of the
+      // compiler isn't set up to absorb. The narrow-storage optimization
+      // that the construction syntax used to provide for array literals
+      // is therefore not preserved by `as`.
+      MaxonValue valueToCast = inputVal;
+      IrRangedPrimitiveType? rangedTarget = _lastCastRangedType;
+      if (rangedTarget != null) {
+        var expectedKind = rangedTarget.BaseType.ToValueKind();
+        valueToCast = ValidateAndEmitRangeCheck(inputVal, rangedTarget, expectedKind, asToken);
+      }
+      // Skip the explicit base-kind cast op when source and target share
+      // the same value kind — emitting a self-targeting MaxonCastOp would
+      // be a no-op that just shows up as noise in IR dumps and breaks
+      // existing RequiredIR expectations. The range-check above is the
+      // semantically meaningful work; no MaxonCastOp is needed when no
+      // kind change is happening.
+      MaxonValue castResult;
+      if (sourceKind == targetKind) {
+        castResult = valueToCast;
+      } else {
+        var castOp = new MaxonCastOp(valueToCast, targetKind);
+        _currentBlock!.AddOp(castOp);
+        castResult = castOp.Result;
+      }
       // When casting to a ranged type, propagate the type name
-      if (_lastCastRangedType != null) {
-        _lastRangedTypeName = _lastCastRangedType.Name;
+      if (rangedTarget != null) {
+        _lastRangedTypeName = rangedTarget.Name;
         _lastCastRangedType = null;
       }
-      lhs = new ExprResult.Direct(castOp.Result);
+      lhs = new ExprResult.Direct(castResult);
     }
 
     while ((BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence)
@@ -13463,25 +13540,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         return new ExprResult.Direct(litOp.Result);
       }
 
-      // Check for ranged primitive construction: TypeName{value} or TypeName.InnerAlias{value}
-      if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is IrRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
-        _usedTypeAliases.Add(token.Value);
-        return ParseRangedPrimitiveConstruction(token, rangedType);
-      }
-      // Dot-syntax ranged primitive construction: FunctionPool.Index{value}
-      // Peek ahead to verify the full pattern (Dot Identifier LeftBrace) before consuming
-      if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier
-          && _pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftBrace) {
-        var dotName = $"{token.Value}.{PeekNext().Value}";
-        if (_typeRegistry.TryGetValue(dotName, out var dotRegType) && dotRegType is IrRangedPrimitiveType dotRangedType) {
-          Advance(); // consume '.'
-          var innerToken = Advance(); // consume inner alias name
-          _usedTypeAliases.Add(token.Value);
-          return ParseRangedPrimitiveConstruction(innerToken, dotRangedType);
-        }
-      }
-
-      // Check for struct literal: TypeName{...} or TypeName { ... }
+      // Check for struct literal: TypeName{...} or TypeName { ... }.
+      // Ranged-primitive construction (`Foo{42}`, `FunctionPool.Index{n}`) is
+      // no longer recognized; use `42 as Foo` / `n as FunctionPool.Index`
+      // instead. With that syntax removed, `Foo{...}` unambiguously means
+      // struct literal — no registry lookup is needed at the parse site to
+      // distinguish the two forms.
       if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.LeftBrace)) {
         _usedTypeAliases.Add(token.Value);
         return ParseStructLiteral(token.Value);
@@ -14719,22 +14783,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Parses [expr, expr, ...] and emits element assigns + __ManagedMemory struct.
   /// Returns the managed memory struct op, the element count, and the element kind.
   /// </summary>
-  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount, MaxonValueKind ElementKind, string? ElementStructTypeName) EmitArrayLiteralElements() {
+  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount, MaxonValueKind ElementKind, string? ElementStructTypeName) EmitArrayLiteralElements(IrRangedPrimitiveType? targetRangedElementType = null) {
     Advance(); // consume '['
 
-    // Parse element expressions
+    // Parse element expressions. When `targetRangedElementType` is supplied
+    // (callers like ParseFromExpression know the destination collection's
+    // element type), each parsed element is range-checked and re-tagged in
+    // the same way `Score{42}` ranged-primitive construction used to —
+    // compile-time check for literals, runtime check otherwise, and a Short
+    // re-tag when the optimal storage type is i16/u16. This is what gives
+    // `U16Array from [10, 20, 30]` narrow `.rdata` storage.
     var elements = new List<MaxonValue>();
     if (!Check(TokenType.RightBracket)) {
-      elements.Add(ResolveExprValue(ParseExpression()));
+      elements.Add(NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType));
       while (Check(TokenType.Comma)) {
         Advance();
         if (Check(TokenType.RightBracket)) break; // trailing comma
-        elements.Add(ResolveExprValue(ParseExpression()));
+        elements.Add(NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType));
       }
     }
     Expect(TokenType.RightBracket);
 
     return EmitManagedMemoryFromElements(elements);
+  }
+
+  // Apply the target ranged element type's range-check + Short re-tag to a
+  // single array-literal element value. Returns the value unchanged when no
+  // target is supplied or the target's optimal type doesn't need narrowing.
+  // Mirrors what ParseRangedPrimitiveConstruction (now removed) used to do
+  // for `Score{n}`-style construction syntax.
+  private MaxonValue NarrowElementToTarget(MaxonValue value, IrRangedPrimitiveType? target) {
+    if (target == null) return value;
+    var expectedKind = target.BaseType.ToValueKind();
+    var validated = ValidateAndEmitRangeCheck(value, target, expectedKind, Current());
+    var optimalKind = target.OptimalType.ToValueKind();
+    if (optimalKind == MaxonValueKind.Short) {
+      var castOp = new MaxonCastOp(validated, MaxonValueKind.Short);
+      _currentBlock!.AddOp(castOp);
+      return castOp.Result;
+    }
+    return validated;
   }
 
   /// <summary>
@@ -14838,51 +14926,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock!.AddOp(managedStruct);
 
     return (managedStruct, arrayTag, count, elementKind, elementStructTypeName);
-  }
-
-  /// Parses ranged primitive construction: Age{42}, Count{someExpr}
-  private ExprResult.Direct ParseRangedPrimitiveConstruction(Token typeToken, IrRangedPrimitiveType rangedType) {
-    Advance(); // consume '{'
-    var innerExpr = ParseExpression();
-    var innerValue = ResolveExprValue(innerExpr);
-    Expect(TokenType.RightBrace);
-
-    var innerKind = DetermineValueKind(innerValue);
-    var expectedKind = rangedType.BaseType.ToValueKind();
-
-    if (innerKind != expectedKind) {
-      bool compatible =
-        (expectedKind == MaxonValueKind.Byte && innerKind == MaxonValueKind.Integer) ||
-        (expectedKind == MaxonValueKind.Float32 && innerKind == MaxonValueKind.Float);
-      if (!compatible) {
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Cannot construct '{rangedType.Name}' from {KindToTypeName(innerKind)}, expected {IrType.FormatAsSourceName(rangedType.BaseType)}",
-          typeToken.Line, typeToken.Column);
-      }
-      // Re-emit float literal as Float32 so lowering produces StdF32 ops
-      if (expectedKind == MaxonValueKind.Float32 && innerKind == MaxonValueKind.Float) {
-        var lastOp = _currentBlock!.Operations.LastOrDefault();
-        if (lastOp is MaxonLiteralOp lit && lit.Result == innerValue) {
-          _currentBlock.Operations.Remove(lastOp);
-          var f32Lit = new MaxonLiteralOp(lit.FloatValue, MaxonValueKind.Float32);
-          _currentBlock.AddOp(f32Lit);
-          innerValue = f32Lit.Result;
-        }
-      }
-    }
-
-    innerValue = ValidateAndEmitRangeCheck(innerValue, rangedType, expectedKind, typeToken);
-
-    // Re-tag as Short when the optimal storage type is i16/u16
-    var optimalKind = rangedType.OptimalType.ToValueKind();
-    if (optimalKind == MaxonValueKind.Short) {
-      var castOp = new MaxonCastOp(innerValue, MaxonValueKind.Short);
-      _currentBlock!.AddOp(castOp);
-      innerValue = castOp.Result;
-    }
-
-    _lastRangedTypeName = rangedType.Name;
-    return new ExprResult.Direct(innerValue);
   }
 
   /// <summary>
@@ -15332,28 +15375,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         $"Type '{typeName}' does not conform to BuiltinArrayLiteral or InitableFromArrayLiteral",
         typeToken.Line, typeToken.Column);
 
-    // Parse elements — both paths start the same way
-    var (managedStruct, arrayTag, elementCount, _, _) = EmitArrayLiteralElements();
-
-    // The init argument differs: BuiltinArrayLiteral gets __ManagedMemory, InitableFromArrayLiteral gets Array
-    MaxonValue initArg;
-    if (isBuiltinArrayLiteral) {
-      // Pass __ManagedMemory directly
-      managedStruct.ArrayLiteralTag = arrayTag;
-      managedStruct.ArrayLiteralCount = elementCount;
-      initArg = managedStruct.Result;
-    } else {
-      // Wrap in Array struct for InitableFromArrayLiteral
-      var arrayFields = new List<(string Name, MaxonValue Value)> {
-        ("managed", managedStruct.Result)
-      };
-      var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
-      _currentBlock!.AddOp(arrayStruct);
-
-      arrayStruct.ArrayLiteralTag = arrayTag;
-      arrayStruct.ArrayLiteralCount = elementCount;
-      initArg = arrayStruct.Result;
-    }
+    // Parse elements — both paths start the same way. When the destination
+    // struct binds its element type to a ranged primitive (e.g.
+    // `U16Array = Array with U16` where U16 is `int(0 to 65535)`), pass it
+    // down so each element gets compile-time range-checked and re-tagged
+    // with the optimal narrow storage kind. This is the replacement for the
+    // old `[U16{10}, U16{20}, …]` per-element construction pattern: now the
+    // collection-from-array syntax does the narrowing once for the whole
+    // literal.
+    IrRangedPrimitiveType? targetRangedElement = ResolveTargetRangedElementType(sourceStruct);
+    var (managedStruct, arrayTag, elementCount, _, _) = EmitArrayLiteralElements(targetRangedElement);
+    // The ArrayLiteralTag goes on the OUTER wrapping struct (the Array
+    // / SourceType-shaped struct emitted below), not on the inner managed
+    // memory. Lowering uses the tag to decide between .rdata lifting and
+    // heap-allocating; tagging both would cause both paths to run, leaking
+    // the heap allocation.
 
     // For types with associated types, auto-create a concrete alias with __capacity
     string concreteTypeName = typeName;
@@ -15370,6 +15406,40 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           new Dictionary<string, long> { ["__capacity"] = elementCount });
       }
     }
+
+    // BuiltinArrayLiteral fast path: by interface contract, init's body is
+    // `Self{managed: managed}` — a thin wrapper. Emit the wrapping struct
+    // literal directly with the array-literal tag attached, mirroring what
+    // ParseArrayLiteralWithFirstElement does for bare `[…]` array literals.
+    // This keeps the result eligible for .rdata lifting in
+    // ConstantArrayAnalysisPass: the analysis looks for an assign whose
+    // value is a struct literal with a tag, which routing through `init`
+    // (a call op) would obscure.
+    if (isBuiltinArrayLiteral) {
+      var arrayFields = new List<(string Name, MaxonValue Value)> {
+        ("managed", managedStruct.Result)
+      };
+      var arrayStruct = new MaxonStructLiteralOp(concreteTypeName, arrayFields);
+      _currentBlock!.AddOp(arrayStruct);
+      arrayStruct.ArrayLiteralTag = arrayTag;
+      arrayStruct.ArrayLiteralCount = elementCount;
+      arrayStruct.IsBitPacked = managedStruct.IsBitPacked;
+      return new ExprResult.Direct(arrayStruct.Result);
+    }
+
+    // InitableFromArrayLiteral path: wrap the managed memory in an Array
+    // struct (so it's typed `Array`, the parameter type the init method
+    // expects) and let the user-defined init do whatever transformation
+    // it wants. The .rdata lifting is forfeited here since init's body
+    // is opaque.
+    var initArrayFields = new List<(string Name, MaxonValue Value)> {
+      ("managed", managedStruct.Result)
+    };
+    var initArrayStruct = new MaxonStructLiteralOp("Array", initArrayFields);
+    _currentBlock!.AddOp(initArrayStruct);
+    initArrayStruct.ArrayLiteralTag = arrayTag;
+    initArrayStruct.ArrayLiteralCount = elementCount;
+    var initArg = initArrayStruct.Result;
 
     // Look up the init method: TypeName.init or the source type's init
     var sourceTypeName = _typeAliasSources.TryGetValue(concreteTypeName, out var src) ? src : concreteTypeName;
@@ -15397,6 +15467,36 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     return new ExprResult.Direct(callOp.Result);
+  }
+
+  /// <summary>
+  /// If the destination struct's element type binds to a ranged-primitive
+  /// type (e.g. `U16Array = Array with U16` where U16 is a ranged int),
+  /// return that ranged type so element parsing can narrow each literal.
+  /// Returns null when there's no ranged element type to propagate —
+  /// generic arrays with concrete struct elements, type-parameter elements
+  /// that don't resolve here, etc.
+  /// </summary>
+  private IrRangedPrimitiveType? ResolveTargetRangedElementType(IrStructType sourceStruct) {
+    // The associated-type names on a generic struct are the slot names whose
+    // values may carry the ranged type. For Array these are typically
+    // {"Element"}; for Map they are {"Key", "Value"} (we only narrow Element-
+    // shaped collections here — Map literals have their own keyed parser).
+    // First try associated-type names (the documented generic slots), then
+    // fall back to a direct TypeParams["Element"] lookup for typealiases
+    // like `U16Array = Array with U16` where the alias's struct registers
+    // the substitution but doesn't always re-list AssociatedTypeNames.
+    foreach (var assocName in sourceStruct.AssociatedTypeNames) {
+      if (assocName != "Element") continue;
+      if (!sourceStruct.TypeParams.TryGetValue(assocName, out var elemType)) continue;
+      if (elemType is IrRangedPrimitiveType rpt) return rpt;
+      return null;
+    }
+    if (sourceStruct.TypeParams.TryGetValue("Element", out var directElem)
+        && directElem is IrRangedPrimitiveType directRpt) {
+      return directRpt;
+    }
+    return null;
   }
 
   /// <summary>

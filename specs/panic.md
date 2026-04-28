@@ -96,7 +96,7 @@ function check(n Integer) returns Integer
 end 'check'
 
 function main() returns ExitCode
-		return check(Integer{-1})
+		return check(-1)
 end 'main'
 ```
 ```exitcode
@@ -136,8 +136,8 @@ function runB(n Integer) returns Integer
 end 'runB'
 
 function main() returns ExitCode
-	let a = runA(Integer{1})  // does not panic
-	let b = runB(Integer{-1}) // should print "message B"
+	let a = runA(1)  // does not panic
+	let b = runB(-1) // should print "message B"
 	return a + b
 end 'main'
 ```

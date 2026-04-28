@@ -39,6 +39,13 @@ public static partial class SpecParser {
           Logger.Debug(LogCategory.Testing, $"Skipping draft spec: {Path.GetFileName(file)}");
           continue;
         }
+        // `selfhosted` marks specs that exercise self-hosted-only language
+        // features. The C# bootstrap doesn't implement them, so we skip
+        // here while the self-hosted runner picks them up.
+        if (spec.Status == "selfhosted") {
+          Logger.Debug(LogCategory.Testing, $"Skipping selfhosted-only spec: {Path.GetFileName(file)}");
+          continue;
+        }
         specs.Add(spec);
       } catch (Exception ex) {
         Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}\n{ex.StackTrace}");

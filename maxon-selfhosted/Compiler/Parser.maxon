@@ -100,7 +100,7 @@ export type Parser
 		// Placeholder func/block — every parseFunction call rebinds these
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
-		let placeholderBlock = IrBlock.create(BlockId{0}, label: "")
+		let placeholderBlock = IrBlock.create(0, label: "")
 		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, consumeExpectedDisplay: "more input"}
 	end 'create'
 
@@ -913,8 +913,10 @@ export type Parser
 	// --- Typealias parsing ---
 
 	// Parse: typealias Name = int(LOWER to UPPER) | float(LOWER to UPPER) | bool | ...
-	// Registers primitive-backed typealiases in the project's type registry.
-	// Computes optimal IR type from the range bounds (e.g. int(0 to u32.max) → u32).
+	// Captures the right-hand side as an UnresolvedTypeExpr and records it in
+	// project.unresolvedTypealiases. Actual conversion to StdType + range
+	// registration happens later in the TypeResolution pass, so we don't have
+	// to know whether the RHS depends on another alias here.
 	function parseTopLevelTypealias() throws ParserError
 		try expect(TokenKind.typealias)
 		let nameToken = try consume()
@@ -924,21 +926,19 @@ export type Parser
 
 		let baseToken = cursor.current()
 
-		var resolvedStdType = StdType.i64
+		// `expr` is the captured RHS; `sawValidBase` tracks whether we saw
+		// something we know how to capture. Recognized RHS forms are `bool`,
+		// `int(L to U)`, `byte(L to U)`, `float(L to U)`, and a bare
+		// identifier (`typealias A = B`). The resolver pass takes the
+		// captured form and computes the eventual StdType.
+		var expr = UnresolvedTypeExpr.boolPrim
 		var sawValidBase = false
 
 		if baseToken.kind == TokenKind.bool 'isBool'
-			// bool typealiases map to i1 at the Std level.
-			resolvedStdType = StdType.i1
+			expr = UnresolvedTypeExpr.boolPrim
 			sawValidBase = true
 		end 'isBool'
 
-		// Track an optional integer range so we can register it after the main
-		// typealias insert succeeds. Float aliases and bare `bool` leave the
-		// range empty.
-		var hasRange = false
-		var rangeLower = 0 as BoundValue
-		var rangeUpper = 0 as BoundValue
 		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float or baseToken.kind == TokenKind.byte 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
 			let isByte = baseToken.kind == TokenKind.byte
@@ -969,34 +969,42 @@ export type Parser
 			let upperBound = try parseTypeBound()
 
 			if isFloat 'computeFloat'
-				resolvedStdType = StdType.f64
+				expr = UnresolvedTypeExpr.rangedFloat(lowerBound, upper: upperBound)
 			end 'computeFloat' else 'computeInt'
-				// `byte(lo to hi)` is just an unsigned integer alias; let
-				// computeOptimalIntType pick the narrowest width (u8 for 0..255).
-				resolvedStdType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
-				hasRange = true
-				rangeLower = lowerBound
-				rangeUpper = upperBound
+				// `byte(lo to hi)` is just an unsigned integer alias; the
+				// resolver will pick the narrowest StdType via
+				// computeOptimalIntType.
+				expr = UnresolvedTypeExpr.rangedInt(lowerBound, upper: upperBound)
 			end 'computeInt'
 			sawValidBase = true
 		end 'isNumeric'
+
+		// Bare identifier RHS: `typealias A = B` aliases an existing named
+		// type. The resolver picks up the chain in a later iteration once
+		// the target alias is itself resolved, so source-text order doesn't
+		// matter — `A` can be declared before or after `B`.
+		if not sawValidBase and baseToken.kind == TokenKind.identifier 'isAliasName'
+			let targetToken = try consume()
+			expr = UnresolvedTypeExpr.aliasName(targetToken.value)
+			sawValidBase = true
+		end 'isAliasName'
 
 		if not sawValidBase 'unsupported'
 			skipToNextLine()
 			return
 		end 'unsupported'
 
-		// Register the alias first so the range entry only lands when this is
-		// the first definition — duplicates report the canonical error here and
-		// leave both maps pointing at the original.
-		var aliasIsDuplicate = false
-		try project.typealiases.insert(nameToken.value, value: resolvedStdType) otherwise 'dupAlias'
-			aliasIsDuplicate = true
+		// Duplicate detection runs against both unresolved and resolved
+		// registries — the latter catches duplicates that survive a stdlib
+		// pre-seed where some aliases are already in `typealiases` before the
+		// parser starts.
+		if project.typealiases.contains(nameToken.value) or project.unresolvedTypealiases.contains(nameToken.value) 'duplicate'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		end 'dupAlias'
-		if not aliasIsDuplicate and hasRange 'recordRange'
-			try project.typealiasRanges.insert(nameToken.value, value: TypealiasRange.create(rangeLower, upper: rangeUpper)) otherwise panic("typealiasRanges.insert: '{nameToken.value}' duplicate but typealiases.insert accepted it")
-		end 'recordRange'
+			skipToNextLine()
+			return
+		end 'duplicate'
+
+		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, line: nameToken.line, column: nameToken.column, filePath: filePath))
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
@@ -2396,19 +2404,15 @@ export type Parser
 		end 'maybeTypeBound'
 
 		// Struct construction: TypeName{field: value, ...}
+		// Ranged-primitive construction (`Foo{42}`) was removed in favor of
+		// `42 as Foo`, so `Foo{...}` here unambiguously means struct literal.
+		// The structTypes registry probe was previously needed to distinguish
+		// the two forms; now `Foo{...}` is uniformly routed to parseStructLiteral
+		// regardless of whether `Foo` is registered as a struct, with the
+		// downstream code reporting an error if the name doesn't resolve to one.
 		if peekToken.kind == TokenKind.leftBrace and project.structTypes.contains(token.value) 'isStructLiteral'
 			return try parseStructLiteral(module, block: block, typeName: token.value, typeToken: token)
 		end 'isStructLiteral'
-
-		// Ranged primitive construction: TypeName{expression}
-		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
-			try expect(TokenKind.identifier)
-			try expect(TokenKind.leftBrace)
-			let innerResult = try parseExpression(module, block: block)
-			// advance past last-consumed of inner expression, landing on '}'
-			try advance()
-			return innerResult
-		end 'isTypedConstruct'
 
 		if project.topLevelConstants.contains(token.value) 'isConst'
 			return resolveConstant(module, block: block, name: token.value)
@@ -3366,7 +3370,7 @@ end 'infixBindingPower'
 
 // --- Type bound parsing helpers ---
 
-typealias BoundValue = int(i64.min to i64.max)
+export typealias BoundValue = int(i64.min to i64.max)
 
 let typeBoundsTable = [
 	"u8.min": 0, "u8.max": 255, "u16.min": 0, "u16.max": 65535, "u32.min": 0, "u32.max": 4294967295, "u64.min": 0, "u64.max": -1,
@@ -3382,7 +3386,7 @@ end 'resolveTypeBound'
 // Pick the narrowest StdType that can hold a typealias's range of values.
 // Negative lower bounds fall through to signed i64 because signed narrow
 // widths aren't yet used at the Std level.
-function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
+export function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
 	if lower >= 0 'unsigned'
 		if upper < 0 'wrappedU64'
 			return StdType.u64

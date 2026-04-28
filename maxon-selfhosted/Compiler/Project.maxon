@@ -53,11 +53,23 @@ export type Project
 	export var calleeNames CalleeNameInterner
 
 	// Typealias registry: maps alias names to their IR base type ("i64", "f64", etc.)
+	// Populated by the TypeResolution pass as it drains unresolvedTypealiases.
+	// Read by lowering and the range-check pass; never written to directly by
+	// the parser.
 	export var typealiases TypealiasMap
 
 	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
 	// Used by the parser to emit runtime range checks on return values.
+	// Populated by the TypeResolution pass alongside `typealiases`.
 	export var typealiasRanges TypealiasRangeMap
+
+	// Unresolved typealias registry: every `typealias Name = ...` the parser
+	// sees lands here first. The TypeResolution pass runs a fixed-point loop
+	// over this map, moving each entry into `typealiases` (and
+	// `typealiasRanges` when applicable) once its right-hand side resolves.
+	// Entries that remain after the loop terminates are reported as either
+	// unknown-name or cycle errors and dropped.
+	export var unresolvedTypealiases UnresolvedTypealiasMap
 
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
@@ -123,6 +135,7 @@ export type Project
 			calleeNames: CalleeNameInterner.create(),
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
+			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
@@ -389,6 +402,49 @@ export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
 export typealias TypealiasRangeMap = Map with(String, TypealiasRange)
+
+// --- Unresolved typealias representation ---
+// The parser captures every `typealias Name = ...` declaration into an
+// UnresolvedTypealias entry first. The TypeResolution pass then runs a
+// fixed-point loop that moves entries into the resolved registries
+// (typealiases / typealiasRanges) as their right-hand side becomes
+// resolvable. This decoupling lets typealiases reference other typealiases
+// regardless of source-text order, and gives us a single place to enforce
+// cycle detection and unknown-name diagnostics.
+//
+// The expression is a small union covering the RHS forms the parser
+// recognizes today. New variants (genericApp, funcType, tupleType, …) plug
+// in without touching the parse-time scaffolding.
+
+export union UnresolvedTypeExpr
+	// `int(LOWER to UPPER)` / `byte(LOWER to UPPER)` — resolvable immediately.
+	rangedInt(lower RangeBound, upper RangeBound)
+	// `float(LOWER to UPPER)` — resolvable immediately. Bounds are kept for
+	// future range-check work even though every float alias maps to f64 today.
+	rangedFloat(lower RangeBound, upper RangeBound)
+	// `bool` RHS — resolvable immediately.
+	boolPrim
+	// Bare named reference, e.g. `typealias A = B`. Resolves once `B` is in
+	// the resolved typealiases map; the fixed-point resolver picks the
+	// chain up regardless of the source-text order between A and B.
+	aliasName(name String)
+end 'UnresolvedTypeExpr'
+
+export type UnresolvedTypealias
+	export var name String
+	export var expr UnresolvedTypeExpr
+	// Parse-time source location; carried so resolver-emitted diagnostics
+	// (cycle, unknown-name) can point back at the original declaration.
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, expr UnresolvedTypeExpr, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTypealias
+		return Self{name: name, expr: expr, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedTypealias'
+
+export typealias UnresolvedTypealiasMap = Map with(String, UnresolvedTypealias)
 
 export union ConstantValue
 	stringValue(value String)

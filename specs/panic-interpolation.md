@@ -128,7 +128,7 @@ function check(n Integer)
 end 'check'
 
 function main() returns ExitCode
-		check(Integer{-5})
+		check(-5)
 		return 0
 end 'main'
 ```

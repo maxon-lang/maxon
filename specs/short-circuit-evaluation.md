@@ -169,10 +169,10 @@ end 'main'
 typealias Index = int(0 to u64.max)
 
 function main() returns ExitCode
-	let arr = [Index{10}, Index{20}, Index{30}]
-	let i = Index{5}
+	let arr = [10 as Index, 20 as Index, 30 as Index]
+	let i = 5 as Index
 
-	if i < arr.count() and (try arr.get(i) otherwise Index{0}) > Index{0} 'check'
+	if i < arr.count() and (try arr.get(i) otherwise 0 as Index) > 0 as Index 'check'
 		return 1
 	end 'check'
 	return 42
@@ -187,8 +187,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let a = Integer{12}
-	let b = Integer{10}
+	let a = 12 as Integer
+	let b = 10 as Integer
 	let andResult = a and b
 	let orResult = a or b
 	return (andResult + orResult) as ExitCode
@@ -202,7 +202,7 @@ end 'main'
 ```maxon
 typealias Integer = int(0 to u64.max)
 
-var trace = Integer{0}
+var trace = 0 as Integer
 
 function setFlag(bit Integer) returns bool
 	trace = trace or bit
@@ -210,7 +210,7 @@ function setFlag(bit Integer) returns bool
 end 'setFlag'
 
 function main() returns ExitCode
-	if setFlag(Integer{1}) and setFlag(Integer{2}) 'never'
+	if setFlag(1) and setFlag(2) 'never'
 		return 99
 	end 'never'
 	return trace as ExitCode

@@ -54,10 +54,10 @@ barContainer.get(barIdx)  // OK after explicit conversion
 
 ### Construction
 
-Use dot-syntax to construct a per-instance value explicitly:
+Cast a value into the per-instance type with `as`:
 
 ```text
-var idx = FooContainer.Idx{0}
+var idx = 0 as FooContainer.Idx
 ```
 
 ## Tests
@@ -242,8 +242,7 @@ end 'Wrapper'
 typealias IntWrapper = Wrapper with Integer
 
 function main() returns ExitCode
-	let idx = IntWrapper.Idx{42}
-	let w = IntWrapper.create(value: 99, tag: idx)
+	let w = IntWrapper.create(value: 99, tag: 42)
 	let t = w.getTag()
 	if t == 42 'check'
 		return 0

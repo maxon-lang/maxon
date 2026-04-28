@@ -1,19 +1,160 @@
 // Type resolution pass.
 //
-// Runs immediately after parsing, before any other Maxon-level pass. Walks
-// every MaxonOp in the module and enforces the rules the parser deliberately
-// skips because it doesn't yet have a full registry view:
+// Runs immediately after parsing, before any other Maxon-level pass. Two
+// jobs:
 //
-//   1. Every MaxonType.named(id) must resolve to a registered typealias,
-//      struct type, enum type, or function type. Unknown names are E3013.
-//   2. Every MaxonOp.convert (from `as` casts and intrinsic coercions like
-//      `trunc`) must obey the widening rules: same category is always ok;
-//      byte→int, byte→float, int→float are widening and allowed; int-literal
-//      in byte range can narrow to byte; every other combination is E3009.
+//   1. Drain `project.unresolvedTypealiases` into the resolved registries
+//      (`typealiases` + `typealiasRanges`). The drain is a fixed-point loop:
+//      each iteration converts whatever entries it can, then re-runs to pick
+//      up entries that were waiting on something resolved this round. The
+//      loop stops when either every entry has been resolved (success) or no
+//      progress was made for a full iteration (cycle or unknown reference,
+//      reported on the entries that remain).
 //
-// The pass reports errors through the usual diagnostic channel — no throws.
+//   2. Validate `MaxonType.named(id)` references on the module's ops, on
+//      struct field types, and on function signatures — every such name
+//      must point at a registered typealias, struct, or function type.
+//      Unknown names are E3013 (semanticUnknownType).
+//
+//   3. Validate convert / cmp ops (the original responsibility of this pass):
+//      cast widening rules and same-category compare rules.
+//
+// All errors flow through reportCompileError; the pass never throws.
 // Downstream passes (lowerMaxonToStd and beyond) depend on this pass having
 // run, so it sits first in the mid pipeline.
+
+// --- Typealias resolution (fixed-point) ---
+
+// Try to translate a single UnresolvedTypeExpr into a (StdType, optional
+// range) pair. Returns success=false when the expression is a named
+// reference whose target is not yet in `project.typealiases`; the caller
+// retries on a later iteration.
+type ResolveResult
+	export var success bool
+	// True when the resolved alias also has a range to record. Float and
+	// bool aliases leave this false.
+	export var hasRange bool
+	export var stdType StdType
+	export var range TypealiasRange
+
+	export static function notYet() returns ResolveResult
+		return Self{success: false, hasRange: false, stdType: StdType.i64, range: TypealiasRange.create(0, upper: 0)}
+	end 'notYet'
+
+	export static function done(stdType StdType) returns ResolveResult
+		return Self{success: true, hasRange: false, stdType: stdType, range: TypealiasRange.create(0, upper: 0)}
+	end 'done'
+
+	export static function doneRanged(stdType StdType, range TypealiasRange) returns ResolveResult
+		return Self{success: true, hasRange: true, stdType: stdType, range: range}
+	end 'doneRanged'
+end 'ResolveResult'
+
+function tryResolveTypeExpr(project Project, expr UnresolvedTypeExpr) returns ResolveResult
+	return match expr 'eval'
+		boolPrim gives ResolveResult.done(StdType.i1)
+		rangedFloat gives ResolveResult.done(StdType.f64)
+		rangedInt(lower, upper) gives ResolveResult.doneRanged(computeOptimalIntType(lower: lower, upper: upper), range: TypealiasRange.create(lower, upper: upper))
+		aliasName(name) gives tryResolveAliasName(project, name: name)
+	end 'eval'
+end 'tryResolveTypeExpr'
+
+function tryResolveAliasName(project Project, name String) returns ResolveResult
+	// If the referenced alias is already resolved, copy its StdType through
+	// and propagate the range when one is recorded. Otherwise the entry has
+	// to wait for a later iteration.
+	let stdType = try project.typealiases.get(name) otherwise return ResolveResult.notYet()
+	let range = try project.typealiasRanges.get(name) otherwise 'noRange'
+		return ResolveResult.done(stdType)
+	end 'noRange'
+	return ResolveResult.doneRanged(stdType, range: range)
+end 'tryResolveAliasName'
+
+// One pass over the unresolved-typealias map: for every entry whose RHS
+// resolves, move it into `typealiases` (and `typealiasRanges` if it has a
+// range), then drop it from the unresolved map. Returns the number of
+// entries that got resolved this pass — zero means the outer loop should
+// stop.
+function drainResolvableTypealiases(project Project) returns ParsedInt
+	var resolvedNames = StringArray.create()
+
+	for (name, entry) in project.unresolvedTypealiases 'sweep'
+		let result = tryResolveTypeExpr(project, expr: entry.expr)
+		if not result.success 'wait'
+			continue
+		end 'wait'
+		// Insert into the resolved maps. The unresolved map is keyed by
+		// name and the parser rejects duplicates against both maps before
+		// inserting here, so the resolved insert can never collide.
+		try project.typealiases.insert(name, value: result.stdType) otherwise panic("TypeResolution: typealiases.insert collided for '{name}' — parser duplicate check missed it")
+		if result.hasRange 'recordRange'
+			try project.typealiasRanges.insert(name, value: result.range) otherwise panic("TypeResolution: typealiasRanges.insert collided for '{name}' — parser duplicate check missed it")
+		end 'recordRange'
+		resolvedNames.push(name)
+	end 'sweep'
+
+	for resolvedName in resolvedNames 'drop'
+		_ = project.unresolvedTypealiases.remove(resolvedName)
+	end 'drop'
+
+	return resolvedNames.count()
+end 'drainResolvableTypealiases'
+
+// Project-wide fixed-point typealias resolution. Runs zero or more drain
+// passes until either the unresolved map is empty (success) or a pass
+// produces no progress (failure — emit diagnostics for what's left).
+//
+// Idempotent: a second call is a no-op once the unresolved map is empty.
+// The pass pipeline dispatches per-module, so the first module's call
+// drains the project-wide registry and every later module just walks an
+// empty map.
+function resolveAllTypealiases(project Project)
+	while project.unresolvedTypealiases.count() > 0 'fixedPoint'
+		let progress = drainResolvableTypealiases(project)
+		if progress == 0 'stuck'
+			break
+		end 'stuck'
+	end 'fixedPoint'
+
+	// Anything still in the unresolved map cannot be resolved. Distinguish
+	// "RHS references a name nobody defined" (E3013) from "RHS references
+	// another unresolved alias, which is itself unresolvable" (E3014 cycle).
+	for (_, entry) in project.unresolvedTypealiases 'reportLeftover'
+		reportUnresolvedTypealias(project, entry: entry)
+	end 'reportLeftover'
+
+	// Drop the unresolvable entries so subsequent module-level validation
+	// doesn't trip over them again.
+	var leftoverNames = StringArray.create()
+	for (name, _) in project.unresolvedTypealiases 'collectNames'
+		leftoverNames.push(name)
+	end 'collectNames'
+	for name in leftoverNames 'dropLeftover'
+		_ = project.unresolvedTypealiases.remove(name)
+	end 'dropLeftover'
+end 'resolveAllTypealiases'
+
+function reportUnresolvedTypealias(project Project, entry UnresolvedTypealias)
+	match entry.expr 'classify'
+		aliasName(target) then reportAliasNameUnresolved(project, entry: entry, target: target)
+		boolPrim then panic("TypeResolution: boolPrim left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
+		rangedInt then panic("TypeResolution: rangedInt left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
+		rangedFloat then panic("TypeResolution: rangedFloat left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
+	end 'classify'
+end 'reportUnresolvedTypealias'
+
+function reportAliasNameUnresolved(project Project, entry UnresolvedTypealias, target String)
+	if project.unresolvedTypealiases.contains(target) 'isCycle'
+		// Target is itself unresolved; treat as a cycle. The diagnostic
+		// names both ends so a `typealias A = B; typealias B = A` pair
+		// produces messages on both lines that point at each other.
+		reportCompileError(project, code: ErrorCode.semanticTypeResolutionCycle, message: "typealias '{entry.name}' depends on '{target}', which is itself unresolved (cycle)", line: entry.line, column: entry.column, filePath: entry.filePath)
+		return
+	end 'isCycle'
+	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "typealias '{entry.name}' references unknown type '{target}'", line: entry.line, column: entry.column, filePath: entry.filePath)
+end 'reportAliasNameUnresolved'
+
+// --- Cast / compare validation (unchanged from prior behavior) ---
 
 export function convertCastCategory(project Project, t MaxonType) returns CastCategory
 	return match t 'map'
@@ -32,6 +173,8 @@ end 'namedIdCastCategory'
 
 // Check whether `t` names a type that's known to the project. Primitives are
 // always known; named types must appear in one of the project registries.
+// Used by the post-resolution validation walk that catches type-name typos
+// in struct field declarations, function signatures, and op annotations.
 function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 	match t 'check'
 		named(id) then return namedIdIsKnown(project, id: id)
@@ -163,8 +306,15 @@ function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, l
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: 0, column: 0, filePath: filePath)
 end 'validateCompareOp'
 
-// Walk every op and validate convert / cmp ops.
+// --- Pass entry ---
+
+// Drains the project-wide unresolved-typealias registry, then walks the
+// module's ops to validate convert / cmp endpoints. The typealias drain is
+// idempotent: only the first module's call does real work, every later
+// module-level call walks an empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+	resolveAllTypealiases(project)
+
 	for opIdx in 0 upto module.ops.count() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'

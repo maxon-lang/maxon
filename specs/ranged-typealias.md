@@ -12,7 +12,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Syntax: `typealias Age = int(0 to 150)` or `int(0 upto 150)` (exclusive upper bound)
 - Type-qualified `min`/`max` bounds: `typealias FullInt = int(i64.min to i64.max)`
 - Type-qualified bounds: `typealias Handle = int(0 to u32.max)`
-- Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
+- Construction: `42 as Age` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
 - Standard library defines purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
 
@@ -41,12 +41,19 @@ typealias FullByte = byte(0 to u8.max)
 
 ### Construction
 
-Create values using the `TypeName{value}` syntax:
+Cast values into a ranged type with `as TypeName`:
 
 ```maxon
 typealias Age = int(0 to 150)
-var myAge = Age{25}
+var myAge = 25 as Age
 ```
+
+In most cases the cast is unnecessary — when a literal flows into a slot
+that already has a known ranged type (a function parameter, struct field,
+or function return), the literal is checked against that target type
+without an explicit cast. Use `as TypeName` when the type association
+needs to be visible at the use site, or when narrowing a wider value to
+a smaller range triggers a runtime check.
 
 ### Runtime range checks
 
@@ -56,7 +63,7 @@ When the value is a computed expression, a runtime check is emitted:
 typealias Year = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 function makeAge(n Year) returns Year
-	let a = Age{n}   // runtime check: panics if n < 0 or n > 150
+	let a = n as Age   // runtime check: panics if n < 0 or n > 150
 	return a
 end 'makeAge'
 ```
@@ -113,7 +120,7 @@ The compiler validates that ranges are representable:
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-	let s = Score{42}
+	let s = 42 as Score
 	return s
 end 'main'
 ```
@@ -128,7 +135,7 @@ end 'main'
 typealias SmallInt = int(0 to 10)
 
 function main() returns ExitCode
-	let x = SmallInt{7}
+	let x = 7 as SmallInt
 	return x
 end 'main'
 ```
@@ -143,7 +150,7 @@ end 'main'
 typealias Temp = int(-50 to 50)
 
 function main() returns ExitCode
-	let t = Temp{-10}
+	let t = -10 as Temp
 	return t + 60
 end 'main'
 ```
@@ -158,7 +165,7 @@ end 'main'
 typealias FullInt = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let x = FullInt{42}
+	let x = 42 as FullInt
 	return x
 end 'main'
 ```
@@ -174,7 +181,7 @@ end 'main'
 typealias Pct = float(0.0 to 100.0)
 
 function main() returns ExitCode
-	let p = Pct{75.5}
+	let p = 75.5 as Pct
 	return trunc(p)
 end 'main'
 ```
@@ -189,7 +196,7 @@ end 'main'
 typealias Idx = int(0 upto 10)
 
 function main() returns ExitCode
-	let i = Idx{9}
+	let i = 9 as Idx
 	return i
 end 'main'
 ```
@@ -204,8 +211,8 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-	let a = Score{30}
-	let b = Score{12}
+	let a = 30 as Score
+	let b = 12 as Score
 	return a + b
 end 'main'
 ```
@@ -224,8 +231,7 @@ function double(s Score) returns Score
 end 'double'
 
 function main() returns ExitCode
-	let s = Score{21}
-	return double(s)
+	return double(21)
 end 'main'
 ```
 ```exitcode
@@ -240,7 +246,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
-	let a = Age{n}
+	let a = n as Age
 	return a
 end 'makeAge'
 
@@ -260,7 +266,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
-	let a = Age{n}
+	let a = n as Age
 	return a
 end 'makeAge'
 
@@ -287,7 +293,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias AsciiCode = byte(0 to 127)
 
 function main() returns ExitCode
-	let c = AsciiCode{65}
+	let c = 65 as AsciiCode
 	return c as Integer
 end 'main'
 ```
@@ -325,7 +331,7 @@ type Player
 end 'Player'
 
 function main() returns ExitCode
-	let p = Player.create(name: "Alice", score: Score{42})
+	let p = Player.create(name: "Alice", score: 42)
 	return p.score
 end 'main'
 ```
@@ -362,8 +368,7 @@ function half(s Score) returns Score
 end 'half'
 
 function main() returns ExitCode
-	let s = Score{84}
-	return half(s)
+	return half(84)
 end 'main'
 ```
 ```exitcode
@@ -381,8 +386,7 @@ function doubleScore(s Score) returns Score
 end 'doubleScore'
 
 function main() returns ExitCode
-	let s = Score{60}
-	return doubleScore(s)
+	return doubleScore(60)
 end 'main'
 ```
 ```exitcode
@@ -440,12 +444,12 @@ error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.
 typealias SmallInt = int(0 to 10)
 
 function main() returns ExitCode
-	let x = SmallInt{15}
+	let x = 15 as SmallInt
 	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:10: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:13: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
 ```
 
 ### Error: negative literal out of range
@@ -455,12 +459,12 @@ error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:
 typealias Positive = int(1 to 100)
 
 function main() returns ExitCode
-	let x = Positive{-5}
+	let x = -5 as Positive
 	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:10: Value -5 is outside the range of 'Positive' (int(1 to 100))
+error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:13: Value -5 is outside the range of 'Positive' (int(1 to 100))
 ```
 
 ### Type-qualified bound: u32.max
@@ -470,7 +474,7 @@ error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5
 typealias Handle = int(0 to u32.max)
 
 function main() returns ExitCode
-	let h = Handle{42}
+	let h = 42 as Handle
 	return h
 end 'main'
 ```
@@ -509,7 +513,7 @@ end 'main'
 typealias SmallSigned = int(i8.min to i8.max)
 
 function main() returns ExitCode
-	let s = SmallSigned{100}
+	let s = 100 as SmallSigned
 	return s
 end 'main'
 ```
@@ -524,7 +528,7 @@ end 'main'
 typealias Port = int(0 to u16.max)
 
 function main() returns ExitCode
-	let p = Port{8080}
+	let p = 8080 as Port
 	return p
 end 'main'
 ```
@@ -539,7 +543,7 @@ end 'main'
 typealias Handle = int(0 to u32.max)
 
 function main() returns ExitCode
-	let h = Handle{42}
+	let h = 42 as Handle
 	return h
 end 'main'
 ```
@@ -554,7 +558,7 @@ end 'main'
 typealias SmallInt = int(i8.min to i8.max)
 
 function main() returns ExitCode
-	let s = SmallInt{100}
+	let s = 100 as SmallInt
 	return s
 end 'main'
 ```
@@ -569,8 +573,8 @@ end 'main'
 typealias SmallFloat = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let x = SmallFloat{3.5}
-	let y = SmallFloat{1.5}
+	let x = 3.5 as SmallFloat
+	let y = 1.5 as SmallFloat
 	return trunc(x + y)
 end 'main'
 ```
@@ -585,8 +589,8 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let a = F{10.0}
-	let b = F{3.0}
+	let a = 10.0 as F
+	let b = 3.0 as F
 	let sum = a + b
 	let diff = a - b
 	let prod = a * b
@@ -605,8 +609,8 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let a = F{3.0}
-	let b = F{5.0}
+	let a = 3.0 as F
+	let b = 5.0 as F
 	if a < b 'less'
 		return 1
 	end 'less'
@@ -628,8 +632,7 @@ function double(x F) returns F
 end 'double'
 
 function main() returns ExitCode
-	let x = F{21.0}
-	return trunc(double(x))
+	return trunc(double(21.0))
 end 'main'
 ```
 ```exitcode
@@ -643,7 +646,7 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-	let x = F{42.9}
+	let x = 42.9 as F
 	return trunc(x)
 end 'main'
 ```
@@ -658,7 +661,7 @@ end 'main'
 typealias Handle = int(0 to 0xFFFF)
 
 function main() returns ExitCode
-	let h = Handle{255}
+	let h = 255 as Handle
 	return h
 end 'main'
 ```
@@ -688,7 +691,7 @@ typealias Score = int(0 to 100)
 typealias Age = int(0 to 150)
 
 function main() returns ExitCode
-	let s = Score{42}
+	let s = 42 as Score
 	return s
 end 'main'
 ```

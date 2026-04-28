@@ -430,12 +430,14 @@ var y = u8.max + 1         // 256
 
 **Construction:**
 
-Create values using `TypeName{value}` syntax:
+Cast a value into a ranged type with `as`:
 
 ```maxon
 typealias Port = int(0 to 65535)
-var p = Port{8080}
+var p = 8080 as Port
 ```
+
+In most cases the cast is unnecessary — when a literal flows into a slot whose type is already a ranged alias (a parameter, a struct field, a function return), the literal is checked against that target type directly. Use `as` when the target type needs to be visible at the use site, or when narrowing a wider value to a smaller range.
 
 **Compile-time range checks:**
 
@@ -443,7 +445,7 @@ Literal values are checked at compile time. This is a compile error:
 
 ```maxon
 typealias SmallInt = int(0 to 10)
-var x = SmallInt{15}   // error: Value 15 is outside the range of 'SmallInt'
+var x = 15 as SmallInt   // error: Value 15 is outside the range of 'SmallInt'
 ```
 
 **Runtime range checks:**
@@ -454,7 +456,7 @@ When the value is a computed expression, a runtime range check is emitted that p
 typealias Port = int(0 to 65535)
 typealias RawValue = int(i64.min to i64.max)
 function makePort(n RawValue) returns RawValue
-	var p = Port{n}   // runtime check: panics if n < 0 or n > 65535
+	var p = n as Port   // runtime check: panics if n < 0 or n > 65535
 	return p
 end 'makePort'
 ```
@@ -480,8 +482,8 @@ Ranged types support standard arithmetic. The result of arithmetic between range
 
 ```maxon
 typealias Score = int(0 to 100)
-var a = Score{30}
-var b = Score{12}
+var a = 30 as Score
+var b = 12 as Score
 var sum = a + b    // result is int
 ```
 
@@ -977,10 +979,10 @@ typealias PoolB = Pool with Integer
 let bIdx = aIdx as PoolB.Idx
 ```
 
-Dot-syntax construction is also supported:
+Dot-syntax `as` casts are also supported:
 
 ```text
-let idx = PoolA.Idx{0}
+let idx = 0 as PoolA.Idx
 ```
 
 ### Interface Extensions

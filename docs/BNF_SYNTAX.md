@@ -701,7 +701,6 @@ primary       = INTEGER
               | tuple_literal
               | paren_expr
               | struct_literal
-              | ranged_construction
               | enum_access
               | static_access
               | closure
@@ -735,8 +734,10 @@ field_init    = IDENTIFIER ':' expression
                    `self.field = expr` assigns it on every control-flow path reaching
                    the literal. A literal-provided value always wins over a default. *)
 
-ranged_construction
-              = IDENTIFIER '{' expression '}'               (* e.g., Port{8080} *)
+                (* Ranged-primitive construction is performed via the postfix `as`
+                   cast (see `cast_expr`) — `8080 as Port`, `n as PoolA.Idx`.
+                   The dedicated `TypeName{value}` syntax was removed in favor
+                   of unifying with `as`. *)
 
 enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
               | IDENTIFIER '.' 'allCases'                            (* Array of all cases — enums only *)

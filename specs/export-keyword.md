@@ -435,7 +435,7 @@ export typealias Score = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let s = Score{42}
+	let s = 42 as Score
 	return s
 end 'main'
 ```
@@ -450,13 +450,13 @@ typealias InternalScore = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let s = InternalScore{42}
+	let s = 42 as InternalScore
 	return s
 end 'main'
 ```
 ```maxoncstderr
 error E3062: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:3:11: unused typealias: 'InternalScore'
-error E2004: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:7:10: Undefined variable 'InternalScore'
+error E2003: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:7:16: Expected type name after 'as'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->

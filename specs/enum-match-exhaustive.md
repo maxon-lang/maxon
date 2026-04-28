@@ -165,7 +165,7 @@ typealias ColorCode = int(0 to 10)
 
 function checkColor(c Color) returns ColorCode throws AppError
 	match c 'check'
-		red then return ColorCode{1}
+		red then return 1
 		default throws AppError.unmatched
 	end 'check'
 end 'checkColor'

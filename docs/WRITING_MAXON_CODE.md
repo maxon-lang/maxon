@@ -469,8 +469,8 @@ export typealias ScoreMap = Map with(String, Score)
 
 ```maxon
 typealias Port = int(0 to 65535)
-var p = Port{8080}          // construct with TypeName{value}
-var bad = Port{70000}       // compile error: out of range
+var p = 8080 as Port        // cast a value into the ranged type
+var bad = 70000 as Port     // compile error: out of range
 ```
 
 ---
