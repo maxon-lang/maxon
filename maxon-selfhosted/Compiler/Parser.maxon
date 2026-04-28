@@ -117,17 +117,16 @@ export type Parser
 		for token in cursor 'parseLoop'
 			let prevPos = cursor.index()
 
+			if token.kind == TokenKind.newline 'isNewline'
+				continue
+			end 'isNewline'
+
 			try 'dispatch'
-				match token.kind 'kind'
-					function then parseFunction(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
-					type then parseTypeDecl(module)
-					let then parseTopLevelLet()
-					var then parseTopLevelVar(typeName: "")
-					typealias then parseTopLevelTypealias()
-					export then parseExport()
-					newline then continue
-					default throws ParserError.unhandledToken
-				end 'kind'
+				if token.kind == TokenKind.export 'isExport'
+					parseExport(module)
+				end 'isExport' else 'notExport'
+					dispatchTopLevel(module, kind: token.kind)
+				end 'notExport'
 			end 'dispatch' otherwise(e) 'propagate'
 				match e 'kind'
 					unhandledToken then return reportUnexpectedTopLevel(token, module: module)
@@ -151,7 +150,7 @@ export type Parser
 				// retreat so for-header advances onto it for re-dispatch.
 				// Otherwise, break out of the loop entirely.
 				let curKind = cursor.current().kind
-				let atTopLevel = curKind == TokenKind.function or curKind == TokenKind.type or curKind == TokenKind.union or curKind == TokenKind.enum or curKind == TokenKind.export or curKind == TokenKind.let or curKind == TokenKind.var or curKind == TokenKind.typealias
+				let atTopLevel = isTopLevelOpener(curKind) or curKind == TokenKind.export
 				if atTopLevel 'redispatch'
 					try cursor.retreat() otherwise panic("Parser.parseModule: retreat from top-level re-dispatch position failed at index {cursor.index()}")
 				end 'redispatch' else 'noMore'
@@ -877,21 +876,60 @@ export type Parser
 
 	// --- Export dispatch ---
 
+	// True when `kind` opens a top-level declaration — used by error-recovery
+	// paths (synchronizeToTopLevel, abortBody re-dispatch) to anchor on the
+	// next plausible declaration. Includes `union`/`enum` which aren't yet
+	// dispatched, but are reserved as recovery anchors so a stray top-level
+	// `union`/`enum` resyncs cleanly once support lands.
+	function isTopLevelOpener(kind TokenKind) returns bool
+		return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.typealias
+	end 'isTopLevelOpener'
+
+	// Single source of truth for top-level keyword → parser routing. Throws
+	// `ParserError.unhandledToken` when `kind` doesn't open a top-level
+	// declaration so the caller can choose its own recovery (top-level
+	// diagnostic vs `export <garbage>` skip-to-next-line). Adding a new
+	// top-level keyword — and hence a new declaration that may carry an
+	// `export` modifier — only requires extending this one match.
+	function dispatchTopLevel(module MaxonModule, kind TokenKind) throws ParserError
+		try 'd'
+			match kind 'k'
+				function then parseFunction(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
+				type then parseTypeDecl(module)
+				let then parseTopLevelLet()
+				var then parseTopLevelVar(typeName: "")
+				typealias then parseTopLevelTypealias()
+				default throws ParserError.unhandledToken
+			end 'k'
+		end 'd' otherwise(e) 'rethrow'
+			match e 'kind'
+				unhandledToken then throw ParserError.unhandledToken
+				typeError then throw ParserError.typeError
+				overflow then throw ParserError.overflow
+				unexpectedEof then throw ParserError.unexpectedEof
+			end 'kind'
+		end 'rethrow'
+	end 'dispatchTopLevel'
+
 	// entry: cursor AT `export`.
-	// exit:  for function/type re-dispatch, leaves cursor AT `function`/`type`
-	//        so main loop re-dispatches. for typealias, after typealias body.
-	function parseExport() throws ParserError
+	// exit:  cursor AT the LAST token consumed by the inner declaration parser.
+	//        Routing reuses dispatchTopLevel so adding a new exportable keyword
+	//        (e.g. union/enum once they're supported) only requires extending
+	//        that one helper. Unrecognized followers are skipped to the next
+	//        line so we don't wedge on `export 42`.
+	function parseExport(module MaxonModule) throws ParserError
 		try expect(TokenKind.export)  // caller has dispatched on 'export'
 
-		if cursor.current().kind == TokenKind.function 'isExportFunc'
-			return
-		end 'isExportFunc' else if cursor.current().kind == TokenKind.typealias 'isExportTypealias'
-			try parseTopLevelTypealias()
-		end 'isExportTypealias' else if cursor.current().kind == TokenKind.type 'isExportType'
-			return
-		end 'isExportType' else 'isExportOther'
-			skipToNextLine()
-		end 'isExportOther'
+		try 'route'
+			dispatchTopLevel(module, kind: cursor.current().kind)
+		end 'route' otherwise(e) 'recover'
+			match e 'kind'
+				unhandledToken then skipToNextLine()
+				typeError then throw ParserError.typeError
+				overflow then throw ParserError.overflow
+				unexpectedEof then throw ParserError.unexpectedEof
+			end 'kind'
+		end 'recover'
 	end 'parseExport'
 
 	// --- Typealias parsing ---
@@ -3068,7 +3106,7 @@ export type Parser
 	// Synchronize to the next top-level declaration after an error.
 	function synchronizeToTopLevel()
 		for token in cursor 'sync'
-			if token.kind == TokenKind.function or token.kind == TokenKind.type or token.kind == TokenKind.union or token.kind == TokenKind.enum or token.kind == TokenKind.export or token.kind == TokenKind.let or token.kind == TokenKind.var or token.kind == TokenKind.typealias 'atTopLevel'
+			if isTopLevelOpener(token.kind) or token.kind == TokenKind.export 'atTopLevel'
 				return
 			end 'atTopLevel'
 		end 'sync'

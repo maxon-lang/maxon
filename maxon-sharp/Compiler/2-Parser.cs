@@ -94,7 +94,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     public required string ErrorFlagVarName { get; init; }
     public required string TypeDiscriminantVarName { get; init; }
     public required string BlockLabel { get; init; }
+    // Snapshot of variable keys captured at try-block entry. Each routed bare
+    // throw uses this with VarRegistry.KeysSince to compute the body-local
+    // managed temps live at the throw site — without this, ephemeral call-arg
+    // allocations (e.g. `f(IntArray.create())`) leak when `f` throws.
+    public required HashSet<string> BodyOuterScope { get; init; }
     public List<IrEnumType> ErrorTypesEncountered { get; } = [];
+    // Pending landing pads: each routed bare throw inside the body deposits
+    // its (label, body-local-temps-live-at-throw) here; ParseTryBlock emits the
+    // actual blocks after the body finishes so they are appended at the END of
+    // the function body and don't disrupt the codegen's fall-through assumption
+    // for the cond_br's success target (which must be the next physical block).
+    public List<(string Label, List<string> LiveBodyTemps)> PendingLandingPads { get; } = [];
 
     public int IndexOfOrAddType(IrEnumType t) {
       for (int i = 0; i < ErrorTypesEncountered.Count; i++) {
@@ -7307,14 +7318,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _variables.Declare(discriminantVar, MaxonValueKind.Integer, true, initDiscrLit.Result, _currentBlock!);
 
     // 3. Push the try-block context so RouteBareThrowingCallToTryBlock targets it.
+    //    bodyOuterScope is snapshotted BEFORE the body-scope push and stored on
+    //    the context so each routed bare throw can compute the body-local
+    //    managed temps live at its throw site (see RouteEmittedTryCallToTryBlock).
+    var bodyOuterScope = _variables.SnapshotKeys();
     var ctx = new TryBlockContext {
       ErrorBlockLabel = sharedErrorBlockLabel,
       ErrorFlagVarName = errorFlagVar,
       TypeDiscriminantVarName = discriminantVar,
-      BlockLabel = blockLabel
+      BlockLabel = blockLabel,
+      BodyOuterScope = bodyOuterScope
     };
     _tryBlockStack.Push(ctx);
-    var bodyOuterScope = _variables.SnapshotKeys();
     PushScope();
 
     // 4. Parse the body. ParseBodyUntilEnd advances until `end`; bare throwing calls inside
@@ -7335,6 +7350,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       _currentBlock.AddOp(new MaxonBrOp(afterTryLabel));
     }
+
+    // Emit deferred per-throw landing pads. Each one releases the body-local
+    // managed temps that were live when its routed call was emitted, then jumps
+    // to the shared error block. They're emitted here (not at the throw site)
+    // so they're appended at the END of the function body — putting them
+    // between the cond_br and its success target would break the codegen's
+    // fall-through assumption (cond_br lowers to a single `jne` falling through
+    // to the then-block).
+    foreach (var (label, liveTemps) in ctx.PendingLandingPads) {
+      var landingPad = _currentFunction!.Body.AddBlock(label);
+      landingPad.AddOp(new MaxonScopeEndOp(liveTemps) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      landingPad.AddOp(new MaxonBrOp(ctx.ErrorBlockLabel));
+    }
+
     PopScope();
     _tryBlockStack.Pop();
 
@@ -17634,6 +17663,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock!.AddOp(discrLitOp);
     _currentBlock!.AddOp(new MaxonAssignOp(ctx.TypeDiscriminantVarName, discrLitOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
 
+    // Free body-local managed temps live at this throw site before branching to the
+    // shared error handler. Mirrors the per-throw landing pad used by routed try-call
+    // failures (see RouteEmittedTryCallToTryBlock).
+    var liveBodyTemps = _variables.KeysSince(ctx.BodyOuterScope);
+    if (liveBodyTemps.Count > 0) {
+      _currentBlock!.AddOp(new MaxonScopeEndOp(liveBodyTemps) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    }
+
     // Unconditional branch to the shared error handler.
     _currentBlock!.AddOp(new MaxonBrOp(ctx.ErrorBlockLabel));
     return true;
@@ -17732,16 +17769,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _currentBlock!.AddOp(discrLitOp);
     _currentBlock!.AddOp(new MaxonAssignOp(ctx.TypeDiscriminantVarName, discrLitOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
 
-    // Branch: success -> fresh continuation (physically next, fall-through); failure -> shared
-    // error block (far away). We invert the standard EmitErrorFlagCheck pattern so the codegen
-    // emits a `jne errorBlock` rather than a `je continueBlock` — the shared error block is
-    // emitted at end-of-construct and is not physically adjacent to this cond_br.
+    // Branch: success -> fresh continuation (physically next, fall-through); failure ->
+    // either a per-throw landing pad (when there are body-local managed temps to release)
+    // or directly to the shared error block (when there's nothing to release). The actual
+    // landing pad block is emitted at end-of-body (see ParseTryBlock) so it doesn't
+    // disrupt the codegen's fall-through assumption for the cond_br's success target.
+    // We invert the standard EmitErrorFlagCheck pattern so the codegen emits a `jne else`
+    // and falls through to the continuation — the cond_br's else target is far away and
+    // is reached by an explicit jump.
+    var liveBodyTemps = _variables.KeysSince(ctx.BodyOuterScope);
+    string elseLabel;
+    if (liveBodyTemps.Count > 0) {
+      var landingPadLabel = UniqueLabel("try_block_throw");
+      ctx.PendingLandingPads.Add((landingPadLabel, liveBodyTemps));
+      elseLabel = landingPadLabel;
+    } else {
+      elseLabel = ctx.ErrorBlockLabel;
+    }
     var continueLabel = UniqueLabel("try_block_continue");
     var zeroOp = new MaxonLiteralOp(0L);
     _currentBlock!.AddOp(zeroOp);
     var cmpEqOp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
     _currentBlock!.AddOp(cmpEqOp);
-    _currentBlock!.AddOp(new MaxonCondBrOp(cmpEqOp.Result, continueLabel, ctx.ErrorBlockLabel));
+    _currentBlock!.AddOp(new MaxonCondBrOp(cmpEqOp.Result, continueLabel, elseLabel));
 
     var contBlock = _currentFunction!.Body.AddBlock(continueLabel);
     _currentBlock = contBlock;

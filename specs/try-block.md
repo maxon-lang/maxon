@@ -1270,3 +1270,64 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: try-block.inline-managed-arg-throws -->
+<!-- MmTrace -->
+Regression: a bare throwing call inside a try-block whose argument is an
+inline allocation (`workFunc(IntArray.create())`) must release the
+argument's allocation when the call throws. Previously the argument was
+incref'd into the call but the routed-error path branched to the shared
+error block without including the call's `__call_tmp_*` temp in the
+scope-end set, leaking the IntArray + its backing __ManagedMemory on
+every error-path throw.
+```maxon
+typealias Idx = int(0 to u64.max)
+typealias IntArray = Array with Idx
+
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function workFunc(arr IntArray) throws MyError
+    if arr.count() == 0 'empty'
+        throw MyError.failed
+    end 'empty'
+    arr.push(1)
+end 'workFunc'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        workFunc(IntArray.create())
+    end 'work' otherwise(e) 'h'
+        match e 'k'
+            failed then sum = 42
+        end 'k'
+    end 'h'
+    return sum as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Idx #1 size=40 [IntArray.create]
+  sl_alloc __ManagedMemory_Idx #1 size=72 class=6
+mm_alloc IntArray #2 size=8 [IntArray.create]
+  sl_alloc IntArray #2 size=40 class=4
+mm_incref __ManagedMemory_Idx #1 rc=1 [IntArray.create]
+mm_incref IntArray #2 rc=1 [IntArray.create]
+mm_transfer IntArray #2 rc=1 [IntArray.create]
+mm_decref IntArray #2 rc=0 [main]
+  mm_decref __ManagedMemory_Idx #1 rc=0 [~IntArray]
+    mm_free __ManagedMemory_Idx #1
+      sl_free __ManagedMemory_Idx #1 size=96 class=6
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
