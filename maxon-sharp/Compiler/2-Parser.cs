@@ -78,6 +78,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
+  // Set while ParseStatement is invoked from a match-arm body. Consulted by
+  // ParseTryBlock and EmitTryOtherwiseBlock to reject the multi-line block forms
+  // of try (which would allocate persistent error-flag/discriminant slots in
+  // the enclosing scope and leak them on every error path through the match).
+  // Single-statement try forms are unaffected.
+  private bool _inMatchArmBody;
 
   /// Active try-block contexts (for the new `try 'label' ... end 'label' otherwise (e) ...` form).
   /// While the stack is non-empty, bare calls to throwing functions inside the body do not require
@@ -7294,6 +7300,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// exhaustively.
   /// </summary>
   private void ParseTryBlock(Token tryToken) {
+    if (_inMatchArmBody) {
+      throw new CompileError(ErrorCode.ParserMatchBlockStatement,
+        "block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead",
+        tryToken.Line, tryToken.Column);
+    }
     // 1. Block label
     var blockLabelToken = Expect(TokenType.CharacterLiteral);
     var blockLabel = blockLabelToken.Value;
@@ -7870,6 +7881,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null) {
+    if (_inMatchArmBody) {
+      var hereToken = Current();
+      throw new CompileError(ErrorCode.ParserMatchBlockStatement,
+        "block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic(\"...\")', 'otherwise ignore', or 'otherwise return/throw/...' instead",
+        hereToken.Line, hereToken.Column);
+    }
     var labelToken = Expect(TokenType.CharacterLiteral);
     var blockLabel = labelToken.Value;
 
@@ -12038,15 +12055,37 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// Match arms accept a single statement, not a nested block-opening construct — an `if`,
-  /// `while`, `for`, `match`, or `try` here would drag users into nested block syntax that
-  /// is allowed elsewhere but hasn't been wired through match-arm scope management. Throws
+  /// `while`, `for`, or `match` here would drag users into nested block syntax that is
+  /// allowed elsewhere but hasn't been wired through match-arm scope management. Throws
   /// E2049 with a hint pointing users at a function call instead.
+  ///
+  /// `try` is deliberately NOT rejected at this token-level gate. Every single-statement
+  /// `try` form (propagate, otherwise panic, otherwise ignore, otherwise return/break/
+  /// continue/throw, otherwise &lt;expr&gt;) is valid inside a match arm. Only the two
+  /// multi-line block forms — `try 'label' ... end 'label'` and `otherwise 'label' ...
+  /// end 'label'` (with or without binding) — are rejected, and that rejection lives in
+  /// ParseTryBlock / EmitTryOtherwiseBlock where the relevant token (the block label)
+  /// is in scope. _inMatchArmBody is the signal those helpers consult.
   private void RejectBlockOpeningInMatchArm() {
     if (Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) ||
-        Check(TokenType.Match) || Check(TokenType.Try)) {
+        Check(TokenType.Match)) {
       throw new CompileError(ErrorCode.ParserMatchBlockStatement,
         $"block-opening statement '{Current().Value}' is not allowed in a match arm; use a function call instead",
         Current().Line, Current().Column);
+    }
+  }
+
+  /// Parse a match-arm body statement with `_inMatchArmBody` flagged so deeper helpers
+  /// (ParseTryBlock, EmitTryOtherwiseBlock) can reject the multi-line `try` block forms
+  /// that would leak slots into the enclosing scope. Saves and restores so nested
+  /// matches behave correctly.
+  private void ParseMatchArmStatement() {
+    var savedInMatchArmBody = _inMatchArmBody;
+    _inMatchArmBody = true;
+    try {
+      ParseStatement();
+    } finally {
+      _inMatchArmBody = savedInMatchArmBody;
     }
   }
 
@@ -12204,7 +12243,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       RejectBlockOpeningInMatchArm();
 
       bool caseHasReturn = Check(TokenType.Return);
-      ParseStatement();
+      ParseMatchArmStatement();
       var caseInnerScope = _variables.KeysSince(caseOuterScope);
       PopScope();
 
@@ -12559,7 +12598,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       RejectBlockOpeningInMatchArm();
 
-      ParseStatement();
+      ParseMatchArmStatement();
       var caseInnerScope = _variables.KeysSince(caseOuterScope);
       PopScope();
 
@@ -15658,7 +15697,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// generic arrays with concrete struct elements, type-parameter elements
   /// that don't resolve here, etc.
   /// </summary>
-  private IrRangedPrimitiveType? ResolveTargetRangedElementType(IrStructType sourceStruct) {
+  private static IrRangedPrimitiveType? ResolveTargetRangedElementType(IrStructType sourceStruct) {
     // The associated-type names on a generic struct are the slot names whose
     // values may carry the ranged type. For Array these are typically
     // {"Element"}; for Map they are {"Key", "Value"} (we only narrow Element-

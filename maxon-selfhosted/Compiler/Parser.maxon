@@ -892,23 +892,14 @@ export type Parser
 	// top-level keyword — and hence a new declaration that may carry an
 	// `export` modifier — only requires extending this one match.
 	function dispatchTopLevel(module MaxonModule, kind TokenKind) throws ParserError
-		try 'd'
-			match kind 'k'
-				function then parseFunction(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
-				type then parseTypeDecl(module)
-				let then parseTopLevelLet()
-				var then parseTopLevelVar(typeName: "")
-				typealias then parseTopLevelTypealias()
-				default throws ParserError.unhandledToken
-			end 'k'
-		end 'd' otherwise(e) 'rethrow'
-			match e 'kind'
-				unhandledToken then throw ParserError.unhandledToken
-				typeError then throw ParserError.typeError
-				overflow then throw ParserError.overflow
-				unexpectedEof then throw ParserError.unexpectedEof
-			end 'kind'
-		end 'rethrow'
+		match kind 'k'
+			function then try parseFunction(module, typeName: "", isInstance: false, fields: StructFieldArray.create())
+			type then try parseTypeDecl(module)
+			let then try parseTopLevelLet()
+			var then try parseTopLevelVar(typeName: "")
+			typealias then try parseTopLevelTypealias()
+			default throws ParserError.unhandledToken
+		end 'k'
 	end 'dispatchTopLevel'
 
 	// entry: cursor AT `export`.
@@ -1036,59 +1027,13 @@ export type Parser
 	// caller (parseTypeDecl) has already advanced past any `export` modifier;
 	// each per-member helper consumes its own opening keyword.
 	function dispatchTypeMember(module MaxonModule, kind MemberKind, typeName String, fields StructFieldArray) throws ParserError
-		if isInstanceMethodKind(kind) 'inst'
-			try parseFunction(module, typeName: typeName, isInstance: true, fields: fields)
-			return
-		end 'inst'
-		if isStaticMethodKind(kind) 'sm'
-			try parseStaticMethod(module, typeName: typeName, fields: fields)
-			return
-		end 'sm'
-		if isStaticVarKind(kind) 'sv'
-			try parseStaticVar(typeName: typeName)
-			return
-		end 'sv'
-		if isStaticLetKind(kind) 'sl'
-			try parseStaticLet(typeName: typeName)
-			return
-		end 'sl'
+		match kind 'm'
+			instanceMethod then try parseFunction(module, typeName: typeName, isInstance: true, fields: fields)
+			staticMethod then try parseStaticMethod(module, typeName: typeName, fields: fields)
+			staticVar then try parseStaticVar(typeName: typeName)
+			staticLet then try parseStaticLet(typeName: typeName)
+		end 'm'
 	end 'dispatchTypeMember'
-
-	function isInstanceMethodKind(kind MemberKind) returns bool
-		return match kind 'check'
-			instanceMethod gives true
-			staticMethod gives false
-			staticVar gives false
-			staticLet gives false
-		end 'check'
-	end 'isInstanceMethodKind'
-
-	function isStaticMethodKind(kind MemberKind) returns bool
-		return match kind 'check'
-			staticMethod gives true
-			instanceMethod gives false
-			staticVar gives false
-			staticLet gives false
-		end 'check'
-	end 'isStaticMethodKind'
-
-	function isStaticVarKind(kind MemberKind) returns bool
-		return match kind 'check'
-			staticVar gives true
-			instanceMethod gives false
-			staticMethod gives false
-			staticLet gives false
-		end 'check'
-	end 'isStaticVarKind'
-
-	function isStaticLetKind(kind MemberKind) returns bool
-		return match kind 'check'
-			staticLet gives true
-			instanceMethod gives false
-			staticMethod gives false
-			staticVar gives false
-		end 'check'
-	end 'isStaticLetKind'
 
 	function parseStaticMethod(module MaxonModule, typeName String, fields StructFieldArray) throws ParserError
 		try expect(TokenKind.static)

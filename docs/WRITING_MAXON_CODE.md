@@ -532,6 +532,11 @@ end 'label'
 Each arm is ONE statement. `default` MUST be last. Fallthrough: `then action() and fallthrough`.
 Use `default panic("message")` when unhandled cases are programming errors.
 
+Block-opening statements (`if`, `while`, `for`, nested `match`, multi-line `try ... end` /
+`try ... otherwise 'label' ... end`) are rejected in match arms (E2049). Single-statement
+`try` is fine: `try call()`, `try call() otherwise panic("...")`, `try call() otherwise ignore`,
+`try call() otherwise return/break/continue/throw ...`, `try call() otherwise <expr>`.
+
 ### match expression
 
 ```maxon

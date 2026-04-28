@@ -311,8 +311,8 @@ for (key, _) in pairs 'loop' ... end 'loop'   // discard value, keep key
 match value 'label'
 		1 then doSomething()
 		2 or 3 then doOther()
-		1..=10 then inRange()          // range pattern: 1 to 10 inclusive
-		11..<20 then nearRange()       // range pattern: 11 to 19 (exclusive upper)
+		1 to 10 then inRange()         // range pattern: 1 to 10 inclusive
+		11 upto 20 then nearRange()    // range pattern: 11 to 19 (exclusive upper)
 		pattern then action() and fallthrough
 		42 then break                  // exit match early
 		default then fallback()
@@ -322,7 +322,9 @@ break            // exits innermost match
 break 'label'    // exits match (or loop) with that label
 ```
 
-Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
+Range patterns: `a to b` (inclusive), `a upto b` (exclusive upper), `a to max` (open upper), `min to b` / `min upto b` (open lower).
+
+Block-opening statements (`if`, `while`, `for`, nested `match`, and the multi-line `try ... end` / `try ... otherwise 'label' ... end` block forms) are rejected in match arms with E2049. Single-statement `try` forms — bare propagation, `otherwise panic`, `otherwise ignore`, `otherwise return/break/continue/throw`, and `otherwise <expr>` — are all permitted.
 
 All matches must be exhaustive. For non-enum/non-union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
 

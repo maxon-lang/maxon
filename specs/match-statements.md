@@ -802,6 +802,217 @@ end 'main'
 error E2049: specs/fragments/match-statements/error.match-block-statement.test:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
 ```
 
+## Single-Statement `try` Forms in Match Arms
+
+A `match` arm body must be a single statement; the multi-line block-opening keywords `if`, `while`, `for`, `match` are rejected with E2049 (see above). All single-statement forms of `try` are permitted: bare propagation (`try call()`), and the four single-statement `otherwise` shapes (`panic`, `ignore`, `return/break/continue/throw`, default-value expression). The two multi-line block forms — `try 'label' ... end 'label'` and `try call() otherwise 'label' ... end 'label'` (with or without binding) — are rejected because they would allocate persistent error-flag slots in the enclosing scope and leak them on every error path through the match.
+
+<!-- test: match-statements.try-propagate -->
+```maxon
+typealias Tally = int(0 to 100)
+
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) throws Err
+	match kind 'k'
+		1 then try leaf()
+		default throws Err.bad
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	try dispatch(kind: 1) otherwise ignore
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-statements.try-otherwise-panic -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+function ok() throws Err
+	return
+end 'ok'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try ok() otherwise panic("unreachable")
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-statements.try-otherwise-ignore -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try leaf() otherwise ignore
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-statements.try-otherwise-stmt -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then try leaf() otherwise return 7
+		default panic("unreachable")
+	end 'k'
+	return 99
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+	return dispatch(kind: 1) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: match-statements.try-otherwise-default -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function leaf() returns Score throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then return try leaf() otherwise 42
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	return dispatch(kind: 1) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.match-try-block-form -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try 'inner'
+			leaf()
+		end 'inner' otherwise (e) 'h'
+			match e 'eh'
+				bad then return
+			end 'eh'
+		end 'h'
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2049: specs/fragments/match-statements/error.match-try-block-form.test:12:10: block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead
+```
+
+<!-- test: error.match-otherwise-block-form -->
+```maxon
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try leaf() otherwise (e) 'h'
+			match e 'eh'
+				bad then return
+			end 'eh'
+		end 'h'
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2049: specs/fragments/match-statements/error.match-otherwise-block-form.test:12:35: block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic("...")', 'otherwise ignore', or 'otherwise return/throw/...' instead
+```
+
 <!-- test: match-string.simple -->
 ```maxon
 function main() returns ExitCode

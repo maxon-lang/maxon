@@ -579,6 +579,13 @@ Match arms for enum and union types use **bare case names** (e.g., `red`, `pendi
 qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
 a compile error (E3075).
 
+Although `match_action` reduces to `statement`, the parser rejects the block-opening
+statements `if`, `while`, `for`, nested `match`, and the multi-line block forms of
+`try` (`try 'label' ... end 'label'` and `try call() otherwise 'label' ... end 'label'`)
+in match arms with E2049. Every single-statement `try` form (bare propagation,
+`otherwise panic`, `otherwise ignore`, `otherwise return/break/continue/throw`, and
+`otherwise <expr>`) is allowed.
+
 ### 5.8 Break and Continue
 
 ```

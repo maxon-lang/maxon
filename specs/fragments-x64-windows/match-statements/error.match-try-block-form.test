@@ -1,0 +1,34 @@
+// Test: error.match-try-block-form
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try 'inner'
+			leaf()
+		end 'inner' otherwise (e) 'h'
+			match e 'eh'
+				bad then return
+			end 'eh'
+		end 'h'
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E2049: specs/fragments/match-statements/error.match-try-block-form.test:12:10: block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead
+```
+---
+---

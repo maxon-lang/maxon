@@ -2752,6 +2752,7 @@ end 'handle'
 **Notes:**
 - Block identifier required after `match expression` and on `end`
 - Each case is a single line with one statement
+- Block-opening statements (`if`, `while`, `for`, nested `match`, and the multi-line `try ... end` / `try ... otherwise 'label' ... end` block forms) are rejected in match arms with **E2049**. All single-statement `try` forms are allowed: bare propagation (`try call()`), `try call() otherwise panic("...")`, `try call() otherwise ignore`, `try call() otherwise return/break/continue/throw ...`, and `try call() otherwise <expr>`.
 - Multiple patterns can be combined with `or`
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
