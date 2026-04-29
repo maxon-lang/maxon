@@ -297,10 +297,6 @@ export union MaxonOp
 	binop(result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange)
 	// Unary ops
 	unop(result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange)
-	// Math intrinsic: square root. Operand must already be a float (the parser
-	// inserts an int→float convert when the source argument is an integer).
-	// Result is always float.
-	sqrt(result ByteArray, operand ByteArray, range SourceRange)
 	// Type conversion. Both fromType and toType are explicit; lowerMaxonToStd
 	// picks the right StdArithUnaryOpcode based on the type pair. `implicit` is
 	// true for compiler-inserted conversions (e.g. `trunc(float)` → int) which
@@ -425,7 +421,6 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		globalStore(name, value, slotType, _) gives "maxon.global_store @{name}, %{String.from(value)} : {slotType.toString(project)}"
 		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
-		sqrt(result, operand, _) gives "%{String.from(result)} = maxon.sqrt %{String.from(operand)}"
 		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {fromType.toString(project)} -> {toType.toString(project)}"
 		cmp(result, left, right, predicate, _, _, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"

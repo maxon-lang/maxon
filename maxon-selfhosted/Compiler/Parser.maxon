@@ -2496,51 +2496,6 @@ export type Parser
 		end 'maybeQualifiedRead'
 
 		if accept(TokenKind.leftParen) 'isCall'
-			if token.value == "trunc" 'isTruncParse'
-				let truncArgResult = try parseExpression(block)
-				try expect(TokenKind.rightParen)
-				let truncRparenToken = previousToken()
-				let truncResultName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.convert(truncResultName, operand: exprName(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, implicit: true, range: SourceRange.between(token, last: truncRparenToken)))
-				return ExprResult.direct(truncResultName, valueType: MaxonType.integer)
-			end 'isTruncParse'
-
-			// `floor`, `ceil`, `round`, `abs` are float→float intrinsics. The
-			// self-hosted backend doesn't have dedicated rounding ops yet, so
-			// we approximate by lowering through the int conversion: float→int→
-			// float. The result is bit-for-bit floor only for positive values
-			// (where floor and trunc coincide), but the only stdlib caller of
-			// these helpers today is `Math.pow`'s integer-detection check
-			// `(x - floor(x)) == 0`, which is correct for both signs whenever
-			// `x` is an integer. Replace with target-native rounding when the
-			// backend grows the appropriate `roundsd`/`frintn` support.
-			if token.value == "floor" or token.value == "ceil" or token.value == "round" or token.value == "abs" 'isRoundLikeParse'
-				let argResult = try parseExpression(block)
-				try expect(TokenKind.rightParen)
-				let rparenToken = previousToken()
-				let opRange = SourceRange.between(token, last: rparenToken)
-				let intName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.convert(intName, operand: exprName(argResult), fromType: exprType(argResult), toType: MaxonType.integer, implicit: true, range: opRange))
-				let floatName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.convert(floatName, operand: intName, fromType: MaxonType.integer, toType: MaxonType.float, implicit: true, range: opRange))
-				return ExprResult.direct(floatName, valueType: MaxonType.float)
-			end 'isRoundLikeParse'
-
-			if token.value == "sqrt" 'isSqrtParse'
-				let sqrtArgResult = try parseExpression(block)
-				try expect(TokenKind.rightParen)
-				let sqrtRparenToken = previousToken()
-				let sqrtRange = SourceRange.between(token, last: sqrtRparenToken)
-				// sqrt is a pure-float intrinsic. Emit an implicit convert-to-float
-				// unconditionally; `lowerConvert` aliases it at zero cost when the
-				// operand is already float (same-family case).
-				let promotedName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.convert(promotedName, operand: exprName(sqrtArgResult), fromType: exprType(sqrtArgResult), toType: MaxonType.float, implicit: true, range: sqrtRange))
-				let sqrtResultName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.sqrt(sqrtResultName, operand: promotedName, range: sqrtRange))
-				return ExprResult.direct(sqrtResultName, valueType: MaxonType.float)
-			end 'isSqrtParse'
-
 			// Bare callee — emit a name-symbolic call. CallContext tells lowering
 			// how to qualify (sibling-method probe inside a type body, then free
 			// resolution via currentNamespace + stdlib fallback). Lowering also

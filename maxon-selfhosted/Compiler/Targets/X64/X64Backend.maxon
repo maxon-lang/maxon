@@ -1661,6 +1661,49 @@ function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel Stri
 	writeDword(code, value: 0)
 end 'emitMovXmmRipRelOp'
 
+// SSE 4.1 ROUNDSD/ROUNDSS: round XMM by immediate mode byte.
+// Encoding: 66 [REX] 0F 3A 0B /r ib (double) or 66 [REX] 0F 3A 0A /r ib (single)
+function emitRoundXmmOp(code ByteArray, dest X64XmmRegister, src X64XmmRegister, mode MachineWord, precision FloatPrecision)
+	let destC = xmmRegCode(dest)
+	let srcC = xmmRegCode(src)
+	code.push(0x66)
+	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x40)
+	code.push(0x0F)
+	code.push(0x3A)
+	let opcode = match precision 'prec'
+		f64 gives 0x0B
+		f32 gives 0x0A
+	end 'prec'
+	code.push(opcode)
+	let modrm = 0xC0 or ((destC and 7) shl 3) or (srcC and 7)
+	code.push(modrm)
+	code.push(mode and 0xFF)
+end 'emitRoundXmmOp'
+
+// ANDPD xmm, [rip+disp32]: bitwise AND of XMM register with 64-bit memory mask.
+// Encoding: 66 [REX] 0F 54 /r with r/m=0b101 (disp32 RIP-relative).
+// Used for absF64 with mask 0x7FFFFFFFFFFFFFFF (clears sign bit). The op is
+// f64-only today; ANDPS would need a different encoding (no 0x66 prefix).
+function emitAndMaskRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel String, precision FloatPrecision, rdataRelocs RdataRelocationArray)
+	match precision 'prec'
+		f64 then break 'prec'
+		f32 then panic("emitAndMaskRipRelOp: f32 (ANDPS) not yet supported")
+	end 'prec'
+	let destC = xmmRegCode(dest)
+	code.push(0x66)
+	// Only REX.R may be needed (for xmm8-xmm15 in reg field). Memory r/m=0b101 is fixed.
+	if destC >= 8 'rexR'
+		code.push(0x44)
+	end 'rexR'
+	code.push(0x0F)
+	code.push(0x54)
+	let destBits = destC and 0x07
+	let modrm = 0x05 or (destBits shl 3)
+	code.push(modrm)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
+end 'emitAndMaskRipRelOp'
+
 // --- movq XMM to GPR ---
 function emitMovqXmmToGprOp(code ByteArray, dest X64Register, src X64XmmRegister)
 	// movq r64, xmm: 66 REX.W 0F 7E ModRM(xmm -> r/m)
@@ -1756,7 +1799,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		mulXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x59)
 		divXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x5E)
 		sqrtXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x51)
-		roundXmm then panic("X86 roundXmm not yet implemented in binary emitter")
+		roundXmm(dest, src, mode, precision) then emitRoundXmmOp(code, dest: resolveFp(dest), src: resolveFp(src), mode: mode, precision: precision)
 		ucomisXmm(src1, src2, precision) then emitUcomisXmmOp(code, src1: resolveFp(src1), src2: resolveFp(src2), precision: precision)
 		cvtSi2Float(dest, src, precision) then emitCvtSi2FloatOp(code, dest: resolveFp(dest), src: resolveGpr(src), precision: precision)
 		cvttFloat2Si(dest, src, precision) then emitCvttFloat2SiOp(code, dest: resolveGpr(dest), src: resolveFp(src), precision: precision)
@@ -1764,7 +1807,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		cvtSs2Sd then panic("X86 cvtSs2Sd not yet implemented in binary emitter")
 		movqXmmToGpr(dest, src) then emitMovqXmmToGprOp(code, dest: resolveGpr(dest), src: resolveFp(src))
 		movqGprToXmm(dest, src) then emitMovqGprToXmmOp(code, dest: resolveFp(dest), src: resolveGpr(src))
-		andMaskRipRel then panic("X86 andMaskRipRel not yet implemented in binary emitter")
+		andMaskRipRel(dest, rdataLabel, precision) then emitAndMaskRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
 		storeIndirect(baseReg, offset, srcReg, size) then emitStoreIndirectOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveGpr(srcReg), size: size)
 		loadIndirect(destReg, baseReg, offset, size) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, size: size)
 		storeIndirectXmm then panic("X86 storeIndirectXmm not yet implemented in binary emitter")

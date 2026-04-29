@@ -596,6 +596,21 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		try data.topLevelConstants.insert(name, value: cv) otherwise ignore
 	end 'eachConst'
 
+	// Populate data.typeNameTable from the destination project's interner so
+	// `restoreStdlibMetadata`'s translation step is a no-op identity. The
+	// disk format encodes named types as strings (writeMaxonType emits
+	// `(tag, name)`), and `readMaxonType` reinterns each name into the
+	// destination project — so by the time we get here, every named type id
+	// in `data.*` already points into `project.typeNames`. Mirroring those
+	// names into `data.typeNameTable` makes restore see `table[id] == name`,
+	// so the named-id translation round-trips through `intern(name)` and
+	// returns the same id. Without this, `data.typeNameTable` is empty and
+	// `restoreStdlibMetadata` panics on the first cached named return type
+	// (e.g. `Math.exp returns Real`).
+	for name in project.typeNames.names 'mirrorTable'
+		data.typeNameTable.push(name)
+	end 'mirrorTable'
+
 	return StdlibCacheResult.create(data, valid: true)
 end 'readStdlibCache'
 

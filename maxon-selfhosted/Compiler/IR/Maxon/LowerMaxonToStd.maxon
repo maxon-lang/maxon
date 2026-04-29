@@ -336,7 +336,6 @@ type MaxonToStdLowering
 			globalStore(name, value, _, _) then self.lowerGlobalStore(name, value: value, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
 			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
-			sqrt(result, operand, _) then self.lowerSqrt(result, operand: operand, dstBlock: dstBlock)
 			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
 			cmp(result, left, right, predicate, _, _, operandType, _) then self.lowerCmp(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock)
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
@@ -473,15 +472,6 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerUnop'
 
-	// sqrt is a pure-float intrinsic. The parser guarantees a preceding convert
-	// so the operand always resolves to an f64 value.
-	function lowerSqrt(result ByteArray, operand ByteArray, dstBlock IrBlock)
-		let operandId = self.resolveName(operand)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.sqrtF64, resultId: resultId, operandId: operandId))))
-		self.setIsFloat(resultId, isFloat: true)
-	end 'lowerSqrt'
-
 	// Lower a cmp. Same family-matching logic as binop: if the declared
 	// operand type resolves to float, promote int-backed operands before
 	// emitting. Result is always i64 (bool).
@@ -515,6 +505,12 @@ type MaxonToStdLowering
 	//      consumers (field loads on the result, etc.) can resolve.
 	function lowerCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
 		let bareCallee = String.from(callee)
+		// Math primitives (sqrt/floor/ceil/round/abs/trunc) inline to a single
+		// Std unary op rather than going through call resolution — see
+		// `lowerMathIntrinsic` for why.
+		if self.lowerMathIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock) 'didLowerMath'
+			return
+		end 'didLowerMath'
 		let qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
 		// One signature lookup powers both the sibling-instance probe (does
 		// the resolved callee's first param name `__self`?) and the per-arg
@@ -577,6 +573,41 @@ type MaxonToStdLowering
 		let argIds = self.resolveArgNames(args)
 		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: argIds, dstBlock: dstBlock)
 	end 'emitUnsignedCall'
+
+	// Math primitives (sqrt, floor, ceil, round, abs, trunc) lower to
+	// single-instruction Std unary ops. These are inlined directly into the
+	// caller — no runtime wrapper, no call/ret overhead — because every
+	// supported backend has native hardware for them (SQRTSD / ROUNDSD on x64,
+	// FSQRT / FRINTM / FRINTP / FRINTN / FABS on ARM64, F64 unary opcodes on
+	// Wasm). Going through a runtime call would dominate the cost of the work.
+	// Int operands are implicitly promoted to f64; `trunc` short-circuits to
+	// identity when its operand is already int (avoiding an int→f64→int round
+	// trip that loses precision for ints outside f64's mantissa range).
+	// Returns true if the call was lowered as an intrinsic.
+	function lowerMathIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		let (opcode, resultType, isMath) = mathIntrinsicTarget(bare: bareCallee)
+		if not isMath 'notMath'
+			return false
+		end 'notMath'
+		// Math intrinsics take exactly one arg. If the arity is wrong, fall
+		// through to normal call resolution which will surface the error.
+		if args.count() != 1 'badArity'
+			return false
+		end 'badArity'
+		let argName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let operandId = self.resolveName(argName)
+		// trunc(int) is identity — alias the result to the operand directly.
+		if bareCallee == "trunc" and not self.getIsFloat(operandId) 'truncOfInt'
+			self.aliasName(result, toId: operandId)
+			return true
+		end 'truncOfInt'
+		// All math intrinsics expect f64 input. Promote int operands.
+		let promotedId = self.promoteToFloat(operandId, dstBlock: dstBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(opcode, resultId: resultId, operandId: promotedId))))
+		self.setValueType(resultId, t: resultType)
+		return true
+	end 'lowerMathIntrinsic'
 
 	// Resolve a parser-emitted bare callee to its qualified name. Thin
 	// wrapper over the shared `qualifyCalleeForContext` so the parser, DFE,
@@ -1084,6 +1115,37 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: true)
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
+
+// Maps a bare math-primitive name to the Std unary opcode that implements it
+// and the MaxonType of its result. Returns isMath=false for non-intrinsic
+// names so the caller can fall through to normal call resolution.
+// The opcode chain is single-instruction on every native backend (SQRTSD /
+// ROUNDSD / FSQRT / FRINT* / FABS), so emitting the StdArithUnaryOp directly
+// rather than calling a runtime wrapper avoids an unnecessary call/ret round
+// trip for what amounts to a one-instruction operation.
+// Used by both TypeResolution (to set the call's result MaxonType) and
+// LowerMaxonToStd (to emit the inline op).
+export function mathIntrinsicTarget(bare String) returns (StdArithUnaryOpcode, MaxonType, bool)
+	if bare == "sqrt" 'isSqrt'
+		return (StdArithUnaryOpcode.sqrtF64, MaxonType.float, true)
+	end 'isSqrt'
+	if bare == "floor" 'isFloor'
+		return (StdArithUnaryOpcode.floorF64, MaxonType.float, true)
+	end 'isFloor'
+	if bare == "ceil" 'isCeil'
+		return (StdArithUnaryOpcode.ceilF64, MaxonType.float, true)
+	end 'isCeil'
+	if bare == "round" 'isRound'
+		return (StdArithUnaryOpcode.roundF64, MaxonType.float, true)
+	end 'isRound'
+	if bare == "abs" 'isAbs'
+		return (StdArithUnaryOpcode.absF64, MaxonType.float, true)
+	end 'isAbs'
+	if bare == "trunc" 'isTrunc'
+		return (StdArithUnaryOpcode.fpToSiI64, MaxonType.integer, true)
+	end 'isTrunc'
+	return (StdArithUnaryOpcode.sqrtF64, MaxonType.unresolved, false)
+end 'mathIntrinsicTarget'
 
 // True when `signature`'s first formal parameter is the implicit `__self`
 // — i.e. the callee is an instance method. Lifted out of the per-call

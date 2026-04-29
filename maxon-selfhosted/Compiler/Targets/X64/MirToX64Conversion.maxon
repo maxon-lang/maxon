@@ -932,8 +932,23 @@ type X64FunctionLowering
 			fpToSiI64 then appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 			siToFpF64 then appendX64Op(target, block: dstBlock, op: X64Op.cvtSi2Float(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId), precision: FloatPrecision.f64))
 			sqrtF64 then appendX64Op(target, block: dstBlock, op: X64Op.sqrtXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
+			// ROUNDSD imm8: bits[1:0]=mode (00=nearest, 01=floor, 10=ceil, 11=trunc),
+			// bit 3 (0x08) suppresses precision exceptions. Float input → float result.
+			floorF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x09, precision: FloatPrecision.f64))
+			ceilF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x0A, precision: FloatPrecision.f64))
+			roundF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x08, precision: FloatPrecision.f64))
+			absF64 then lowerFloatAbs(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerUnaryOp'
+
+	// Float absolute value via ANDPD with a sign-mask constant (clears bit 63).
+	// Two-step: mov result, src; andpd result, [rip+mask].
+	function lowerFloatAbs(resultId ValueId, operandId ValueId, dstBlock IrBlock)
+		let dest = X64FpVReg.virtual(resultId)
+		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(dest, src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
+		let label = registerFloatConstant(0x7FFFFFFFFFFFFFFF, globalData: globalData)
+		appendX64Op(target, block: dstBlock, op: X64Op.andMaskRipRel(dest, rdataLabel: label, precision: FloatPrecision.f64))
+	end 'lowerFloatAbs'
 
 	function lowerIntUnary(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
 		let dest = X64VReg.virtual(resultId)
@@ -941,7 +956,7 @@ type X64FunctionLowering
 		match opcode 'emit'
 			negI64 then appendX64Op(target, block: dstBlock, op: X64Op.negReg(dest))
 			bitNotI64 then appendX64Op(target, block: dstBlock, op: X64Op.bitNotReg(dest))
-			fpToSiI64 to sqrtF64 then panic("lowerIntUnary: unexpected float opcode {opcode.name}")
+			fpToSiI64 to absF64 then panic("lowerIntUnary: unexpected float opcode {opcode.name}")
 		end 'emit'
 	end 'lowerIntUnary'
 

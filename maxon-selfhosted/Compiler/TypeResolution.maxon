@@ -478,7 +478,14 @@ end 'methodCallResultType'
 // looking it up in funcReturnTypes. Returns MaxonType.unresolved when the
 // callee isn't registered.
 function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String) returns MaxonType
-	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace)
+	let bareCallee = String.from(callee)
+	// Math primitives are inlined to a Std unary op by lowering — they have
+	// no entry in funcReturnTypes, so look up their result type directly.
+	let (_, intrinsicResultType, isMath) = mathIntrinsicTarget(bare: bareCallee)
+	if isMath 'isMath'
+		return intrinsicResultType
+	end 'isMath'
+	let qualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace)
 	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
 	return match returnType 'unwrap'
 		void gives MaxonType.unresolved
@@ -546,7 +553,6 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		globalStore then return
 		binop(result, _, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
 		unop(result, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
-		sqrt(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.float)
 		convert(result, _, _, toType, _, _) then recordResultType(producerTypes, name: result, t: toType)
 		cmp(result, _, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
 		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
@@ -620,7 +626,6 @@ function fillUnresolvedTypesForOp(module MaxonModule, opIdx OpIndex, op MaxonOp,
 		stringConst then return
 		varStore then return
 		globalLoad then return
-		sqrt then return
 		refEq then return
 		condBr then return
 		br then return
@@ -908,7 +913,6 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		globalStore then return
 		binop then return
 		unop then return
-		sqrt then return
 		convert then return
 		refEq then return
 		condBr then return
