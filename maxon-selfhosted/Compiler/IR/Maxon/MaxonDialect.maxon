@@ -154,36 +154,24 @@ end 'maxonReturnTypeName'
 // --- Cache codecs ---
 //
 // Symmetric (de)serialization for MaxonType / MaxonReturnType using the
-// .unionCases pattern: writers match on the value (exhaustive), readers
-// lift the raw int through fromRawValue and match on the resulting
-// .unionCases enum (also exhaustive). Adding a variant to either union
-// produces non-exhaustive-match errors on both sides until the codec is
-// updated. See specs/union-cases.md for the contract.
-//
-// Match arms accept only a single statement; multi-line arm bodies are
-// extracted into write*/return* helpers.
-
-function writeMaxonTypeTag(buf ByteArray, kase MaxonType.unionCases)
-	writeDword(buf, value: kase.rawValue)
-end 'writeMaxonTypeTag'
-
-function writeMaxonTypeNamed(project Project, buf ByteArray, id TypeNameId)
-	writeMaxonTypeTag(buf, kase: MaxonType.unionCases.named)
-	writeString(buf, s: project.typeNames.get(id))
-end 'writeMaxonTypeNamed'
+// .unionCases pattern: writers emit the variant ordinal, readers lift it
+// through fromRawValue and match on the .unionCases enum (exhaustive).
+// Adding a variant produces non-exhaustive-match errors on both sides
+// until the codec is updated. See specs/union-cases.md for the contract.
 
 export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
-	match t 'tag'
+	writeDword(buf, value: t.ordinal)
+	match t 'payload'
 		// `unresolved` should never reach the cache: this serializer is only
 		// invoked for declaration-site types (struct fields, function signatures),
 		// which the parser fills with concrete primitives or named refs.
 		unresolved then panic("writeMaxonType: MaxonType.unresolved cannot be cached — declaration sites (struct fields, function signatures) reach this serializer with concrete types only")
-		boolean then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.boolean)
-		integer then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.integer)
-		float then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.float)
-		string then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.string)
-		named(id) then writeMaxonTypeNamed(project, buf: buf, id: id)
-	end 'tag'
+		boolean then break
+		integer then break
+		float then break
+		string then break
+		named(id) then writeString(buf, s: project.typeNames.get(id))
+	end 'payload'
 end 'writeMaxonType'
 
 function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
@@ -205,20 +193,12 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 	end 'tag'
 end 'readMaxonType'
 
-function writeMaxonReturnTypeTag(buf ByteArray, kase MaxonReturnType.unionCases)
-	writeDword(buf, value: kase.rawValue)
-end 'writeMaxonReturnTypeTag'
-
-function writeMaxonReturnTypeValue(project Project, buf ByteArray, inner MaxonType)
-	writeMaxonReturnTypeTag(buf, kase: MaxonReturnType.unionCases.value)
-	writeMaxonType(project, buf: buf, t: inner)
-end 'writeMaxonReturnTypeValue'
-
 export function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType)
-	match rt 'tag'
-		void then writeMaxonReturnTypeTag(buf, kase: MaxonReturnType.unionCases.void)
-		value(inner) then writeMaxonReturnTypeValue(project, buf: buf, inner: inner)
-	end 'tag'
+	writeDword(buf, value: rt.ordinal)
+	match rt 'payload'
+		void then break
+		value(inner) then writeMaxonType(project, buf: buf, t: inner)
+	end 'payload'
 end 'writeMaxonReturnType'
 
 function readMaxonReturnTypeValue(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)

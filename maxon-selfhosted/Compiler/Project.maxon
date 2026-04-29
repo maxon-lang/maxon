@@ -533,31 +533,13 @@ export typealias ConstantMap = Map with(String, ConstantValue)
 // strings table. The id space is per-Project and not portable across
 // caches, so we round-trip the resolved bytes.
 
-function writeConstantValueTag(buf ByteArray, kase ConstantValue.unionCases)
-	writeDword(buf, value: kase.rawValue)
-end 'writeConstantValueTag'
-
-function writeConstantValueString(project Project, buf ByteArray, stringId StringId)
-	writeConstantValueTag(buf, kase: ConstantValue.unionCases.stringValue)
-	writeString(buf, s: project.strings.get(stringId))
-end 'writeConstantValueString'
-
-function writeConstantValueInt(buf ByteArray, value IntConstant)
-	writeConstantValueTag(buf, kase: ConstantValue.unionCases.intValue)
-	writeQword(buf, value: value)
-end 'writeConstantValueInt'
-
-function writeConstantValueFloat(buf ByteArray, bits IntConstant)
-	writeConstantValueTag(buf, kase: ConstantValue.unionCases.floatValue)
-	writeQword(buf, value: bits)
-end 'writeConstantValueFloat'
-
 export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
-	match cv 'tag'
-		stringValue(stringId) then writeConstantValueString(project, buf: buf, stringId: stringId)
-		intValue(value) then writeConstantValueInt(buf, value: value)
-		floatValue(bits) then writeConstantValueFloat(buf, bits: bits)
-	end 'tag'
+	writeDword(buf, value: cv.ordinal)
+	match cv 'payload'
+		stringValue(stringId) then writeString(buf, s: project.strings.get(stringId))
+		intValue(value) then writeQword(buf, value: value)
+		floatValue(bits) then writeQword(buf, value: bits)
+	end 'payload'
 end 'writeConstantValue'
 
 function readConstantValueString(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
@@ -565,24 +547,14 @@ function readConstantValueString(project Project, buf ByteArray, offset ByteOffs
 	return (ConstantValue.stringValue(project.strings.intern(strVal)), nextPos)
 end 'readConstantValueString'
 
-function readConstantValueInt(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
-	let value = readQword(buf, offset: offset)
-	return (ConstantValue.intValue(value), offset + 8)
-end 'readConstantValueInt'
-
-function readConstantValueFloat(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
-	let bits = readQword(buf, offset: offset)
-	return (ConstantValue.floatValue(bits), offset + 8)
-end 'readConstantValueFloat'
-
 export function readConstantValue(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
 	let raw = readDword(buf, offset: offset)
 	let pos = offset + 4
 	let kase = try ConstantValue.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ConstantValue tag {raw}")
 	match kase 'tag'
 		stringValue then return readConstantValueString(project, buf: buf, offset: pos)
-		intValue then return readConstantValueInt(buf, offset: pos)
-		floatValue then return readConstantValueFloat(buf, offset: pos)
+		intValue then return (ConstantValue.intValue(readQword(buf, offset: pos)), pos + 8)
+		floatValue then return (ConstantValue.floatValue(readQword(buf, offset: pos)), pos + 8)
 	end 'tag'
 end 'readConstantValue'
 

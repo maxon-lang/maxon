@@ -109,20 +109,12 @@ export function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdTyp
 	return (t, offset + 4)
 end 'readStdTypeTag'
 
-function writeStdReturnTypeTag(buf ByteArray, kase StdReturnType.unionCases)
-	writeDword(buf, value: kase.rawValue)
-end 'writeStdReturnTypeTag'
-
-function writeStdReturnTypeValue(buf ByteArray, inner StdType)
-	writeStdReturnTypeTag(buf, kase: StdReturnType.unionCases.value)
-	writeStdTypeTag(buf, t: inner)
-end 'writeStdReturnTypeValue'
-
 export function writeStdReturnType(buf ByteArray, rt StdReturnType)
-	match rt 'tag'
-		void then writeStdReturnTypeTag(buf, kase: StdReturnType.unionCases.void)
-		value(inner) then writeStdReturnTypeValue(buf, inner: inner)
-	end 'tag'
+	writeDword(buf, value: rt.ordinal)
+	match rt 'payload'
+		void then break
+		value(inner) then writeStdTypeTag(buf, t: inner)
+	end 'payload'
 end 'writeStdReturnType'
 
 function readStdReturnTypeValue(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)

@@ -40,21 +40,12 @@ export union RdataRelocKind
 end 'RdataRelocKind'
 
 // --- Cache codec ---
-// All variants are bare, so the codec writes the discriminant via .unionCases
-// and lifts back through fromRawValue. Both writer and reader are exhaustive.
+// All variants are bare, so the writer just emits the ordinal. The reader
+// lifts the raw int through .unionCases.fromRawValue and matches over the
+// companion enum (exhaustive); adding a variant breaks the reader.
 
 export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
-	match kind 'tag'
-		ripRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.ripRelDisp32.rawValue)
-		symdataRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.symdataRipRelDisp32.rawValue)
-		dataSectionRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.dataSectionRipRelDisp32.rawValue)
-		covdataRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.covdataRipRelDisp32.rawValue)
-		arm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.arm64Adr.rawValue)
-		arm64LdrLiteral then writeDword(buf, value: RdataRelocKind.unionCases.arm64LdrLiteral.rawValue)
-		symdataArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.symdataArm64Adr.rawValue)
-		dataSectionArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.dataSectionArm64Adr.rawValue)
-		covdataArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.covdataArm64Adr.rawValue)
-	end 'tag'
+	writeDword(buf, value: kind.ordinal)
 end 'writeRdataRelocKind'
 
 export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
