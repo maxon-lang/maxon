@@ -119,8 +119,16 @@ export type Project
 	// the .data section is sized one 8-byte slot per global.
 	export var globalVars GlobalVarMap
 
-	// Struct type registry: maps type names to field layouts
+	// Struct type registry: maps type names to field layouts.
+	// Populated by the TypeResolution pass as it drains unresolvedStructTypes.
+	// Read by lowering and downstream validation; never written to directly by
+	// the parser.
 	export var structTypes StructTypeMap
+
+	// Unresolved struct registry: every `type Name ... end` the parser sees
+	// lands here first. The TypeResolution pass moves each entry into
+	// `structTypes` before any pass that consumes struct layouts runs.
+	export var unresolvedStructTypes UnresolvedStructTypeMap
 
 	// Project metadata
 	export var rootPath FilePath
@@ -167,6 +175,7 @@ export type Project
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
 			globalVars: GlobalVarMap.create(),
 			structTypes: StructTypeMap.create(),
+			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -514,6 +523,27 @@ export type UnresolvedTypealias
 end 'UnresolvedTypealias'
 
 export typealias UnresolvedTypealiasMap = Map with(String, UnresolvedTypealias)
+
+// Parser-record for a `type Name` declaration awaiting registration. The
+// parser emits one of these instead of writing `project.structTypes` directly
+// — the type-resolution pass drains them into `structTypes` after every
+// module has been parsed. Field MaxonTypes are kept as the parser saw them;
+// their named-id validation happens during the same resolver pass.
+export type UnresolvedStructType
+	export var name String
+	export var fields StructFieldArray
+	export var byteSize FieldOffset
+	// Source location of the `type Name` token, for duplicate-type diagnostics.
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedStructType
+		return Self{name: name, fields: fields, byteSize: byteSize, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedStructType'
+
+export typealias UnresolvedStructTypeMap = Map with(String, UnresolvedStructType)
 
 export union ConstantValue
 	// String-typed constants store an interned StringId (not raw bytes) so

@@ -154,6 +154,30 @@ function reportAliasNameUnresolved(project Project, entry UnresolvedTypealias, t
 	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "typealias '{entry.name}' references unknown type '{target}'", line: entry.line, column: entry.column, filePath: entry.filePath)
 end 'reportAliasNameUnresolved'
 
+// --- Struct type resolution ---
+
+// Drain `project.unresolvedStructTypes` into `project.structTypes`. Struct
+// resolution is non-fixed-point — each entry's information is independent
+// (its field MaxonTypes are validated separately, after this drain, against
+// the now-fully-populated registries).
+function resolveAllStructTypes(project Project)
+	var resolvedNames = StringArray.create()
+
+	for (name, entry) in project.unresolvedStructTypes 'sweep'
+		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize)
+		// Parser rejects duplicates against the unresolved map before
+		// inserting; collisions with the resolved map (e.g. stdlib-cached
+		// structs reusing a name) are silently ignored here so cache restore
+		// continues to win.
+		try project.structTypes.insert(name, value: st) otherwise ignore
+		resolvedNames.push(name)
+	end 'sweep'
+
+	for resolvedName in resolvedNames 'drop'
+		_ = project.unresolvedStructTypes.remove(resolvedName)
+	end 'drop'
+end 'resolveAllStructTypes'
+
 // --- Cast / compare validation (unchanged from prior behavior) ---
 
 export function convertCastCategory(project Project, t MaxonType) returns CastCategory
@@ -1301,6 +1325,7 @@ end 'joinStringArray'
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	resolveAllTopLevelLets(project)
 	resolveAllTypealiases(project)
+	resolveAllStructTypes(project)
 
 	for opIdx in 0 upto module.ops.count() 'rewriteUnresolved'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")

@@ -1125,38 +1125,74 @@ public class LspServer {
     }
 
     // If the enclosing function is a method inside a `type` block, scan upward
-    // from the function declaration for field declarations (`var NAME` / `let NAME`)
-    // at the type-body indentation level. This allows go-to-definition on implicit
-    // `self.field` references like `namespace` inside a Parser method.
+    // and downward from the function declaration for sibling members at the
+    // type-body indentation level: field declarations (`var NAME` / `let NAME`)
+    // and other methods (`function NAME(`). This allows go-to-definition on
+    // implicit `self.field` and `self.method()` references inside a method.
     if (funcLine >= 0) {
       var funcIndent = lines[funcLine].Length - lines[funcLine].TrimStart().Length;
       // Only methods inside a type body have non-zero indent; top-level functions
-      // have indent 0 and no enclosing struct fields to find.
+      // have indent 0 and no enclosing struct to scan.
       if (funcIndent == 0) return null;
+
+      // Walk upward to find the enclosing `type` declaration line, if any.
+      // We only proceed with sibling-member resolution when we're confirmed
+      // to be inside a `type` body.
+      int typeLine = -1;
       for (int i = funcLine - 1; i >= 0; i--) {
         var rawLine = lines[i];
         var trimmed = rawLine.TrimStart();
         if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
         var indent = rawLine.Length - trimmed.Length;
-
-        // If we hit a line at lower indentation than the method, check if it's
-        // the enclosing `type` declaration. If so, stop (we've scanned all fields).
         if (indent < funcIndent) {
           var decl = trimmed.StartsWith("export ") ? trimmed[7..] : trimmed;
           if (decl.StartsWith("type ")) {
-            break;
+            typeLine = i;
           }
-          // Some other construct at outer scope — we're not inside a type body.
-          return null;
+          break;
         }
+      }
+      if (typeLine < 0) return null;
 
-        // Only consider lines at the exact type-body indentation (same as the method).
+      // Scan all lines at the exact type-body indentation, both above the
+      // method (between typeLine and funcLine) and below it (until indent
+      // drops to typeLine's indent or less, signalling end of the type body).
+      var typeIndent = lines[typeLine].Length - lines[typeLine].TrimStart().Length;
+
+      Location? Match(int i, string trimmed, int indent) {
+        var fieldCol = FindLetVarDeclaration(trimmed, word);
+        if (fieldCol >= 0)
+          return MakeLocation(uri, i, indent + fieldCol, word.Length);
+        var d = trimmed.StartsWith("export ") ? trimmed[7..] : trimmed;
+        var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
+        if (d.StartsWith("function ") && MatchesName(d, 9, word))
+          return MakeLocation(uri, i, indent + exportOffset + 9, word.Length);
+        return null;
+      }
+
+      // Above the method.
+      for (int i = funcLine - 1; i > typeLine; i--) {
+        var rawLine = lines[i];
+        var trimmed = rawLine.TrimStart();
+        if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
+        var indent = rawLine.Length - trimmed.Length;
         if (indent != funcIndent) continue;
+        var hit = Match(i, trimmed, indent);
+        if (hit != null) return hit;
+      }
 
-        var col = FindLetVarDeclaration(trimmed, word);
-        if (col >= 0) {
-          return MakeLocation(uri, i, indent + col, word.Length);
-        }
+      // Below the method.
+      for (int i = funcLine + 1; i < lines.Length; i++) {
+        var rawLine = lines[i];
+        var trimmed = rawLine.TrimStart();
+        if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
+        var indent = rawLine.Length - trimmed.Length;
+        // End of the type body: indentation dropped to or below the type
+        // declaration line itself.
+        if (indent <= typeIndent) break;
+        if (indent != funcIndent) continue;
+        var hit = Match(i, trimmed, indent);
+        if (hit != null) return hit;
       }
     }
 
