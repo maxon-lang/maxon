@@ -1,0 +1,77 @@
+// Test: module-struct-field-assign
+typealias SmallInt = int(0 to u8.max)
+
+type Counter
+		export var value SmallInt
+
+		static function create(value SmallInt) returns Self
+			return Self{value: value}
+		end 'create'
+end 'Counter'
+
+var state = Counter.create(value: 0)
+
+function main() returns ExitCode
+		state.value = 42
+		return state.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Counter.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @module-level-struct-var.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+state]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 42
+    x64.mov rdx, [rbp-8]
+    x64.mov [rdx+0], rcx
+    x64.mov rbx, qword [rip+state]
+    x64.mov [rbp-16], rbx
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rsi+0]
+    x64.xor r8d, r8d
+    x64.mov r9, 4294967295
+    x64.cmp rdi, r9
+    x64.jg module-level-struct-var.main.__range_panic_0
+    x64.cmp rdi, r8
+    x64.jl module-level-struct-var.main.__range_panic_0
+    x64.jmp module-level-struct-var.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdi
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Counter.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,39 @@
+// Test: top-level-var-const-expr
+let BASE = 20
+var offset = BASE + 1
+
+function main() returns ExitCode
+	offset = offset * 2
+	return offset
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+offset]
+    x64.mov rcx, 2
+    x64.imul rax, rcx
+    x64.mov qword [rip+offset], rax
+    x64.mov rdx, qword [rip+offset]
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg static-variables.main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl static-variables.main.__range_panic_0
+    x64.jmp static-variables.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_8]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

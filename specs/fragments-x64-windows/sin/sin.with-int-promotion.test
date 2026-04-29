@@ -1,0 +1,35 @@
+// Test: sin.with-int-promotion
+function main() returns ExitCode
+	let x = 0  // int
+	let result = Math.sin(x)  // x promoted to 0.0
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @sin.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.cvtsi2sd xmm0, rax
+    x64.call stdlib.Math.sin
+    x64.movsd xmm1, [rip+__float_0]
+    x64.ucomisd xmm0, xmm1
+    x64.jne sin.main.check_0.after
+    x64.jp sin.main.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

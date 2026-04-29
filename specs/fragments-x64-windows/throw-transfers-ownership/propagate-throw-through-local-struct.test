@@ -1,0 +1,389 @@
+// Test: propagate-throw-through-local-struct
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+enum InnerErr implements Error
+	gone
+end 'InnerErr'
+
+type Lex
+	var pendingError OuterErr
+	var hasPending bool
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unexpectedEof(line: 0, column: 0), hasPending: false}
+	end 'create'
+
+	function bump() throws InnerErr
+		hasPending = true
+		pendingError = OuterErr.unterminatedString(line: 7, column: 13)
+		throw InnerErr.gone
+	end 'bump'
+
+	function run() returns N throws OuterErr
+		try bump() otherwise 'inner'
+			if hasPending 'hp'
+				throw pendingError
+			end 'hp'
+			throw OuterErr.unexpectedEof(line: 0, column: 0)
+		end 'inner'
+		return 0
+	end 'run'
+end 'Lex'
+
+function outer() returns N throws OuterErr
+	var lex = Lex.create()
+	return try lex.run()
+end 'outer'
+
+function main() returns ExitCode
+	let v = try outer() otherwise(e) 'fail'
+		match e 'kind'
+			unterminatedString(line, column) then return (line + column)
+			unexpectedEof(line, column) then return (line + column + 100)
+		end 'kind'
+	end 'fail'
+	return (v + 200)
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @Lex.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.xor ecx, ecx
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rdx, 1
+    x64.mov [rax+0], rdx
+    x64.xor ebx, ebx
+    x64.mov [rax+8], rbx
+    x64.xor esi, esi
+    x64.mov [rax+16], rsi
+    x64.xor edi, edi
+    x64.lea_func r8, [__destruct_Lex]
+    x64.mov r9, r8
+    x64.mov rdx, r9
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+8], rcxb
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Lex.bump(__self_ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, 1
+    x64.mov rdx, [rbp-8]
+    x64.mov byte ptr [rdx+8], raxb
+    x64.mov rax, 7
+    x64.mov rdx, 13
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 7
+    x64.mov [rax+8], rdx
+    x64.mov rbx, 13
+    x64.mov [rax+16], rbx
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-16], rdi
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r9, [rbp-16]
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], r9
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.lea rdx, [rcx + rax]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @Lex.run(__self_ptr: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Lex.bump
+    x64.mov rcx, [rbp-8]
+    x64.mov rax, [rcx+0]
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je Lex.run.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-8]
+    x64.movzx rcx, byte ptr [rax+8]
+    x64.test rcx, rcx
+    x64.je Lex.run.hp_3.after
+  hp_3:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  hp_3.after:
+    x64.xor eax, eax
+    x64.xor ecx, ecx
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rdx, 1
+    x64.mov [rax+0], rdx
+    x64.xor ebx, ebx
+    x64.mov [rax+8], rbx
+    x64.xor esi, esi
+    x64.mov [rax+16], rsi
+    x64.mov rdi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.xor eax, eax
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @throw-transfers-ownership.outer() -> u64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Lex.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Lex.run
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je throw-transfers-ownership.outer.try_continue_1
+  propagate_error_0:
+    x64.mov rdx, [rbp-16]
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_1:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jge throw-transfers-ownership.outer.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-24]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @throw-transfers-ownership.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call throw-transfers-ownership.outer
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je throw-transfers-ownership.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-32], rax
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-48]
+    x64.mov [rbp-40], rsi
+    x64.jmp throw-transfers-ownership.main.kind_4.cmp0
+  kind_4.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne throw-transfers-ownership.main.kind_4.cmp1
+  kind_4.case0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+16]
+    x64.add rcx, rbx
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rcx, rdi
+    x64.jg throw-transfers-ownership.main.__range_panic_5
+    x64.cmp rcx, rsi
+    x64.jl throw-transfers-ownership.main.__range_panic_5
+    x64.jmp throw-transfers-ownership.main.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-48], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  kind_4.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne throw-transfers-ownership.main.kind_4.merge
+  kind_4.case1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+16]
+    x64.add rcx, rbx
+    x64.mov rsi, 100
+    x64.add rcx, rsi
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rcx, r8
+    x64.jg throw-transfers-ownership.main.__range_panic_6
+    x64.cmp rcx, rdi
+    x64.jl throw-transfers-ownership.main.__range_panic_6
+    x64.jmp throw-transfers-ownership.main.__range_ok_6
+  __range_panic_6:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_6:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-48], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_7
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  kind_4.merge:
+  otherwise_continue_1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 200
+    x64.add rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg throw-transfers-ownership.main.__range_panic_7
+    x64.cmp rax, rdx
+    x64.jl throw-transfers-ownership.main.__range_panic_7
+    x64.jmp throw-transfers-ownership.main.__range_ok_7
+  __range_panic_7:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_7:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_OuterErr(ptr: i64) {
+  entry:
+    x64.jmp __destruct_OuterErr.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Lex(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.jmp __destruct_Lex.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,34 @@
+// Test: explicit-cast-int-to-float
+
+typealias Float = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let x = 5
+	let y = 5.0
+	if (x as Float) == y 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @contextual-literal-typing.main() -> u32 {
+  entry:
+    x64.mov rax, 5
+    x64.movsd xmm0, [rip+__float_5]
+    x64.cvtsi2sd xmm1, rax
+    x64.ucomisd xmm1, xmm0
+    x64.jne contextual-literal-typing.main.check_0.after
+    x64.jp contextual-literal-typing.main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor eax, eax
+    x64.ret
+  }
+}
+---

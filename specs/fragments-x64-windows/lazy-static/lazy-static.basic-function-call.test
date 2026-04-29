@@ -1,0 +1,128 @@
+// Test: lazy-static.basic-function-call
+typealias Count = int(0 to u64.max)
+
+type Config
+	static var value = Config.makeValue()
+	export var n Count
+
+	static function makeValue() returns Config
+		return Config{n: 42}
+	end 'makeValue'
+
+	export static function getValue() returns Config
+		return Config.value
+	end 'getValue'
+end 'Config'
+
+function main() returns ExitCode
+	let c = Config.getValue()
+	return c.n
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Config.makeValue() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Config.getValue() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx rax, byte [rip+Config.value.__initialized]
+    x64.test rax, rax
+    x64.je Config.getValue.__lazy_init_2
+  __lazy_merge_2:
+    x64.mov rax, qword [rip+Config.value]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  __lazy_init_2:
+    x64.call Config.value.__lazy_init
+    x64.jmp Config.getValue.__lazy_merge_2
+  }
+  func @lazy-static.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Config.getValue
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg lazy-static.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl lazy-static.main.__range_panic_0
+    x64.jmp lazy-static.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Config.value.__lazy_init() {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov byte [rip+Config.value.__initialized], rax
+    x64.call Config.makeValue
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, qword [rip+Config.value]
+    x64.mov [rbp-16], rdx
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_25
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_25
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-8]
+    x64.mov qword [rip+Config.value], rbx
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_26
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_26
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Config(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Config.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,57 @@
+// Test: assignment-in-loop
+function main() returns ExitCode
+	var sum = 0
+	var i = 1
+	while i <= 5 'loop'
+		sum = sum + i
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 15
+---
+// CompiledIR
+module {
+  func @assignment.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.jmp assignment.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jg assignment.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp assignment.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg assignment.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl assignment.main.__range_panic_1
+    x64.jmp assignment.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

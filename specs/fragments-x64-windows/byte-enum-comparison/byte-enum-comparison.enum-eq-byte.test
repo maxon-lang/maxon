@@ -1,0 +1,39 @@
+// Test: byte-enum-comparison.enum-eq-byte
+
+typealias Byte = byte(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function main() returns ExitCode
+	let s = 32 as Byte
+	if Ascii.space == s 'match'
+		return 0
+	end 'match'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @byte-enum-comparison.main() -> u32 {
+  entry:
+    x64.mov rax, 32
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, 32
+    x64.cmp rdx, rax
+    x64.jne byte-enum-comparison.main.match_0.after
+  match_0:
+    x64.xor eax, eax
+    x64.ret
+  match_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

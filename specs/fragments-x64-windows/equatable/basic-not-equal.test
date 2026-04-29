@@ -1,0 +1,141 @@
+// Test: basic-not-equal
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point implements Equatable
+	export var x Integer
+	export var y Integer
+
+	function equals(other Point) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 3, y: 4)
+	if a.equals(b) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Point.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rax+0]
+    x64.cmp rbx, rsi
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor ebx, ebx
+    x64.mov [rbp-17], rbx
+    x64.test rax, rax
+    x64.je Point.equals.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.cmp rbx, rcx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov [rbp-17], rsi
+    x64.jmp Point.equals.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-17]
+    x64.epilogue
+    x64.ret
+  }
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @equatable.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.call Point.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Point.equals
+    x64.test rax, rax
+    x64.je equatable.main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_7
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Point.done
+  done:
+    x64.ret
+  }
+}
+---

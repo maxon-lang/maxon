@@ -1,0 +1,35 @@
+// Test: variable-division-optimizes
+function main() returns ExitCode
+	let a = 7
+	let b = 2
+	return a / b              // int/int = truncating int, returns 3
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @arithmetic-operators.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 7
+    x64.mov rcx, 2
+    x64.cqo
+    x64.idiv rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg arithmetic-operators.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl arithmetic-operators.main.__range_panic_0
+    x64.jmp arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

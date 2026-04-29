@@ -1,0 +1,35 @@
+// Test: math-intrinsic-int-promotion
+function main() returns ExitCode
+	let result = sqrt(16)
+	return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @implicit-type-conversion.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 16
+    x64.cvtsi2sd xmm0, rax
+    x64.sqrtsd xmm1, xmm0
+    x64.cvttsd2si rcx, xmm1
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg implicit-type-conversion.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl implicit-type-conversion.main.__range_panic_0
+    x64.jmp implicit-type-conversion.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_9]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

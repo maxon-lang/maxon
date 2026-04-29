@@ -1,0 +1,843 @@
+// Test: bounds-valid-operations
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	let arr = IntArray.create()
+	try arr.managed.grow(8) otherwise panic("grow OOB")
+	try arr.managed.setLength(4) otherwise panic("setLength OOB")
+	try arr.managed.set(0, 10) otherwise panic("set OOB")
+	try arr.managed.set(1, 20) otherwise panic("set OOB")
+	try arr.managed.set(2, 30) otherwise panic("set OOB")
+	try arr.managed.set(3, 40) otherwise panic("set OOB")
+	let v0 = try arr.managed.get(0) otherwise panic("get OOB")
+	let v1 = try arr.managed.get(1) otherwise panic("get OOB")
+	let v2 = try arr.managed.get(2) otherwise panic("get OOB")
+	let v3 = try arr.managed.get(3) otherwise panic("get OOB")
+	let sum = v0 + v1 + v2 + v3
+	return sum
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @managed-memory-methods.main() -> u32 {
+  entry:
+    x64.prologue stack_size=528
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, 8
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbx+24]
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, [rdi+16]
+    x64.xor r9d, r9d
+    x64.cmp r8, r9
+    x64.setl rax
+    x64.movzx rax, raxb
+    x64.test rax, rax
+    x64.mov rcx, r8
+    x64.cmovne rcx, r9
+    x64.mov rax, 1
+    x64.lea rbx, [rdx + rax]
+    x64.cmp rcx, rbx
+    x64.setae rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 4
+    x64.xor ebx, ebx
+    x64.test rax, rax
+    x64.mov rdi, rbx
+    x64.cmovne rdi, rcx
+    x64.test rax, rax
+    x64.mov [rbp-280], rsi
+    x64.mov [rbp-288], rdi
+    x64.je managed-memory-methods.main.__grow_ok_398
+  __grow_err_398:
+    x64.jmp managed-memory-methods.main.__grow_merge_398
+  __grow_ok_398:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.mov [rbp-32], rcx
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-40], rdi
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-280]
+    x64.imul rbx, r9
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+0]
+    x64.mov rcx, rdx
+    x64.mov rdx, [rbp-32]
+    x64.mov r8, rbx
+    x64.mov r9, [rbp-16]
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-40]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-24]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-296], rax
+    x64.mov [rbp-304], rdx
+    x64.mov [rbp-312], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_29
+    x64.mov rcx, [rbp-312]
+    x64.call mm_decref
+    x64.label __nonnull_skip_29
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-304]
+    x64.mov rdx, [rbp-296]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+0]
+    x64.mov rax, [rbp-280]
+    x64.mov rdx, 8
+    x64.mov rbx, rdx
+    x64.imul rbx, rax
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, rbx
+    x64.mov r8, [rbp-16]
+    x64.call mm_raw_realloc
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 8
+    x64.mov [rax+16], rcx
+    x64.jmp managed-memory-methods.main.__grow_merge_398
+  __grow_merge_398:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-288]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_12]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-48], rcx
+    x64.mov rdx, 4
+    x64.mov rbx, [rbp-48]
+    x64.mov rsi, [rbx+16]
+    x64.mov rdi, 1
+    x64.add rsi, rdi
+    x64.cmp rdx, rsi
+    x64.setae r8
+    x64.movzx r8, r8b
+    x64.mov r9, 3
+    x64.xor eax, eax
+    x64.test r8, r8
+    x64.mov rcx, rax
+    x64.cmovne rcx, r9
+    x64.test r8, r8
+    x64.mov [rbp-320], rcx
+    x64.je managed-memory-methods.main.__setlen_ok_400
+  __setlen_err_400:
+    x64.jmp managed-memory-methods.main.__setlen_merge_400
+  __setlen_ok_400:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, 4
+    x64.mov [rax+8], rcx
+    x64.jmp managed-memory-methods.main.__setlen_merge_400
+  __setlen_merge_400:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-320]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_4
+  otherwise_panic_3:
+    x64.lea_symdata rax, [__panic_msg_13]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_4:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-56], rcx
+    x64.xor edx, edx
+    x64.mov rbx, 10
+    x64.mov rsi, [rbp-56]
+    x64.mov rdi, [rsi+24]
+    x64.mov r8, [rbp-56]
+    x64.mov r9, [r8+16]
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-64], rcx
+    x64.mov [rbp-72], r9
+    x64.mov rax, [rbp-56]
+    x64.mov rsi, [rax+0]
+    x64.mov [rbp-80], rsi
+    x64.mov rax, [rbp-56]
+    x64.imul rcx, rdi
+    x64.mov rsi, [rbp-56]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-328], rdi
+    x64.mov rdx, [rbp-72]
+    x64.mov r9, [rbp-56]
+    x64.xchg r8, rcx
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-56]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rbp-80]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-64]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-56]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-336], rax
+    x64.mov [rbp-344], rdx
+    x64.mov [rbp-352], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_30
+    x64.mov rcx, [rbp-352]
+    x64.call mm_decref
+    x64.label __nonnull_skip_30
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-344]
+    x64.mov rdx, [rbp-336]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-56]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rax+16]
+    x64.xor eax, eax
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-360], rsi
+    x64.je managed-memory-methods.main.__set_ok_402
+  __set_oob_402:
+    x64.jmp managed-memory-methods.main.__set_merge_402
+  __set_ok_402:
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-328]
+    x64.xor ebx, ebx
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 10
+    x64.mov [rcx+0], rsi
+    x64.jmp managed-memory-methods.main.__set_merge_402
+  __set_merge_402:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-360]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_7
+  otherwise_panic_6:
+    x64.lea_symdata rax, [__panic_msg_14]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_7:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-88], rcx
+    x64.mov rdx, 1
+    x64.mov rbx, 20
+    x64.mov rsi, [rbp-88]
+    x64.mov rdi, [rsi+24]
+    x64.mov r8, [rbp-88]
+    x64.mov r9, [r8+16]
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-96], rcx
+    x64.mov [rbp-104], r9
+    x64.mov rax, [rbp-88]
+    x64.mov rsi, [rax+0]
+    x64.mov [rbp-112], rsi
+    x64.mov rax, [rbp-88]
+    x64.imul rcx, rdi
+    x64.mov rsi, [rbp-88]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-368], rdi
+    x64.mov rdx, [rbp-104]
+    x64.mov r9, [rbp-88]
+    x64.xchg r8, rcx
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-88]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-104]
+    x64.mov rdx, [rbp-112]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-96]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-88]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-376], rax
+    x64.mov [rbp-384], rdx
+    x64.mov [rbp-392], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_31
+    x64.mov rcx, [rbp-392]
+    x64.call mm_decref
+    x64.label __nonnull_skip_31
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-384]
+    x64.mov rdx, [rbp-376]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-88]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rax+16]
+    x64.mov rax, 1
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-400], rsi
+    x64.je managed-memory-methods.main.__set_ok_404
+  __set_oob_404:
+    x64.jmp managed-memory-methods.main.__set_merge_404
+  __set_ok_404:
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-368]
+    x64.mov rbx, 1
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 20
+    x64.mov [rcx+0], rsi
+    x64.jmp managed-memory-methods.main.__set_merge_404
+  __set_merge_404:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-400]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_10
+  otherwise_panic_9:
+    x64.lea_symdata rax, [__panic_msg_15]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_10:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-120], rcx
+    x64.mov rdx, 2
+    x64.mov rbx, 30
+    x64.mov rsi, [rbp-120]
+    x64.mov rdi, [rsi+24]
+    x64.mov r8, [rbp-120]
+    x64.mov r9, [r8+16]
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-128], rcx
+    x64.mov [rbp-136], r9
+    x64.mov rax, [rbp-120]
+    x64.mov rsi, [rax+0]
+    x64.mov [rbp-144], rsi
+    x64.mov rax, [rbp-120]
+    x64.imul rcx, rdi
+    x64.mov rsi, [rbp-120]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-408], rdi
+    x64.mov rdx, [rbp-136]
+    x64.mov r9, [rbp-120]
+    x64.xchg r8, rcx
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-120]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-136]
+    x64.mov rdx, [rbp-144]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-128]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-120]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-120]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-416], rax
+    x64.mov [rbp-424], rdx
+    x64.mov [rbp-432], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_32
+    x64.mov rcx, [rbp-432]
+    x64.call mm_decref
+    x64.label __nonnull_skip_32
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-424]
+    x64.mov rdx, [rbp-416]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-120]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rax+16]
+    x64.mov rax, 2
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-440], rsi
+    x64.je managed-memory-methods.main.__set_ok_406
+  __set_oob_406:
+    x64.jmp managed-memory-methods.main.__set_merge_406
+  __set_ok_406:
+    x64.mov rax, [rbp-120]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-408]
+    x64.mov rbx, 2
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 30
+    x64.mov [rcx+0], rsi
+    x64.jmp managed-memory-methods.main.__set_merge_406
+  __set_merge_406:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-440]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_13
+  otherwise_panic_12:
+    x64.lea_symdata rax, [__panic_msg_16]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_13:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-152], rcx
+    x64.mov rdx, 3
+    x64.mov rbx, 40
+    x64.mov rsi, [rbp-152]
+    x64.mov rdi, [rsi+24]
+    x64.mov r8, [rbp-152]
+    x64.mov r9, [r8+16]
+    x64.mov rax, [rbp-152]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-160], rcx
+    x64.mov [rbp-168], r9
+    x64.mov rax, [rbp-152]
+    x64.mov rsi, [rax+0]
+    x64.mov [rbp-176], rsi
+    x64.mov rax, [rbp-152]
+    x64.imul rcx, rdi
+    x64.mov rsi, [rbp-152]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-448], rdi
+    x64.mov rdx, [rbp-168]
+    x64.mov r9, [rbp-152]
+    x64.xchg r8, rcx
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-152]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-168]
+    x64.mov rdx, [rbp-176]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-160]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-152]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-152]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-456], rax
+    x64.mov [rbp-464], rdx
+    x64.mov [rbp-472], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_33
+    x64.mov rcx, [rbp-472]
+    x64.call mm_decref
+    x64.label __nonnull_skip_33
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-464]
+    x64.mov rdx, [rbp-456]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-152]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-152]
+    x64.mov rcx, [rax+16]
+    x64.mov rax, 3
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-480], rsi
+    x64.je managed-memory-methods.main.__set_ok_408
+  __set_oob_408:
+    x64.jmp managed-memory-methods.main.__set_merge_408
+  __set_ok_408:
+    x64.mov rax, [rbp-152]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-448]
+    x64.mov rbx, 3
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 40
+    x64.mov [rcx+0], rsi
+    x64.jmp managed-memory-methods.main.__set_merge_408
+  __set_merge_408:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-480]
+    x64.cmp rcx, rax
+    x64.je managed-memory-methods.main.otherwise_continue_16
+  otherwise_panic_15:
+    x64.lea_symdata rax, [__panic_msg_17]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_16:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-184], rcx
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-184]
+    x64.mov rsi, [rbx+8]
+    x64.cmp rdx, rsi
+    x64.setae rdi
+    x64.movzx rdi, rdib
+    x64.mov r8, 1
+    x64.xor r9d, r9d
+    x64.test rdi, rdi
+    x64.mov rax, r9
+    x64.cmovne rax, r8
+    x64.mov [rbp-192], rax
+    x64.test rdi, rdi
+    x64.je managed-memory-methods.main.__get_ok_410
+  __get_oob_410:
+    x64.jmp managed-memory-methods.main.__get_merge_410
+  __get_ok_410:
+    x64.mov rax, [rbp-184]
+    x64.mov rcx, [rax+24]
+    x64.mov rdx, [rbp-184]
+    x64.mov rbx, [rdx+0]
+    x64.xor esi, esi
+    x64.imul rsi, rcx
+    x64.add rbx, rsi
+    x64.mov rdi, [rbx+0]
+    x64.mov [rbp-488], rdi
+    x64.jmp managed-memory-methods.main.__get_merge_410
+  __get_merge_410:
+    x64.mov rax, [rbp-192]
+    x64.mov rcx, [rbp-488]
+    x64.mov [rbp-200], rcx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je managed-memory-methods.main.otherwise_continue_19
+  otherwise_panic_18:
+    x64.lea_symdata rax, [__panic_msg_18]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_19:
+    x64.mov rax, [rbp-200]
+    x64.mov [rbp-208], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-216], rdx
+    x64.mov rbx, 1
+    x64.mov rsi, [rbp-216]
+    x64.mov rdi, [rsi+8]
+    x64.cmp rbx, rdi
+    x64.setae r8
+    x64.movzx r8, r8b
+    x64.mov r9, 1
+    x64.xor eax, eax
+    x64.test r8, r8
+    x64.mov rcx, rax
+    x64.cmovne rcx, r9
+    x64.mov [rbp-192], rcx
+    x64.test r8, r8
+    x64.je managed-memory-methods.main.__get_ok_412
+  __get_oob_412:
+    x64.jmp managed-memory-methods.main.__get_merge_412
+  __get_ok_412:
+    x64.mov rax, [rbp-216]
+    x64.mov rcx, [rax+24]
+    x64.mov rdx, [rbp-216]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, 1
+    x64.imul rsi, rcx
+    x64.add rbx, rsi
+    x64.mov rdi, [rbx+0]
+    x64.mov [rbp-496], rdi
+    x64.jmp managed-memory-methods.main.__get_merge_412
+  __get_merge_412:
+    x64.mov rax, [rbp-192]
+    x64.mov rcx, [rbp-496]
+    x64.mov [rbp-224], rcx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je managed-memory-methods.main.otherwise_continue_23
+  otherwise_panic_22:
+    x64.lea_symdata rax, [__panic_msg_19]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_23:
+    x64.mov rax, [rbp-224]
+    x64.mov [rbp-232], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-240], rdx
+    x64.mov rbx, 2
+    x64.mov rsi, [rbp-240]
+    x64.mov rdi, [rsi+8]
+    x64.cmp rbx, rdi
+    x64.setae r8
+    x64.movzx r8, r8b
+    x64.mov r9, 1
+    x64.xor eax, eax
+    x64.test r8, r8
+    x64.mov rcx, rax
+    x64.cmovne rcx, r9
+    x64.mov [rbp-192], rcx
+    x64.test r8, r8
+    x64.je managed-memory-methods.main.__get_ok_414
+  __get_oob_414:
+    x64.jmp managed-memory-methods.main.__get_merge_414
+  __get_ok_414:
+    x64.mov rax, [rbp-240]
+    x64.mov rcx, [rax+24]
+    x64.mov rdx, [rbp-240]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, 2
+    x64.imul rsi, rcx
+    x64.add rbx, rsi
+    x64.mov rdi, [rbx+0]
+    x64.mov [rbp-504], rdi
+    x64.jmp managed-memory-methods.main.__get_merge_414
+  __get_merge_414:
+    x64.mov rax, [rbp-192]
+    x64.mov rcx, [rbp-504]
+    x64.mov [rbp-248], rcx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je managed-memory-methods.main.otherwise_continue_27
+  otherwise_panic_26:
+    x64.lea_symdata rax, [__panic_msg_20]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_27:
+    x64.mov rax, [rbp-248]
+    x64.mov [rbp-256], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-264], rdx
+    x64.mov rbx, 3
+    x64.mov rsi, [rbp-264]
+    x64.mov rdi, [rsi+8]
+    x64.cmp rbx, rdi
+    x64.setae r8
+    x64.movzx r8, r8b
+    x64.mov r9, 1
+    x64.xor eax, eax
+    x64.test r8, r8
+    x64.mov rcx, rax
+    x64.cmovne rcx, r9
+    x64.mov [rbp-192], rcx
+    x64.test r8, r8
+    x64.je managed-memory-methods.main.__get_ok_416
+  __get_oob_416:
+    x64.jmp managed-memory-methods.main.__get_merge_416
+  __get_ok_416:
+    x64.mov rax, [rbp-264]
+    x64.mov rcx, [rax+24]
+    x64.mov rdx, [rbp-264]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, 3
+    x64.imul rsi, rcx
+    x64.add rbx, rsi
+    x64.mov rdi, [rbx+0]
+    x64.mov [rbp-512], rdi
+    x64.jmp managed-memory-methods.main.__get_merge_416
+  __get_merge_416:
+    x64.mov rax, [rbp-192]
+    x64.mov rcx, [rbp-512]
+    x64.mov [rbp-272], rcx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je managed-memory-methods.main.otherwise_continue_31
+  otherwise_panic_30:
+    x64.lea_symdata rax, [__panic_msg_21]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_31:
+    x64.mov rax, [rbp-272]
+    x64.mov rcx, [rbp-208]
+    x64.mov rdx, [rbp-232]
+    x64.add rcx, rdx
+    x64.mov rbx, [rbp-256]
+    x64.add rcx, rbx
+    x64.add rcx, rax
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rcx, rdi
+    x64.jg managed-memory-methods.main.__range_panic_34
+    x64.cmp rcx, rsi
+    x64.jl managed-memory-methods.main.__range_panic_34
+    x64.jmp managed-memory-methods.main.__range_ok_34
+  __range_panic_34:
+    x64.lea_symdata rax, [__panic_msg_22]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_34:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-520], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_34
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_34
+    x64.mov rax, [rbp-520]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_118
+    x64.call mm_decref
+    x64.label __nonnull_skip_118
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_119
+    x64.call mm_decref
+    x64.label __nonnull_skip_119
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

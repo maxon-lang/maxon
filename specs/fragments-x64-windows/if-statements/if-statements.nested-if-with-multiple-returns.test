@@ -1,0 +1,79 @@
+// Test: if-statements.nested-if-with-multiple-returns
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(c Integer, next Integer) returns Integer
+	if c == 0 'maybePrefix'
+		if next == 1 'isHex'
+			return 1
+		end 'isHex'
+		if next == 2 'isBinary'
+			return 2
+		end 'isBinary'
+	end 'maybePrefix'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5, next: 0)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @if-statements.test(c: i64, next: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rdx
+    x64.xor eax, eax
+    x64.cmp rcx, rax
+    x64.jne if-statements.test.maybePrefix_0.merge
+  maybePrefix_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne if-statements.test.isHex_1.after
+  isHex_1:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  isHex_1.after:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne if-statements.test.isBinary_2.after
+  isBinary_2:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  isBinary_2.after:
+    x64.jmp if-statements.test.maybePrefix_0.merge
+  maybePrefix_0.merge:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  }
+  func @if-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.xor edx, edx
+    x64.call if-statements.test
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg if-statements.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl if-statements.main.__range_panic_0
+    x64.jmp if-statements.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

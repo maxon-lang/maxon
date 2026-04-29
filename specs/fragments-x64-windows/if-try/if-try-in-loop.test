@@ -1,0 +1,104 @@
+// Test: if-try-in-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(n Integer) returns Integer throws MyError
+	if n < 3 'check'
+		throw MyError.failed
+	end 'check'
+	return n
+end 'mayFail'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		if let val = try mayFail(i) 'check'
+			sum = sum + val
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @if-try.mayFail(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 3
+    x64.cmp rcx, rax
+    x64.jge if-try.mayFail.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-8]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @if-try.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.jmp if-try.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge if-try.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call if-try.mayFail
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne if-try.main.check_3.merge
+  check_3:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp if-try.main.check_3.merge
+  check_3.merge:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp if-try.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg if-try.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl if-try.main.__range_panic_4
+    x64.jmp if-try.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_13]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

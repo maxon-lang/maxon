@@ -1,0 +1,78 @@
+// Test: enum-function-param
+enum Status
+	on
+	off
+end 'Status'
+
+function isOn(s Status) returns bool
+	let result = match s 'check'
+		on gives true
+		off gives false
+	end 'check'
+	return result
+end 'isOn'
+
+function main() returns ExitCode
+	let status = Status.on
+	if isOn(status) 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @enum-full.isOn(s: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rax
+    x64.jmp enum-full.isOn.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne enum-full.isOn.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.isOn.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne enum-full.isOn.check_0.merge
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.isOn.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @enum-full.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call enum-full.isOn
+    x64.test rax, rax
+    x64.je enum-full.main.test_0.after
+  test_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  test_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

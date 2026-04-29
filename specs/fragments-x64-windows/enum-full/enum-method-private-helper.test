@@ -1,0 +1,100 @@
+// Test: enum-method-private-helper
+enum Signal
+	red
+	green
+	yellow
+
+	function isStop() returns bool
+		return match self 'check'
+			red gives true
+			green gives false
+			yellow gives false
+		end 'check'
+	end 'isStop'
+
+	export function action() returns bool
+		return self.isStop()
+	end 'action'
+end 'Signal'
+
+function main() returns ExitCode
+	let s = Signal.red
+	if s.action() 'isRed'
+		return 1
+	end 'isRed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Signal.isStop(self: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rax
+    x64.jmp Signal.isStop.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne Signal.isStop.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp Signal.isStop.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne Signal.isStop.check_0.cmp2
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp Signal.isStop.check_0.merge
+  check_0.cmp2:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne Signal.isStop.check_0.merge
+  check_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp Signal.isStop.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Signal.action(self: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Signal.isStop
+  }
+  func @enum-full.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call Signal.action
+    x64.test rax, rax
+    x64.je enum-full.main.isRed_0.after
+  isRed_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  isRed_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

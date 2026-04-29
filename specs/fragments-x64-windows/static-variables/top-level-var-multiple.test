@@ -1,0 +1,54 @@
+// Test: top-level-var-multiple
+var a = 1
+var b = 2
+var c = 3
+
+function main() returns ExitCode
+	a = a * 10
+	b = b * 10
+	c = c * 10
+	return a + b + c
+end 'main'
+---
+ExitCode: 60
+---
+// CompiledIR
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+a]
+    x64.mov rcx, 10
+    x64.imul rax, rcx
+    x64.mov qword [rip+a], rax
+    x64.mov rdx, qword [rip+b]
+    x64.mov rbx, 10
+    x64.imul rdx, rbx
+    x64.mov qword [rip+b], rdx
+    x64.mov rsi, qword [rip+c]
+    x64.mov rdi, 10
+    x64.imul rsi, rdi
+    x64.mov qword [rip+c], rsi
+    x64.mov r8, qword [rip+a]
+    x64.mov r9, qword [rip+b]
+    x64.add r8, r9
+    x64.mov rax, qword [rip+c]
+    x64.add r8, rax
+    x64.xor eax, eax
+    x64.mov ecx, 4294967295
+    x64.cmp r8, rcx
+    x64.jg static-variables.main.__range_panic_0
+    x64.cmp r8, rax
+    x64.jl static-variables.main.__range_panic_0
+    x64.jmp static-variables.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, r8
+    x64.epilogue
+    x64.ret
+  }
+}
+---

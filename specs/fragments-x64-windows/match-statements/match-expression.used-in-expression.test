@@ -1,0 +1,64 @@
+// Test: match-expression.used-in-expression
+function main() returns ExitCode
+	let x = 2
+	let doubled = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval' * 2
+	return doubled
+end 'main'
+---
+ExitCode: 40
+---
+// CompiledIR
+module {
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp match-statements.main.eval_0.cmp0
+  eval_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-statements.main.eval_0.cmp1
+  eval_0.case0:
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp match-statements.main.eval_0.merge
+  eval_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne match-statements.main.eval_0.case2
+  eval_0.case1:
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp match-statements.main.eval_0.merge
+  eval_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp match-statements.main.eval_0.merge
+  eval_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.imul rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg match-statements.main.__range_panic_1
+    x64.cmp rax, rdx
+    x64.jl match-statements.main.__range_panic_1
+    x64.jmp match-statements.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_10]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

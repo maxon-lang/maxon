@@ -1,0 +1,130 @@
+// Test: is-after-clone
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(x: 1, y: 2)
+	let b = a.clone()
+	if a is not b 'diff'
+		return 1
+	end 'diff'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Point.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+8]
+    x64.mov [rbp-24], rdx
+    x64.mov [rbp-32], rbx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-32]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Point.clone
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.cmp rcx, rdx
+    x64.je memory-safety.main.diff_0.after
+  diff_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_31
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_31
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_32
+    x64.call mm_decref
+    x64.label __nonnull_skip_32
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  diff_0.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_33
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_33
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_34
+    x64.call mm_decref
+    x64.label __nonnull_skip_34
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Point.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,36 @@
+// Test: ceil.negative
+function main() returns ExitCode
+	let neg = -3.9
+	let y = trunc(ceil(neg))
+	return y + 10
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @ceil.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_-3.9]
+    x64.roundsd xmm1, xmm0, 2
+    x64.cvttsd2si rax, xmm1
+    x64.mov rcx, 10
+    x64.add rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg ceil.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl ceil.main.__range_panic_0
+    x64.jmp ceil.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

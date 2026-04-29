@@ -1,0 +1,82 @@
+// Test: docs-example-4
+function main() returns ExitCode
+	let role = 1
+	var permissions = 0
+	match role 'auth'
+		1 then permissions = permissions + 100 and fallthrough
+		2 then permissions = permissions + 10 and fallthrough
+		3 then permissions = permissions + 1
+		default then permissions = 0
+	end 'auth'
+	return permissions
+end 'main'
+
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.auth_0.cmp0
+  auth_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.auth_0.cmp1
+  auth_0.case0:
+    x64.mov rax, 100
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.auth_0.case1
+  auth_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.auth_0.cmp2
+  auth_0.case1:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.auth_0.case2
+  auth_0.cmp2:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.auth_0.case3
+  auth_0.case2:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.auth_0.merge
+  auth_0.case3:
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.jmp match-simple.main.auth_0.merge
+  auth_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-simple.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl match-simple.main.__range_panic_1
+    x64.jmp match-simple.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_12]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

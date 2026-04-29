@@ -1,0 +1,96 @@
+// Test: error.otherwise-return-in-assignment
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: success path still yields a value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function maybeFail(flag bool) returns Integer throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'maybeFail'
+
+function runIt(flag bool) returns Integer
+	let value = try maybeFail(flag) otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let good = runIt(false)
+	if good == 42 'checkGood'
+		let bad = runIt(true)
+		if bad == -1 'checkBad'
+			return 7
+		end 'checkBad'
+	end 'checkGood'
+	return 0
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @error-handling.maybeFail(flag: i1) -> i64 {
+  entry:
+    x64.test rcx, rcx
+    x64.je error-handling.maybeFail.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  check_0.after:
+    x64.mov rax, 42
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @error-handling.runIt(flag: i1) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call error-handling.maybeFail
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je error-handling.runIt.otherwise_continue_1
+  otherwise_stmt_0:
+    x64.mov rax, -1
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call error-handling.runIt
+    x64.mov rcx, 42
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.checkGood_0.merge
+  checkGood_0:
+    x64.mov rcx, 1
+    x64.call error-handling.runIt
+    x64.mov rcx, -1
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.checkBad_1.after
+  checkBad_1:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  checkBad_1.after:
+    x64.jmp error-handling.main.checkGood_0.merge
+  checkGood_0.merge:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

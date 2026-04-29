@@ -1,0 +1,119 @@
+// Test: top-level-var-array-literal
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 52
+---
+// CompiledIR
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=112
+    x64.mov rax, qword [rip+items]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.mov r8, 12
+    x64.call __Array_i64.set
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.je static-variables.main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_9]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, qword [rip+items]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.xor edx, edx
+    x64.call __Array_i64.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je static-variables.main.otherwise_default_continue_6
+  otherwise_default_error_5:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.jmp static-variables.main.otherwise_default_continue_6
+  otherwise_default_continue_6:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, qword [rip+items]
+    x64.mov [rbp-48], rcx
+    x64.mov rdx, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.mov rdx, 1
+    x64.call __Array_i64.get
+    x64.xor ebx, ebx
+    x64.mov [rbp-56], rbx
+    x64.mov [rbp-64], rax
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.je static-variables.main.otherwise_default_continue_10
+  otherwise_default_error_9:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-64], rax
+    x64.jmp static-variables.main.otherwise_default_continue_10
+  otherwise_default_continue_10:
+    x64.mov rax, [rbp-64]
+    x64.mov [rbp-72], rax
+    x64.mov rcx, qword [rip+items]
+    x64.mov [rbp-80], rcx
+    x64.mov rdx, [rbp-80]
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, 2
+    x64.call __Array_i64.get
+    x64.xor ebx, ebx
+    x64.mov [rbp-88], rbx
+    x64.mov [rbp-96], rax
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.je static-variables.main.otherwise_default_continue_14
+  otherwise_default_error_13:
+    x64.mov rax, [rbp-88]
+    x64.mov [rbp-96], rax
+    x64.jmp static-variables.main.otherwise_default_continue_14
+  otherwise_default_continue_14:
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-40]
+    x64.mov rdx, [rbp-72]
+    x64.add rcx, rdx
+    x64.add rcx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg static-variables.main.__range_panic_15
+    x64.cmp rcx, rbx
+    x64.jl static-variables.main.__range_panic_15
+    x64.jmp static-variables.main.__range_ok_15
+  __range_panic_15:
+    x64.lea_symdata rax, [__panic_msg_10]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_15:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-104], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-104]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

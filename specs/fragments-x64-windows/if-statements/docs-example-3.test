@@ -1,0 +1,45 @@
+// Test: docs-example-3
+function main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end 'main'
+
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne if-statements.main.case1_0.elseif
+  case1_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  case1_0.elseif:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne if-statements.main.default_2
+  case2_1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  default_2:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

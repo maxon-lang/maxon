@@ -1,0 +1,44 @@
+// Test: named-args
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(a: 3, b: 4)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @parameter-labels.add(a: i64, b: i64) -> i64 {
+  entry:
+    x64.lea rax, [rcx + rdx]
+    x64.ret
+  }
+  func @parameter-labels.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.call parameter-labels.add
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg parameter-labels.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl parameter-labels.main.__range_panic_0
+    x64.jmp parameter-labels.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

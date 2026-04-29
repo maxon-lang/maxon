@@ -1,0 +1,214 @@
+// Test: dispatch-three-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function value() returns Integer
+end 'Valued'
+
+type One implements Valued
+	function value() returns Integer
+		return 1
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'One'
+
+type Two implements Valued
+	function value() returns Integer
+		return 2
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Two'
+
+type Three implements Valued
+	function value() returns Integer
+		return 3
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Three'
+
+function getValue(v Valued) returns Integer
+	return v.value()
+end 'getValue'
+
+function main() returns ExitCode
+	let a = One.create()
+	let b = Two.create()
+	let c = Three.create()
+	return getValue(a) + getValue(b) + getValue(c)
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @One.value(__self_ptr: i64) -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @One.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Two.value(__self_ptr: i64) -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.ret
+  }
+  func @Two.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 14
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Three.value(__self_ptr: i64) -> i64 {
+  entry:
+    x64.mov rax, 3
+    x64.ret
+  }
+  func @Three.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 15
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call One.create
+    x64.mov [rbp-8], rax
+    x64.call Two.create
+    x64.mov [rbp-16], rax
+    x64.call Three.create
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call interface-dispatch.getValue$One
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.call interface-dispatch.getValue$Two
+    x64.mov rdx, [rbp-32]
+    x64.add rdx, rax
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-40], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call interface-dispatch.getValue$Three
+    x64.mov rsi, [rbp-40]
+    x64.add rsi, rax
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rsi, r8
+    x64.jg interface-dispatch.main.__range_panic_0
+    x64.cmp rsi, rdi
+    x64.jl interface-dispatch.main.__range_panic_0
+    x64.jmp interface-dispatch.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], rsi
+    x64.test rax, rax
+    x64.jz __nonnull_skip_12
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_13
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_14
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.getValue$One(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp One.value
+  }
+  func @interface-dispatch.getValue$Two(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Two.value
+  }
+  func @interface-dispatch.getValue$Three(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Three.value
+  }
+  func @__destruct_One(ptr: i64) {
+  entry:
+    x64.jmp __destruct_One.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Two(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Two.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Three(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Three.done
+  done:
+    x64.ret
+  }
+}
+---

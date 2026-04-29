@@ -1,0 +1,34 @@
+// Test: bitwise-and
+function main() returns ExitCode
+	let a = 12
+	let b = 10
+	return a and b
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @bitwise-operators.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 12
+    x64.mov rcx, 10
+    x64.and rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg bitwise-operators.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl bitwise-operators.main.__range_panic_0
+    x64.jmp bitwise-operators.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

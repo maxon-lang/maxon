@@ -1,0 +1,180 @@
+// Test: release-on-error-propagation-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Wrapper'
+
+enum LookupError
+	case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+	throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+	let w = Wrapper.create(val: flag)
+	if w.val > 0 'positive'
+		let inner = Wrapper.create(val: w.val * 2)
+		let result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+	return 0
+end 'compute'
+
+function main() returns ExitCode
+	let result = try compute(flag: 5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 77
+---
+// CompiledIR
+module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 20
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.failingLookup() -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call Wrapper.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jle memory-safety.compute.positive_0.after
+  positive_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 2
+    x64.imul rcx, rdx
+    x64.call Wrapper.create
+    x64.mov [rbp-16], rax
+    x64.call memory-safety.failingLookup
+    x64.mov [rbp-24], rdx
+    x64.mov [rbp-32], rax
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.je memory-safety.compute.try_continue_2
+  propagate_error_1:
+    x64.mov rdx, [rbp-24]
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_52
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_52
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_53
+    x64.call mm_decref
+    x64.label __nonnull_skip_53
+    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_2:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.add rax, rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbp-40], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_54
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_54
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_55
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_55
+    x64.mov rax, [rbp-40]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  positive_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_56
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_56
+    x64.xor eax, eax
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call memory-safety.compute
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je memory-safety.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, 77
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg memory-safety.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl memory-safety.main.__range_panic_4
+    x64.jmp memory-safety.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_8]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Wrapper.done
+  done:
+    x64.ret
+  }
+}
+---

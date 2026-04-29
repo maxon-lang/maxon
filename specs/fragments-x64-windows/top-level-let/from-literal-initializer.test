@@ -1,0 +1,37 @@
+// Test: from-literal-initializer
+let path = FilePath from "test.txt"
+
+function main() returns ExitCode
+	print(path.toString())
+	return 0
+end 'main'
+---
+Stdout: ```
+test.txt
+```
+---
+// CompiledIR
+module {
+  func @top-level-let.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+path]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.FilePath.toString
+    x64.mov [rbp-16], rax
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.Print.print
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

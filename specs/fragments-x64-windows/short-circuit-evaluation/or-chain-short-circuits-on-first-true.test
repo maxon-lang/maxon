@@ -1,0 +1,87 @@
+// Test: or-chain-short-circuits-on-first-true
+var sideEffectCount = 0
+
+function trackAndReturn(result bool) returns bool
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'trackAndReturn'
+
+function main() returns ExitCode
+	let result = trackAndReturn(false) or trackAndReturn(true) or trackAndReturn(false)
+	if not result 'r'
+		return 99
+	end 'r'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @short-circuit-evaluation.trackAndReturn(result: i1) -> i1 {
+  entry:
+    x64.mov rax, qword [rip+sideEffectCount]
+    x64.mov rdx, 1
+    x64.add rax, rdx
+    x64.mov qword [rip+sideEffectCount], rax
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @short-circuit-evaluation.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call short-circuit-evaluation.trackAndReturn
+    x64.mov rcx, 1
+    x64.mov [rbp-1], rcx
+    x64.mov rcx, 1
+    x64.xor rax, rcx
+    x64.test rax, rax
+    x64.je short-circuit-evaluation.main.shortOr_0.merge
+  shortOr_0.rhs:
+    x64.mov rcx, 1
+    x64.call short-circuit-evaluation.trackAndReturn
+    x64.mov [rbp-1], rax
+    x64.jmp short-circuit-evaluation.main.shortOr_0.merge
+  shortOr_0.merge:
+    x64.mov rax, [rbp-1]
+    x64.mov rcx, 1
+    x64.mov [rbp-2], rcx
+    x64.mov rdx, 1
+    x64.xor rax, rdx
+    x64.test rax, rax
+    x64.je short-circuit-evaluation.main.shortOr_1.merge
+  shortOr_1.rhs:
+    x64.xor ecx, ecx
+    x64.call short-circuit-evaluation.trackAndReturn
+    x64.mov [rbp-2], rax
+    x64.jmp short-circuit-evaluation.main.shortOr_1.merge
+  shortOr_1.merge:
+    x64.mov rax, [rbp-2]
+    x64.mov rcx, 1
+    x64.xor rax, rcx
+    x64.test rax, rax
+    x64.je short-circuit-evaluation.main.r_2.after
+  r_2:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  r_2.after:
+    x64.mov rax, qword [rip+sideEffectCount]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg short-circuit-evaluation.main.__range_panic_3
+    x64.cmp rax, rcx
+    x64.jl short-circuit-evaluation.main.__range_panic_3
+    x64.jmp short-circuit-evaluation.main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

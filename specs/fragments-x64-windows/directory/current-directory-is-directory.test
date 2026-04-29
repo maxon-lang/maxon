@@ -1,0 +1,46 @@
+// Test: current-directory-is-directory
+function main() returns ExitCode
+	let cwd = Directory.currentPath()
+	if Directory.exists(cwd) 'ok'
+		return 42
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @directory.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call stdlib.Directory.currentPath
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.Directory.exists
+    x64.test rax, rax
+    x64.je directory.main.ok_0.after
+  ok_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_56
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_56
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_57
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_57
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

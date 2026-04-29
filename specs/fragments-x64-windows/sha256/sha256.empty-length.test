@@ -1,0 +1,51 @@
+// Test: sha256.empty-length
+function main() returns ExitCode
+	let hash = sha256(ByteArray.create())
+	return hash.count()
+end 'main'
+---
+ExitCode: 32
+---
+// CompiledIR
+module {
+  func @sha256.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call ByteArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.Sha256.sha256
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call ByteArray.count
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg sha256.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl sha256.main.__range_panic_0
+    x64.jmp sha256.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

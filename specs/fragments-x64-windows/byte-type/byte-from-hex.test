@@ -1,0 +1,34 @@
+// Test: byte-from-hex
+
+typealias Byte = byte(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 0xff as Byte
+	if b == 255 'ok'
+		return 0
+	end 'ok' else 'fail'
+		return 1
+	end 'fail'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @byte-type.main() -> u32 {
+  entry:
+    x64.mov rax, 255
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, 255
+    x64.cmp rax, rdx
+    x64.jne byte-type.main.fail_1
+  ok_0:
+    x64.xor eax, eax
+    x64.ret
+  fail_1:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

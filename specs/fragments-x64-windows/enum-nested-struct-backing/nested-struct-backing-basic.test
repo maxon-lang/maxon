@@ -1,0 +1,154 @@
+// Test: nested-struct-backing-basic
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	add = X64OpMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = X64OpMeta.create(OpMeta.create(3), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.add
+	return op.rawValue.meta.latency
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @enum-nested-struct-backing.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.lea_func rdx, [__destruct_X64OpMeta]
+    x64.mov rbx, rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor esi, esi
+    x64.xor edi, edi
+    x64.mov r8, [rbp-8]
+    x64.cmp r8, rdi
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.mov rax, 1
+    x64.test r9, r9
+    x64.mov rcx, rsi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rdx, 3
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+0], rbx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-8]
+    x64.cmp rdx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rbx, 1
+    x64.test rcx, rcx
+    x64.mov rsi, rax
+    x64.cmovne rsi, rbx
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rdx, rsi
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-16]
+    x64.mov byte ptr [rax+8], rdxb
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-40], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+0]
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg enum-nested-struct-backing.main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl enum-nested-struct-backing.main.__range_panic_0
+    x64.jmp enum-nested-struct-backing.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-48], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_X64OpMeta(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_14
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.jmp __destruct_X64OpMeta.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_OpMeta(ptr: i64) {
+  entry:
+    x64.jmp __destruct_OpMeta.done
+  done:
+    x64.ret
+  }
+}
+---

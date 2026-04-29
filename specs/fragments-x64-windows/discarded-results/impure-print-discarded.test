@@ -1,0 +1,98 @@
+// Test: impure-print-discarded
+
+typealias Integer = int(i64.min to i64.max)
+
+function computeAndPrint(x Integer) returns Integer
+	print("computing")
+	return x * 2
+end 'computeAndPrint'
+
+function main() returns ExitCode
+	_ = computeAndPrint(5)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+computing
+```
+---
+// CompiledIR
+module {
+  func @discarded-results.computeAndPrint(x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rdx, rax
+    x64.mov rax, 9
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rdx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rcx, [__destruct___ManagedMemory]
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rbx, -2
+    x64.mov rsi, 1
+    x64.xor edi, edi
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-32]
+    x64.mov [r8+0], r9
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 9
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+16], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+24], rsi
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rdi
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.Print.print
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-24]
+    x64.imul rcx, rax
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-40], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call discarded-results.computeAndPrint
+    x64.xor ecx, ecx
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

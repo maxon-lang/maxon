@@ -1,0 +1,113 @@
+// Test: same-name-methods.same-params
+typealias Integer = int(i64.min to i64.max)
+
+type Converter
+	export var factor Integer
+
+	static function create(factor Integer) returns Converter
+		return Converter{factor: factor}
+	end 'create'
+
+	static function convert(x Integer) returns Integer
+		return x * 2
+	end 'convert'
+
+	function convert(x Integer) returns Integer
+		return x * factor
+	end 'convert'
+end 'Converter'
+
+function main() returns ExitCode
+	let c = Converter.create(factor: 7)
+	let instanceResult = c.convert(5)
+	let staticResult = Converter.convert(3)
+	return instanceResult + staticResult
+end 'main'
+---
+ExitCode: 41
+---
+// CompiledIR
+module {
+  func @Converter.create(factor: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Converter.convert~static(x: i64) -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @Converter.convert(__self_ptr: i64, x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.imul rdx, rbx
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @same-name-methods.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 7
+    x64.call Converter.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 5
+    x64.call Converter.convert
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 3
+    x64.call Converter.convert~static
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg same-name-methods.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl same-name-methods.main.__range_panic_0
+    x64.jmp same-name-methods.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Converter(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Converter.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,185 @@
+// Test: error.otherwise-block-reused-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: two sibling `try ... otherwise (e) 'label' ... end 'label'`
+// blocks reusing the same binding name `e` but with different error types
+// (one associated-value enum, one simple enum). Without per-block scoping,
+// the first block's managed-type registration of `e` persists and the
+// function epilogue incorrectly decrefs the second block's integer `e`.
+union AssocError implements Error
+	withCode(code Integer)
+	plain
+end 'AssocError'
+
+enum SimpleError implements Error
+	broken
+end 'SimpleError'
+
+function mayFailAssoc() returns Integer throws AssocError
+	throw AssocError.withCode(7)
+end 'mayFailAssoc'
+
+function mayFailSimple() returns Integer throws SimpleError
+	throw SimpleError.broken
+end 'mayFailSimple'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFailAssoc() otherwise (e) 'handler1'
+		match e 'check1'
+			withCode(code) then result = result + code
+			plain then result = result + 1
+		end 'check1'
+	end 'handler1'
+	try mayFailSimple() otherwise (e) 'handler2'
+		match e 'check2'
+			broken then result = result + 35
+		end 'check2'
+	end 'handler2'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @error-handling.mayFailAssoc() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 7
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 7
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @error-handling.mayFailSimple() -> i64 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.call error-handling.mayFailAssoc
+    x64.mov [rbp-16], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je error-handling.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-32], rax
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-64], rdx
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-64]
+    x64.mov [rbp-40], rsi
+    x64.jmp error-handling.main.check1_4.cmp0
+  check1_4.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.check1_4.cmp1
+  check1_4.case0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-8]
+    x64.add rdx, rcx
+    x64.mov [rbp-8], rdx
+    x64.jmp error-handling.main.check1_4.merge
+  check1_4.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.check1_4.merge
+  check1_4.case1:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp error-handling.main.check1_4.merge
+  check1_4.merge:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.jmp error-handling.main.otherwise_continue_1
+  otherwise_continue_1:
+    x64.call error-handling.mayFailSimple
+    x64.mov [rbp-48], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je error-handling.main.otherwise_continue_6
+  otherwise_error_5:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.mov [rbp-56], rax
+    x64.jmp error-handling.main.check2_9.cmp0
+  check2_9.cmp0:
+    x64.mov rax, [rbp-56]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.check2_9.merge
+  check2_9.case0:
+    x64.mov rax, 35
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp error-handling.main.check2_9.merge
+  check2_9.merge:
+    x64.jmp error-handling.main.otherwise_continue_6
+  otherwise_continue_6:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg error-handling.main.__range_panic_10
+    x64.cmp rax, rcx
+    x64.jl error-handling.main.__range_panic_10
+    x64.jmp error-handling.main.__range_ok_10
+  __range_panic_10:
+    x64.lea_symdata rax, [__panic_msg_11]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_10:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_AssocError(ptr: i64) {
+  entry:
+    x64.jmp __destruct_AssocError.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,29 @@
+// Test: large-hex-literal-underscore
+// Test large hex literal with underscore separators
+function main() returns ExitCode
+	let x = 0x0000_0001_4000_0000
+	if x == 5368709120 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @literals.main() -> u32 {
+  entry:
+    x64.mov rax, 5368709120
+    x64.mov rcx, 5368709120
+    x64.cmp rax, rcx
+    x64.jne literals.main.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

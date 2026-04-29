@@ -1,0 +1,173 @@
+// Test: try-block.array-get-success
+typealias Score = int(0 to 100)
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+    var arr = ScoreArray.create()
+    arr.push(7)
+    arr.push(11)
+
+    var sum = 0
+    try 'work'
+        let a = arr.get(0)
+        let b = arr.get(1)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            indexOutOfBounds then sum = 99
+            emptySlot then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 18
+---
+// CompiledIR
+module {
+  func @try-block.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call ScoreArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 7
+    x64.call ScoreArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 11
+    x64.call ScoreArray.push
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call ScoreArray.get
+    x64.mov [rbp-24], rax
+    x64.mov [rbp-32], rdx
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
+    x64.jne try-block.main.try_block_err_2
+  try_block_continue_5:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call ScoreArray.get
+    x64.mov [rbp-48], rax
+    x64.mov [rbp-32], rdx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne try-block.main.try_block_throw_7
+  try_block_continue_8:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp try-block.main.try_block_after_3
+  try_block_throw_7:
+    x64.jmp try-block.main.try_block_err_2
+  try_block_err_2:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.mov [rbp-56], rax
+    x64.jmp try-block.main.k_9.cmp0
+  k_9.cmp0:
+    x64.mov rax, [rbp-56]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne try-block.main.k_9.cmp1
+  k_9.case0:
+    x64.mov rax, 99
+    x64.mov [rbp-16], rax
+    x64.jmp try-block.main.k_9.merge
+  k_9.cmp1:
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne try-block.main.k_9.merge
+  k_9.case1:
+    x64.mov rax, 99
+    x64.mov [rbp-16], rax
+    x64.jmp try-block.main.k_9.merge
+  k_9.merge:
+    x64.jmp try-block.main.try_block_after_3
+  try_block_after_3:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg try-block.main.__range_panic_10
+    x64.cmp rax, rcx
+    x64.jl try-block.main.__range_panic_10
+    x64.jmp try-block.main.__range_ok_10
+  __range_panic_10:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_10:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Score(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Score.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_96
+    x64.call mm_decref
+    x64.label __nonnull_skip_96
+    x64.jmp __destruct___ManagedMemory_Score.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Score.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Score.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Score.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ScoreArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_97
+    x64.call mm_decref
+    x64.label __nonnull_skip_97
+    x64.jmp __destruct_ScoreArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

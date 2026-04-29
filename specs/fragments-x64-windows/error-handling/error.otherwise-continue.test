@@ -1,0 +1,106 @@
+// Test: error.otherwise-continue
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: continue to next iteration on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	if counter == 2 'check'
+		throw MyError.failed
+	end 'check'
+	return counter
+end 'mayFail'
+
+function main() returns ExitCode
+	var total = 0
+	var iter = 0
+	while iter < 4 'loop'
+		iter = iter + 1
+		let v = try mayFail() otherwise continue
+		total = total + v
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @error-handling.mayFail() -> i64 {
+  entry:
+    x64.mov rax, qword [rip+counter]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov qword [rip+counter], rax
+    x64.mov rdx, qword [rip+counter]
+    x64.mov rbx, 2
+    x64.cmp rdx, rbx
+    x64.jne error-handling.mayFail.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  check_0.after:
+    x64.mov rax, qword [rip+counter]
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.jmp error-handling.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 4
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge error-handling.main.loop_0.exit
+  loop_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.call error-handling.mayFail
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je error-handling.main.otherwise_continue_2
+  otherwise_stmt_1:
+    x64.jmp error-handling.main.loop_0.header
+  otherwise_continue_2:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp error-handling.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg error-handling.main.__range_panic_5
+    x64.cmp rax, rcx
+    x64.jl error-handling.main.__range_panic_5
+    x64.jmp error-handling.main.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_13]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

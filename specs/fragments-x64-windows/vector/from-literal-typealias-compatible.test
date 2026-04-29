@@ -1,0 +1,207 @@
+// Test: from-literal-typealias-compatible
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias Vec3 = Vector with 3 Integer
+
+function sum(v Vec3) returns Integer
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	let c = try v.get(2) otherwise 0
+	return a + b + c
+end 'sum'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 12) otherwise panic("test invariant: set OOB")
+	return sum(v)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @vector.sum(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call Vec3.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je vector.sum.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp vector.sum.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call Vec3.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-40], rcx
+    x64.mov [rbp-48], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je vector.sum.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.jmp vector.sum.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call Vec3.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-64], rcx
+    x64.mov [rbp-72], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je vector.sum.otherwise_default_continue_11
+  otherwise_default_error_10:
+    x64.mov rax, [rbp-64]
+    x64.mov [rbp-72], rax
+    x64.jmp vector.sum.otherwise_default_continue_11
+  otherwise_default_continue_11:
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-56]
+    x64.add rcx, rdx
+    x64.lea rax, [rcx + rax]
+    x64.epilogue
+    x64.ret
+  }
+  func @vector.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Vec3.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call Vec3.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je vector.main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_45]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.mov r8, 20
+    x64.call Vec3.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je vector.main.otherwise_continue_4
+  otherwise_panic_3:
+    x64.lea_symdata rax, [__panic_msg_46]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_4:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.mov r8, 12
+    x64.call Vec3.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je vector.main.otherwise_continue_7
+  otherwise_panic_6:
+    x64.lea_symdata rax, [__panic_msg_47]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_7:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call vector.sum
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg vector.main.__range_panic_9
+    x64.cmp rax, rcx
+    x64.jl vector.main.__range_panic_9
+    x64.jmp vector.main.__range_ok_9
+  __range_panic_9:
+    x64.lea_symdata rax, [__panic_msg_48]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_9:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_21
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_21
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_129
+    x64.call mm_decref
+    x64.label __nonnull_skip_129
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_130
+    x64.call mm_decref
+    x64.label __nonnull_skip_130
+    x64.jmp __destruct_Vec3.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

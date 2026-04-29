@@ -1,0 +1,64 @@
+// Test: error.otherwise-default-value
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test try otherwise with default value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = try mayFail() otherwise 42
+	return val
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @error-handling.mayFail() -> i64 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call error-handling.mayFail
+    x64.mov rcx, 42
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je error-handling.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp error-handling.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg error-handling.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl error-handling.main.__range_panic_4
+    x64.jmp error-handling.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

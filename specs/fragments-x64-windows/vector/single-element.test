@@ -1,0 +1,123 @@
+// Test: single-element
+typealias Int = int(i64.min to i64.max)
+typealias Vec1 = Vector with 1 Int
+
+function main() returns ExitCode
+	var v = Vec1.create()
+	try v.set(0, value: 77) otherwise panic("test invariant: set OOB")
+	return try v.get(0) otherwise 0
+end 'main'
+---
+ExitCode: 77
+---
+// CompiledIR
+module {
+  func @vector.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Vec1.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov r8, 77
+    x64.call Vec1.set
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je vector.main.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_8]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call Vec1.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je vector.main.otherwise_default_continue_6
+  otherwise_default_error_5:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp vector.main.otherwise_default_continue_6
+  otherwise_default_continue_6:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg vector.main.__range_panic_7
+    x64.cmp rax, rcx
+    x64.jl vector.main.__range_panic_7
+    x64.jmp vector.main.__range_ok_7
+  __range_panic_7:
+    x64.lea_symdata rax, [__panic_msg_9]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_7:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_109
+    x64.call mm_decref
+    x64.label __nonnull_skip_109
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vec1(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_110
+    x64.call mm_decref
+    x64.label __nonnull_skip_110
+    x64.jmp __destruct_Vec1.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

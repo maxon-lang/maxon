@@ -1,0 +1,121 @@
+// Test: union-method-with-assoc-values
+
+typealias Code = int(0 to 1000)
+
+union Outcome
+	ok
+	failure(code Code)
+
+	function statusCode() returns Code
+		return match self 'check'
+			ok gives 0
+			failure(code) gives code
+		end 'check'
+	end 'statusCode'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.failure(42)
+	return o.statusCode()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Outcome.statusCode(self: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rdx
+    x64.jmp Outcome.statusCode.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne Outcome.statusCode.check_0.cmp1
+  check_0.case0:
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp Outcome.statusCode.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne Outcome.statusCode.check_0.merge
+  check_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-24], rcx
+    x64.jmp Outcome.statusCode.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov rdx, 1000
+    x64.cmp rax, rdx
+    x64.jg Outcome.statusCode.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl Outcome.statusCode.__range_panic_1
+    x64.jmp Outcome.statusCode.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_16]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+  func @enum-full.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 15
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 42
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Outcome.statusCode
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rax, r8
+    x64.jg enum-full.main.__range_panic_0
+    x64.cmp rax, rdi
+    x64.jl enum-full.main.__range_panic_0
+    x64.jmp enum-full.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_17]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_78
+    x64.call mm_decref
+    x64.label __nonnull_skip_78
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Outcome(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Outcome.done
+  done:
+    x64.ret
+  }
+}
+---

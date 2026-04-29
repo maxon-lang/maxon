@@ -1,0 +1,38 @@
+// Test: multiple-constants
+let A = 1
+let B = 2
+let C = 3
+
+function main() returns ExitCode
+	return A + B + C
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @top-level-let.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.add rax, rcx
+    x64.mov rdx, 3
+    x64.add rax, rdx
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg top-level-let.main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl top-level-let.main.__range_panic_0
+    x64.jmp top-level-let.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

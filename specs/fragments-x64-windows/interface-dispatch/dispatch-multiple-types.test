@@ -1,0 +1,183 @@
+// Test: dispatch-multiple-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Scorer
+	function score() returns Integer
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n Integer
+
+	function score() returns Integer
+		return n * 2
+	end 'score'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+type Beta implements Scorer
+	let n Integer
+
+	function score() returns Integer
+		return n * 3
+	end 'score'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Beta'
+
+function getScore(s Scorer) returns Integer
+	return s.score()
+end 'getScore'
+
+function main() returns ExitCode
+	let a = Alpha.create(n: 10)
+	let b = Beta.create(n: 10)
+	return getScore(a) + getScore(b)
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @Alpha.score(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 2
+    x64.imul rdx, rax
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Alpha.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Beta.score(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 3
+    x64.imul rdx, rax
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Beta.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 10
+    x64.call Alpha.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 10
+    x64.call Beta.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call interface-dispatch.getScore$Alpha
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.call interface-dispatch.getScore$Beta
+    x64.mov rdx, [rbp-24]
+    x64.add rdx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg interface-dispatch.main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl interface-dispatch.main.__range_panic_0
+    x64.jmp interface-dispatch.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.getScore$Alpha(s: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Alpha.score
+  }
+  func @interface-dispatch.getScore$Beta(s: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Beta.score
+  }
+  func @__destruct_Alpha(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Alpha.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Beta(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Beta.done
+  done:
+    x64.ret
+  }
+}
+---

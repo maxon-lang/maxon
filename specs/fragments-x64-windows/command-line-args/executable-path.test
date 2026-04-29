@@ -1,0 +1,51 @@
+// Test: executable-path
+function main() returns ExitCode
+	let exe = Process.executablePath()
+	// Just verify it returns something (the actual path varies)
+	if exe.path.byteLength() > 0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @command-line-args.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call stdlib.Process.executablePath
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call stdlib.String.byteLength
+    x64.xor ebx, ebx
+    x64.cmp rax, rbx
+    x64.jle command-line-args.main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

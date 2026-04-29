@@ -1,0 +1,29 @@
+// Test: if-statements.else-false
+function main() returns ExitCode
+	let x = 3
+	if x > 5 'gt5'
+		return 1
+	end 'gt5' else 'not_gt5'
+		return 0
+	end 'not_gt5'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    x64.mov rax, 3
+    x64.mov rcx, 5
+    x64.cmp rax, rcx
+    x64.jle if-statements.main.not_gt5_1
+  gt5_0:
+    x64.mov rax, 1
+    x64.ret
+  not_gt5_1:
+    x64.xor eax, eax
+    x64.ret
+  }
+}
+---

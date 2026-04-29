@@ -1,0 +1,35 @@
+// Test: min.basic
+function main() returns ExitCode
+	let x = min(3.0, 5.0)
+	return trunc(x)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @min.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3]
+    x64.movsd xmm1, [rip+__float_5]
+    x64.movsd xmm2, xmm0
+    x64.minsd xmm2, xmm1
+    x64.cvttsd2si rax, xmm2
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg min.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl min.main.__range_panic_0
+    x64.jmp min.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

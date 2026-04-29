@@ -1,0 +1,35 @@
+// Test: abs.negative-int-as-float
+function main() returns ExitCode
+	let neg = -42.0
+	let x = abs(neg)
+	return trunc(x)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @abs.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_-42]
+    x64.movsd xmm1, xmm0
+    x64.andpd xmm1, [rip+__abs_mask]
+    x64.cvttsd2si rax, xmm1
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg abs.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl abs.main.__range_panic_0
+    x64.jmp abs.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

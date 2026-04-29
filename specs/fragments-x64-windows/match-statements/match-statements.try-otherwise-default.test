@@ -1,0 +1,114 @@
+// Test: match-statements.try-otherwise-default
+enum Err implements Error
+	bad
+end 'Err'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function leaf() returns Score throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then return try leaf() otherwise 42
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	return dispatch(kind: 1) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @match-statements.leaf() -> u8 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @match-statements.dispatch(kind: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.jmp match-statements.dispatch.k_0.cmp0
+  k_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-statements.dispatch.k_0.case1
+  k_0.case0:
+    x64.call match-statements.leaf
+    x64.mov rcx, 42
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je match-statements.dispatch.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp match-statements.dispatch.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov rdx, 100
+    x64.cmp rax, rdx
+    x64.jg match-statements.dispatch.__range_panic_5
+    x64.cmp rax, rcx
+    x64.jl match-statements.dispatch.__range_panic_5
+    x64.jmp match-statements.dispatch.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_16]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.epilogue
+    x64.ret
+  k_0.case1:
+    x64.lea_symdata rax, [__panic_msg_17]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  k_0.merge:
+  }
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call match-statements.dispatch
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-statements.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl match-statements.main.__range_panic_0
+    x64.jmp match-statements.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_18]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg match-statements.main.__range_panic_1
+    x64.cmp rax, rbx
+    x64.jl match-statements.main.__range_panic_1
+    x64.jmp match-statements.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_18]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

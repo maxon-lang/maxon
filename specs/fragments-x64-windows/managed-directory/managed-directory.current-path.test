@@ -1,0 +1,153 @@
+// Test: managed-directory.current-path
+function main() returns ExitCode
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let cwdStr = String.init(cwd)
+	if cwdStr.count() > 0 'hasPath'
+		return 42
+	end 'hasPath'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @managed-directory.main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.call maxon_get_current_directory
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 8
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.mov [rbp-64], rax
+    x64.mov [rbp-72], rsi
+    x64.mov rcx, [rbp-64]
+    x64.call maxon_strlen
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-64]
+    x64.mov [rbp-16], rax
+    x64.lea_func rcx, [__destruct___ManagedMemory]
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 1
+    x64.add rbx, rsi
+    x64.mov rcx, rbx
+    x64.call mm_raw_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rdi, [rbp-32]
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [rbp-8]
+    x64.mov rax, 1
+    x64.add r9, rax
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-16]
+    x64.mov r8, r9
+    x64.call maxon_memcpy
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 1
+    x64.lea rsi, [rdx + rbx]
+    x64.mov rbx, 1
+    x64.xor edi, edi
+    x64.mov r8, [rbp-24]
+    x64.mov [r8+0], rcx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+8], rdx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+16], rsi
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+24], rbx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+32], rdi
+    x64.mov [rbp-80], rax
+    x64.mov rcx, [rbp-16]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-72]
+    x64.cmp rcx, rax
+    x64.je managed-directory.main.otherwise_continue_1
+  otherwise_stmt_0:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_11
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.String.init
+    x64.mov [rbp-56], rax
+    x64.mov rbx, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call stdlib.String.count
+    x64.xor esi, esi
+    x64.cmp rax, rsi
+    x64.jle managed-directory.main.hasPath_4.after
+  hasPath_4:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_12
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rcx, [rbp-56]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_13
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.mov rdx, [rbp-48]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_14
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  hasPath_4.after:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_15
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_15
+    x64.mov rcx, [rbp-56]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_16
+    x64.call mm_decref
+    x64.label __nonnull_skip_16
+    x64.mov rdx, [rbp-48]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_17
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_17
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,122 @@
+// Test: conformance-basic
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Counter
+	function get() returns Integer
+	function increment()
+end 'Counter'
+
+type SimpleCounter implements Counter
+	var value Integer
+
+	function get() returns Integer
+		return value
+	end 'get'
+
+	function increment()
+		value = value + 1
+	end 'increment'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'SimpleCounter'
+
+function main() returns ExitCode
+	var c = SimpleCounter.create(value: 40)
+	c.increment()
+	c.increment()
+	return c.get()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @SimpleCounter.get(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @SimpleCounter.increment(__self_ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 1
+    x64.add rdx, rax
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @SimpleCounter.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-conformance.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 40
+    x64.call SimpleCounter.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call SimpleCounter.increment
+    x64.mov rcx, [rbp-8]
+    x64.call SimpleCounter.increment
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call SimpleCounter.get
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg interface-conformance.main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl interface-conformance.main.__range_panic_0
+    x64.jmp interface-conformance.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_SimpleCounter(ptr: i64) {
+  entry:
+    x64.jmp __destruct_SimpleCounter.done
+  done:
+    x64.ret
+  }
+}
+---

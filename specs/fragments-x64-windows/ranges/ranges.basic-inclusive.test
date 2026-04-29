@@ -1,0 +1,59 @@
+// Test: ranges.basic-inclusive
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 5 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 15
+---
+// CompiledIR
+module {
+  func @ranges.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 5
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jg ranges.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp ranges.main.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg ranges.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl ranges.main.__range_panic_1
+    x64.jmp ranges.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

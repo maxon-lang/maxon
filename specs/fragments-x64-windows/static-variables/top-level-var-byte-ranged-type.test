@@ -1,0 +1,34 @@
+// Test: top-level-var-byte-ranged-type
+typealias SmallInt = int(0 to u8.max)
+
+var counter = 42 as SmallInt
+
+function main() returns ExitCode
+		return counter
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+counter]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg static-variables.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl static-variables.main.__range_panic_0
+    x64.jmp static-variables.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_15]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

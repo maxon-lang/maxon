@@ -1,0 +1,100 @@
+// Test: decref-reclaims-same-scope
+typealias Integer = int(i64.min to i64.max)
+type Val
+		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
+end 'Val'
+function main() returns ExitCode
+		var a = Val.create(n: 10)
+		let b = a
+		a = Val.create(n: 20)
+		return a.n + b.n
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Val.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 14
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @refcount.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 10
+    x64.call Val.create
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rcx, 20
+    x64.call Val.create
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_31
+    x64.call mm_decref
+    x64.label __nonnull_skip_31
+    x64.mov rdx, [rbp-24]
+    x64.mov [rbp-8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, [rdi+0]
+    x64.add rsi, r8
+    x64.xor r9d, r9d
+    x64.mov eax, 4294967295
+    x64.cmp rsi, rax
+    x64.jg refcount.main.__range_panic_0
+    x64.cmp rsi, r9
+    x64.jl refcount.main.__range_panic_0
+    x64.jmp refcount.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_10]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rsi
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_32
+    x64.call mm_decref
+    x64.label __nonnull_skip_32
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_33
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_33
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Val(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Val.done
+  done:
+    x64.ret
+  }
+}
+---

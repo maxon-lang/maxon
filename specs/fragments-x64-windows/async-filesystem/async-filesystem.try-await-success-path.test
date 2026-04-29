@@ -1,0 +1,175 @@
+// Test: async-filesystem.try-await-success-path
+typealias Integer = int(i64.min to i64.max)
+
+enum ComputeError implements Error
+		overflow
+end 'ComputeError'
+
+function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
+		_ = File.exists(FilePath from "noyield.txt")
+		if b == 0 'check'
+				throw ComputeError.overflow
+		end 'check'
+		return a / b
+end 'safeDivide'
+
+function main() returns ExitCode
+		let p = async safeDivide(100, b: 5)
+		let r = try await p otherwise 0
+		return r
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @async-filesystem.safeDivide(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rbx, rax
+    x64.mov rax, 11
+    x64.lea_func rsi, [__destruct_String]
+    x64.mov rdi, rsi
+    x64.mov [rbp-48], rbx
+    x64.mov rdx, rdi
+    x64.mov rcx, 16
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.lea_func rcx, [__destruct___ManagedMemory]
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rbx, -2
+    x64.mov rsi, 1
+    x64.xor edi, edi
+    x64.mov r8, [rbp-32]
+    x64.mov r9, [rbp-48]
+    x64.mov [r8+0], r9
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 11
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+16], rbx
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+24], rsi
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+32], rdi
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call stdlib.FilePath.init
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call stdlib.File.exists
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.cmp rdx, rcx
+    x64.jne async-filesystem.safeDivide.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-40]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rbx, 1
+    x64.xor esi, esi
+    x64.lea rdx, [rsi + rbx]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.cqo
+    x64.idiv rcx
+    x64.mov rdx, [rbp-24]
+    x64.mov [rbp-48], rax
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rbx, [rbp-40]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-48]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @async-filesystem.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 100
+    x64.mov rcx, 5
+    x64.mov rcx, 24
+    x64.call mm_raw_alloc
+    x64.mov rdx, 2
+    x64.mov [rax+0], rdx
+    x64.mov rbx, 100
+    x64.mov [rax+8], rbx
+    x64.mov rsi, 5
+    x64.mov [rax+16], rsi
+    x64.lea_func rdi, [async-filesystem.safeDivide]
+    x64.mov rcx, rdi
+    x64.mov r8, rax
+    x64.call __gt_spawn
+    x64.mov rcx, rax
+    x64.call __gt_try_await
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], rax
+    x64.xor r9d, r9d
+    x64.cmp rdx, r9
+    x64.je async-filesystem.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp async-filesystem.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg async-filesystem.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl async-filesystem.main.__range_panic_4
+    x64.jmp async-filesystem.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

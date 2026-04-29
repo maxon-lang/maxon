@@ -1,0 +1,28 @@
+// Test: comparison-in-constant
+let IS_LARGE = 100 > 50
+
+function main() returns ExitCode
+	if IS_LARGE 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @top-level-let.main() -> u32 {
+  entry:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je top-level-let.main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor eax, eax
+    x64.ret
+  }
+}
+---

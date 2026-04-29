@@ -1,0 +1,30 @@
+// Test: float-vs-float
+function main() returns ExitCode
+	let a = 3.14
+	let b = 3.14
+	if a == b 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @contextual-literal-typing.main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.movsd xmm1, [rip+__float_3.14]
+    x64.ucomisd xmm0, xmm1
+    x64.jne contextual-literal-typing.main.check_0.after
+    x64.jp contextual-literal-typing.main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor eax, eax
+    x64.ret
+  }
+}
+---

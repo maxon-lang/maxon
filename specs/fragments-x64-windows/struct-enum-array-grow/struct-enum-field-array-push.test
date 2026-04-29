@@ -1,0 +1,232 @@
+// Test: struct-enum-field-array-push
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export union Op
+		add(value Integer)
+		sub(value Integer)
+end 'Op'
+
+export type Block
+		export var id Integer
+		export var ops IntArray
+		export var terminator Op
+
+		static function create(id Integer, ops IntArray, terminator Op) returns Self
+			return Self{id: id, ops: ops, terminator: terminator}
+		end 'create'
+end 'Block'
+
+function main() returns ExitCode
+		var b = Block.create(id: 0, ops: IntArray.create(), terminator: Op.add(42))
+		b.ops.push(1)
+		b.ops.push(2)
+		b.ops.push(3)
+		return b.ops.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @Block.create(id: i64, ops: i64, terminator: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], r8
+    x64.lea_func rax, [__destruct_Block]
+    x64.mov rbx, rax
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, rbx
+    x64.mov rcx, 24
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-32]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rsi+8], rbx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, [rbp-24]
+    x64.mov [r8+16], rdi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r9, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @struct-enum-array-grow.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 42
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 42
+    x64.mov [rax+8], rdx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-16]
+    x64.mov rdx, [rbp-8]
+    x64.mov r8, [rbp-16]
+    x64.xor ecx, ecx
+    x64.call Block.create
+    x64.mov [rbp-24], rax
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, [rdi+8]
+    x64.mov [rbp-32], r8
+    x64.mov r9, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, 1
+    x64.call IntArray.push
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-40], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.mov rdx, 2
+    x64.call IntArray.push
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-48], rcx
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.mov rdx, 3
+    x64.call IntArray.push
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-56], rcx
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call IntArray.count
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg struct-enum-array-grow.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl struct-enum-array-grow.main.__range_panic_0
+    x64.jmp struct-enum-array-grow.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-64], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-64]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Block(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_153
+    x64.call mm_decref
+    x64.label __nonnull_skip_153
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+16]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_154
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_154
+    x64.jmp __destruct_Block.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Op(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Op.done
+  done:
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_218
+    x64.call mm_decref
+    x64.label __nonnull_skip_218
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_219
+    x64.call mm_decref
+    x64.label __nonnull_skip_219
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

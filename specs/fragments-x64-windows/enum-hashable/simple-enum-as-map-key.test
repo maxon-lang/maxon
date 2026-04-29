@@ -1,0 +1,223 @@
+// Test: simple-enum-as-map-key
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+typealias Int = int(i64.min to i64.max)
+typealias ColorMap = Map with (Color, Int)
+
+function main() returns ExitCode
+	var m = ColorMap.create()
+	try m.insert(Color.red, value: 10) otherwise ignore
+	try m.insert(Color.green, value: 20) otherwise ignore
+	try m.insert(Color.blue, value: 30) otherwise ignore
+	let result = try m.get(Color.green) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @Color.hash(self: i64) -> i64 {
+  entry:
+    x64.jmp stdlib.int.hash
+  }
+  func @enum-hashable.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call ColorMap.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call ColorMap.insert
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rdx
+    x64.mov rdx, 1
+    x64.mov r8, 20
+    x64.call ColorMap.insert
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-40], rdx
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.mov r8, 30
+    x64.call ColorMap.insert
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call ColorMap.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je enum-hashable.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp enum-hashable.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg enum-hashable.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl enum-hashable.main.__range_panic_4
+    x64.jmp enum-hashable.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Color(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Color.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_246
+    x64.call mm_decref
+    x64.label __nonnull_skip_246
+    x64.jmp __destruct___ManagedMemory_Color.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Color.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Color.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Color.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Array_Color(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_247
+    x64.call mm_decref
+    x64.label __nonnull_skip_247
+    x64.jmp __destruct_Array_Color.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_248
+    x64.call mm_decref
+    x64.label __nonnull_skip_248
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Array_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_249
+    x64.call mm_decref
+    x64.label __nonnull_skip_249
+    x64.jmp __destruct_Array_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ColorMap(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_250
+    x64.call mm_decref
+    x64.label __nonnull_skip_250
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_251
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_251
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+16]
+    x64.mov [rbp-32], rdi
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_252
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_252
+    x64.jmp __destruct_ColorMap.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

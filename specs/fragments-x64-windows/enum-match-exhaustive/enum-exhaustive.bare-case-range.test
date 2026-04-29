@@ -1,0 +1,66 @@
+// Test: enum-exhaustive.bare-case-range
+enum Priority
+		low
+		medium
+		high
+		critical
+end 'Priority'
+
+function main() returns ExitCode
+	let p = Priority.high
+	match p 'check'
+		low to medium then return 1
+		high to critical then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @enum-match-exhaustive.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp enum-match-exhaustive.main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 1
+    x64.cmp rbx, rsi
+    x64.setle rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je enum-match-exhaustive.main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 3
+    x64.cmp rbx, rsi
+    x64.setle rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je enum-match-exhaustive.main.check_0.merge
+  check_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+}
+---

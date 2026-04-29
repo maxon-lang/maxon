@@ -1,0 +1,50 @@
+// Test: docs-example-5
+enum Direction
+	north
+	south
+	east
+	west
+end 'Direction'
+
+function main() returns ExitCode
+	let dir = Direction.north
+	match dir 'navigate'
+		north then return 1
+		south then return 2
+		east then return 3
+		west then return 4
+	end 'navigate'
+end 'main'
+
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.jump_table rcx, 4 cases, default=match-simple.main.navigate_0.merge
+  navigate_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  navigate_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  navigate_0.case2:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  navigate_0.case3:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  navigate_0.merge:
+  }
+}
+---

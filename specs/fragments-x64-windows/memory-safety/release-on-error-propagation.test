@@ -1,0 +1,164 @@
+// Test: release-on-error-propagation
+typealias Integer = int(i64.min to i64.max)
+
+type Resource
+	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Resource'
+
+enum ResourceError
+	case notFound
+end 'ResourceError'
+
+function loadResource() returns Resource throws ResourceError
+	throw ResourceError.notFound
+end 'loadResource'
+
+function process() returns Integer throws ResourceError
+	@heap let marker = Resource.create(id: 42)
+	let res = try loadResource()
+	return res.id + marker.id
+end 'process'
+
+function main() returns ExitCode
+	let result = try process() otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @Resource.create(id: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 19
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.loadResource() -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @memory-safety.process() -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 42
+    x64.call Resource.create
+    x64.mov [rbp-8], rax
+    x64.call memory-safety.loadResource
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je memory-safety.process.try_continue_1
+  propagate_error_0:
+    x64.mov rdx, [rbp-16]
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_47
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_47
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_48
+    x64.call mm_decref
+    x64.label __nonnull_skip_48
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_1:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.add rbx, rdi
+    x64.mov r8, [rbp-24]
+    x64.mov [rbp-40], rbx
+    x64.test r8, r8
+    x64.jz __nonnull_skip_49
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_49
+    x64.mov r9, [rbp-32]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_50
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_50
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_51
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_51
+    x64.mov rax, [rbp-40]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call memory-safety.process
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je memory-safety.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg memory-safety.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl memory-safety.main.__range_panic_4
+    x64.jmp memory-safety.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_7]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Resource(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Resource.done
+  done:
+    x64.ret
+  }
+}
+---

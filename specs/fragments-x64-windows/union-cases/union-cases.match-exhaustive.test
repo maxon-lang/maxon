@@ -1,0 +1,104 @@
+// Test: union-cases.match-exhaustive
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+function describe(k Shape.unionCases) returns Integer
+	match k 'tag'
+		circle then return 100
+		square then return 200
+		point then return 300
+	end 'tag'
+end 'describe'
+
+function main() returns ExitCode
+	let c = Shape.unionCases.circle
+	let s = Shape.unionCases.square
+	let p = Shape.unionCases.point
+	let total = describe(c) + describe(s) + describe(p)
+	if total == 600 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @union-cases.describe(k: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.jmp union-cases.describe.tag_0.cmp0
+  tag_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne union-cases.describe.tag_0.cmp1
+  tag_0.case0:
+    x64.mov rax, 100
+    x64.epilogue
+    x64.ret
+  tag_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne union-cases.describe.tag_0.cmp2
+  tag_0.case1:
+    x64.mov rax, 200
+    x64.epilogue
+    x64.ret
+  tag_0.cmp2:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne union-cases.describe.tag_0.merge
+  tag_0.case2:
+    x64.mov rax, 300
+    x64.epilogue
+    x64.ret
+  tag_0.merge:
+  }
+  func @union-cases.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, 2
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call union-cases.describe
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-16]
+    x64.call union-cases.describe
+    x64.mov rdi, [rbp-32]
+    x64.add rdi, rax
+    x64.mov r8, [rbp-24]
+    x64.mov [rbp-40], rdi
+    x64.mov rcx, [rbp-24]
+    x64.call union-cases.describe
+    x64.mov r9, [rbp-40]
+    x64.add r9, rax
+    x64.mov rax, 600
+    x64.cmp r9, rax
+    x64.jne union-cases.main.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

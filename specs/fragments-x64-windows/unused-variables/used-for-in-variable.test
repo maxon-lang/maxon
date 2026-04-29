@@ -1,0 +1,136 @@
+// Test: used-for-in-variable
+
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	var total = 0
+	for s in arr 'loop'
+		total = total + s
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 60
+---
+// CompiledIR
+module {
+  func @unused-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.xor eax, eax
+    x64.mov rcx, 3
+    x64.xor edx, edx
+    x64.mov rbx, 8
+    x64.xor esi, esi
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov r9, [rbp-8]
+    x64.xor eax, eax
+    x64.mov [r9+0], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 8
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+24]
+    x64.lea_symdata rax, [__mm_panic_element_size_zero]
+    x64.mov rdx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rcx
+    x64.xor ecx, ecx
+    x64.call maxon_bounds_check
+    x64.lea_func rax, [__destruct___Array_i64]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 8
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.lea_rdata rax, [__const_array_unused-variables.main_arr]
+    x64.mov rcx, rax
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+0]
+    x64.mov [rdx+0], rcx
+    x64.mov rax, -2
+    x64.mov [rdx+16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-32], rcx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-40], rcx
+    x64.xor eax, eax
+    x64.mov [rbp-48], rax
+    x64.jmp unused-variables.main.loop_1.header
+  loop_1.header:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.cmp rax, rcx
+    x64.jge unused-variables.main.loop_1.exit
+  loop_1:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rcx+24]
+    x64.mov rbx, [rbp-32]
+    x64.mov rsi, [rbx+0]
+    x64.imul rax, rdx
+    x64.add rsi, rax
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-56], rdi
+    x64.mov r8, [rbp-56]
+    x64.mov r9, [rbp-24]
+    x64.add r9, r8
+    x64.mov [rbp-24], r9
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov [rbp-48], rax
+    x64.jmp unused-variables.main.loop_1.header
+  loop_1.exit:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg unused-variables.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl unused-variables.main.__range_panic_4
+    x64.jmp unused-variables.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

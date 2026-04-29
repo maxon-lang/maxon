@@ -1,0 +1,33 @@
+// Test: basic-float-constant
+let PI = 3.14
+
+function main() returns ExitCode
+	return trunc(PI)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @top-level-let.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.cvttsd2si rax, xmm0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg top-level-let.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl top-level-let.main.__range_panic_0
+    x64.jmp top-level-let.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,259 @@
+// Test: try-block.multi-union-assoc-mixed-bindings
+typealias Score = int(0 to 1000)
+typealias Sel = int(0 to 2)
+
+union ErrA implements Error
+    bad(code Score)
+    worse(level Score)
+end 'ErrA'
+
+enum ErrB implements Error
+    splat
+end 'ErrB'
+
+function callA(x Sel) returns Score throws ErrA
+    if x == 1 'c1'
+        throw ErrA.bad(code: 50)
+    end 'c1'
+    if x == 2 'c2'
+        throw ErrA.worse(level: 200)
+    end 'c2'
+    return 5
+end 'callA'
+
+function callB(x bool) returns Score throws ErrB
+    if x 'c'
+        throw ErrB.splat
+    end 'c'
+    return 6
+end 'callB'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = callA(2)
+        let b = callB(false)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            ErrA.bad(code) then sum = code
+            ErrA.worse then sum = 777
+            ErrB.splat then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 777
+---
+// CompiledIR
+module {
+  func @try-block.callA(x: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 1
+    x64.cmp rcx, rax
+    x64.jne try-block.callA.c1_0.after
+  c1_0:
+    x64.mov rax, 50
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 50
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  c1_0.after:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne try-block.callA.c2_1.after
+  c2_1:
+    x64.mov rax, 200
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 200
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  c2_1.after:
+    x64.mov rax, 5
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @try-block.callB(x: i1) -> u16 {
+  entry:
+    x64.test rcx, rcx
+    x64.je try-block.callB.c_0.after
+  c_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  c_0.after:
+    x64.mov rax, 6
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @try-block.main() -> u32 {
+  entry:
+    x64.prologue stack_size=96
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.call try-block.callA
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rdx
+    x64.xor ecx, ecx
+    x64.mov [rbp-32], rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne try-block.main.try_block_err_2
+  try_block_continue_5:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-40], rax
+    x64.xor ecx, ecx
+    x64.call try-block.callB
+    x64.mov [rbp-48], rax
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 1
+    x64.mov [rbp-32], rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne try-block.main.try_block_throw_7
+  try_block_continue_8:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp try-block.main.try_block_after_3
+  try_block_throw_7:
+    x64.jmp try-block.main.try_block_err_2
+  try_block_err_2:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-56], rax
+    x64.jmp try-block.main.k_9.cmp0
+  k_9.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne try-block.main.k_9.cmp1
+  k_9.cmpTag0:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-64], rax
+    x64.mov rcx, [rbp-64]
+    x64.mov rdx, [rcx+0]
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.jne try-block.main.k_9.cmp1
+  k_9.case0:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-72], rax
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rcx+8]
+    x64.mov [rbp-8], rdx
+    x64.jmp try-block.main.k_9.case0.exit
+  k_9.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne try-block.main.k_9.cmp2
+  k_9.cmpTag1:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-80], rax
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, 1
+    x64.cmp rdx, rbx
+    x64.jne try-block.main.k_9.cmp2
+  k_9.case1:
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-88], rax
+    x64.mov rcx, 777
+    x64.mov [rbp-8], rcx
+    x64.jmp try-block.main.k_9.case1.exit
+  k_9.cmp2:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-56]
+    x64.mov rsi, 1
+    x64.cmp rbx, rsi
+    x64.sete rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je try-block.main.k_9.merge
+  k_9.case2:
+    x64.mov rax, 99
+    x64.mov [rbp-8], rax
+    x64.jmp try-block.main.k_9.merge
+  k_9.merge:
+    x64.jmp try-block.main.try_block_after_3
+  k_9.case0.exit:
+    x64.mov rax, [rbp-72]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-72]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.jmp try-block.main.k_9.merge
+  k_9.case1.exit:
+    x64.mov rax, [rbp-88]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-88]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.jmp try-block.main.k_9.merge
+  try_block_after_3:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg try-block.main.__range_panic_10
+    x64.cmp rax, rcx
+    x64.jl try-block.main.__range_panic_10
+    x64.jmp try-block.main.__range_ok_10
+  __range_panic_10:
+    x64.lea_symdata rax, [__panic_msg_13]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_10:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ErrA(ptr: i64) {
+  entry:
+    x64.jmp __destruct_ErrA.done
+  done:
+    x64.ret
+  }
+}
+---

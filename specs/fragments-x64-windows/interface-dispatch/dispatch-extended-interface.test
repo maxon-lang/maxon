@@ -1,0 +1,147 @@
+// Test: dispatch-extended-interface
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function base() returns Integer
+end 'Base'
+
+interface Derived extends Base
+	function derived() returns Integer
+end 'Derived'
+
+type Impl implements Derived
+	let n Integer
+
+	function base() returns Integer
+		return n
+	end 'base'
+
+	function derived() returns Integer
+		return n * 2
+	end 'derived'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callBase(b Base) returns Integer
+	return b.base()
+end 'callBase'
+
+function callDerived(d Derived) returns Integer
+	return d.derived()
+end 'callDerived'
+
+function main() returns ExitCode
+	let i = Impl.create(n: 10)
+	return callBase(i) + callDerived(i)
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Impl.base(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Impl.derived(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 2
+    x64.imul rdx, rax
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Impl.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 11
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 10
+    x64.call Impl.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call interface-dispatch.callBase$Impl
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.call interface-dispatch.callDerived$Impl
+    x64.mov rdx, [rbp-16]
+    x64.add rdx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg interface-dispatch.main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl interface-dispatch.main.__range_panic_0
+    x64.jmp interface-dispatch.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.callBase$Impl(b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Impl.base
+  }
+  func @interface-dispatch.callDerived$Impl(d: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Impl.derived
+  }
+  func @__destruct_Impl(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Impl.done
+  done:
+    x64.ret
+  }
+}
+---

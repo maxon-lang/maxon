@@ -1,0 +1,86 @@
+// Test: multiple-aliases
+typealias Integer = int(i64.min to i64.max)
+type Data
+		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
+end 'Data'
+function main() returns ExitCode
+		let a = Data.create(n: 7)
+		let b = a
+		let c = a
+		return a.n + b.n + c.n
+end 'main'
+---
+ExitCode: 21
+---
+// CompiledIR
+module {
+  func @Data.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 6
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @refcount.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 7
+    x64.call Data.create
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+0]
+    x64.add rcx, rbx
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, [rsi+0]
+    x64.add rcx, rdi
+    x64.xor r8d, r8d
+    x64.mov r9, 4294967295
+    x64.cmp rcx, r9
+    x64.jg refcount.main.__range_panic_0
+    x64.cmp rcx, r8
+    x64.jl refcount.main.__range_panic_0
+    x64.jmp refcount.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-32], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Data(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Data.done
+  done:
+    x64.ret
+  }
+}
+---

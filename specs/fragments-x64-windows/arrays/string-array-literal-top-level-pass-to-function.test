@@ -1,0 +1,166 @@
+// Test: string-array-literal-top-level-pass-to-function
+var items = ["hello"]
+
+function useString(s String) returns ExitCode
+	if s == "hello" 'check'
+		return 42
+	end 'check'
+	return 0
+end 'useString'
+
+function main() returns ExitCode
+	for item in items 'loop'
+		return useString(item)
+	end 'loop'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @arrays.useString(s: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rdx, rax
+    x64.mov rax, 5
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-32], rdx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.lea_func rcx, [__destruct___ManagedMemory]
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rbx, -2
+    x64.mov rsi, 1
+    x64.xor edi, edi
+    x64.mov r8, [rbp-24]
+    x64.mov r9, [rbp-32]
+    x64.mov [r8+0], r9
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 5
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+16], rbx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+24], rsi
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+32], rdi
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call stdlib.String.equals
+    x64.test rax, rax
+    x64.je arrays.useString.check_0.after
+  check_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_51
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_51
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_52
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_52
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @arrays.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rax, qword [rip+items]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call __Array_String.createIterator
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne arrays.main.loop_0.exit
+  loop_0.preamble:
+    x64.jmp arrays.main.loop_0
+  loop_0.header:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call __ArrayIterator_String.advance
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne arrays.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call __ArrayIterator_String.current
+    x64.mov [rbp-24], rax
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.call arrays.useString
+    x64.mov edx, rax
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg arrays.main.__range_panic_3
+    x64.cmp rdx, rbx
+    x64.jl arrays.main.__range_panic_3
+    x64.jmp arrays.main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_34]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-40], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_53
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_53
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_54
+    x64.call mm_decref
+    x64.label __nonnull_skip_54
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  loop_0.exit:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_55
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_55
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

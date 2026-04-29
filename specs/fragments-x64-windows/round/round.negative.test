@@ -1,0 +1,36 @@
+// Test: round.negative
+function main() returns ExitCode
+	let neg = -2.3
+	let y = trunc(round(neg))
+	return y + 10
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @round.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_-2.3]
+    x64.roundsd xmm1, xmm0, 0
+    x64.cvttsd2si rax, xmm1
+    x64.mov rcx, 10
+    x64.add rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg round.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl round.main.__range_panic_0
+    x64.jmp round.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

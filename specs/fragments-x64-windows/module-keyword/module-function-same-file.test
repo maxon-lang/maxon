@@ -1,0 +1,36 @@
+// Test: module-function-same-file
+typealias Integer = int(i64.min to i64.max)
+
+module function helper() returns Integer
+	return 42
+end 'helper'
+
+function main() returns ExitCode
+	return helper()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @module-keyword.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call module-keyword.helper
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg module-keyword.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl module-keyword.main.__range_panic_0
+    x64.jmp module-keyword.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

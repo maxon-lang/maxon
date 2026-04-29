@@ -1,0 +1,215 @@
+// Test: match-enum-binding-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+type EnumPoint
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'EnumPoint'
+
+union Shape
+	circle(radius Integer)
+	rect(origin EnumPoint)
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.rect(EnumPoint.create(x: 10, y: 20))
+	match s 'handle'
+		circle(r) then return r
+		rect(p) then return p.x + p.y
+	end 'handle'
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @EnumPoint.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 26
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @enum-full.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 10
+    x64.mov rdx, 20
+    x64.call EnumPoint.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_Shape]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 27
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdx, 1
+    x64.mov [rax+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov [rax+8], rbx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, [rdi+0]
+    x64.mov r9, [rbp-16]
+    x64.mov [rbp-24], r9
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], r8
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-32], rax
+    x64.jmp enum-full.main.handle_0.cmp0
+  handle_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne enum-full.main.handle_0.cmp1
+  handle_0.case0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg enum-full.main.__range_panic_1
+    x64.cmp rcx, rdx
+    x64.jl enum-full.main.__range_panic_1
+    x64.jmp enum-full.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_30]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-48], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_132
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_132
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_133
+    x64.call mm_decref
+    x64.label __nonnull_skip_133
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_134
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_134
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  handle_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne enum-full.main.handle_0.merge
+  handle_0.case1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-40], rcx
+    x64.mov rdx, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, [rbp-40]
+    x64.mov r8, [rdi+8]
+    x64.add rsi, r8
+    x64.xor r9d, r9d
+    x64.mov eax, 4294967295
+    x64.cmp rsi, rax
+    x64.jg enum-full.main.__range_panic_2
+    x64.cmp rsi, r9
+    x64.jl enum-full.main.__range_panic_2
+    x64.jmp enum-full.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_31]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-48], rsi
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_135
+    x64.call mm_decref
+    x64.label __nonnull_skip_135
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_136
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_136
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_137
+    x64.call mm_decref
+    x64.label __nonnull_skip_137
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_138
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_138
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  handle_0.merge:
+  }
+  func @__destruct_EnumPoint(ptr: i64) {
+  entry:
+    x64.jmp __destruct_EnumPoint.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Shape.done
+  case_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_234
+    x64.call mm_decref
+    x64.label __nonnull_skip_234
+    x64.jmp __destruct_Shape.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

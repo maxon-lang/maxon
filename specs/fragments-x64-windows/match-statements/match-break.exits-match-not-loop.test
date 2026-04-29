@@ -1,0 +1,78 @@
+// Test: match-break.exits-match-not-loop
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'loop'
+		match i 'check'
+			1 then break
+			default then result = result + 10
+		end 'check'
+		result = result + 1
+		i = i + 1
+	end 'loop'
+	return result
+end 'main'
+---
+ExitCode: 23
+---
+// CompiledIR
+module {
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.jmp match-statements.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 3
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge match-statements.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp match-statements.main.check_1.cmp0
+  check_1.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-statements.main.check_1.case1
+  check_1.case0:
+    x64.jmp match-statements.main.check_1.merge
+  check_1.case1:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-statements.main.check_1.merge
+  check_1.merge:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp match-statements.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-statements.main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl match-statements.main.__range_panic_2
+    x64.jmp match-statements.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_24]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

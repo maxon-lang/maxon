@@ -1,0 +1,215 @@
+// Test: for-in-nested
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function innerSum(arr IntArray) returns Int
+	var total = 0
+	for item in arr 'inner'
+		total = total + item
+	end 'inner'
+	return total
+end 'innerSum'
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+
+	var outerTotal = 0
+	for item in arr 'outer'
+		outerTotal = outerTotal + item + innerSum(arr)
+	end 'outer'
+
+	// Each outer item: item + innerSum(arr) = item + 6
+	// Outer loop: (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @stdlib-array.innerSum(arr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-24], rdx
+    x64.mov rax, [rbp-24]
+    x64.mov rdx, [rax+8]
+    x64.mov [rbp-32], rdx
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.jmp stdlib-array.innerSum.inner_0.header
+  inner_0.header:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-32]
+    x64.cmp rax, rcx
+    x64.jge stdlib-array.innerSum.inner_0.exit
+  inner_0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+24]
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, [rbx+0]
+    x64.imul rax, rdx
+    x64.add rsi, rax
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-48], rdi
+    x64.mov r8, [rbp-48]
+    x64.mov r9, [rbp-16]
+    x64.add r9, r8
+    x64.mov [rbp-16], r9
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov [rbp-40], rax
+    x64.jmp stdlib-array.innerSum.inner_0.header
+  inner_0.exit:
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @stdlib-array.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call IntArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call IntArray.push
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 3
+    x64.call IntArray.push
+    x64.xor ebx, ebx
+    x64.mov [rbp-16], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-24], rdi
+    x64.mov r8, [rbp-24]
+    x64.mov r9, [r8+8]
+    x64.mov [rbp-32], r9
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.jmp stdlib-array.main.outer_0.header
+  outer_0.header:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-32]
+    x64.cmp rax, rcx
+    x64.jge stdlib-array.main.outer_0.exit
+  outer_0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+24]
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, [rbx+0]
+    x64.imul rax, rdx
+    x64.add rsi, rax
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-48], rdi
+    x64.mov r8, [rbp-48]
+    x64.mov r9, [rbp-16]
+    x64.add r9, r8
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-56], r9
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib-array.innerSum
+    x64.mov rcx, [rbp-56]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov [rbp-40], rax
+    x64.jmp stdlib-array.main.outer_0.header
+  outer_0.exit:
+    x64.mov rax, 24
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jne stdlib-array.main.check_3.after
+  check_3:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_26
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_26
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_3.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_27
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_27
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_449
+    x64.call mm_decref
+    x64.label __nonnull_skip_449
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_450
+    x64.call mm_decref
+    x64.label __nonnull_skip_450
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

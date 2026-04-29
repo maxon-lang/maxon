@@ -1,0 +1,161 @@
+// Test: auto-equatable
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(x: 1, y: 2)
+	let b = Point.create(x: 1, y: 2)
+	let c = Point.create(x: 3, y: 4)
+	var result = 0
+	if a == b 'eq1'
+		result = result + 1
+	end 'eq1'
+	if a == c 'eq2'
+		result = result + 10
+	end 'eq2'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 11
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Point.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rax+0]
+    x64.cmp rbx, rsi
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+8]
+    x64.mov rbx, [rbp-16]
+    x64.mov rdi, [rbx+8]
+    x64.cmp rsi, rdi
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.and rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.call Point.create
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Point.equals
+    x64.test rax, rax
+    x64.je memory-safety.main.eq1_0.merge
+  eq1_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp memory-safety.main.eq1_0.merge
+  eq1_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call Point.equals
+    x64.test rax, rax
+    x64.je memory-safety.main.eq2_1.merge
+  eq2_1:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp memory-safety.main.eq2_1.merge
+  eq2_1.merge:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg memory-safety.main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl memory-safety.main.__range_panic_2
+    x64.jmp memory-safety.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rbx, [rbp-24]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_26
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_26
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_27
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_27
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_28
+    x64.call mm_decref
+    x64.label __nonnull_skip_28
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Point.done
+  done:
+    x64.ret
+  }
+}
+---

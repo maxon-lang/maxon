@@ -1,0 +1,36 @@
+// Test: same-type-float
+
+typealias Float = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let f = 42.0
+	let g = f as Float
+	return trunc(g)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @type-casting.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_42]
+    x64.cvttsd2si rax, xmm0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg type-casting.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl type-casting.main.__range_panic_0
+    x64.jmp type-casting.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_7]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

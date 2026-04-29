@@ -1,0 +1,31 @@
+// Test: abs.zero
+function main() returns ExitCode
+	let x = abs(0.0)
+	if x == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @abs.main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd xmm1, xmm0
+    x64.andpd xmm1, [rip+__abs_mask]
+    x64.movsd xmm2, [rip+__float_0]
+    x64.ucomisd xmm1, xmm2
+    x64.jne abs.main.check_0.after
+    x64.jp abs.main.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

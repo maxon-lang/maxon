@@ -1,0 +1,42 @@
+// Test: int-division-preserves-other-values
+function main() returns ExitCode
+	let x = 10
+	let a = 84
+	let b = 2
+	let quotient = a / b
+	return quotient - x
+end 'main'
+---
+ExitCode: 32
+---
+// CompiledIR
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 84
+    x64.mov rdx, 2
+    x64.mov rbx, rdx
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.mov rbx, 10
+    x64.sub rax, rbx
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg register-allocator.main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl register-allocator.main.__range_panic_0
+    x64.jmp register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

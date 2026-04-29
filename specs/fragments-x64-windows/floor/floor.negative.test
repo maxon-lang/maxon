@@ -1,0 +1,36 @@
+// Test: floor.negative
+function main() returns ExitCode
+	let neg = -3.2
+	let y = trunc(floor(neg))
+	return y + 10
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @floor.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_-3.2]
+    x64.roundsd xmm1, xmm0, 1
+    x64.cvttsd2si rax, xmm1
+    x64.mov rcx, 10
+    x64.add rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg floor.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl floor.main.__range_panic_0
+    x64.jmp floor.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

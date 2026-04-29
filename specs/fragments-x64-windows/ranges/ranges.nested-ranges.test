@@ -1,0 +1,84 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+// CompiledIR
+module {
+  func @ranges.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 3
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.outer_0.header
+  outer_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jg ranges.main.outer_0.exit
+  outer_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 3
+    x64.mov [rbp-40], rdx
+    x64.mov [rbp-48], rcx
+    x64.jmp ranges.main.inner_1.header
+  inner_1.header:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.cmp rax, rcx
+    x64.jg ranges.main.inner_1.exit
+  inner_1:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-32]
+    x64.imul rcx, rax
+    x64.mov rdx, [rbp-8]
+    x64.add rdx, rcx
+    x64.mov [rbp-8], rdx
+    x64.jmp ranges.main.inner_1.incr
+  inner_1.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-48]
+    x64.add rcx, rax
+    x64.mov [rbp-48], rcx
+    x64.jmp ranges.main.inner_1.header
+  inner_1.exit:
+    x64.jmp ranges.main.outer_0.incr
+  outer_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.outer_0.header
+  outer_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg ranges.main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl ranges.main.__range_panic_2
+    x64.jmp ranges.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_12]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

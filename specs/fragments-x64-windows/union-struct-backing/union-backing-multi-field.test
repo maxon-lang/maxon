@@ -1,0 +1,207 @@
+// Test: union-backing-multi-field
+typealias Flag = int(0 to 1)
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type DetailMeta
+	export let latency Latency
+	export let isMemory Flag
+
+	static function create(latency Latency, isMemory Flag) returns Self
+		return Self{latency: latency, isMemory: isMemory}
+	end 'create'
+end 'DetailMeta'
+
+union MemOp
+	load(dest ID, offset ID) = DetailMeta.create(latency: 4, isMemory: 1)
+	store(src ID, offset ID) = DetailMeta.create(latency: 3, isMemory: 1)
+	add(dest ID, src ID) = DetailMeta.create(latency: 1, isMemory: 0)
+end 'MemOp'
+
+function main() returns ExitCode
+	let memFlag = MemOp.load.isMemory
+	let aluFlag = MemOp.add.isMemory
+	return memFlag + aluFlag
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @union-struct-backing.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.xor ebx, ebx
+    x64.cmp rbx, rdx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov rdi, 4
+    x64.test rsi, rsi
+    x64.mov r8, rcx
+    x64.cmovne r8, rdi
+    x64.mov r9, 1
+    x64.cmp rbx, r9
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 3
+    x64.test rcx, rcx
+    x64.mov rsi, r8
+    x64.cmovne rsi, rdx
+    x64.mov rcx, 2
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rdx
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rdi
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rbx, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rsi, 1
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov rcx, 1
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rsi, rdi
+    x64.cmovne rsi, rdx
+    x64.mov rcx, 2
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor edx, edx
+    x64.test rcx, rcx
+    x64.mov rbx, rsi
+    x64.cmovne rbx, rdx
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rbx
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov rax, 2
+    x64.mov [rbp-40], rcx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.mov rbx, 2
+    x64.cmp rbx, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rsi, 4
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov rcx, 1
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 3
+    x64.test rcx, rcx
+    x64.mov rsi, rdi
+    x64.cmovne rsi, rdx
+    x64.mov rcx, 2
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rdx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+0], rdi
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rbx, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rsi, 1
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rsi
+    x64.mov rcx, 1
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rsi, rdi
+    x64.cmovne rsi, rdx
+    x64.mov rcx, 2
+    x64.cmp rbx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor edx, edx
+    x64.test rcx, rcx
+    x64.mov rbx, rsi
+    x64.cmovne rbx, rdx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+8], rbx
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rax, [rbp-40]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg union-struct-backing.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl union-struct-backing.main.__range_panic_0
+    x64.jmp union-struct-backing.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-48], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_13
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_14
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_DetailMeta(ptr: i64) {
+  entry:
+    x64.jmp __destruct_DetailMeta.done
+  done:
+    x64.ret
+  }
+}
+---

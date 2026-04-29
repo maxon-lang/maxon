@@ -1,0 +1,45 @@
+// Test: none-unused
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiply(a Integer, b Integer) returns Integer
+	return a * b
+end 'multiply'
+
+function main() returns ExitCode
+	return multiply(7, b: 6)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @unused-parameters.multiply(a: i64, b: i64) -> i64 {
+  entry:
+    x64.imul rcx, rdx
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @unused-parameters.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 7
+    x64.mov rdx, 6
+    x64.call unused-parameters.multiply
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg unused-parameters.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl unused-parameters.main.__range_panic_0
+    x64.jmp unused-parameters.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

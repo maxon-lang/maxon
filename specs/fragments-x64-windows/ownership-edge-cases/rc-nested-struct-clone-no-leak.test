@@ -1,0 +1,223 @@
+// Test: rc-nested-struct-clone-no-leak
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var a Inner
+	export var b Integer
+
+	static function create(a Inner, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let x = Outer.create(a: Inner.create(value: 42), b: 10)
+	var y = x.clone()
+	y.a.value = 99
+	return x.a.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Inner.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 12
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Inner.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 12
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Outer.create(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Outer]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Outer.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call Inner.clone
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+8]
+    x64.lea_func rbx, [__destruct_Outer]
+    x64.mov rsi, rbx
+    x64.mov [rbp-40], rdx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 13
+    x64.call mm_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, [rbp-32]
+    x64.mov [r8+0], rdi
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov r9, [rbp-32]
+    x64.mov rax, [rbp-40]
+    x64.mov [r9+8], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_43
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_43
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 42
+    x64.call Inner.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 10
+    x64.call Outer.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call Outer.clone
+    x64.mov [rbp-24], rax
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rdx+0]
+    x64.mov [rbp-32], rbx
+    x64.mov rsi, 99
+    x64.mov rdi, [rbp-32]
+    x64.mov [rdi+0], rsi
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [r8+0]
+    x64.mov [rbp-40], r9
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+0]
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg ownership-edge-cases.main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl ownership-edge-cases.main.__range_panic_0
+    x64.jmp ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-48], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_44
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_44
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_45
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_45
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_46
+    x64.call mm_decref
+    x64.label __nonnull_skip_46
+    x64.mov rax, [rbp-48]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Inner(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Inner.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Outer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_335
+    x64.call mm_decref
+    x64.label __nonnull_skip_335
+    x64.jmp __destruct_Outer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

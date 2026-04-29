@@ -1,0 +1,130 @@
+// Test: bare-self-field
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+type Holder
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function readViaClosure() returns Integer
+		return apply(f: (_ Integer) gives self.value, x: 0)
+	end 'readViaClosure'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(value: 7)
+	return h.readViaClosure()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @closure-self.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov r10, rcx
+    x64.mov rcx, r8
+    x64.call r10
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.readViaClosure(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__closure_0]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.lea rcx, [rbp-8]
+    x64.mov rdx, rcx
+    x64.mov [rax+0], rdx
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-16]
+    x64.xor r8d, r8d
+    x64.call closure-self.apply
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @closure-self.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 7
+    x64.call Holder.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Holder.readViaClosure
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg closure-self.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl closure-self.main.__range_panic_0
+    x64.jmp closure-self.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Holder.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,34 @@
+// Test: modulo
+function main() returns ExitCode
+	return 17 mod 5
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @arithmetic-operators.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 17
+    x64.mov rcx, 5
+    x64.cqo
+    x64.idiv rcx
+    x64.xor eax, eax
+    x64.mov ecx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg arithmetic-operators.main.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl arithmetic-operators.main.__range_panic_0
+    x64.jmp arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

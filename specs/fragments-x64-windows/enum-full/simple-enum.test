@@ -1,0 +1,69 @@
+// Test: simple-enum
+enum Direction
+	north
+	south
+	east
+	west
+end 'Direction'
+
+function main() returns ExitCode
+	let dir = Direction.north
+	let result = match dir 'check'
+		north gives 1
+		south gives 0
+		east gives 0
+		west gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @enum-full.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.mov rbx, [rbp-24]
+    x64.jump_table rbx, 4 cases, default=enum-full.main.check_0.merge
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.main.check_0.merge
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.main.check_0.merge
+  check_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.main.check_0.merge
+  check_0.case3:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enum-full.main.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg enum-full.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl enum-full.main.__range_panic_1
+    x64.jmp enum-full.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

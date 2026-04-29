@@ -1,0 +1,325 @@
+// Test: container-push-remove-cycle
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	var i = 0
+	while i < 10 'push'
+		arr.push(Item.create(value: i))
+		i = i + 1
+	end 'push'
+	var total = 0
+	while arr.count() > 0 'remove'
+		let elem = try arr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + elem.value
+	end 'remove'
+	print("{total}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+45
+```
+---
+// CompiledIR
+module {
+  func @Item.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 18
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @ownership.main() -> u32 {
+  entry:
+    x64.prologue stack_size=160
+    x64.call ItemArray.create
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp ownership.main.push_0.header
+  push_0.header:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge ownership.main.push_0.exit
+  push_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call Item.create
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call ItemArray.push
+    x64.mov rbx, 1
+    x64.mov rsi, [rbp-16]
+    x64.add rsi, rbx
+    x64.mov [rbp-16], rsi
+    x64.mov rdi, [rbp-24]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_62
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_62
+    x64.jmp ownership.main.push_0.header
+  push_0.exit:
+    x64.xor eax, eax
+    x64.mov [rbp-32], rax
+    x64.jmp ownership.main.remove_1.header
+  remove_1.header:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call ItemArray.count
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jle ownership.main.remove_1.exit
+  remove_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call ItemArray.remove
+    x64.mov [rbp-40], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je ownership.main.otherwise_continue_3
+  otherwise_error_2:
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_63
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_63
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_64
+    x64.call mm_decref
+    x64.label __nonnull_skip_64
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  otherwise_continue_3:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, [rbp-32]
+    x64.add rbx, rdx
+    x64.mov [rbp-32], rbx
+    x64.mov rsi, [rbp-40]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_65
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_65
+    x64.jmp ownership.main.remove_1.header
+  remove_1.exit:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-56]
+    x64.call maxon_i64_to_string
+    x64.mov rcx, [rbp-56]
+    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.mov rbx, rdx
+    x64.mov rsi, 1
+    x64.lea rdi, [rax + rsi]
+    x64.lea_func r8, [__destruct_String]
+    x64.mov r9, r8
+    x64.mov [rbp-136], rax
+    x64.mov [rbp-144], rbx
+    x64.mov [rbp-152], rdi
+    x64.mov rdx, r9
+    x64.mov rcx, 16
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-64], rax
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-72], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-152]
+    x64.lea rdx, [rcx + rax]
+    x64.mov rcx, rdx
+    x64.call mm_raw_alloc
+    x64.xor ecx, ecx
+    x64.mov [rbp-80], rcx
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-152]
+    x64.mov [rbp-96], rax
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-104], rax
+    x64.mov rax, [rbp-136]
+    x64.mov [rbp-112], rax
+    x64.mov rax, [rbp-144]
+    x64.mov [rbp-120], rax
+    x64.mov rax, 1
+    x64.mov [rbp-128], rax
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-80]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-104]
+    x64.mov rdx, [rbp-112]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-112]
+    x64.add rax, rcx
+    x64.mov [rbp-80], rax
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-80]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-120]
+    x64.mov rdx, [rbp-128]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-96]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-96]
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-72]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-72]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-72]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-72]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-72]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-72]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-64]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call stdlib.Print.print
+    x64.mov rax, [rbp-64]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_66
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.label __nonnull_skip_66
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_67
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_67
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Item(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Item.done
+  done:
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Item.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_309
+    x64.call mm_decref
+    x64.label __nonnull_skip_309
+    x64.jmp __destruct___ManagedMemory_Item.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Item.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Item.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Item.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ItemArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_310
+    x64.call mm_decref
+    x64.label __nonnull_skip_310
+    x64.jmp __destruct_ItemArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

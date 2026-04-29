@@ -1,0 +1,81 @@
+// Test: closure-capture.multiple-captures
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let a = 10
+	let b = 20
+	let result = apply(f: (x Integer) gives x + a + b, x: 5)
+	return result
+end 'main'
+---
+ExitCode: 35
+---
+// CompiledIR
+module {
+  func @closure-capture.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov r10, rcx
+    x64.mov rcx, r8
+    x64.call r10
+    x64.epilogue
+    x64.ret
+  }
+  func @closure-capture.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rax, 10
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 20
+    x64.mov [rbp-16], rcx
+    x64.lea_func rdx, [__closure_4]
+    x64.mov [rbp-32], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.lea rbx, [rbp-8]
+    x64.mov rsi, rbx
+    x64.mov [rax+0], rsi
+    x64.lea rdi, [rbp-16]
+    x64.mov r8, rdi
+    x64.mov [rax+8], r8
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov r9, [rbp-24]
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rbp-24]
+    x64.mov r8, 5
+    x64.call closure-capture.apply
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg closure-capture.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl closure-capture.main.__range_panic_0
+    x64.jmp closure-capture.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-40], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

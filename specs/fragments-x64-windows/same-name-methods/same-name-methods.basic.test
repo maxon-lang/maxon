@@ -1,0 +1,108 @@
+// Test: same-name-methods.basic
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer
+		return 99
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(42)
+	let instanceResult = b.getValue()
+	let staticResult = Box.getValue()
+	return instanceResult + staticResult
+end 'main'
+---
+ExitCode: 141
+---
+// CompiledIR
+module {
+  func @Box.create(v: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Box.getValue~static() -> i64 {
+  entry:
+    x64.mov rax, 99
+    x64.ret
+  }
+  func @Box.getValue(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @same-name-methods.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 42
+    x64.call Box.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Box.getValue
+    x64.mov [rbp-16], rax
+    x64.call Box.getValue~static
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg same-name-methods.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl same-name-methods.main.__range_panic_0
+    x64.jmp same-name-methods.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Box(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Box.done
+  done:
+    x64.ret
+  }
+}
+---

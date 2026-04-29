@@ -1,0 +1,119 @@
+// Test: release-before-continue
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		let c = Counter.create(n: i)
+		if c.n == 3 'skip'
+			continue
+		end 'skip'
+		total = total + c.n
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 12
+---
+// CompiledIR
+module {
+  func @Counter.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 16
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.jmp memory-safety.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge memory-safety.main.loop_0.exit
+  loop_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.call Counter.create
+    x64.mov [rbp-24], rax
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, 3
+    x64.cmp rbx, rsi
+    x64.jne memory-safety.main.skip_1.after
+  skip_1:
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_38
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_38
+    x64.jmp memory-safety.main.loop_0.header
+  skip_1.after:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-8]
+    x64.add rdx, rcx
+    x64.mov [rbp-8], rdx
+    x64.mov rbx, [rbp-24]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_39
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_39
+    x64.jmp memory-safety.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg memory-safety.main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl memory-safety.main.__range_panic_2
+    x64.jmp memory-safety.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Counter.done
+  done:
+    x64.ret
+  }
+}
+---

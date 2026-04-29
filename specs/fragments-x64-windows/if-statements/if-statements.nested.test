@@ -1,0 +1,46 @@
+// Test: if-statements.nested
+function main() returns ExitCode
+	let x = 3
+	if x == 1 'outer'
+		return 1
+	end 'outer' else 'else_outer'
+		if x == 2 'inner'
+			return 2
+		end 'inner' else 'else_inner'
+			return 3
+		end 'else_inner'
+	end 'else_outer'
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne if-statements.main.else_outer_1
+  outer_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  else_outer_1:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne if-statements.main.else_inner_3
+  inner_2:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  else_inner_3:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  }
+}
+---

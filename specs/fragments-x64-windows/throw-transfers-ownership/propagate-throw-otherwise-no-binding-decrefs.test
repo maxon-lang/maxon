@@ -1,0 +1,107 @@
+// Test: propagate-throw-otherwise-no-binding-decrefs
+typealias N = int(0 to i64.max)
+
+union LexErr implements Error
+	unterminatedString(line N, column N)
+end 'LexErr'
+
+function tokenize() returns N throws LexErr
+	throw LexErr.unterminatedString(line: 7, column: 13)
+end 'tokenize'
+
+function main() returns ExitCode
+	var ran = false
+	let v = try tokenize() otherwise 'noBinding'
+		ran = true
+		return 0
+	end 'noBinding'
+	if ran 'ranOk'
+		return (v + 5)
+	end 'ranOk'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @throw-transfers-ownership.tokenize() -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 7
+    x64.mov rcx, 13
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.mov rbx, 7
+    x64.mov [rax+8], rbx
+    x64.mov rsi, 13
+    x64.mov [rax+16], rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @throw-transfers-ownership.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-1], rax
+    x64.call throw-transfers-ownership.tokenize
+    x64.mov [rbp-9], rdx
+    x64.mov [rbp-17], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je throw-transfers-ownership.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-9]
+    x64.mov rcx, [rbp-9]
+    x64.call mm_decref
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-17]
+    x64.mov [rbp-25], rax
+    x64.mov rcx, [rbp-1]
+    x64.test rcx, rcx
+    x64.je throw-transfers-ownership.main.ranOk_4.after
+  ranOk_4:
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-25]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg throw-transfers-ownership.main.__range_panic_5
+    x64.cmp rcx, rdx
+    x64.jl throw-transfers-ownership.main.__range_panic_5
+    x64.jmp throw-transfers-ownership.main.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  ranOk_4.after:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_LexErr(ptr: i64) {
+  entry:
+    x64.jmp __destruct_LexErr.done
+  done:
+    x64.ret
+  }
+}
+---

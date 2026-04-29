@@ -1,0 +1,36 @@
+// Test: max.fractional
+function main() returns ExitCode
+	let x = max(3.5, 5.2)
+	// max of 3.5 and 5.2 is 5.2, trunc gives 5
+	return trunc(x)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @max.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.5]
+    x64.movsd xmm1, [rip+__float_5.2]
+    x64.movsd xmm2, xmm0
+    x64.maxsd xmm2, xmm1
+    x64.cvttsd2si rax, xmm2
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg max.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl max.main.__range_panic_0
+    x64.jmp max.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

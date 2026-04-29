@@ -1,0 +1,77 @@
+// Test: break.labeled-break-triple-nested
+function main() returns ExitCode
+	var result = 0
+	while true 'outer'
+		while true 'middle'
+			while true 'inner'
+				result = result + 1
+				if result == 5 'check'
+					break 'outer'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return result
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @break.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.jmp break.main.outer_0.header
+  outer_0.header:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je break.main.outer_0.exit
+  outer_0:
+    x64.jmp break.main.middle_1.header
+  middle_1.header:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je break.main.middle_1.exit
+  middle_1:
+    x64.jmp break.main.inner_2.header
+  inner_2.header:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je break.main.inner_2.exit
+  inner_2:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 5
+    x64.cmp rcx, rdx
+    x64.jne break.main.check_3.after
+  check_3:
+    x64.jmp break.main.outer_0.exit
+  check_3.after:
+    x64.jmp break.main.inner_2.header
+  inner_2.exit:
+    x64.jmp break.main.middle_1.header
+  middle_1.exit:
+    x64.jmp break.main.outer_0.header
+  outer_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg break.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl break.main.__range_panic_4
+    x64.jmp break.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

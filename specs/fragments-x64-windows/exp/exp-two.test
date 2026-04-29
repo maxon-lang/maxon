@@ -1,0 +1,33 @@
+// Test: exp-two
+function main() returns ExitCode
+	let result = Math.exp(2.0)  // e^2 ≈ 7.389
+	return trunc(result)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @exp.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_2]
+    x64.call stdlib.Math.exp
+    x64.cvttsd2si rax, xmm0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg exp.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl exp.main.__range_panic_0
+    x64.jmp exp.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

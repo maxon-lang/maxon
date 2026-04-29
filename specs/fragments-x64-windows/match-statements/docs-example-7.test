@@ -1,0 +1,146 @@
+// Test: docs-example-7
+typealias Score = int(i64.min to i64.max)
+
+function grade(score Score) returns Score
+	match score 'grade'
+		90 to 100 then return 65  // 'A'
+		80 upto 90 then return 66   // 'B'
+		70 upto 80 then return 67   // 'C'
+		60 upto 70 then return 68   // 'D'
+		0 upto 60 then return 70    // 'F'
+		default then return 63   // '?'
+	end 'grade'
+end 'grade'
+
+function main() returns ExitCode
+	return grade(85)
+end 'main'
+
+---
+ExitCode: 66
+---
+// CompiledIR
+module {
+  func @match-statements.grade(score: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.jmp match-statements.grade.grade_0.cmp0
+  grade_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 90
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 100
+    x64.cmp rbx, rsi
+    x64.setle rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je match-statements.grade.grade_0.cmp1
+  grade_0.case0:
+    x64.mov rax, 65
+    x64.epilogue
+    x64.ret
+  grade_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 80
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 90
+    x64.cmp rbx, rsi
+    x64.setl rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je match-statements.grade.grade_0.cmp2
+  grade_0.case1:
+    x64.mov rax, 66
+    x64.epilogue
+    x64.ret
+  grade_0.cmp2:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 70
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 80
+    x64.cmp rbx, rsi
+    x64.setl rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je match-statements.grade.grade_0.cmp3
+  grade_0.case2:
+    x64.mov rax, 67
+    x64.epilogue
+    x64.ret
+  grade_0.cmp3:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 60
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 70
+    x64.cmp rbx, rsi
+    x64.setl rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je match-statements.grade.grade_0.cmp4
+  grade_0.case3:
+    x64.mov rax, 68
+    x64.epilogue
+    x64.ret
+  grade_0.cmp4:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, 60
+    x64.cmp rbx, rsi
+    x64.setl rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je match-statements.grade.grade_0.case5
+  grade_0.case4:
+    x64.mov rax, 70
+    x64.epilogue
+    x64.ret
+  grade_0.case5:
+    x64.mov rax, 63
+    x64.epilogue
+    x64.ret
+  grade_0.merge:
+  }
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 85
+    x64.call match-statements.grade
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-statements.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl match-statements.main.__range_panic_0
+    x64.jmp match-statements.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_30]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

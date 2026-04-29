@@ -1,0 +1,68 @@
+// Test: match-statements.try-otherwise-ignore
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try leaf() otherwise ignore
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @match-statements.leaf() {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @match-statements.dispatch(kind: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.jmp match-statements.dispatch.k_0.cmp0
+  k_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-statements.dispatch.k_0.case1
+  k_0.case0:
+    x64.call match-statements.leaf
+    x64.jmp match-statements.dispatch.k_0.merge
+  k_0.case1:
+    x64.lea_symdata rax, [__panic_msg_13]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  k_0.merge:
+    x64.epilogue
+    x64.ret
+  }
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call match-statements.dispatch
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

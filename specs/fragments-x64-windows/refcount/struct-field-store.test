@@ -1,0 +1,173 @@
+// Test: struct-field-store
+typealias Integer = int(i64.min to i64.max)
+type Inner
+		export var val Integer
+
+		static function create(val Integer) returns Self
+			return Self{val: val}
+		end 'create'
+end 'Inner'
+type Outer
+		export var child Inner
+		export function setChild(c Inner)
+				child = c
+		end 'setChild'
+
+		static function create(child Inner) returns Self
+			return Self{child: child}
+		end 'create'
+end 'Outer'
+function main() returns ExitCode
+		var o = Outer.create(child: Inner.create(val: 0))
+		let i = Inner.create(val: 55)
+		o.setChild(i)
+		return o.child.val
+end 'main'
+---
+ExitCode: 55
+---
+// CompiledIR
+module {
+  func @Inner.create(val: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Outer.setChild(__self_ptr: i64, c: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-8]
+    x64.mov [rsi+0], rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Outer.create(child: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Outer]
+    x64.mov rdx, rax
+    x64.mov rcx, 8
+    x64.mov r8, 9
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @refcount.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor ecx, ecx
+    x64.call Inner.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Outer.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 55
+    x64.call Inner.create
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.call Outer.setChild
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbx+0]
+    x64.mov [rbp-32], rsi
+    x64.mov rdi, [rbp-32]
+    x64.mov r8, [rdi+0]
+    x64.xor r9d, r9d
+    x64.mov eax, 4294967295
+    x64.cmp r8, rax
+    x64.jg refcount.main.__range_panic_0
+    x64.cmp r8, r9
+    x64.jl refcount.main.__range_panic_0
+    x64.jmp refcount.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-40], r8
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_12
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_13
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Inner(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Inner.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Outer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_128
+    x64.call mm_decref
+    x64.label __nonnull_skip_128
+    x64.jmp __destruct_Outer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,50 @@
+// Test: docs-example-1
+typealias Score = int(i64.min to i64.max)
+
+function double(x Score) returns Score
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	let f = double      // f is a function reference
+	return f(21)        // calls double(21), returns 42
+end 'main'
+
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @first-class-functions.double(x: i64) -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @first-class-functions.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea_func rax, [first-class-functions.double]
+    x64.mov rcx, 21
+    x64.xor edx, edx
+    x64.mov [rbp-8], rax
+    x64.mov r10, rax
+    x64.call r10
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg first-class-functions.main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl first-class-functions.main.__range_panic_0
+    x64.jmp first-class-functions.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_6]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

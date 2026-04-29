@@ -1,0 +1,50 @@
+// Test: struct-backing-ordinal
+typealias Weight = int(0 to 100)
+
+type Info
+	export let weight Weight
+
+	static function create(weight Weight) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Info'
+
+enum Priority
+	low = Info.create(weight: 1)
+	medium = Info.create(weight: 5)
+	high = Info.create(weight: 10)
+end 'Priority'
+
+function main() returns ExitCode
+	let p = Priority.high
+	return p.ordinal
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @enum-struct-backing.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg enum-struct-backing.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl enum-struct-backing.main.__range_panic_0
+    x64.jmp enum-struct-backing.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

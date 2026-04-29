@@ -1,0 +1,57 @@
+// Test: return-type
+enum Result
+	success
+	failure
+end 'Result'
+
+function getResult(succeed bool) returns Result
+	if succeed 'check'
+		return Result.success
+	end 'check'
+	return Result.failure
+end 'getResult'
+
+function main() returns ExitCode
+	let r = getResult(true)
+	if r == Result.success 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @constants.getResult(succeed: i1) -> i64 {
+  entry:
+    x64.test rcx, rcx
+    x64.je constants.getResult.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @constants.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call constants.getResult
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jne constants.main.test_0.after
+  test_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  test_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

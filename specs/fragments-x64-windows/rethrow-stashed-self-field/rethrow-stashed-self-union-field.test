@@ -1,0 +1,269 @@
+// Test: rethrow-stashed-self-union-field
+typealias N = int(0 to i64.max)
+
+union Inner implements Error
+	exhausted
+end 'Inner'
+
+union Outer implements Error
+	first(line N, column N)
+	second(line N, column N)
+end 'Outer'
+
+type Holder
+	var pending Outer
+
+	static function create() returns Holder
+		return Self{pending: Outer.first(line: 0, column: 0)}
+	end 'create'
+
+	function inner() throws Inner
+		pending = Outer.second(line: 1, column: 1)
+		throw Inner.exhausted
+	end 'inner'
+
+	function outer() throws Outer
+		try inner() otherwise 'innerErr'
+			throw pending
+		end 'innerErr'
+	end 'outer'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	try h.outer() otherwise(e) 'fail'
+		match e 'kind'
+			first then return 1
+			second then return 0
+		end 'kind'
+	end 'fail'
+	return 2
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Holder.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.xor ecx, ecx
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.xor ebx, ebx
+    x64.mov [rax+8], rbx
+    x64.xor esi, esi
+    x64.mov [rax+16], rsi
+    x64.lea_func rdi, [__destruct_Holder]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 8
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, [rbp-8]
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+0], r9
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.inner(__self_ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, 1
+    x64.mov rdx, 1
+    x64.mov rcx, 24
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 1
+    x64.mov [rax+8], rdx
+    x64.mov rbx, 1
+    x64.mov [rax+16], rbx
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-16], rdi
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r9, [rbp-16]
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], r9
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.lea rdx, [rcx + rax]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.outer(__self_ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Holder.inner
+    x64.mov rcx, [rbp-8]
+    x64.mov rax, [rcx+0]
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je Holder.outer.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @rethrow-stashed-self-field.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call Holder.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Holder.outer
+    x64.mov [rbp-16], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je rethrow-stashed-self-field.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-32], rax
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-48]
+    x64.mov [rbp-40], rsi
+    x64.jmp rethrow-stashed-self-field.main.kind_3.cmp0
+  kind_3.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne rethrow-stashed-self-field.main.kind_3.cmp1
+  kind_3.case0:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  kind_3.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne rethrow-stashed-self-field.main.kind_3.merge
+  kind_3.case1:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  kind_3.merge:
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Outer(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Outer.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.jmp __destruct_Holder.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

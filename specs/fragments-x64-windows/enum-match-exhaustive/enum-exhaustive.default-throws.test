@@ -1,0 +1,88 @@
+// Test: enum-exhaustive.default-throws
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+enum AppError
+		unmatched
+end 'AppError'
+
+typealias ColorCode = int(0 to 10)
+
+function checkColor(c Color) returns ColorCode throws AppError
+	match c 'check'
+		red then return 1
+		default throws AppError.unmatched
+	end 'check'
+end 'checkColor'
+
+function main() returns ExitCode
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @enum-match-exhaustive.checkColor(c: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.jmp enum-match-exhaustive.checkColor.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne enum-match-exhaustive.checkColor.check_0.case1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @enum-match-exhaustive.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call enum-match-exhaustive.checkColor
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je enum-match-exhaustive.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg enum-match-exhaustive.main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl enum-match-exhaustive.main.__range_panic_4
+    x64.jmp enum-match-exhaustive.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

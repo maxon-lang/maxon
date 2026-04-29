@@ -1,0 +1,118 @@
+// Test: type-method-with-params
+
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var total Integer
+
+	function add(value Integer)
+		total = total + value
+	end 'add'
+
+	function getTotal() returns Integer
+		return total
+	end 'getTotal'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Adder'
+
+function main() returns ExitCode
+	var a = Adder.create(total: 0)
+	a.add(10)
+	a.add(32)
+	return a.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Adder.add(__self_ptr: i64, value: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.add rbx, rdx
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Adder.getTotal(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Adder.create(total: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @type-methods.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor ecx, ecx
+    x64.call Adder.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 10
+    x64.call Adder.add
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 32
+    x64.call Adder.add
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Adder.getTotal
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg type-methods.main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl type-methods.main.__range_panic_0
+    x64.jmp type-methods.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Adder(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Adder.done
+  done:
+    x64.ret
+  }
+}
+---

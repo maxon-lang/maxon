@@ -1,0 +1,157 @@
+// Test: match-statements.break-exhaustive-enum
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+	var result = 0
+	match c 'check'
+		empty then break 'check'
+		value(n) then result = n
+	end 'check'
+	return result
+end 'process'
+
+function main() returns ExitCode
+	let a = process(Container.empty)
+	let b = process(Container.value(42))
+	if a == 0 and b == 42 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @match-statements.process(c: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rdx
+    x64.jmp match-statements.process.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne match-statements.process.check_0.cmp1
+  check_0.case0:
+    x64.jmp match-statements.process.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-statements.process.check_0.merge
+  check_0.case1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.jmp match-statements.process.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @match-statements.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.xor ecx, ecx
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call match-statements.process
+    x64.mov rcx, 42
+    x64.mov [rbp-33], rax
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdx, 1
+    x64.mov [rax+0], rdx
+    x64.mov rbx, 42
+    x64.mov [rax+8], rbx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call match-statements.process
+    x64.mov [rbp-24], rax
+    x64.xor edi, edi
+    x64.mov r8, [rbp-33]
+    x64.cmp r8, rdi
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.xor eax, eax
+    x64.mov [rbp-25], rax
+    x64.test r9, r9
+    x64.je match-statements.main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, 42
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-25], rdx
+    x64.jmp match-statements.main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-25]
+    x64.test rax, rax
+    x64.je match-statements.main.check_1.after
+  check_1:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_60
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_60
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_61
+    x64.call mm_decref
+    x64.label __nonnull_skip_61
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_1.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_62
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_62
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_63
+    x64.call mm_decref
+    x64.label __nonnull_skip_63
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Container(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Container.done
+  done:
+    x64.ret
+  }
+}
+---

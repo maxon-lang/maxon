@@ -1,0 +1,78 @@
+// Test: export-let-readonly
+
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export let version Integer
+
+	static function create() returns Self
+		return Config{version: 42}
+	end 'create'
+end 'Config'
+
+function main() returns ExitCode
+	let c = Config.create()
+	return c.version
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Config.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @export-var-fields.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Config.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg export-var-fields.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl export-var-fields.main.__range_panic_0
+    x64.jmp export-var-fields.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Config(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Config.done
+  done:
+    x64.ret
+  }
+}
+---

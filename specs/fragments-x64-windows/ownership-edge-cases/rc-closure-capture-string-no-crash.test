@@ -1,0 +1,139 @@
+// Test: rc-closure-capture-string-no-crash
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns String, x Integer) returns String
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let prefix = "hello"
+	let result = apply(f: (_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+hello
+```
+---
+// CompiledIR
+module {
+  func @ownership-edge-cases.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov r10, rcx
+    x64.mov rcx, r8
+    x64.call r10
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.lea_rdata rax, [__str_38]
+    x64.mov rcx, rax
+    x64.mov rdx, 5
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-48], rcx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, -2
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-48]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, 5
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.lea_func rax, [__closure_0]
+    x64.mov [rbp-56], rax
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 25
+    x64.call mm_alloc
+    x64.lea rcx, [rbp-24]
+    x64.mov rdx, rcx
+    x64.mov [rax+0], rdx
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, [rbp-32]
+    x64.xor r8d, r8d
+    x64.call ownership-edge-cases.apply
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call stdlib.Print.print
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_134
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_134
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_135
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_135
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_136
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_136
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_137
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_137
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

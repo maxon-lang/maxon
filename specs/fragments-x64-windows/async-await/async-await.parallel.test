@@ -1,0 +1,213 @@
+// Test: async-await.parallel
+typealias Integer = int(i64.min to i64.max)
+
+function taskA() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 10
+end 'taskA'
+
+function taskB() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 20
+end 'taskB'
+
+function main() returns ExitCode
+		let p1 = async taskA()
+		let p2 = async taskB()
+		let r1 = await p1
+		let r2 = await p2
+		return r1 + r2
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @async-await.taskA() -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 11
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, -2
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-32]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, 11
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.FilePath.init
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call stdlib.File.exists
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-40], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
+  }
+  func @async-await.taskB() -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 11
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, -2
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-32]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, 11
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.FilePath.init
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call stdlib.File.exists
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-40], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
+  }
+  func @async-await.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 8
+    x64.call mm_raw_alloc
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.lea_func rdx, [async-await.taskA]
+    x64.mov r8, rax
+    x64.xchg rdx, rcx
+    x64.call __gt_spawn
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 8
+    x64.call mm_raw_alloc
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.lea_func rdx, [async-await.taskB]
+    x64.mov r8, rax
+    x64.xchg rdx, rcx
+    x64.call __gt_spawn
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.call __gt_await
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-16]
+    x64.call __gt_await
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg async-await.main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl async-await.main.__range_panic_0
+    x64.jmp async-await.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

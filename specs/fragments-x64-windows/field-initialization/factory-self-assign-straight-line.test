@@ -1,0 +1,92 @@
+// Test: factory-self-assign-straight-line
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value Integer
+	export var version Integer
+
+	export static function make(initial Integer) returns Self
+		self.value = initial
+		self.version = 1
+		return Self{}
+	end 'make'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.make(41)
+	return c.value + c.version
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Counter.make(initial: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, [rbp-8]
+    x64.mov [rbx+0], rsi
+    x64.mov rdi, [rbp-24]
+    x64.mov r8, [rbp-16]
+    x64.mov [rdi+8], r8
+    x64.mov r9, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @field-initialization.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 41
+    x64.call Counter.make
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.add rcx, rbx
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rcx, rdi
+    x64.jg field-initialization.main.__range_panic_0
+    x64.cmp rcx, rsi
+    x64.jl field-initialization.main.__range_panic_0
+    x64.jmp field-initialization.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Counter.done
+  done:
+    x64.ret
+  }
+}
+---

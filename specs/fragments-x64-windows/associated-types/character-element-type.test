@@ -1,0 +1,245 @@
+// Test: character-element-type
+// character is a grapheme cluster type, use codepoints() to access codepoint values
+interface CharSource uses Element
+	function getChar() returns Element
+end 'CharSource'
+
+type SingleChar implements CharSource with Character
+	let ch Character
+
+	function getChar() returns Character
+		return ch
+	end 'getChar'
+
+	static function create(ch Character) returns Self
+		return Self{ch: ch}
+	end 'create'
+end 'SingleChar'
+
+function main() returns ExitCode
+	let s = SingleChar.create(ch: 'A')
+	let c = s.getChar()
+	for cp in c.codepoints() 'loop'
+		return cp
+	end 'loop'
+	return 0
+end 'main'
+---
+ExitCode: 65
+---
+// CompiledIR
+module {
+  func @SingleChar.getChar(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @SingleChar.create(ch: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_SingleChar]
+    x64.mov rdx, rax
+    x64.mov rcx, 8
+    x64.mov r8, 11
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @associated-types.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.lea_rdata rax, [__chr_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 1
+    x64.lea_func rbx, [__destruct_Character]
+    x64.mov rsi, rbx
+    x64.mov [rbp-64], rcx
+    x64.mov rdx, rsi
+    x64.mov rcx, 8
+    x64.mov r8, 6
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 7
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, -2
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-64]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, 1
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call SingleChar.create
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call SingleChar.getChar
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call stdlib.Character.codepoints
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call stdlib.helpers.string.CodepointView.createIterator
+    x64.mov [rbp-48], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.jne associated-types.main.loop_0.exit
+  loop_0.preamble:
+    x64.jmp associated-types.main.loop_0
+  loop_0.header:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.helpers.string.CodepointIterator.advance
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne associated-types.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.helpers.string.CodepointIterator.current
+    x64.mov ecx, rax
+    x64.mov [rbp-56], rcx
+    x64.mov rdx, [rbp-56]
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg associated-types.main.__range_panic_3
+    x64.cmp rdx, rbx
+    x64.jl associated-types.main.__range_panic_3
+    x64.jmp associated-types.main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.mov rax, [rbp-48]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_7
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rbx, [rbp-32]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rsi, [rbp-24]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  loop_0.exit:
+    x64.mov rax, [rbp-48]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_11
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_13
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.mov rbx, [rbp-32]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_14
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.mov rsi, [rbp-24]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_15
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_15
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_SingleChar(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_50
+    x64.call mm_decref
+    x64.label __nonnull_skip_50
+    x64.jmp __destruct_SingleChar.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

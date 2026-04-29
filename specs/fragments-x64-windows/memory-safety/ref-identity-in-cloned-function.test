@@ -1,0 +1,127 @@
+// Test: ref-identity-in-cloned-function
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function isSame(a Box, b Box) returns Integer
+	if a is b 'same'
+		return 1
+	end 'same'
+	return 0
+end 'isSame'
+
+function main() returns ExitCode
+	let x = Box.create(value: 10)
+	let y = x
+	let z = Box.create(value: 10)
+	let same = isSame(a: x, b: y)
+	let diff = isSame(a: x, b: z)
+	return same + diff
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Box.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 22
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.isSame(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.cmp rax, rbx
+    x64.jne memory-safety.isSame.same_0.after
+  same_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  same_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 10
+    x64.call Box.create
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 10
+    x64.call Box.create
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call memory-safety.isSame
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call memory-safety.isSame
+    x64.mov rsi, [rbp-32]
+    x64.add rsi, rax
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rsi, r8
+    x64.jg memory-safety.main.__range_panic_0
+    x64.cmp rsi, rdi
+    x64.jl memory-safety.main.__range_panic_0
+    x64.jmp memory-safety.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_10]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-40], rsi
+    x64.test rax, rax
+    x64.jz __nonnull_skip_63
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_63
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_64
+    x64.call mm_decref
+    x64.label __nonnull_skip_64
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Box(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Box.done
+  done:
+    x64.ret
+  }
+}
+---

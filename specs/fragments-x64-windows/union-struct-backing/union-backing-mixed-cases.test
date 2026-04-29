@@ -1,0 +1,156 @@
+// Test: union-backing-mixed-cases
+typealias Cost = int(0 to 100)
+typealias ID = int(i64.min to i64.max)
+
+type CostMeta
+	export let cost Cost
+
+	static function create(cost Cost) returns Self
+		return Self{cost: cost}
+	end 'create'
+end 'CostMeta'
+
+union Action
+	load(dest ID) = CostMeta.create(cost: 4)
+	store(src ID) = CostMeta.create(cost: 3)
+	nop = CostMeta.create(cost: 0)
+end 'Action'
+
+function main() returns ExitCode
+	let op = Action.nop
+	match op 'handle'
+		load(d) then return d
+		store(s) then return s
+		nop then return 1
+	end 'handle'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @union-struct-backing.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.mov [rax+0], rcx
+    x64.xor ecx, ecx
+    x64.mov [rax+8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-8]
+    x64.mov [rbp-16], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbp-32], rcx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-32]
+    x64.mov [rbp-24], rsi
+    x64.jmp union-struct-backing.main.handle_0.cmp0
+  handle_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne union-struct-backing.main.handle_0.cmp1
+  handle_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg union-struct-backing.main.__range_panic_1
+    x64.cmp rcx, rdx
+    x64.jl union-struct-backing.main.__range_panic_1
+    x64.jmp union-struct-backing.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_8
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  handle_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne union-struct-backing.main.handle_0.cmp2
+  handle_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg union-struct-backing.main.__range_panic_2
+    x64.cmp rcx, rdx
+    x64.jl union-struct-backing.main.__range_panic_2
+    x64.jmp union-struct-backing.main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_10
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  handle_0.cmp2:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne union-struct-backing.main.handle_0.merge
+  handle_0.case2:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_11
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  handle_0.merge:
+  }
+  func @__destruct_Action(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Action.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,82 @@
+// Test: ranges.expression-bounds
+
+typealias Integer = int(i64.min to i64.max)
+
+function getStart() returns Integer
+		return 1
+end 'getStart'
+
+function getEnd() returns Integer
+		return 4
+end 'getEnd'
+
+function main() returns ExitCode
+		var sum = 0
+		for i in getStart() to getEnd() 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @ranges.getStart() -> i64 {
+  entry:
+    x64.mov rax, 1
+    x64.ret
+  }
+  func @ranges.getEnd() -> i64 {
+  entry:
+    x64.mov rax, 4
+    x64.ret
+  }
+  func @ranges.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.call ranges.getStart
+    x64.mov [rbp-32], rax
+    x64.call ranges.getEnd
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-32]
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.loop_0.header
+  loop_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jg ranges.main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp ranges.main.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp ranges.main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg ranges.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl ranges.main.__range_panic_1
+    x64.jmp ranges.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_8]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

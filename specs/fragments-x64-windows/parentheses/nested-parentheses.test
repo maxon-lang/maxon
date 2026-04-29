@@ -1,0 +1,36 @@
+// Test: nested-parentheses
+function main() returns ExitCode
+	return ((5 + 3) * 2) - 6
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @parentheses.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov rcx, 3
+    x64.add rax, rcx
+    x64.mov rdx, 2
+    x64.imul rax, rdx
+    x64.mov rbx, 6
+    x64.sub rax, rbx
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg parentheses.main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl parentheses.main.__range_panic_0
+    x64.jmp parentheses.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

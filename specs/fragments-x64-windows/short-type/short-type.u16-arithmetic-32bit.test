@@ -1,0 +1,36 @@
+// Test: short-type.u16-arithmetic-32bit
+typealias U16 = int(0 to 65535)
+
+function main() returns ExitCode
+	let a = 1000 as U16
+	let b = 500 as U16
+	return a - b
+end 'main'
+---
+ExitCode: 500
+---
+// CompiledIR
+module {
+  func @short-type.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1000
+    x64.mov rcx, 500
+    x64.sub rax, rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg short-type.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl short-type.main.__range_panic_0
+    x64.jmp short-type.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

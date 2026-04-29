@@ -1,0 +1,350 @@
+// Test: global-enum-map
+enum LogLevel
+	NONE
+	ERROR
+	INFO
+end 'LogLevel'
+
+enum LogCategory
+	compiler
+	lexer
+	parser
+end 'LogCategory'
+
+typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
+
+var categoryLevels = CategoryLevelMap.create()
+
+function setCategoryLevel(category LogCategory, level LogLevel)
+	try categoryLevels.insert(category, value: level) otherwise ignore
+end 'setCategoryLevel'
+
+function getCategoryLevel(category LogCategory) returns LogLevel
+	return try categoryLevels.get(category) otherwise LogLevel.NONE
+end 'getCategoryLevel'
+
+function main() returns ExitCode
+	setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
+	setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
+	let compilerLevel = getCategoryLevel(LogCategory.compiler)
+	let lexerLevel = getCategoryLevel(LogCategory.lexer)
+	let r1 = match compilerLevel 'c'
+		INFO gives true
+		NONE gives false
+		ERROR gives false
+	end 'c'
+	let r2 = match lexerLevel 'l'
+		ERROR gives true
+		NONE gives false
+		INFO gives false
+	end 'l'
+	if r1 and r2 'both'
+		return 1
+	end 'both'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @LogCategory.hash(self: i64) -> i64 {
+  entry:
+    x64.jmp stdlib.int.hash
+  }
+  func @enum-hashable.setCategoryLevel(category: i64, level: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, qword [rip+categoryLevels]
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-8]
+    x64.mov r8, [rbp-16]
+    x64.call CategoryLevelMap.insert
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbp-32], rdx
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_13
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.epilogue
+    x64.ret
+  }
+  func @enum-hashable.getCategoryLevel(category: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, qword [rip+categoryLevels]
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-8]
+    x64.call CategoryLevelMap.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je enum-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.jmp enum-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @enum-hashable.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.xor ecx, ecx
+    x64.mov rdx, 2
+    x64.call enum-hashable.setCategoryLevel
+    x64.mov rcx, 1
+    x64.mov rdx, 1
+    x64.call enum-hashable.setCategoryLevel
+    x64.xor ecx, ecx
+    x64.call enum-hashable.getCategoryLevel
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.call enum-hashable.getCategoryLevel
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rax
+    x64.jmp enum-hashable.main.c_0.cmp0
+  c_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.c_0.cmp1
+  c_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-24], rax
+    x64.jmp enum-hashable.main.c_0.merge
+  c_0.cmp1:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.c_0.cmp2
+  c_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp enum-hashable.main.c_0.merge
+  c_0.cmp2:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.c_0.merge
+  c_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.jmp enum-hashable.main.c_0.merge
+  c_0.merge:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-33], rax
+    x64.mov rcx, [rbp-16]
+    x64.xor edx, edx
+    x64.mov [rbp-41], rdx
+    x64.mov [rbp-49], rcx
+    x64.jmp enum-hashable.main.l_1.cmp0
+  l_1.cmp0:
+    x64.mov rax, [rbp-49]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.l_1.cmp1
+  l_1.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-41], rax
+    x64.jmp enum-hashable.main.l_1.merge
+  l_1.cmp1:
+    x64.mov rax, [rbp-49]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.l_1.cmp2
+  l_1.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-41], rax
+    x64.jmp enum-hashable.main.l_1.merge
+  l_1.cmp2:
+    x64.mov rax, [rbp-49]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne enum-hashable.main.l_1.merge
+  l_1.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-41], rax
+    x64.jmp enum-hashable.main.l_1.merge
+  l_1.merge:
+    x64.mov rax, [rbp-41]
+    x64.mov [rbp-50], rax
+    x64.mov rcx, [rbp-33]
+    x64.xor edx, edx
+    x64.mov [rbp-51], rdx
+    x64.test rcx, rcx
+    x64.je enum-hashable.main.shortAnd_2.merge
+  shortAnd_2.rhs:
+    x64.mov rax, [rbp-50]
+    x64.mov [rbp-51], rax
+    x64.jmp enum-hashable.main.shortAnd_2.merge
+  shortAnd_2.merge:
+    x64.mov rax, [rbp-51]
+    x64.test rax, rax
+    x64.je enum-hashable.main.both_3.after
+  both_3:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  both_3.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_LogCategory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_LogCategory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_279
+    x64.call mm_decref
+    x64.label __nonnull_skip_279
+    x64.jmp __destruct___ManagedMemory_LogCategory.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_LogCategory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_LogCategory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_LogCategory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Array_LogCategory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_280
+    x64.call mm_decref
+    x64.label __nonnull_skip_280
+    x64.jmp __destruct_Array_LogCategory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_LogLevel(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_LogLevel.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_281
+    x64.call mm_decref
+    x64.label __nonnull_skip_281
+    x64.jmp __destruct___ManagedMemory_LogLevel.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_LogLevel.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_LogLevel.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_LogLevel.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Array_LogLevel(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_282
+    x64.call mm_decref
+    x64.label __nonnull_skip_282
+    x64.jmp __destruct_Array_LogLevel.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_CategoryLevelMap(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_283
+    x64.call mm_decref
+    x64.label __nonnull_skip_283
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_284
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_284
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+16]
+    x64.mov [rbp-32], rdi
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_285
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_285
+    x64.jmp __destruct_CategoryLevelMap.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

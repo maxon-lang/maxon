@@ -1,0 +1,43 @@
+// Test: arithmetic-as-array-index
+enum Slot
+	a
+	b
+	c
+end 'Slot'
+
+let NUM_SLOTS = 3
+
+function main() returns ExitCode
+	let idx = Slot.b * NUM_SLOTS + Slot.a
+	return idx
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 3
+    x64.imul rax, rcx
+    x64.xor edx, edx
+    x64.add rax, rdx
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg constants.main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl constants.main.__range_panic_0
+    x64.jmp constants.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

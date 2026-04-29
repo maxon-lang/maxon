@@ -1,0 +1,182 @@
+// Test: cursor-retreat
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advance() otherwise ignore
+	let afterAdv = cursor.current()
+	try cursor.retreat() otherwise ignore
+	let afterRet = cursor.current()
+
+	return afterAdv + afterRet
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @array-cursor.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call ByteArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 10
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rax
+    x64.call ByteArray.push
+    x64.mov rbx, 20
+    x64.mov rsi, 255
+    x64.and rbx, rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rbx
+    x64.call ByteArray.push
+    x64.mov r8, 30
+    x64.mov r9, 255
+    x64.and r8, r9
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, r8
+    x64.call ByteArray.push
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call ByteArray.cursor
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je array-cursor.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_15
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_15
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_16
+    x64.call mm_decref
+    x64.label __nonnull_skip_16
+    x64.mov rax, 99
+    x64.epilogue
+    x64.ret
+  otherwise_continue_1:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call __ArrayIterator_Byte.advance
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-32], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call __ArrayIterator_Byte.current
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-24]
+    x64.call __ArrayIterator_Byte.retreat
+    x64.mov rdi, [rbp-24]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call __ArrayIterator_Byte.current
+    x64.mov r8, [rbp-40]
+    x64.add r8, rax
+    x64.xor r9d, r9d
+    x64.mov eax, 4294967295
+    x64.cmp r8, rax
+    x64.jg array-cursor.main.__range_panic_4
+    x64.cmp r8, r9
+    x64.jl array-cursor.main.__range_panic_4
+    x64.jmp array-cursor.main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-56], r8
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_17
+    x64.call mm_decref
+    x64.label __nonnull_skip_17
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_18
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_18
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_19
+    x64.call mm_decref
+    x64.label __nonnull_skip_19
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Byte(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Byte.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_165
+    x64.call mm_decref
+    x64.label __nonnull_skip_165
+    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Byte.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Byte.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_166
+    x64.call mm_decref
+    x64.label __nonnull_skip_166
+    x64.jmp __destruct_ByteArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

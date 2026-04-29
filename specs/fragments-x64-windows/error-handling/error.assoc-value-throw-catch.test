@@ -1,0 +1,137 @@
+// Test: error.assoc-value-throw-catch
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test error enum with associated value - throw and catch
+union MyError implements Error
+	notFound(code Integer)
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	throw MyError.notFound(404)
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'check'
+			notFound(code) then result = code
+			failed then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 404
+---
+// CompiledIR
+module {
+  func @error-handling.mayFail() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+counter]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov qword [rip+counter], rax
+    x64.mov rdx, 404
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor ebx, ebx
+    x64.mov [rax+0], rbx
+    x64.mov rsi, 404
+    x64.mov [rax+8], rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.call error-handling.mayFail
+    x64.mov [rbp-16], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je error-handling.main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-32], rax
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-48]
+    x64.mov [rbp-40], rsi
+    x64.jmp error-handling.main.check_4.cmp0
+  check_4.cmp0:
+    x64.mov rax, [rbp-40]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.check_4.cmp1
+  check_4.case0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-8], rcx
+    x64.jmp error-handling.main.check_4.merge
+  check_4.cmp1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne error-handling.main.check_4.merge
+  check_4.case1:
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.jmp error-handling.main.check_4.merge
+  check_4.merge:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp error-handling.main.otherwise_continue_1
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg error-handling.main.__range_panic_5
+    x64.cmp rax, rcx
+    x64.jl error-handling.main.__range_panic_5
+    x64.jmp error-handling.main.__range_ok_5
+  __range_panic_5:
+    x64.lea_symdata rax, [__panic_msg_9]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_5:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_MyError(ptr: i64) {
+  entry:
+    x64.jmp __destruct_MyError.done
+  done:
+    x64.ret
+  }
+}
+---

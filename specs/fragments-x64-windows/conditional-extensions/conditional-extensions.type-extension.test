@@ -1,0 +1,104 @@
+// Test: conditional-extensions.type-extension
+type Box uses Item
+	export var item Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+extension Box where Item is Equatable
+	function matches(other Item) returns bool
+		return item == other
+	end 'matches'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+	let b = IntBox.create(item: 42)
+	if b.matches(42) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @conditional-extensions.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 42
+    x64.call IntBox.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.call IntBox.matches
+    x64.test rax, rax
+    x64.je conditional-extensions.main.yes_0.after
+  yes_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  yes_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @IntBox.create(item: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntBox.matches(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.cmp rax, rdx
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntBox(ptr: i64) {
+  entry:
+    x64.jmp __destruct_IntBox.done
+  done:
+    x64.ret
+  }
+}
+---

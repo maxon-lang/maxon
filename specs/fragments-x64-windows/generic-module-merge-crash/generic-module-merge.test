@@ -1,0 +1,593 @@
+// Test: generic-module-merge
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+interface Mergeable uses Func
+	function itemCount() returns Count
+	function getItem(index Count) returns Func
+	function pushItem(item Func)
+	function opsCount() returns Count
+	function appendOps(source Self)
+	function cloneItem(src Func) returns Func
+end 'Mergeable'
+
+extension Mergeable
+	export function merge(source Self)
+		self.appendOps(source)
+		for i in 0 upto source.itemCount() 'eachItem'
+			let src = source.getItem(i)
+			let copy = self.cloneItem(src)
+			self.pushItem(copy)
+		end 'eachItem'
+	end 'merge'
+end 'Mergeable'
+
+type Wrapper
+	export var value Integer
+	export static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+type Container uses Op implements Mergeable with Wrapper
+	typealias OpArray = Array with Op
+
+	export var ops OpArray
+	export var items WrapperArray
+
+	export static function create() returns Self
+		return Self{
+			ops: OpArray.create(),
+			items: WrapperArray.create()
+		}
+	end 'create'
+
+	export function opsCount() returns Count
+		return self.ops.count()
+	end 'opsCount'
+
+	export function appendOps(source Self)
+		self.ops.append(source.ops)
+	end 'appendOps'
+
+	export function itemCount() returns Count
+		return self.items.count()
+	end 'itemCount'
+
+	export function getItem(index Count) returns Wrapper
+		return try self.items.get(index) otherwise 'unreachable'
+			panic("getItem: index out of bounds")
+		end 'unreachable'
+	end 'getItem'
+
+	export function pushItem(item Wrapper)
+		self.items.push(item)
+	end 'pushItem'
+
+	export function cloneItem(src Wrapper) returns Wrapper
+		return Wrapper.create(src.value)
+	end 'cloneItem'
+
+	export function pushOp(op Op)
+		self.ops.push(op)
+	end 'pushOp'
+end 'Container'
+
+typealias IntContainer = Container with Integer
+
+typealias ExitCode = int(0 to 125)
+
+function main() returns ExitCode
+	var a = IntContainer.create()
+	a.pushOp(10)
+	a.pushOp(20)
+	a.pushItem(Wrapper.create(99))
+
+	var b = IntContainer.create()
+	b.merge(a)
+
+	if b.opsCount() == 2 and b.itemCount() == 1 'check'
+		let item = b.getItem(0)
+		if item.value == 99 'valueCheck'
+			return 0
+		end 'valueCheck'
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Wrapper.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @generic-module-merge-crash.main() -> u8 {
+  entry:
+    x64.prologue stack_size=48
+    x64.call IntContainer.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 10
+    x64.call IntContainer.pushOp
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 20
+    x64.call IntContainer.pushOp
+    x64.mov rcx, 99
+    x64.call Wrapper.create
+    x64.mov [rbp-16], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call IntContainer.pushItem
+    x64.call IntContainer.create
+    x64.mov [rbp-24], rax
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-8]
+    x64.call IntContainer.merge
+    x64.mov r8, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call IntContainer.opsCount
+    x64.mov r9, 2
+    x64.cmp rax, r9
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor ecx, ecx
+    x64.mov [rbp-25], rcx
+    x64.test rax, rax
+    x64.je generic-module-merge-crash.main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call IntContainer.itemCount
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-25], rdx
+    x64.jmp generic-module-merge-crash.main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-25]
+    x64.test rax, rax
+    x64.je generic-module-merge-crash.main.check_1.merge
+  check_1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.xor edx, edx
+    x64.call IntContainer.getItem
+    x64.mov [rbp-33], rax
+    x64.mov rcx, [rbp-33]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, 99
+    x64.cmp rdx, rbx
+    x64.jne generic-module-merge-crash.main.valueCheck_2.after
+  valueCheck_2:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-33]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rdx, [rbp-24]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  valueCheck_2.after:
+    x64.mov rax, [rbp-33]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-33]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.jmp generic-module-merge-crash.main.check_1.merge
+  check_1.merge:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.merge(__self_ptr: i64, source: i64) {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call IntContainer.appendOps
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call IntContainer.itemCount
+    x64.mov [rbp-24], rax
+    x64.xor ebx, ebx
+    x64.mov [rbp-32], rbx
+    x64.jmp IntContainer.merge.eachItem_0.header
+  eachItem_0.header:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.cmp rax, rcx
+    x64.jge IntContainer.merge.eachItem_0.exit
+  eachItem_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-32]
+    x64.call IntContainer.getItem
+    x64.mov [rbp-40], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-40]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-40]
+    x64.call IntContainer.cloneItem
+    x64.mov [rbp-48], rax
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rbp-48]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-48]
+    x64.call IntContainer.pushItem
+    x64.mov r8, [rbp-48]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_16
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_16
+    x64.mov r9, [rbp-40]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_17
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_17
+    x64.jmp IntContainer.merge.eachItem_0.incr
+  eachItem_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp IntContainer.merge.eachItem_0.header
+  eachItem_0.exit:
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.create() -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call Array_Integer.create
+    x64.mov [rbp-8], rax
+    x64.call WrapperArray.create
+    x64.mov [rbp-16], rax
+    x64.lea_func rax, [__destruct_IntContainer]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbx+0], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rbp-24]
+    x64.mov [rdi+8], rsi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-16]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_18
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_18
+    x64.mov r9, [rbp-8]
+    x64.test r9, r9
+    x64.jz __nonnull_skip_19
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_19
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.opsCount(__self_ptr: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rcx, [rbp-16]
+    x64.epilogue
+    x64.jmp Array_Integer.count
+  }
+  func @IntContainer.appendOps(__self_ptr: i64, source: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-24], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-32], rbx
+    x64.mov rax, [rbp-24]
+    x64.mov rbx, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-32]
+    x64.call Array_Integer.append
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.itemCount(__self_ptr: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+8]
+    x64.mov [rbp-16], rdx
+    x64.mov rcx, [rbp-16]
+    x64.epilogue
+    x64.jmp WrapperArray.count
+  }
+  func @IntContainer.getItem(__self_ptr: i64, index: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+8]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call WrapperArray.get
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je IntContainer.getItem.otherwise_continue_1
+  otherwise_error_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.pushItem(__self_ptr: i64, item: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+8]
+    x64.mov [rbp-24], rbx
+    x64.mov rax, [rbp-24]
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-16]
+    x64.call WrapperArray.push
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.cloneItem(__self_ptr: i64, src: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.mov rcx, rbx
+    x64.call Wrapper.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntContainer.pushOp(__self_ptr: i64, op: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call Array_Integer.push
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Wrapper.done
+  done:
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Wrapper(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Wrapper.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_22
+    x64.call mm_decref
+    x64.label __nonnull_skip_22
+    x64.jmp __destruct___ManagedMemory_Wrapper.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Wrapper.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Wrapper.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Wrapper.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_WrapperArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_23
+    x64.call mm_decref
+    x64.label __nonnull_skip_23
+    x64.jmp __destruct_WrapperArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_24
+    x64.call mm_decref
+    x64.label __nonnull_skip_24
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Array_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_25
+    x64.call mm_decref
+    x64.label __nonnull_skip_25
+    x64.jmp __destruct_Array_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntContainer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_26
+    x64.call mm_decref
+    x64.label __nonnull_skip_26
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_27
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_27
+    x64.jmp __destruct_IntContainer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

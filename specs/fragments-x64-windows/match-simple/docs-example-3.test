@@ -1,0 +1,73 @@
+// Test: docs-example-3
+function main() returns ExitCode
+	let x = 2
+	let result = match x 'convert'
+		1 gives 10
+		2 gives 20
+		3 gives 30
+		default gives 0
+	end 'convert'
+	return result
+end 'main'
+
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp match-simple.main.convert_0.cmp0
+  convert_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.convert_0.cmp1
+  convert_0.case0:
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.convert_0.merge
+  convert_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.convert_0.cmp2
+  convert_0.case1:
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.convert_0.merge
+  convert_0.cmp2:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.convert_0.case3
+  convert_0.case2:
+    x64.mov rax, 30
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.convert_0.merge
+  convert_0.case3:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.convert_0.merge
+  convert_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-simple.main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl match-simple.main.__range_panic_1
+    x64.jmp match-simple.main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_11]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

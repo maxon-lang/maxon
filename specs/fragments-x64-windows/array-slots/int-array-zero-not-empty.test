@@ -1,0 +1,144 @@
+// Test: int-array-zero-not-empty
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(0)
+	arr.push(5)
+	arr.resize(4)
+	let val = try arr.get(0) otherwise -1
+	let val2 = try arr.get(2) otherwise -1
+	return val + val2
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @array-slots.main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call IntArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 5
+    x64.call IntArray.push
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 4
+    x64.call IntArray.resize
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call IntArray.get
+    x64.mov rsi, -1
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], rax
+    x64.xor edi, edi
+    x64.cmp rdx, rdi
+    x64.je array-slots.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp array-slots.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call IntArray.get
+    x64.mov rcx, -1
+    x64.mov [rbp-40], rcx
+    x64.mov [rbp-48], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je array-slots.main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.jmp array-slots.main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg array-slots.main.__range_panic_8
+    x64.cmp rcx, rdx
+    x64.jl array-slots.main.__range_panic_8
+    x64.jmp array-slots.main.__range_ok_8
+  __range_panic_8:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_8:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-56], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_12
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_87
+    x64.call mm_decref
+    x64.label __nonnull_skip_87
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_88
+    x64.call mm_decref
+    x64.label __nonnull_skip_88
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

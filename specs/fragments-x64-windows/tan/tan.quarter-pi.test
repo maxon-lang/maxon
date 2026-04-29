@@ -1,0 +1,41 @@
+// Test: tan.quarter-pi
+function main() returns ExitCode
+	let quarterPi = 0.785398163
+	let result = Math.tan(quarterPi)
+	// Should be approximately 1.0
+	let diff = abs(result - 1.0)
+	if diff < 0.01 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @tan.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_0.785398163]
+    x64.call stdlib.Math.tan
+    x64.movsd xmm1, [rip+__float_1]
+    x64.movsd xmm2, xmm0
+    x64.subsd xmm2, xmm1
+    x64.movsd xmm3, xmm2
+    x64.andpd xmm3, [rip+__abs_mask]
+    x64.movsd xmm4, [rip+__float_0.01]
+    x64.ucomisd xmm3, xmm4
+    x64.jp tan.main.check_0.after
+    x64.jae tan.main.check_0.after
+  check_0:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+}
+---

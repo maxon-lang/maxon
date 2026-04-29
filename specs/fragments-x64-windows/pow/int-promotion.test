@@ -1,0 +1,37 @@
+// Test: int-promotion
+function main() returns ExitCode
+	let result = Math.pow(3, exponent: 2)  // Ints promoted to float
+	return trunc(result)
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @pow.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov rcx, 2
+    x64.cvtsi2sd xmm0, rax
+    x64.cvtsi2sd xmm1, rcx
+    x64.call stdlib.Math.pow
+    x64.cvttsd2si rdx, xmm0
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg pow.main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl pow.main.__range_panic_0
+    x64.jmp pow.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

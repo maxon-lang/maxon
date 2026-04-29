@@ -1,0 +1,35 @@
+// Test: int-division-fixed-regs
+function main() returns ExitCode
+	let a = 126
+	let b = 3
+	return a / b
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 126
+    x64.mov rcx, 3
+    x64.cqo
+    x64.idiv rcx
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg register-allocator.main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl register-allocator.main.__range_panic_0
+    x64.jmp register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

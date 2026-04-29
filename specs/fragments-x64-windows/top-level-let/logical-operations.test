@@ -1,0 +1,53 @@
+// Test: logical-operations
+let BOTH = true and true
+let EITHER = false or true
+let NEITHER = not false
+
+function main() returns ExitCode
+	if BOTH and EITHER and NEITHER 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @top-level-let.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov [rbp-1], rcx
+    x64.test rax, rax
+    x64.je top-level-let.main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, 1
+    x64.mov [rbp-1], rax
+    x64.jmp top-level-let.main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-1]
+    x64.xor ecx, ecx
+    x64.mov [rbp-2], rcx
+    x64.test rax, rax
+    x64.je top-level-let.main.shortAnd_1.merge
+  shortAnd_1.rhs:
+    x64.mov rax, 1
+    x64.mov [rbp-2], rax
+    x64.jmp top-level-let.main.shortAnd_1.merge
+  shortAnd_1.merge:
+    x64.mov rax, [rbp-2]
+    x64.test rax, rax
+    x64.je top-level-let.main.check_2.after
+  check_2:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_2.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---
