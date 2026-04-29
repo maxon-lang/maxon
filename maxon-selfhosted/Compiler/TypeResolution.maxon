@@ -1242,40 +1242,26 @@ function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExpr
 		stringLit(stringId) gives ConstantValue.stringValue(stringId)
 		floatLit(bits) gives ConstantValue.floatValue(bits)
 		nameRef(target) gives evaluateTopLevelLet(project, name: target, evaluating: evaluating)
-		negate(operand) gives negateConstantValue(evaluateUnresolvedConstExpr(project, exprId: operand, evaluating: evaluating))
-		notOp(operand) gives notConstantValue(evaluateUnresolvedConstExpr(project, exprId: operand, evaluating: evaluating))
-		add(left, right) gives addConstantValues(evaluateUnresolvedConstExpr(project, exprId: left, evaluating: evaluating), b: evaluateUnresolvedConstExpr(project, exprId: right, evaluating: evaluating))
-		sub(left, right) gives subConstantValues(evaluateUnresolvedConstExpr(project, exprId: left, evaluating: evaluating), b: evaluateUnresolvedConstExpr(project, exprId: right, evaluating: evaluating))
+		negate(operand) gives ConstantValue.intValue(0 - evalChildAsInt(project, exprId: operand, evaluating: evaluating))
+		notOp(operand) gives ConstantValue.intValue(not evalChildAsInt(project, exprId: operand, evaluating: evaluating))
+		add(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) + evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		sub(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) - evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		mul(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) * evalChildAsInt(project, exprId: right, evaluating: evaluating))
 	end 'eval'
 end 'evaluateUnresolvedConstExpr'
 
-// `negate` / `notOp` / `add` / `sub` nodes are emitted only after parseConstAtom
-// has accepted an int- or bool-typed atom. String / float operands therefore
-// can't reach these helpers; mismatched operand types are an invariant
-// violation, not a user error, and panic loudly so the bug surfaces in tests
-// instead of silently folding to zero.
-function intValueOrPanic(v ConstantValue) returns IntConstant
-	return match v 'kind'
+// Recursive helper used by every arithmetic / unary arm above. Composing
+// the eval-then-unwrap pair into one call keeps the match arms short and
+// keeps the "operand must be int" invariant in a single place. `negate` /
+// `notOp` / `add` / `sub` / `mul` nodes are only emitted after
+// parseConstAtom has accepted an int- or bool-typed atom, so reaching a
+// non-int operand here is an invariant violation, not a user error.
+function evalChildAsInt(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns IntConstant
+	return match evaluateUnresolvedConstExpr(project, exprId: exprId, evaluating: evaluating) 'kind'
 		intValue(x) gives x
 		default panic("const folder reached non-int operand: only intValue arms are valid for arithmetic / unary const folding")
 	end 'kind'
-end 'intValueOrPanic'
-
-function negateConstantValue(v ConstantValue) returns ConstantValue
-	return ConstantValue.intValue(0 - intValueOrPanic(v))
-end 'negateConstantValue'
-
-function notConstantValue(v ConstantValue) returns ConstantValue
-	return ConstantValue.intValue(not intValueOrPanic(v))
-end 'notConstantValue'
-
-function addConstantValues(a ConstantValue, b ConstantValue) returns ConstantValue
-	return ConstantValue.intValue(intValueOrPanic(a) + intValueOrPanic(b))
-end 'addConstantValues'
-
-function subConstantValues(a ConstantValue, b ConstantValue) returns ConstantValue
-	return ConstantValue.intValue(intValueOrPanic(a) - intValueOrPanic(b))
-end 'subConstantValues'
+end 'evalChildAsInt'
 
 function joinStringArray(arr StringArray, sep String) returns String
 	var result = ""

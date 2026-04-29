@@ -951,13 +951,15 @@ export type Parser
 	// name is currently resolvable — the TypeResolution pass walks the
 	// arena with cycle detection and emits E2012 for cyclic references.
 	//
-	// The grammar mirrors the integer evaluator: integer literals, hex
-	// literals, `true`/`false`, `not <expr>`, `-<expr>`, identifier
-	// references, and `+`/`-` between operands of any of the above. Token
-	// shapes outside this grammar throw `ParserError.unhandledToken`,
-	// surfacing as the existing E2010 diagnostic.
+	// Grammar: integer literals, hex literals, `true`/`false`, `not <expr>`,
+	// `-<expr>`, identifier references, and `+` / `-` / `*` between operands
+	// of any of the above (with `*` binding tighter than `+`/`-`). This is a
+	// superset of `evalConstExpr` since deferred resolution gives top-level
+	// let initializers access to forward references and to `*`. Token shapes
+	// outside this grammar throw `ParserError.unhandledToken`, surfacing as
+	// the existing E2010 diagnostic.
 	function parseConstExpr() returns UnresolvedConstExprId throws ParserError
-		let lhs = try parseConstAtom()
+		let lhs = try parseConstMul()
 		return try parseConstAddTail(lhs)
 	end 'parseConstExpr'
 
@@ -965,10 +967,10 @@ export type Parser
 		var acc = lhs
 		while true 'tail'
 			if tokenIs(TokenKind.plus) 'isPlus'
-				let rhs = try parseConstAtom()
+				let rhs = try parseConstMul()
 				acc = appendConstExpr(UnresolvedConstExpr.add(left: acc, right: rhs))
 			end 'isPlus' else if tokenIs(TokenKind.minus) 'isMinus'
-				let rhs = try parseConstAtom()
+				let rhs = try parseConstMul()
 				acc = appendConstExpr(UnresolvedConstExpr.sub(left: acc, right: rhs))
 			end 'isMinus' else 'done'
 				break
@@ -976,6 +978,24 @@ export type Parser
 		end 'tail'
 		return acc
 	end 'parseConstAddTail'
+
+	// Multiplication binds tighter than `+`/`-`, matching the runtime
+	// expression parser's precedence. Only `*` is captured here; `/` and
+	// `mod` aren't needed by any current top-level let initializer and
+	// would require introducing float / divide-by-zero handling at fold
+	// time.
+	function parseConstMul() returns UnresolvedConstExprId throws ParserError
+		var acc = try parseConstAtom()
+		while true 'tail'
+			if tokenIs(TokenKind.star) 'isStar'
+				let rhs = try parseConstAtom()
+				acc = appendConstExpr(UnresolvedConstExpr.mul(left: acc, right: rhs))
+			end 'isStar' else 'done'
+				break
+			end 'done'
+		end 'tail'
+		return acc
+	end 'parseConstMul'
 
 	function parseConstAtom() returns UnresolvedConstExprId throws ParserError
 		if tokenIs(TokenKind.not) 'isNot'
