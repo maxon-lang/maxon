@@ -61,7 +61,15 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 			// Terminators are never removed — they control block flow
 		end 'eachBlock'
 
-		// Phase 3: Remove blocks unreachable from the entry block.
+		// Phase 3: Bypass blocks whose only contents are an unconditional
+		// `cf.br successor` (no live ops, no block parameters). Predecessors
+		// get retargeted to the successor; the now-orphan block is pruned in
+		// Phase 4. Runs after the dead-op sweep above so blocks that became
+		// empty by virtue of canonicalize folding everything to dead consts
+		// are recognized as bypassable.
+		skipThroughEmptyBranches(module, func: func)
+
+		// Phase 4: Remove blocks unreachable from the entry block.
 		// Canonicalize may fold condBr to br, leaving successor blocks with
 		// no predecessors. Pruning them here keeps the output clean.
 		pruneUnreachableBlocks(func, module: module)
@@ -71,6 +79,265 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 
 	return module
 end 'eliminateDeadCode'
+
+// One pass over every block, retargeting predecessors of any "skippable"
+// block to the skippable block's sole successor. Non-iterative: a chain
+// of two skippable blocks only collapses by one level per DCE run, but
+// the canonicalize/DCE pipeline doesn't currently iterate, and chain
+// compaction past one level isn't a pattern produced by current passes.
+function skipThroughEmptyBranches(module StdModule, func IrFunction)
+	for blockRef in func.blockRefs 'scan'
+		let block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
+		let bypass = tryGetBypassTarget(module, block: block)
+		match bypass 'apply'
+			none then break 'apply'
+			some(target, fwdArgIds) then retargetPredecessors(module, func: func, fromBlockId: block.id, toBlockId: target, fwdArgIds: fwdArgIds)
+		end 'apply'
+	end 'scan'
+
+	// Entry-block special case: a bypassable entry has no predecessors, so
+	// `retargetPredecessors` is a no-op above. Promote its successor to the
+	// new entry by removing the bypassable entry from blockRefs. The
+	// downstream `pruneUnreachableBlocks` does not handle this on its own
+	// because the entry block is always considered reachable from itself.
+	dropBypassableEntry(module, func: func)
+end 'skipThroughEmptyBranches'
+
+// Entry-block special case: when the entry block's only contents are
+// `cf.br S`, retargeting predecessors does nothing (entry has none).
+// Inline S's contents into the entry block in place — replacing the
+// bridge terminator with S's full op sequence + S's terminator — and
+// drop S from blockRefs. The entry block keeps its conventional
+// `entry` label and identity; the merged successor disappears.
+//
+// Only safe to merge when S has exactly one predecessor (the entry).
+// Otherwise inlining would lose the join semantics other predecessors
+// depend on. In that case we leave the empty-entry shape alone — the
+// IR still encodes the program correctly, just with one extra hop.
+function dropBypassableEntry(module StdModule, func IrFunction)
+	if func.blockRefs.count() < 2 'tooSmall'
+		return
+	end 'tooSmall'
+	let entryRef = try func.blockRefs.get(0) otherwise panic("dropBypassableEntry: blockRefs[0] missing despite count check")
+	var entryBlock = try module.blocks.get(entryRef) otherwise panic("dropBypassableEntry: entry block not found in module")
+	let bypass = tryGetBypassTarget(module, block: entryBlock)
+	let targetBlockId = match bypass 'extract'
+		none gives BLOCK_ID_NONE
+		some(target, _) gives target
+	end 'extract'
+	if targetBlockId == BLOCK_ID_NONE 'notBypassable'
+		return
+	end 'notBypassable'
+
+	let targetRefIndex = findBlockRefByBlockId(func, module: module, blockId: targetBlockId)
+	if targetRefIndex == BLOCK_ID_NONE 'noTargetRef'
+		panic("dropBypassableEntry: bypass target block_{targetBlockId} not in func.blockRefs")
+	end 'noTargetRef'
+	let targetRef = try func.blockRefs.get(targetRefIndex) otherwise panic("dropBypassableEntry: blockRefs.get({targetRefIndex}) failed")
+	let targetBlock = try module.blocks.get(targetRef) otherwise panic("dropBypassableEntry: target block missing from module")
+
+	if not isSolePredecessor(module, func: func, ofBlockId: targetBlockId, predecessorBlockId: entryBlock.id) 'notSole'
+		return
+	end 'notSole'
+	if targetBlock.blockArgs.count() != 0 'targetHasArgs'
+		// Entry's `br target argIds=[]` and target's blockArgs would
+		// disagree — the merge would silently drop incoming bindings.
+		return
+	end 'targetHasArgs'
+
+	entryBlock.opRefs = targetBlock.opRefs
+	entryBlock.terminator = targetBlock.terminator
+	try module.blocks.set(entryRef, value: entryBlock) otherwise panic("dropBypassableEntry: blocks.set OOB updating entry")
+
+	var newRefs = BlockRefList.create()
+	var index = 0
+	for ref in func.blockRefs 'each'
+		if index != targetRefIndex 'keep'
+			newRefs.append(ref)
+		end 'keep'
+		index = index + 1
+	end 'each'
+	func.blockRefs = newRefs
+
+	logTrace(LogCategory.ir, message: () gives "dce: merged bypassable entry into block_{targetBlockId}")
+end 'dropBypassableEntry'
+
+// True when `predecessorBlockId` is the only block whose terminator
+// branches to `ofBlockId`. Walks every block's terminator in the
+// function and counts incoming edges — the merge step relies on this
+// being exactly one before inlining the target into the predecessor.
+function isSolePredecessor(module StdModule, func IrFunction, ofBlockId BlockId, predecessorBlockId BlockId) returns bool
+	var found = false
+	for blockRef in func.blockRefs 'scan'
+		let block = try module.blocks.get(blockRef) otherwise panic("isSolePredecessor: blockRef not in module")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("isSolePredecessor: terminator opIdx not in module.ops")
+		if not terminatorBranchesTo(termOp, blockId: ofBlockId) 'noEdge'
+			continue
+		end 'noEdge'
+		if block.id != predecessorBlockId 'otherPred'
+			return false
+		end 'otherPred'
+		if found 'duplicateEdge'
+			// Same predecessor branches via both arms of a condBr — not
+			// the simple sole-predecessor case.
+			return false
+		end 'duplicateEdge'
+		found = true
+	end 'scan'
+	return found
+end 'isSolePredecessor'
+
+function terminatorBranchesTo(op StdOp, blockId BlockId) returns bool
+	return match op 'outer'
+		control(c) gives controlBranchesTo(c, blockId: blockId)
+		arith gives false
+		call gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'terminatorBranchesTo'
+
+function controlBranchesTo(op StdControlOp, blockId BlockId) returns bool
+	return match op 'inner'
+		br(target, _) gives target == blockId
+		condBr(_, thenTarget, _, elseTarget, _) gives thenTarget == blockId or elseTarget == blockId
+	end 'inner'
+end 'controlBranchesTo'
+
+// Sentinel used to signal "no result" from helpers that return a BlockId
+// or BlockRef-list index. Picked from the high end of the typealias range
+// so it can't collide with any real id (the parser allocates from 0 up).
+let BLOCK_ID_NONE = u64.max
+
+function findBlockRefByBlockId(func IrFunction, module StdModule, blockId BlockId) returns BlockId
+	var index = 0
+	for ref in func.blockRefs 'scan'
+		let block = try module.blocks.get(ref) otherwise panic("findBlockRefByBlockId: blockRef {ref} not in module")
+		if block.id == blockId 'match'
+			return index
+		end 'match'
+		index = index + 1
+	end 'scan'
+	return BLOCK_ID_NONE
+end 'findBlockRefByBlockId'
+
+// A block is bypassable when it has no live ops, no block parameters, and
+// its terminator is an unconditional `cf.br targetBlock` carrying the args
+// that should flow through to `targetBlock`. Returns `none` for any block
+// that fails one of these checks. Called only after Phase 2 has stripped
+// dead ops, so opRefs.count() reflects live content.
+function tryGetBypassTarget(module StdModule, block IrBlock) returns BypassTarget
+	if block.opRefs.count() != 0 'hasOps'
+		return BypassTarget.none
+	end 'hasOps'
+	if block.blockArgs.count() != 0 'hasArgs'
+		return BypassTarget.none
+	end 'hasArgs'
+	if not block.hasTerminatorOp() 'noTerm'
+		return BypassTarget.none
+	end 'noTerm'
+	let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminator opIdx not in module.ops")
+	return match termOp 'extract'
+		control(c) gives bypassFromControl(c)
+		arith gives BypassTarget.none
+		call gives BypassTarget.none
+		memory gives BypassTarget.none
+		system gives BypassTarget.none
+	end 'extract'
+end 'tryGetBypassTarget'
+
+function bypassFromControl(op StdControlOp) returns BypassTarget
+	return match op 'check'
+		br(target, argIds) gives BypassTarget.some(target: target, argIds: argIds)
+		condBr gives BypassTarget.none
+	end 'check'
+end 'bypassFromControl'
+
+// Walk every block in the function, rewriting each terminator's target so
+// any branch to `fromBlockId` jumps directly to `toBlockId` instead. The
+// predecessor's argIds (destined for fromBlockId, which has no blockArgs)
+// are dropped; the new br carries `fwdArgIds` — the args fromBlockId's
+// own br was forwarding to toBlockId — so toBlockId's blockArgs see the
+// same values they would have via the bypassed hop.
+function retargetPredecessors(module StdModule, func IrFunction, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray)
+	if fromBlockId == toBlockId 'selfLoop'
+		return
+	end 'selfLoop'
+	for blockRef in func.blockRefs 'eachPred'
+		let predBlock = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
+		if predBlock.id == fromBlockId 'skipSelf'
+			continue
+		end 'skipSelf'
+		if not predBlock.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let termOp = try module.ops.get(predBlock.terminatorIndex()) otherwise panic("invariant: terminator opIdx not in module.ops")
+		let rewritten = rewriteTerminator(termOp, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
+		match rewritten 'apply'
+			none then break 'apply'
+			some(newOp) then module.setTerminator(predBlock, op: newOp)
+		end 'apply'
+	end 'eachPred'
+end 'retargetPredecessors'
+
+// Build the rewritten terminator op when any of its targets equal
+// `fromBlockId`. Returns `none` when the terminator does not branch to
+// the bypassed block (no rewrite needed).
+function rewriteTerminator(op StdOp, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
+	return match op 'outer'
+		control(c) gives rewriteControl(c, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
+		arith gives RewrittenTerminator.none
+		call gives RewrittenTerminator.none
+		memory gives RewrittenTerminator.none
+		system gives RewrittenTerminator.none
+	end 'outer'
+end 'rewriteTerminator'
+
+function rewriteControl(op StdControlOp, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
+	return match op 'inner'
+		br(target, _) gives rewriteBr(target, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives rewriteCondBr(condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
+	end 'inner'
+end 'rewriteControl'
+
+function rewriteBr(target BlockId, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
+	if target != fromBlockId 'noMatch'
+		return RewrittenTerminator.none
+	end 'noMatch'
+	logTrace(LogCategory.ir, message: () gives "dce: skip-through br block_{fromBlockId} -> block_{toBlockId}")
+	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(toBlockId, argIds: fwdArgIds)))
+end 'rewriteBr'
+
+function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
+	let newThen = toBlockId if thenTarget == fromBlockId else thenTarget
+	let newThenArgs = fwdArgIds if thenTarget == fromBlockId else thenArgIds
+	let newElse = toBlockId if elseTarget == fromBlockId else elseTarget
+	let newElseArgs = fwdArgIds if elseTarget == fromBlockId else elseArgIds
+	if newThen == thenTarget and newElse == elseTarget 'noChange'
+		return RewrittenTerminator.none
+	end 'noChange'
+	logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
+	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
+end 'rewriteCondBr'
+
+// Result of inspecting a block for skip-through eligibility: either it's
+// not bypassable, or it is — in which case we know its sole successor and
+// the args it forwards there.
+union BypassTarget
+	none
+	some(target BlockId, argIds ValueIdArray)
+end 'BypassTarget'
+
+// Result of attempting to retarget a single terminator op: either it
+// didn't reference the bypassed block, or we built a new op shape with
+// the substitution applied.
+union RewrittenTerminator
+	none
+	some(op StdOp)
+end 'RewrittenTerminator'
 
 // Remove blocks that are not reachable from the entry block via CFG edges.
 // Builds the CFG, DFS-marks reachable blocks, then filters func.blockRefs.

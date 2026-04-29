@@ -951,20 +951,81 @@ export type Parser
 	// name is currently resolvable — the TypeResolution pass walks the
 	// arena with cycle detection and emits E2012 for cyclic references.
 	//
-	// Grammar: integer literals, hex literals, `true`/`false`, `not <expr>`,
-	// `-<expr>`, identifier references, and `+` / `-` / `*` between operands
-	// of any of the above (with `*` binding tighter than `+`/`-`). This is a
-	// superset of `evalConstExpr` since deferred resolution gives top-level
-	// let initializers access to forward references and to `*`. Token shapes
-	// outside this grammar throw `ParserError.unhandledToken`, surfacing as
-	// the existing E2010 diagnostic.
+	// Grammar (precedence high → low): integer literals, hex literals,
+	// `true`/`false`, identifier references, `not <expr>`, `-<expr>`,
+	// `*`, `+` / `-`, comparison (`==` `!=` `<` `<=` `>` `>=`), `and`,
+	// `xor`, `or`. This mirrors the runtime expression precedence so a
+	// `let` written with the runtime grammar parses identically here.
+	// Token shapes outside this grammar throw `ParserError.unhandledToken`,
+	// surfacing as the existing E2010 diagnostic.
 	function parseConstExpr() returns UnresolvedConstExprId throws ParserError
-		let lhs = try parseConstMul()
-		return try parseConstAddTail(lhs)
+		return try parseConstOr()
 	end 'parseConstExpr'
 
-	function parseConstAddTail(lhs UnresolvedConstExprId) returns UnresolvedConstExprId throws ParserError
-		var acc = lhs
+	function parseConstOr() returns UnresolvedConstExprId throws ParserError
+		var acc = try parseConstXor()
+		while tokenIs(TokenKind.or) 'tail'
+			let rhs = try parseConstXor()
+			acc = appendConstExpr(UnresolvedConstExpr.logicalOr(left: acc, right: rhs))
+		end 'tail'
+		return acc
+	end 'parseConstOr'
+
+	function parseConstXor() returns UnresolvedConstExprId throws ParserError
+		var acc = try parseConstAnd()
+		while tokenIs(TokenKind.xor) 'tail'
+			let rhs = try parseConstAnd()
+			acc = appendConstExpr(UnresolvedConstExpr.logicalXor(left: acc, right: rhs))
+		end 'tail'
+		return acc
+	end 'parseConstXor'
+
+	function parseConstAnd() returns UnresolvedConstExprId throws ParserError
+		var acc = try parseConstCompare()
+		while tokenIs(TokenKind.and) 'tail'
+			let rhs = try parseConstCompare()
+			acc = appendConstExpr(UnresolvedConstExpr.logicalAnd(left: acc, right: rhs))
+		end 'tail'
+		return acc
+	end 'parseConstAnd'
+
+	// Comparison is non-associative — only one `cmp` may appear per
+	// expression, mirroring how the C# bootstrap rejects chained
+	// comparisons. Folds to `intValue(0)` / `intValue(1)` at evaluate time.
+	function parseConstCompare() returns UnresolvedConstExprId throws ParserError
+		let lhs = try parseConstAdd()
+
+		let opKind = cursor.current().kind
+		if not isConstCompareToken(opKind) 'noOp'
+			return lhs
+		end 'noOp'
+
+		try advance()
+		let rhs = try parseConstAdd()
+		return appendConstExpr(buildConstCompareNode(opKind, left: lhs, right: rhs))
+	end 'parseConstCompare'
+
+	function isConstCompareToken(kind TokenKind) returns bool
+		return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
+	end 'isConstCompareToken'
+
+	// Caller (parseConstCompare) guarantees `kind` passed isConstCompareToken;
+	// any other token is a dispatch bug, so panic surfaces it as a compiler
+	// invariant violation rather than a recoverable parse error.
+	function buildConstCompareNode(kind TokenKind, left UnresolvedConstExprId, right UnresolvedConstExprId) returns UnresolvedConstExpr
+		return match kind 'mk'
+			equalsEquals gives UnresolvedConstExpr.compareEq(left: left, right: right)
+			bangEquals gives UnresolvedConstExpr.compareNeq(left: left, right: right)
+			lessThan gives UnresolvedConstExpr.compareLt(left: left, right: right)
+			lessEquals gives UnresolvedConstExpr.compareLte(left: left, right: right)
+			greaterThan gives UnresolvedConstExpr.compareGt(left: left, right: right)
+			greaterEquals gives UnresolvedConstExpr.compareGte(left: left, right: right)
+			default panic("buildConstCompareNode: unexpected token kind {kind.name} — caller must filter via isConstCompareToken")
+		end 'mk'
+	end 'buildConstCompareNode'
+
+	function parseConstAdd() returns UnresolvedConstExprId throws ParserError
+		var acc = try parseConstMul()
 		while true 'tail'
 			if tokenIs(TokenKind.plus) 'isPlus'
 				let rhs = try parseConstMul()
@@ -977,7 +1038,7 @@ export type Parser
 			end 'done'
 		end 'tail'
 		return acc
-	end 'parseConstAddTail'
+	end 'parseConstAdd'
 
 	// Multiplication binds tighter than `+`/`-`, matching the runtime
 	// expression parser's precedence. Only `*` is captured here; `/` and

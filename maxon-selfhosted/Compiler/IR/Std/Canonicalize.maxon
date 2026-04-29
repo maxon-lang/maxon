@@ -2,7 +2,9 @@
 // Walks module -> functions -> blocks -> ops.
 // For each std.arith.binary where both operands are std.arith.const in the
 // same block, folds the computation into a new std.arith.const.
-// Currently folds: addI64, subI64, mulI64. All others are left as-is.
+// Folds every integer arith op that doesn't trap (add/sub/mul/and/or/xor/shl/shr
+// and the signed cmpI64* family); div/rem and the float arith / unsigned-cmp
+// opcodes are left as-is.
 // Also folds condBr terminators whose condition is a known integer constant
 // into unconditional branches. Dead block removal is left to the DCE pass.
 
@@ -158,7 +160,14 @@ function tryComputeFold(opcode StdArithBinaryOpcode, leftVal ParsedInt, rightVal
 		addI64 gives leftVal + rightVal
 		subI64 gives leftVal - rightVal
 		mulI64 gives leftVal * rightVal
-		divI64 to shrI64 gives CONST_UNKNOWN
+		divI64 gives CONST_UNKNOWN
+		remI64 gives CONST_UNKNOWN
+		andI64 gives leftVal and rightVal
+		orI64 gives leftVal or rightVal
+		orI1 gives leftVal or rightVal
+		xorI64 gives leftVal xor rightVal
+		shlI64 gives leftVal shl rightVal
+		shrI64 gives leftVal shr rightVal
 		addF64 to divF64 gives CONST_UNKNOWN
 		cmpI64Eq gives 1 if leftVal == rightVal else 0
 		cmpI64Ne gives 1 if leftVal != rightVal else 0

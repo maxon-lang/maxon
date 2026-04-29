@@ -1247,15 +1247,26 @@ function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExpr
 		add(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) + evalChildAsInt(project, exprId: right, evaluating: evaluating))
 		sub(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) - evalChildAsInt(project, exprId: right, evaluating: evaluating))
 		mul(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) * evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		compareEq(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) == evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareNeq(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) != evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareLt(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) < evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareLte(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) <= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareGt(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) > evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareGte(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) >= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		logicalAnd(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) and evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		logicalXor(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) xor evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		logicalOr(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) or evalChildAsInt(project, exprId: right, evaluating: evaluating))
 	end 'eval'
 end 'evaluateUnresolvedConstExpr'
 
-// Recursive helper used by every arithmetic / unary arm above. Composing
-// the eval-then-unwrap pair into one call keeps the match arms short and
-// keeps the "operand must be int" invariant in a single place. `negate` /
-// `notOp` / `add` / `sub` / `mul` nodes are only emitted after
-// parseConstAtom has accepted an int- or bool-typed atom, so reaching a
-// non-int operand here is an invariant violation, not a user error.
+// Recursive helper used by every arithmetic / unary / comparison /
+// logical arm above. Composing the eval-then-unwrap pair into one call
+// keeps the match arms short and keeps the "operand must be int"
+// invariant in a single place. Every binary / unary operator node in
+// `UnresolvedConstExpr` is only emitted after parseConstAtom has accepted
+// an int- or bool-typed atom (booleans are stored as `intValue(0|1)`),
+// so reaching a non-int operand here is an invariant violation, not a
+// user error.
 function evalChildAsInt(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns IntConstant
 	return match evaluateUnresolvedConstExpr(project, exprId: exprId, evaluating: evaluating) 'kind'
 		intValue(x) gives x

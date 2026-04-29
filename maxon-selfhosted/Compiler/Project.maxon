@@ -593,6 +593,25 @@ export union UnresolvedConstExpr
 	add(left UnresolvedConstExprId, right UnresolvedConstExprId)
 	sub(left UnresolvedConstExprId, right UnresolvedConstExprId)
 	mul(left UnresolvedConstExprId, right UnresolvedConstExprId)
+
+	// Comparison operators. Fold to `intValue(0)` / `intValue(1)` like
+	// `boolLit`, so a top-level `let IS_LARGE = 100 > 50` substitutes as
+	// `intValue(1)` at every read site — matching the existing boolean
+	// representation used by `if` / `and` / `or` lowering.
+	compareEq(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	compareNeq(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	compareLt(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	compareLte(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	compareGt(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	compareGte(left UnresolvedConstExprId, right UnresolvedConstExprId)
+
+	// Logical / bitwise `and` / `xor` / `or`. Booleans are stored as
+	// `intValue(0|1)`, so the integer bitwise operation produces the
+	// expected result for both bool and int operands. Precedence runs
+	// `and` > `xor` > `or`, matching the runtime expression grammar.
+	logicalAnd(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	logicalXor(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	logicalOr(left UnresolvedConstExprId, right UnresolvedConstExprId)
 end 'UnresolvedConstExpr'
 
 export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
