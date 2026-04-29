@@ -327,6 +327,12 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	if let constVal = try project.topLevelConstants.get(name) 'isConst'
 		match constVal 'inline'
 			intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range)
+			// Float-typed top-level constants store IEEE 754 raw bits in the
+			// same i64 slot used by MaxonOp.literal for floats. Rewrite to a
+			// literal op tagged with MaxonType.float so the producer-type
+			// fill-in pass populates downstream convert.fromType operands
+			// (e.g. trunc's implicit convert) with float.
+			floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: MaxonType.float)
 			// String constants resolve to a `stringConst` op carrying the
 			// interned StringId. A follow-up walk pattern-matches on
 			// `stringConst` producers to specialize printInt/cmp consumers
@@ -340,8 +346,8 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	reportUnknownName(project, name: name, filePath: filePath)
 end 'rewriteUnresolvedRead'
 
-function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, range SourceRange)
-	try module.ops.set(opIdx, value: MaxonOp.literal(result, value: value, valueType: MaxonType.integer, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+function rewriteToLiteral(module MaxonModule, opIdx OpIndex, result ByteArray, value IntConstant, range SourceRange, valueType MaxonType = MaxonType.integer)
+	try module.ops.set(opIdx, value: MaxonOp.literal(result, value: value, valueType: valueType, range: range)) otherwise panic("rewriteToLiteral: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 end 'rewriteToLiteral'
 
 function rewriteToStringConst(module MaxonModule, opIdx OpIndex, result ByteArray, stringId StringId, range SourceRange)
@@ -1154,6 +1160,137 @@ function validateSelfField(project Project, fieldName String, typeName String, s
 	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldName}' in type '{typeName}'", line: range.line, column: range.column, filePath: filePath)
 end 'validateSelfField'
 
+// --- Top-level let resolution ---
+//
+// The parser captures every top-level `let NAME = <init>` as an
+// `UnresolvedTopLevelLet` entry without resolving identifier references in
+// the initializer. This pass walks the registry with DFS + a visiting
+// stack, evaluates each initializer in dependency order, and populates
+// `project.topLevelConstants`. Cycles among let initializers surface as
+// E2012 (parserCircularDependency).
+//
+// Project-wide and idempotent: only the first call drains the registry;
+// later per-module calls walk an empty map.
+
+function resolveAllTopLevelLets(project Project)
+	if project.unresolvedTopLevelLets.count() == 0 'alreadyDone'
+		return
+	end 'alreadyDone'
+
+	var evaluating = StringArray.create()
+
+	// Snapshot key set up-front: we'll be removing entries as we evaluate
+	// them, and iterating-while-removing is unsafe for the underlying map.
+	var names = StringArray.create()
+	for (name, _) in project.unresolvedTopLevelLets 'collect'
+		names.push(name)
+	end 'collect'
+
+	for name in names 'evalEach'
+		_ = evaluateTopLevelLet(project, name: name, evaluating: evaluating)
+	end 'evalEach'
+
+	// Drain anything still left (cycle victims): we leave them out of
+	// `topLevelConstants`, so downstream `rewriteUnresolvedRead` reports
+	// the standard "Undefined name" diagnostic for any reader that survives
+	// the parser-stage error gate.
+	var leftover = StringArray.create()
+	for (name, _) in project.unresolvedTopLevelLets 'collectLeft'
+		leftover.push(name)
+	end 'collectLeft'
+	for name in leftover 'drop'
+		_ = project.unresolvedTopLevelLets.remove(name)
+	end 'drop'
+end 'resolveAllTopLevelLets'
+
+// Evaluate a single top-level let by name. Returns an empty option-like
+// signal via the bool return: true on successful evaluation (result is in
+// `topLevelConstants`), false on cycle / unknown-name (caller can ignore).
+// `evaluating` is the DFS visit stack; the cycle diagnostic lists every
+// name on the stack joined with ", " — matching the C# bootstrap's output
+// at maxon-sharp/Compiler/2-Parser.cs:4517-4521.
+function evaluateTopLevelLet(project Project, name String, evaluating StringArray) returns ConstantValue
+	if let cached = try project.topLevelConstants.get(name) 'cached'
+		return cached
+	end 'cached'
+
+	let entry = try project.unresolvedTopLevelLets.get(name) otherwise return ConstantValue.intValue(0)
+
+	if evaluating.contains(name) 'cycle'
+		let cycleNames = joinStringArray(evaluating, sep: ", ")
+		reportCompileError(project, code: ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {cycleNames}", line: entry.line, column: entry.column, filePath: entry.filePath)
+		return ConstantValue.intValue(0)
+	end 'cycle'
+
+	evaluating.push(name)
+	let result = evaluateUnresolvedConstExpr(project, exprId: entry.rootExprId, evaluating: evaluating)
+	_ = try evaluating.pop() otherwise panic("evaluateTopLevelLet: stack underflow popping '{name}'")
+
+	try project.topLevelConstants.insert(name, value: result) otherwise ignore
+	_ = project.unresolvedTopLevelLets.remove(name)
+	return result
+end 'evaluateTopLevelLet'
+
+// Walk the expression arena recursively. Literal arms return their value
+// directly; `nameRef(target)` recurses into `evaluateTopLevelLet` so cycle
+// detection composes naturally.
+function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns ConstantValue
+	let node = try project.unresolvedConstExprs.get(exprId) otherwise panic("evaluateUnresolvedConstExpr: arena get OOB at id={exprId}")
+	return match node 'eval'
+		intLit(value) gives ConstantValue.intValue(value)
+		boolLit(value) gives ConstantValue.intValue(1 if value else 0)
+		stringLit(stringId) gives ConstantValue.stringValue(stringId)
+		floatLit(bits) gives ConstantValue.floatValue(bits)
+		nameRef(target) gives evaluateTopLevelLet(project, name: target, evaluating: evaluating)
+		negate(operand) gives negateConstantValue(evaluateUnresolvedConstExpr(project, exprId: operand, evaluating: evaluating))
+		notOp(operand) gives notConstantValue(evaluateUnresolvedConstExpr(project, exprId: operand, evaluating: evaluating))
+		add(left, right) gives addConstantValues(evaluateUnresolvedConstExpr(project, exprId: left, evaluating: evaluating), b: evaluateUnresolvedConstExpr(project, exprId: right, evaluating: evaluating))
+		sub(left, right) gives subConstantValues(evaluateUnresolvedConstExpr(project, exprId: left, evaluating: evaluating), b: evaluateUnresolvedConstExpr(project, exprId: right, evaluating: evaluating))
+	end 'eval'
+end 'evaluateUnresolvedConstExpr'
+
+// `negate` / `notOp` / `add` / `sub` nodes are emitted only after parseConstAtom
+// has accepted an int- or bool-typed atom. String / float operands therefore
+// can't reach these helpers; mismatched operand types are an invariant
+// violation, not a user error, and panic loudly so the bug surfaces in tests
+// instead of silently folding to zero.
+function intValueOrPanic(v ConstantValue) returns IntConstant
+	return match v 'kind'
+		intValue(x) gives x
+		default panic("const folder reached non-int operand: only intValue arms are valid for arithmetic / unary const folding")
+	end 'kind'
+end 'intValueOrPanic'
+
+function negateConstantValue(v ConstantValue) returns ConstantValue
+	return ConstantValue.intValue(0 - intValueOrPanic(v))
+end 'negateConstantValue'
+
+function notConstantValue(v ConstantValue) returns ConstantValue
+	return ConstantValue.intValue(not intValueOrPanic(v))
+end 'notConstantValue'
+
+function addConstantValues(a ConstantValue, b ConstantValue) returns ConstantValue
+	return ConstantValue.intValue(intValueOrPanic(a) + intValueOrPanic(b))
+end 'addConstantValues'
+
+function subConstantValues(a ConstantValue, b ConstantValue) returns ConstantValue
+	return ConstantValue.intValue(intValueOrPanic(a) - intValueOrPanic(b))
+end 'subConstantValues'
+
+function joinStringArray(arr StringArray, sep String) returns String
+	var result = ""
+	var first = true
+	for s in arr 'each'
+		if first 'isFirst'
+			result = "{s}"
+			first = false
+		end 'isFirst' else 'rest'
+			result = "{result}{sep}{s}"
+		end 'rest'
+	end 'each'
+	return result
+end 'joinStringArray'
+
 // --- Pass entry ---
 
 // Drains the project-wide unresolved-typealias registry, then walks the
@@ -1165,6 +1302,7 @@ end 'validateSelfField'
 // module's call does real work, every later module-level call walks an
 // empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+	resolveAllTopLevelLets(project)
 	resolveAllTypealiases(project)
 
 	for opIdx in 0 upto module.ops.count() 'rewriteUnresolved'
@@ -1206,6 +1344,13 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 
 	validateSelfFields(project, module: module, filePath: filePath)
 
+	// Reject calls / methodCalls whose argument count exceeds the registered
+	// signature's user-param slot count. Without this, lowering trusts the
+	// caller's arg vector and panics in the backend when the slot index walks
+	// off the end of paramTypes. Runs per-function so receiver types can be
+	// looked up against the same producer-type map fillUnresolvedTypes built.
+	validateCallArities(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'
@@ -1222,3 +1367,61 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 		end 'isCmp'
 	end 'validateOps'
 end 'runTypeResolution'
+
+// --- Arity validation ---
+//
+// Walks every function once, looks up each `call` / `methodCall` op's
+// signature in `project.funcSignatures`, and reports E3036 when the source
+// arg count exceeds the user-param-slot count (signature param count minus
+// the receiver/self slot offset). Calls / methods with no registered
+// signature (interface dispatch, missing functions) are skipped — those
+// fall through lowering's no-signature path which doesn't panic.
+function validateCallArities(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateCallArities: funcIdx < count but get failed")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateCallArities: producerTypesPerFunc.get({funcIdx}) failed")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateCallArities: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateCallArities: opIdx OOB")
+				validateCallArityOp(project, op: op, producerTypes: producerTypes, currentNamespace: func.namespace, filePath: filePath)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateCallArities'
+
+function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, filePath FilePath)
+	if op.name == "call" 'isCall'
+		match op 'extractCall'
+			call(_, callee, callContext, args, _, _, _, range) then checkCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace), userArgCount: args.count(), paramStartIndex: 0, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == call")
+		end 'extractCall'
+	end 'isCall'
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'extractMethod'
+			methodCall(_, receiver, methodName, args, _, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, userArgCount: args.count(), range: range, filePath: filePath)
+			default panic("unreachable: already checked name == methodCall")
+		end 'extractMethod'
+	end 'isMethodCall'
+end 'validateCallArityOp'
+
+function checkMethodCallArity(project Project, receiverType MaxonType, methodName ByteArray, userArgCount ParsedInt, range SourceRange, filePath FilePath)
+	let structName = maxonTypeStructName(project, t: receiverType)
+	if structName.isEmpty() 'noStruct'
+		return
+	end 'noStruct'
+	let qualifiedCallee = "{structName}.{String.from(methodName)}"
+	checkCallArity(project, qualifiedCallee: qualifiedCallee, userArgCount: userArgCount, paramStartIndex: 1, range: range, filePath: filePath)
+end 'checkMethodCallArity'
+
+function checkCallArity(project Project, qualifiedCallee String, userArgCount ParsedInt, paramStartIndex ParsedInt, range SourceRange, filePath FilePath)
+	let signature = try project.funcSignatures.get(qualifiedCallee) otherwise return
+	let userParamCount = signature.paramNames.count() - paramStartIndex
+	if userParamCount < 0 'badSig'
+		return
+	end 'badSig'
+	if userArgCount <= userParamCount 'inRange'
+		return
+	end 'inRange'
+	reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "too many arguments to '{qualifiedCallee}': expected {userParamCount}, got at least {userArgCount}", line: range.line, column: range.column, filePath: filePath)
+end 'checkCallArity'

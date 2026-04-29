@@ -76,10 +76,9 @@ end 'main'
 <!-- test: basic-float-constant -->
 ```maxon
 let PI = 3.14
-let PI_INT = 3
 
 function main() returns ExitCode
-	return PI_INT
+	return trunc(PI)
 end 'main'
 ```
 ```exitcode
@@ -230,18 +229,20 @@ end 'main'
 <!-- test: function-call-in-constant-error -->
 Function calls are not allowed in constant expressions.
 ```maxon
-fn compute() -> Int
+typealias Integer = int(i64.min to i64.max)
+
+function compute() returns Integer
 	return 42
-end
+end 'compute'
 
 let RESULT = compute()
 
-fn main()
-	println(RESULT)
-end
+function main() returns ExitCode
+	return RESULT
+end 'main'
 ```
 ```maxoncstderr
-error E2045: specs/fragments/top-level-let/function-call-in-constant-error.test:6:14: Function calls are not allowed in global variable initializers; 'compute()' is not a constant expression
+error E2045: specs/fragments/top-level-let/function-call-in-constant-error.test:8:14: Function calls are not allowed in global variable initializers; 'compute()' is not a constant expression
 ```
 
 <!-- test: circular-dependency-error -->

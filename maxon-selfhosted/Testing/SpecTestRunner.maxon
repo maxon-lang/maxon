@@ -37,17 +37,16 @@ let whitelist = ["basics",
 	"implicit-type-conversion",
 	"type-alias-resolution",
 	"namespaces",
-	// "multi-file",
-	// "stdlib-basic",
-	// "stdlib-autodiscovery",
-	// "export-keyword",
-	// "top-level-let",
+	"top-level-let",
 	// "static-variables",
 	// "bitwise-operators",
 	// "pair",
+	// "stdlib-basic",
+	// "stdlib-autodiscovery",
 	// "equatable",
 	// "enums-simple",
 	// "match-simple",
+	// "export-keyword",
 	// "lexer-parser-robustness",
 	// "error-handling",
 	// "closures",
@@ -362,7 +361,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 			let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
 				logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
 				specFailed = specFailed + 1
-				specFailures.push("specs/fragments-{targetKey}/{specName}/{test.name}.test")
+				specFailures.push(fragPath.toString())
 				specFailures.push("  Failed to parse fragment file")
 				continue
 			end 'parseFailed'
@@ -376,7 +375,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 				specPassed = specPassed + 1
 			end 'pass' else 'fail'
 				specFailed = specFailed + 1
-				specFailures.push("specs/fragments-{targetKey}/{specName}/{result.testName}.test")
+				specFailures.push(fragPath.toString())
 				if not result.errorMessage.isEmpty() 'hasErr'
 					specFailures.push("  {result.errorMessage}")
 				end 'hasErr'
@@ -655,7 +654,9 @@ end 'sliceFromBytePos'
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
 	let tempDir = projectRoot.join("temp")
-	let tempSource = tempDir.join("{fragment.testName}.test")
+	// virtualPath ends up embedded in compiler error messages, so point it at
+	// the on-disk fragment we just wrote — readers can open the path verbatim.
+	let virtualSourcePath = try FilePath.from(fragment.filePath) otherwise tempDir.join("{fragment.testName}.test")
 	let ext = executableExtension(target)
 	let testName = fragment.testName
 
@@ -680,7 +681,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Compile source directly from memory, capturing any error output
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
-	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: outputExe, coverage: false, covMapPath: outputExe.changeExtension(".covmap")) otherwise 'compileFailed'
+	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: outputExe.changeExtension(".covmap")) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'

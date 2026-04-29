@@ -640,16 +640,18 @@ error E2013: specs/fragments/static-variables/top-level-let-struct-reassign-erro
 <!-- test: top-level-var-function-call-error -->
 Function calls are not allowed in module-level `var` initializers.
 ```maxon
-fn getDefault() -> Int
+typealias Integer = int(i64.min to i64.max)
+
+function getDefault() returns Integer
 	return 42
-end
+end 'getDefault'
 
 var value = getDefault()
 
-fn main()
-	println(value)
-end
+function main() returns ExitCode
+	return value
+end 'main'
 ```
 ```maxoncstderr
-error E2045: specs/fragments/static-variables/top-level-var-function-call-error.test:6:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
+error E2045: specs/fragments/static-variables/top-level-var-function-call-error.test:8:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
 ```

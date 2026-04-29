@@ -22,6 +22,30 @@ export type Target
 	end 'create'
 end 'Target'
 
+// --- Cache codecs ---
+// Both CpuArch and Os are simple enums, so the codec is the collapsed
+// one-line form: write the rawValue, lift through fromRawValue on read.
+
+export function writeCpuArch(buf ByteArray, cpu CpuArch)
+	writeDword(buf, value: cpu.rawValue)
+end 'writeCpuArch'
+
+export function readCpuArch(buf ByteArray, offset ByteOffset) returns (CpuArch, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let cpu = try CpuArch.fromRawValue(raw) otherwise panic("corrupt cache: unknown CpuArch tag {raw}")
+	return (cpu, offset + 4)
+end 'readCpuArch'
+
+export function writeOs(buf ByteArray, os Os)
+	writeDword(buf, value: os.rawValue)
+end 'writeOs'
+
+export function readOs(buf ByteArray, offset ByteOffset) returns (Os, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let os = try Os.fromRawValue(raw) otherwise panic("corrupt cache: unknown Os tag {raw}")
+	return (os, offset + 4)
+end 'readOs'
+
 export function detectHostTarget() returns Target
 	#if os(Windows)
 		let hostOs = Os.windows

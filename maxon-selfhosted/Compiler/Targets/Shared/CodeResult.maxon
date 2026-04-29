@@ -39,6 +39,41 @@ export union RdataRelocKind
 	covdataArm64Adr
 end 'RdataRelocKind'
 
+// --- Cache codec ---
+// All variants are bare, so the codec writes the discriminant via .unionCases
+// and lifts back through fromRawValue. Both writer and reader are exhaustive.
+
+export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
+	match kind 'tag'
+		ripRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.ripRelDisp32.rawValue)
+		symdataRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.symdataRipRelDisp32.rawValue)
+		dataSectionRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.dataSectionRipRelDisp32.rawValue)
+		covdataRipRelDisp32 then writeDword(buf, value: RdataRelocKind.unionCases.covdataRipRelDisp32.rawValue)
+		arm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.arm64Adr.rawValue)
+		arm64LdrLiteral then writeDword(buf, value: RdataRelocKind.unionCases.arm64LdrLiteral.rawValue)
+		symdataArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.symdataArm64Adr.rawValue)
+		dataSectionArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.dataSectionArm64Adr.rawValue)
+		covdataArm64Adr then writeDword(buf, value: RdataRelocKind.unionCases.covdataArm64Adr.rawValue)
+	end 'tag'
+end 'writeRdataRelocKind'
+
+export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try RdataRelocKind.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown RdataRelocKind tag {raw}")
+	match kase 'tag'
+		ripRelDisp32 then return (RdataRelocKind.ripRelDisp32, pos)
+		symdataRipRelDisp32 then return (RdataRelocKind.symdataRipRelDisp32, pos)
+		dataSectionRipRelDisp32 then return (RdataRelocKind.dataSectionRipRelDisp32, pos)
+		covdataRipRelDisp32 then return (RdataRelocKind.covdataRipRelDisp32, pos)
+		arm64Adr then return (RdataRelocKind.arm64Adr, pos)
+		arm64LdrLiteral then return (RdataRelocKind.arm64LdrLiteral, pos)
+		symdataArm64Adr then return (RdataRelocKind.symdataArm64Adr, pos)
+		dataSectionArm64Adr then return (RdataRelocKind.dataSectionArm64Adr, pos)
+		covdataArm64Adr then return (RdataRelocKind.covdataArm64Adr, pos)
+	end 'tag'
+end 'readRdataRelocKind'
+
 // A relocation from code to a data section (.rdata, .symtab, .data, or .covdata).
 // For rdata kinds: rdataLabel names the global data entry, rdataOffset is resolved during serialization.
 // For symdata kinds: points to the base of the .symtab section (rdataOffset unused).

@@ -151,6 +151,91 @@ export function maxonReturnTypeName(project Project, ref MaxonReturnType) return
 	end 'name'
 end 'maxonReturnTypeName'
 
+// --- Cache codecs ---
+//
+// Symmetric (de)serialization for MaxonType / MaxonReturnType using the
+// .unionCases pattern: writers match on the value (exhaustive), readers
+// lift the raw int through fromRawValue and match on the resulting
+// .unionCases enum (also exhaustive). Adding a variant to either union
+// produces non-exhaustive-match errors on both sides until the codec is
+// updated. See specs/union-cases.md for the contract.
+//
+// Match arms accept only a single statement; multi-line arm bodies are
+// extracted into write*/return* helpers.
+
+function writeMaxonTypeTag(buf ByteArray, kase MaxonType.unionCases)
+	writeDword(buf, value: kase.rawValue)
+end 'writeMaxonTypeTag'
+
+function writeMaxonTypeNamed(project Project, buf ByteArray, id TypeNameId)
+	writeMaxonTypeTag(buf, kase: MaxonType.unionCases.named)
+	writeString(buf, s: project.typeNames.get(id))
+end 'writeMaxonTypeNamed'
+
+export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
+	match t 'tag'
+		// `unresolved` should never reach the cache: this serializer is only
+		// invoked for declaration-site types (struct fields, function signatures),
+		// which the parser fills with concrete primitives or named refs.
+		unresolved then panic("writeMaxonType: MaxonType.unresolved cannot be cached — declaration sites (struct fields, function signatures) reach this serializer with concrete types only")
+		boolean then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.boolean)
+		integer then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.integer)
+		float then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.float)
+		string then writeMaxonTypeTag(buf, kase: MaxonType.unionCases.string)
+		named(id) then writeMaxonTypeNamed(project, buf: buf, id: id)
+	end 'tag'
+end 'writeMaxonType'
+
+function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let (name, nextPos) = readString(buf, offset: offset)
+	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
+end 'readMaxonTypeNamed'
+
+export function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try MaxonType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonType tag {raw}")
+	match kase 'tag'
+		boolean then return (MaxonType.boolean, pos)
+		integer then return (MaxonType.integer, pos)
+		float then return (MaxonType.float, pos)
+		string then return (MaxonType.string, pos)
+		named then return readMaxonTypeNamed(project, buf: buf, offset: pos)
+		unresolved then panic("readMaxonType: cache contains MaxonType.unresolved — should never have been written")
+	end 'tag'
+end 'readMaxonType'
+
+function writeMaxonReturnTypeTag(buf ByteArray, kase MaxonReturnType.unionCases)
+	writeDword(buf, value: kase.rawValue)
+end 'writeMaxonReturnTypeTag'
+
+function writeMaxonReturnTypeValue(project Project, buf ByteArray, inner MaxonType)
+	writeMaxonReturnTypeTag(buf, kase: MaxonReturnType.unionCases.value)
+	writeMaxonType(project, buf: buf, t: inner)
+end 'writeMaxonReturnTypeValue'
+
+export function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType)
+	match rt 'tag'
+		void then writeMaxonReturnTypeTag(buf, kase: MaxonReturnType.unionCases.void)
+		value(inner) then writeMaxonReturnTypeValue(project, buf: buf, inner: inner)
+	end 'tag'
+end 'writeMaxonReturnType'
+
+function readMaxonReturnTypeValue(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
+	let (inner, nextPos) = readMaxonType(project, buf: buf, offset: offset)
+	return (MaxonReturnType.value(inner), nextPos)
+end 'readMaxonReturnTypeValue'
+
+export function readMaxonReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try MaxonReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown MaxonReturnType tag {raw}")
+	match kase 'tag'
+		void then return (MaxonReturnType.void, pos)
+		value then return readMaxonReturnTypeValue(project, buf: buf, offset: pos)
+	end 'tag'
+end 'readMaxonReturnType'
+
 // --- Op kinds ---
 
 export union BinOpKind

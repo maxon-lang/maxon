@@ -15,11 +15,11 @@ let CACHE_MAGIC_1 = 0x58  // 'X'
 let CACHE_MAGIC_2 = 0x43  // 'C'
 let CACHE_MAGIC_3 = 0x00  // '\0'
 
-// Bumped from 2 to 3 when `nextValueId` was removed: SSA numbering is now
-// assigned per function at the Maxon→Std lowering boundary, so there is no
-// project-level counter to persist across builds. Cache files written by
-// older compilers will fail the version check below and be rebuilt.
-let CACHE_FORMAT_VERSION = 3
+// Bumped from 3 to 4 alongside the codec migration to .unionCases-based
+// (de)serialization. The on-disk encoding is identical to v3 (same tag
+// values, same payload layout), but bumping is cheap insurance against
+// any subtle drift introduced when codecs were relocated and rewritten.
+let CACHE_FORMAT_VERSION = 4
 
 // ============================================================
 // Types
@@ -141,220 +141,6 @@ export function getCompilerFingerprint() returns (MachineWord, MachineWord)
 
 	return (info.size, info.modifiedTime)
 end 'getCompilerFingerprint'
-
-// ============================================================
-// Serialization helpers
-// ============================================================
-
-function writeString(buf ByteArray, s String)
-	let bytes = s.toByteArray()
-	writeDword(buf, value: bytes.count())
-	buf.append(bytes)
-end 'writeString'
-
-function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset)
-	let len = readDword(buf, offset: offset)
-	var pos = offset + 4
-
-	if len == 0 'empty'
-		return ("", pos)
-	end 'empty'
-
-	let endPos = pos + len
-	var bytes = ByteArray.create()
-	bytes.reserve(len)
-
-	while pos < endPos 'copy'
-		let b = try buf.get(pos) otherwise panic("readString: pos < endPos just succeeded but buf.get({pos}) failed (buf.count={buf.count()}, endPos={endPos})")
-		bytes.push(b)
-		pos = pos + 1
-	end 'copy'
-
-	return (String.from(bytes), endPos)
-end 'readString'
-
-function writeStdTypeTag(buf ByteArray, t StdType)
-	writeDword(buf, value: t.ordinal)
-end 'writeStdTypeTag'
-
-function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	let t = try StdType.allCases.get(tag) otherwise panic("readStdTypeTag: unknown tag {tag} — corrupt cache file")
-	return (t, offset + 4)
-end 'readStdTypeTag'
-
-function writeMaxonType(project Project, buf ByteArray, t MaxonType)
-	// `unresolved` should never reach the cache: this serializer is only
-	// invoked for declaration-site types (struct fields, function signatures),
-	// and the parser fills those in with concrete primitives or named refs.
-	match t 'unresolvedGuard'
-		unresolved then panic("writeMaxonType: MaxonType.unresolved cannot be cached — declaration sites (struct fields, function signatures) reach this serializer with concrete types only")
-		boolean then writeDword(buf, value: 0)
-		integer then writeDword(buf, value: 1)
-		float then writeDword(buf, value: 2)
-		named then writeDwordAndName(project, buf: buf, t: t)
-		string then writeDword(buf, value: 4)
-	end 'unresolvedGuard'
-end 'writeMaxonType'
-
-function writeDwordAndName(project Project, buf ByteArray, t MaxonType)
-	writeDword(buf, value: 3)
-	let name = t.nameOrEmpty(project)
-	writeString(buf, s: name)
-end 'writeDwordAndName'
-
-function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	var pos = offset + 4
-
-	if tag == 0 'isBool'
-		return (MaxonType.boolean, pos)
-	end 'isBool'
-
-	if tag == 1 'isInt'
-		return (MaxonType.integer, pos)
-	end 'isInt'
-
-	if tag == 2 'isFloat'
-		return (MaxonType.float, pos)
-	end 'isFloat'
-
-	if tag == 4 'isString'
-		return (MaxonType.string, pos)
-	end 'isString'
-
-	if tag != 3 'unknownTag'
-		panic("readMaxonType: unknown tag {tag} — corrupt cache file")
-	end 'unknownTag'
-
-	let (name, nextPos) = readString(buf, offset: pos)
-	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
-end 'readMaxonType'
-
-function writeMaxonReturnType(project Project, buf ByteArray, rt MaxonReturnType)
-	if maxonReturnTypeIsVoid(rt) 'isVoid'
-		writeDword(buf, value: 0)
-	end 'isVoid' else 'hasValue'
-		writeDword(buf, value: 1)
-		let inner = match rt 'getInner'
-			void gives MaxonType.boolean
-			value(inner) gives inner
-		end 'getInner'
-		writeMaxonType(project, buf: buf, t: inner)
-	end 'hasValue'
-end 'writeMaxonReturnType'
-
-function readMaxonReturnType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonReturnType, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	var pos = offset + 4
-
-	if tag == 0 'isVoid'
-		return (MaxonReturnType.void, pos)
-	end 'isVoid'
-
-	if tag != 1 'unknownTag'
-		panic("readMaxonReturnType: unknown tag {tag} — corrupt cache file")
-	end 'unknownTag'
-
-	let (inner, nextPos) = readMaxonType(project, buf: buf, offset: pos)
-	return (MaxonReturnType.value(inner), nextPos)
-end 'readMaxonReturnType'
-
-function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
-	let tag = match kind 'toTag'
-		ripRelDisp32 gives 0
-		symdataRipRelDisp32 gives 1
-		dataSectionRipRelDisp32 gives 2
-		covdataRipRelDisp32 gives 3
-		arm64Adr gives 4
-		arm64LdrLiteral gives 5
-		symdataArm64Adr gives 6
-		dataSectionArm64Adr gives 7
-		covdataArm64Adr gives 8
-	end 'toTag'
-	writeDword(buf, value: tag)
-end 'writeRdataRelocKind'
-
-function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	let kind = match tag 'fromTag'
-		0 gives RdataRelocKind.ripRelDisp32
-		1 gives RdataRelocKind.symdataRipRelDisp32
-		2 gives RdataRelocKind.dataSectionRipRelDisp32
-		3 gives RdataRelocKind.covdataRipRelDisp32
-		4 gives RdataRelocKind.arm64Adr
-		5 gives RdataRelocKind.arm64LdrLiteral
-		6 gives RdataRelocKind.symdataArm64Adr
-		7 gives RdataRelocKind.dataSectionArm64Adr
-		8 gives RdataRelocKind.covdataArm64Adr
-		default panic("readRdataRelocKind: unknown tag {tag} — corrupt cache file")
-	end 'fromTag'
-	return (kind, offset + 4)
-end 'readRdataRelocKind'
-
-function writeStdReturnType(buf ByteArray, rt StdReturnType)
-	if stdReturnTypeIsVoid(rt) 'isVoid'
-		writeDword(buf, value: 0)
-	end 'isVoid' else 'hasValue'
-		writeDword(buf, value: 1)
-		let inner = match rt 'getInner'
-			void gives StdType.i64
-			value(inner) gives inner
-		end 'getInner'
-		writeStdTypeTag(buf, t: inner)
-	end 'hasValue'
-end 'writeStdReturnType'
-
-function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
-	let tag = readDword(buf, offset: offset)
-	var pos = offset + 4
-
-	if tag == 0 'isVoid'
-		return (StdReturnType.void, pos)
-	end 'isVoid'
-
-	if tag != 1 'unknownTag'
-		panic("readStdReturnType: unknown tag {tag} — corrupt cache file")
-	end 'unknownTag'
-
-	let (inner, nextPos) = readStdTypeTag(buf, offset: pos)
-	return (StdReturnType.value(inner), nextPos)
-end 'readStdReturnType'
-
-function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
-	let tag = match cv 'getTag'
-		stringValue gives 0
-		intValue gives 1
-	end 'getTag'
-	writeDword(buf, value: tag)
-
-	match cv 'writeVal'
-		// Cache stores the resolved bytes, not the project-local
-		// StringId — the id space is per-Project and would be
-		// meaningless to a fresh project that loads the cache.
-		stringValue(stringId) then writeString(buf, s: project.strings.get(stringId))
-		intValue(value) then writeQword(buf, value: value)
-	end 'writeVal'
-end 'writeConstantValue'
-
-function writeCpuArch(buf ByteArray, cpu CpuArch)
-	let tag = match cpu 'toTag'
-		x64 gives 0
-		arm64 gives 1
-		wasm32 gives 2
-	end 'toTag'
-	writeDword(buf, value: tag)
-end 'writeCpuArch'
-
-function writeOs(buf ByteArray, os Os)
-	let tag = match os 'toTag'
-		windows gives 0
-		linux gives 1
-		macos gives 2
-		wasi gives 3
-	end 'toTag'
-	writeDword(buf, value: tag)
-end 'writeOs'
 
 // ============================================================
 // Write cache
@@ -570,21 +356,10 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	end 'staleCompiler'
 
 	// Target
-	let cachedCpu = readDword(buf, offset: 24)
-	let cachedOs = readDword(buf, offset: 28)
-	let expectedCpu = match target.cpu 'cpuTag'
-		x64 gives 0
-		arm64 gives 1
-		wasm32 gives 2
-	end 'cpuTag'
-	let expectedOs = match target.os 'osTag'
-		windows gives 0
-		linux gives 1
-		macos gives 2
-		wasi gives 3
-	end 'osTag'
+	let (cachedCpu, _) = readCpuArch(buf, offset: 24)
+	let (cachedOs, _) = readOs(buf, offset: 28)
 
-	if cachedCpu != expectedCpu or cachedOs != expectedOs 'badTarget'
+	if cachedCpu.rawValue != target.cpu.rawValue or cachedOs.rawValue != target.os.rawValue 'badTarget'
 		return invalid
 	end 'badTarget'
 
@@ -820,21 +595,9 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	for _ in 0 upto constCount 'eachConst'
 		let (name, p14) = readString(buf, offset: pos)
 		pos = p14
-		let constTag = readDword(buf, offset: pos)
-		pos = pos + 4
-
-		if constTag == 0 'isString'
-			let (strVal, p15) = readString(buf, offset: pos)
-			pos = p15
-			let stringId = project.strings.intern(strVal)
-			try data.topLevelConstants.insert(name, value: ConstantValue.stringValue(stringId)) otherwise ignore
-		end 'isString' else if constTag == 1 'isInt'
-			let intVal = readQword(buf, offset: pos)
-			pos = pos + 8
-			try data.topLevelConstants.insert(name, value: ConstantValue.intValue(intVal)) otherwise ignore
-		end 'isInt' else 'unknownConst'
-			panic("readStdlibCache: unknown constant tag {constTag} — corrupt cache file")
-		end 'unknownConst'
+		let (cv, p15) = readConstantValue(project, buf: buf, offset: pos)
+		pos = p15
+		try data.topLevelConstants.insert(name, value: cv) otherwise ignore
 	end 'eachConst'
 
 	return StdlibCacheResult.create(data, valid: true)

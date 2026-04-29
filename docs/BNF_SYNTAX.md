@@ -283,7 +283,7 @@ raw_field_init
 
 ### 3.5 Union Declaration
 
-Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases`, since cases may carry associated values.
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly, but expose a synthesized `.unionCases` companion enum — `U.unionCases` is an int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization.
 
 ```
 union_decl    = visibility_prefix 'union' IDENTIFIER
@@ -755,6 +755,9 @@ field_init    = IDENTIFIER ':' expression
 enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
               | IDENTIFIER '.' 'allCases'                            (* Array of all cases — enums only *)
               | IDENTIFIER '.' 'allCaseNames'                        (* Array with String of case names — enums and unions *)
+              | IDENTIFIER '.' 'unionCases' '.' IDENTIFIER           (* synthesized discriminant-enum case — unions only *)
+              | IDENTIFIER '.' 'unionCases' '.' 'allCases'           (* Array of all discriminant cases — unions only *)
+              | IDENTIFIER '.' 'unionCases' '.' 'fromRawValue' '(' expression ')'  (* lift int discriminant to companion enum *)
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 

@@ -1422,7 +1422,7 @@ end 'HttpError'
 
 Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
 
-Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values.
+Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values; use `.unionCases` to access the discriminant as a first-class enum (see [Union Cases](#union-cases-discriminant-as-an-enum) below).
 
 ### Simple Unions
 
@@ -1588,6 +1588,78 @@ end 'FileError'
 
 **Notes:**
 - The `Error` interface can be implemented by enums or unions (not types/structs)
+
+### Union Cases (Discriminant as an Enum)
+
+Every `union` has a compiler-synthesized companion type `U.unionCases` — a simple integer-backed enum with one bare case per variant of `U`, in declaration order. It is the union's discriminant exposed as a first-class enum value.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+// Shape.unionCases is conceptually:
+//   enum Shape.unionCases
+//     circle    // rawValue 0
+//     square    // rawValue 1
+//     point     // rawValue 2
+//   end
+```
+
+Because `U.unionCases` is a regular enum it inherits all of the standard enum machinery: `.allCases`, `.allCaseNames`, `.rawValue`, `.fromRawValue`, `.fromName`, `.name`, and `.ordinal`. Match arms over a `U.unionCases` value are exhaustiveness-checked, just like match arms over the union itself.
+
+The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw integer back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Match arms are single-statement, so multi-step writers and readers extract per-variant helpers:
+
+```maxon
+function writeShapeCircle(buf ByteArray, radius Integer)
+	writeDword(buf, value: Shape.unionCases.circle.rawValue)
+	writeQword(buf, value: radius)
+end 'writeShapeCircle'
+
+function writeShapeSquare(buf ByteArray, side Integer)
+	writeDword(buf, value: Shape.unionCases.square.rawValue)
+	writeQword(buf, value: side)
+end 'writeShapeSquare'
+
+function writeShape(buf ByteArray, value Shape)
+	match value 'tag'
+		circle(r) then writeShapeCircle(buf, radius: r)
+		square(s) then writeShapeSquare(buf, side: s)
+		point then writeDword(buf, value: Shape.unionCases.point.rawValue)
+	end 'tag'
+end 'writeShape'
+
+function readShapeCircle(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
+	let radius = readQword(buf, offset: offset)
+	return (Shape.circle(radius), offset + 8)
+end 'readShapeCircle'
+
+function readShapeSquare(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
+	let side = readQword(buf, offset: offset)
+	return (Shape.square(side), offset + 8)
+end 'readShapeSquare'
+
+function readShape(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try Shape.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown Shape tag {raw}")
+	match kase 'tag'
+		circle then return readShapeCircle(buf, offset: pos)
+		square then return readShapeSquare(buf, offset: pos)
+		point then return (Shape.point, pos)
+	end 'tag'
+end 'readShape'
+```
+
+Both `match` statements are exhaustiveness-checked: the writer matches over a `Shape` value, the reader matches over a `Shape.unionCases` value. Adding a new variant to `Shape` automatically extends `Shape.unionCases`, which produces non-exhaustive-match errors in *both* the writer and reader. There is no path to a compiling-but-broken codec.
+
+**Notes:**
+- `.unionCases` raw values are declaration ordinals (0, 1, 2, ...). Reordering variants of `U` changes the on-disk format if `rawValue` is being persisted; treat serialized unions as append-only.
+- Plain `enum` types do not need `.unionCases` — they already are their own discriminant and expose `.allCases` / `.fromRawValue` directly.
 
 ---
 

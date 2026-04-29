@@ -92,6 +92,54 @@ export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
 	end 'check'
 end 'stdReturnTypeIsFloat'
 
+// --- Cache codecs ---
+// StdType is a struct-backed simple enum, so its codec is the collapsed
+// one-line form: write the rawValue, lift through allCases on read.
+//
+// StdReturnType is a union, so its codec uses the .unionCases pattern —
+// both writer and reader matches are exhaustiveness-checked.
+
+export function writeStdTypeTag(buf ByteArray, t StdType)
+	writeDword(buf, value: t.ordinal)
+end 'writeStdTypeTag'
+
+export function readStdTypeTag(buf ByteArray, offset ByteOffset) returns (StdType, ByteOffset)
+	let tag = readDword(buf, offset: offset)
+	let t = try StdType.allCases.get(tag) otherwise panic("corrupt cache: unknown StdType tag {tag}")
+	return (t, offset + 4)
+end 'readStdTypeTag'
+
+function writeStdReturnTypeTag(buf ByteArray, kase StdReturnType.unionCases)
+	writeDword(buf, value: kase.rawValue)
+end 'writeStdReturnTypeTag'
+
+function writeStdReturnTypeValue(buf ByteArray, inner StdType)
+	writeStdReturnTypeTag(buf, kase: StdReturnType.unionCases.value)
+	writeStdTypeTag(buf, t: inner)
+end 'writeStdReturnTypeValue'
+
+export function writeStdReturnType(buf ByteArray, rt StdReturnType)
+	match rt 'tag'
+		void then writeStdReturnTypeTag(buf, kase: StdReturnType.unionCases.void)
+		value(inner) then writeStdReturnTypeValue(buf, inner: inner)
+	end 'tag'
+end 'writeStdReturnType'
+
+function readStdReturnTypeValue(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
+	let (inner, nextPos) = readStdTypeTag(buf, offset: offset)
+	return (StdReturnType.value(inner), nextPos)
+end 'readStdReturnTypeValue'
+
+export function readStdReturnType(buf ByteArray, offset ByteOffset) returns (StdReturnType, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try StdReturnType.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdReturnType tag {raw}")
+	match kase 'tag'
+		void then return (StdReturnType.void, pos)
+		value then return readStdReturnTypeValue(buf, offset: pos)
+	end 'tag'
+end 'readStdReturnType'
+
 // Map a MaxonType to its ABI-level StdType by consulting the project's
 // typealias registry for named types. Unconstrained integer literals default
 // to i64; unconstrained floats default to f64. MaxonType is value-only so

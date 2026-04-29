@@ -386,3 +386,30 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:12:17: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
+
+<!-- test: error-instance-method-too-many-args -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var count Integer
+
+	function increment()
+		count = count + 1
+	end 'increment'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(count: 0)
+	c.increment(5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: specs/fragments/method-calls/error-instance-method-too-many-args.test:19:4: too many arguments to 'Counter.increment': expected 0, got at least 1
+```

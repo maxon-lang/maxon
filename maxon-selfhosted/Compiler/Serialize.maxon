@@ -1,0 +1,39 @@
+// Serialize: shared helpers for codec functions that round-trip values
+// through the on-disk cache format.
+//
+// Codecs follow a strict convention: write<TypeName> matches over the value
+// (exhaustiveness-checked because the value has a union/enum type) and emits
+// rawValue + payload; read<TypeName> reads the rawValue, lifts it to a
+// <TypeName>.unionCases via fromRawValue, then matches over the lifted enum
+// (also exhaustiveness-checked). Adding a variant to the underlying union
+// produces non-exhaustive-match errors on both sides until both arms are
+// added — there is no path to a compiling-but-broken codec. The
+// panicCorruptCache branch is reachable only when raw bytes name a variant
+// that no longer exists (e.g. across a cache-version skew).
+
+export function writeString(buf ByteArray, s String)
+	let bytes = s.toByteArray()
+	writeDword(buf, value: bytes.count())
+	buf.append(bytes)
+end 'writeString'
+
+export function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset)
+	let len = readDword(buf, offset: offset)
+	var pos = offset + 4
+
+	if len == 0 'empty'
+		return ("", pos)
+	end 'empty'
+
+	let endPos = pos + len
+	var bytes = ByteArray.create()
+	bytes.reserve(len)
+
+	while pos < endPos 'copy'
+		let b = try buf.get(pos) otherwise panic("readString: pos < endPos just succeeded but buf.get({pos}) failed (buf.count={buf.count()}, endPos={endPos})")
+		bytes.push(b)
+		pos = pos + 1
+	end 'copy'
+
+	return (String.from(bytes), endPos)
+end 'readString'

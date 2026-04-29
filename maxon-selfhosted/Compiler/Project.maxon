@@ -99,6 +99,20 @@ export type Project
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
 
+	// Unresolved top-level let registry: every `let NAME = <init>` at module
+	// scope lands here first. The TypeResolution pass walks this map with
+	// DFS + a visiting stack to evaluate initializers in dependency order;
+	// successful evaluations move into `topLevelConstants`, and cycles are
+	// reported as E2012. The keys live alongside `topLevelConstants` keys
+	// during parsing — readers that ask "is this name a known let?" need to
+	// consult both maps.
+	export var unresolvedTopLevelLets UnresolvedTopLevelLetMap
+
+	// Flat arena of expression nodes referenced by UnresolvedTopLevelLet
+	// entries via UnresolvedConstExprId. Shared project-wide because
+	// cross-file `export let` references resolve through the same id space.
+	export var unresolvedConstExprs UnresolvedConstExprArray
+
 	// Mutable globals (top-level `var` and `static var/let` fields). The map
 	// key is the qualified name used at the source level (`counter` for a
 	// top-level var, `Counter.count` for a static field). Writable storage in
@@ -149,6 +163,8 @@ export type Project
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
+			unresolvedTopLevelLets: UnresolvedTopLevelLetMap.create(),
+			unresolvedConstExprs: UnresolvedConstExprArray.create(),
 			globalVars: GlobalVarMap.create(),
 			structTypes: StructTypeMap.create(),
 			rootPath: rootPath,
@@ -504,9 +520,127 @@ export union ConstantValue
 	// cross-file references resolve by identity through `project.strings`.
 	stringValue(stringId StringId)
 	intValue(value IntConstant)
+	// Float-typed constants store IEEE 754 f64 raw bits in the same i64
+	// payload shape used by MaxonOp.literal for float values.
+	floatValue(bits IntConstant)
 end 'ConstantValue'
 
 export typealias ConstantMap = Map with(String, ConstantValue)
+
+// --- Cache codec ---
+// Reader resolves stringValue payloads through the destination project's
+// string interner; writer dereferences through the source project's
+// strings table. The id space is per-Project and not portable across
+// caches, so we round-trip the resolved bytes.
+
+function writeConstantValueTag(buf ByteArray, kase ConstantValue.unionCases)
+	writeDword(buf, value: kase.rawValue)
+end 'writeConstantValueTag'
+
+function writeConstantValueString(project Project, buf ByteArray, stringId StringId)
+	writeConstantValueTag(buf, kase: ConstantValue.unionCases.stringValue)
+	writeString(buf, s: project.strings.get(stringId))
+end 'writeConstantValueString'
+
+function writeConstantValueInt(buf ByteArray, value IntConstant)
+	writeConstantValueTag(buf, kase: ConstantValue.unionCases.intValue)
+	writeQword(buf, value: value)
+end 'writeConstantValueInt'
+
+function writeConstantValueFloat(buf ByteArray, bits IntConstant)
+	writeConstantValueTag(buf, kase: ConstantValue.unionCases.floatValue)
+	writeQword(buf, value: bits)
+end 'writeConstantValueFloat'
+
+export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
+	match cv 'tag'
+		stringValue(stringId) then writeConstantValueString(project, buf: buf, stringId: stringId)
+		intValue(value) then writeConstantValueInt(buf, value: value)
+		floatValue(bits) then writeConstantValueFloat(buf, bits: bits)
+	end 'tag'
+end 'writeConstantValue'
+
+function readConstantValueString(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
+	let (strVal, nextPos) = readString(buf, offset: offset)
+	return (ConstantValue.stringValue(project.strings.intern(strVal)), nextPos)
+end 'readConstantValueString'
+
+function readConstantValueInt(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
+	let value = readQword(buf, offset: offset)
+	return (ConstantValue.intValue(value), offset + 8)
+end 'readConstantValueInt'
+
+function readConstantValueFloat(buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
+	let bits = readQword(buf, offset: offset)
+	return (ConstantValue.floatValue(bits), offset + 8)
+end 'readConstantValueFloat'
+
+export function readConstantValue(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try ConstantValue.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ConstantValue tag {raw}")
+	match kase 'tag'
+		stringValue then return readConstantValueString(project, buf: buf, offset: pos)
+		intValue then return readConstantValueInt(buf, offset: pos)
+		floatValue then return readConstantValueFloat(buf, offset: pos)
+	end 'tag'
+end 'readConstantValue'
+
+// --- Unresolved top-level let representation ---
+// Mirrors the UnresolvedTypealias pattern: the parser captures every
+// `let NAME = <init>` at module scope into an UnresolvedTopLevelLet entry
+// without resolving identifier references. The TypeResolution pass walks
+// the map with DFS + a visiting stack, evaluates each initializer, and
+// populates `topLevelConstants`. Cycles among let initializers surface as
+// E2012 (parserCircularDependency) from the resolver, not the parser.
+//
+// The expression tree is stored as a flat arena of UnresolvedConstExpr
+// nodes on Project; UnresolvedConstExprId is an integer index into that
+// arena. The arena is shared across all files in the project so cross-file
+// `export let` references resolve through the same id space.
+
+export typealias UnresolvedConstExprId = int(0 to u64.max)
+
+export union UnresolvedConstExpr
+	// Compile-time literal forms: resolvable without consulting any name.
+	intLit(value IntConstant)
+	boolLit(value bool)
+	stringLit(stringId StringId)
+	floatLit(bits IntConstant)
+
+	// Forward-deferred reference to another top-level constant. The
+	// resolver looks `name` up in `topLevelConstants` (already-evaluated)
+	// or `unresolvedTopLevelLets` (recurse with cycle check).
+	nameRef(name String)
+
+	// Unary ops over an arena id.
+	negate(operand UnresolvedConstExprId)
+	notOp(operand UnresolvedConstExprId)
+
+	// Binary `+` / `-` over arena ids.
+	add(left UnresolvedConstExprId, right UnresolvedConstExprId)
+	sub(left UnresolvedConstExprId, right UnresolvedConstExprId)
+end 'UnresolvedConstExpr'
+
+export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
+
+export type UnresolvedTopLevelLet
+	export var name String
+	// Index into project.unresolvedConstExprs for the root of the
+	// initializer expression tree.
+	export var rootExprId UnresolvedConstExprId
+	// Parse-time source location for resolver-emitted diagnostics (cycle,
+	// unknown-name). Mirrors UnresolvedTypealias.
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, rootExprId UnresolvedConstExprId, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelLet
+		return Self{name: name, rootExprId: rootExprId, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedTopLevelLet'
+
+export typealias UnresolvedTopLevelLetMap = Map with(String, UnresolvedTopLevelLet)
 
 // Mutable top-level / static-field global. Stored in the writable .data
 // section with an 8-byte slot per global. Initial value is materialized into

@@ -3151,6 +3151,36 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Lazily materialize the <UnionName>.unionCases companion enum the first
+  /// time it's referenced — either through member access (UnionName.unionCases.X)
+  /// or as a type name (parameter / variable / return type). Synthesizing on
+  /// demand keeps the compiled binary smaller for unions whose discriminant
+  /// is never used as a first-class value.
+  /// </summary>
+  private IrEnumType EnsureUnionCasesCompanion(IrModule<MaxonOp> module, IrEnumType union) {
+    var companionName = union.Name + ".unionCases";
+    if (_typeRegistry.TryGetValue(companionName, out var existing) && existing is IrEnumType existingEnum) {
+      return existingEnum;
+    }
+    var companionCases = new List<IrEnumCase>(union.Cases.Count);
+    for (int i = 0; i < union.Cases.Count; i++) {
+      companionCases.Add(new IrEnumCase(union.Cases[i].Name, i, (long)i));
+    }
+    var companionInterfaces = new List<string> { "Hashable", "Equatable" };
+    var companionType = new IrEnumType(companionName, companionCases, IrType.I64, companionInterfaces) {
+      SourceFilePath = union.SourceFilePath,
+      SourceLine = union.SourceLine,
+      SourceColumn = union.SourceColumn,
+      IsUnion = false
+    };
+    _typeRegistry[companionName] = companionType;
+    PreRegisterSyntheticEnumMethods(module, companionName, companionType);
+    if (_exportedTypes.Contains(union.Name)) _exportedTypes.Add(companionName);
+    if (_moduleVisibleTypes.Contains(union.Name)) _moduleVisibleTypes.Add(companionName);
+    return companionType;
+  }
+
+  /// <summary>
   /// Parse struct literal fields for enum raw values, supporting nested struct literals.
   /// Nested fields are flattened with dot-separated prefixes (e.g., "meta.latency").
   /// The opening '{' has already been consumed; this method consumes through the closing '}'.
@@ -6477,6 +6507,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (_typeRegistry.ContainsKey(dotName)) {
           Advance(); // consume '.'
           Advance(); // consume inner name
+          return dotName;
+        }
+        // Lazily synthesize <UnionName>.unionCases the first time it appears as a type ref.
+        if (PeekNext().Value == "unionCases"
+            && _typeRegistry.TryGetValue(name, out var unionEntry)
+            && unionEntry is IrEnumType union
+            && union.IsUnion) {
+          EnsureUnionCasesCompanion(_currentModule!, union);
+          Advance(); // consume '.'
+          Advance(); // consume 'unionCases'
           return dotName;
         }
       }
@@ -13913,6 +13953,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Check for enum case: EnumType.caseName
         if (_typeRegistry.TryGetValue(token.Value, out var typeEntry) && typeEntry is IrEnumType enumType) {
           var memberName = PeekNext().Value;
+
+          // UnionName.unionCases.<X> — redirect to companion enum, synthesizing it lazily.
+          // Lets readers match exhaustively on the discriminant of any union, regardless of
+          // whether variants carry associated values.
+          if (memberName == "unionCases" && enumType.IsUnion) {
+            var companionEnum = EnsureUnionCasesCompanion(_currentModule!, enumType);
+            var companionName = companionEnum.Name;
+            _usedTypeAliases.Add(token.Value);
+            Advance(); // consume '.'
+            Advance(); // consume 'unionCases'
+            // Rebind the dispatch onto the companion enum and re-enter the same logic via a synthetic token.
+            token = new Token(TokenType.Identifier, companionName, token.Line, token.Column);
+            // Fall through requires re-checking that we're at '.' before the companion-member name.
+            if (!Check(TokenType.Dot) || !IsIdentifierLikeToken(PeekNext())) {
+              throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+                $"expected member access after '{companionName}'", token.Line, token.Column);
+            }
+            qualifiedName = $"{token.Value}.{PeekNext().Value}";
+            enumType = companionEnum;
+            typeEntry = companionEnum;
+            memberName = PeekNext().Value;
+          }
+
           var enumCase = enumType.GetCase(memberName);
           if (enumCase != null) {
             _usedTypeAliases.Add(token.Value);
@@ -14910,7 +14973,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // For struct/enum elements, auto-create an alias (e.g., __Array_Pair)
     if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null) {
-      var autoAliasName = $"__Array_{elementStructTypeName}";
+      // Element type names may contain '.' (synthesized companion types like
+      // 'U.unionCases'). Sanitize to '_' so `<alias>.method` lookups split on a
+      // single dot in ResolveMethodName.
+      var aliasSafeElementName = elementStructTypeName.Replace('.', '_');
+      var autoAliasName = $"__Array_{aliasSafeElementName}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
           && arrayType is IrStructType arrayStruct
@@ -16955,6 +17022,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (args[i] != null && argLocations[i].block == null)
           argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
     } else {
+      if (firstPositionalIndex >= callee.ParamTypes.Count) {
+        throw new CompileError(ErrorCode.SemanticWrongArgCount,
+          $"too many arguments to '{callToken.Value}': expected {callee.ParamTypes.Count - firstPositionalIndex}, got at least 1",
+          callToken.Line, callToken.Column);
+      }
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
       if (argMutabilities != null) argMutabilities[firstPositionalIndex] = _lastExprWasMutableVar;
       if (argVarNames != null) argVarNames[firstPositionalIndex] = _lastExprVarName;
