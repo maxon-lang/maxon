@@ -1,0 +1,31 @@
+// Test: negate-int
+function main() returns ExitCode
+	let x = -42
+	let y = -x
+	if y == 42 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @unary-operators.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %1 = mir.neg.i64 %0
+    %3 = mir.neg.i64 %1
+    %5 = mir.mov_imm 42 : i64
+    %6 = mir.cmp eq, %3, %5
+    mir.cond_br %6 [then: check_1(), else: check_1.after()]
+  check_1:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  check_1.after:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  }
+}
+---

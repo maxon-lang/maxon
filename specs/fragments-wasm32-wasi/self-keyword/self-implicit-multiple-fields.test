@@ -1,0 +1,61 @@
+// Test: self-implicit-multiple-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Rectangle
+	var width Integer
+	var height Integer
+
+	function area() returns Integer
+		return width * height
+	end 'area'
+
+	static function create(width Integer, height Integer) returns Self
+		return Self{width: width, height: height}
+	end 'create'
+end 'Rectangle'
+
+function main() returns ExitCode
+	let r = Rectangle.create(width: 6, height: 7)
+	return r.area()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Rectangle.area(local0: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %1 = mir.load %6, 0
+    %3 = mir.load %6, 8
+    %5 = mir.mul.i64 %1, %3
+    mir.ret %5
+  }
+  func @Rectangle.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %7 = mir.param local1 : i64
+    %2 = mir.mov_imm 16 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %6, %3, 0
+    mir.store %7, %3, 8
+    mir.ret %3
+  }
+  func @self-keyword.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 6 : i64
+    %1 = mir.mov_imm 7 : i64
+    %2 = mir.call @Rectangle.create(%0, %1)
+    %4 = mir.call @Rectangle.area(%2)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_5(), else: __range_ok_5()]
+  __range_panic_5:
+    %7 = mir.global_addr @__panic_msg_5
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_5:
+    mir.ret %4
+  }
+}
+---

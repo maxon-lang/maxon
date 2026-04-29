@@ -1,0 +1,30 @@
+// Test: float-promotion
+function main() returns ExitCode
+	let x = 5
+	let y = 2.0
+	let result = x + y
+	return trunc(result)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @float-type.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 4611686018427387904 : f64
+    %4 = mir.sitofp.f64 %0
+    %5 = mir.add.f64 %4, %1
+    %7 = mir.fptosi.i64 %5
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %10 = mir.global_addr @__panic_msg_2
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_2:
+    mir.ret %7
+  }
+}
+---

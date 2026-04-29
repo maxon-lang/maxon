@@ -1,0 +1,34 @@
+// Test: composite-interp
+function main() returns ExitCode
+	let x = 42
+	print("value is {x} and doubled is {x + x}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+value is 42 and doubled is 84
+```
+---
+// CompiledIR
+module {
+  func @print-function.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %1 = mir.global_addr @__istr_1
+    %2 = mir.mov_imm 9 : i64
+    %3 = mir.call @mrt_write_stdout(%1, %2)
+    %5 = mir.call @mrt_printInt(%0)
+    %6 = mir.global_addr @__istr_2
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_write_stdout(%6, %7)
+    %11 = mir.mov_imm 84 : i64
+    %12 = mir.call @mrt_printInt(%11)
+    %13 = mir.global_addr @__istr_0
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.call @mrt_write_stdout(%13, %14)
+    %16 = mir.mov_imm 0 : i64
+    mir.ret %16
+  }
+}
+---

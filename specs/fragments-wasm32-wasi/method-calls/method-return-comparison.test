@@ -1,0 +1,66 @@
+// Test: method-return-comparison
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n Integer
+
+	function isPositive() returns Integer
+		if n > 0 'positive'
+			return 1
+		end 'positive'
+		return 0
+	end 'isPositive'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let v = Value.create(n: 42)
+	return v.isPositive()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Value.isPositive(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %1 = mir.load %7, 0
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp gt, %1, %3
+    mir.cond_br %4 [then: positive_1(), else: positive_1.after()]
+  positive_1:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  positive_1.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+  func @Value.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @method-calls.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %1 = mir.call @Value.create(%0)
+    %3 = mir.call @Value.isPositive(%1)
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_6(), else: __range_ok_6()]
+  __range_panic_6:
+    %6 = mir.global_addr @__panic_msg_6
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_6:
+    mir.ret %3
+  }
+}
+---

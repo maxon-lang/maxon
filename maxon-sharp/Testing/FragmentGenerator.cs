@@ -161,14 +161,21 @@ public static partial class FragmentGenerator {
       }
 
       // Build a single SpecBatchWorkItem for the batchable tests, if any.
+      // The shared exe goes under .spec-cache/<spec>/. Each batchable test
+      // gets its own per-test fragment written after the batched compile
+      // (with IR sliced from the batched output for inspection); register
+      // those paths so orphan cleanup doesn't sweep them.
       if (batchable.Count > 0) {
         var batchBaseName = BatchFragmentBaseName(specName);
-        var batchFragmentPath = Path.Combine(specFragmentDir, $"{batchBaseName}.test");
         var batchExePath = Path.Combine(specCacheDir, specName, $"{batchBaseName}{exeExt}");
-        allFragmentPaths.Add(Path.GetFullPath(batchFragmentPath));
+
+        foreach (var test in batchable) {
+          var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+          allFragmentPaths.Add(Path.GetFullPath(fragmentPath));
+        }
 
         workItems.Add(new AnyWorkItem.Batch(new SpecBatchWorkItem(
-          specName, batchFragmentPath, batchExePath, [.. batchable], specFile)));
+          specName, batchExePath, [.. batchable], specFile)));
       }
     }
 
@@ -220,33 +227,25 @@ public static partial class FragmentGenerator {
     return new PrepareResult([.. workItems], totalTests, errors);
   }
 
-  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {
+  /// <summary>
+  /// Build the header + expectation sections of a fragment file (everything up
+  /// through the second `---` separator). The IR section that follows is
+  /// produced by either compiling the test in isolation
+  /// (`GenerateFragmentContent`) or by extracting from a batched compile
+  /// (`GenerateFragmentContentWithIr`).
+  /// </summary>
+  private static StringBuilder BuildFragmentPrelude(TestCase test) {
     var sb = new StringBuilder();
-    string? error = null;
-
-    var commentLine = $"// Test: {test.Name}";
-    var sourceWithComment = $"{commentLine}\n{test.Source}";
-
-    sb.AppendLine(commentLine);
+    sb.AppendLine($"// Test: {test.Name}");
     sb.AppendLine(test.Source);
     sb.AppendLine("---");
 
-    if (test.Args != null) {
-      sb.AppendLine($"Args: {test.Args}");
-    }
-
-    if (test.MmTrace) {
-      sb.AppendLine("MmTrace: true");
-    }
-
-    if (test.AsyncTrace) {
-      sb.AppendLine("AsyncTrace: true");
-    }
+    if (test.Args != null) sb.AppendLine($"Args: {test.Args}");
+    if (test.MmTrace) sb.AppendLine("MmTrace: true");
+    if (test.AsyncTrace) sb.AppendLine("AsyncTrace: true");
 
     if (test.Expectation is SuccessExpectation success) {
-      if (success.ExitCode.HasValue) {
-        sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
-      }
+      if (success.ExitCode.HasValue) sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
       if (success.Stdout != null) {
         sb.AppendLine("Stdout: ```");
         sb.AppendLine(success.Stdout);
@@ -257,20 +256,16 @@ public static partial class FragmentGenerator {
         sb.AppendLine(success.Stderr);
         sb.AppendLine("```");
       }
-
-      // Write required IR if specified
       if (success.RequiredIR != null) {
         sb.AppendLine("RequiredIR: ```");
         sb.AppendLine(success.RequiredIR);
         sb.AppendLine("```");
       }
-
       if (success.RequiredRdata != null) {
         sb.AppendLine("RequiredRdata: ```");
         sb.AppendLine(success.RequiredRdata);
         sb.AppendLine("```");
       }
-
       if (success.RequiredData != null) {
         sb.AppendLine("RequiredData: ```");
         sb.AppendLine(success.RequiredData);
@@ -283,6 +278,33 @@ public static partial class FragmentGenerator {
     }
 
     sb.AppendLine("---");
+    return sb;
+  }
+
+  /// <summary>
+  /// Build a complete fragment file using a pre-extracted IR snippet (e.g. one
+  /// produced by `SplitBatchedIr`). Used by the batched-compile path so we
+  /// don't recompile each test individually just to fill in the
+  /// `// CompiledIR` section. The IR is for inspection only — it may differ
+  /// from a per-fragment compile because batched optimization decisions are
+  /// not identical.
+  /// </summary>
+  public static string GenerateFragmentContentWithIr(TestCase test, string? compiledIr) {
+    var sb = BuildFragmentPrelude(test);
+    if (test.Expectation is SuccessExpectation s && s.RequiredIR == null && compiledIr != null) {
+      sb.AppendLine("// CompiledIR");
+      sb.Append(compiledIr.Trim());
+      sb.AppendLine();
+    }
+    sb.AppendLine("---");
+    return sb.ToString();
+  }
+
+  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {
+    var sb = BuildFragmentPrelude(test);
+    string? error = null;
+    var commentLine = $"// Test: {test.Name}";
+    var sourceWithComment = $"{commentLine}\n{test.Source}";
 
     // Compile to executable and capture IR (for success expectations only, skip if RequiredIR covers it)
     if (test.Expectation is SuccessExpectation s2 && s2.RequiredIR == null) {
@@ -627,166 +649,129 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
-  /// Generate the on-disk text of a __batch.test file. Includes per-test source
-  /// + expectation sections, plus a single shared CompiledIR section at the end.
-  /// Note: this method does NOT compile — the IR is supplied by the caller from
-  /// a previous compile of the batched source.
+  /// Split the IR text returned by a batched compile into per-test IR snippets,
+  /// suitable for embedding in each test's `// CompiledIR` section as a human
+  /// inspection aid. NOT semantically identical to a per-fragment compile —
+  /// inlining/optimization decisions can differ when more code is in the unit.
+  ///
+  /// Strategy: top-level `func @<name>` blocks whose name starts with the
+  /// rewriter's `_b_&lt;sanitized&gt;_` prefix are attributed to that test. The
+  /// prefix is stripped from every occurrence within the function body (call
+  /// targets, label-qualified jumps, lea_func operands, etc.) so the snippet
+  /// reads as if compiled in isolation. Functions with no `_b_` prefix
+  /// (dispatcher `main`, stdlib, runtime helpers) are not attributed to any
+  /// test and are dropped.
   /// </summary>
-  public static string GenerateBatchContent(string specName, IReadOnlyList<TestCase> tests, string? compiledIr) {
-    var sb = new StringBuilder();
-    sb.Append("// Batch: ").AppendLine(specName);
-    sb.Append("// Tests: ").AppendLine(string.Join(", ", tests.Select(t => t.Name)));
+  public static Dictionary<string, string> SplitBatchedIr(string archIr, IReadOnlyList<TestCase> tests) {
+    var result = new Dictionary<string, string>();
 
-    foreach (var test in tests) {
-      sb.AppendLine("---");
-      sb.Append("// Test: ").AppendLine(test.Name);
-      sb.AppendLine(test.Source);
-      sb.AppendLine("---");
-      AppendExpectationLines(sb, test);
-    }
+    // Map sanitized test name → original test name. Match the longest sanitized
+    // prefix first so "foo-bar" → `_b_foo_bar_*` doesn't get mis-attributed to
+    // a sibling test "foo".
+    var sanitizedToTest = tests
+      .Select(t => (Sanitized: SanitizeTestName(t.Name), Test: t))
+      .OrderByDescending(p => p.Sanitized.Length)
+      .ToList();
 
-    sb.AppendLine("---");
-    if (compiledIr != null) {
-      sb.AppendLine("// CompiledIR");
-      sb.Append(compiledIr.Trim());
-      sb.AppendLine();
-    }
-    sb.AppendLine("---");
+    var funcs = SplitTopLevelFunctions(archIr);
+    var perTest = new Dictionary<string, List<string>>();
 
-    return sb.ToString();
-  }
+    foreach (var (header, body) in funcs) {
+      // header looks like `  func @<name>(...) -> ... {` (indent 2). Function
+      // names are emitted module-qualified, e.g. `<spec>._b_<sanitized>_main`
+      // — so look for the rewriter prefix anywhere in the name, not only at
+      // the start.
+      var name = ExtractFuncName(header);
+      if (name == null) continue;
+      var bIdx = name.IndexOf("_b_");
+      if (bIdx < 0) continue;
+      var afterB = name[(bIdx + "_b_".Length)..];
 
-  private static void AppendExpectationLines(StringBuilder sb, TestCase test) {
-    if (test.Args != null) sb.Append("Args: ").AppendLine(test.Args);
-    if (test.MmTrace) sb.AppendLine("MmTrace: true");
-    if (test.AsyncTrace) sb.AppendLine("AsyncTrace: true");
-    if (test.Expectation is SuccessExpectation success) {
-      if (success.ExitCode.HasValue) sb.Append("ExitCode: ").Append(success.ExitCode.Value).AppendLine();
-      if (success.Stdout != null) {
-        sb.AppendLine("Stdout: ```");
-        sb.AppendLine(success.Stdout);
-        sb.AppendLine("```");
-      }
-      if (success.Stderr != null) {
-        sb.AppendLine("Stderr: ```");
-        sb.AppendLine(success.Stderr);
-        sb.AppendLine("```");
-      }
-      if (success.RequiredIR != null) {
-        sb.AppendLine("RequiredIR: ```");
-        sb.AppendLine(success.RequiredIR);
-        sb.AppendLine("```");
-      }
-      if (success.RequiredRdata != null) {
-        sb.AppendLine("RequiredRdata: ```");
-        sb.AppendLine(success.RequiredRdata);
-        sb.AppendLine("```");
-      }
-      if (success.RequiredData != null) {
-        sb.AppendLine("RequiredData: ```");
-        sb.AppendLine(success.RequiredData);
-        sb.AppendLine("```");
-      }
-    } else if (test.Expectation is CompilerErrorExpectation ce) {
-      sb.AppendLine("MaxoncStderr: ```");
-      sb.AppendLine(ce.ExpectedStderr);
-      sb.AppendLine("```");
-    }
-  }
+      foreach (var (sanitized, test) in sanitizedToTest) {
+        var suffix = $"{sanitized}_";
+        if (!afterB.StartsWith(suffix)) continue;
 
-  /// <summary>
-  /// A parsed __batch.test file: a list of per-test fragments plus the shared
-  /// compiled IR (which applies to the batched binary as a whole, not any one
-  /// fragment in isolation).
-  /// </summary>
-  public class BatchedFragment {
-    public required string FilePath { get; init; }
-    public required string SpecName { get; init; }
-    public required List<Fragment> Fragments { get; init; }
-    public string? SharedCompiledIR { get; init; }
-  }
-
-  /// <summary>
-  /// Parse a __batch.test file. Returns null if the file does not exist or is
-  /// not in the batched format (callers should NOT silently fall through to the
-  /// per-fragment parser; a missing batch file means the batch hasn't been
-  /// generated yet, and a non-batched file with this name is a bug).
-  /// </summary>
-  public static BatchedFragment? ParseBatchFragment(string batchPath) {
-    if (!File.Exists(batchPath)) return null;
-    var content = File.ReadAllText(batchPath);
-    var lines = content.Split('\n');
-    if (lines.Length == 0 || !lines[0].StartsWith("// Batch: ")) return null;
-
-    var specName = lines[0]["// Batch: ".Length..].Trim();
-
-    // Locate all section separators.
-    var sepIndices = new List<int>();
-    for (int i = 0; i < lines.Length; i++) {
-      if (lines[i].Trim() == "---") sepIndices.Add(i);
-    }
-    // Layout: [header lines]\n---\n<test1 source>\n---\n<test1 expect>\n---\n... \n---\n<IR>\n---
-    // So sections come in pairs (source, expect) per test, then a final IR section.
-    // We expect (sepIndices.Count - 1) pairs + 1 IR = at least 3 separators total
-    // if there's at least one test.
-    if (sepIndices.Count < 3) return null;
-
-    var fragments = new List<Fragment>();
-    int s = 0;
-    while (s + 2 < sepIndices.Count) {
-      var sourceStart = sepIndices[s] + 1;
-      var sourceEnd = sepIndices[s + 1];
-      var expectStart = sepIndices[s + 1] + 1;
-      var expectEnd = sepIndices[s + 2];
-
-      var sourceLines = lines[sourceStart..sourceEnd];
-      var source = string.Join("\n", sourceLines).Trim();
-
-      // Extract the test name from the first non-blank line of the source
-      // section (the "// Test: <name>" comment is the convention used by
-      // GenerateBatchContent).
-      string testName = "unknown";
-      foreach (var line in sourceLines) {
-        var trimmed = line.TrimStart();
-        if (trimmed.StartsWith("// Test: ")) {
-          testName = trimmed["// Test: ".Length..].Trim();
-          break;
+        // Strip the rewriter prefix everywhere in this function's text. The
+        // `_b_<sanitized>_` sentinel is distinctive enough that a plain
+        // string-replace is safe (no false positives in opcodes, register
+        // names, or string literals — those don't contain that sequence).
+        // The leftover module prefix (e.g. `abs.main` instead of `main`)
+        // stays — it's a real qualifying namespace and reads fine.
+        var prefix = $"_b_{sanitized}_";
+        var stripped = (header + body).Replace(prefix, "");
+        if (!perTest.TryGetValue(test.Name, out var list)) {
+          list = [];
+          perTest[test.Name] = list;
         }
-        if (trimmed.Length > 0) break;
+        list.Add(stripped);
+        break;
       }
-
-      var expectationSection = string.Join("\n", lines[expectStart..expectEnd]);
-      var (expectation, args, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
-
-      fragments.Add(new Fragment {
-        FilePath = batchPath,
-        TestName = testName,
-        Source = source,
-        Expectation = expectation,
-        GeneratedIR = null,
-        Args = args,
-        SourceFiles = null,
-        MmTrace = mmTrace,
-        AsyncTrace = asyncTrace,
-      });
-
-      s += 2;
     }
 
-    // The last separator pair brackets the shared CompiledIR section.
-    string? sharedIr = null;
-    if (s + 1 < sepIndices.Count) {
-      var irStart = sepIndices[s] + 1;
-      var irEnd = sepIndices[s + 1];
-      var irLines = lines[irStart..irEnd];
-      sharedIr = ExtractGeneratedIr(irLines, batchPath);
+    foreach (var (testName, parts) in perTest) {
+      var sb = new StringBuilder();
+      sb.AppendLine("module {");
+      foreach (var fn in parts) sb.Append(fn);
+      sb.AppendLine("}");
+      result[testName] = sb.ToString().TrimEnd();
     }
 
-    return new BatchedFragment {
-      FilePath = batchPath,
-      SpecName = specName,
-      Fragments = fragments,
-      SharedCompiledIR = sharedIr,
-    };
+    return result;
   }
+
+  /// <summary>
+  /// Split an IR module's text into top-level function blocks. Each entry is
+  /// (headerLine, bodyAndClosingBrace). Lines outside any function (the outer
+  /// `module {` and the trailing `}`) are dropped; the caller wraps the
+  /// extracted functions in a fresh module. Line endings are normalized to LF
+  /// in the output regardless of the input's mix of LF/CRLF.
+  /// </summary>
+  private static List<(string Header, string Body)> SplitTopLevelFunctions(string ir) {
+    var results = new List<(string, string)>();
+    var lines = ir.Replace("\r\n", "\n").Split('\n');
+    int i = 0;
+    while (i < lines.Length) {
+      var line = lines[i];
+      // Top-level functions are indented exactly 2 spaces.
+      if (line.StartsWith("  func @")) {
+        var header = line + "\n";
+        var bodySb = new StringBuilder();
+        i++;
+        // Collect lines until the matching closing `}` at indent 2.
+        while (i < lines.Length) {
+          bodySb.Append(lines[i]).Append('\n');
+          if (lines[i] == "  }") {
+            i++;
+            break;
+          }
+          i++;
+        }
+        results.Add((header, bodySb.ToString()));
+      } else {
+        i++;
+      }
+    }
+    return results;
+  }
+
+  /// <summary>
+  /// Pull the function name out of a header line like `  func @foo(args) -> ret {`.
+  /// Returns null if the line doesn't match the expected shape. Spec module
+  /// names can contain `-`, so they're allowed here even though the rewriter's
+  /// sanitizer converts them to `_`.
+  /// </summary>
+  private static string? ExtractFuncName(string headerLine) {
+    var marker = "func @";
+    var start = headerLine.IndexOf(marker);
+    if (start < 0) return null;
+    start += marker.Length;
+    var end = start;
+    while (end < headerLine.Length) {
+      var c = headerLine[end];
+      if (char.IsLetterOrDigit(c) || c == '_' || c == '.' || c == '-') end++;
+      else break;
+    }
+    return end > start ? headerLine[start..end] : null;
+  }
+
 }

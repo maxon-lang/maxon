@@ -12,10 +12,28 @@ var stdlibCacheCpuOrd = 0
 var stdlibCacheOsOrd = 0
 var stdlibCacheProjectDirs = FilePathArray.create()
 
+// The self-hosted compiler isn't yet feature-complete enough to compile every
+// file under `stdlib/` — many use language features (generics, interface
+// dispatch, error handling) that are still unimplemented. We start from a
+// curated whitelist and grow it as more features come online. Each entry is a
+// path relative to the project root (i.e. the directory that contains
+// `stdlib/`).
+let stdlibWhitelist = ["stdlib/Math.maxon"]
+
+// A synthesized stdlib prelude. The real `stdlib/Process.maxon` declares
+// `ExitCode` behind `#if os(...)` — a directive form the self-hosted compiler
+// doesn't understand yet — so we substitute a single platform-agnostic alias
+// here. SemanticCheck enforces `main returns ExitCode` by name match, so this
+// has to land in the stdlib namespace before any user code is parsed. The
+// range matches the wasi target's tightest cap (0..125), which is the strictest
+// of the platform variants and so works across all targets.
+let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\n"
+let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
+
 export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
-		let candidate = dir.join("stdlib_selfhosted")
+		let candidate = dir.join("stdlib")
 		if Directory.exists(candidate) 'found'
 			return candidate
 		end 'found'
@@ -24,6 +42,42 @@ export function findStdlibPath() returns FilePath
 	end 'search'
 	return FilePath from ""
 end 'findStdlibPath'
+
+// Resolve the project root that holds `stdlib/`. Returned path is the parent
+// of `findStdlibPath()`; empty when stdlib can't be located. All whitelist
+// entries are joined onto this root.
+function findStdlibProjectRoot() returns FilePath
+	let stdlibPath = findStdlibPath()
+	if stdlibPath.isEmpty() 'noStdlib'
+		return FilePath from ""
+	end 'noStdlib'
+	return try stdlibPath.parent() otherwise FilePath from ""
+end 'findStdlibProjectRoot'
+
+function collectStdlibFiles() returns FilePathArray
+	var files = FilePathArray.create()
+	let root = findStdlibProjectRoot()
+	if root.isEmpty() 'noRoot'
+		return files
+	end 'noRoot'
+	for relPath in stdlibWhitelist 'eachWhitelisted'
+		files.push(root.join(relPath))
+	end 'eachWhitelisted'
+	return files
+end 'collectStdlibFiles'
+
+// Parse a single stdlib source string and merge its module into `allModule`.
+// Bundled stdlib content (whitelisted files + the synthesized bootstrap) is
+// trusted: any lex/parse failure is a compiler bug rather than a user input
+// problem, so we panic with a precise message instead of skipping silently.
+function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, content String)
+	logDebug(LogCategory.compiler, message: () gives "  Parsing {filePath}")
+	let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {filePath}")
+	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, namespace: "stdlib") otherwise panic("StdlibLoader: empty or malformed stdlib file {filePath}")
+	let parsed = try parser.parseModule() otherwise panic("StdlibLoader: parse failed for stdlib file {filePath}")
+	parsed.assertAllBlocksTerminated()
+	allModule.merge(parsed)
+end 'parseStdlibSource'
 
 export function getStdlibModule(project Project) returns MaxonModule
 	if stdlibLoaded 'cached'
@@ -50,7 +104,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	let stdlibPath = findStdlibPath()
 	if stdlibPath.isEmpty() 'noStdlib'
-		logInfo(LogCategory.compiler, message: () gives "No stdlib_selfhosted/ found, skipping stdlib")
+		logInfo(LogCategory.compiler, message: () gives "No stdlib/ found, skipping stdlib")
 		stdlibLoaded = true
 		return cachedStdlibModule
 	end 'noStdlib'
@@ -69,7 +123,8 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'firstSet'
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let contentChecksum = computeStdlibChecksum(stdlibPath)
+	let stdlibFilesForChecksum = collectStdlibFiles()
+	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum)
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
@@ -87,31 +142,19 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	logInfo(LogCategory.compiler, message: () gives "Stdlib cache miss: compiling from source")
 
-	// Cache miss — parse from source
-	var stdlibFiles = FilePathArray.create()
-	stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
+	// Cache miss — parse from source. Whitelist drives which stdlib files the
+	// self-hosted compiler can handle today; see stdlibWhitelist above.
+	let stdlibFiles = collectStdlibFiles()
 
 	var allModule = MaxonModule.create()
+	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSource)
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
 				logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
 				continue
 			end 'readErr'
-			logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
-			// Bundled stdlib files must lex cleanly — a failure here is a
-			// compiler bug, not a user input problem.
-			let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {fp}")
-			var parser = try Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib") otherwise 'parserCreateFail'
-				logDebug(LogCategory.compiler, message: () gives "  Empty or malformed stdlib file {fp}")
-				continue
-			end 'parserCreateFail'
-			let parsed = try parser.parseModule() otherwise 'parseFail'
-				logDebug(LogCategory.compiler, message: () gives "  Parse failed for stdlib file {fp}")
-				continue
-			end 'parseFail'
-			parsed.assertAllBlocksTerminated()
-			allModule.merge(parsed)
+			parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
 		end 'exists'
 	end 'eachFile'
 
@@ -131,14 +174,21 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// process (e.g. spec tests) consistently use the pre-compiled path.
 	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
 
+	stdlibLoaded = true
 	if stdlibCacheValid 'switchToCached'
-		// Cache was built successfully — return empty module from now on.
-		// The first compilation still has stdlib in its IR (already merged above),
-		// but all subsequent calls will use the cached machine code path.
+		// Cache was built successfully — the user binary picks up stdlib via
+		// the pre-compiled cache (linked at codegen) plus the metadata we
+		// already restored on this project, so the parsed module must NOT
+		// flow into the user pipeline. Otherwise emitWasm/x64 sees the same
+		// stdlib functions twice — once from the IR and once from the cache —
+		// and the wasm validator rejects the duplicate definitions.
 		cachedStdlibModule = MaxonModule.create()
+		return cachedStdlibModule
 	end 'switchToCached'
 
-	stdlibLoaded = true
+	// Cache build failed: keep the parsed module in flight so the user
+	// pipeline still has stdlib bodies to call into, even though there's no
+	// cache for next time.
 	return allModule
 end 'getStdlibModule'
 
@@ -288,7 +338,8 @@ function loadCacheForTarget(project Project)
 	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let contentChecksum = computeStdlibChecksum(stdlibPath)
+	let stdlibFilesForChecksum = collectStdlibFiles()
+	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum)
 
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
@@ -301,29 +352,15 @@ function loadCacheForTarget(project Project)
 	// Cache miss for this target — need the parsed module to compile
 	if stdlibParsedModule.functions.count() == 0 'needsParsing'
 		// First load was from cache, so we never parsed. Parse now.
-		var stdlibFiles = FilePathArray.create()
-		stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
+		let stdlibFiles = collectStdlibFiles()
 		var allModule = MaxonModule.create()
-		// Bundled stdlib files must lex and parse cleanly — any failure
-		// here is a compiler bug, not a user input problem. Wrap the
-		// whole loop in a single try/otherwise that panics on the first
-		// file that fails any of read/lex/parse.
-		try 'eachFile'
-			for fp in stdlibFiles 'iter'
-				if File.exists(fp) 'exists'
-					let content = File.readText(fp)
-					let tokens = tokenize(content)
-					var parser = Parser.create(project, tokens: tokens, filePath: fp, namespace: "stdlib")
-					let parsed = parser.parseModule()
-					parsed.assertAllBlocksTerminated()
-					allModule.merge(parsed)
-				end 'exists'
-			end 'iter'
-		end 'eachFile' otherwise(e) 'failed'
-			match e 'errKind'
-				default panic("StdlibLoader: failed to load bundled stdlib (read/lex/parse error)")
-			end 'errKind'
-		end 'failed'
+		parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSource)
+		for fp in stdlibFiles 'iter'
+			if File.exists(fp) 'exists'
+				let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")
+				parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
+			end 'exists'
+		end 'iter'
 		stdlibParsedModule = allModule
 	end 'needsParsing'
 

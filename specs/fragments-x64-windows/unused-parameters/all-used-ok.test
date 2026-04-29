@@ -14,27 +14,22 @@ ExitCode: 15
 ---
 // CompiledIR
 module {
-  func @unused-parameters.add(a: i64, b: i64) -> i64 {
+  func @unused-parameters.add(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.lea rax, [rcx + rdx]
+    x64.mov r8, rcx
+    x64.add r8, rdx
     x64.ret
   }
-  func @unused-parameters.main() -> u32 {
+  func @unused-parameters.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 5
-    x64.mov rdx, 10
+    x64.mov edx, 10
+    x64.mov ecx, 5
     x64.call unused-parameters.add
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg unused-parameters.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl unused-parameters.main.__range_panic_0
-    x64.jmp unused-parameters.main.__range_ok_0
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

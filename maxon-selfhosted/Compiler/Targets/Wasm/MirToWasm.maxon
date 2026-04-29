@@ -1278,12 +1278,30 @@ type WasmFunctionLowering
 
 	// Scan a function to find which ValueIds hold float (f64) values.
 	// Returns a BoolArray where index i is true if ValueId i is float.
+	// Block-argument value ids (introduced by mem2reg's phi-to-blockArg
+	// rewrite) carry their StdType on IrBlock.blockArgs, so we mark those
+	// directly. MIR-op outputs are marked by walking each op once: opcodes
+	// determine float-ness deterministically, and movReg propagates from
+	// source — which is always defined before the move because a movReg's
+	// source is either an earlier MIR op result or a block argument we've
+	// already seeded.
 	function findFloatValueIds() returns BoolArray
 		let maxId = findMaxValueId()
 		var result = BoolArray.create()
 		for _ in 0 upto maxId + 1 'init'
 			result.push(false)
 		end 'init'
+		// Seed block-arg locals from their declared StdType. This must run
+		// before the op walk so movRegs / branch-arg copies into a block
+		// arg's id pick up its known type.
+		for blockRef in func.blockRefs 'seedBlockArgs'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			for blockArg in block.blockArgs 'eachArg'
+				if stdTypeIsFloat(blockArg.argType) 'isFloat'
+					try result.set(blockArg.valueId as MachineWord, value: true) otherwise panic("invariant: floatSet.set OOB for blockArg")
+				end 'isFloat'
+			end 'eachArg'
+		end 'seedBlockArgs'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			for packed in block.opRefs 'eachOp'

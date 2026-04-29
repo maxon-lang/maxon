@@ -1,0 +1,38 @@
+// Test: docs-example-1
+typealias Score = int(i64.min to i64.max)
+
+function add(a Score, b Score) returns Score
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(a: 3, b: 4)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @parameter-labels.add(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %6 = mir.param local1 : i64
+    %4 = mir.add.i64 %5, %6
+    mir.ret %4
+  }
+  func @parameter-labels.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 4 : i64
+    %2 = mir.call @parameter-labels.add(%0, %1)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %5 = mir.global_addr @__panic_msg_3
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_3:
+    mir.ret %2
+  }
+}
+---

@@ -1,0 +1,75 @@
+// Test: type-method-with-params
+
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var total Integer
+
+	function add(value Integer)
+		total = total + value
+	end 'add'
+
+	function getTotal() returns Integer
+		return total
+	end 'getTotal'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Adder'
+
+function main() returns ExitCode
+	var a = Adder.create(total: 0)
+	a.add(10)
+	a.add(32)
+	return a.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Adder.add(local0: i64, local1: i64) {
+  entry:
+    %8 = mir.param local0 : i64
+    %9 = mir.param local1 : i64
+    %2 = mir.load %8, 0
+    %5 = mir.add.i64 %2, %9
+    mir.store %5, %8, 0
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+  func @Adder.getTotal(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0
+    mir.ret %1
+  }
+  func @Adder.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @type-methods.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @Adder.create(%0)
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.call @Adder.add(%1, %3)
+    %6 = mir.mov_imm 32 : i64
+    %7 = mir.call @Adder.add(%1, %6)
+    %9 = mir.call @Adder.getTotal(%1)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %12 = mir.global_addr @__panic_msg_1
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_1:
+    mir.ret %9
+  }
+}
+---

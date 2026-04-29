@@ -1,0 +1,49 @@
+// Test: nested-calls
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function quadruple(x Integer) returns Integer
+	return double(double(x))
+end 'quadruple'
+
+function main() returns ExitCode
+	return quadruple(3)
+end 'main'
+---
+ExitCode: 12
+---
+// CompiledIR
+module {
+  func @function-declaration.double(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @function-declaration.quadruple(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.call @function-declaration.double(%4)
+    %3 = mir.call @function-declaration.double(%2)
+    mir.ret %3
+  }
+  func @function-declaration.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.call @function-declaration.quadruple(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %4 = mir.global_addr @__panic_msg_2
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_2:
+    mir.ret %1
+  }
+}
+---

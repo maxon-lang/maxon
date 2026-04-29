@@ -1,0 +1,31 @@
+// Test: unary-negate-expression
+function main() returns ExitCode
+	let x = 10
+	let y = 5
+	let z = -(x + y)
+	return 57 + z
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @unary-negation.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 5 : i64
+    %4 = mir.mov_imm 15 : i64
+    %5 = mir.neg.i64 %4
+    %6 = mir.mov_imm 57 : i64
+    %8 = mir.add.i64 %6, %5
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %11 = mir.global_addr @__panic_msg_1
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_1:
+    mir.ret %8
+  }
+}
+---

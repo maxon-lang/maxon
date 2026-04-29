@@ -1,0 +1,30 @@
+// Test: int-to-float
+
+typealias Float = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let x = 42
+	let f = x as Float
+	return trunc(f)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @type-casting.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %2 = mir.sitofp.f64 %0
+    %4 = mir.fptosi.i64 %2
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %7 = mir.global_addr @__panic_msg_1
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_1:
+    mir.ret %4
+  }
+}
+---

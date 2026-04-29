@@ -1,0 +1,39 @@
+// Test: named-args-any-order
+
+typealias Integer = int(i64.min to i64.max)
+
+function subtract(a Integer, b Integer) returns Integer
+	return a - b
+end 'subtract'
+
+function main() returns ExitCode
+	return subtract(b: 3, a: 10)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @parameter-labels.subtract(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %6 = mir.param local1 : i64
+    %4 = mir.sub.i64 %5, %6
+    mir.ret %4
+  }
+  func @parameter-labels.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 10 : i64
+    %2 = mir.call @parameter-labels.subtract(%1, %0)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %5 = mir.global_addr @__panic_msg_2
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_2:
+    mir.ret %2
+  }
+}
+---

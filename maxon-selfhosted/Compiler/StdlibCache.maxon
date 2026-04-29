@@ -80,6 +80,12 @@ export type StdlibCacheData
 	export var funcReturnTypes FuncReturnTypeMap
 	export var structTypes StructTypeMap
 	export var topLevelConstants ConstantMap
+	// Snapshot of the source project's type-name interner at capture time.
+	// MaxonType.named(id) values stored in funcReturnTypes / structTypes
+	// embed an interner-local id; the user project's interner has its own
+	// id space, so restoreStdlibMetadata uses this map to translate captured
+	// ids back to names and re-intern them in the destination project.
+	export var typeNameTable StringArray
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -90,7 +96,8 @@ export type StdlibCacheData
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			structTypes: StructTypeMap.create(),
-			topLevelConstants: ConstantMap.create()
+			topLevelConstants: ConstantMap.create(),
+			typeNameTable: StringArray.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -109,28 +116,17 @@ end 'StdlibCacheResult'
 // Checksum
 // ============================================================
 
-// Compute a simple checksum over all stdlib source files in a directory.
-// Sums all bytes of all .maxon files (sorted by name) mod 2^32.
-export function computeStdlibChecksum(stdlibPath FilePath) returns CacheChecksum
-	let dirEntries = try Directory.list(stdlibPath) otherwise return 0
-
-	// Collect .maxon file paths
-	var maxonFiles = FilePathArray.create()
-	for entry in dirEntries 'collect'
-		if entry.filename().endsWith(".maxon") 'isMaxon'
-			maxonFiles.push(entry)
-		end 'isMaxon'
-	end 'collect'
+// Compute a simple checksum over the supplied stdlib source files.
+// Sums all bytes of every file mod 2^32. Caller controls which files
+// participate (so the cache key matches the on-disk whitelist).
+export function computeStdlibChecksum(files FilePathArray) returns CacheChecksum
 	var checksum = 0
-
-	for filePath in maxonFiles 'eachFile'
+	for filePath in files 'eachFile'
 		let bytes = try File.readBinary(filePath) otherwise continue
-
 		for b in bytes 'eachByte'
 			checksum = (checksum + b) and 0xFFFFFFFF
 		end 'eachByte'
 	end 'eachFile'
-
 	return checksum
 end 'computeStdlibChecksum'
 
@@ -694,8 +690,53 @@ end 'mergeStdlibGlobalData'
 // Restore stdlib metadata into a project for user parsing
 // ============================================================
 
+// Translate a captured MaxonType: every `named(id)` is reinterned through the
+// destination project's typeNames using the cache's typeNameTable so the new
+// id is meaningful in the user project. Primitives pass through unchanged.
+function translateMaxonType(project Project, table StringArray, t MaxonType) returns MaxonType
+	return match t 'translate'
+		boolean gives MaxonType.boolean
+		integer gives MaxonType.integer
+		float gives MaxonType.float
+		string gives MaxonType.string
+		unresolved gives MaxonType.unresolved
+		named(id) gives translateNamedTypeId(project, table: table, id: id)
+	end 'translate'
+end 'translateMaxonType'
+
+function translateNamedTypeId(project Project, table StringArray, id TypeNameId) returns MaxonType
+	let name = try table.get(id) otherwise panic("translateNamedTypeId: captured id {id} out of range (table count={table.count()}) — captureStdlibMetadata snapshot is missing entries")
+	return MaxonType.named(project.typeNames.intern(name))
+end 'translateNamedTypeId'
+
+// Translate a captured MaxonReturnType: void passes through; value(inner)
+// gets its inner MaxonType reinterned via translateMaxonType.
+function translateMaxonReturnType(project Project, table StringArray, rt MaxonReturnType) returns MaxonReturnType
+	return match rt 'translate'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(translateMaxonType(project, table: table, t: inner))
+	end 'translate'
+end 'translateMaxonReturnType'
+
+// Translate a captured StructType: every field's MaxonType has its `named` ids
+// reinterned in the destination project.
+function translateStructType(project Project, table StringArray, st StructType) returns StructType
+	var fields = StructFieldArray.create()
+	for f in st.fields 'eachField'
+		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, table: table, t: f.fieldType), offset: f.offset))
+	end 'eachField'
+	return StructType.create(st.name, fields: fields, byteSize: st.byteSize)
+end 'translateStructType'
+
 // Capture parser metadata from a project into a StdlibCacheData.
 export function captureStdlibMetadata(project Project, data StdlibCacheData)
+	// Snapshot the type-name interner so restoreStdlibMetadata can translate
+	// captured ids back to names — every MaxonType.named id in the captured
+	// metadata indexes into this table.
+	for name in project.typeNames.names 'snapshotTypeNames'
+		data.typeNameTable.push(name)
+	end 'snapshotTypeNames'
+
 	for (name, baseType) in project.typealiases 'copyAliases'
 		try data.typealiases.insert(name, value: baseType) otherwise ignore
 	end 'copyAliases'
@@ -730,15 +771,22 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 
 	// Restore function return types and seed the method-name index in
 	// lockstep so DFE's methodCall handling sees stdlib methods alongside
-	// user-defined ones without a separate post-pass.
+	// user-defined ones without a separate post-pass. MaxonType.named ids
+	// embedded in the cached return types belong to the source project's
+	// interner, so translate each through the captured typeNameTable into a
+	// fresh id in the destination project before storing.
 	for (name, rt) in data.funcReturnTypes 'restoreRts'
-		try project.funcReturnTypes.insert(name, value: rt) otherwise ignore
+		let translated = translateMaxonReturnType(project, table: data.typeNameTable, rt: rt)
+		try project.funcReturnTypes.insert(name, value: translated) otherwise ignore
 		project.methodNameIndex.record(name)
 	end 'restoreRts'
 
-	// Restore struct types
+	// Restore struct types. Field MaxonTypes carry the same captured-id
+	// problem as funcReturnTypes — translate every named id through the
+	// typeNameTable before insertion.
 	for (name, st) in data.structTypes 'restoreStructs'
-		try project.structTypes.insert(name, value: st) otherwise ignore
+		let translated = translateStructType(project, table: data.typeNameTable, st: st)
+		try project.structTypes.insert(name, value: translated) otherwise ignore
 	end 'restoreStructs'
 
 	// Restore top-level constants

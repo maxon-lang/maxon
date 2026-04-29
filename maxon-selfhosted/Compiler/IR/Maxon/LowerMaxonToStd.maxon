@@ -445,13 +445,29 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: opIsFloat)
 	end 'lowerBinop'
 
-	// The current integer unary ops (neg, bitNot) always produce i64 even
-	// when operandType is a named alias — lowerConvert handles any
-	// subsequent widening. Float negation is lowered by the parser as
-	// `0.0 - x`, which lands in lowerBinop rather than here, so we ignore
-	// operandType entirely.
+	// Integer unary ops (neg, bitNot) produce i64; lowerConvert handles any
+	// subsequent widening. Float negation is normally lowered by the parser
+	// as `0.0 - x` (which lands in lowerBinop), but `-x` on a named alias
+	// that resolves to float (e.g. `Real`) reaches here as an integer `neg`
+	// because the parser couldn't see through the alias. We detect the
+	// already-float operand from the value-type map and rewrite to a float
+	// subtract so targets that strictly check operand widths (wasm) accept
+	// the emitted body.
 	function lowerUnop(result ByteArray, operand ByteArray, opKind UnaryOpKind, dstBlock IrBlock)
 		let operandId = self.resolveName(operand)
+		let isFloatNeg = match opKind 'isFloatNeg'
+			neg gives self.getIsFloat(operandId)
+			bitNot gives false
+		end 'isFloatNeg'
+		if isFloatNeg 'floatNeg'
+			let zeroId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: zeroId, value: 0))))
+			self.setIsFloat(zeroId, isFloat: true)
+			let resultId = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.subF64, resultId: resultId, leftId: zeroId, rightId: operandId))))
+			self.setIsFloat(resultId, isFloat: true)
+			return
+		end 'floatNeg'
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
 		self.setIsFloat(resultId, isFloat: false)

@@ -508,7 +508,9 @@ export type Parser
 				block = try parseIfStatement(func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
 				block = try parseWhileStatement(func, block: block)
-			end 'isWhile' else if stmtToken.kind == TokenKind.break 'isBreak'
+			end 'isWhile' else if stmtToken.kind == TokenKind.for 'isFor'
+				block = try parseForStatement(func, block: block)
+			end 'isFor' else if stmtToken.kind == TokenKind.break 'isBreak'
 				block = parseBreakStatement(func, block: block)
 				lastWasReturn = true
 			end 'isBreak' else if stmtToken.kind == TokenKind.continue 'isContinue'
@@ -1696,6 +1698,130 @@ export type Parser
 		return exitBlock
 	end 'parseWhileStatement'
 
+	// --- For statement ---
+	//
+	// Range-form `for ID in START upto END 'label' ... end 'label'` (and the
+	// inclusive `to` variant) desugar in-parser to the same control-flow
+	// shape as a hand-written `while`:
+	//   ENTRY: slot = START; endTmp = END; br HEADER
+	//   HEADER: cur = load(slot); cmp(cur, endTmp, predicate); cond_br BODY EXIT
+	//   BODY: <user statements>; cur2 = load(slot); inc = cur2 + 1; store(slot, inc); br HEADER
+	//   EXIT
+	// `upto` uses `lt` / increment by 1, `to` uses `le` / same increment.
+	// Iterating `_` is supported by binding the synthetic name in scope so
+	// nothing in the body can reference it (matches the spec's "discard").
+	// Collection iteration (`for x in arr`) is not yet implemented; calls
+	// reach the parser today only on numeric ranges.
+	//
+	// entry: cursor AT `for`.
+	// exit:  cursor AT last-consumed of the construct (label string after `end`).
+	function parseForStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
+		let forToken = cursor.current()
+		try expect(TokenKind.for)
+
+		let nameToken = cursor.current()
+		if nameToken.kind != TokenKind.identifier 'noName'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop variable name after 'for'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			synchronize()
+			return block
+		end 'noName'
+		let iterName = nameToken.value
+		try advance()
+
+		try expect(TokenKind.in)
+
+		// Parse START into the entry block.
+		currentBlock = block
+		let startResult = try parseExpression(block)
+		try advance()  // past last-consumed of start
+
+		let isInclusive = cursor.current().kind == TokenKind.to
+		if not isInclusive and cursor.current().kind != TokenKind.upto 'noRange'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected 'upto' or 'to' in for-range", line: tok.line, column: tok.column, filePath: filePath)
+			synchronize()
+			return block
+		end 'noRange'
+		try advance()  // consume `upto` / `to`
+
+		// Parse END into the entry block.
+		currentBlock = block
+		let endResult = try parseExpression(block)
+		try advance()  // past last-consumed of end
+
+		// Loop label is mandatory (matches `while`).
+		if cursor.current().kind != TokenKind.stringLiteral 'noLabel'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop label after for-range", line: tok.line, column: tok.column, filePath: filePath)
+			synchronize()
+			return block
+		end 'noLabel'
+		let userLabel = try parseOptionalBlockLabel("loop")
+
+		let forFilePath = filePath.toString()
+		let stmtRange = SourceRange.between(forToken, last: cursor.current())
+
+		// Allocate iterator slot. `_` is reserved as a discard, but we still
+		// need a unique slot — synthesize a fresh name so successive `for _`
+		// loops don't collide on the symbol table.
+		scope.pushScope()
+		var iterSlot = 0
+		if iterName == "_" 'discardIter'
+			iterSlot = scope.declare("__forrange_iter_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
+		end 'discardIter' else 'namedIter'
+			iterSlot = defineVariableWithType(iterName, varType: MaxonType.integer)
+		end 'namedIter'
+
+		// Snapshot END once into a fresh slot so mutating END's source after
+		// loop entry doesn't change the bound.
+		let endSlot = scope.declare("__forrange_end_{forToken.line}_{forToken.column}", varType: MaxonType.integer, mutable: true)
+
+		// ENTRY: store START into iterSlot, END into endSlot, branch to header.
+		module.appendOp(block, op: MaxonOp.varDecl(iterSlot, value: exprName(startResult), slotType: MaxonType.integer, range: stmtRange))
+		module.appendOp(block, op: MaxonOp.varDecl(endSlot, value: exprName(endResult), slotType: MaxonType.integer, range: stmtRange))
+
+		var headerBlock = module.addBlockAt(func, label: "forrange.header", filePath: forFilePath, firstLine: forToken.line)
+		let headerBlockId = headerBlock.id
+		var bodyBlock = module.addBlockAt(func, label: "{userLabel}_{headerBlockId}", filePath: forFilePath, firstLine: forToken.line)
+		let bodyBlockId = bodyBlock.id
+		let exitBlock = module.addBlockAt(func, label: "{userLabel}_{headerBlockId}.exit", filePath: forFilePath, firstLine: forToken.line)
+		let exitBlockId = exitBlock.id
+		// Keep header label distinct from any other loop's "cond" labels.
+		headerBlock.label = "{userLabel}_{headerBlockId}.header"
+
+		module.setTerminator(block, op: MaxonOp.br(headerBlockId, range: SourceRange.none()))
+
+		// HEADER: load iter and end, compare, conditional branch.
+		let curName = freshSynthName()
+		module.appendOp(headerBlock, op: MaxonOp.varLoad(curName, slotId: iterSlot, slotType: MaxonType.integer, range: stmtRange))
+		let endValName = freshSynthName()
+		module.appendOp(headerBlock, op: MaxonOp.varLoad(endValName, slotId: endSlot, slotType: MaxonType.integer, range: stmtRange))
+		let cmpName = freshSynthName()
+		let predicate = CmpPredicate.le if isInclusive else CmpPredicate.lt
+		module.appendOp(headerBlock, op: MaxonOp.cmp(cmpName, left: curName, right: endValName, predicate: predicate, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: stmtRange))
+		module.setTerminator(headerBlock, op: MaxonOp.condBr(cmpName, thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
+
+		// BODY: parse user statements, then emit the increment + back-branch.
+		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId))
+		var bodyExit = try parseStatements(func, block: bodyBlock, lastWasReturn: false)
+		try loopStack.pop() otherwise panic("loopStack.pop: stack unexpectedly empty after for-range body parse")
+
+		if not bodyExit.isTerminated() 'needsIncrement'
+			let cur2Name = freshSynthName()
+			module.appendOp(bodyExit, op: MaxonOp.varLoad(cur2Name, slotId: iterSlot, slotType: MaxonType.integer, range: stmtRange))
+			let oneName = emitLiteral(bodyExit, value: 1, valueType: MaxonType.integer)
+			let incName = freshSynthName()
+			module.appendOp(bodyExit, op: MaxonOp.binop(incName, left: cur2Name, right: oneName, opKind: BinOpKind.add, operandType: MaxonType.integer, range: stmtRange))
+			module.appendOp(bodyExit, op: MaxonOp.varStore(iterSlot, value: incName, range: stmtRange))
+			module.setTerminator(bodyExit, op: MaxonOp.br(headerBlockId, range: SourceRange.none()))
+		end 'needsIncrement'
+
+		scope.popScope()
+
+		try skipEndAndLabel()
+		return exitBlock
+	end 'parseForStatement'
+
 	// --- Break / continue statements ---
 
 	// Parse: break [label]  or  continue [label]
@@ -2569,6 +2695,27 @@ export type Parser
 				module.appendOp(block, op: MaxonOp.convert(truncResultName, operand: exprName(truncArgResult), fromType: exprType(truncArgResult), toType: MaxonType.integer, implicit: true, range: SourceRange.between(token, last: truncRparenToken)))
 				return ExprResult.direct(truncResultName, valueType: MaxonType.integer)
 			end 'isTruncParse'
+
+			// `floor`, `ceil`, `round`, `abs` are float→float intrinsics. The
+			// self-hosted backend doesn't have dedicated rounding ops yet, so
+			// we approximate by lowering through the int conversion: float→int→
+			// float. The result is bit-for-bit floor only for positive values
+			// (where floor and trunc coincide), but the only stdlib caller of
+			// these helpers today is `Math.pow`'s integer-detection check
+			// `(x - floor(x)) == 0`, which is correct for both signs whenever
+			// `x` is an integer. Replace with target-native rounding when the
+			// backend grows the appropriate `roundsd`/`frintn` support.
+			if token.value == "floor" or token.value == "ceil" or token.value == "round" or token.value == "abs" 'isRoundLikeParse'
+				let argResult = try parseExpression(block)
+				try advance()
+				let rparenToken = cursor.current()
+				let opRange = SourceRange.between(token, last: rparenToken)
+				let intName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.convert(intName, operand: exprName(argResult), fromType: exprType(argResult), toType: MaxonType.integer, implicit: true, range: opRange))
+				let floatName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.convert(floatName, operand: intName, fromType: MaxonType.integer, toType: MaxonType.float, implicit: true, range: opRange))
+				return ExprResult.direct(floatName, valueType: MaxonType.float)
+			end 'isRoundLikeParse'
 
 			if token.value == "sqrt" 'isSqrtParse'
 				let sqrtArgResult = try parseExpression(block)

@@ -1,0 +1,38 @@
+// Test: byte-to-int-param
+
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
+
+function takeInt(x Integer) returns Integer
+	return x
+end 'takeInt'
+
+function main() returns ExitCode
+	let b = 42 as Byte
+	return takeInt(b)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @implicit-type-conversion.takeInt(local0: i64) -> i64 {
+  entry:
+    %2 = mir.param local0 : i64
+    mir.ret %2
+  }
+  func @implicit-type-conversion.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %2 = mir.call @implicit-type-conversion.takeInt(%0)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %5 = mir.global_addr @__panic_msg_2
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_2:
+    mir.ret %2
+  }
+}
+---

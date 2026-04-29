@@ -1,0 +1,71 @@
+// Test: type-method-basic
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var count Integer
+
+	function increment()
+		count = count + 1
+	end 'increment'
+
+	function get() returns Integer
+		return count
+	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(count: 0)
+	c.increment()
+	return c.get()
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Counter.increment(local0: i64) {
+  entry:
+    %7 = mir.param local0 : i64
+    %1 = mir.load %7, 0
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.add.i64 %1, %3
+    mir.store %4, %7, 0
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+  func @Counter.get(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0
+    mir.ret %1
+  }
+  func @Counter.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @type-methods.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @Counter.create(%0)
+    %3 = mir.call @Counter.increment(%1)
+    %5 = mir.call @Counter.get(%1)
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %5, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_0
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

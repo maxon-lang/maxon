@@ -1,0 +1,43 @@
+// Test: static-method-named-args
+
+typealias Integer = int(i64.min to i64.max)
+
+type Factory
+	static function create(x Integer, y Integer) returns Integer
+		return x * 10 + y
+	end 'create'
+end 'Factory'
+
+function main() returns ExitCode
+	return Factory.create(4, y: 2)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Factory.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.mul.i64 %7, %3
+    %6 = mir.add.i64 %4, %8
+    mir.ret %6
+  }
+  func @method-calls.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.call @Factory.create(%0, %1)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_8(), else: __range_ok_8()]
+  __range_panic_8:
+    %5 = mir.global_addr @__panic_msg_8
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_8:
+    mir.ret %2
+  }
+}
+---

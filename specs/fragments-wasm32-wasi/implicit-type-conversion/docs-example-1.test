@@ -1,0 +1,38 @@
+// Test: docs-example-1
+typealias Score = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
+
+function takeFloat(x Weight) returns Score
+	return trunc(x)
+end 'takeFloat'
+
+function main() returns ExitCode
+	return takeFloat(42)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @implicit-type-conversion.takeFloat(local0: f64) -> i64 {
+  entry:
+    %3 = mir.param local0 : f64
+    %2 = mir.fptosi.i64 %3
+    mir.ret %2
+  }
+  func @implicit-type-conversion.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %1 = mir.sitofp.f64 %0
+    %2 = mir.call @implicit-type-conversion.takeFloat(%1)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_10(), else: __range_ok_10()]
+  __range_panic_10:
+    %5 = mir.global_addr @__panic_msg_10
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_10:
+    mir.ret %2
+  }
+}
+---

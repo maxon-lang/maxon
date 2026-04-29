@@ -1,0 +1,37 @@
+// Test: duplicate-block-identifiers.else-nested
+function main() returns ExitCode
+	var x = 0
+	if false 'check'
+		x = 1
+	end 'check' else 'else_check'
+		if true 'nested'
+			x = 2
+		end 'nested'
+	end 'else_check'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @duplicate-block-identifiers.main() -> u8 {
+  entry:
+    mir.br nested_3()
+  nested_3:
+    %4 = mir.mov_imm 2 : i64
+    mir.br nested_3.after(%4)
+  nested_3.after:
+    mir.br check_1.merge(%6)
+  check_1.merge:
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %10 = mir.global_addr @__panic_msg_3
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_3:
+    mir.ret %7
+  }
+}
+---

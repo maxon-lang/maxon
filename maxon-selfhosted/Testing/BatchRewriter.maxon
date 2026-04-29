@@ -240,6 +240,232 @@ end 'buildBatchSource'
 
 export typealias RenameArray = Array with RenameEntry
 
+// One test's per-test IR slice extracted from a batched compile.
+export type BatchIrSlice
+	export var testName String
+	export var ir String
+
+	export static function create(testName String, ir String) returns BatchIrSlice
+		return Self{testName: testName, ir: ir}
+	end 'create'
+end 'BatchIrSlice'
+
+export typealias BatchIrSliceArray = Array with BatchIrSlice
+
+// Split the IR text returned by a batched compile into per-test snippets,
+// suitable for embedding in each test's `// CompiledIR` section as a human
+// inspection aid. NOT semantically identical to a per-fragment compile —
+// inlining/optimization decisions can differ when more code is in the unit.
+//
+// Strategy: top-level `func @<name>` blocks whose name contains the
+// rewriter's `_b_<sanitized>_` substring are attributed to that test. The
+// substring is stripped from every occurrence within the function body
+// (call targets, label-qualified jumps, lea_func operands, etc.) so the
+// snippet reads as if compiled in isolation. Functions with no `_b_`
+// substring (dispatcher `main`, stdlib, runtime helpers) are not attributed
+// to any test and are dropped.
+export function splitBatchedIr(archIr String, tests SpecTestArray) returns BatchIrSliceArray
+	var slices = BatchIrSliceArray.create()
+
+	// Build (sanitized → original) pairs sorted by sanitized length descending,
+	// so longer sanitized names match first (e.g. "foo_bar" wins over "foo").
+	var pairs = SanitizedTestPairArray.create()
+	for test in tests 'collectPairs'
+		pairs.push(SanitizedTestPair.create(sanitizeTestName(test.name), original: test.name))
+	end 'collectPairs'
+	sortSanitizedPairsByLengthDesc(pairs)
+
+	let funcs = splitTopLevelFunctions(archIr)
+	var perTest = TestIrPartsArray.create()
+
+	for fn in funcs 'eachFunc'
+		let name = extractFuncName(fn.header)
+		if name.isEmpty() 'noName'
+			continue
+		end 'noName'
+		let bIdx = try name.findFirst("_b_") otherwise continue
+		var afterBIdx = bIdx.clone()
+		var skipped = 0
+		while skipped < 3 'skipMarker'
+			afterBIdx = try name.indexAfter(afterBIdx) otherwise break
+			skipped = skipped + 1
+		end 'skipMarker'
+		if skipped < 3 'incomplete'
+			continue
+		end 'incomplete'
+		let afterB = name.slice(afterBIdx, endIndex: name.endIndex())
+
+		for pair in pairs 'eachPair'
+			let suffix = "{pair.sanitized}_"
+			if not afterB.startsWith(suffix) 'noMatch'
+				continue
+			end 'noMatch'
+
+			let prefix = "_b_{pair.sanitized}_"
+			let stripped = "{fn.header}{fn.body}".replace(prefix, with: "")
+			pushTestIrPart(perTest, testName: pair.original, part: stripped)
+			break
+		end 'eachPair'
+	end 'eachFunc'
+
+	for entry in perTest 'eachTest'
+		var sb = "module \{\n"
+		for part in entry.parts 'eachPart'
+			sb = "{sb}{part}"
+		end 'eachPart'
+		sb = "{sb}\}"
+		slices.push(BatchIrSlice.create(entry.testName, ir: sb))
+	end 'eachTest'
+
+	return slices
+end 'splitBatchedIr'
+
+type SanitizedTestPair
+	export var sanitized String
+	export var original String
+
+	export static function create(sanitized String, original String) returns SanitizedTestPair
+		return Self{sanitized: sanitized, original: original}
+	end 'create'
+end 'SanitizedTestPair'
+
+typealias SanitizedTestPairArray = Array with SanitizedTestPair
+
+function sortSanitizedPairsByLengthDesc(pairs SanitizedTestPairArray)
+	// Simple insertion sort — `pairs` is small (one entry per batchable test).
+	let n = pairs.count()
+	var i = 1
+	while i < n 'outer'
+		var j = i
+		while j > 0 'inner'
+			let prevLen = (try pairs.get(j - 1) otherwise break).sanitized.count()
+			let curLen = (try pairs.get(j) otherwise break).sanitized.count()
+			if prevLen >= curLen 'inOrder'
+				break
+			end 'inOrder'
+			let curClone = (try pairs.get(j) otherwise break).clone()
+			let prevClone = (try pairs.get(j - 1) otherwise break).clone()
+			try pairs.set(j - 1, value: curClone) otherwise break
+			try pairs.set(j, value: prevClone) otherwise break
+			j = j - 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+end 'sortSanitizedPairsByLengthDesc'
+
+type BatchIrFunction
+	export var header String
+	export var body String
+
+	export static function create(header String, body String) returns BatchIrFunction
+		return Self{header: header, body: body}
+	end 'create'
+end 'BatchIrFunction'
+
+typealias BatchIrFunctionArray = Array with BatchIrFunction
+
+type TestIrParts
+	export var testName String
+	export var parts StringArray
+
+	export static function create(testName String) returns TestIrParts
+		return Self{testName: testName, parts: StringArray.create()}
+	end 'create'
+
+	export static function createWith(testName String, parts StringArray) returns TestIrParts
+		return Self{testName: testName, parts: parts}
+	end 'createWith'
+end 'TestIrParts'
+
+typealias TestIrPartsArray = Array with TestIrParts
+
+typealias TestIrPartsIndex = int(0 to u64.max)
+
+function pushTestIrPart(perTest TestIrPartsArray, testName String, part String)
+	let n = perTest.count()
+	var i = 0 as TestIrPartsIndex
+	var found = false
+	while i < n 'find'
+		if (try perTest.get(i) otherwise break).testName == testName 'match'
+			found = true
+			break
+		end 'match'
+		i = i + 1
+	end 'find'
+	if found 'append'
+		appendPartAt(perTest, index: i, part: part)
+		return
+	end 'append'
+	var initialParts = StringArray.create()
+	initialParts.push(part)
+	perTest.push(TestIrParts.createWith(testName.clone(), parts: initialParts))
+end 'pushTestIrPart'
+
+function appendPartAt(perTest TestIrPartsArray, index TestIrPartsIndex, part String)
+	var entry = try perTest.get(index) otherwise return
+	entry.parts.push(part)
+end 'appendPartAt'
+
+// Split an IR module's text into top-level function blocks. Each entry is
+// (header, body+closingBrace). Lines outside any function (the outer
+// `module {` and the trailing `}`) are dropped; the caller wraps the
+// extracted functions in a fresh module. Line endings are normalized to LF
+// in the output regardless of the input's mix of LF/CRLF.
+function splitTopLevelFunctions(ir String) returns BatchIrFunctionArray
+	var results = BatchIrFunctionArray.create()
+	let normalized = ir.replace("\r\n", with: "\n")
+	let lines = normalized.split("\n")
+	let lineCount = lines.count()
+	var i = 0
+	while i < lineCount 'outer'
+		let line = try lines.get(i) otherwise break
+		if line.startsWith("  func @") 'startFunc'
+			let header = "{line}\n"
+			var body = ""
+			i = i + 1
+			while i < lineCount 'collectBody'
+				let bl = try lines.get(i) otherwise break
+				body = "{body}{bl}\n"
+				if bl == "  }" 'endFunc'
+					i = i + 1
+					break
+				end 'endFunc'
+				i = i + 1
+			end 'collectBody'
+			results.push(BatchIrFunction.create(header, body: body))
+		end 'startFunc' else 'notFunc'
+			i = i + 1
+		end 'notFunc'
+	end 'outer'
+	return results
+end 'splitTopLevelFunctions'
+
+// Pull the function name out of a header line like `  func @foo(args) -> ret {`.
+// Returns "" if the line doesn't match the expected shape. Spec module names
+// can contain `-`, so they're allowed here even though sanitizeTestName
+// converts them to `_`.
+function extractFuncName(headerLine String) returns String
+	let marker = "func @"
+	let markerLen = marker.count()
+	let markerIdx = try headerLine.findFirst(marker) otherwise return ""
+	var nameStart = markerIdx.clone()
+	var skipped = 0
+	while skipped < markerLen 'skipMarker'
+		nameStart = try headerLine.indexAfter(nameStart) otherwise return ""
+		skipped = skipped + 1
+	end 'skipMarker'
+	let rest = headerLine.slice(nameStart, endIndex: headerLine.endIndex())
+	var name = ""
+	for c in rest 'eachChar'
+		if Ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-' 'isIdent'
+			name = "{name}{c}"
+		end 'isIdent' else 'notIdent'
+			break
+		end 'notIdent'
+	end 'eachChar'
+	return name
+end 'extractFuncName'
+
 // Compute the mangled symbol name shared by the rewriter (for renames) and
 // the dispatcher generator (for resolving each test's main).
 //

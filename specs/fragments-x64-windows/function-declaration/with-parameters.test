@@ -14,29 +14,24 @@ ExitCode: 30
 ---
 // CompiledIR
 module {
-  func @function-declaration.add(a: i64, b: i64) -> i64 {
+  func @function-declaration.add(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.lea rax, [rcx + rdx]
+    x64.mov r8, rcx
+    x64.add r8, rdx
     x64.ret
   }
-  func @function-declaration.main() -> u32 {
+  func @function-declaration.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 10
-    x64.mov rdx, 20
+    x64.mov edx, 20
+    x64.mov ecx, 10
     x64.call function-declaration.add
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg function-declaration.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl function-declaration.main.__range_panic_0
-    x64.jmp function-declaration.main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.cmp r8, 125
+    x64.jbe __range_ok_1
+  __range_panic_1:
+    x64.lea rcx, [rip+__panic_msg_1]
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x64.epilogue
     x64.ret
   }

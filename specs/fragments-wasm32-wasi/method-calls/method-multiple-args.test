@@ -1,0 +1,75 @@
+// Test: method-multiple-args
+
+typealias Integer = int(i64.min to i64.max)
+
+type Calculator
+	var result Integer
+
+	function addTwo(a Integer, b Integer)
+		result = result + a + b
+	end 'addTwo'
+
+	function get() returns Integer
+		return result
+	end 'get'
+
+	static function create(result Integer) returns Self
+		return Self{result: result}
+	end 'create'
+end 'Calculator'
+
+function main() returns ExitCode
+	var calc = Calculator.create(result: 0)
+	calc.addTwo(20, b: 22)
+	return calc.get()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Calculator.addTwo(local0: i64, local1: i64, local2: i64) {
+  entry:
+    %11 = mir.param local0 : i64
+    %12 = mir.param local1 : i64
+    %13 = mir.param local2 : i64
+    %3 = mir.load %11, 0
+    %6 = mir.add.i64 %3, %12
+    %8 = mir.add.i64 %6, %13
+    mir.store %8, %11, 0
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  }
+  func @Calculator.get(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0
+    mir.ret %1
+  }
+  func @Calculator.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @method-calls.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @Calculator.create(%0)
+    %3 = mir.mov_imm 20 : i64
+    %4 = mir.mov_imm 22 : i64
+    %5 = mir.call @Calculator.addTwo(%1, %3, %4)
+    %7 = mir.call @Calculator.get(%1)
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %10 = mir.global_addr @__panic_msg_3
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_3:
+    mir.ret %7
+  }
+}
+---

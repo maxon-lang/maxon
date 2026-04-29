@@ -18,40 +18,40 @@ ExitCode: 6
 ---
 // CompiledIR
 module {
-  func @namespaces.add(a: i64, b: i64) -> i64 {
+  func @namespaces.add(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.lea rax, [rcx + rdx]
+    x64.mov r8, rcx
+    x64.add r8, rdx
     x64.ret
   }
-  func @namespaces.sum_three(a: i64, b: i64, c: i64) -> i64 {
+  func @namespaces.sum_three(rcx: i64, rdx: i64, rax: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], r8
+    x64.prologue stack_size=32
+    x64.mov r8, rcx
+    x64.mov r9, rdx
+    x64.mov r12, rax
+    x64.mov rcx, r8
+    x64.mov rdx, r9
     x64.call namespaces.add
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, rax
+    x64.mov rcx, r8
+    x64.mov rdx, r12
+    x64.call namespaces.add
     x64.epilogue
-    x64.jmp namespaces.add
+    x64.ret
   }
-  func @namespaces.main() -> u32 {
+  func @namespaces.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.mov r8, 3
+    x64.mov eax, 3
+    x64.mov edx, 2
+    x64.mov ecx, 1
     x64.call namespaces.sum_three
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg namespaces.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl namespaces.main.__range_panic_0
-    x64.jmp namespaces.main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
-    x64.mov rcx, rax
+    x64.cmp r8, 125
+    x64.jbe __range_ok_2
+  __range_panic_2:
+    x64.lea rcx, [rip+__panic_msg_2]
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_2:
     x64.epilogue
     x64.ret
   }

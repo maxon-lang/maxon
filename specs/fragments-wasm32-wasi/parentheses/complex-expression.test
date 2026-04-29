@@ -1,0 +1,26 @@
+// Test: complex-expression
+function main() returns ExitCode
+	let result = trunc((10 + (2 * 3)) / (4 - 2))
+	return result
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @parentheses.main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 16 : i64
+    %7 = mir.mov_imm 2 : i64
+    %8 = mir.div.i64 %4, %7
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

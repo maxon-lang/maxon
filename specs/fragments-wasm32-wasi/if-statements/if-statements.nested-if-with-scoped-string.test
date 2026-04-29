@@ -1,0 +1,50 @@
+// Test: if-statements.nested-if-with-scoped-string
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(x Integer) returns Integer
+	if x == 0 'outer'
+		let inner = "hello"
+		if inner == "hello" 'checkInner'
+			return 1
+		end 'checkInner'
+	end 'outer'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @if-statements.test(local0: i64) -> i64 {
+  entry:
+    %11 = mir.param local0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp eq, %11, %2
+    mir.cond_br %3 [then: checkInner_2(), else: outer_1.after(%0)]
+  checkInner_2:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  outer_1.after:
+    %9 = mir.mov_imm 42 : i64
+    mir.ret %9
+  }
+  func @if-statements.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.call @if-statements.test(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %4 = mir.global_addr @__panic_msg_1
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_1:
+    mir.ret %1
+  }
+}
+---

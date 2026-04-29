@@ -1,0 +1,29 @@
+// Test: unary-negate-variable
+function main() returns ExitCode
+	let x = 47
+	let y = -x
+	print("{42 + y}\n")
+	return 0
+end 'main'
+---
+Stdout: ```
+-5
+```
+---
+// CompiledIR
+module {
+  func @unary-negation.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 47 : i64
+    %2 = mir.neg.i64 %0
+    %3 = mir.mov_imm 42 : i64
+    %5 = mir.add.i64 %3, %2
+    %6 = mir.call @mrt_printInt(%5)
+    %7 = mir.global_addr @__istr_0
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.call @mrt_write_stdout(%7, %8)
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  }
+}
+---

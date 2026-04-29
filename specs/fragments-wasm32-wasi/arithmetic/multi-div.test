@@ -1,0 +1,47 @@
+// Test: multi-div
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
+	let r1 = a / b
+	let r2 = c / d
+	return trunc(r1 + r2)
+end 'multiDiv'
+
+function main() returns ExitCode
+	return multiDiv(10, b: 2, c: 20, d: 4)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @arithmetic.multiDiv(local0: i64, local1: i64, local2: i64, local3: i64) -> i64 {
+  entry:
+    %13 = mir.param local0 : i64
+    %14 = mir.param local1 : i64
+    %15 = mir.param local2 : i64
+    %16 = mir.param local3 : i64
+    %6 = mir.div.i64 %13, %14
+    %9 = mir.div.i64 %15, %16
+    %12 = mir.add.i64 %6, %9
+    mir.ret %12
+  }
+  func @arithmetic.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.mov_imm 20 : i64
+    %3 = mir.mov_imm 4 : i64
+    %4 = mir.call @arithmetic.multiDiv(%0, %1, %2, %3)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_6(), else: __range_ok_6()]
+  __range_panic_6:
+    %7 = mir.global_addr @__panic_msg_6
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_6:
+    mir.ret %4
+  }
+}
+---

@@ -37,15 +37,13 @@ let whitelist = ["basics",
 	"implicit-type-conversion",
 	"type-alias-resolution",
 	"namespaces",
-	// "static-variables",
-	// "bitwise-operators",
-	// "pair",
-	// "stdlib-basic",
+	"stdlib-basic",
 	// "stdlib-autodiscovery",
 	// "top-level-let",
 	// "equatable",
 	// "enums-simple",
 	// "match-simple",
+	// "static-variables",
 	// "export-keyword",
 	// "lexer-parser-robustness",
 	// "error-handling",
@@ -53,6 +51,7 @@ let whitelist = ["basics",
 	// "reserved-double-underscore",  // most tests pass; enum-case and closure-parameter need enum/closure support first
 	// "arrays",
 	// "vector",
+	// "bitwise-operators",
 	// "interface-conformance",
 	// "set",
 	// "first-class-functions",
@@ -507,10 +506,11 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let batchBaseName = batchFragmentBaseName(specName)
 	let batchExePath = cacheSpecDir.join("{batchBaseName}{ext}")
 
-	// Virtual path for the batched source used when invoking the compiler;
-	// not actually written to disk in this form (the per-test fragments live
-	// at their own paths).
-	let virtualPath = fragmentDir.join(specName).join("{batchBaseName}.maxon")
+	// Virtual path for the batched source used when invoking the compiler.
+	// Use the spec name (not `<spec>_batch`) as the stem so the parser-derived
+	// namespace matches a non-batched compile — otherwise per-test IR slices
+	// inherit `<spec>_batch.<name>` qualifiers that leak the batching detail.
+	let virtualPath = fragmentDir.join(specName).join("{specName}.maxon")
 
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
@@ -589,8 +589,41 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		outcome.verboseLines.push(line)
 	end 'commitPassed'
 
+	// Slice the batched IR text into per-test snippets and write a fragment
+	// file for each batchable test. Inspection aid only — the IR may differ
+	// from a per-fragment compile because batched optimization decisions
+	// aren't identical.
+	writePerTestFragmentsFromBatch(tests, fragmentDir: fragmentDir, specName: specName, batchedIr: cr.ir, skippedNames: buildResult.skippedNames)
+
 	return outcome
 end 'runSpecBatch'
+
+// After a successful batched compile, slice the batched IR text into per-test
+// snippets and write a fragment file for each batchable test. Tests rejected
+// by the rewriter aren't in the binary; the caller reruns those via the
+// per-fragment path which writes its own fragment.
+function writePerTestFragmentsFromBatch(tests SpecTestArray, fragmentDir FilePath, specName String, batchedIr String, skippedNames StringArray)
+	let slices = splitBatchedIr(batchedIr, tests: tests)
+	for test in tests 'eachTest'
+		if isSkippedTestName(skippedNames, name: test.name) 'skipRewriterRejected'
+			continue
+		end 'skipRewriterRejected'
+		let ir = lookupSliceIr(slices, testName: test.name)
+		writeFragment(fragmentDir, specName: specName, test: test, compileIr: ir)
+	end 'eachTest'
+end 'writePerTestFragmentsFromBatch'
+
+// Find the IR snippet for `testName` in a BatchIrSliceArray. Returns "" when
+// no slice was attributed to the test (e.g. the rewriter renamed all of its
+// declarations away from any `_b_<sanitized>_` form).
+function lookupSliceIr(slices BatchIrSliceArray, testName String) returns String
+	for slice in slices 'each'
+		if slice.testName == testName 'match'
+			return slice.ir
+		end 'match'
+	end 'each'
+	return ""
+end 'lookupSliceIr'
 
 // Per-test slice of a batched binary's output. Used by parseBatchSlice.
 type BatchSlice

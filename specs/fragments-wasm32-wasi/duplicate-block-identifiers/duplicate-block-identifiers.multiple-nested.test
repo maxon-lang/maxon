@@ -1,0 +1,37 @@
+// Test: duplicate-block-identifiers.multiple-nested
+function main() returns ExitCode
+	var x = 0
+	if true 'outer'
+		x = 1
+		while true 'inner'
+			x = 2
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @duplicate-block-identifiers.main() -> u8 {
+  entry:
+    mir.br inner_2()
+  inner_2:
+    %4 = mir.mov_imm 2 : i64
+    mir.br inner_2.exit(%4)
+  inner_2.exit:
+    mir.br outer_1.after(%6)
+  outer_1.after:
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %10 = mir.global_addr @__panic_msg_2
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_2:
+    mir.ret %7
+  }
+}
+---

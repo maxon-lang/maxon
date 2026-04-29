@@ -1,0 +1,65 @@
+// Test: self-multiple-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	var x Integer
+	var y Integer
+
+	function sum() returns Integer
+		return self.x + self.y
+	end 'sum'
+
+	function setX(newX Integer)
+		self.x = newX
+	end 'setX'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(x: 10, y: 32)
+	return p.sum()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Point.sum(local0: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %2 = mir.load %6, 0
+    %4 = mir.load %6, 8
+    %5 = mir.add.i64 %2, %4
+    mir.ret %5
+  }
+  func @Point.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %7 = mir.param local1 : i64
+    %2 = mir.mov_imm 16 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %6, %3, 0
+    mir.store %7, %3, 8
+    mir.ret %3
+  }
+  func @self-keyword.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 32 : i64
+    %2 = mir.call @Point.create(%0, %1)
+    %4 = mir.call @Point.sum(%2)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %7 = mir.global_addr @__panic_msg_3
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_3:
+    mir.ret %4
+  }
+}
+---

@@ -307,11 +307,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     Compiler.Compiler.AsyncTrace = false;
     Compiler.Compiler.Testing = true;
 
-    string? batchedIr;
     var compileSw = Stopwatch.StartNew();
     Directory.CreateDirectory(Path.GetDirectoryName(item.BatchExePath)!);
+    string? batchedArchIr = null;
     try {
-      var virtualPath = Path.Combine(_fragmentDir, item.SpecName, $"{FragmentGenerator.BatchFragmentBaseName(item.SpecName)}.maxon");
+      // Use the spec name (without `_batch` suffix) as the virtualPath stem
+      // so the parser-derived namespace matches what a non-batched compile of
+      // the same source would produce. Otherwise the per-test IR slices end
+      // up with `<spec>_batch.<name>` qualifiers that leak the batching
+      // implementation detail.
+      var virtualPath = Path.Combine(_fragmentDir, item.SpecName, $"{item.SpecName}.maxon");
       var compilerSources = new[] { new Compiler.SourceFile(virtualPath, source) };
       var result = new Compiler.Compiler().Compile(compilerSources, item.BatchExePath, returnIr: true, target: _target);
       compileSw.Stop();
@@ -321,17 +326,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var compileError = string.Join("\n", result.Errors.Select(e => e.Format()));
         return FallbackBatchToSingles(item, $"batch compile failed: {compileError}", ref generatedCount, generationErrors);
       }
-      batchedIr = result.ArchIr;
+      batchedArchIr = result.ArchIr;
     } catch (Exception ex) {
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
       return FallbackBatchToSingles(item, $"batch compile threw: {ex.Message}", ref generatedCount, generationErrors);
     }
-
-    // Persist the batch fragment file with the compiled IR snapshot.
-    var content = FragmentGenerator.GenerateBatchContent(item.SpecName, item.Tests, batchedIr);
-    File.WriteAllText(item.BatchFragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-    Interlocked.Increment(ref generatedCount);
 
     // Step 2: Run the batched binary ONCE. The dispatcher runs every
     // included test sequentially and emits framing markers around each;
@@ -375,6 +375,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       foreach (var i in batchableIdx) {
         results[i] = batchedResults[i]!;
       }
+      // Write per-test fragment files using IR sliced out of the batched
+      // compile. Inspection aid only: the IR may differ from a per-fragment
+      // compile because batched optimization decisions aren't identical.
+      WritePerTestFragmentsFromBatch(item, batchableIdx, batchedArchIr, ref generatedCount, generationErrors);
     } else {
       Logger.Debug(LogCategory.Testing, $"[BATCH FALLBACK] {item.SpecName}: re-running batchable tests individually after batch failure");
       foreach (var i in batchableIdx) {
@@ -383,6 +387,36 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
 
     return results;
+  }
+
+  /// <summary>
+  /// After a successful batched compile, slice the batched IR text into per-test
+  /// snippets and write a fragment file for each batchable test. Skipped if the
+  /// compile didn't return IR (returnIr was off or the result was empty).
+  /// </summary>
+  private void WritePerTestFragmentsFromBatch(SpecBatchWorkItem item, List<int> batchableIdx, string? batchedArchIr, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+    if (batchedArchIr == null) return;
+    var batchableTests = batchableIdx.Select(i => item.Tests[i]).ToList();
+    Dictionary<string, string> perTestIr;
+    try {
+      perTestIr = FragmentGenerator.SplitBatchedIr(batchedArchIr, batchableTests);
+    } catch (Exception ex) {
+      generationErrors.Add($"[BATCH IR SPLIT] {item.SpecName}: {ex.Message}");
+      return;
+    }
+    var specFragmentDir = Path.Combine(_fragmentDir, item.SpecName);
+    Directory.CreateDirectory(specFragmentDir);
+    foreach (var test in batchableTests) {
+      perTestIr.TryGetValue(test.Name, out var ir);
+      var content = FragmentGenerator.GenerateFragmentContentWithIr(test, ir);
+      var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+      try {
+        File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+        Interlocked.Increment(ref generatedCount);
+      } catch (Exception ex) {
+        generationErrors.Add($"[BATCH FRAGMENT WRITE] {fragmentPath}: {ex.Message}");
+      }
+    }
   }
 
   /// <summary>
@@ -463,6 +497,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
 
     var success = (SuccessExpectation)test.Expectation;
+    // Surface the per-test fragment path so failure reports point at the same
+    // file the per-fragment path would — even though we didn't write a fragment
+    // for the batched compile itself.
+    var perTestFragmentPath = Path.Combine(_fragmentDir, item.SpecName, $"{test.Name}.test");
 
     if (success.ExitCode.HasValue) {
       var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
@@ -474,7 +512,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           Passed = false,
           ErrorMessage = $"Expected exit code {expectedCode}, got {slice.ExitCode}",
           Duration = elapsed,
-          FilePath = item.BatchFragmentPath,
+          FilePath = perTestFragmentPath,
         };
       }
     }
@@ -488,7 +526,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           Passed = false,
           ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
           Duration = elapsed,
-          FilePath = item.BatchFragmentPath,
+          FilePath = perTestFragmentPath,
         };
       }
     }
@@ -502,7 +540,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       TestName = test.Name,
       Passed = true,
       Duration = elapsed,
-      FilePath = item.BatchFragmentPath,
+      FilePath = perTestFragmentPath,
     };
   }
 

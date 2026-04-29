@@ -1,0 +1,27 @@
+// Test: scientific-notation-negative-exponent
+function main() returns ExitCode
+	let x = 5.0e-1
+	return trunc(x * 20.0)
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @literals.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %2 = mir.mov_imm 4626322717216342016 : f64
+    %3 = mir.mul.f64 %0, %2
+    %4 = mir.fptosi.i64 %3
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %7 = mir.global_addr @__panic_msg_2
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_2:
+    mir.ret %4
+  }
+}
+---

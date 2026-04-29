@@ -1,0 +1,30 @@
+// Test: basic-float
+function main() returns ExitCode
+	let x = 3.14
+	let y = 2.0
+	let z = x + y
+	let result = trunc(z)
+	return result
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @float-type.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989086 : f64
+    %1 = mir.mov_imm 4611686018427387904 : f64
+    %4 = mir.add.f64 %0, %1
+    %6 = mir.fptosi.i64 %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

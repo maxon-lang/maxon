@@ -1,0 +1,33 @@
+// Test: chained-byte-int-float
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+typealias Byte = byte(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 25 as Byte
+	let i = b as Integer
+	let f = i as Float
+	return trunc(f)
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @type-casting.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 25 : i64
+    %3 = mir.sitofp.f64 %0
+    %5 = mir.fptosi.i64 %3
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %5, %6
+    mir.cond_br %7 [then: __range_panic_4(), else: __range_ok_4()]
+  __range_panic_4:
+    %8 = mir.global_addr @__panic_msg_4
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_4:
+    mir.ret %5
+  }
+}
+---

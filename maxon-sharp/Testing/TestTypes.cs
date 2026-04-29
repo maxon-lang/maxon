@@ -157,7 +157,6 @@ public record TestWorkItem(
 /// </summary>
 public record SpecBatchWorkItem(
   string SpecName,
-  string BatchFragmentPath,        // path to __batch.test
   string BatchExePath,             // path to .spec-cache/<spec>/__batch<ext>
   TestCase[] Tests,                // batchable tests in this spec, in stable order
   FileInfo SpecFile

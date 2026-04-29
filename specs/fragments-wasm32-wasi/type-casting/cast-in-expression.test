@@ -1,0 +1,23 @@
+// Test: cast-in-expression
+
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 10 as Byte
+	let result = b as Integer + 32
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @type-casting.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  }
+}
+---

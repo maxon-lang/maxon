@@ -1,0 +1,29 @@
+// Test: float-arithmetic
+function main() returns ExitCode
+	let a = 10.0
+	let b = 3.0
+	let result = a / b
+	return trunc(result)
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @float-type.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4621819117588971520 : f64
+    %1 = mir.mov_imm 4613937818241073152 : f64
+    %4 = mir.div.f64 %0, %1
+    %6 = mir.fptosi.i64 %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %9 = mir.global_addr @__panic_msg_1
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_1:
+    mir.ret %6
+  }
+}
+---

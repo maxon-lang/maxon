@@ -1,0 +1,27 @@
+// Test: scientific-notation-positive-exponent
+function main() returns ExitCode
+	let x = 1.5e2
+	return trunc(x) - 140
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @literals.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4639481672377565184 : f64
+    %2 = mir.fptosi.i64 %0
+    %3 = mir.mov_imm 140 : i64
+    %4 = mir.sub.i64 %2, %3
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %7 = mir.global_addr @__panic_msg_1
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_1:
+    mir.ret %4
+  }
+}
+---
