@@ -360,32 +360,85 @@ end 'validateCompareOp'
 // project knows about. After this rewrite, lowering only ever sees concrete
 // op shapes; the unresolved* arms in LowerMaxonToStd are pure safety panics.
 
+// Walk every function's ops, rewriting `unresolvedRead` / `unresolvedAssign`
+// against the function's declaring file path as the visibility context.
+// `fallbackFilePath` is used when a function's entry block has no recorded
+// source path (detached / synthesized functions). Visibility filtering at
+// the rewrite site needs the *reader's* file, not the project's primary
+// source path, because module-merge produces one MaxonModule covering
+// every input file.
+function rewriteUnresolvedOpsPerFunction(project Project, module MaxonModule, fallbackFilePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("invariant: funcIdx < count but get failed")
+		let funcFilePathStr = entryBlockFilePath(module, func: func)
+		let funcFilePath = filePathFromString(funcFilePathStr, fallback: fallbackFilePath)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+				rewriteOneUnresolvedOp(project, module: module, opIdx: opIdx, op: op, filePath: funcFilePath)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'rewriteUnresolvedOpsPerFunction'
+
+function rewriteOneUnresolvedOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, filePath FilePath)
+	if op.name == "unresolvedRead" 'isUnresolvedRead'
+		match op 'extract'
+			unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == unresolvedRead")
+		end 'extract'
+		return
+	end 'isUnresolvedRead'
+	if op.name == "unresolvedAssign" 'isUnresolvedAssign'
+		match op 'extract'
+			unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
+			default panic("unreachable: already checked name == unresolvedAssign")
+		end 'extract'
+	end 'isUnresolvedAssign'
+end 'rewriteOneUnresolvedOp'
+
+// Bridge `BlockSourceInfo.filePath` (a String) into a FilePath. Empty
+// strings (sentinel for non-parser-created blocks) fall back to the
+// project's primary source path so visibility checks against detached
+// blocks still resolve to *some* file.
+function filePathFromString(s String, fallback FilePath) returns FilePath
+	if s.isEmpty() 'empty'
+		return fallback
+	end 'empty'
+	return try FilePath.from(s) otherwise fallback
+end 'filePathFromString'
+
 function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
 	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
-		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
-		return
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'visible'
+			try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+			return
+		end 'visible'
 	end 'isTopLevelVar'
-	if let constVal = try project.topLevelConstants.get(name) 'isConst'
-		// Enum cases get tagged with the enclosing enum's named MaxonType so
-		// downstream consumers (varDecl slotType inference, match scrutinee
-		// type recovery) can recover the case set rather than seeing a bare
-		// integer or float literal.
-		let intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
-		let floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
-		match constVal 'inline'
-			intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range, valueType: intValueType)
-			// Float-typed top-level constants store IEEE 754 raw bits in the
-			// same i64 slot used by MaxonOp.literal for floats.
-			floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: floatValueType)
-			// String constants resolve to a `stringConst` op carrying the
-			// interned StringId. A follow-up walk pattern-matches on
-			// `stringConst` producers to specialize printInt/cmp consumers
-			// (printInt → printLiteral, cmp(stringConst, stringConst) →
-			// literal fold). Lowering panics if a stringConst op survives
-			// to its layer.
-			stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
-		end 'inline'
-		return
+	if let entry = try project.topLevelConstants.get(name) 'isConst'
+		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
+			// Enum cases get tagged with the enclosing enum's named MaxonType so
+			// downstream consumers (varDecl slotType inference, match scrutinee
+			// type recovery) can recover the case set rather than seeing a bare
+			// integer or float literal.
+			let intValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.integer)
+			let floatValueType = enumLiteralTypeOr(project, qualifiedName: name, fallback: MaxonType.float)
+			match entry.value 'inline'
+				intValue(v) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: v, range: range, valueType: intValueType)
+				// Float-typed top-level constants store IEEE 754 raw bits in the
+				// same i64 slot used by MaxonOp.literal for floats.
+				floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: floatValueType)
+				// String constants resolve to a `stringConst` op carrying the
+				// interned StringId. A follow-up walk pattern-matches on
+				// `stringConst` producers to specialize printInt/cmp consumers
+				// (printInt → printLiteral, cmp(stringConst, stringConst) →
+				// literal fold). Lowering panics if a stringConst op survives
+				// to its layer.
+				stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
+			end 'inline'
+			return
+		end 'visible'
 	end 'isConst'
 	// Enum-case lookup: a qualified name `EnumName.case` whose case isn't a
 	// known top-level constant might still name a known enum — that means the
@@ -503,8 +556,8 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 		return
 	end 'noEnum'
 	let qualifiedName = "{enumName}.{caseName}"
-	if let constVal = try project.topLevelConstants.get(qualifiedName) 'isCase'
-		let resolvedHit = matchCaseFromConstantValue(constVal)
+	if let entry = try project.topLevelConstants.get(qualifiedName) 'isCase'
+		let resolvedHit = matchCaseFromConstantValue(entry.value)
 		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: resolvedHit.rawValue, isFloat: resolvedHit.isFloat, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isCase'
@@ -559,19 +612,23 @@ end 'matchCaseFromConstantValue'
 
 function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
 	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
-		try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
-		return
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'visible'
+			try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
+			return
+		end 'visible'
 	end 'isTopLevelVar'
-	if project.topLevelConstants.contains(name) 'isConst'
-		// Top-level lets are immutable; reassignment is rejected with the
-		// E2013 wording shared with the C# bootstrap. By the time this runs
-		// `resolveAllTopLevelDecls` has drained every let into
-		// `topLevelConstants`, so a single map check suffices. The cursor
-		// location isn't available here (the rewrite walks ops post-parse),
-		// so we pass 0 / 0 / filePath — diagnostics are deduplicated by
-		// message rather than by exact span.
-		reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
-		return
+	if let entry = try project.topLevelConstants.get(name) 'isConst'
+		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
+			// Top-level lets are immutable; reassignment is rejected with
+			// the E2013 wording shared with the C# bootstrap. By the time
+			// this runs `resolveAllTopLevelDecls` has drained every let
+			// into `topLevelConstants`, so a single map check suffices.
+			// The cursor location isn't available here (the rewrite walks
+			// ops post-parse), so we pass 0 / 0 / filePath — diagnostics
+			// are deduplicated by message rather than by exact span.
+			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
+			return
+		end 'visible'
 	end 'isConst'
 	reportUnknownName(project, name: name, filePath: filePath)
 end 'rewriteUnresolvedAssign'
@@ -1442,7 +1499,7 @@ end 'resolveAllTopLevelDecls'
 // at maxon-sharp/Compiler/2-Parser.cs:4517-4521.
 function evaluateTopLevelDecl(project Project, name String, evaluating StringArray) returns ConstantValue
 	if let cached = try project.topLevelConstants.get(name) 'cached'
-		return cached
+		return cached.value
 	end 'cached'
 
 	let entry = try project.unresolvedTopLevelDecls.get(name) otherwise return ConstantValue.intValue(0)
@@ -1460,10 +1517,11 @@ function evaluateTopLevelDecl(project Project, name String, evaluating StringArr
 	if entry.mutable 'asGlobal'
 		let slotType = inferSlotTypeFromExpr(project, exprId: entry.rootExprId, value: result)
 		let initialValue = constantValueToInitialBits(result)
-		let info = TopLevelVarInfo.create(name, slotType: slotType, initialValue: initialValue)
+		let info = TopLevelVarInfo.create(name, slotType: slotType, initialValue: initialValue, visibility: entry.visibility, sourceFilePath: entry.filePath)
 		try project.topLevelVars.insert(name, value: info) otherwise ignore
 	end 'asGlobal' else 'asConst'
-		try project.topLevelConstants.insert(name, value: result) otherwise ignore
+		let constEntry = TopLevelConstant.create(result, visibility: entry.visibility, sourceFilePath: entry.filePath)
+		try project.topLevelConstants.insert(name, value: constEntry) otherwise ignore
 	end 'asConst'
 	_ = project.unresolvedTopLevelDecls.remove(name)
 	return result
@@ -1506,8 +1564,8 @@ end 'evaluateUnresolvedConstExpr'
 // runtime-side `unresolvedRead` rejection.
 function evaluateEnumCaseConst(project Project, enumName String, caseName String) returns ConstantValue
 	let qualifiedName = "{enumName}.{caseName}"
-	if let value = try project.topLevelConstants.get(qualifiedName) 'found'
-		return value
+	if let entry = try project.topLevelConstants.get(qualifiedName) 'found'
+		return entry.value
 	end 'found'
 	return ConstantValue.intValue(0)
 end 'evaluateEnumCaseConst'
@@ -1664,21 +1722,12 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// pending decl without ordering hazards.
 	resolveAllTopLevelDecls(project)
 
-	for opIdx in 0 upto module.ops.count() 'rewriteUnresolved'
-		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
-		if op.name == "unresolvedRead" 'isUnresolvedRead'
-			match op 'extract'
-				unresolvedRead(result, name, range) then rewriteUnresolvedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath)
-				default panic("unreachable: already checked name == unresolvedRead")
-			end 'extract'
-		end 'isUnresolvedRead'
-		if op.name == "unresolvedAssign" 'isUnresolvedAssign'
-			match op 'extract'
-				unresolvedAssign(name, value, range) then rewriteUnresolvedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath)
-				default panic("unreachable: already checked name == unresolvedAssign")
-			end 'extract'
-		end 'isUnresolvedAssign'
-	end 'rewriteUnresolved'
+	// Per-function rewrite so visibility lookups can use the function's
+	// declaring file as the reading context — when files are merged into
+	// one MaxonModule, `filePath` (the runTypeResolution param) only
+	// names the first source. Ops from other files would visibility-
+	// check against the wrong path otherwise.
+	rewriteUnresolvedOpsPerFunction(project, module: module, fallbackFilePath: filePath)
 
 	// Now that every unresolvedRead/Assign has been replaced with its concrete
 	// op shape (globalLoad/globalStore/literal), build per-function producer-

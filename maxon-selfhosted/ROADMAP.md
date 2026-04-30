@@ -406,9 +406,15 @@ Cross-module / link-time inlining; profile-guided optimization; `@specialize` at
 ### Done
 - Parser: module-level `var`/`let` declarations and `static var/let` fields with structural `UnresolvedConstExpr` initializers (deferred resolution after enums/typealiases drain).
 - Const-expr forms supported: int / float / bool literals, `EnumName.caseName`, `<expr> as TypeName` ranged-cast, identifier references to `let` constants, full arithmetic / comparison / logical fold.
-- TypeResolution: `resolveAllTopLevelVars` drains `unresolvedTopLevelVars` into `globalVars`, with slot-type inference from the outermost initializer node.
+- TypeResolution: `resolveAllTopLevelDecls` drains `unresolvedTopLevelDecls` into `topLevelConstants` (lets) or `topLevelVars` (vars) based on each entry's `mutable` flag.
 - Diagnostics: E2045 for runtime call initializers; E2013 for assignment to immutable `let` (top-level or static); `let X = TypeName.method(...)` is tolerated (no init emitted yet) so the reassignment path can still surface E2013.
 - Std Dialect: `globalLoad` / `globalStore` carry `slotType`. The `isFloat` flag is plumbed through `StdSystemOp.loadIndirect`/`storeIndirect` → `MirOp.load`/`store` → X64 (`loadIndirectXmm` / `storeIndirectXmm` via new `emitLoadIndirectXmmOp` / `emitStoreIndirectXmmOp`) → ARM64 (`fpLoadIndirect` / `fpStoreIndirect`) → WASM (`opF64Load` / `opF64Store`), so float-typed globals and float struct fields land directly in FP registers.
+- Visibility: `Visibility` enum (file / module / exported); `export` and contextual `module` keywords detected at `dispatchTopLevel`; every resolved/unresolved decl entry carries `visibility` + `sourceFilePath`. The `unresolvedRead`/`unresolvedAssign` rewrite walk runs per function so the reader's file path is the function's declaring file (not the project's primary source). Lookup uses `isVisibleFrom(visibility, declFilePath, readerFilePath)` — file-private match same path; module-scoped match same directory subtree; exported always match. `module-var-same-directory` passes when enabled.
+
+### Visibility limitations (next steps)
+- Functions, types, typealiases, and enums don't yet track visibility — they default to whole-program-visible regardless of modifier. `module function` / `export function` is recognized syntactically but the visibility tier is dropped on the floor.
+- Static-field visibility is hardcoded to `exported`; once type-decl visibility is tracked end-to-end, static fields should inherit the enclosing type's tier.
+- The `module-keyword` spec exercises function-tier `module` and remains off the whitelist until function visibility lands.
 
 ### Still pending (3/28 failing)
 - **Array literal globals** (`var xs = [1, 2, 3]`): no array-literal value emission yet (Maxon-side `parseArrayLiteralExpr` is still a parse-stub) and no `__module_init` runtime-init function — Phase 6 (managed memory) prerequisite.

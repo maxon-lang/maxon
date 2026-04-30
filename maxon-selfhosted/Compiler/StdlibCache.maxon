@@ -298,11 +298,13 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		end 'eachField'
 	end 'eachStruct'
 
-	// Top-level constants
+	// Top-level constants. Visibility / sourceFilePath are not serialized:
+	// every stdlib constant is implicitly `exported` and originates at the
+	// stdlib bootstrap path; readStdlibCache stamps those defaults in.
 	writeDword(buf, value: data.topLevelConstants.count())
-	for (name, cv) in data.topLevelConstants 'eachConst'
+	for (name, entry) in data.topLevelConstants 'eachConst'
 		writeString(buf, s: name)
-		writeConstantValue(project, buf: buf, cv: cv)
+		writeConstantValue(project, buf: buf, cv: entry.value)
 	end 'eachConst'
 
 	// Ensure parent directory (and any missing ancestors) exist
@@ -638,12 +640,14 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	let constCount = readDword(buf, offset: pos)
 	pos = pos + 4
 
+	let stdlibBootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("readStdlibCache: bootstrap path rejected")
 	for _ in 0 upto constCount 'eachConst'
 		let (name, p14) = readString(buf, offset: pos)
 		pos = p14
 		let (cv, p15) = readConstantValue(project, buf: buf, offset: pos)
 		pos = p15
-		try data.topLevelConstants.insert(name, value: cv) otherwise ignore
+		let entry = TopLevelConstant.create(cv, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath)
+		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'eachConst'
 
 	// Populate data.typeNameTable from the destination project's interner so
@@ -822,8 +826,8 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'copyStructs'
 
-	for (name, cv) in project.topLevelConstants 'copyConsts'
-		try data.topLevelConstants.insert(name, value: cv) otherwise ignore
+	for (name, entry) in project.topLevelConstants 'copyConsts'
+		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'copyConsts'
 end 'captureStdlibMetadata'
 
@@ -870,7 +874,7 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	end 'restoreStructs'
 
 	// Restore top-level constants
-	for (name, cv) in data.topLevelConstants 'restoreConsts'
-		try project.topLevelConstants.insert(name, value: cv) otherwise ignore
+	for (name, entry) in data.topLevelConstants 'restoreConsts'
+		try project.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'restoreConsts'
 end 'restoreStdlibMetadata'

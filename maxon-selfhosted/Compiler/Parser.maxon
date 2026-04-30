@@ -695,7 +695,7 @@ export type Parser
 	// entry: cursor AT the token AFTER `let` / `var` — the binding name.
 	// Caller (dispatchTopLevel / parseStaticVar) has already consumed the
 	// keyword.
-	function parseTopLevelDecl(typeName String, mutable bool) throws ParserError
+	function parseTopLevelDecl(typeName String, mutable bool, visibility Visibility) throws ParserError
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
@@ -707,7 +707,7 @@ export type Parser
 		// String literal initializer (`let GREETING = "hello"`,
 		// `var msg = "hi"`). Captured as a `stringLit` arena node.
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
-			try parseTopLevelStringDecl(nameToken, qualifiedName: qualifiedName, valueToken: valueToken, mutable: mutable)
+			try parseTopLevelStringDecl(nameToken, qualifiedName: qualifiedName, valueToken: valueToken, mutable: mutable, visibility: visibility)
 			return
 		end 'isString'
 
@@ -731,7 +731,8 @@ export type Parser
 		// distinction the resolver currently tracks).
 		if isRuntimeInitInitializer(valueToken) 'isMethodCall'
 			skipToNextLine()
-			try project.topLevelConstants.insert(qualifiedName, value: ConstantValue.intValue(0)) otherwise ignore
+			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
+			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise ignore
 			logTrace(LogCategory.parser, message: () gives "parser: deferred runtime-init decl '{qualifiedName}' (no init emitted)")
 			return
 		end 'isMethodCall'
@@ -745,12 +746,12 @@ export type Parser
 			return
 		end 'notConst'
 
-		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable)
+		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
 	end 'parseTopLevelDecl'
 
 	// Handle the `<name> = "<string>"` shape. Lifted out so the EOF /
 	// interpolation handling stays self-contained.
-	function parseTopLevelStringDecl(nameToken Token, qualifiedName String, valueToken Token, mutable bool) throws ParserError
+	function parseTopLevelStringDecl(nameToken Token, qualifiedName String, valueToken Token, mutable bool, visibility Visibility) throws ParserError
 		// Step past the string literal. Tolerate EOF because `<name> = ""`
 		// at end-of-file is a complete declaration.
 		try cursor.advance() otherwise 'eofAfterString'
@@ -766,7 +767,7 @@ export type Parser
 		end 'hasInterp'
 		let strId = project.strings.intern(valueToken.value)
 		let exprId = appendConstExpr(UnresolvedConstExpr.stringLit(strId))
-		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable)
+		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
 		logTrace(LogCategory.parser, message: () gives "parser: const string '{qualifiedName}'")
 	end 'parseTopLevelStringDecl'
 
@@ -817,16 +818,16 @@ export type Parser
 	// an already-resolved constant, an already-resolved var, or a
 	// stdlib-cached constant. The duplicate-check set is the union of all
 	// destinations the resolver might land in.
-	function registerUnresolvedTopLevelDecl(nameToken Token, qualifiedName String, rootExprId UnresolvedConstExprId, mutable bool)
+	function registerUnresolvedTopLevelDecl(nameToken Token, qualifiedName String, rootExprId UnresolvedConstExprId, mutable bool, visibility Visibility)
 		if project.topLevelConstants.contains(qualifiedName) or project.topLevelVars.contains(qualifiedName) 'dupResolved'
 			reportDuplicateConstant(nameToken)
 			return
 		end 'dupResolved'
-		let entry = UnresolvedTopLevelDecl.create(qualifiedName, rootExprId: rootExprId, mutable: mutable, line: nameToken.line, column: nameToken.column, filePath: filePath)
+		let entry = UnresolvedTopLevelDecl.create(qualifiedName, rootExprId: rootExprId, mutable: mutable, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath)
 		try project.unresolvedTopLevelDecls.insert(qualifiedName, value: entry) otherwise 'dupPending'
 			reportDuplicateConstant(nameToken)
 		end 'dupPending'
-		logTrace(LogCategory.parser, message: () gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable}")
+		logTrace(LogCategory.parser, message: () gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable} visibility={visibility.name}")
 	end 'registerUnresolvedTopLevelDecl'
 
 	// Parse `static let NAME = <const-int-expr>` inside a type. The value is
@@ -1081,10 +1082,11 @@ export type Parser
 	// Adding a new top-level keyword — and hence a new declaration that may
 	// carry an `export` modifier — only requires extending the inner match.
 	function dispatchTopLevel() throws ParserError
-		let isExport = accept(TokenKind.export)
+		let visibility = consumeVisibilityModifier()
+		let isExport = visibility == Visibility.global
 
 		try 'dispatchInner'
-			dispatchInner()
+			dispatchInner(visibility: visibility)
 		end 'dispatchInner' otherwise(e) 'maybeRecover'
 			if isExport 'exportRecovery'
 				// `export <garbage>` — report the bad token then skip to the
@@ -1102,21 +1104,41 @@ export type Parser
 		end 'maybeRecover'
 	end 'dispatchTopLevel'
 
+	// Consume an optional `export` keyword or contextual `module`
+	// identifier, returning the resulting visibility tier. `module` is a
+	// contextual keyword (the lexer emits it as an identifier) — it's
+	// only recognized when followed by a decl-opener token, so user code
+	// can still bind `module` as a parameter or local variable name.
+	function consumeVisibilityModifier() returns Visibility
+		if accept(TokenKind.export) 'isExport'
+			return Visibility.global
+		end 'isExport'
+		let token = cursor.current()
+		if token.kind == TokenKind.identifier and token.value == "module" 'maybeModuleScoped'
+			let next = try cursor.peek(1) otherwise Token.eof()
+			if isTopLevelOpener(next.kind) 'isModuleScoped'
+				try cursor.advance() otherwise return Visibility.file
+				return Visibility.module
+			end 'isModuleScoped'
+		end 'maybeModuleScoped'
+		return Visibility.file
+	end 'consumeVisibilityModifier'
+
 	function reportBadExportAndSkip()
 		let badTok = cursor.current()
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected declaration after 'export', got '{tokenValueToString(badTok.value)}'", line: badTok.line, column: badTok.column, filePath: filePath)
 		skipToNextLine()
 	end 'reportBadExportAndSkip'
 
-	function dispatchInner() throws ParserError
+	function dispatchInner(visibility Visibility) throws ParserError
 		let token = try consume()
 
 		match token.kind 'k'
 			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create())
 			type then try parseTypeDecl()
 			enum then try parseEnumDecl()
-			let then try parseTopLevelDecl(typeName: "", mutable: false)
-			var then try parseTopLevelDecl(typeName: "", mutable: true)
+			let then try parseTopLevelDecl(typeName: "", mutable: false, visibility: visibility)
+			var then try parseTopLevelDecl(typeName: "", mutable: true, visibility: visibility)
 			typealias then try parseTopLevelTypealias()
 			default throws ParserError.unhandledToken
 		end 'k'
@@ -1267,12 +1289,19 @@ export type Parser
 			end 'isField' else if kindToken.kind == TokenKind.static 'isStatic'
 				try eat(TokenKind.static)
 				let afterStatic = cursor.current()
+				// Static fields' visibility tracks the enclosing type:
+				// `export type T { static var f = 0 }` makes `T.f`
+				// reachable wherever `T` is reachable. We don't have the
+				// type's visibility threaded here yet, so static fields
+				// register as `global` to preserve current cross-file
+				// reachability — tightening this is a follow-up once
+				// type-decl visibility is also tracked end-to-end.
 				if afterStatic.kind == TokenKind.var 'sVar'
 					try eat(TokenKind.var)
-					try parseTopLevelDecl(typeName: currentTypeName, mutable: true)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: true, visibility: Visibility.global)
 				end 'sVar' else if afterStatic.kind == TokenKind.let 'sLet'
 					try eat(TokenKind.let)
-					try parseTopLevelDecl(typeName: currentTypeName, mutable: false)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: false, visibility: Visibility.global)
 				end 'sLet' else 'sFn'
 					try eat(TokenKind.function)
 					try parseFunction(currentTypeName, isInstance: false, fields: fields)
@@ -1451,12 +1480,16 @@ export type Parser
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
+			// Enum-case visibility matches the enum declaration's; we
+			// haven't threaded enum-decl visibility through yet, so cases
+			// register as `global` to preserve cross-file reachability.
 			let qualifiedName = "{currentTypeName}.{caseName}"
 			var constValue = ConstantValue.intValue(rawValue)
 			if rawIsFloat 'isFloatConst'
 				constValue = ConstantValue.floatValue(rawValue)
 			end 'isFloatConst'
-			try project.topLevelConstants.insert(qualifiedName, value: constValue) otherwise ignore
+			let caseEntry = TopLevelConstant.create(constValue, visibility: Visibility.global, sourceFilePath: filePath)
+			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise ignore
 
 			try skipNewlines()
 
@@ -2695,7 +2728,8 @@ export type Parser
 		// would read garbage.
 		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
 			let stringId = exprStringConstId(exprResult)
-			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(stringId)) otherwise 'dupConst3'
+			let localStrEntry = TopLevelConstant.create(ConstantValue.stringValue(stringId), visibility: Visibility.file, sourceFilePath: filePath)
+			try project.topLevelConstants.insert(nameToken.value, value: localStrEntry) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
 			let lastExprTokenStr = previousToken()

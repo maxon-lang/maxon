@@ -38,6 +38,63 @@ export type IrDumpOptions
 	end 'stagesEnabled'
 end 'IrDumpOptions'
 
+// Visibility tier for a top-level declaration. Three tiers match the
+// language reference:
+//   - `file`: visible only inside the declaring file. The default
+//     when a decl carries no visibility modifier.
+//   - `module`: visible from any file in the directory subtree
+//     rooted at the declaring file's directory. Source: the contextual
+//     `module` keyword that precedes the decl token.
+//   - `exported`: visible everywhere. Source: the `export` keyword.
+//
+// Stored on every resolved/unresolved decl entry so visibility-aware
+// lookup can filter candidates against the reading file's path. Until
+// this enum landed, the self-hosted compiler treated every decl as
+// `exported` regardless of modifier.
+export enum Visibility
+	file
+	module
+	global
+end 'Visibility'
+
+// True when a decl declared in `declFilePath` (with the given visibility
+// tier) is visible from the file at `readerFilePath`. The two paths are
+// absolute / virtual paths as the parser stamped them at decl time.
+//
+// Tier rules:
+//   - file: declFilePath must equal readerFilePath
+//   - module: readerFilePath must live under declFilePath's parent
+//     directory (or in that directory itself)
+//   - global: always visible
+export function isVisibleFrom(visibility Visibility, declFilePath FilePath, readerFilePath FilePath) returns bool
+	match visibility 'tier'
+		global then return true
+		file then return declFilePath.toString() == readerFilePath.toString()
+		module then return readerFileIsInModuleSubtree(declFilePath, readerFilePath: readerFilePath)
+	end 'tier'
+end 'isVisibleFrom'
+
+// True when `readerFilePath` lives in the same directory as `declFilePath`
+// or any descendant directory. The check compares stringified parent
+// paths: the reader's parent must start with the declarer's parent
+// (followed by either end-of-string or a path separator) so a sibling
+// directory whose name happens to share a prefix doesn't match.
+function readerFileIsInModuleSubtree(declFilePath FilePath, readerFilePath FilePath) returns bool
+	let declDir = try declFilePath.parent() otherwise return declFilePath.toString() == readerFilePath.toString()
+	let readerDir = try readerFilePath.parent() otherwise return false
+	let declDirStr = declDir.toString()
+	let readerDirStr = readerDir.toString()
+	if readerDirStr == declDirStr 'sameDir'
+		return true
+	end 'sameDir'
+	// Subtree match: readerDir must start with declDir + native separator
+	// so a directory name that shares a prefix (`foo/` vs `foobar/`)
+	// doesn't false-positive. FilePath normalizes paths to the platform
+	// separator on construction, so we use the same separator here.
+	let prefix = "{declDirStr}{FilePath.separator()}"
+	return readerDirStr.startsWith(prefix)
+end 'readerFileIsInModuleSubtree'
+
 export type Project
 	// Query database (incremental compilation cache)
 	export var db QueryDatabase
@@ -599,13 +656,31 @@ export union ConstantValue
 	floatValue(bits IntConstant)
 end 'ConstantValue'
 
-export typealias ConstantMap = Map with(String, ConstantValue)
+// One resolved top-level constant. The `value` carries the folded
+// payload; `visibility` and `sourceFilePath` let cross-file lookup
+// filter via `isVisibleFrom`. Stdlib-cached constants synthesize an
+// `exported` entry with the stdlib bootstrap path so user code reading
+// a stdlib constant always sees it.
+export type TopLevelConstant
+	export var value ConstantValue
+	export var visibility Visibility
+	export var sourceFilePath FilePath
+
+	export static function create(value ConstantValue, visibility Visibility, sourceFilePath FilePath) returns TopLevelConstant
+		return Self{value: value, visibility: visibility, sourceFilePath: sourceFilePath}
+	end 'create'
+end 'TopLevelConstant'
+
+export typealias ConstantMap = Map with(String, TopLevelConstant)
 
 // --- Cache codec ---
 // Reader resolves stringValue payloads through the destination project's
 // string interner; writer dereferences through the source project's
 // strings table. The id space is per-Project and not portable across
-// caches, so we round-trip the resolved bytes.
+// caches, so we round-trip the resolved bytes. Cached entries don't carry
+// visibility / sourceFilePath — every stdlib constant is implicitly
+// `exported` and originates at the stdlib bootstrap path; readStdlibCache
+// stamps those values in.
 
 export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
 	writeDword(buf, value: cv.ordinal)
@@ -738,14 +813,19 @@ export type UnresolvedTopLevelDecl
 	// Determines whether the resolved value lands in the writable `.data`
 	// section or as an inlined constant the rewriter substitutes at use sites.
 	export var mutable bool
+	// Visibility tier. The parser stamps in `exported` when the decl
+	// carries `export`, `module` when preceded by the contextual
+	// `module` keyword, otherwise `file`.
+	export var visibility Visibility
 	// Parse-time source location for resolver-emitted diagnostics (cycle,
-	// unknown-name). Mirrors UnresolvedTypealias.
+	// unknown-name). `filePath` doubles as the visibility anchor —
+	// visibility lookups compare against this.
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
-		return Self{name: name, rootExprId: rootExprId, mutable: mutable, line: line, column: column, filePath: filePath}
+	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
+		return Self{name: name, rootExprId: rootExprId, mutable: mutable, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedTopLevelDecl'
 
@@ -760,13 +840,19 @@ export typealias UnresolvedTopLevelDeclMap = Map with(String, UnresolvedTopLevel
 // label because that is the lowering technique — RIP-relative reads
 // against a linker symbol — regardless of whether the source-level decl
 // was exported.
+//
+// `visibility` and `sourceFilePath` carry the source-level visibility
+// tier and declaring file path so cross-file reads can filter by
+// `isVisibleFrom`.
 export type TopLevelVarInfo
 	export var name String
 	export var slotType MaxonType
 	export var initialValue IntConstant
+	export var visibility Visibility
+	export var sourceFilePath FilePath
 
-	export static function create(name String, slotType MaxonType, initialValue IntConstant) returns TopLevelVarInfo
-		return Self{name: name, slotType: slotType, initialValue: initialValue}
+	export static function create(name String, slotType MaxonType, initialValue IntConstant, visibility Visibility, sourceFilePath FilePath) returns TopLevelVarInfo
+		return Self{name: name, slotType: slotType, initialValue: initialValue, visibility: visibility, sourceFilePath: sourceFilePath}
 	end 'create'
 end 'TopLevelVarInfo'
 
