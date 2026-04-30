@@ -87,9 +87,15 @@ function promoteFunction(func IrFunction, module StdModule)
 	let maxFuncId = scanMaxValueId(func, module: module)
 	let funcIdRef = ValueIdRef.create(maxFuncId + 1)
 
+	// Slot liveness powers pruned-SSA phi placement below — without it,
+	// slots stored only inside a loop body get dead phis at the loop header
+	// whose entry-edge value is unreachable.
+	let numSlots = slotInfo.maxSlot + 1
+	let liveness = computeSlotLiveness(func, module: module, numBlocks: numBlocks, numSlots: numSlots, promotable: promotable, cfg: cfg, rpo: rpo)
+
 	// Phase 5: Place block arguments (phi-nodes) at iterated dominance frontiers
 	// phiMap[blockId][slotIdx] = valueId of the block arg for that slot, or REMAP_NONE
-	let phiMap = placePhiNodes(slotInfo, promotable: promotable, df: df, numBlocks: numBlocks, funcIdRef: funcIdRef)
+	let phiMap = placePhiNodes(slotInfo, promotable: promotable, df: df, numBlocks: numBlocks, funcIdRef: funcIdRef, liveness: liveness, numSlots: numSlots)
 
 	// Insert block args into the actual blocks for each placed phi
 	insertBlockArgs(func, module: module, phiMap: phiMap, slotInfo: slotInfo)
@@ -290,9 +296,16 @@ function markBothOperandSlots(leftId ValueId, rightId ValueId, info SlotInfo)
 end 'markBothOperandSlots'
 
 function markFloatUnaryOperands(op StdArithUnaryOp, info SlotInfo)
+	// Only ops whose OPERAND is float poison the source slot's type. siToFpF64
+	// converts int→float, so its operand is int — including it in the float
+	// range flipped int loop-counter slots to float, which poisoned the
+	// mem2reg phi's argType and produced f64 locals fed by i64 stores on
+	// wasm (silent stack-machine mismatch surfacing as `expected f64, found i64`).
 	match op.opcode 'check'
-		fpToSiI64 to absF64 then markOperandSlotAsFloat(op.operandId, info: info)
 		negI64 to bitNotI64 then break 'check'
+		fpToSiI64 then markOperandSlotAsFloat(op.operandId, info: info)
+		siToFpF64 then break 'check'
+		sqrtF64 to absF64 then markOperandSlotAsFloat(op.operandId, info: info)
 	end 'check'
 end 'markFloatUnaryOperands'
 
@@ -361,8 +374,163 @@ end 'classifyPromotable'
 // phiMap[blockId][slotId] = fresh valueId for the block arg, or REMAP_NONE if no phi.
 typealias PhiMap = Array with ValueIdArray
 
-function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef) returns PhiMap
-	let numSlots = slotInfo.maxSlot + 1
+// Per-block slot bitsets, flat-indexed as `blockId * numSlots + slotId`. Used
+// for liveness analysis to prune dead phis from the IDF placement.
+
+// Flat index into a (numBlocks × numSlots) BoolArray bitset. Distinct
+// typealias from VarSlot/BlockId so signatures read as "index into the
+// bitset" rather than "slot id" or "block id".
+typealias BitsetIndex = int(0 to u64.max)
+
+function bitsetIndex(blockId BlockId, slotId VarSlot, numSlots VarSlot) returns BitsetIndex
+	return blockId * numSlots + slotId
+end 'bitsetIndex'
+
+function getSlotBit(bitset BoolArray, blockId BlockId, slotId VarSlot, numSlots VarSlot) returns bool
+	return try bitset.get(bitsetIndex(blockId, slotId: slotId, numSlots: numSlots)) otherwise false
+end 'getSlotBit'
+
+function setSlotBit(bitset BoolArray, blockId BlockId, slotId VarSlot, numSlots VarSlot, value bool)
+	let idx = bitsetIndex(blockId, slotId: slotId, numSlots: numSlots)
+	try bitset.set(idx, value: value) otherwise panic("invariant: BoolArray.set OOB at ({blockId},{slotId}) — sized to numBlocks*numSlots")
+end 'setSlotBit'
+
+// Per-block liveness inputs. `gen[B]` = slots loaded in B before any local
+// store (upward-exposed); `kill[B]` = slots stored in B. `liveIn[B]` =
+// gen[B] ∪ (liveOut[B] − kill[B]); `liveOut[B]` = ⋃ liveIn[succ].
+type SlotLiveness
+	export var gen BoolArray
+	export var kill BoolArray
+	export var liveIn BoolArray
+	export var liveOut BoolArray
+
+	export static function create(gen BoolArray, kill BoolArray, liveIn BoolArray, liveOut BoolArray) returns SlotLiveness
+		return Self{gen: gen, kill: kill, liveIn: liveIn, liveOut: liveOut}
+	end 'create'
+end 'SlotLiveness'
+
+// Build the gen/kill sets by walking each block's ops once. A load reaches
+// gen only if it isn't already killed by an earlier store in the same block —
+// that's what makes `gen` upward-exposed instead of "any load anywhere".
+function computeSlotGenKill(func IrFunction, module StdModule, numBlocks BlockId, numSlots VarSlot, promotable PromotableInfo) returns (BoolArray, BoolArray)
+	let bsSize = numBlocks * numSlots
+	var gen = BoolArray.create()
+	var kill = BoolArray.create()
+	growBoolArray(gen, size: bsSize)
+	growBoolArray(kill, size: bsSize)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		let blockId = block.id
+		// Per-block scratch: track which slots have been killed within this
+		// block so far. Loads that follow a kill don't contribute to gen.
+		var killedHere = BoolArray.create()
+		growBoolArray(killedHere, size: numSlots)
+
+		for opIdx in block.opRefs 'eachOp'
+			let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			match stdOp 'dispatch'
+				memory(op) then accumulateGenKill(op, blockId: blockId, numSlots: numSlots, promotable: promotable, gen: gen, kill: kill, killedHere: killedHere)
+				arith then break 'dispatch'
+				control then break 'dispatch'
+				call then break 'dispatch'
+				system then break 'dispatch'
+			end 'dispatch'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return (gen, kill)
+end 'computeSlotGenKill'
+
+function accumulateGenKill(memOp StdMemoryOp, blockId BlockId, numSlots VarSlot, promotable PromotableInfo, gen BoolArray, kill BoolArray, killedHere BoolArray)
+	match memOp 'check'
+		loadSlot(_, slotId) then accumulateLoad(slotId, blockId: blockId, numSlots: numSlots, promotable: promotable, gen: gen, killedHere: killedHere)
+		storeSlot(slotId, _) then accumulateStore(slotId, blockId: blockId, numSlots: numSlots, promotable: promotable, kill: kill, killedHere: killedHere)
+	end 'check'
+end 'accumulateGenKill'
+
+function accumulateLoad(slotId VarSlot, blockId BlockId, numSlots VarSlot, promotable PromotableInfo, gen BoolArray, killedHere BoolArray)
+	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'skip'
+		return
+	end 'skip'
+	let alreadyKilled = try killedHere.get(slotId) otherwise false
+	if alreadyKilled 'localStore'
+		return
+	end 'localStore'
+	setSlotBit(gen, blockId: blockId, slotId: slotId, numSlots: numSlots, value: true)
+end 'accumulateLoad'
+
+function accumulateStore(slotId VarSlot, blockId BlockId, numSlots VarSlot, promotable PromotableInfo, kill BoolArray, killedHere BoolArray)
+	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'skip'
+		return
+	end 'skip'
+	setSlotBit(kill, blockId: blockId, slotId: slotId, numSlots: numSlots, value: true)
+	try killedHere.set(slotId, value: true) otherwise panic("invariant: killedHere sized to numSlots")
+end 'accumulateStore'
+
+// Backward dataflow to fixpoint over the gen/kill sets. Iterating in reverse
+// post-order propagates back-edges in one extra pass per loop nesting depth.
+function computeSlotLiveness(func IrFunction, module StdModule, numBlocks BlockId, numSlots VarSlot, promotable PromotableInfo, cfg CfgInfo, rpo RpoInfo) returns SlotLiveness
+	let (gen, kill) = computeSlotGenKill(func, module: module, numBlocks: numBlocks, numSlots: numSlots, promotable: promotable)
+	let bsSize = numBlocks * numSlots
+	var liveIn = BoolArray.create()
+	var liveOut = BoolArray.create()
+	growBoolArray(liveIn, size: bsSize)
+	growBoolArray(liveOut, size: bsSize)
+
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		// Walk blocks in reverse RPO so a block's successors are visited
+		// before the block itself — that way a single iteration carries
+		// liveness across forward edges and only loop back-edges force
+		// another pass.
+		var rpoIdx = rpo.order.count() - 1
+		while rpoIdx >= 0 'eachBlockRev'
+			let blockId = try rpo.order.get(rpoIdx) otherwise break
+			let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+				rpoIdx = rpoIdx - 1
+				continue
+			end 'noSuccs'
+			// liveOut[B] = union liveIn[succ]
+			var slotIdx = 0
+			while slotIdx < numSlots 'eachSlotOut'
+				var anyLive = false
+				for succ in succs 'eachSucc'
+					if getSlotBit(liveIn, blockId: succ, slotId: slotIdx, numSlots: numSlots) 'isLive'
+						anyLive = true
+						break
+					end 'isLive'
+				end 'eachSucc'
+				let prev = getSlotBit(liveOut, blockId: blockId, slotId: slotIdx, numSlots: numSlots)
+				if anyLive != prev 'changedOut'
+					setSlotBit(liveOut, blockId: blockId, slotId: slotIdx, numSlots: numSlots, value: anyLive)
+					changed = true
+				end 'changedOut'
+				slotIdx = slotIdx + 1
+			end 'eachSlotOut'
+			// liveIn[B] = gen[B] ∪ (liveOut[B] − kill[B])
+			slotIdx = 0
+			while slotIdx < numSlots 'eachSlotIn'
+				let isGen = getSlotBit(gen, blockId: blockId, slotId: slotIdx, numSlots: numSlots)
+				let isKilled = getSlotBit(kill, blockId: blockId, slotId: slotIdx, numSlots: numSlots)
+				let outLive = getSlotBit(liveOut, blockId: blockId, slotId: slotIdx, numSlots: numSlots)
+				let nowLive = isGen or (outLive and not isKilled)
+				let prevIn = getSlotBit(liveIn, blockId: blockId, slotId: slotIdx, numSlots: numSlots)
+				if nowLive != prevIn 'changedIn'
+					setSlotBit(liveIn, blockId: blockId, slotId: slotIdx, numSlots: numSlots, value: nowLive)
+					changed = true
+				end 'changedIn'
+				slotIdx = slotIdx + 1
+			end 'eachSlotIn'
+			rpoIdx = rpoIdx - 1
+		end 'eachBlockRev'
+	end 'fixpoint'
+
+	return SlotLiveness.create(gen, kill: kill, liveIn: liveIn, liveOut: liveOut)
+end 'computeSlotLiveness'
+
+function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef, liveness SlotLiveness, numSlots VarSlot) returns PhiMap
 	// Initialize phiMap: for each block, an array of REMAP_NONE
 	var phiMap = PhiMap.create()
 	var bi = 0
@@ -409,32 +577,45 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 			for dfBlock in dfSet 'eachDfBlock'
 				// Sentinel: hasPlacedPhi is grown lazily; absent entries default to false ("no phi placed yet").
 				let alreadyPlaced = try hasPlacedPhi.get(dfBlock) otherwise false
-				if not alreadyPlaced 'place'
-					// Allocate a fresh valueId for this phi-node.
-					// phiMap, hasPlacedPhi, and inWorklist are all sized to numBlocks; dfBlock < numBlocks
-					// because it came from the dominance frontier of an in-bounds block. blockSlots is
-					// sized to numSlots in initPhiMap; slotIdx < numSlots for the current loop.
-					let freshId = allocValueId(funcIdRef)
-					try 'placePhi'
-						var blockSlots = phiMap.get(dfBlock)
-						blockSlots.set(slotIdx, value: freshId)
-						hasPlacedPhi.set(dfBlock, value: true)
-					end 'placePhi' otherwise(e) 'badPlace'
-						match e 'kind'
-							indexOutOfBounds then panic("invariant: phiMap/hasPlacedPhi/blockSlots sized to numBlocks/numSlots but a get/set was OOB")
-							emptySlot then panic("invariant: phiMap/hasPlacedPhi/blockSlots slot empty after init")
-						end 'kind'
-					end 'badPlace'
-					logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
+				if alreadyPlaced 'skipPlaced'
+					continue
+				end 'skipPlaced'
 
-					// The phi itself is a definition, so add to worklist
-					// Sentinel: inWorklist is grown lazily; absent entries default to false.
-					let alreadyInWl = try inWorklist.get(dfBlock) otherwise false
-					if not alreadyInWl 'addToWl'
-						worklist.push(dfBlock)
-						try inWorklist.set(dfBlock, value: true) otherwise panic("invariant: inWorklist.set OOB")
-					end 'addToWl'
-				end 'place'
+				// Pruned-SSA: only place a phi where the slot is actually
+				// live-in. Without this, slots whose only stores are inside a
+				// loop body (e.g. a let-bound divisor) get a header phi whose
+				// entry-edge value is unreachable, and the rename pass falls
+				// back to value id 0 — which referenced whatever happened to
+				// live there (typically the first param), producing a
+				// type-tagged dead phi that wasm validation rejected.
+				if not getSlotBit(liveness.liveIn, blockId: dfBlock, slotId: slotIdx, numSlots: numSlots) 'notLiveIn'
+					continue
+				end 'notLiveIn'
+
+				// Allocate a fresh valueId for this phi-node.
+				// phiMap, hasPlacedPhi, and inWorklist are all sized to numBlocks; dfBlock < numBlocks
+				// because it came from the dominance frontier of an in-bounds block. blockSlots is
+				// sized to numSlots in initPhiMap; slotIdx < numSlots for the current loop.
+				let freshId = allocValueId(funcIdRef)
+				try 'placePhi'
+					var blockSlots = phiMap.get(dfBlock)
+					blockSlots.set(slotIdx, value: freshId)
+					hasPlacedPhi.set(dfBlock, value: true)
+				end 'placePhi' otherwise(e) 'badPlace'
+					match e 'kind'
+						indexOutOfBounds then panic("invariant: phiMap/hasPlacedPhi/blockSlots sized to numBlocks/numSlots but a get/set was OOB")
+						emptySlot then panic("invariant: phiMap/hasPlacedPhi/blockSlots slot empty after init")
+					end 'kind'
+				end 'badPlace'
+				logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
+
+				// The phi itself is a definition, so add to worklist
+				// Sentinel: inWorklist is grown lazily; absent entries default to false.
+				let alreadyInWl = try inWorklist.get(dfBlock) otherwise false
+				if not alreadyInWl 'addToWl'
+					worklist.push(dfBlock)
+					try inWorklist.set(dfBlock, value: true) otherwise panic("invariant: inWorklist.set OOB")
+				end 'addToWl'
 			end 'eachDfBlock'
 		end 'processWorklist'
 		slotIdx = slotIdx + 1

@@ -915,15 +915,20 @@ export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeAr
 			// directly. This is a strong hint we can never improve on.
 			destRange.hint = srcRange.fixedReg
 		end 'srcFixed' else 'noFixed'
-			// Otherwise record a copy-link in both directions so the
-			// coloring phase can resolve the hint dynamically. We never
-			// forward-propagate `srcRange.hint` because that hint may
-			// reflect a *birth-side* preference (e.g. the source's own
-			// param mov), while the dest may have a stronger *death-side*
-			// preference (e.g. flowing into a return register). The copy-
-			// link resolver picks whichever side has the more useful hint
-			// when it gets there.
-			destRange.copyHintValueId = srcReg
+			// Record a copy-link in both directions so the coloring phase
+			// can resolve the hint dynamically. Phi destinations get hinted
+			// from every incoming edge — keep the FIRST link because that
+			// edge usually comes from the loop's pre-header (already-
+			// colored constants), while later back-edge sources are always
+			// uncolored at the time of the phi's color step. Overwriting
+			// would discard the edge that can actually pull a real color
+			// out of resolveCopyLinkHint. We never forward-propagate
+			// `srcRange.hint` because that hint may reflect a birth-side
+			// preference while the dest may have a stronger death-side
+			// preference.
+			if destRange.copyHintValueId < 0 'destNoLink'
+				destRange.copyHintValueId = srcReg
+			end 'destNoLink'
 			if srcRange.copyHintValueId < 0 'srcNoLink'
 				srcRange.copyHintValueId = destReg
 			end 'srcNoLink'

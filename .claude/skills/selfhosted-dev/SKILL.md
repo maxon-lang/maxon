@@ -3,7 +3,7 @@ name: selfhosted-dev
 description: Implement the self hosted compiler
 ---
 
-We are developing the self hosted maxon compiler by implementing by enabling spec tests one by one and fixing any failures until all tests pass. This ensures that we are building the compiler incrementally and have a clear understanding of what features are implemented at each step.
+We are developing the self hosted maxon compiler by enabling spec tests one by one and fixing any failures until all tests pass. This ensures that we are building the compiler incrementally and have a clear understanding of what features are implemented at each step.
 
 Run the spec tests and fix any failures by modifying the self hosted compiler code.
 

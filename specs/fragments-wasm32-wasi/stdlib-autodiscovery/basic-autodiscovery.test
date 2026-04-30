@@ -1,0 +1,25 @@
+// Test: basic-autodiscovery
+function main() returns ExitCode
+	return trunc(sqrt(16.0))
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @stdlib-autodiscovery.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4625196817309499392 : f64
+    %1 = mir.sqrt.f64 %0
+    %2 = mir.fptosi.i64 %1
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_0
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

@@ -15,11 +15,11 @@ let CACHE_MAGIC_1 = 0x58  // 'X'
 let CACHE_MAGIC_2 = 0x43  // 'C'
 let CACHE_MAGIC_3 = 0x00  // '\0'
 
-// Bumped from 3 to 4 alongside the codec migration to .unionCases-based
-// (de)serialization. The on-disk encoding is identical to v3 (same tag
-// values, same payload layout), but bumping is cheap insurance against
-// any subtle drift introduced when codecs were relocated and rewritten.
-let CACHE_FORMAT_VERSION = 4
+// v5: added funcSignatures table so cached stdlib functions surface their
+// param names + defaults to TypeResolution's arity validator (arity errors
+// for stdlib calls used to silently no-op when the cache was warm because
+// project.funcSignatures is only populated when stdlib source is reparsed).
+let CACHE_FORMAT_VERSION = 5
 
 // ============================================================
 // Types
@@ -78,6 +78,7 @@ export type StdlibCacheData
 	export var typealiases TypealiasMap
 	export var typealiasRanges TypealiasRangeMap
 	export var funcReturnTypes FuncReturnTypeMap
+	export var funcSignatures FuncSignatureMap
 	export var structTypes StructTypeMap
 	export var topLevelConstants ConstantMap
 	// Snapshot of the source project's type-name interner at capture time.
@@ -95,6 +96,7 @@ export type StdlibCacheData
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			funcSignatures: FuncSignatureMap.create(),
 			structTypes: StructTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			typeNameTable: StringArray.create()
@@ -263,6 +265,24 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		writeString(buf, s: name)
 		writeMaxonReturnType(project, buf: buf, rt: rt)
 	end 'eachRt'
+
+	// Function signatures (param names + types + defaults). Persisted so
+	// TypeResolution.checkCallArity can validate stdlib-call sites without
+	// needing to re-parse stdlib source — see CACHE_FORMAT_VERSION = 5 note.
+	writeDword(buf, value: data.funcSignatures.count())
+	for (name, signature) in data.funcSignatures 'eachSig'
+		writeString(buf, s: name)
+		writeDword(buf, value: signature.paramNames.count())
+		for paramName in signature.paramNames 'eachParamName'
+			writeString(buf, s: paramName)
+		end 'eachParamName'
+		for paramType in signature.paramTypes 'eachParamType'
+			writeMaxonType(project, buf: buf, t: paramType)
+		end 'eachParamType'
+		for paramDefault in signature.paramDefaults 'eachParamDefault'
+			writeParamDefault(buf, pd: paramDefault)
+		end 'eachParamDefault'
+	end 'eachSig'
 
 	// Struct types
 	writeDword(buf, value: data.structTypes.count())
@@ -556,6 +576,36 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
 	end 'eachRt'
 
+	// Function signatures
+	let sigCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto sigCount 'eachSig'
+		let (sigName, pSig0) = readString(buf, offset: pos)
+		pos = pSig0
+		let paramCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var paramNames = StringArray.create()
+		for _ in 0 upto paramCount 'eachParamName'
+			let (paramName, pSig1) = readString(buf, offset: pos)
+			pos = pSig1
+			paramNames.push(paramName)
+		end 'eachParamName'
+		var paramTypes = MaxonTypeArray.create()
+		for _ in 0 upto paramCount 'eachParamType'
+			let (pt, pSig2) = readMaxonType(project, buf: buf, offset: pos)
+			pos = pSig2
+			paramTypes.push(pt)
+		end 'eachParamType'
+		var paramDefaults = ParamDefaultArray.create()
+		for _ in 0 upto paramCount 'eachParamDefault'
+			let (pd, pSig3) = readParamDefault(buf, offset: pos)
+			pos = pSig3
+			paramDefaults.push(pd)
+		end 'eachParamDefault'
+		try data.funcSignatures.insert(sigName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	end 'eachSig'
+
 	// Struct types
 	let structCount = readDword(buf, offset: pos)
 	pos = pos + 4
@@ -764,6 +814,10 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
 	end 'copyRts'
 
+	for (name, sig) in project.funcSignatures 'copySigs'
+		try data.funcSignatures.insert(name, value: sig) otherwise ignore
+	end 'copySigs'
+
 	for (name, st) in project.structTypes 'copyStructs'
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'copyStructs'
@@ -795,6 +849,17 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.funcReturnTypes.insert(name, value: translated) otherwise ignore
 		project.methodNameIndex.record(name)
 	end 'restoreRts'
+
+	// Function signatures carry MaxonTypes embedded in paramTypes — same
+	// captured-id concern as funcReturnTypes, so each signature is rebuilt
+	// with the destination project's id space.
+	for (name, sig) in data.funcSignatures 'restoreSigs'
+		var translatedTypes = MaxonTypeArray.create()
+		for pt in sig.paramTypes 'eachParamType'
+			translatedTypes.push(translateMaxonType(project, table: data.typeNameTable, t: pt))
+		end 'eachParamType'
+		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
+	end 'restoreSigs'
 
 	// Restore struct types. Field MaxonTypes carry the same captured-id
 	// problem as funcReturnTypes — translate every named id through the

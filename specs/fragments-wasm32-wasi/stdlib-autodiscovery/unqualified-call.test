@@ -1,0 +1,26 @@
+// Test: unqualified-call
+function main() returns ExitCode
+	let result = sqrt(16.0)
+	return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @stdlib-autodiscovery.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4625196817309499392 : f64
+    %1 = mir.sqrt.f64 %0
+    %3 = mir.fptosi.i64 %1
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %6 = mir.global_addr @__panic_msg_1
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_1:
+    mir.ret %3
+  }
+}
+---

@@ -444,6 +444,32 @@ export function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns Para
 	end 'unwrap'
 end 'paramDefaultAsIntLiteral'
 
+// Stdlib-cache codec for ParamDefault. Writes the union tag (none vs
+// intLiteral) followed by the int payload when present, mirroring the
+// rawValue/unionCases pattern used by the other cache codecs.
+export function writeParamDefault(buf ByteArray, pd ParamDefault)
+	writeDword(buf, value: pd.ordinal)
+	match pd 'payload'
+		none then break 'payload'
+		intLiteral(value) then writeQword(buf, value: value)
+	end 'payload'
+end 'writeParamDefault'
+
+function readParamDefaultIntLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+	let value = readQword(buf, offset: offset)
+	return (ParamDefault.intLiteral(value), offset + 8)
+end 'readParamDefaultIntLiteral'
+
+export function readParamDefault(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let pos = offset + 4
+	let kase = try ParamDefault.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ParamDefault tag {raw}")
+	match kase 'tag'
+		none then return (ParamDefault.none, pos)
+		intLiteral then return readParamDefaultIntLiteral(buf, offset: pos)
+	end 'tag'
+end 'readParamDefault'
+
 export typealias ParamNameIndexMap = Map with(String, ParsedInt)
 
 // Function signature: parallel arrays of parameter names, types, and their

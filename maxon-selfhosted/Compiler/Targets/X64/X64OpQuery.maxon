@@ -119,7 +119,7 @@ export type X64OpQuery implements TargetOpQuery
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		match x64Op 'check'
 			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-			movXmmXmm(destFp, srcFp, _) then setFpCopyHint(destReg: extractX64FpVRegId(destFp), srcReg: extractX64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			movXmmXmm(destFp, srcFp, _) then extractX64MovXmmXmmHint(destFp, srcFp: srcFp, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			prologue to memcpyOp then break 'check'
 			cmpRegReg to xchgRegReg then break 'check'
 			spillXmmToStack to repStosq then break 'check'
@@ -188,3 +188,28 @@ function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, ranges LiveRan
 		setPhysHint(destOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 	end 'physDest'
 end 'extractX64MovRegRegHint'
+
+// FP analogue of extractX64MovRegRegHint. Without the physical-side cases the
+// regalloc never sees that a `movXmmXmm phys, virt` pins the virtual to the
+// dest physical xmm — leading to swap-shaped sequential moves at call sites.
+function extractX64MovXmmXmmHint(destFp X64FpVReg, srcFp X64FpVReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	let destId = extractX64FpVRegId(destFp)
+	let srcId = extractX64FpVRegId(srcFp)
+
+	if destId >= 0 and srcId >= 0 'bothVirtual'
+		setFpCopyHint(destReg: destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
+		let srcOrd = x64FpVRegOrdinal(srcFp)
+		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physSrc' else if destId < 0 and srcId >= 0 'physDest'
+		let destOrd = x64FpVRegOrdinal(destFp)
+		setPhysHint(destOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	end 'physDest'
+end 'extractX64MovXmmXmmHint'
+
+function x64FpVRegOrdinal(vreg X64FpVReg) returns RegOrdinal
+	return match vreg 'getOrd'
+		physical(reg) gives reg.rawValue
+		virtual gives RM_NONE
+	end 'getOrd'
+end 'x64FpVRegOrdinal'

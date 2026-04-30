@@ -1,0 +1,31 @@
+// Test: transitive
+// pow -> log, exp
+function main() returns ExitCode
+	let result = Math.pow(2.0, exponent: 3.0)
+	if result > 7.5 'check'
+		return 8
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @stdlib-autodiscovery.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4611686018427387904 : f64
+    %1 = mir.mov_imm 4613937818241073152 : f64
+    %2 = mir.call @Math.pow(%0, %1)
+    %4 = mir.mov_imm 4620130267728707584 : f64
+    %5 = mir.cmp fgt, %2, %4
+    mir.cond_br %5 [then: check_1(), else: check_1.after()]
+  check_1:
+    %6 = mir.mov_imm 8 : i64
+    mir.ret %6
+  check_1.after:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+}
+---

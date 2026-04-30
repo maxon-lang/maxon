@@ -16,9 +16,13 @@ export typealias CopyMoveArray = Array with CopyMove
 export type CopyMove
 	export var srcOrd RegOrdinal
 	export var dstOrd RegOrdinal
+	// Block args carry GPR and FP values through the same ordinal space, but
+	// the emit routines disagree (movXmmXmm vs movRegReg, no xchg for xmm).
+	// The flag rides along so the sequencer can pick the right emit per move.
+	export var isFloat bool
 
-	export static function create(srcOrd RegOrdinal, dstOrd RegOrdinal) returns CopyMove
-		return Self{srcOrd: srcOrd, dstOrd: dstOrd}
+	export static function create(srcOrd RegOrdinal, dstOrd RegOrdinal, isFloat bool = false) returns CopyMove
+		return Self{srcOrd: srcOrd, dstOrd: dstOrd, isFloat: isFloat}
 	end 'create'
 end 'CopyMove'
 
@@ -71,7 +75,8 @@ export function buildBlockArgCopies(module TargetModule, func IrFunction, colori
 
 				// Skip identity copies
 				if srcReg != dstReg and srcReg != RM_NONE and dstReg != RM_NONE 'needsCopy'
-					moves.push(CopyMove.create(srcReg, dstOrd: dstReg))
+					let isFloat = stdTypeIsFloat(blockArg.argType)
+					moves.push(CopyMove.create(srcReg, dstOrd: dstReg, isFloat: isFloat))
 				end 'needsCopy'
 
 				argIdx = argIdx + 1
@@ -89,7 +94,10 @@ end 'buildBlockArgCopies'
 
 // Emit sequentialized register moves for a parallel copy.
 // Handles dependencies via topological ordering and breaks cycles
-// with xchg (x64) or 3-mov via scratch register (arm64).
+// with xchg (x64) or 3-mov via scratch register (arm64). Each move carries
+// an isFloat tag so GPR and FP block args route to the matching emit funcs;
+// since the GPR/FP ordinal spaces overlap, mixing them in one parallel copy
+// is only safe within the same class.
 export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	if moves.count() == 0 'empty'
 		return
@@ -136,7 +144,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 			end 'checkBlocked'
 
 			if not blocked 'safe'
-				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
+				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd, isFloat: move.isFloat)
 				try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				progress = true
 			end 'safe'
@@ -160,19 +168,19 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 		let otherSrc = getOr(moveFrom, index: srcOrd, fallback: RM_NONE)
 		if getOr(needsMove, index: srcOrd, fallback: 0) == 1 and otherSrc == dstOrd 'twoWaySwap'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} swap r{dstOrd}<->r{srcOrd}")
-			targetEmitXchgOrSwap(module, state: state, target: regTarget, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd)
+			emitClassSwap(regTarget, module: module, state: state, dstBlock: dstBlock, ord1: dstOrd, ord2: srcOrd, isFloat: move.isFloat)
 			try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 			try needsMove.set(srcOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'twoWaySwap' else 'longerCycle'
 			logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} cycle via scratch r{dstOrd}")
-			// Use scratch register to break the cycle
-			let scratch = state.desc.gprCycleBreakOrd
-			regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd)
+			// Use scratch register matching the move's class to break the cycle
+			let scratch = scratchOrdForClass(state, isFloat: move.isFloat)
+			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: scratch, srcOrd: dstOrd, isFloat: move.isFloat)
 
 			var cur = dstOrd
 			var curSrc = srcOrd
 			while curSrc != dstOrd 'walkCycle'
-				regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
+				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc, isFloat: move.isFloat)
 				try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 				cur = curSrc
 				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
@@ -182,11 +190,43 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 				end 'broken'
 			end 'walkCycle'
 
-			regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch)
+			emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: cur, srcOrd: scratch, isFloat: move.isFloat)
 			try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'longerCycle'
 	end 'breakCycles'
 end 'sequentializeParallelCopy'
+
+// Dispatch a single move to GPR or FP emit based on the move's class. The
+// register-class flag rides on each CopyMove because GPR and FP share the
+// same ordinal space — without it the copy resolver would emit movRegReg
+// for an xmm-to-xmm copy.
+function emitClassMov(regTarget RegAllocTarget, module TargetModule, dstBlock IrBlock, destOrd RegOrdinal, srcOrd RegOrdinal, isFloat bool)
+	if isFloat 'fp'
+		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'fp' else 'gpr'
+		regTarget.emitMovReg(module, dstBlock: dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'gpr'
+end 'emitClassMov'
+
+// FP swaps fall back to a 3-mov via the FP cycle-break scratch because
+// xchg has no xmm form on x64; GPR swaps still use the native xchg path.
+function emitClassSwap(regTarget RegAllocTarget, module TargetModule, state RegState, dstBlock IrBlock, ord1 RegOrdinal, ord2 RegOrdinal, isFloat bool)
+	if isFloat 'fp'
+		let scratch = state.desc.fpCycleBreakOrd
+		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord1)
+		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: ord1, srcOrd: ord2)
+		regTarget.emitMovFp(module, dstBlock: dstBlock, destOrd: ord2, srcOrd: scratch)
+	end 'fp' else 'gpr'
+		targetEmitXchgOrSwap(module, state: state, target: regTarget, dstBlock: dstBlock, ord1: ord1, ord2: ord2)
+	end 'gpr'
+end 'emitClassSwap'
+
+function scratchOrdForClass(state RegState, isFloat bool) returns RegOrdinal
+	if isFloat 'fp'
+		return state.desc.fpCycleBreakOrd
+	end 'fp'
+	return state.desc.gprCycleBreakOrd
+end 'scratchOrdForClass'
 
 // ============================================================
 // Helpers

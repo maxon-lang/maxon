@@ -1419,35 +1419,104 @@ end 'validateCallArities'
 function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, filePath FilePath)
 	if op.name == "call" 'isCall'
 		match op 'extractCall'
-			call(_, callee, callContext, args, _, _, _, range) then checkCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace), userArgCount: args.count(), paramStartIndex: 0, range: range, filePath: filePath)
+			call(_, callee, callContext, args, argLabels, _, _, range) then checkFreeCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace), args: args, argLabels: argLabels, range: range, filePath: filePath)
 			default panic("unreachable: already checked name == call")
 		end 'extractCall'
 	end 'isCall'
 	if op.name == "methodCall" 'isMethodCall'
 		match op 'extractMethod'
-			methodCall(_, receiver, methodName, args, _, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, userArgCount: args.count(), range: range, filePath: filePath)
+			methodCall(_, receiver, methodName, args, argLabels, _, _, range) then checkMethodCallArity(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, args: args, argLabels: argLabels, range: range, filePath: filePath)
 			default panic("unreachable: already checked name == methodCall")
 		end 'extractMethod'
 	end 'isMethodCall'
 end 'validateCallArityOp'
 
-function checkMethodCallArity(project Project, receiverType MaxonType, methodName ByteArray, userArgCount ParsedInt, range SourceRange, filePath FilePath)
+function checkMethodCallArity(project Project, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, argLabels StringArray, range SourceRange, filePath FilePath)
 	let structName = maxonTypeStructName(project, t: receiverType)
 	if structName.isEmpty() 'noStruct'
 		return
 	end 'noStruct'
 	let qualifiedCallee = "{structName}.{String.from(methodName)}"
-	checkCallArity(project, qualifiedCallee: qualifiedCallee, userArgCount: userArgCount, paramStartIndex: 1, range: range, filePath: filePath)
+	checkCallArity(project, qualifiedCallee: qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, range: range, filePath: filePath)
 end 'checkMethodCallArity'
 
-function checkCallArity(project Project, qualifiedCallee String, userArgCount ParsedInt, paramStartIndex ParsedInt, range SourceRange, filePath FilePath)
+// Free / sibling-instance call entry — looks at the resolved signature's
+// first param to decide whether to skip the implicit `__self` slot, mirroring
+// LowerMaxonToStd.lowerCall. Without this, sibling calls like `double()`
+// inside a method body trip the new "missing argument for parameter
+// '__self'" check.
+function checkFreeCallArity(project Project, qualifiedCallee String, args ByteArrayArray, argLabels StringArray, range SourceRange, filePath FilePath)
+	let signature = try project.funcSignatures.get(qualifiedCallee) otherwise return
+	var paramStart = 0
+	if signatureFirstParamIsSelf(signature) 'siblingInstance'
+		paramStart = 1
+	end 'siblingInstance'
+	checkCallArity(project, qualifiedCallee: qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: paramStart, range: range, filePath: filePath)
+end 'checkFreeCallArity'
+
+// Walks the signature and reports E3036 for either too-many or missing-required
+// arg-count problems, plus E3003 when a named-arg label doesn't map to a
+// parameter. Mirrors the slotArgsForCall fold so the diagnostic agrees with
+// what lowering will actually do.
+function checkCallArity(project Project, qualifiedCallee String, args ByteArrayArray, argLabels StringArray, paramStartIndex ParsedInt, range SourceRange, filePath FilePath)
 	let signature = try project.funcSignatures.get(qualifiedCallee) otherwise return
 	let userParamCount = signature.paramNames.count() - paramStartIndex
 	if userParamCount < 0 'badSig'
 		return
 	end 'badSig'
-	if userArgCount <= userParamCount 'inRange'
+	let userArgCount = args.count()
+	if userArgCount > userParamCount 'tooMany'
+		reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "too many arguments to '{qualifiedCallee}': expected {userParamCount}, got at least {userArgCount}", line: range.line, column: range.column, filePath: filePath)
 		return
-	end 'inRange'
-	reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "too many arguments to '{qualifiedCallee}': expected {userParamCount}, got at least {userArgCount}", line: range.line, column: range.column, filePath: filePath)
+	end 'tooMany'
+
+	// Mark each user-facing slot filled by either a positional arg (slot == i)
+	// or a named arg whose label resolves through the signature's nameToIndex.
+	// Unknown labels surface as E3003 here so the lowering pass doesn't have
+	// to repeat the diagnostic — and so the missing-arg loop below doesn't
+	// fire on a slot that the user thought they had filled by name.
+	var slotFilled = BoolArray.create()
+	for _ in 0 upto userParamCount 'initFilled'
+		slotFilled.push(false)
+	end 'initFilled'
+	var sawUnknownLabel = false
+	for i in 0 upto userArgCount 'placeArgs'
+		let label = try argLabels.get(i) otherwise ""
+		var slot = i
+		if not label.isEmpty() 'hasLabel'
+			let resolved = try signature.nameToIndex.get(label) otherwise -1
+			if resolved < 0 'unknown'
+				reportCompileError(project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{label}'", line: range.line, column: range.column, filePath: filePath)
+				sawUnknownLabel = true
+				continue
+			end 'unknown'
+			slot = resolved - paramStartIndex
+		end 'hasLabel'
+		if slot < 0 or slot >= userParamCount 'outOfRange'
+			continue
+		end 'outOfRange'
+		try slotFilled.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
+	end 'placeArgs'
+
+	// Unknown-label E3003 is the primary diagnostic — suppress the
+	// missing-arg follow-up since it's almost always a downstream artifact
+	// of the typo and would just repeat noise.
+	if sawUnknownLabel 'hadUnknown'
+		return
+	end 'hadUnknown'
+
+	for slot in 0 upto userParamCount 'eachSlot'
+		let filled = try slotFilled.get(slot) otherwise panic("invariant: slotFilled sized to userParamCount")
+		if filled 'ok'
+			continue
+		end 'ok'
+		let paramIdx = slot + paramStartIndex
+		let pd = try signature.paramDefaults.get(paramIdx) otherwise ParamDefault.none
+		if paramDefaultAsIntLiteral(pd).hasValue 'hasDefault'
+			continue
+		end 'hasDefault'
+		let paramName = try signature.paramNames.get(paramIdx) otherwise ""
+		reportCompileError(project, code: ErrorCode.semanticWrongArgCount, message: "missing argument for parameter '{paramName}'", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'eachSlot'
 end 'checkCallArity'

@@ -16820,7 +16820,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           args[i] = EmitDefaultLiteral(defaultAttr, callee.ParamTypes[i], functionNameToken,
             $"Missing argument for parameter '{callee.ParamNames[i]}' in call to '{callee.Name}'");
         } else {
-          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          throw new CompileError(ErrorCode.SemanticWrongArgCount,
             $"missing argument for parameter '{callee.ParamNames[i]}'",
             functionNameToken.Line, functionNameToken.Column);
         }
