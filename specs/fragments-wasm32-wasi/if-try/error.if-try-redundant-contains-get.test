@@ -1,0 +1,19 @@
+// Test: error.if-try-redundant-contains-get
+typealias StrMap = Map with String, String
+
+function main() returns ExitCode
+	var m = StrMap.create()
+	m.upsert("k", value: "v")
+	let key = "k"
+	if m.contains(key) 'has'
+		let v = try m.get(key) otherwise panic("nope")
+		print("{v}\n")
+	end 'has'
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get.test:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(key)' (or 'if var') instead — performs one lookup instead of two
+```
+---
+---

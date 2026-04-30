@@ -1,0 +1,50 @@
+// Test: module-with-nested-call
+// --- file: feature/inner.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function inner() returns Integer
+	return 22
+end 'inner'
+
+// --- file: feature/outer.maxon
+typealias Int = int(i64.min to i64.max)
+
+module function outer() returns Int
+	return inner() + 20
+end 'outer'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	return outer()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @inner.inner() -> i64 {
+  entry:
+    %0 = mir.mov_imm 22 : i64
+    mir.ret %0
+  }
+  func @outer.outer() -> i64 {
+  entry:
+    %0 = mir.call @inner.inner()
+    %1 = mir.mov_imm 20 : i64
+    %2 = mir.add.i64 %0, %1
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @outer.outer()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_0
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

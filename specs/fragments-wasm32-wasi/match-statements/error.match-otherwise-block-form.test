@@ -1,0 +1,32 @@
+// Test: error.match-otherwise-block-form
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally)
+	match kind 'k'
+		1 then try leaf() otherwise (e) 'h'
+			match e 'eh'
+				bad then return
+			end 'eh'
+		end 'h'
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+
+function main() returns ExitCode
+	dispatch(kind: 1)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E2049: specs/fragments/match-statements/error.match-otherwise-block-form.test:12:35: block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic("...")', 'otherwise ignore', or 'otherwise return/throw/...' instead
+```
+---
+---

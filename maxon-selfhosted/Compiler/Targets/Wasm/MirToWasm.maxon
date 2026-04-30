@@ -44,6 +44,20 @@ typealias FuncNameIndexMap = Map with(String, MachineWord)
 // emission to resolve a target's dispatch index in O(1).
 typealias BlockIndexMap = Map with(BlockId, MachineWord)
 
+// One contiguous chunk of bytes placed into the wasm data section. The
+// layout pass produces these once so both the offset map and the active
+// data segments use identical addresses without recomputing offsets.
+type WasmDataChunk
+	export var offset MachineWord
+	export var bytes ByteArray
+
+	export static function create(offset MachineWord, bytes ByteArray) returns WasmDataChunk
+		return Self{offset: offset, bytes: bytes}
+	end 'create'
+end 'WasmDataChunk'
+
+typealias WasmDataChunkArray = Array with WasmDataChunk
+
 // Bundled per-function metadata for module-level functions. `returnTypes`
 // is keyed by index into the parallel `funcNames` array; `nameIndex` maps
 // a function name back to that same index. `pushFunc` keeps the two in
@@ -240,6 +254,38 @@ end 'computeNeededStdlibFunctionsWasm'
 // Module assembly
 // ============================================================
 
+// Lay out the wasm linear-memory image of the global data table starting at
+// `baseOffset`. Each rdata entry (string literals, named globals) and each
+// data-section entry (top-level `var` and static-field globals) gets its
+// offset recorded in `offsets`. Data-section entries are padded to 8-byte
+// alignment between entries to match `buildDataPreludeSection` on the native
+// backends. The returned chunks let the write phase emit active data
+// segments at exactly the offsets the lowering phase already saw, and the
+// returned end offset feeds the stack-base calculation.
+function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset MachineWord, offsets GlobalDataOffsetMap) returns (WasmDataChunkArray, MachineWord)
+	var chunks = WasmDataChunkArray.create()
+	var dataOffset = baseOffset
+	for i in 0 upto globalData.values.count() 'rdata'
+		let name = try globalData.names.get(i) otherwise panic("layoutWasmGlobalData: globalData.names.get({i}) failed — names/values arrays out of sync")
+		let data = try globalData.values.get(i) otherwise panic("layoutWasmGlobalData: globalData.values.get({i}) failed — names/values arrays out of sync")
+		try offsets.insert(name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate global data name '{name}' at offset {dataOffset}")
+		chunks.push(WasmDataChunk.create(dataOffset, bytes: data))
+		dataOffset = dataOffset + (data.count() as MachineWord)
+	end 'rdata'
+	for entry in globalData.dataSectionEntries 'dataEntries'
+		try offsets.insert(entry.name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate data section entry '{entry.name}' at offset {dataOffset}")
+		chunks.push(WasmDataChunk.create(dataOffset, bytes: entry.initialBytes))
+		dataOffset = dataOffset + (entry.initialBytes.count() as MachineWord)
+		// Pad to 8-byte alignment so the next entry starts aligned (matches
+		// `buildDataPreludeSection`). Wasm linear memory is zero-initialized,
+		// so the gap doesn't need an explicit segment.
+		while dataOffset mod 8 != 0 'align'
+			dataOffset = dataOffset + 1
+		end 'align'
+	end 'dataEntries'
+	return (chunks, dataOffset)
+end 'layoutWasmGlobalData'
+
 function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns ByteArray
 	var wasm = ByteArray.create()
 	writeModuleHeader(wasm)
@@ -363,19 +409,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// Heap region comes first (right after scratch); global data is placed
 	// AFTER the heap so that mrt_alloc's bookkeeping counter at heapBase is
 	// not clobbered by string literal segments. Stack slots start after
-	// global data.
+	// global data. Top-level / static-field globals (top-level `var counter
+	// = 42`, etc.) live in `dataSectionEntries` and follow the rdata payloads
+	// — `layoutWasmGlobalData` mirrors the native `buildDataPreludeSection`
+	// layout so MirOp.globalAddr resolves `__data_<name>` symbols against
+	// `globalDataOffsets`.
 	var globalDataOffsets = GlobalDataOffsetMap.create()
 	// Register the runtime heap label pointing at our reserved heap region.
 	// mrt_alloc loads its bump counter from the first 8 bytes of this region.
 	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise panic("emitWasmModule: __data_heap insert into fresh map failed")
-	var dataOffset = heapEnd as MachineWord
-	for i in 0 upto globalData.values.count() 'computeOffsets'
-		let name = try globalData.names.get(i) otherwise panic("emitWasmModule: globalData.names.get({i}) failed — names/values arrays out of sync")
-		let data = try globalData.values.get(i) otherwise panic("emitWasmModule: globalData.values.get({i}) failed — names/values arrays out of sync")
-		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmModule: duplicate global data name '{name}' at offset {dataOffset}")
-		dataOffset = dataOffset + (data.count() as MachineWord)
-	end 'computeOffsets'
-	let stackBase = alignUp(dataOffset, alignment: 16)
+	let (dataChunks, dataEnd) = layoutWasmGlobalData(globalData, baseOffset: heapEnd as MachineWord, offsets: globalDataOffsets)
+	let stackBase = alignUp(dataEnd, alignment: 16)
 
 	// --- Code section ---
 	var bodies = ByteArrayArray.create()
@@ -407,20 +451,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeCodeSection(wasm, bodies: bodies)
 
 	// --- Data section ---
-	// Place global data (string literals etc.) starting at heapEnd. The heap
-	// region below heapEnd is left zero-initialized so mrt_alloc's counter
-	// starts at 0.
-	if globalData.names.count() > 0 'hasData'
+	// Emit one active data segment per chunk produced by the layout pass so
+	// the on-disk offsets match what the lowering phase recorded in
+	// `globalDataOffsets`. Linear memory between/after segments stays zero,
+	// which covers both the heap arena's bump counter and the alignment
+	// padding between data-section entries.
+	if dataChunks.count() > 0 'hasData'
 		var segments = ByteArray.create()
-		var segmentCount = 0 as MachineWord
-		var dataOffset = heapEnd as MachineWord
-		for i in 0 upto globalData.values.count() 'eachData'
-			let data = try globalData.values.get(i) otherwise panic("invariant: i < globalData.values.count() but get failed")
-			writeActiveDataSegment(segments, offset: dataOffset, data: data)
-			segmentCount = segmentCount + 1
-			dataOffset = dataOffset + (data.count() as MachineWord)
-		end 'eachData'
-		writeDataSection(wasm, segments: segments, segmentCount: segmentCount)
+		for chunk in dataChunks 'eachChunk'
+			writeActiveDataSegment(segments, offset: chunk.offset, data: chunk.bytes)
+		end 'eachChunk'
+		writeDataSection(wasm, segments: segments, segmentCount: dataChunks.count() as MachineWord)
 	end 'hasData'
 
 	// --- Name section (custom section for debug info) ---

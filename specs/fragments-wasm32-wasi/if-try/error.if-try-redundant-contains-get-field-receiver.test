@@ -1,0 +1,31 @@
+// Test: error.if-try-redundant-contains-get-field-receiver
+typealias StrMap = Map with String, String
+
+type Holder
+	export var cache StrMap
+
+	static function create() returns Self
+		return Self{cache: StrMap.create()}
+	end 'create'
+end 'Holder'
+
+function lookup(holder Holder, key String) returns String
+	if holder.cache.contains(key) 'has'
+		let v = try holder.cache.get(key) otherwise panic("nope")
+		return v
+	end 'has'
+	return "missing"
+end 'lookup'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let s = lookup(h, key: "x")
+	print("{s}\n")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3087: specs/fragments/if-try/error.if-try-redundant-contains-get-field-receiver.test:13:18: redundant 'Map.contains' followed by 'Map.get' on 'holder.cache': use 'if let v = try holder.cache.get(key)' (or 'if var') instead — performs one lookup instead of two
+```
+---
+---
