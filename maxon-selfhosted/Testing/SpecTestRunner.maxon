@@ -41,7 +41,7 @@ let whitelist = ["basics",
 	"enums-simple",
 	"match-simple",
 	"module-keyword",
-	// "lexer-parser-robustness",
+	"lexer-parser-robustness",
 	// "error-handling",
 	// "closures",
 	// "reserved-double-underscore",  // most tests pass; enum-case and closure-parameter need enum/closure support first
@@ -167,9 +167,9 @@ function captureLoweringLog(source String, testName String, specName String, tem
 	let tempSource = tempDir.join("{testName}.test")
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
-	// Match parseFragment: append a trailing newline so the parser doesn't hit
-	// EOF mid-statement on tests whose source ends without one.
-	let normalizedSource = source if source.endsWith("\n") else "{source}\n"
+	// parseFragment trims the source; mirror that here so this lowering
+	// capture sees the same byte stream the runner will measure against.
+	let normalizedSource = source.trim()
 	_ = try compileSourceWithIr(normalizedSource, virtualPath: tempSource, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap")) otherwise 'compileFailed'
 		cancelCapturingTrace()
 		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)

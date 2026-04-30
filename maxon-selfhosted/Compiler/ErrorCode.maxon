@@ -50,6 +50,7 @@ export union ErrorCode
 	semanticSymbolNotInModuleScope = 3088
 	borrowMutateWhileBorrowed = 4001
 	borrowMultipleMutable = 4002
+	irInvalidFieldAccess = 4006
 end 'ErrorCode'
 
 export typealias ErrorLineNumber = int(0 to 1000000)
@@ -82,16 +83,19 @@ export typealias DiagnosticArray = Array with Diagnostic
 // keep it but suppress the resulting noise. C# bootstrap reports a single
 // error per file via throw-and-unwind; this gate gives parity.
 //
-// Specifically: once a lexer- or parser-stage error (codes < 3000) has
-// been recorded for `filePath`, every subsequent error for that file is
-// dropped — including semantic errors, because they're operating on a
-// partially-parsed module and are downstream noise. Tests that assert
-// multiple errors (e.g. `void-function-unused` with two independent
-// semantic problems) still work because they have no parser error first.
+// Specifically: once a lexer- (1xxx), parser- (2xxx), or IR/borrow-stage
+// (4xxx) error has been recorded for `filePath`, every subsequent semantic
+// error (3xxx) for that file is dropped — semantic checks operate on a
+// partially-parsed/lowered module and are downstream noise once the
+// upstream stages have already complained. Tests that assert multiple
+// errors (e.g. `void-function-unused` with two independent semantic
+// problems) still work because they have no upstream error first.
 export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
+	let newIsSemantic = code.rawValue >= 3000 and code.rawValue < 4000
 	for d in project.diagnostics 'firstErrorGate'
 		let existingIsLexParser = d.code.rawValue >= 1000 and d.code.rawValue < 3000
-		if existingIsLexParser and d.filePath == filePath 'sameFile'
+		let existingIsIr = d.code.rawValue >= 4000 and d.code.rawValue < 5000
+		if (existingIsLexParser or (existingIsIr and newIsSemantic)) and d.filePath == filePath 'sameFile'
 			return
 		end 'sameFile'
 	end 'firstErrorGate'

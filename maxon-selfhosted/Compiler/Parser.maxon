@@ -25,9 +25,16 @@
 //
 // ===== End-of-file semantics =====
 //
-// There is no `TokenKind.eof` sentinel. The cursor signals exhaustion by
-// throwing `IterationError.exhausted` from `try cursor.advance()` / `peek(n)`. A
-// `for token in cursor` loop terminates naturally when the cursor runs out.
+// The lexer appends a `TokenKind.eof` sentinel as the last token of the
+// stream. After consuming all user-visible tokens, `cursor.current()` still
+// returns a valid Token (the EOF sentinel) with empty `value`, line/column
+// pointing one past the last lexed character. This lets diagnostic helpers
+// emit "got '<token>'" messages without a special EOF branch — the empty
+// value renders as `''` and matches the C# bootstrap's phrasing.
+//
+// Helpers that consume a token via `cursor.advance()` past the EOF sentinel
+// throw `IterationError.exhausted`; the parser's `consume()` wrapper catches
+// that and reports `Unexpected end of input, expected <X>`.
 //
 // Unclosed constructs (missing `end`, `)`, `}`, truncated expression) are
 // parse errors, not silent terminations. Helpers that expect a closing
@@ -360,7 +367,10 @@ export type Parser
 
 		try skipThrowsClause()
 
-		try skipNewlines()
+		// Tolerate EOF here so a truncated source (e.g. `function main()` with no
+		// body) reaches the missing-`end` diagnostic via skipEndAndLabel below
+		// instead of throwing through to queryParseOps' generic EOF fallback.
+		_ = skipOptionalNewlines()
 
 		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
 		// Carry the source-file namespace forward so LowerMaxonToStd can
@@ -1755,7 +1765,7 @@ export type Parser
 			return
 		end 'noNext'
 		let returnToken = try consume()
-		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end 'bareReturn'
+		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
 			emitImplicitReturn(block)
 			return
 		end 'bareReturn'
@@ -1977,9 +1987,14 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserMatchMissingBlockId, message: "missing block identifier", line: tok.line, column: tok.column, filePath: filePath)
 			return MatchHeader.failed()
 		end 'noLabel'
-		let userLabel = try parseOptionalBlockLabel("match")
+		// Consume the label and skip any trailing newlines without enforcing one
+		// — match defers diagnostics to the arm-parsing loop so a truncated
+		// `match X 'L'` reports "Expected pattern value" rather than the more
+		// generic "Expected newline after block label" if-and-friends emit.
+		let labelToken = try consume()
+		let userLabel = labelToken.value
+		_ = skipOptionalNewlines()
 		let baseLabel = "{userLabel}_{currentFunc.nextBlockId}"
-		try skipNewlines()
 		let mergeBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: cursor.current().line)
 		return MatchHeader.create(scrutineeName: exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock)
 	end 'parseMatchHeader'
@@ -2304,6 +2319,7 @@ export type Parser
 		var lastEnumCaseName = ""
 
 		while not isMatchArmsEnd() 'arms'
+			let armPrevPos = cursor.index()
 			let patterns = try parseMatchArmPatterns(seenKeys, defaultSeen: defaultSeen)
 			// `dispatchBlock` is where this arm's comparison/dispatch lives —
 			// for non-default arms it gets the cmp+condBr (or enumMatchArm)
@@ -2347,6 +2363,13 @@ export type Parser
 			end 'advanceCursor'
 			armIndex = armIndex + 1
 			try skipNewlines()
+			// Stuck-guard: a malformed arm (truncated input, default pattern
+			// returned without consumption) can leave the cursor untouched.
+			// Break rather than spin so error recovery surfaces a single
+			// diagnostic instead of allocating per-iteration arm blocks.
+			if cursor.index() <= armPrevPos 'stuck'
+				break
+			end 'stuck'
 		end 'arms'
 
 		// `currentBlock` is now either:
@@ -2471,6 +2494,7 @@ export type Parser
 		var lastEnumCaseName = ""
 
 		while not isMatchArmsEnd() 'arms'
+			let armPrevPos = cursor.index()
 			let patterns = try parseMatchArmPatterns(seenKeys, defaultSeen: defaultSeen)
 			let dispatchBlock = currentBlock
 			if patterns.isDefault() and hasEnumArm 'defaultOnEnum'
@@ -2503,6 +2527,10 @@ export type Parser
 			end 'advanceCursor'
 			armIndex = armIndex + 1
 			try skipNewlines()
+			// Stuck-guard: see parseMatchStatement's loop comment.
+			if cursor.index() <= armPrevPos 'stuck'
+				break
+			end 'stuck'
 		end 'arms'
 
 		// Wire the no-arm-matched fallback for non-enum matches without an
@@ -2770,7 +2798,7 @@ export type Parser
 		let kwToken = try consume()
 		let isLet = kwToken.kind == TokenKind.let
 
-		let nameToken = try consume()
+		let nameToken = try consumeExpecting("identifier")
 		if nameToken.kind != TokenKind.identifier 'badName'
 			reportTokenMismatch(nameToken, expectedDisplay: "identifier")
 			synchronize()
@@ -3358,6 +3386,17 @@ export type Parser
 				continue
 			end 'isMethodCall'
 
+			// Field access on a primitive value (e.g. `(5).a`) is statically
+			// invalid — primitives have no fields. Report E4006 and bail out
+			// of the chain so any trailing `.` in a long chain doesn't
+			// cascade into a follow-up "Expected identifier" diagnostic.
+			// Mirrors the C# bootstrap's E4006 check at the same parse site.
+			if maxonTypeIsPrimitive(exprType(result)) 'primitiveReceiver'
+				reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Cannot access field on non-struct value", line: memberToken.line, column: memberToken.column, filePath: filePath)
+				skipToNextLine()
+				return result
+			end 'primitiveReceiver'
+
 			let fieldLoadName = freshSynthName()
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
 			// Field-load result type is filled in by TypeResolution from
@@ -3759,10 +3798,12 @@ export type Parser
 		reportTokenMismatch(token, expectedDisplay: "expression", wrongKindCode: ErrorCode.parserExpectedExpression)
 		let message = "Expected expression but got '{tokenValueToString(token.value)}'"
 		module.appendOp(block, op: MaxonOp.error(MaxonErrorKind.expectedExpression, message: message, range: SourceRange.ofToken(token)))
-		for tok in cursor 'skip'
-			if tok.kind == TokenKind.newline 'atEnd'
-				break
-			end 'atEnd'
+		// Skip ahead to the next newline so a single bad expression doesn't
+		// cascade into a follow-up "Expected expression" on the same line.
+		// Stop on EOF without consuming the sentinel — leaves cursor parked on
+		// it so callers can branch on `at(eof)` without re-reading past end.
+		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
+			try cursor.advance() otherwise break
 		end 'skip'
 		return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
 	end 'raiseUnexpectedToken'
@@ -3996,7 +4037,15 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected {expectedDisplay}", line: token.line, column: token.column, filePath: filePath)
 			return
 		end 'isEof'
-		reportCompileError(project, code: wrongKindCode, message: "Expected {expectedDisplay} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+		// Expression-position diagnostics render newline / empty values as the
+		// literal text "(empty)"; other paths render them as the empty string
+		// itself. Mirrors the split between FormatTokenValueForError and raw
+		// `Current().Value` in the C# bootstrap.
+		var displayValue = tokenValueToString(token.value)
+		if wrongKindCode.rawValue == ErrorCode.parserExpectedExpression.rawValue 'expressionForm'
+			displayValue = formatExpressionTokenValue(token.value)
+		end 'expressionForm'
+		reportCompileError(project, code: wrongKindCode, message: "Expected {expectedDisplay} but got '{displayValue}'", line: token.line, column: token.column, filePath: filePath)
 	end 'reportTokenMismatch'
 
 	// Returns true if there's at least one non-empty token at or after the
@@ -4082,6 +4131,12 @@ export type Parser
 		while at(TokenKind.newline) 'skip'
 			try cursor.advance() otherwise return false
 		end 'skip'
+		// EOF sentinel marks the end of the user-visible token stream — treat
+		// it like exhaustion so callers stop dispatching once nothing real
+		// remains.
+		if at(TokenKind.eof) 'isEof'
+			return false
+		end 'isEof'
 		return cursor.index() < tokens.count()
 	end 'skipOptionalNewlines'
 
@@ -4124,11 +4179,11 @@ export type Parser
 
 	function skipToNextLine()
 		// Iterate until we land on a newline (or exhaust at EOF). Body breaks
-		// the moment we see one, leaving cursor AT the newline.
-		for token in cursor 'skip'
-			if token.kind == TokenKind.newline 'atEnd'
-				return
-			end 'atEnd'
+		// the moment we see one, leaving cursor AT the newline. EOF stops the
+		// scan without consuming the sentinel so callers stay parked on a
+		// valid position.
+		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
+			try cursor.advance() otherwise return
 		end 'skip'
 	end 'skipToNextLine'
 
@@ -4137,26 +4192,17 @@ export type Parser
 	// exhaustion because we're already in an error-recovery state.
 	function synchronize()
 		try cursor.advance() otherwise return
-		for token in cursor 'sync'
-			if token.kind == TokenKind.end 'atBoundary'
-				return
-			end 'atBoundary'
-			if token.kind == TokenKind.newline 'atNewline'
-				// Leave cursor AT newline (new contract — the statement's
-				// last-consumed token, from the parser's POV). The dispatch
-				// loop's compensating advance past this will land on the next
-				// statement's opener.
-				return
-			end 'atNewline'
+		// Stop at the next newline or `end`, or park on the EOF sentinel
+		// without consuming it.
+		while not at(TokenKind.end) and not at(TokenKind.newline) and not at(TokenKind.eof) 'sync'
+			try cursor.advance() otherwise return
 		end 'sync'
 	end 'synchronize'
 
 	// Synchronize to the next top-level declaration after an error.
 	function synchronizeToTopLevel()
-		for token in cursor 'sync'
-			if isTopLevelOpener(token.kind) or token.kind == TokenKind.export 'atTopLevel'
-				return
-			end 'atTopLevel'
+		while not isTopLevelOpener(cursor.current().kind) and not at(TokenKind.export) and not at(TokenKind.eof) 'sync'
+			try cursor.advance() otherwise return
 		end 'sync'
 	end 'synchronizeToTopLevel'
 
@@ -4330,6 +4376,22 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeIsFloat'
 
+// True for numeric and bool primitives — types that have no fields. Used by
+// parsePostfix to emit E4006 when source tries to access a field on `(5)` or
+// similar. Strings are excluded because String is a struct internally and
+// supports method/field-style access. Named/unresolved types are deferred —
+// TypeResolution makes the final call when the receiver shape is known.
+function maxonTypeIsPrimitive(t MaxonType) returns bool
+	return match t 'check'
+		integer gives true
+		float gives true
+		boolean gives true
+		named gives false
+		string gives false
+		unresolved gives false
+	end 'check'
+end 'maxonTypeIsPrimitive'
+
 function maxonTypeIsBool(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true
@@ -4385,12 +4447,24 @@ function newDetachedBlock(func IrFunction) returns IrBlock
 	return block
 end 'newDetachedBlock'
 
+// Render a token's value for inclusion in a diagnostic. Empty values render
+// as the empty string itself so messages match C#'s "got ''" phrasing for
+// EOF / synthetic tokens — matching the call sites that quote `Current().Value`
+// directly. Use `formatExpressionTokenValue` for the expression-error path
+// (E2004) which substitutes the literal text "(empty)" instead.
 function tokenValueToString(value String) returns String
-	if value.isEmpty() 'empty'
-		return "(empty)"
-	end 'empty'
 	return value
 end 'tokenValueToString'
+
+// Render an empty/newline token value as "(empty)" for the expression-error
+// path. Mirrors `FormatTokenValueForError` in the C# bootstrap so messages
+// like "Expected expression but got '(empty)'" line up across compilers.
+function formatExpressionTokenValue(value String) returns String
+	if value.isEmpty() or value == "\n" or value == "\r\n" 'isEmpty'
+		return "(empty)"
+	end 'isEmpty'
+	return value
+end 'formatExpressionTokenValue'
 
 // Render a TokenKind for use inside a diagnostic message. Keywords,
 // operators, and punctuation get wrapped in single quotes (`'function'`,

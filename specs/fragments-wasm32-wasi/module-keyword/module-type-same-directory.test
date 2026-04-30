@@ -1,0 +1,52 @@
+// Test: module-type-same-directory
+// --- file: feature/point.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module type Point
+	module var x Integer
+	module var y Integer
+
+	module static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+// --- file: feature/main.maxon
+function main() returns ExitCode
+	let p = Point.create(x: 20, y: 22)
+	return p.x + p.y
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Point.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %7 = mir.param local1 : i64
+    %2 = mir.mov_imm 16 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %6, %3, 0
+    mir.store %7, %3, 8
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 22 : i64
+    %2 = mir.call @Point.create(%0, %1)
+    %4 = mir.load %2, 0
+    %6 = mir.load %2, 8
+    %7 = mir.add.i64 %4, %6
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

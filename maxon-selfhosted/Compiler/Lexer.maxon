@@ -86,6 +86,7 @@ enum DfaState
 	dot
 	lBracket
 	rBracket
+	emitBackslash
 	COUNT
 end 'DfaState'
 
@@ -293,7 +294,7 @@ let charClassTable = [
 // Columns: other space tab  cr   lf   (    )    {    }    [    ]    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof
 let transitionTable = [
 	// start: dispatch on first character
-	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.skipOther, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.lBracket, DfaState.rBracket, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.emitBackslash, DfaState.dot, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther,
 	// sawEq: '=' seen, looking for '='
 	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
 	// sawBang: '!' seen, looking for '='
@@ -325,6 +326,10 @@ let transitionTable = [
 	// lBracket (terminal)
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	// rBracket (terminal)
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	// emitBackslash (terminal — emits a synthetic identifier holding the
+	// `\` byte so downstream "Expected function declaration, got '\\'"
+	// diagnostics carry a real token to point at)
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
 ]
 
@@ -335,8 +340,8 @@ let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.sk
 	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
 	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
 	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
-	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot         lBracket    rBracket
-	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit, Action.emit, Action.emit
+	//              bang            enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther      dot         lBracket    rBracket    emitBackslash
+	Action.emit, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip, Action.emit, Action.emit, Action.emit, Action.emit
 ]
 
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
@@ -365,6 +370,12 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		33 then tokens.push(Token.create(TokenKind.dot, value: ".", line: line, column: column))
 		34 then tokens.push(Token.create(TokenKind.leftBracket, value: "[", line: line, column: column))
 		35 then tokens.push(Token.create(TokenKind.rightBracket, value: "]", line: line, column: column))
+		// Backslash is illegal at the source level outside of strings; emit a
+		// synthetic identifier carrying the literal `\` so the parser surfaces
+		// `Expected function declaration, got '\\'` (which the spec runner's
+		// path normalization renders as `'/'`) instead of silently dropping
+		// the byte.
+		36 then tokens.push(Token.create(TokenKind.identifier, value: "\\", line: line, column: column))
 		default panic("emitFixedToken: unhandled state index {stateIndex}")
 	end 'dispatch'
 end 'emitFixedToken'
@@ -386,9 +397,14 @@ type Lexer
 	// unexpectedEof.
 	var pendingError LexerError
 	var hasPendingError bool
+	// Set by sub-scanners that complete a token whose final byte happens to
+	// be the last byte of the source (no trailing newline). They unwind via
+	// CursorError because that's the shared "done" channel; the flag lets
+	// run() distinguish "clean completion at EOF" from a truncated token.
+	var emittedAtEof bool
 
 	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(line: 0, column: 0), hasPendingError: false}
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(line: 0, column: 0), hasPendingError: false, emittedAtEof: false}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -496,11 +512,24 @@ type Lexer
 		column = 1
 	end 'newline'
 
+	// Sub-scanners signal "token completed cleanly on the source's final byte"
+	// by setting `emittedAtEof` and unwinding via CursorError. Centralized here
+	// so the contract — flag must be set before the throw, never after — lives
+	// in one place.
+	function finishAtEof() throws CursorError
+		emittedAtEof = true
+		throw CursorError.exhausted
+	end 'finishAtEof'
+
 	// --- Action dispatch helpers ---
 
 	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber) throws CursorError
 		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
-		try advance()
+		try advance() otherwise 'eof'
+			// Two-char token completed at the source's last byte — clean
+			// completion, not a truncated token.
+			try finishAtEof()
+		end 'eof'
 	end 'handleEmit2'
 
 	function handleEnterComment() throws CursorError
@@ -584,7 +613,7 @@ type Lexer
 			if sc == Ascii.quote 'endStr'
 				emitStringLit(TokenKind.stringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				if not tryAdvance() 'squoteEof'
-					throw CursorError.exhausted
+					try finishAtEof()
 				end 'squoteEof'
 				return
 			end 'endStr'
@@ -616,7 +645,7 @@ type Lexer
 			if dc == Ascii.dquote 'endDstr'
 				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				if not tryAdvance() 'dquoteEof'
-					throw CursorError.exhausted
+					try finishAtEof()
 				end 'dquoteEof'
 				return
 			end 'endDstr'
@@ -715,7 +744,16 @@ type Lexer
 				continue
 			end 'openBrace'
 
-			let atEnd = try stepDfa(startLine: line, startCol: column)
+			let atEnd = try stepDfa(startLine: line, startCol: column) otherwise 'subEof'
+				// A sub-scanner unwound via CursorError. Inside an interpolation
+				// any EOF — even an "emittedAtEof = true" clean completion —
+				// means the closing `}` is missing; reroute to the unterminated-
+				// string path so `run()` surfaces E1002 instead of treating the
+				// stream as cleanly terminated.
+				hasPendingError = true
+				pendingError = LexerError.unterminatedString(line: line, column: column)
+				throw CursorError.exhausted
+			end 'subEof'
 			if atEnd 'interpEof'
 				// stepDfa hit EOF inside an interpolation — the closing `}`
 				// is missing. Stash the lexer error so run() reports it as
@@ -748,7 +786,7 @@ type Lexer
 				_ = tryAdvance()
 				if not tryAdvance() 'hexPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
-					throw CursorError.exhausted
+					try finishAtEof()
 				end 'hexPrefixEof'
 				while cursor.index() < len 'hexDigits'
 					let hc = cursor.current()
@@ -767,7 +805,7 @@ type Lexer
 				_ = tryAdvance()
 				if not tryAdvance() 'binPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
-					throw CursorError.exhausted
+					try finishAtEof()
 				end 'binPrefixEof'
 				while cursor.index() < len 'binDigits'
 					let bc = cursor.current()
@@ -785,7 +823,7 @@ type Lexer
 				_ = tryAdvance()
 				if not tryAdvance() 'octPrefixEof'
 					emitNumber(TokenKind.intLiteral, numStart: numStart, startLine: startLine, startCol: startCol)
-					throw CursorError.exhausted
+					try finishAtEof()
 				end 'octPrefixEof'
 				while cursor.index() < len 'octDigits'
 					let oc = cursor.current()
@@ -884,7 +922,7 @@ type Lexer
 			emitWithSource(TokenKind.intLiteral, value: numVal, valueBytes: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
 		end 'emitInt'
 		if atEof 'numDone'
-			throw CursorError.exhausted
+			try finishAtEof()
 		end 'numDone'
 	end 'scanNumber'
 
@@ -913,7 +951,7 @@ type Lexer
 		let kind = classifyIdentifier(identVal)
 		emitWithSource(kind, value: identVal, valueBytes: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 		if atEof 'identDone'
-			throw CursorError.exhausted
+			try finishAtEof()
 		end 'identDone'
 	end 'scanIdentifier'
 
@@ -926,7 +964,9 @@ type Lexer
 				break
 			end 'endComment'
 			if not tryAdvanceRaw() 'commentEof'
-				throw CursorError.exhausted
+				// Comment runs to end of file — that's a complete comment, not a
+				// truncated token.
+				try finishAtEof()
 			end 'commentEof'
 		end 'skipComment'
 	end 'scanComment'
@@ -943,8 +983,9 @@ type Lexer
 					_ = tryAdvance()
 					if not tryAdvance() 'endSlashEof'
 						// `*/` was the last two bytes — comment closed cleanly,
-						// just at EOF. Surface as plain EOF (no error stash).
-						throw CursorError.exhausted
+						// just at EOF. Mark clean completion so run() doesn't
+						// surface this as truncated input.
+						try finishAtEof()
 					end 'endSlashEof'
 					return
 				end 'foundEnd'
@@ -976,24 +1017,40 @@ type Lexer
 	function run() returns TokenArray throws LexerError
 		logDebug(LogCategory.lexer, message: () gives "Starting lexer")
 
+		// Drive the DFA until either stepDfa returns true (consumed everything
+		// cleanly) or a scanner unwinds via CursorError. CursorError with
+		// `emittedAtEof` set means a complete token landed on the last byte
+		// (clean completion); otherwise it's truly truncated input.
 		var done = false
 		while not done 'scan'
 			let startLine = line
 			let startCol = column
-			done = try stepDfa(startLine: startLine, startCol: startCol) otherwise 'cursorErr'
-				// stepDfa unwound via CursorError. If a scanner stashed a
-				// specific LexerError (e.g. unterminated string), surface
-				// that; otherwise fall back to generic unexpectedEof.
-				if hasPendingError 'hasErr'
-					throw pendingError
-				end 'hasErr'
-				throw LexerError.unexpectedEof(startLine, column: startCol)
-			end 'cursorErr'
+			done = try stepOnce(startLine, startCol: startCol)
 		end 'scan'
 
-		// No EOF sentinel — parser uses iterator exhaustion for end-of-stream.
+		// Emit a final EOF sentinel token so the parser can rely on cursor.current()
+		// returning a valid Token even after the last user-visible token was
+		// consumed. Position points one column past the last lexed character on
+		// the same line, matching the C# bootstrap's EOF token.
+		tokens.push(Token.create(TokenKind.eof, value: "", line: line, column: column))
 		return tokens
 	end 'run'
+
+	// One iteration of the DFA loop. Returns true when the lexer is done — either
+	// stepDfa hit the source's last byte cleanly, or a sub-scanner emitted its
+	// final token and signalled `emittedAtEof`. Throws LexerError on a stashed
+	// scanner error or a truly-truncated token.
+	function stepOnce(startLine LineNumber, startCol ColumnNumber) returns bool throws LexerError
+		return try stepDfa(startLine: startLine, startCol: startCol) otherwise 'cursorErr'
+			if hasPendingError 'hasErr'
+				throw pendingError
+			end 'hasErr'
+			if not emittedAtEof 'truncated'
+				throw LexerError.unexpectedEof(startLine, column: startCol)
+			end 'truncated'
+			return true
+		end 'cursorErr'
+	end 'stepOnce'
 end 'Lexer'
 
 // --- Public API wrapper ---
