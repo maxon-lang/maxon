@@ -244,6 +244,10 @@ export type Arm64Backend implements TargetBackend
 		end 'useActual' else 'usePrecomputed'
 			targetFunc.varSlotCount = precomputedSlotCount
 		end 'usePrecomputed'
+		// Bump the running stack-size tally for each slot ISel allocated. The
+		// regalloc and prologue passes will add their own contributions later;
+		// the prologue pass just reads func.stackSize and aligns it.
+		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8
 
 		targetModule.functions.push(targetFunc)
 	end 'lowerFunctionToArm64'

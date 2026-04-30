@@ -32,16 +32,22 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(funcIdx) otherwise panic("Function not found in module")
 
-		// Phase 1: Count uses of every ValueId across the entire function
+		// Phase 1: Count uses of every ValueId across the entire function.
+		// Void-returning functions have an implicit `return 0` injected by the
+		// parser; treating that ret as a use would pin the unused zero through
+		// the entire pipeline (and downstream into a dead `xor r8d, r8d` in
+		// codegen). Skip the use-count for void rets so the producer becomes
+		// dead and gets removed below.
 		var useCount = ValueIdArray.create()
+		let isVoid = stdReturnTypeIsVoid(func.returnType)
 
 		for blockRef in func.blockRefs 'countBlocks'
 			let block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 			for packed in block.opRefs 'countOps'
-				countPackedOpUses(module, opIdx: packed, useCount: useCount)
+				countPackedOpUses(module, opIdx: packed, useCount: useCount, isVoidFunc: isVoid)
 			end 'countOps'
 			if block.hasTerminatorOp() 'countTerm'
-				countPackedOpUses(module, opIdx: block.terminatorIndex(), useCount: useCount)
+				countPackedOpUses(module, opIdx: block.terminatorIndex(), useCount: useCount, isVoidFunc: isVoid)
 			end 'countTerm'
 		end 'countBlocks'
 
@@ -373,12 +379,12 @@ end 'pruneUnreachableBlocks'
 // Phase 1: Use counting — extract operand ValueIds from each op
 // ============================================================
 
-function countPackedOpUses(module StdModule, opIdx OpIndex, useCount ValueIdArray)
+function countPackedOpUses(module StdModule, opIdx OpIndex, useCount ValueIdArray, isVoidFunc bool)
 	let stdOp = try module.ops.get(opIdx) otherwise panic("Op not found in module")
 	match stdOp 'outer'
 		arith(op) then countArithUses(op, useCount: useCount)
 		control(op) then countCfUses(op, useCount: useCount)
-		call(op) then countFuncUses(op, useCount: useCount)
+		call(op) then countFuncUses(op, useCount: useCount, isVoidFunc: isVoidFunc)
 		memory(op) then countMemoryUses(op, useCount: useCount)
 		system(op) then countSysUses(op, useCount: useCount)
 	end 'outer'
@@ -420,9 +426,9 @@ function countCondBrUses(condId ValueId, thenArgIds ValueIdArray, elseArgIds Val
 	end 'elseArgs'
 end 'countCondBrUses'
 
-function countFuncUses(op StdCallOp, useCount ValueIdArray)
+function countFuncUses(op StdCallOp, useCount ValueIdArray, isVoidFunc bool)
 	match op 'count'
-		ret(retValId) then incrementUse(useCount, valueId: retValId)
+		ret(retValId) then countRetUse(retValId, useCount: useCount, isVoidFunc: isVoidFunc)
 		call(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
 		tryCall(_, _, argIds, _) then countArrayUses(argIds, useCount: useCount)
 		indirectCall(_, calleeId, argIds) then countIndirectCallUses(calleeId, argIds: argIds, useCount: useCount)
@@ -431,6 +437,17 @@ function countFuncUses(op StdCallOp, useCount ValueIdArray)
 		param then break 'count'
 	end 'count'
 end 'countFuncUses'
+
+// Void functions carry an implicit `return 0` whose retValId nothing else
+// reads. Treating that as a use would keep the literal zero alive all the way
+// through to codegen as a dead `xor r8d, r8d`. Skipping the count lets DCE
+// remove both the constant and (separately) the codegen pass skip the move.
+function countRetUse(retValId ValueId, useCount ValueIdArray, isVoidFunc bool)
+	if isVoidFunc 'voidRet'
+		return
+	end 'voidRet'
+	incrementUse(useCount, valueId: retValId)
+end 'countRetUse'
 
 function countIndirectCallUses(calleeId ValueId, argIds ValueIdArray, useCount ValueIdArray)
 	incrementUse(useCount, valueId: calleeId)
@@ -467,7 +484,13 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		storeIndirect(addrId, _, valueId) then countTwoUses(addrId, b: valueId, useCount: useCount)
 		printLiteral then break 'count'
 		printInt(valueId) then incrementUse(useCount, valueId: valueId)
-		drop(valueId) then incrementUse(useCount, valueId: valueId)
+		// `sys.drop` is a cleanup hook, not a real consumer of its operand. If
+		// the operand has no other users, the value itself is dead — counting
+		// drop as a use would pin every let-bound primitive to live through to
+		// function exit just because inject-drops emitted a no-op cleanup.
+		// `sys.free` IS counted (in the heap-allocated case) because freeing
+		// requires the pointer to actually exist at runtime.
+		drop then break 'count'
 	end 'count'
 end 'countSysUses'
 
@@ -511,9 +534,21 @@ function isDeadPackedOp(module StdModule, opIdx OpIndex, useCount ValueIdArray) 
 		call(op) gives isDeadFuncOp(op, useCount: useCount)
 		memory(op) gives isDeadMemRefOp(op, useCount: useCount)
 		control gives false
-		system gives false
+		system(op) gives isDeadSysOp(op)
 	end 'outer'
 end 'isDeadPackedOp'
+
+// `sys.drop` lowers to a no-op at MIR level — the runtime never runs a
+// destructor. With drops carrying no real semantics, every drop is dead IR
+// and can be removed; that in turn lets the producer it was pinning become
+// dead too. Every other system op (syscall, iatCall, free, prints, stores)
+// has observable side effects.
+function isDeadSysOp(op StdSystemOp) returns bool
+	return match op 'check'
+		drop gives true
+		syscall to printInt gives false
+	end 'check'
+end 'isDeadSysOp'
 
 function isDeadArithOp(op StdArithOp, useCount ValueIdArray) returns bool
 	// All arith ops are pure (no side effects) — dead if unused

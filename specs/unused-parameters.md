@@ -36,6 +36,14 @@ function identity(a Score) returns Score
 	return a  // OK: 'a' is used
 end 'identity'
 ```
+
+### Interface Method Exception
+
+Methods that implement an interface are exempt from this check (see
+`interface-conformance` spec). The implementer is forced to declare every
+parameter the contract names, even when a particular implementation does
+not need one of them. The check still applies to non-interface methods on
+the same type and to local `var`/`let` bindings inside interface methods.
 ## Tests
 
 <!-- test: single-unused -->
@@ -125,4 +133,30 @@ end 'main'
 ```maxoncstderr
 error E3012: specs/fragments/unused-parameters/void-function-unused.test:5:20: unused variable: 'x'
 error E3005: specs/fragments/unused-parameters/void-function-unused.test:10:2: Second and subsequent arguments must be named. Use 'name: value' syntax
+```
+
+<!-- test: method-on-non-conforming-type-still-errors -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Plain
+	let value Integer
+
+	function helper(unused Integer) returns Integer
+		return value
+	end 'helper'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create(value: 1)
+	return p.helper(unused: 5)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-parameters/method-on-non-conforming-type-still-errors.test:8:18: unused variable: 'unused'
 ```

@@ -8,22 +8,6 @@
 // in the small target-specific bits (callee-saved scanning, frame-size
 // formula, op constructors) via TargetBackend hooks.
 
-// Frame layout information computed per function.
-export type FrameInfo
-	export var totalStackSize StackSize
-	export var spillAreaSize StackSize
-	export var varAreaSize StackSize
-	export var alignedSize StackSize
-	// True when the function makes a direct or indirect call. ARM64 uses this
-	// to decide whether STP x29,x30 is required: any BL/BLR clobbers the link
-	// register, so x30 must be saved before any call.
-	export var hasCalls bool
-
-	export static function create(totalStackSize StackSize, spillAreaSize StackSize, varAreaSize StackSize, alignedSize StackSize, hasCalls bool) returns FrameInfo
-		return Self{totalStackSize: totalStackSize, spillAreaSize: spillAreaSize, varAreaSize: varAreaSize, alignedSize: alignedSize, hasCalls: hasCalls}
-	end 'create'
-end 'FrameInfo'
-
 // Round a size up to the next 16-byte boundary.
 // Both x64 and Arm64 require 16-byte stack alignment.
 export function alignTo16(size StackSize) returns StackSize
@@ -33,37 +17,25 @@ export function alignTo16(size StackSize) returns StackSize
 	return size
 end 'alignTo16'
 
-// Mutable accumulator for frame scanning. Using a type (reference semantics)
-// so that nested function calls can update the fields.
+// Mutable accumulator for the per-op call-detection scan. ISel/regalloc/
+// callee-save detection have already bumped `func.stackSize` for everything
+// that needs space; the only thing we still need to know per-function is
+// whether it makes any call, which gates the empty-frame fallback (any
+// function that calls something needs a real prologue so unwinders can walk
+// the rbp/x29 chain even when it has zero stack/save bytes of its own) and
+// ARM64's prologue-necessity check.
 export type FrameScanState
-	export var spillArea StackSize
 	export var hasCalls bool
 
 	static function create() returns FrameScanState
-		return Self{
-			spillArea: 0,
-			hasCalls: false
-		}
+		return Self{hasCalls: false}
 	end 'create'
 end 'FrameScanState'
 
-function createFrameScanState() returns FrameScanState
-	return FrameScanState.create()
-end 'createFrameScanState'
-
-// Compute frame information for a single function by scanning its ops.
-// The var area comes from slot-addressed ops (ISel records varSlotCount),
-// the spill area comes from the register allocator, and scanning surfaces
-// hasCalls for later decisions.
-export function computeFrameInfoWith(module TargetModule, func IrFunction, backend TargetBackend) returns FrameInfo
-	// The register allocator stores the spill size on the function.
-	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
-	// Total frame = var area + spill area, aligned to 16.
-	let varArea = func.varSlotCount * 8
-	let spillArea = func.spillSize
-	var totalSize = varArea + spillArea
-
-	let state = createFrameScanState()
+// Detect whether a function makes any call. Used by the empty-frame fallback
+// and ARM64's prologue-necessity check. Cheap one-pass scan.
+function detectHasCalls(module TargetModule, func IrFunction, backend TargetBackend) returns bool
+	let state = FrameScanState.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for packed in block.opRefs 'eachOp'
@@ -73,36 +45,8 @@ export function computeFrameInfoWith(module TargetModule, func IrFunction, backe
 			backend.scanOpForFrameInfo(block.terminatorIndex(), state: state)
 		end 'hasTerm'
 	end 'eachBlock'
-
-	// Any function with calls needs a frame for correct stack unwinding (panic stack traces).
-	if state.hasCalls and totalSize == 0 'needFrame'
-		totalSize = 16
-	end 'needFrame'
-
-	let aligned = alignTo16(totalSize)
-
-	return FrameInfo.create(totalSize, spillAreaSize: spillArea, varAreaSize: varArea, alignedSize: aligned, hasCalls: state.hasCalls)
-end 'computeFrameInfoWith'
-
-// Update the spill area size to accommodate the given offset.
-// Spill offsets are absolute values from the frame base; we track the maximum.
-export function updateSpillArea(state FrameScanState, offset MachineWord)
-	// Offsets may be negative (x86 grows down from rbp) or positive (arm64 grows up).
-	// The spill area size is the absolute extent.
-	let absOffset = absoluteOffset(offset)
-	let needed = absOffset + 8
-	if needed > state.spillArea 'larger'
-		state.spillArea = needed
-	end 'larger'
-end 'updateSpillArea'
-
-function absoluteOffset(offset MachineWord) returns MachineWord
-	// MachineWord is unsigned; negative offsets wrap to large values (> i64.max).
-	if offset > i64.max 'negative'
-		return 0 - offset
-	end 'negative'
-	return offset
-end 'absoluteOffset'
+	return state.hasCalls
+end 'detectHasCalls'
 
 // ============================================================
 // Shared driver
@@ -114,13 +58,24 @@ end 'absoluteOffset'
 // (ISel emits epilogue+ret; setLastOpAsTerminator promotes the ret to the
 // terminator, leaving epilogue as the last regular op). This pass strips
 // those stale epilogue ops and re-emits prologue/epilogue based on the
-// computed frame size and the backend's frame-necessity rules.
-export function insertPrologueEpilogueShared(module TargetModule, func IrFunction, backend TargetBackend, opQuery TargetOpQuery, frameInfo FrameInfo)
+// running stack-size tally and the backend's frame-necessity rules.
+export function insertPrologueEpilogueShared(module TargetModule, func IrFunction, backend TargetBackend, opQuery TargetOpQuery)
 	backend.detectCalleeSavedRegs(func: func)
 
-	let saveArea = backend.calleeSaveAreaBytes(func: func)
-	let adjustedStackSize = alignTo16(frameInfo.alignedSize + saveArea)
-	let needsPrologue = backend.needsPrologue(adjustedStackSize: adjustedStackSize, hasCalls: frameInfo.hasCalls)
+	let hasCalls = detectHasCalls(module, func: func, backend: backend)
+	// Any function with calls needs a frame so the unwinder can walk rbp/x29.
+	// If func.stackSize is already non-zero (locals, spills, or callee-saves),
+	// the prologue is emitted on those merits. Only force a 16-byte minimum
+	// frame when there'd otherwise be nothing to emit at all.
+	var rawStackSize = func.stackSize
+	if hasCalls and rawStackSize == 0 'minFrame'
+		rawStackSize = 16
+	end 'minFrame'
+	let adjustedStackSize = alignTo16(rawStackSize)
+	let varArea = func.varSlotCount * 8
+	let preSaveTotal = varArea + func.spillSize
+	logTrace(LogCategory.ir, message: () gives "  frame: var={varArea} spill={func.spillSize} total={preSaveTotal} aligned={alignTo16(preSaveTotal)}")
+	let needsPrologue = backend.needsPrologue(adjustedStackSize: adjustedStackSize, hasCalls: hasCalls)
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'

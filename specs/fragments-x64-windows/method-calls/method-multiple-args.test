@@ -30,13 +30,10 @@ ExitCode: 42
 module {
   func @Calculator.addTwo(rcx: i64, rdx: i64, rax: i64) {
   entry:
-    x64.mov r8, rcx
-    x64.mov r9, rdx
-    x64.mov rcx, [r8+0] (8b)
-    x64.add rcx, r9
-    x64.add rcx, rax
-    x64.mov [r8+0], rcx (8b)
-    x64.xor r8d, r8d
+    x64.mov r8, [rcx+0] (8b)
+    x64.add r8, rdx
+    x64.add r8, rax
+    x64.mov [rcx+0], r8 (8b)
     x64.ret
   }
   func @Calculator.get(rcx: i64) -> i64 {
@@ -46,7 +43,7 @@ module {
   }
   func @Calculator.create(rcx: i64) -> i64 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.mov r12, rcx
     x64.mov ecx, 8
     x64.call mrt_alloc
@@ -56,7 +53,7 @@ module {
   }
   func @method-calls.main() -> u8 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.xor ecx, ecx
     x64.call Calculator.create
     x64.mov r12, r8

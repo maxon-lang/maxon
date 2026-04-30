@@ -1,0 +1,26 @@
+// Test: method-on-non-conforming-type-still-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+type Plain
+	let value Integer
+
+	function helper(unused Integer) returns Integer
+		return value
+	end 'helper'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create(value: 1)
+	return p.helper(unused: 5)
+end 'main'
+---
+MaxoncStderr: ```
+error E3012: specs/fragments/unused-parameters/method-on-non-conforming-type-still-errors.test:8:18: unused variable: 'unused'
+```
+---
+---

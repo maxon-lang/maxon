@@ -566,12 +566,15 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 		// Entry block: add pseudo-ranges for calling convention registers
 		// that carry function parameters. These prevent the coloring from
 		// assigning virtual values to registers that still hold unsaved params.
+		// Each param register's pseudo-range ends at THAT specific register's
+		// last use, not at the latest use across all params — that lets early-
+		// consumed param registers (e.g. rcx for arg 0) become free to host
+		// later virtual values, instead of pinning every caller-saved reg
+		// until the slowest param has been copied out.
 		if isFirstBlock and func.paramCount > 0 'entryBlock'
 			let paramMask = targetGetParamRegMask(regTarget, paramCount: func.paramCount, paramTypes: func.paramTypes)
-			let lastParamUse = findLastParamRegUsePacked(module, block: block, paramMask: paramMask, regTarget: regTarget, opQuery: opQuery)
-
-			if paramMask > 0 and lastParamUse > 0 'hasParams'
-				nextPseudoId = emitParamRanges(ranges, mask: paramMask, blockId: blockId, endPos: lastParamUse, nextId: nextPseudoId)
+			if paramMask > 0 'hasParams'
+				nextPseudoId = emitPerBitParamRanges(module, ranges: ranges, mask: paramMask, block: block, blockId: blockId, regTarget: regTarget, opQuery: opQuery, nextId: nextPseudoId)
 			end 'hasParams'
 			isFirstBlock = false
 		end 'entryBlock'
@@ -638,15 +641,44 @@ function findLastParamRegUsePacked(module TargetModule, block IrBlock, paramMask
 	return lastPos
 end 'findLastParamRegUsePacked'
 
+// Emit one pseudo-range per param register, each spanning [0, that register's
+// last use). A whole-mask `lastParamUse` would force every param register to
+// stay "occupied" until the SLOWEST param is consumed — which keeps caller-
+// saved registers like rcx blocked for the entire param-copy phase even after
+// rcx's own param has been moved out, pushing later virtuals into callee-
+// saved registers and inflating the save area.
+function emitPerBitParamRanges(module TargetModule, ranges LiveRangeArray, mask RegMask, block IrBlock, blockId BlockId, regTarget RegAllocTarget, opQuery TargetOpQuery, nextId RegInt) returns RegInt
+	var currentId = nextId
+	var bit = 0
+	var remaining = mask
+	while remaining > 0 'eachBit'
+		if (remaining and 1) == 1 'bitSet'
+			let bitMask = 1 shl bit
+			let bitLastUse = findLastParamRegUsePacked(module, block: block, paramMask: bitMask, regTarget: regTarget, opQuery: opQuery)
+			if bitLastUse > 0 'hasUse'
+				var range = LiveRange.create(currentId)
+				range.defBlock = blockId
+				range.defPosition = 0
+				range.regClass = RegClass.gpr
+				range.fixedReg = bit
+				range.assignedReg = bit
+				range.spillWeight = 1000000
+				range.isRematerializable = false
+				range.intervals.push(Interval.create(blockId, startPos: 0, endPos: bitLastUse))
+				ranges.push(range)
+				currentId = currentId + 1
+			end 'hasUse'
+		end 'bitSet'
+		remaining = remaining shr 1
+		bit = bit + 1
+	end 'eachBit'
+	return currentId
+end 'emitPerBitParamRanges'
+
 // Get a mask of physical GPR registers explicitly read by a movRegReg-from-physical op.
 function getExplicitPhysReadsWith(module TargetModule, packed OpIndex, opQuery TargetOpQuery) returns RegMask
 	return opQuery.getExplicitPhysReads(module, packed: packed)
 end 'getExplicitPhysReadsWith'
-
-// Emit pseudo-ranges for parameter registers spanning [0, endPos) in the entry block.
-function emitParamRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, endPos RegInt, nextId RegInt) returns RegInt
-	return emitFixedRegRanges(ranges, mask: mask, blockId: blockId, startPos: 0, endPos: endPos, nextId: nextId)
-end 'emitParamRanges'
 
 // Emit one pseudo LiveRange per set bit in the clobber mask.
 // Returns the next available pseudo value ID.

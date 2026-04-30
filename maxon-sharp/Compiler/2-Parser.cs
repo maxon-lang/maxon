@@ -6009,9 +6009,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private void CheckUnusedVariables() {
-    foreach (var (paramName, paramLine, paramCol) in _paramLocations) {
-      if (!_referencedVars.Contains(paramName)) {
-        throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{paramName}'", paramLine, paramCol);
+    var skipParamCheck = IsCurrentFunctionInterfaceMethod();
+    if (!skipParamCheck) {
+      foreach (var (paramName, paramLine, paramCol) in _paramLocations) {
+        if (!_referencedVars.Contains(paramName)) {
+          throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{paramName}'", paramLine, paramCol);
+        }
       }
     }
     foreach (var (varName, varLine, varCol) in _localVarLocations) {
@@ -6019,6 +6022,40 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{varName}'", varLine, varCol);
       }
     }
+  }
+
+  // True when the current function implements a method required by one of the
+  // conforming interfaces of the enclosing type. Interface contracts force
+  // implementers to declare parameters they may not need, so we suppress E3012
+  // for parameters here. Non-interface methods on the same type still get the
+  // unused-parameter check.
+  private bool IsCurrentFunctionInterfaceMethod() {
+    if (_currentTypeName == null || _currentFunction == null) return false;
+    if (!_typeRegistry.TryGetValue(_currentTypeName, out var typeEntry)) return false;
+    HashSet<string>? conformingInterfaces = typeEntry switch {
+      IrStructType st => st.ConformingInterfaces,
+      IrEnumType et => et.ConformingInterfaces,
+      _ => null
+    };
+    if (conformingInterfaces == null || conformingInterfaces.Count == 0) return false;
+
+    var fullName = _currentFunction.Name;
+    var tildeIdx = fullName.IndexOf('~');
+    if (tildeIdx >= 0) fullName = fullName[..tildeIdx];
+    var lastDot = fullName.LastIndexOf('.');
+    var simpleName = lastDot >= 0 ? fullName[(lastDot + 1)..] : fullName;
+    var dollarIdx = simpleName.IndexOf('$');
+    if (dollarIdx >= 0) simpleName = simpleName[..dollarIdx];
+
+    foreach (var ifaceName in conformingInterfaces) {
+      if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceEntry) || ifaceEntry is not IrInterfaceType iface) continue;
+      var collected = new List<(IrInterfaceMethodSignature Method, string SourceInterface)>();
+      CollectInterfaceMethods(iface, ifaceName, collected, []);
+      foreach (var (m, _) in collected) {
+        if (m.Name == simpleName) return true;
+      }
+    }
+    return false;
   }
 
   private void CheckVarShouldBeLet() {
@@ -9643,13 +9680,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileMethod(
     string methodName, List<MaxonValue> args, Token methodToken) {
     ValidateThrowingBuiltinCallContext("__ManagedFile", methodName, methodToken);
+    var mfErr = GetBuiltinThrowsType("__ManagedFile", methodName);
     var selfValue = args[0];
     switch (methodName) {
       case "size": {
         // size() throws __ManagedFileError (sizeFailed / closed)
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
-        var tryOp = new MaxonTryCallOp("__managed_file_size", [handleRef.Result], MaxonValueKind.Integer, null);
+        var tryOp = new MaxonTryCallOp("__managed_file_size", [handleRef.Result], MaxonValueKind.Integer, null) { ThrowsType = mfErr };
         SetBuiltinCallReceiver(tryOp);
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
@@ -9664,7 +9702,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(bufferRef);
         var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
         _currentBlock!.AddOp(capacityRef);
-        var tryOp = new MaxonTryCallOp("__managed_file_read", [handleRef.Result, bufferRef.Result, size, capacityRef.Result], MaxonValueKind.Integer, null);
+        var tryOp = new MaxonTryCallOp("__managed_file_read", [handleRef.Result, bufferRef.Result, size, capacityRef.Result], MaxonValueKind.Integer, null) { ThrowsType = mfErr };
         SetBuiltinCallReceiver(tryOp);
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
@@ -9678,7 +9716,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(bufferRef);
         var lengthRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
         _currentBlock!.AddOp(lengthRef);
-        var tryOp = new MaxonTryCallOp("__managed_file_write", [handleRef.Result, bufferRef.Result, lengthRef.Result], MaxonValueKind.Integer, null);
+        var tryOp = new MaxonTryCallOp("__managed_file_write", [handleRef.Result, bufferRef.Result, lengthRef.Result], MaxonValueKind.Integer, null) { ThrowsType = mfErr };
         SetBuiltinCallReceiver(tryOp);
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
@@ -9699,19 +9737,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Args are pre-parsed: args[0..] are the user arguments (no self).
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName, List<MaxonValue> args, Token methodToken) {
     ValidateThrowingBuiltinCallContext("__ManagedFile", methodName, methodToken);
+    var mfErr = GetBuiltinThrowsType("__ManagedFile", methodName);
     switch (methodName) {
       case "openRead": {
         // openRead(managed) throws __ManagedFileError (notFound / accessDenied / openFailed)
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_file_open_read", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        var tryOp = new MaxonTryCallOp("__managed_file_open_read", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile") { ThrowsType = mfErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }
       case "openWrite": {
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_file_open_write", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        var tryOp = new MaxonTryCallOp("__managed_file_open_write", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile") { ThrowsType = mfErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }
@@ -9719,7 +9758,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Same as openWrite but creates file with executable permissions (0755) on Unix.
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_file_open_write_executable", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile");
+        var tryOp = new MaxonTryCallOp("__managed_file_open_write_executable", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedFile") { ThrowsType = mfErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }
@@ -9735,7 +9774,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // delete(managed) throws __ManagedFileError (notFound / accessDenied / deleteFailed)
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_file_delete", [toCstrOp.Result], (MaxonValueKind?)null, null);
+        var tryOp = new MaxonTryCallOp("__managed_file_delete", [toCstrOp.Result], (MaxonValueKind?)null, null) { ThrowsType = mfErr };
         _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
@@ -9743,7 +9782,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // stat(managed) throws __ManagedFileError (notFound / statFailed); returns raw buffer ptr on success.
         var toCstrOp = new MaxonManagedToCStringOp(args[0]);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_file_stat", [toCstrOp.Result], MaxonValueKind.Integer, null);
+        var tryOp = new MaxonTryCallOp("__managed_file_stat", [toCstrOp.Result], MaxonValueKind.Integer, null) { ThrowsType = mfErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }
@@ -9768,6 +9807,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryMethod(
     string methodName, List<MaxonValue> args, Token methodToken) {
     ValidateThrowingBuiltinCallContext("__ManagedDirectory", methodName, methodToken);
+    var mdErr = GetBuiltinThrowsType("__ManagedDirectory", methodName);
     var selfValue = args[0];
     switch (methodName) {
       case "filename": {
@@ -9786,7 +9826,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // next() throws __ManagedDirectoryError (nextFailed). -1 sentinel means OS error.
         var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
         _currentBlock!.AddOp(blockRef);
-        var tryOp = new MaxonTryCallOp("__managed_directory_next", [blockRef.Result], MaxonValueKind.Integer, null);
+        var tryOp = new MaxonTryCallOp("__managed_directory_next", [blockRef.Result], MaxonValueKind.Integer, null) { ThrowsType = mdErr };
         SetBuiltinCallReceiver(tryOp);
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
@@ -9809,6 +9849,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Args are pre-parsed: args[0..] are the user arguments (no self).
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName, List<MaxonValue> args, Token methodToken) {
     ValidateThrowingBuiltinCallContext("__ManagedDirectory", methodName, methodToken);
+    var mdErr = GetBuiltinThrowsType("__ManagedDirectory", methodName);
     switch (methodName) {
       case "openSearch": {
         // openSearch(managed) throws __ManagedDirectoryError (openSearchFailed).
@@ -9816,7 +9857,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_directory_open_search", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedDirectory");
+        var tryOp = new MaxonTryCallOp("__managed_directory_open_search", [toCstrOp.Result], MaxonValueKind.Struct, "__ManagedDirectory") { ThrowsType = mdErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }
@@ -9838,7 +9879,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var managed = args[0];
         var toCstrOp = new MaxonManagedToCStringOp(managed);
         _currentBlock!.AddOp(toCstrOp);
-        var tryOp = new MaxonTryCallOp("__managed_directory_create", [toCstrOp.Result], (MaxonValueKind?)null, null);
+        var tryOp = new MaxonTryCallOp("__managed_directory_create", [toCstrOp.Result], (MaxonValueKind?)null, null) { ThrowsType = mdErr };
         _currentBlock!.AddOp(tryOp);
         return (true, null);
       }
@@ -9846,7 +9887,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // currentPath() throws __ManagedDirectoryError (currentPathFailed).
         // The lowering calls maxon_get_current_directory, converts the cstring to
         // __ManagedMemory, and frees the raw buffer — all in the success path.
-        var tryOp = new MaxonTryCallOp("__managed_directory_current_path", [], MaxonValueKind.Struct, "__ManagedMemory");
+        var tryOp = new MaxonTryCallOp("__managed_directory_current_path", [], MaxonValueKind.Struct, "__ManagedMemory") { ThrowsType = mdErr };
         _currentBlock!.AddOp(tryOp);
         return (true, tryOp.Result);
       }

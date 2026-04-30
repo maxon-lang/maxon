@@ -280,6 +280,63 @@ end 'main'
 42
 ```
 
+<!-- test: managed-file.open-read-not-found-variant -->
+
+The errno→variant mapping ensures that opening a path that does not exist
+routes to the `notFound` arm (rather than the catch-all `openFailed`).
+Backed by `gt->io_error_code` populated by the runtime sync worker
+(Win32 ERROR_FILE_NOT_FOUND=2 / POSIX ENOENT=2).
+
+```maxon
+function main() returns ExitCode
+	var result = 0
+	try __ManagedFile.openRead("nonexistent_phaseB_open_xyz.txt".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-file.delete-not-found-variant -->
+```maxon
+function main() returns ExitCode
+	var result = 0
+	try __ManagedFile.delete("nonexistent_phaseB_delete_xyz.txt".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: managed-file.stat-not-found-variant -->
+```maxon
+function main() returns ExitCode
+	var result = 0
+	try __ManagedFile.stat("nonexistent_phaseB_stat_xyz.txt".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: managed-file.error-direct-construction -->
 ```maxon
 function main() returns ExitCode

@@ -3578,6 +3578,9 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_fstat_done");
 
     DefineLabel("rt_fstat_fail");
+    // Capture GetLastError into gt->io_error_code so the lowering's
+    // notFound/accessDenied dispatch sees ERROR_FILE_NOT_FOUND / ERROR_ACCESS_DENIED.
+    EmitCaptureLastErrorToGt();
     // Free buffer on failure
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
@@ -3778,7 +3781,10 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("ne", "rt_mdos_found");
 
-    // Not found: decref block (frees since rc drops to 0), return 0
+    // Not found: capture GetLastError into gt->io_error_code so the lowering
+    // can map ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND to notFound.
+    EmitCaptureLastErrorToGt();
+    // Decref block (frees since rc drops to 0), return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
     EmitCallRuntimeLabel("mm_decref");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
@@ -3905,6 +3911,23 @@ public partial class X86CodeEmitter {
   // Each entry: [deadline_ms: i64, gt_ptr: i64] = 16 bytes
   private const int TimerEntrySize = 16;
   private const int TimerHeapCapacity = 256;
+
+  /// <summary>
+  /// On a failure branch of a Win32 call, capture GetLastError into the current
+  /// green thread's io_error_code field, so the lowering's notFound/accessDenied
+  /// dispatch (via __io_get_last_error) sees the OS code. Uses the caller's
+  /// frame slot at [rbp+saveSlotOffset] to stash GetLastError's RAX result while
+  /// loading the GT pointer. saveSlotOffset is negative (e.g. -0x20) and must
+  /// fit within the runtime function's frame.
+  /// Clobbers RAX, R10.
+  /// </summary>
+  private void EmitCaptureLastErrorToGt(int saveSlotOffset = -0x20) {
+    EmitCallImportOnSystemStack("kernel32.dll", "GetLastError");
+    EmitMovMemReg(saveSlotOffset, X86Register.Rax, 8);    // save error code
+    EmitLoadCurrentGtInline(X86Register.R10);             // R10 = current GT
+    EmitMovRegMem(X86Register.Rax, saveSlotOffset, 8);    // reload error code
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+  }
 
   /// <summary>
   /// Emit inline gs: TLS access to load the P pointer, then dereference P->currentGt
@@ -6192,13 +6215,32 @@ public partial class X86CodeEmitter {
   /// Processes non-overlappable I/O ops (FindFirstFile, GetFileAttributes, etc.) serially.
   /// Posts IoCompletion results to shared done queue.
   /// </summary>
+  /// <summary>
+  /// Inside the sync worker on a failure branch, capture the Win32 GetLastError
+  /// value into the worker's error-code slot (-0x248) so __io_sync_op_done passes
+  /// it through __io_complete_gt -> gt->io_error_code. RAX is preserved (saved
+  /// to -0x240 around the GetLastError call) so callers may continue using their
+  /// failing return value to determine the sentinel they emit.
+  /// </summary>
+  private void EmitSyncWorkerCaptureLastError() {
+    EmitMovMemReg(-0x240, X86Register.Rax, 8);             // save failing RAX
+    EmitCallImport("kernel32.dll", "GetLastError");
+    EmitMovMemReg(-0x248, X86Register.Rax, 8);             // captured Win32 error
+    EmitMovRegMem(X86Register.Rax, -0x240, 8);             // restore failing RAX
+  }
+
   private void EmitIoSyncWorkerLoop() {
     DefineLabel("__io_sync_worker_loop");
     EmitPushReg(X86Register.Rbp);
     EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
-    EmitSubRegImm(X86Register.Rsp, 0x260);
+    EmitSubRegImm(X86Register.Rsp, 0x270);
     // Locals: [rbp-0x08]=req ptr, [rbp-0x10]=result, [rbp-0x18]=comp ptr
     // Extended frame for net_connect: WSADATA(408b), hints(48b), sockaddr_in(16b)
+    // Phase B errno capture (Step 1a):
+    //   [rbp-0x240] = saved RAX during GetLastError calls (failure branches)
+    //   [rbp-0x248] = captured Win32 error code, passed as the 4th arg to
+    //                 __io_complete_gt so the lowering can map ENOENT/EACCES
+    //                 to notFound/accessDenied via __io_get_last_error.
 
     DefineLabel("__io_sync_worker_top");
     // WaitForSingleObject(__io_sync_req_event, INFINITE)
@@ -6211,6 +6253,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__io_sync_worker_top"); // spurious wakeup
     EmitMovMemReg(-0x08, X86Register.Rax, 8); // req
+
+    // Zero the error-code slot up front. Success handlers leave it at 0; failure
+    // handlers overwrite it with GetLastError before jumping to __io_sync_op_done.
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovMemReg(-0x248, X86Register.Rcx, 8);
 
     // Dispatch on op code
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffOp);
@@ -6274,7 +6321,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
     EmitCallImport("kernel32.dll", "DeleteFileA");
-    EmitJmp("__io_sync_op_done"); // result in RAX (0=failure, nonzero=success)
+    // result in RAX (0=failure, nonzero=success). On failure, capture
+    // GetLastError into the worker's error-code slot for the lowering's
+    // notFound/accessDenied dispatch.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "__io_sync_op_done");
+    EmitSyncWorkerCaptureLastError();
+    EmitJmp("__io_sync_op_done");
 
     // --- findFirst: FindFirstFileA(arg0=pattern, arg1=WIN32_FIND_DATA*) → HANDLE ---
     DefineLabel("__io_sync_op_find_first");
@@ -6282,7 +6335,12 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // pattern
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SyncReqOffArg1); // WIN32_FIND_DATA*
     EmitCallImport("kernel32.dll", "FindFirstFileA");
-    EmitJmp("__io_sync_op_done"); // INVALID_HANDLE_VALUE on failure
+    // INVALID_HANDLE_VALUE on failure → capture GetLastError.
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ne", "__io_sync_op_done");
+    EmitSyncWorkerCaptureLastError();
+    EmitJmp("__io_sync_op_done");
 
     // --- findNext: FindNextFileA(arg0=HANDLE, arg1=WIN32_FIND_DATA*) → BOOL, or -1 on real error ---
     // Returns: non-zero=found, 0=no more files (ERROR_NO_MORE_FILES), -1=OS error.
@@ -6295,10 +6353,13 @@ public partial class X86CodeEmitter {
     EmitJcc("nz", "__io_sync_op_done"); // success: return the non-zero BOOL
     // FindNextFileA returned FALSE. Check if that means "no more files" or a real error.
     EmitCallImport("kernel32.dll", "GetLastError");
-    // ERROR_NO_MORE_FILES = 18 (0x12)
+    // ERROR_NO_MORE_FILES = 18 (0x12) — clean end-of-iteration; do NOT record
+    // an error code (this is not a user-visible failure).
     EmitCmpRegImm(X86Register.Rax, 18);
     EmitJcc("e", "__io_sync_op_find_next_eof");
-    // Real error: return -1
+    // Real error: RAX still holds GetLastError's result. Save it before
+    // overwriting RAX with the -1 sentinel for the lowering.
+    EmitMovMemReg(-0x248, X86Register.Rax, 8);
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_op_find_next_eof");
@@ -6332,6 +6393,11 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // lpSecurityAttributes = NULL
     EmitCallImport("kernel32.dll", "CreateDirectoryA");
+    // CreateDirectoryA returns 0 on failure. Capture GetLastError so the
+    // lowering can map ERROR_ALREADY_EXISTS / access-denied to specific variants.
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "__io_sync_op_done");
+    EmitSyncWorkerCaptureLastError();
     EmitJmp("__io_sync_op_done");
 
     // --- getCwd: GetCurrentDirectoryA(260, heap_buf) → raw ptr, or 0 on failure ---
@@ -6341,9 +6407,11 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, 260); // nBufferLength
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // lpBuffer
     EmitCallImport("kernel32.dll", "GetCurrentDirectoryA");
-    // GetCurrentDirectoryA returns 0 on failure. Free the buffer and return 0.
+    // GetCurrentDirectoryA returns 0 on failure. Capture GetLastError, free
+    // the buffer, and return 0.
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("nz", "__io_sync_op_get_cwd_ok");
+    EmitSyncWorkerCaptureLastError();
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buf to free
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax); // return 0
@@ -6383,6 +6451,9 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_file_open_read_fail");
+    // RAX = INVALID_HANDLE_VALUE (-1). Capture GetLastError so the lowering
+    // can map ERROR_FILE_NOT_FOUND → notFound, ERROR_ACCESS_DENIED → accessDenied.
+    EmitSyncWorkerCaptureLastError();
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
 
@@ -6417,6 +6488,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_file_open_write_fail");
+    EmitSyncWorkerCaptureLastError();
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
 
@@ -6446,6 +6518,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_file_open_write_exec_fail");
+    EmitSyncWorkerCaptureLastError();
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
 
@@ -6714,11 +6787,13 @@ public partial class X86CodeEmitter {
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
-    // __io_complete_gt(gt, result, result, 0)
+    // __io_complete_gt(gt, result, result, error)
+    // error is the captured Win32 error code (0 on success); failure handlers
+    // populate -0x248 with GetLastError before jumping here.
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // gt
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // result
     EmitMovRegMem(X86Register.R8, -0x10, 8);  // len = result
-    EmitXorRegReg(X86Register.R9, X86Register.R9); // error = 0
+    EmitMovRegMem(X86Register.R9, -0x248, 8); // error = captured code
     EmitCallRuntimeLabel("__io_complete_gt");
 
     EmitJmp("__io_sync_worker_top");
@@ -7029,10 +7104,26 @@ public partial class X86CodeEmitter {
     EmitIoEnqueueSyncReq();
     EmitIoDequeuesSyncReq();
     EmitIoCompleteGt();
+    EmitIoGetLastError();
     EmitIoEnqueueCompletion();
     EmitIoDequeueCompletion();
     new Runtime.RuntimeEmitter(CreateBackend()).EmitMmRawAlloc260(Compiler.MmTrace);
     EmitIoPanicIo();
+  }
+
+  /// <summary>
+  /// __io_get_last_error() -> i64 in RAX: returns gt->io_error_code for the current
+  /// green thread. Used by the lowering to map raw OS error codes (Win32 GetLastError
+  /// values captured by the sync worker, or POSIX errno on macOS) to method-specific
+  /// error-enum ordinals (notFound / accessDenied / etc).
+  /// </summary>
+  private void EmitIoGetLastError() {
+    EmitRuntimeFunctionStart("__io_get_last_error", 0, 0x20);
+    // R10 = current GT pointer
+    EmitLoadCurrentGtInline(X86Register.R10);
+    // RAX = gt->io_error_code
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffIoErrorCode);
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>

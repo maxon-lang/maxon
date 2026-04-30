@@ -41,6 +41,15 @@ export type IrFunction
 	export var varSlotCount VarSlot
 	// Spill area size in bytes, computed by the register allocator.
 	export var spillSize StackSize
+	// Running tally of bytes the function needs on the stack for its frame
+	// (locals + spills + callee-save area). Bumped by each pass that allocates
+	// space — ISel when it hands out a temp slot, the spill manager when it
+	// places a spill slot, callee-save detection when a non-volatile register
+	// gets clobbered. The prologue/epilogue pass aligns this to 16 and emits
+	// a single `sub rsp, N` (plus the saves). If a later pass proves a slot
+	// or save is unneeded, it should decrement the counter so the prologue
+	// stays accurate without a re-scan.
+	export var stackSize StackSize
 	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
@@ -62,6 +71,7 @@ export type IrFunction
 			paramTypes: StdTypeArray.create(),
 			varSlotCount: 0,
 			spillSize: 0,
+			stackSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create()
 		}
@@ -84,6 +94,7 @@ export type IrFunction
 			paramTypes: paramTypes,
 			varSlotCount: 0,
 			spillSize: 0,
+			stackSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create()
 		}
@@ -104,6 +115,7 @@ export type IrFunction
 			paramTypes: src.paramTypes,
 			varSlotCount: src.varSlotCount,
 			spillSize: src.spillSize,
+			stackSize: src.stackSize,
 			calleeSavedGprs: src.calleeSavedGprs,
 			calleeSavedFps: src.calleeSavedFps
 		}

@@ -643,6 +643,10 @@ type X64FunctionLowering
 		end 'useActual' else 'usePrecomputed'
 			targetFunc.varSlotCount = precomputedSlotCount
 		end 'usePrecomputed'
+		// Bump the running stack-size tally for each slot ISel allocated. The
+		// regalloc and prologue passes will add their own contributions later;
+		// the prologue pass just reads func.stackSize and aligns it.
+		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8
 
 		target.functions.push(targetFunc)
 	end 'lowerFunction'
@@ -1114,12 +1118,16 @@ type X64FunctionLowering
 	end 'lowerMirTerminator'
 
 	// Return: move value to R8 (or XMM0 for float), then emit epilogue+ret.
-	// Void-returning functions still get the move so that the implicit 0 returned
-	// by the parser lands in the canonical return register — this keeps the dead
-	// `mov r8d, 0` visible in the output instead of letting regalloc assign it to
-	// an arbitrary callee-saved register. Floating-point void is unreachable
-	// (only value-returning functions can have float return type).
+	// Void-returning functions skip the move entirely — the parser still wires
+	// every void function to `return 0` so MIR carries an unused retValId, but
+	// callers never read the return register, so materializing the implicit
+	// zero just bloats every void function with a dead `xor r8d, r8d`.
 	function lowerReturn(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
+		if stdReturnTypeIsVoid(returnType) 'voidReturn'
+			appendX64Op(target, block: dstBlock, op: X64Op.epilogue)
+			appendX64Op(target, block: dstBlock, op: X64Op.ret)
+			return
+		end 'voidReturn'
 		let isFloat = stdReturnTypeIsFloat(returnType)
 		if isFloat 'floatReturn'
 			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), src: X64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
@@ -1263,13 +1271,10 @@ type X64FunctionLowering
 	function lowerGlobalAddr(resultId ValueId, name String, dstBlock IrBlock)
 		// Emit LEA directly into a virtual register — no slot indirection needed.
 		// The code emitter resolves the label via a data island + RIP-relative LEA.
+		// If a later op needs this value as a slot (syscall/iatCall arg, byte-op
+		// base, etc.), ensureValueInSlot will allocate one lazily; pre-reserving
+		// here would just inflate the var area for values that never spill.
 		appendX64Op(target, block: dstBlock, op: X64Op.leaRipRelative(X64VReg.virtual(resultId), rdataLabel: name))
-		// Reserve a home slot for the value so later ensureValueInSlot calls can
-		// spill it without clashing with fresh temp allocations. Without the
-		// nextTempSlot bump, a subsequent allocation would hand out the same
-		// index and the two values would corrupt each other's spills.
-		valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
-		nextTempSlot = nextTempSlot + 1
 	end 'lowerGlobalAddr'
 
 	function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock IrBlock)

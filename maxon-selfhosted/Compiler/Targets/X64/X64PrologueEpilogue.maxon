@@ -7,51 +7,19 @@
 // X64 frame scanning
 // ============================================================
 
+// The frame size is now read directly from running tallies on `IrFunction`
+// (varSlotCount populated by ISel, spillSize populated by the regalloc spill
+// manager), so this scan only needs to surface whether the function makes any
+// call. That bool drives the empty-frame fallback in insertPrologueEpilogueShared.
 export function scanX64InstrForFrame(op X64Op, state FrameScanState)
 	match op 'scan'
-		prologue to movRegImm32 then break 'scan'
-		movSlot(slotIndex, _) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
-		loadSlot(_, slotIndex) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
-		addRegReg to loadRegRbpOffset then break 'scan'
+		prologue to loadRegRbpOffset then break 'scan'
 		callDirect then state.hasCalls = true
-		syscall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
-		iatCall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
-		globalAddr(resultSlot, _) then updateSpillAreaFromSlot(state, slotIndex: resultSlot)
-		stackAddrOp(resultSlot, targetSlot) then updateSpillAreaFromTwoSlots(state, slot1: resultSlot, slot2: targetSlot)
-		storeByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
-		loadByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
-		memcpyOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
-		movRegReg to idivReg then break 'scan'
-		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
-		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
-		xorRegRegSelf then break 'scan'
+		syscall to xorRegRegSelf then break 'scan'
 		callIndirect then state.hasCalls = true
 		xchgRegReg to repStosq then break 'scan'
 	end 'scan'
 end 'scanX64InstrForFrame'
-
-function updateSpillAreaFromSlot(state FrameScanState, slotIndex VarSlot)
-	let offset = (slotIndex + 1) * 8
-	updateSpillArea(state, offset: 0 - offset)
-end 'updateSpillAreaFromSlot'
-
-function updateSpillAreaFromSysOp(state FrameScanState, resultSlot VarSlot, argSlots VarSlotArray)
-	updateSpillAreaFromSlot(state, slotIndex: resultSlot)
-	for s in argSlots 'eachArg'
-		updateSpillAreaFromSlot(state, slotIndex: s)
-	end 'eachArg'
-end 'updateSpillAreaFromSysOp'
-
-function updateSpillAreaFromTwoSlots(state FrameScanState, slot1 VarSlot, slot2 VarSlot)
-	updateSpillAreaFromSlot(state, slotIndex: slot1)
-	updateSpillAreaFromSlot(state, slotIndex: slot2)
-end 'updateSpillAreaFromTwoSlots'
-
-function updateSpillAreaFromThreeSlots(state FrameScanState, s1 VarSlot, s2 VarSlot, s3 VarSlot)
-	updateSpillAreaFromSlot(state, slotIndex: s1)
-	updateSpillAreaFromSlot(state, slotIndex: s2)
-	updateSpillAreaFromSlot(state, slotIndex: s3)
-end 'updateSpillAreaFromThreeSlots'
 
 // ============================================================
 // X64 TargetBackend hooks for prologue/epilogue insertion
@@ -86,9 +54,11 @@ end 'x64GetGprOrdinal'
 
 function x64MarkGprIfCalleeSaved(seen RegIntArray, vreg X64VReg)
 	let ord = x64GetGprOrdinal(vreg)
-	// Windows x64 callee-saved (non-volatile) registers:
-	// rbx=3, rsi=6, rdi=7, r12=12, r13=13, r14=14, r15=15
-	if (ord >= 12 and ord <= 15) or ord == 3 or ord == 6 or ord == 7 'calleeSaved'
+	// Internal-convention callee-saved (non-volatile) registers.
+	// Maxon's internal calling convention treats rsi/rdi as caller-saved on
+	// every OS — see createX64CallerSavedGprs in X64RegisterAlloc.maxon.
+	// Callee-saved: rbx=3, r12=12, r13=13, r14=14, r15=15
+	if (ord >= 12 and ord <= 15) or ord == 3 'calleeSaved'
 		x64MarkRegOrdinal(seen, ordinal: ord)
 	end 'calleeSaved'
 end 'x64MarkGprIfCalleeSaved'
@@ -137,6 +107,8 @@ export function x64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 	sortRegOrdinals(gprSeen)
 
 	func.calleeSavedGprs = gprSeen
+	// Bump the running stack-size tally for the save area.
+	func.stackSize = func.stackSize + gprSeen.count() * 8
 end 'x64DetectCalleeSavedRegs'
 
 function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)

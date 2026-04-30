@@ -285,3 +285,147 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: interface-method-unused-param-allowed -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(volume Integer) returns Integer
+end 'Greeter'
+
+type Silent implements Greeter
+	let value Integer
+
+	function greet(volume Integer) returns Integer
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Silent'
+
+function callGreet(g Greeter) returns Integer
+	return g.greet(volume: 99)
+end 'callGreet'
+
+function main() returns ExitCode
+	let s = Silent.create(value: 42)
+	return callGreet(s)
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: interface-method-via-extended-interface -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function ping(payload Integer) returns Integer
+end 'Base'
+
+interface Extended extends Base
+	function other() returns Integer
+end 'Extended'
+
+type Impl implements Extended
+	let n Integer
+
+	function ping(payload Integer) returns Integer
+		return n
+	end 'ping'
+
+	function other() returns Integer
+		return n + 1
+	end 'other'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callPing(b Base) returns Integer
+	return b.ping(payload: 7)
+end 'callPing'
+
+function main() returns ExitCode
+	let i = Impl.create(n: 5)
+	return callPing(i)
+end 'main'
+```
+```exitcode
+5
+```
+
+
+<!-- test: non-interface-method-on-conforming-type-still-errors -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value Integer
+
+	function greet() returns Integer
+		return value
+	end 'greet'
+
+	function helper(unused Integer) returns Integer
+		return value
+	end 'helper'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function main() returns ExitCode
+	let h = Hello.create(value: 1)
+	return h.helper(unused: 5)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/interface-conformance/non-interface-method-on-conforming-type-still-errors.test:16:18: unused variable: 'unused'
+```
+
+
+<!-- test: interface-method-local-var-still-errors -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(volume Integer) returns Integer
+end 'Greeter'
+
+type Silent implements Greeter
+	let value Integer
+
+	function greet(volume Integer) returns Integer
+		let unusedLocal = 99
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Silent'
+
+function main() returns ExitCode
+	let s = Silent.create(value: 1)
+	return s.greet(volume: 0)
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/interface-conformance/interface-method-local-var-still-errors.test:13:7: unused variable: 'unusedLocal'
+```

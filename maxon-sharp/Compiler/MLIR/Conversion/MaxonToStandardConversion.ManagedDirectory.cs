@@ -5,9 +5,9 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
 	// __ManagedDirectoryError ordinals (see stdlib/Interfaces.maxon). Flag values are 1-indexed
-	// (0 = success), so flag = ordinal + 1. Only the variants this lowering can currently
-	// produce are listed here; notFound / accessDenied / iteratorInvalid / closed require
-	// runtime GetLastError capture (Phase B) before the lowering can pick the right ordinal.
+	// (0 = success), so flag = ordinal + 1. notFound (0) / accessDenied (1) are dispatched at
+	// runtime by SelectIoErrorOrdinal (errno→variant); iteratorInvalid / closed are stdlib-
+	// internal invariant panics, not user-catchable.
 	private const int MdErrOpenSearchFailed = 3;
 	private const int MdErrNextFailed = 4;
 	private const int MdErrCreateFailed = 6;
@@ -18,10 +18,10 @@ public static partial class MaxonToStandardConversion {
 	/// Instance methods read _block before calling; static methods pass a cstring directly.
 	/// Invariant panics (filename) emit null checks before calling.
 	///
-	/// Error mapping: each throwing method translates its sentinel return (0 / -1) into a single
-	/// __ManagedDirectoryError ordinal. Distinguishing notFound / accessDenied / openSearchFailed
-	/// requires runtime GetLastError capture and is a follow-up; today all failures map to a
-	/// single catch-all variant per method.
+	/// Error mapping: each throwing method translates its sentinel return (0 / -1) into a 1-indexed
+	/// __ManagedDirectoryError flag. SelectIoErrorOrdinal then routes specific OS error codes
+	/// (ENOENT / EACCES on POSIX; ERROR_FILE_NOT_FOUND / ERROR_ACCESS_DENIED on Win32) to
+	/// notFound / accessDenied; everything else falls through to the method-specific catch-all.
 	/// </summary>
 	public static bool TryLowerManagedDirectoryBuiltin(
 	  string callee,
@@ -81,7 +81,8 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(zero);
 		var isError = new StdCmpI64Op("eq", dirPtr, zero.Result);
 		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, MdErrOpenSearchFailed + 1, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isError.Result, MdErrOpenSearchFailed + 1, valueMap, varTypes, errorFlagValue,
+		  SelectIoErrorOrdinal);
 
 		if (result != null) {
 			var tempName = temps.CreateTemp("md_open", result.Id, "__ManagedDirectory", OwnershipFlags.None);
@@ -130,7 +131,8 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(zero);
 		var isError = new StdCmpI64Op("eq", rc, zero.Result);
 		block.AddOp(isError);
-		EmitBoundsCheckErrorFlag(block, isError.Result, MdErrCreateFailed + 1, valueMap, varTypes, errorFlagValue);
+		EmitBoundsCheckErrorFlag(block, isError.Result, MdErrCreateFailed + 1, valueMap, varTypes, errorFlagValue,
+		  SelectIoErrorOrdinal);
 	}
 
 	private static void LowerManagedDirectoryCurrentPath(
@@ -147,7 +149,8 @@ public static partial class MaxonToStandardConversion {
 		  new StdI64(IrContext.Current.NextStdId()));
 		block.AddOp(callRt);
 		var cstrPtr = (StdI64)callRt.Result!;
-		EmitSentinelErrorFlag(block, cstrPtr, 0, MdErrCurrentPathFailed, valueMap, varTypes, errorFlagValue);
+		EmitSentinelErrorFlag(block, cstrPtr, 0, MdErrCurrentPathFailed, valueMap, varTypes, errorFlagValue,
+		  SelectIoErrorOrdinal);
 		// Convert cstring to __ManagedMemory.
 		var resultId = result != null ? result.Id : IrContext.Current.NextStdId();
 		var hp = LowerCStringToManagedCore(cstrPtr, resultId, block, varTypes, temps);
@@ -169,7 +172,8 @@ public static partial class MaxonToStandardConversion {
 		  new StdI64(IrContext.Current.NextStdId()));
 		block.AddOp(callRt);
 		var found = (StdI64)callRt.Result!;
-		EmitSentinelErrorFlag(block, found, -1, MdErrNextFailed, valueMap, varTypes, errorFlagValue);
+		EmitSentinelErrorFlag(block, found, -1, MdErrNextFailed, valueMap, varTypes, errorFlagValue,
+		  SelectIoErrorOrdinal);
 		if (result != null) valueMap[result] = found;
 	}
 

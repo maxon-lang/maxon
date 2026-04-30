@@ -5,6 +5,10 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static IrModule<StandardOp>? _resultModule;
+  // Target the conversion is lowering for; drives platform-specific decisions
+  // such as the Win32-vs-POSIX errno→ordinal mapping table used by the throwing
+  // __ManagedFile / __ManagedDirectory builtins.
+  [ThreadStatic] private static CompileTarget? _currentTarget;
   [ThreadStatic] private static Dictionary<string, string>? _rdataStringCache;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
@@ -24,7 +28,8 @@ public static partial class MaxonToStandardConversion {
   private static string NextRdataId() =>
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
-  public static IrModule<StandardOp> Run(IrModule<MaxonOp> module) {
+  public static IrModule<StandardOp> Run(IrModule<MaxonOp> module, CompileTarget? target = null) {
+    _currentTarget = target ?? CompileTarget.Default;
     _rdataStringCache = [];
     _symdataTagCache = [];
     _tagIndexMap = [];

@@ -256,6 +256,29 @@ end 'main'
 42
 ```
 
+<!-- test: managed-directory.open-search-not-found-variant -->
+
+The errno→variant mapping ensures that opening a search on a path that does
+not exist routes to the `notFound` arm (rather than the catch-all
+`openSearchFailed`). Backed by `gt->io_error_code` populated by the runtime
+sync worker (Win32 ERROR_FILE_NOT_FOUND=2 / ERROR_PATH_NOT_FOUND=3, POSIX ENOENT=2).
+
+```maxon
+function main() returns ExitCode
+	var result = 0
+	try __ManagedDirectory.openSearch("nonexistent_phaseB_search_xyz/*".managed) otherwise (e) 'h'
+		match e 'k'
+			notFound then result = 42
+			default panic("expected notFound")
+		end 'k'
+	end 'h'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: managed-directory.error-direct-construction -->
 ```maxon
 function main() returns ExitCode

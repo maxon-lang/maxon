@@ -1,0 +1,176 @@
+// Test: slab-two-types-two-classes
+typealias Integer = int(i64.min to i64.max)
+
+type Small
+	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Small'
+
+type Large
+	export var a Integer
+	export var b Integer
+	export var c Integer
+	export var d Integer
+	export var e Integer
+
+	static function create(a Integer, b Integer, c Integer, d Integer, e Integer) returns Self
+		return Self{a: a, b: b, c: c, d: d, e: e}
+	end 'create'
+end 'Large'
+
+function main() returns ExitCode
+	@heap let s = Small.create(x: 1)
+	@heap let l = Large.create(a: 1, b: 2, c: 3, d: 4, e: 5)
+	return s.x + l.a
+end 'main'
+---
+MmTrace: true
+ExitCode: 2
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Small #1 size=8 [Small.create]
+  sl_alloc Small #1 size=40 class=4
+mm_incref Small #1 rc=1 [Small.create]
+mm_transfer Small #1 rc=1 [Small.create]
+mm_alloc Large #2 size=40 [Large.create]
+  sl_alloc Large #2 size=72 class=6
+mm_incref Large #2 rc=1 [Large.create]
+mm_transfer Large #2 rc=1 [Large.create]
+mm_decref Large #2 rc=0 [main]
+  mm_free Large #2
+    sl_free Large #2 size=96 class=6
+mm_decref Small #1 rc=0 [main]
+  mm_free Small #1
+    sl_free Small #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+// CompiledIR
+module {
+  func @Small.create(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Large.create(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.str x2, [x29, #-32]
+    arm64.str x3, [x29, #-40]
+    arm64.str x4, [x29, #-48]
+    arm64.mov x0, #40
+    arm64.mov x1, #0
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x3, [x2, #8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x29, #-32]
+    arm64.str x5, [x4, #16]
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x7, [x29, #-40]
+    arm64.str x7, [x6, #24]
+    arm64.ldr x8, [x29, #-8]
+    arm64.ldr x9, [x29, #-48]
+    arm64.str x9, [x8, #32]
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x11, [x29, #-8]
+    arm64.mov x0, x11
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #1
+    arm64.bl Small.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #1
+    arm64.mov x1, #2
+    arm64.mov x2, #3
+    arm64.mov x3, #4
+    arm64.mov x4, #5
+    arm64.bl Large.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.add x4, x1, x3
+    arm64.mov x5, #0
+    arm64.cmp x4, x5
+    arm64.cset x6, lt
+    arm64.mov w7, #4294967295
+    arm64.cmp x4, x7
+    arm64.cset x8, gt
+    arm64.orr x9, x6, x8
+    arm64.cmp x9, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x4, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_25
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_25
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_27
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_27
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Small(ptr: i64) {
+  entry:
+    arm64.b __destruct_Small.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Large(ptr: i64) {
+  entry:
+    arm64.b __destruct_Large.done
+  done:
+    arm64.ret
+  }
+}
+---

@@ -84,25 +84,32 @@ end 'emitEpilogueX64'
 // --- Register pool configuration ---
 
 export function createX64GprPool() returns RegIntArray
-	// Ordered to defer rax/rdx (clobbered by cqo/idiv) and rcx (shift count).
-	// R8 is the return register but has no implicit clobbers, so it's placed
-	// early for general use. The return constraint is handled by a pseudo-range.
-	// rbx=3, rsi=6, rdi=7, r8=8, r9=9, r12-r15 (callee-saved), rax=0, rcx=1, rdx=2
-	return [3, 6, 7, 8, 9, 12, 13, 14, 15, 0, 1, 2]
+	// Ordered for the SSA picker:
+	//   * rax/rcx/rdx last (clobbered by cqo/idiv/shift; deferring lets the
+	//     scheduler keep them free for those implicit uses).
+	//   * r8/r9 right after rbx so a free caller-saved slot is found before
+	//     rsi/rdi — keeps short-lived virtuals out of the param-conv slots
+	//     so call sites don't have to shuffle them at the boundary.
+	//   * rsi/rdi mid-pool: caller-saved internally (no callee-save penalty)
+	//     but they ARE param-conv slots, so we'd rather not burn them on
+	//     ordinary virtuals when r8/r9 are still free.
+	//   * r12-r15 last among callee-saved: only used under real pressure.
+	// Pool: rbx=3, r8=8, r9=9, rsi=6, rdi=7, r12-r15, rax=0, rcx=1, rdx=2
+	return [3, 8, 9, 6, 7, 12, 13, 14, 15, 0, 1, 2]
 end 'createX64GprPool'
 
-// Caller-saved (volatile) GPR set, parameterized on the OS because the
-// Windows x64 ABI and the System V x64 ABI disagree on rsi/rdi:
-//   Windows: callee-saved -> rbx, rsi, rdi, r12-r15
-//   SysV   : callee-saved -> rbx, r12-r15           (rsi/rdi are caller-saved)
-// Mislabeling these inflates frames with unnecessary callee-save stores.
-export function createX64CallerSavedGprs(os Os) returns RegIntArray
-	if os == Os.windows 'isWin'
-		// rax=0, rcx=1, rdx=2, r8=8, r9=9 (r10=10, r11=11 not in pool)
-		return [0, 1, 2, 8, 9]
-	end 'isWin'
-	// SysV (Linux/macOS): rsi=6 and rdi=7 join the caller-saved set.
-	// rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9
+// Caller-saved (volatile) GPR set for the internal calling convention.
+// Maxon does not follow the Win64 or SysV ABIs internally — we pick our own
+// convention and use it on every OS. We treat rsi/rdi as caller-saved
+// everywhere so functions like manyVars can mutate their own param registers
+// without inflating the prologue. The internal convention is target-agnostic
+// from the regalloc's perspective; OS-level boundaries (entry from the OS,
+// imported functions like kernel32) handle the public ABI separately.
+//
+// Caller-saved: rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9
+// Callee-saved: rbx=3, r12=12, r13=13, r14=14, r15=15
+// Not in pool: rsp=4, rbp=5, r10=10, r11=11
+export function createX64CallerSavedGprs(_ Os) returns RegIntArray
 	return [0, 1, 2, 6, 7, 8, 9]
 end 'createX64CallerSavedGprs'
 

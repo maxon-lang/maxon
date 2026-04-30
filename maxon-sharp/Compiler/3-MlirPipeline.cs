@@ -72,7 +72,7 @@ public class IrPipeline {
     IrModule<StandardOp> stdModule;
     if (timings != null) {
       var sw = new System.Diagnostics.Stopwatch();
-      sw.Restart(); stdModule = MaxonToStandardConversion.Run(module);     StageTimer.Record(timings, "lower:mx→std", sw.ElapsedMilliseconds);
+      sw.Restart(); stdModule = MaxonToStandardConversion.Run(module, target); StageTimer.Record(timings, "lower:mx→std", sw.ElapsedMilliseconds);
       Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
       sw.Restart(); StoreForwardingPass.Run(stdModule);                    StageTimer.Record(timings, "storeFwd",     sw.ElapsedMilliseconds);
       sw.Restart(); DeadStoreEliminationPass.Run(stdModule);               StageTimer.Record(timings, "dse",          sw.ElapsedMilliseconds);
@@ -81,7 +81,7 @@ public class IrPipeline {
       sw.Restart(); DeadStoreEliminationPass.Run(stdModule);               StageTimer.Record(timings, "dse",          sw.ElapsedMilliseconds);
       sw.Restart(); JumpTableFormationPass.Run(stdModule);                 StageTimer.Record(timings, "jumpTab",      sw.ElapsedMilliseconds);
     } else {
-      stdModule = MaxonToStandardConversion.Run(module);
+      stdModule = MaxonToStandardConversion.Run(module, target);
       Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
       StoreForwardingPass.Run(stdModule);
       DeadStoreEliminationPass.Run(stdModule);

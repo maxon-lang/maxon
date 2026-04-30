@@ -1,0 +1,34 @@
+// Test: non-interface-method-on-conforming-type-still-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value Integer
+
+	function greet() returns Integer
+		return value
+	end 'greet'
+
+	function helper(unused Integer) returns Integer
+		return value
+	end 'helper'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function main() returns ExitCode
+	let h = Hello.create(value: 1)
+	return h.helper(unused: 5)
+end 'main'
+---
+MaxoncStderr: ```
+error E3012: specs/fragments/interface-conformance/non-interface-method-on-conforming-type-still-errors.test:16:18: unused variable: 'unused'
+```
+---
+---

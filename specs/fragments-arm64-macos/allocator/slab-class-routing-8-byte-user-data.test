@@ -1,0 +1,98 @@
+// Test: slab-class-routing-8-byte-user-data
+typealias Integer = int(i64.min to i64.max)
+
+type Tiny
+	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Tiny'
+
+function main() returns ExitCode
+	@heap let t = Tiny.create(x: 7)
+	return t.x
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Tiny #1 size=8 [Tiny.create]
+  sl_alloc Tiny #1 size=40 class=4
+mm_incref Tiny #1 rc=1 [Tiny.create]
+mm_transfer Tiny #1 rc=1 [Tiny.create]
+mm_decref Tiny #1 rc=0 [main]
+  mm_free Tiny #1
+    sl_free Tiny #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+// CompiledIR
+module {
+  func @Tiny.create(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #7
+    arm64.bl Tiny.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.mov w4, #4294967295
+    arm64.cmp x1, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_15
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_15
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Tiny(ptr: i64) {
+  entry:
+    arm64.b __destruct_Tiny.done
+  done:
+    arm64.ret
+  }
+}
+---

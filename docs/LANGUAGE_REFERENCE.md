@@ -1703,6 +1703,7 @@ items2.push(1)           // OK — items2 is var
   ```
 - All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
 - The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring (e.g., `for (_, _) in pairs`). In match patterns, `_` can discard individual bindings (e.g., `pair(_, second)`) but discarding all bindings is an error (E3081) — omit the parentheses instead: `pair then ...`.
+- **Interface method exception**: methods that implement an interface contract are exempt from the unused-parameter check on their parameters. The implementer is forced to declare every parameter the interface names, even when a particular implementation does not need one of them. The check still applies to local `let`/`var` bindings inside the method, and to non-interface methods on the same type.
 
 ### Top-Level Variables
 

@@ -5,9 +5,9 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   // __ManagedFileError ordinals (see stdlib/Interfaces.maxon). Flag values are 1-indexed
-  // (0 = success), so flag = ordinal + 1. Only the variants this lowering can produce are
-  // listed; notFound / accessDenied / invalidStatBuffer / invalidStatIndex / closed wait
-  // on Phase B (runtime errno capture) before the lowering can pick the right ordinal.
+  // (0 = success), so flag = ordinal + 1. notFound (0) / accessDenied (1) are dispatched at
+  // runtime by SelectIoErrorOrdinal (errno→variant); the remaining variants (invalidStatBuffer
+  // / invalidStatIndex / closed) are stdlib-internal invariant panics, not user-catchable.
   private const int MfErrOpenFailed = 2;
   private const int MfErrReadFailed = 3;
   private const int MfErrWriteFailed = 4;
@@ -21,11 +21,11 @@ public static partial class MaxonToStandardConversion {
   /// directly from MaxonManagedToCStringOp; invariant panics (statField/statFree)
   /// emit bounds checks before calling.
   ///
-  /// Error mapping: each throwing method translates its sentinel return
-  /// (-1 / 0 / negative) into a single __ManagedFileError ordinal. Distinguishing
-  /// notFound / accessDenied / openFailed requires runtime GetLastError / errno
-  /// capture and is a follow-up; today all open/delete/stat failures map to a
-  /// single catch-all variant.
+  /// Error mapping: each throwing method translates its sentinel return (-1 / 0 / negative)
+  /// into a 1-indexed __ManagedFileError flag. SelectIoErrorOrdinal then routes specific
+  /// OS error codes (ENOENT / EACCES on POSIX; ERROR_FILE_NOT_FOUND / ERROR_ACCESS_DENIED
+  /// on Win32) to notFound / accessDenied; everything else falls through to the method-
+  /// specific catch-all variant.
   /// </summary>
   public static bool TryLowerManagedFileBuiltin(
     string callee,
@@ -80,6 +80,11 @@ public static partial class MaxonToStandardConversion {
   ///   isError = (result == sentinel)
   ///   flag = isError ? errorOrdinal+1 : 0
   ///   __error_flag = flag; valueMap[errorFlagValue] = flag
+  ///
+  /// When ioErrnoOrdinalSelector is non-null, the truthy arm becomes a runtime
+  /// ordinal computed from gt->io_error_code; the catch-all (errorOrdinal+1) is
+  /// passed as the fallback to the selector. Used by throwing __ManagedFile /
+  /// __ManagedDirectory builtins to route ENOENT/EACCES to notFound/accessDenied.
   internal static void EmitSentinelErrorFlag(
     IrBlock<StandardOp> block,
     StdI64 callResult,
@@ -87,12 +92,13 @@ public static partial class MaxonToStandardConversion {
     int errorOrdinal,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    MaxonValue? errorFlagValue) {
+    MaxonValue? errorFlagValue,
+    Func<IrBlock<StandardOp>, int, StdI64>? ioErrnoOrdinalSelector = null) {
     var sentinelConst = new StdConstI64Op(sentinel);
     block.AddOp(sentinelConst);
     var isError = new StdCmpI64Op("eq", callResult, sentinelConst.Result);
     block.AddOp(isError);
-    EmitBoundsCheckErrorFlag(block, isError.Result, errorOrdinal + 1, valueMap, varTypes, errorFlagValue);
+    EmitBoundsCheckErrorFlag(block, isError.Result, errorOrdinal + 1, valueMap, varTypes, errorFlagValue, ioErrnoOrdinalSelector);
   }
 
   private static void LowerManagedFileSize(
@@ -106,7 +112,8 @@ public static partial class MaxonToStandardConversion {
       new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(callRt);
     var size = (StdI64)callRt.Result!;
-    EmitSentinelErrorFlag(block, size, -1, MfErrSizeFailed, valueMap, varTypes, errorFlagValue);
+    EmitSentinelErrorFlag(block, size, -1, MfErrSizeFailed, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
     if (result != null) valueMap[result] = size;
   }
 
@@ -152,7 +159,8 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(negOne);
     var isIoError = new StdCmpI64Op("eq", bytes, negOne.Result);
     block.AddOp(isIoError);
-    EmitBoundsCheckErrorFlag(block, isIoError.Result, MfErrReadFailed + 1, valueMap, varTypes, errorFlagValue);
+    EmitBoundsCheckErrorFlag(block, isIoError.Result, MfErrReadFailed + 1, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
     if (result != null) {
       EmitStore(block, bytes, $"__mfread_bytes_{uid}", varTypes);
     }
@@ -183,7 +191,8 @@ public static partial class MaxonToStandardConversion {
       new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(callRt);
     var written = (StdI64)callRt.Result!;
-    EmitSentinelErrorFlag(block, written, -1, MfErrWriteFailed, valueMap, varTypes, errorFlagValue);
+    EmitSentinelErrorFlag(block, written, -1, MfErrWriteFailed, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
     if (result != null) valueMap[result] = written;
   }
 
@@ -231,7 +240,8 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(sentinelConst);
     var isError = new StdCmpI64Op("eq", handlePtr, sentinelConst.Result);
     block.AddOp(isError);
-    EmitBoundsCheckErrorFlag(block, isError.Result, MfErrOpenFailed + 1, valueMap, varTypes, errorFlagValue);
+    EmitBoundsCheckErrorFlag(block, isError.Result, MfErrOpenFailed + 1, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
 
     if (result != null) {
       var tempName = temps.CreateTemp("mf_open", result.Id, "__ManagedFile", OwnershipFlags.None);
@@ -290,7 +300,8 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(zero);
     var isError = new StdCmpI64Op("ne", rc, zero.Result);
     block.AddOp(isError);
-    EmitBoundsCheckErrorFlag(block, isError.Result, MfErrDeleteFailed + 1, valueMap, varTypes, errorFlagValue);
+    EmitBoundsCheckErrorFlag(block, isError.Result, MfErrDeleteFailed + 1, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
   }
 
   private static void LowerManagedFileStat(
@@ -304,7 +315,8 @@ public static partial class MaxonToStandardConversion {
       new StdI64(IrContext.Current.NextStdId()));
     block.AddOp(callRt);
     var statBuf = (StdI64)callRt.Result!;
-    EmitSentinelErrorFlag(block, statBuf, -1, MfErrStatFailed, valueMap, varTypes, errorFlagValue);
+    EmitSentinelErrorFlag(block, statBuf, -1, MfErrStatFailed, valueMap, varTypes, errorFlagValue,
+      SelectIoErrorOrdinal);
     if (result != null) valueMap[result] = statBuf;
   }
 

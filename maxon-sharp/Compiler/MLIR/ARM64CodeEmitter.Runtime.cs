@@ -187,6 +187,39 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Lt));
   }
 
+  /// <summary>
+  /// On a failure branch of a libc call, capture the current errno value into
+  /// the current green thread's io_error_code field (offset GtOffIoErrorCode).
+  /// Uses Darwin's __error() libc function: it returns a pointer to the TLS
+  /// errno variable, which we then dereference (W-sized load) and store.
+  /// Clobbers X0, X9.
+  /// </summary>
+  private void EmitCaptureErrnoToGt() {
+    // X0 = &errno (TLS pointer)
+    EmitCallImport("__error");
+    // W0 = *errno (32-bit errno value)
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X0, 0, 4);
+    // X9 = current GT
+    EmitLoadCurrentGt(ARM64Register.X9);
+    // gt->io_error_code = X0 (zero-extended from W0)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
+  }
+
+  /// <summary>
+  /// Sync-worker variant of EmitCaptureErrnoToGt: stashes the errno value into
+  /// a frame-local scratch slot. The dispatcher's __io_op_done tail then reads
+  /// this slot and writes it through to the waiter's gt->io_error_code (so the
+  /// running thread, which is NOT the waiter, doesn't accidentally clobber its
+  /// own errno-tracking field). slotFrameOffset is positive for SP-relative
+  /// access (e.g. 200 → [x29+200] in __io_check_completions).
+  /// Clobbers X0.
+  /// </summary>
+  private void EmitCaptureErrnoToFrameSlot(int slotFrameOffset) {
+    EmitCallImport("__error");
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X0, 0, 4);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, slotFrameOffset, 8);
+  }
+
   // --- Runtime functions ---
 
   public void EmitRuntimeFunctions() {
@@ -328,6 +361,8 @@ public partial class ARM64CodeEmitter {
     EmitBranch("rt_fstat_done");
 
     DefineLabel("rt_fstat_fail");
+    // Capture errno BEFORE mm_raw_free (the free path may itself touch errno).
+    EmitCaptureErrnoToGt();
     // Free buffer on failure
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
     if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X1, 0);
@@ -1927,6 +1962,9 @@ public partial class ARM64CodeEmitter {
     _branchFixups.Add((_code.Count, okLabel));
     EmitWord(0x14000000); // B ok
     DefineLabel(failLabel);
+    // Capture errno into gt->io_error_code so the lowering can map it to a
+    // specific __ManagedFileError variant (notFound / accessDenied / etc).
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitRuntimeFunctionEnd();
     DefineLabel(okLabel);
@@ -1967,6 +2005,8 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000); // B done
 
     DefineLabel(errorLabel);
+    // Capture errno into gt->io_error_code for the lowering's per-variant dispatch.
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, 0); // return 0 on error (match X86 behavior)
 
     DefineLabel(doneLabel);
@@ -2149,6 +2189,8 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000);
 
     DefineLabel(errorLabel);
+    // Capture errno into gt->io_error_code for per-variant dispatch.
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, -1);
 
     DefineLabel(doneLabel);
@@ -2173,6 +2215,8 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000);
 
     DefineLabel(errorLabel);
+    // Capture errno into gt->io_error_code for per-variant dispatch.
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, -1);
 
     DefineLabel(doneLabel);
@@ -2552,6 +2596,9 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000);
 
     DefineLabel(openFailLabel);
+    // Capture errno into gt->io_error_code so the lowering can map it to
+    // notFound / accessDenied for ManagedDirectory.openSearch.
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, 0);
 
     DefineLabel($"__dir_open_done_{_uniqueLabelCounter}");
@@ -2763,6 +2810,9 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x14000000);
 
     DefineLabel(errorLabel);
+    // Real OS error from getdirentries64 — capture errno before returning -1.
+    // (Distinct from the EOF path above, which is not an error.)
+    EmitCaptureErrnoToGt();
     EmitMovRegImm(ARM64Register.X0, -1); // real OS error
 
     DefineLabel(doneLabel);
@@ -4062,6 +4112,7 @@ public partial class ARM64CodeEmitter {
     EmitIoEnqueueCompletion();
     EmitIoDequeueCompletion();
     EmitIoCompleteGt();
+    EmitIoGetLastError();
     EmitIoPollKqueue();
     EmitIoCheckCompletions();
     EmitIoSyncWorkerLoop();
@@ -4155,15 +4206,19 @@ public partial class ARM64CodeEmitter {
   private void EmitIoCheckCompletions() {
     // Frame: 0x100 to accommodate stat64 buffer and networking locals
     // Locals:
-    //   [x29+16] = req ptr
-    //   [x29+24] = waiter GT ptr
-    //   [x29+32] = op code
-    //   [x29+40] = result value / temp
+    //   [x29+16]  = req ptr
+    //   [x29+24]  = waiter GT ptr
+    //   [x29+32]  = op code
+    //   [x29+40]  = result value / temp
     //   [x29+48 .. x29+191] = stat64 buffer (144 bytes) / sockaddr_in for net_connect
-    //   [x29+64] = net_connect: socket fd
-    //   [x29+72] = net_connect: resolved IP
-    //   [x29+80] = net_connect: port
-    //   [x29+88] = net_send/recv: args struct ptr
+    //   [x29+64]  = net_connect: socket fd
+    //   [x29+72]  = net_connect: resolved IP
+    //   [x29+80]  = net_connect: port
+    //   [x29+88]  = net_send/recv: args struct ptr
+    //   [x29+200] = captured POSIX errno (Phase B errno→variant dispatch).
+    //               Failure handlers populate this before jumping to __io_op_done,
+    //               which writes it through to the waiter's gt->io_error_code so
+    //               the lowering can map ENOENT/EACCES via __io_get_last_error.
     // Note: getcwd path buffer is heap-allocated instead of stack-allocated
     EmitRuntimeFunctionStart("__io_check_completions", 0, 0x100);
 
@@ -4180,6 +4235,10 @@ public partial class ARM64CodeEmitter {
     // Load and save op code
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X0, SyncReqOffOp, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 32, 8);
+    // Zero the error-code scratch slot. Failure handlers overwrite it; success
+    // handlers leave it at 0 so __io_op_done writes 0 to gt->io_error_code.
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 200, 8);
 
     // Dispatch on op code
     EmitCmpImm(ARM64Register.X2, SyncOpFileExists);
@@ -4245,6 +4304,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 0); // success (0 per spec)
     EmitBranch("__io_op_done");
     DefineLabel("__io_op_file_delete_fail");
+    EmitCaptureErrnoToFrameSlot(200); // capture errno for notFound/accessDenied
     EmitMovRegImm(ARM64Register.X0, -1); // failure
     EmitBranch("__io_op_done");
 
@@ -4278,6 +4338,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 1); // success
     EmitBranch("__io_op_done");
     DefineLabel("__io_op_dir_create_fail");
+    EmitCaptureErrnoToFrameSlot(200);
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitBranch("__io_op_done");
 
@@ -4309,6 +4370,8 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     EmitBranch("__io_op_done");
     DefineLabel("__io_op_get_cwd_fail");
+    // Capture errno BEFORE mm_free (free path may itself touch errno).
+    EmitCaptureErrnoToFrameSlot(200);
     // Free the allocated buffer on failure
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     EmitBranchLink("mm_free");
@@ -4327,6 +4390,7 @@ public partial class ARM64CodeEmitter {
     EmitBranchOnLibcError("__io_op_file_open_read_fail");
     EmitBranch("__io_op_done"); // X0 = fd
     DefineLabel("__io_op_file_open_read_fail");
+    EmitCaptureErrnoToFrameSlot(200);
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitBranch("__io_op_done");
 
@@ -4342,6 +4406,7 @@ public partial class ARM64CodeEmitter {
     EmitBranchOnLibcError("__io_op_file_open_write_fail");
     EmitBranch("__io_op_done"); // X0 = fd
     DefineLabel("__io_op_file_open_write_fail");
+    EmitCaptureErrnoToFrameSlot(200);
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitBranch("__io_op_done");
 
@@ -4357,6 +4422,7 @@ public partial class ARM64CodeEmitter {
     EmitBranchOnLibcError("__io_op_file_open_write_exec_fail");
     EmitBranch("__io_op_done"); // X0 = fd
     DefineLabel("__io_op_file_open_write_exec_fail");
+    EmitCaptureErrnoToFrameSlot(200);
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitBranch("__io_op_done");
 
@@ -4499,8 +4565,10 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8); // waiter GT
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoResultVal, 8);
-    EmitMovRegImm(ARM64Register.X0, 0);
+    // io_error_code := captured errno slot (0 on success, errno on failure).
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 200, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
+    EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
     EmitBranchLink("__gt_enqueue");
@@ -6343,6 +6411,21 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("__gt_enqueue");
 
     DefineLabel("__io_complete_gt_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_get_last_error() -> i64 in X0: returns gt->io_error_code for the current
+  /// green thread. Used by the lowering to map raw OS error codes (Win32 GetLastError
+  /// values captured by the sync worker on x86, or POSIX errno on macOS) to method-
+  /// specific error-enum ordinals (notFound / accessDenied / etc).
+  /// </summary>
+  private void EmitIoGetLastError() {
+    EmitRuntimeFunctionStart("__io_get_last_error", 0, 0x20);
+    // X9 = current GT pointer
+    EmitLoadCurrentGt(ARM64Register.X9);
+    // X0 = gt->io_error_code
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
     EmitRuntimeFunctionEnd();
   }
 

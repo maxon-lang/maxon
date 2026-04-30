@@ -1,0 +1,120 @@
+// Test: interface-method-via-extended-interface
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function ping(payload Integer) returns Integer
+end 'Base'
+
+interface Extended extends Base
+	function other() returns Integer
+end 'Extended'
+
+type Impl implements Extended
+	let n Integer
+
+	function ping(payload Integer) returns Integer
+		return n
+	end 'ping'
+
+	function other() returns Integer
+		return n + 1
+	end 'other'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callPing(b Base) returns Integer
+	return b.ping(payload: 7)
+end 'callPing'
+
+function main() returns ExitCode
+	let i = Impl.create(n: 5)
+	return callPing(i)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @Impl.ping(__self_ptr: i64, payload: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @Impl.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 6
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-conformance.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call Impl.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call interface-conformance.callPing$Impl
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg interface-conformance.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl interface-conformance.main.__range_panic_0
+    x64.jmp interface-conformance.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_5]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-conformance.callPing$Impl(b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, 7
+    x64.mov rcx, rax
+    x64.epilogue
+    x64.jmp Impl.ping
+  }
+  func @__destruct_Impl(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Impl.done
+  done:
+    x64.ret
+  }
+}
+---

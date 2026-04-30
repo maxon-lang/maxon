@@ -1,0 +1,107 @@
+// Test: day2
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(x Integer, y Integer) returns Integer
+		return x + y
+end 'add'
+
+function main() returns ExitCode
+	return add(3, y: 4)
+end 'main'
+---
+ExitCode: 7
+RequiredIR: ```
+=== maxon
+module {
+  func @advent.add(x: i64, y: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
+    maxon.scope_end [x, y]
+    maxon.return %2
+  }
+  func @main() -> i64 {
+  entry:
+    %3 = maxon.literal {value = 3 : i64}
+    %4 = maxon.literal {value = 4 : i64}
+    %5 = maxon.call @advent.add %3, %4
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.binop %5, %6 {op = lt}
+    %8 = maxon.literal {value = 4294967295 : i64}
+    %9 = maxon.binop %5, %8 {op = gt}
+    %10 = maxon.binop %7, %9 {op = or}
+    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at day2.test:10: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %5
+  }
+}
+=== standard
+module {
+  func @advent.add(x: i64, y: i64) -> i64 {
+  entry:
+    %0 = func.param x : StdI64
+    %1 = func.param y : StdI64
+    %2 = arith.addi %0, %1
+    func.return %2
+  }
+  func @main() -> u32 {
+  entry:
+    %3 = arith.constant {value = 3 : i64}
+    %4 = arith.constant {value = 4 : i64}
+    %5 = func.call @advent.add %3, %4
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.cmpi lt %5, %6
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.cmpi gt %5, %8
+    %10 = arith.ori1 %7, %9
+    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %11 = memref.lea_symdata __panic_msg_0
+    %12 = std.ptr_to_i64 %11
+    std.call_runtime @mrt_panic %12
+  __range_ok_0:
+    func.return %5
+  }
+}
+=== arm64
+module {
+  func @advent.add(x: i64, y: i64) -> i64 {
+  entry:
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #3
+    arm64.mov x1, #4
+    arm64.bl advent.add
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov w1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+```
+---
+---

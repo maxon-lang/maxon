@@ -7,13 +7,17 @@
 // ARM64 frame scanning
 // ============================================================
 
+// The frame size is now read directly from running tallies on `IrFunction`
+// (varSlotCount populated by ISel, spillSize populated by the regalloc spill
+// manager), so this scan only needs to surface whether the function makes any
+// call. That bool drives the empty-frame fallback in insertPrologueEpilogueShared
+// and gates ARM64's prologue-necessity check (BL/BLR clobber x30, so x30 must be
+// saved when any call is present).
 export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 	match op 'scan'
 		prologue to branch then break 'scan'
 		branchLink then state.hasCalls = true
-		printLiteral to movRegReg then break 'scan'
-		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
-		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
+		printLiteral to reloadFromStack then break 'scan'
 		branchLinkReg then state.hasCalls = true
 		subSpImm to nullSafeLoad then break 'scan'
 	end 'scan'
@@ -213,4 +217,9 @@ export function arm64DetectCalleeSavedRegs(module TargetModule, func IrFunction)
 
 	func.calleeSavedGprs = gprSeen
 	func.calleeSavedFps = fpSeen
+	// Bump the running stack-size tally for the save area. ARM64 saves regs in
+	// STP pairs (16 bytes per pair), GPRs and FPs in separate pair groups.
+	let gprPairs = (gprSeen.count() + 1) / 2
+	let fpPairs = (fpSeen.count() + 1) / 2
+	func.stackSize = func.stackSize + (gprPairs + fpPairs) * 16
 end 'arm64DetectCalleeSavedRegs'
