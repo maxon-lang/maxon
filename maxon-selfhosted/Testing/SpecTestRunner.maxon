@@ -39,7 +39,7 @@ let whitelist = ["basics",
 	"stdlib-basic",
 	"stdlib-autodiscovery",
 	"enums-simple",
-	// "match-simple",
+	"match-simple",
 	// "static-variables",
 	// "export-keyword",
 	// "lexer-parser-robustness",
@@ -166,7 +166,10 @@ function captureLoweringLog(source String, testName String, specName String, tem
 	let tempSource = tempDir.join("{testName}.test")
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
-	_ = try compileSourceWithIr(source, virtualPath: tempSource, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap")) otherwise 'compileFailed'
+	// Match parseFragment: append a trailing newline so the parser doesn't hit
+	// EOF mid-statement on tests whose source ends without one.
+	let normalizedSource = source if source.endsWith("\n") else "{source}\n"
+	_ = try compileSourceWithIr(normalizedSource, virtualPath: tempSource, target: target, outputPath: tempExe, coverage: false, covMapPath: tempExe.changeExtension(".covmap")) otherwise 'compileFailed'
 		cancelCapturingTrace()
 		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
 		return ""

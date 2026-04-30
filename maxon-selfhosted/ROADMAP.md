@@ -53,9 +53,9 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (33)
+### Currently whitelisted specs (34)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `enums-simple`.
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `enums-simple`, `match-simple`.
 
 ---
 
@@ -76,7 +76,7 @@ All operators (`+`/`-`/`*`/`/`/`mod`/`and`/`or`/`xor`/`shl`/`shr`/`not`/comparis
 Parser entry points exist at [`Parser.maxon:1372`](Compiler/Parser.maxon#L1372) (`parseWhileStatement`), [`Parser.maxon:1442`](Compiler/Parser.maxon#L1442) (`parseBreakStatement`), [`Parser.maxon:1454`](Compiler/Parser.maxon#L1454) (`parseContinueStatement`). Lowering uses existing `condBr`/`br`/`label` ops on both backends.
 
 **Still pending in this area**:
-- `match-simple` and richer `if-statements` edge cases (commented in whitelist)
+- richer `if-statements` edge cases (commented in whitelist)
 - `for ... in` over integer ranges — needed before Phase 6's array iteration
 
 ---
@@ -201,13 +201,14 @@ Parser at [`Parser.maxon:2439`](Compiler/Parser.maxon#L2439) (`parseStructLitera
 
 ### Done
 - `enums-simple` (14 fragments): enum declarations with int and float raw values, methods on enums, `match` as both statement and expression, `gives` and `then` arms, keyword-token case names (`function`, `return`, `end`, `if`, …), error-path diagnostics E3030 / E3031 / E3032 / E3034.
+- `match-simple` (31 fragments): integer-literal patterns, `or`-chained patterns, `default` arms, `and fallthrough` chains, statement and expression forms, full diagnostic coverage — E2025 (`fallthrough`+`return`), E2026 (non-exhaustive enum match), E2027 (duplicate pattern), E2029 (default-not-last), E2042 (missing block id), E2043 (block-id mismatch), E2046 (default-on-enum-without-throws/panic).
 - Pipeline integration: enum cases registered as top-level constants so `EnumName.case` flows through the existing `unresolvedRead → literal` rewrite. The enum itself is registered as a typealias to int (or f64 for float-backed) so parameters / return types / locals lower without per-call special cases.
 
 ### Still pending
-`enum-full`, `enum-match-only`, `match-statements`, `match-simple`, `match-enum-typed-binding`, `enum-struct-field-match`, `enum-hashable` — associated values, exhaustiveness checks, default arms, fallthrough, range patterns (`1 to 5 then …`).
+`enum-full`, `enum-match-only`, `match-statements`, `match-enum-typed-binding`, `enum-struct-field-match`, `enum-hashable` — associated values, range patterns (`1 to 5 then …`).
 
 ### Changes still required for full phase
-**Parser**: `match val 'l' ... Case(x) then ... end 'l'` (case-binding form), associated-value enum construction (`EnumType.caseName(value)`), `default` arms, `to`/`upto` range patterns.
+**Parser**: `match val 'l' ... Case(x) then ... end 'l'` (case-binding form), associated-value enum construction (`EnumType.caseName(value)`), `to`/`upto` range patterns on integer scrutinees.
 
 **Maxon Dialect**: `enumConstruct`, `enumTag`, `enumPayload`, `enumRawValue`, `enumName` (only needed when associated values land — simple enums lower to plain integer literals through the existing `literal` op).
 

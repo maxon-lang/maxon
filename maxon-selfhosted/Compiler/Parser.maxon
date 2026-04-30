@@ -104,6 +104,11 @@ export type Parser
 	// instead of a generic message — gives parity with C#'s "expected X"
 	// suffix without threading the kind through every call site.
 	var consumeExpectedDisplay String
+	// True while parsing an arm body inside a match statement. Suppresses the
+	// Pratt parser's consumption of `and` when followed by `fallthrough` so
+	// the match-arm helper can see and process the fallthrough marker.
+	// Saved/restored by callers so nested matches behave correctly.
+	var inMatchArmBody bool
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -114,7 +119,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input"}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -1897,7 +1902,7 @@ export type Parser
 		let scrutineeResult = try parseExpression(currentBlock)
 		if not at(TokenKind.stringLiteral) 'noLabel'
 			let tok = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected match label after scrutinee", line: tok.line, column: tok.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.parserMatchMissingBlockId, message: "missing block identifier", line: tok.line, column: tok.column, filePath: filePath)
 			return MatchHeader.failed()
 		end 'noLabel'
 		let userLabel = try parseOptionalBlockLabel("match")
@@ -1907,67 +1912,250 @@ export type Parser
 		return MatchHeader.create(scrutineeName: exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock)
 	end 'parseMatchHeader'
 
-	// Consume one arm header (`caseName then` or `caseName gives`), create
-	// its body and next-arm blocks, and emit the symbolic dispatch terminator
-	// on the current block. The case name flows through verbatim — TR
-	// resolves it to a raw value once the scrutinee's enum is known.
-	function beginMatchArm(header MatchHeader, armIndex IntConstant, separator TokenKind) returns MatchArmBlocks throws ParserError
-		let caseToken = try consume()
-		try expect(separator)
-		let armBodyBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.case{armIndex}", filePath: filePath.toString(), firstLine: caseToken.line)
-		let nextArmBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.next{armIndex}", filePath: filePath.toString(), firstLine: caseToken.line)
-		module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: caseToken.value, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(caseToken)))
-		return MatchArmBlocks.create(caseToken: caseToken, body: armBodyBlock, next: nextArmBlock)
-	end 'beginMatchArm'
-
-	// Parse: match <expr> 'label' <arms> end 'label' — statement form. Each
-	// arm is `caseName then <statement-shape expression>`. A statement match
-	// is currently used only for early `return` / propagation patterns in the
-	// enum-comparison spec, so the per-arm body is parsed as a single
-	// expression that is emitted directly into the arm block.
-	function parseMatchStatement(block IrBlock) returns IrBlock throws ParserError
-		currentBlock = block
-		let header = try parseMatchHeader()
-		if header.failed 'bailout'
+	// Consume `'label'` after `end`, validating it matches the expected label.
+	// Emits E2043 (block-id mismatch) when present-but-different. The shared
+	// `skipEndAndLabel` accepts any label silently — match needs the stricter
+	// match-up check both forms expose to the user.
+	function consumeMatchEndLabel(expectedLabel String) throws ParserError
+		if not at(TokenKind.end) 'notEnd'
+			reportTokenMismatch(cursor.current(), expectedDisplay: "'end'")
 			synchronize()
-			return currentBlock
-		end 'bailout'
-		let mergeBlockId = header.mergeBlock.id
+			return
+		end 'notEnd'
+		let endToken = try consume()
+		if at(TokenKind.stringLiteral) 'hasLabel'
+			let labelToken = try consume()
+			if labelToken.value != expectedLabel 'mismatch'
+				reportCompileError(project, code: ErrorCode.parserMatchMismatchedBlockId, message: "block identifier mismatch: expected '{expectedLabel}', got '{tokenValueToString(labelToken.value)}'", line: endToken.line, column: endToken.column, filePath: filePath)
+			end 'mismatch'
+		end 'hasLabel'
+	end 'consumeMatchEndLabel'
 
-		var armIndex = 0 as IntConstant
-		var anyArmReachesMerge = false
+	// Parse one pattern token: an integer literal (with optional leading `-`),
+	// the `default` keyword, or an identifier (treated as an enum case name).
+	// Returns the spec; reports overflow/error and returns a fallback default
+	// when the token can't be classified. Caller handles `or` chaining and
+	// duplicate detection.
+	function parseOneMatchPattern() returns MatchPatternSpec throws ParserError
+		if at(TokenKind.default) 'isDefault'
+			let tok = try consume()
+			return MatchPatternSpec.defaultPattern(tok)
+		end 'isDefault'
 
-		while not isMatchArmsEnd() 'arms'
-			let arm = try beginMatchArm(header, armIndex: armIndex, separator: TokenKind.then)
+		let firstToken = cursor.current()
+		var negate = false
+		if at(TokenKind.minus) 'isNegated'
+			negate = true
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+		end 'isNegated'
 
-			currentBlock = arm.body
-			let armBodyExit = try parseMatchStatementArmBody(arm.body)
-			if not armBodyExit.isTerminated() 'armReachesMerge'
-				anyArmReachesMerge = true
-				module.setTerminator(armBodyExit, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
-			end 'armReachesMerge'
-			currentBlock = arm.next
-			armIndex = armIndex + 1
-			try skipNewlines()
-		end 'arms'
+		if at(TokenKind.intLiteral) 'isInt'
+			let litToken = try consume()
+			var value = try parseInt(litToken.value) otherwise 'overflow'
+				reportLiteralOverflow(token: litToken, message: "Integer literal '{tokenValueToString(litToken.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
+				return MatchPatternSpec.defaultPattern(litToken)
+			end 'overflow'
+			if negate 'applyNeg'
+				value = 0 - value
+			end 'applyNeg'
+			return MatchPatternSpec.intLiteral(litToken, value: value, displayName: "{value}")
+		end 'isInt'
 
-		// `currentBlock` now holds the last arm's `next` block — the
-		// "no arm matched" landing pad. When at least one arm reached merge,
-		// fall through to it; otherwise (every arm terminated with
-		// return/throw/etc.) emit a synthetic panic on both the fallback and
-		// merge blocks so the static verifier sees fully-terminated CFG.
-		if anyArmReachesMerge 'wireFallback'
-			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
-		end 'wireFallback' else 'allArmsTerminated'
-			emitMatchUnreachableTerminator(currentBlock)
-			currentBlock = header.mergeBlock
-			emitMatchUnreachableTerminator(currentBlock)
-		end 'allArmsTerminated'
+		// Anything else is treated as an enum case name. The lexer emits the
+		// case identifier as either `TokenKind.identifier` or — when the
+		// case name is spelled with a keyword (the keyword-as-case-name
+		// spec) — as the keyword's own TokenKind. We let any non-empty
+		// token value through and defer enum-case resolution to
+		// TypeResolution. If the scrutinee turns out to be non-enum, TR
+		// rewrites the op to a `br` and reports E3005.
+		if firstToken.value.isEmpty() 'noValue'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected pattern value, got '{tokenValueToString(firstToken.value)}'", line: firstToken.line, column: firstToken.column, filePath: filePath)
+			return MatchPatternSpec.defaultPattern(firstToken)
+		end 'noValue'
+		let caseToken = try consume()
+		return MatchPatternSpec.enumCase(caseToken, caseName: caseToken.value)
+	end 'parseOneMatchPattern'
 
-		try skipEndAndLabel()
-		currentBlock = header.mergeBlock
-		return header.mergeBlock
-	end 'parseMatchStatement'
+	// Parse one arm's pattern list (either a single `default`, a single enum
+	// case identifier, or one or more integer literals separated by `or`).
+	// Returns the list along with whether it is a default arm. Tracks duplicate
+	// patterns via `seenKeys` and reports E2027 on collision.
+	function parseMatchArmPatterns(seenKeys ReferencedVarSet, defaultSeen bool) returns MatchPatternList throws ParserError
+		var patterns = MatchPatternSpecArray.create()
+		while true 'collect'
+			let firstLine = cursor.current().line
+			let firstCol = cursor.current().column
+			let pattern = try parseOneMatchPattern()
+
+			if pattern.isDefault() 'isDefault'
+				patterns.push(pattern)
+				return MatchPatternList.create(patterns: patterns)
+			end 'isDefault'
+
+			if defaultSeen 'afterDefault'
+				reportCompileError(project, code: ErrorCode.parserMatchDefaultNotLast, message: "'default' case must be the last case in match", line: firstLine, column: firstCol, filePath: filePath)
+			end 'afterDefault'
+			if seenKeys.contains(pattern.displayName) 'isDup'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "duplicate pattern in match: '{pattern.displayName}'", line: firstLine, column: firstCol, filePath: filePath)
+			end 'isDup' else 'recordKey'
+				seenKeys.insert(element: pattern.displayName)
+			end 'recordKey'
+			patterns.push(pattern)
+
+			if not at(TokenKind.or) 'noOr'
+				return MatchPatternList.create(patterns: patterns)
+			end 'noOr'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+		end 'collect'
+		return MatchPatternList.create(patterns: patterns)
+	end 'parseMatchArmPatterns'
+
+	// Look up the enum-type name that owns `caseName`. Walks both the
+	// resolved registry and the parser-time unresolved entries because
+	// match arms may reference an enum declared in the same file before
+	// TypeResolution has promoted it. Returns "<unknown>" when no enum
+	// claims the case (which only happens when the user typed a typo'd
+	// case name — TR will surface the real diagnostic).
+	function enumScrutineeDisplayNameFromCase(caseName String) returns String
+		for (name, enumType) in project.enumTypes 'searchResolved'
+			if enumType.caseByName.contains(caseName) 'isMatch'
+				return name
+			end 'isMatch'
+		end 'searchResolved'
+		for (name, enumType) in project.unresolvedEnums 'searchUnresolved'
+			for c in enumType.cases 'cases'
+				if c.name == caseName 'isMatch'
+					return name
+				end 'isMatch'
+			end 'cases'
+		end 'searchUnresolved'
+		return "<unknown>"
+	end 'enumScrutineeDisplayNameFromCase'
+
+	// Match-expression arms forbid `and fallthrough`. The Pratt parser stops
+	// at the boundary because of the `inMatchArmBody` gate, but we still need
+	// to surface E2001 (unexpected `and`) at the leftover token. Caller has
+	// already finished parsing the arm's expression; on entry the cursor sits
+	// on `and` if a fallthrough was present.
+	function rejectFallthroughInMatchExpression()
+		if at(TokenKind.and) and atOffset(TokenKind.fallthrough, offset: 1) 'badFt'
+			let andToken = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: 'and'", line: andToken.line, column: andToken.column, filePath: filePath)
+		end 'badFt'
+	end 'rejectFallthroughInMatchExpression'
+
+	// Enforce E2026 — every enum case must be covered when matching on an
+	// enum without a `default` arm. Caller provides the most-recent enum-case
+	// name (from any arm) so we can resolve the scrutinee's enum type, the
+	// set of seen pattern keys (which includes covered case names), and the
+	// source position of the closing `end` for the diagnostic.
+	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, seenKeys ReferencedVarSet, errorLine ErrorLineNumber, errorColumn ErrorColumnNumber)
+		if not hasEnumArm 'noEnum'
+			return
+		end 'noEnum'
+		if hasDefault 'hasDefault'
+			return
+		end 'hasDefault'
+		let enumName = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
+		var missing = ""
+		if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
+			missing = enumMissingCases(resolvedEnum.cases, seenKeys: seenKeys)
+		end 'isResolved' else 'tryUnresolved'
+			if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+				missing = enumMissingCases(unresolvedEnum.cases, seenKeys: seenKeys)
+			end 'isUnresolved'
+		end 'tryUnresolved'
+		if missing.isEmpty() 'allCovered'
+			return
+		end 'allCovered'
+		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
+	end 'validateEnumExhaustiveness'
+
+	// Comma-separated list of case names not present in `seenKeys`. Returns
+	// an empty string when every case is covered. Used by E2026 messages.
+	function enumMissingCases(cases EnumCaseArray, seenKeys ReferencedVarSet) returns String
+		var missing = ""
+		var first = true
+		for c in cases 'eachCase'
+			if seenKeys.contains(c.name) 'isCovered'
+				continue
+			end 'isCovered'
+			if first 'firstMiss'
+				missing.append(c.name)
+				first = false
+			end 'firstMiss' else 'subsequent'
+				missing.append(", ")
+				missing.append(c.name)
+			end 'subsequent'
+		end 'eachCase'
+		return missing
+	end 'enumMissingCases'
+
+	// Emit pattern-comparison ops into `block` and return the boolean SSA name
+	// holding the combined OR of all comparisons. Caller passes a list of
+	// integer-literal patterns; `block` is the comparison block (already
+	// allocated). Handles single-pattern and multi-pattern (or-chain) cases.
+	function emitIntPatternComparisons(block IrBlock, scrutineeName ByteArray, patterns MatchPatternSpecArray) returns ByteArray
+		var combined = ByteArray.create()
+		var hasCombined = false
+		for pattern in patterns 'each'
+			let litRange = SourceRange.ofToken(pattern.token)
+			let litName = emitLiteral(block, value: pattern.intValue, valueType: MaxonType.integer, range: litRange)
+			let cmpName = freshSynthName()
+			module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: litRange))
+			if not hasCombined 'first'
+				combined = cmpName
+				hasCombined = true
+			end 'first' else 'fold'
+				let orName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.binop(orName, left: combined, right: cmpName, opKind: BinOpKind.bitOr, operandType: MaxonType.integer, range: litRange))
+				combined = orName
+			end 'fold'
+		end 'each'
+		return combined
+	end 'emitIntPatternComparisons'
+
+	// Parse a statement-form arm body, returning the exit block plus a flag
+	// signalling whether the body was a `return` (so the parser can reject
+	// `return ... and fallthrough` per E2025). Bodies may be a return, a
+	// simple assignment, or a void expression-statement (function call).
+	// Sets `inMatchArmBody` so the Pratt parser stops before `and fallthrough`.
+	function parseMatchStatementArmBody(block IrBlock) returns MatchStmtArmBodyResult throws ParserError
+		let savedInMatchArmBody = inMatchArmBody
+		inMatchArmBody = true
+		let result = try parseMatchStatementArmBodyInner(block)
+		inMatchArmBody = savedInMatchArmBody
+		return result
+	end 'parseMatchStatementArmBody'
+
+	// Parse a single expression for a match-expression arm body. Sets
+	// `inMatchArmBody` so the Pratt parser stops at `and fallthrough`
+	// (E2001 is reported separately by `rejectFallthroughInMatchExpression`).
+	function parseMatchExpressionArmBody(block IrBlock) returns ExprResult throws ParserError
+		let savedInMatchArmBody = inMatchArmBody
+		inMatchArmBody = true
+		let result = try parseExpression(block)
+		inMatchArmBody = savedInMatchArmBody
+		return result
+	end 'parseMatchExpressionArmBody'
+
+	function parseMatchStatementArmBodyInner(block IrBlock) returns MatchStmtArmBodyResult throws ParserError
+		currentBlock = block
+		let stmtToken = cursor.current()
+		if stmtToken.kind == TokenKind.return 'isReturn'
+			try parseReturnStatement(block)
+			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: true)
+		end 'isReturn'
+		if stmtToken.kind == TokenKind.identifier 'maybeAssign'
+			let peekTok = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
+			if peekTok.kind == TokenKind.equals 'isAssign'
+				try parseVarAssignment(block)
+				return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
+			end 'isAssign'
+		end 'maybeAssign'
+		_ = try parseExpression(block)
+		return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
+	end 'parseMatchStatementArmBodyInner'
 
 	// Emit a `panic` op + synthetic `ret 0` so the static verifier sees the
 	// block terminated. The runtime never reaches these — they only fire on
@@ -1979,18 +2167,207 @@ export type Parser
 		module.setTerminator(block, op: MaxonOp.ret(zero, range: SourceRange.none()))
 	end 'emitMatchUnreachableTerminator'
 
-	// Parse a statement-form arm body. Today this is one expression — for the
-	// enums-simple specs that means a `return <expr>` or another simple call.
-	function parseMatchStatementArmBody(block IrBlock) returns IrBlock throws ParserError
+	// Mark `block` as `Terminator.dead` (treated as terminated by isTerminated)
+	// when it has no terminator yet. Exists because the parser type-system
+	// rules forbid mutating a field of a `let`-bound struct in-place at the
+	// caller site; threading the block through this helper sidesteps that.
+	function markBlockDeadIfUnset(block IrBlock)
+		var b = block
+		if not b.isTerminated() 'unset'
+			b.terminator = Terminator.dead
+		end 'unset'
+	end 'markBlockDeadIfUnset'
+
+	// Allocate the per-arm body and "next" (cmp-or-fallback) blocks and emit
+	// the arm's dispatch into `currentBlock` (the shared cmp block for this
+	// arm). For enum-case patterns we keep using the legacy `enumMatchArm` op
+	// so TR resolves the case name. For integer-literal patterns we emit
+	// literal+cmp+(or)+condBr inline. Default arms get only a body block; the
+	// caller wires them after all non-default arms are placed.
+	function buildMatchArmBlocks(header MatchHeader, armIndex IntConstant, patterns MatchPatternList, separator TokenKind) returns MatchArmBlocks throws ParserError
+		try expect(separator)
+		let firstPattern = patterns.first()
+		let armBodyBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.case{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
+		if patterns.isDefault() 'isDefault'
+			// Default arms are bodies only; the caller wires entry once it
+			// knows the position. Return a body-only sentinel.
+			return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: armBodyBlock)
+		end 'isDefault'
+		let nextArmBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.next{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
+		if patterns.isEnumCase() 'isEnum'
+			// Enum case names need TR to resolve the raw value. Reuse the
+			// existing enumMatchArm op. or-patterns of enum cases aren't
+			// reached today (no spec test exercises them) but the placeholder
+			// op family permits one arm = one case name.
+			module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: firstPattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(firstPattern.token)))
+			return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock)
+		end 'isEnum'
+		let combinedCmp = emitIntPatternComparisons(currentBlock, scrutineeName: header.scrutineeName, patterns: patterns.patterns)
+		module.setTerminator(currentBlock, op: MaxonOp.condBr(combinedCmp, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(firstPattern.token)))
+		return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock)
+	end 'buildMatchArmBlocks'
+
+	// Parse: match <expr> 'label' <arms> end 'label' — statement form. Each
+	// arm is `<patterns> then <statement>`. Patterns are integer literals
+	// (possibly or-chained), bare enum case names, or `default`. Optional
+	// `and fallthrough` chains the body to the next arm's body block.
+	function parseMatchStatement(block IrBlock) returns IrBlock throws ParserError
 		currentBlock = block
-		let stmtToken = cursor.current()
-		if stmtToken.kind == TokenKind.return 'isReturn'
-			try parseReturnStatement(block)
+		let header = try parseMatchHeader()
+		if header.failed 'bailout'
+			synchronize()
 			return currentBlock
-		end 'isReturn'
-		_ = try parseExpression(block)
-		return currentBlock
-	end 'parseMatchStatementArmBody'
+		end 'bailout'
+		let mergeBlockId = header.mergeBlock.id
+
+		var bodies = IrBlockArray.create()
+		var fallthroughs = BoolArray.create()
+		var defaultBodyId = 0 as BlockId
+		var hasDefault = false
+		var armIndex = 0 as IntConstant
+		var anyArmReachesMerge = false
+		var seenKeys = ReferencedVarSet.create()
+		var defaultSeen = false
+		var hasEnumArm = false
+		var lastEnumCaseName = ""
+
+		while not isMatchArmsEnd() 'arms'
+			let patterns = try parseMatchArmPatterns(seenKeys, defaultSeen: defaultSeen)
+			// `dispatchBlock` is where this arm's comparison/dispatch lives —
+			// for non-default arms it gets the cmp+condBr (or enumMatchArm)
+			// terminator wired into `arm.next`; for a default arm it must
+			// branch unconditionally into the default body. Capture before
+			// `buildMatchArmBlocks` so a default-arm dispatch can be wired
+			// after the loop without losing the entry block.
+			let dispatchBlock = currentBlock
+			if patterns.isDefault() and hasEnumArm 'defaultOnEnum'
+				reportDefaultOnEnumMatch(patterns, lastEnumCaseName: lastEnumCaseName)
+			end 'defaultOnEnum'
+			if patterns.isEnumCase() 'recordEnum'
+				hasEnumArm = true
+				lastEnumCaseName = patterns.first().caseName
+			end 'recordEnum'
+			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.then)
+			if patterns.isDefault() 'recordDefault'
+				hasDefault = true
+				defaultBodyId = arm.body.id
+				defaultSeen = true
+				module.setTerminator(dispatchBlock, op: MaxonOp.br(arm.body.id, range: SourceRange.none()))
+			end 'recordDefault'
+
+			currentBlock = arm.body
+			let bodyExit = try parseMatchStatementArmBody(arm.body)
+			let armHasFallthrough = checkAndConsumeFallthrough(hadReturn: bodyExit.hadReturn)
+
+			bodies.push(arm.body)
+			fallthroughs.push(armHasFallthrough)
+
+			if not bodyExit.exitBlock.isTerminated() 'armReachesMerge'
+				anyArmReachesMerge = true
+				// Wire fallthrough later (after we know the next arm's body)
+				if not armHasFallthrough 'noFt'
+					module.setTerminator(bodyExit.exitBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+				end 'noFt'
+			end 'armReachesMerge'
+
+			if not patterns.isDefault() 'advanceCursor'
+				currentBlock = arm.next
+			end 'advanceCursor'
+			armIndex = armIndex + 1
+			try skipNewlines()
+		end 'arms'
+
+		// `currentBlock` is now either:
+		//   - the last non-default arm's `next` block (the no-arm-matched
+		//     fallback), needing a final `br` to default body or merge
+		//   - the same block as the default body (when the default was the
+		//     last arm) — already terminated by the loop, no further work
+		if hasDefault 'wireDefault'
+			if currentBlock.id != defaultBodyId 'needsBranch'
+				module.setTerminator(currentBlock, op: MaxonOp.br(defaultBodyId, range: SourceRange.none()))
+			end 'needsBranch'
+		end 'wireDefault' else 'noDefault'
+			if anyArmReachesMerge 'wireFallback'
+				module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+			end 'wireFallback' else 'allArmsTerminated'
+				emitMatchUnreachableTerminator(currentBlock)
+			end 'allArmsTerminated'
+		end 'noDefault'
+
+		// Wire fallthrough exits: each arm flagged `and fallthrough` branches
+		// to the *next* arm's body (or to merge if no next arm).
+		wireMatchFallthroughs(bodies, fallthroughs: fallthroughs, mergeBlockId: mergeBlockId)
+
+		// Enum match exhaustiveness (E2026): if the match was on an enum and
+		// no `default` arm was given, every enum case must be covered.
+		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+
+		// The merge block may be unreachable — when every arm body terminates
+		// via return/throw and no fallthrough reaches a non-terminating tail.
+		// Mark it dead so parseStatements / parseFunction skip the implicit
+		// return / E3013 path. The runtime never reaches these.
+		if not anyArmReachesMerge 'mergeDead'
+			markBlockDeadIfUnset(header.mergeBlock)
+		end 'mergeDead'
+
+		try consumeMatchEndLabel(expectedLabel: header.userLabel)
+		currentBlock = header.mergeBlock
+		return header.mergeBlock
+	end 'parseMatchStatement'
+
+	// Emit E2046 (default-without-throws-or-panic in a match on enum) when a
+	// default arm follows at least one enum-case arm. The diagnostic must
+	// fire at the default arm itself, not at the closing `end`, so it shares
+	// a position-aware path between the statement and expression forms.
+	function reportDefaultOnEnumMatch(patterns MatchPatternList, lastEnumCaseName String)
+		let tok = patterns.first().token
+		let enumDisplay = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
+		reportCompileError(project, code: ErrorCode.parserMatchDefaultEnumMustThrow, message: "'default' in a match on enum '{enumDisplay}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: tok.line, column: tok.column, filePath: filePath)
+	end 'reportDefaultOnEnumMatch'
+
+	// Wire the body-exit block of each fallthrough-flagged arm to the next
+	// arm's body block. Iterates after all bodies are parsed so each arm
+	// already knows its successor's BlockId. Last arm's fallthrough (if any)
+	// targets the merge block since no next arm exists.
+	function wireMatchFallthroughs(bodies IrBlockArray, fallthroughs BoolArray, mergeBlockId BlockId)
+		for armIdx in 0 upto bodies.count() 'each'
+			let didFall = try fallthroughs.get(armIdx) otherwise panic("wireMatchFallthroughs: fallthroughs OOB at {armIdx}")
+			if not didFall 'skip'
+				continue
+			end 'skip'
+			let bodyBlock = try bodies.get(armIdx) otherwise panic("wireMatchFallthroughs: bodies OOB at {armIdx}")
+			if bodyBlock.isTerminated() 'alreadyTerminated'
+				continue
+			end 'alreadyTerminated'
+			var target = mergeBlockId
+			if armIdx + 1 < bodies.count() 'hasNext'
+				let nextBody = try bodies.get(armIdx + 1) otherwise panic("wireMatchFallthroughs: bodies OOB at {armIdx + 1}")
+				target = nextBody.id
+			end 'hasNext'
+			module.setTerminator(bodyBlock, op: MaxonOp.br(target, range: SourceRange.none()))
+		end 'each'
+	end 'wireMatchFallthroughs'
+
+	// Detect optional `and fallthrough` after an arm body. Reports E2025 when
+	// the arm body was a `return` (combining return with fallthrough is
+	// statically impossible — the return already exits). Returns true if a
+	// fallthrough was consumed.
+	function checkAndConsumeFallthrough(hadReturn bool) returns bool
+		if not at(TokenKind.and) 'noAnd'
+			return false
+		end 'noAnd'
+		let afterAnd = try cursor.peek(1) otherwise return false
+		if afterAnd.kind != TokenKind.fallthrough 'notFallthrough'
+			return false
+		end 'notFallthrough'
+		let andToken = cursor.current()
+		try cursor.advance() otherwise return false
+		try cursor.advance() otherwise return true
+		if hadReturn 'returnFt'
+			reportCompileError(project, code: ErrorCode.parserMatchFallthroughWithReturn, message: "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''", line: andToken.line, column: andToken.column, filePath: filePath)
+		end 'returnFt'
+		return true
+	end 'checkAndConsumeFallthrough'
 
 	function parseMatchExpression(block IrBlock) returns ExprResult throws ParserError
 		currentBlock = block
@@ -2014,12 +2391,34 @@ export type Parser
 
 		var armIndex = 0 as IntConstant
 		var resultType = MaxonType.unresolved
+		var defaultBodyId = 0 as BlockId
+		var hasDefault = false
+		var seenKeys = ReferencedVarSet.create()
+		var defaultSeen = false
+		var hasEnumArm = false
+		var lastEnumCaseName = ""
 
 		while not isMatchArmsEnd() 'arms'
-			let arm = try beginMatchArm(header, armIndex: armIndex, separator: TokenKind.gives)
+			let patterns = try parseMatchArmPatterns(seenKeys, defaultSeen: defaultSeen)
+			let dispatchBlock = currentBlock
+			if patterns.isDefault() and hasEnumArm 'defaultOnEnum'
+				reportDefaultOnEnumMatch(patterns, lastEnumCaseName: lastEnumCaseName)
+			end 'defaultOnEnum'
+			if patterns.isEnumCase() 'recordEnum'
+				hasEnumArm = true
+				lastEnumCaseName = patterns.first().caseName
+			end 'recordEnum'
+			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.gives)
+			if patterns.isDefault() 'recordDefault'
+				hasDefault = true
+				defaultBodyId = arm.body.id
+				defaultSeen = true
+				module.setTerminator(dispatchBlock, op: MaxonOp.br(arm.body.id, range: SourceRange.none()))
+			end 'recordDefault'
 
 			currentBlock = arm.body
-			let armResult = try parseExpression(arm.body)
+			let armResult = try parseMatchExpressionArmBody(arm.body)
+			rejectFallthroughInMatchExpression()
 			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(armResult), range: SourceRange.ofToken(arm.caseToken)))
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
 
@@ -2027,14 +2426,29 @@ export type Parser
 				resultType = exprType(armResult)
 			end 'firstArmType'
 
-			currentBlock = arm.next
+			if not patterns.isDefault() 'advanceCursor'
+				currentBlock = arm.next
+			end 'advanceCursor'
 			armIndex = armIndex + 1
 			try skipNewlines()
 		end 'arms'
 
-		module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+		// Wire the no-arm-matched fallback for non-enum matches without an
+		// explicit default. Enum matches without `default` rely on the
+		// exhaustiveness check below; integer matches without `default`
+		// would leave the fallback block unterminated, so route it through
+		// the merge block so the verifier sees a fully terminated CFG.
+		if hasDefault 'wireDefault'
+			if currentBlock.id != defaultBodyId 'needsBranch'
+				module.setTerminator(currentBlock, op: MaxonOp.br(defaultBodyId, range: SourceRange.none()))
+			end 'needsBranch'
+		end 'wireDefault' else 'noDefault'
+			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+		end 'noDefault'
 
-		try skipEndAndLabel()
+		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+
+		try consumeMatchEndLabel(expectedLabel: header.userLabel)
 
 		currentBlock = header.mergeBlock
 		let resultName = freshSynthName()
@@ -2502,6 +2916,14 @@ export type Parser
 			if bp <= minBP 'tooLow'
 				break
 			end 'tooLow'
+			// Inside a match arm body, `and fallthrough` belongs to the
+			// match-arm helper — stop the Pratt loop so the helper can pick
+			// it up. Without this, `and` is consumed as a binary operator
+			// and `fallthrough` (which is a keyword, not an expression)
+			// triggers E2004.
+			if inMatchArmBody and cursor.current().kind == TokenKind.and and atOffset(TokenKind.fallthrough, offset: 1) 'maybeFt'
+				break
+			end 'maybeFt'
 
 			let opToken = try consume()
 
@@ -4098,6 +4520,92 @@ type MatchArmBlocks
 		return Self{caseToken: caseToken, body: body, next: next}
 	end 'create'
 end 'MatchArmBlocks'
+
+// One parsed pattern within a match-arm pattern list. `kind` discriminates
+// between the catch-all default (`defaultArm`), an integer-literal pattern
+// (`intValue` populated), and an enum-case pattern (`caseName` populated).
+// `displayName` is the duplicate-detection / E2027 message string. The
+// `defaultArm` variant is named with a suffix because `default` is a
+// reserved keyword.
+export union MatchPatternKind
+	defaultArm
+	intLiteral
+	enumCase
+end 'MatchPatternKind'
+
+export type MatchPatternSpec
+	export var kind MatchPatternKind
+	export var token Token
+	export var intValue ParsedInt
+	export var caseName String
+	export var displayName String
+
+	export static function defaultPattern(token Token) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default"}
+	end 'defaultPattern'
+
+	export static function intLiteral(token Token, value ParsedInt, displayName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName}
+	end 'intLiteral'
+
+	export static function enumCase(token Token, caseName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName}
+	end 'enumCase'
+
+	export function isDefault() returns bool
+		return match self.kind 'check'
+			defaultArm gives true
+			intLiteral gives false
+			enumCase gives false
+		end 'check'
+	end 'isDefault'
+end 'MatchPatternSpec'
+
+export typealias MatchPatternSpecArray = Array with MatchPatternSpec
+
+// Bundle of patterns belonging to one arm. The arm is a `default` arm when
+// the first (only) entry is a default pattern; an enum-case arm when the
+// first entry is an enum-case pattern; an integer-literal arm otherwise.
+// Patterns within an arm share a kind by construction (the parser only
+// chains `or`-separated literals, never mixing literals with enum cases or
+// `default` — a mix would mean a single arm is matching a heterogeneous set
+// of values, which the language explicitly disallows).
+export type MatchPatternList
+	export var patterns MatchPatternSpecArray
+
+	export static function create(patterns MatchPatternSpecArray) returns MatchPatternList
+		return Self{patterns: patterns}
+	end 'create'
+
+	export function first() returns MatchPatternSpec
+		return try self.patterns.get(0) otherwise panic("MatchPatternList.first: empty list")
+	end 'first'
+
+	export function isDefault() returns bool
+		return self.first().isDefault()
+	end 'isDefault'
+
+	export function isEnumCase() returns bool
+		return match self.first().kind 'check'
+			defaultArm gives false
+			intLiteral gives false
+			enumCase gives true
+		end 'check'
+	end 'isEnumCase'
+end 'MatchPatternList'
+
+// Outcome of parsing one match-statement arm body: the block control flow
+// landed on after the body statement plus a flag indicating whether the
+// statement was a `return` (so the parser can reject `return ... and
+// fallthrough` per E2025).
+export type MatchStmtArmBodyResult
+	export var exitBlock IrBlock
+	export var hadReturn bool
+
+	export static function create(exitBlock IrBlock, hadReturn bool) returns MatchStmtArmBodyResult
+		return Self{exitBlock: exitBlock, hadReturn: hadReturn}
+	end 'create'
+end 'MatchStmtArmBodyResult'
 
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.

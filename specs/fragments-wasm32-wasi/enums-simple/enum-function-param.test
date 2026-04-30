@@ -1,0 +1,60 @@
+// Test: enum-function-param
+enum Status
+	on
+	off
+end 'Status'
+
+function isOn(s Status) returns bool
+	let result = match s 'check'
+		on gives true
+		off gives false
+	end 'check'
+	return result
+end 'isOn'
+
+function main() returns ExitCode
+	let status = Status.on
+	if isOn(status) 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @enum-function-param.isOn(local0: u8) -> i1 {
+  entry:
+    %12 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %12, %3
+    mir.cond_br %4 [then: check_1.case0(), else: check_1.next0()]
+  check_1.merge:
+    mir.ret %11
+  check_1.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%7)
+  check_1.next0:
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.cmp eq, %12, %8
+    mir.cond_br %9 [then: check_1.case1(), else: check_1.merge(%2)]
+  check_1.case1:
+    %10 = mir.mov_imm 0 : i64
+    mir.br check_1.merge(%10)
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.call @enum-function-param.isOn(%0)
+    mir.cond_br %2 [then: test_1(), else: test_1.after()]
+  test_1:
+    %3 = mir.mov_imm 1 : i64
+    mir.ret %3
+  test_1.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

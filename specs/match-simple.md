@@ -329,14 +329,14 @@ function main() returns ExitCode
 	match x 'check'
 		1 then result = 10
 		2 then result = 20
-		3 then result = result + 30 and fallthrough
+		3 then result = result + 20 and fallthrough
 		default then result = result + 100
 	end 'check'
 	return result
 end 'main'
 ```
 ```exitcode
-130
+120
 ```
 
 <!-- test: match-statements.nested-in-function -->
@@ -367,14 +367,14 @@ function main() returns ExitCode
 	var result = 0
 	match x 'process'
 		1 then result = 100
-		2 then result = 200
+		2 then result = 120
 		default then result = 0
 	end 'process'
 	return result
 end 'main'
 ```
 ```exitcode
-200
+120
 ```
 
 <!-- test: match-statements.function-call -->

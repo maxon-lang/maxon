@@ -1,0 +1,51 @@
+// Test: keyword-as-case-name
+enum TokenType
+	function
+	return
+	end
+	if
+	else
+	let
+	var
+	identifier
+end 'TokenType'
+
+function main() returns ExitCode
+	let t = TokenType.function
+	let result = match t 'check'
+		function gives 1
+		return gives 0
+		end gives 0
+		if gives 0
+		else gives 0
+		let gives 0
+		var gives 0
+		identifier gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br check_1.case0()
+  check_1.merge:
+    %30 = mir.mov_imm 125 : i64
+    %31 = mir.cmp ugt, %29, %30
+    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+  check_1.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%7)
+  __range_panic_0:
+    %32 = mir.global_addr @__panic_msg_0
+    %33 = mir.call @mrt_panic(%32)
+  __range_ok_0:
+    mir.ret %29
+  }
+}
+---

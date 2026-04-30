@@ -1,0 +1,46 @@
+// Test: match-statements.fallthrough-chain
+function main() returns ExitCode
+	let x = 1
+	var result = 0
+	match x 'cascade'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20 and fallthrough
+		3 then result = result + 30
+		default then result = 100
+	end 'cascade'
+	return result
+end 'main'
+---
+ExitCode: 60
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br cascade_1.case0()
+  cascade_1.merge:
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_4(), else: __range_ok_4()]
+  cascade_1.case0:
+    %7 = mir.mov_imm 10 : i64
+    %8 = mir.add.i64 %1, %7
+    mir.br cascade_1.case1(%8)
+  cascade_1.case1:
+    %12 = mir.mov_imm 20 : i64
+    %13 = mir.add.i64 %22, %12
+    mir.br cascade_1.case2(%13)
+  cascade_1.case2:
+    %17 = mir.mov_imm 30 : i64
+    %18 = mir.add.i64 %21, %17
+    mir.br cascade_1.merge(%18)
+  __range_panic_4:
+    %25 = mir.global_addr @__panic_msg_6
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_4:
+    mir.ret %20
+  }
+}
+---

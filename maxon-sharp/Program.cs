@@ -331,11 +331,17 @@ class Program {
   }
 
   static int RunRun(string[] args) {
-    var (emitIr, dumpStages, valid) = ParseOptions(args);
+    // Split args at the function name: anything before is for the compiler (build flags),
+    // anything from the function name onward is forwarded to the runner executable.
+    var splitIndex = GetNonOptionArgIndex(args);
+    var buildArgs = splitIndex < 0 ? args : args[..splitIndex];
+    var forwardedArgs = splitIndex < 0 ? [] : args[(splitIndex + 1)..];
+
+    var (emitIr, dumpStages, valid) = ParseOptions(buildArgs);
     if (!valid) return Fail();
 
-    var target = ParseTarget(args);
-    var cliName = GetNonOptionArg(args);
+    var target = ParseTarget(buildArgs);
+    var cliName = splitIndex < 0 ? null : args[splitIndex];
     // Translate dashes to underscores so CLI uses dashes but Maxon uses underscores
     var functionName = cliName?.Replace('-', '_');
 
@@ -401,7 +407,7 @@ class Program {
       if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, name: cacheName);
     }
 
-    return RunExecutable(outputPath);
+    return RunExecutable(outputPath, forwardedArgs);
   }
 
   static int RunFmt(string[] args) {
@@ -530,12 +536,15 @@ class Program {
   /// Gets the first non-option argument from the args array.
   /// </summary>
   static string? GetNonOptionArg(string[] args) {
-    foreach (var arg in args) {
-      if (!arg.StartsWith('-')) {
-        return arg;
-      }
+    var index = GetNonOptionArgIndex(args);
+    return index < 0 ? null : args[index];
+  }
+
+  static int GetNonOptionArgIndex(string[] args) {
+    for (var i = 0; i < args.Length; i++) {
+      if (!args[i].StartsWith('-')) return i;
     }
-    return null;
+    return -1;
   }
 
   /// <summary>
@@ -570,13 +579,15 @@ class Program {
   /// <summary>
   /// Runs a compiled executable and returns its exit code.
   /// </summary>
-  static int RunExecutable(string executablePath) {
-    var process = new Process {
-      StartInfo = new ProcessStartInfo {
-        FileName = Path.GetFullPath(executablePath),
-        UseShellExecute = false,
-      }
+  static int RunExecutable(string executablePath, string[]? forwardedArgs = null) {
+    var startInfo = new ProcessStartInfo {
+      FileName = Path.GetFullPath(executablePath),
+      UseShellExecute = false,
     };
+    if (forwardedArgs != null) {
+      foreach (var arg in forwardedArgs) startInfo.ArgumentList.Add(arg);
+    }
+    var process = new Process { StartInfo = startInfo };
 
     process.Start();
     process.WaitForExit();

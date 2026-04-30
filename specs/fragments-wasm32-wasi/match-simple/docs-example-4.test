@@ -1,0 +1,46 @@
+// Test: docs-example-4
+function main() returns ExitCode
+	let role = 1
+	var permissions = 0
+	match role 'auth'
+		1 then permissions = permissions + 100 and fallthrough
+		2 then permissions = permissions + 10 and fallthrough
+		3 then permissions = permissions + 1
+		default then permissions = 0
+	end 'auth'
+	return permissions
+end 'main'
+---
+ExitCode: 111
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br auth_1.case0()
+  auth_1.merge:
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %20, %23
+    mir.cond_br %24 [then: __range_panic_12(), else: __range_ok_12()]
+  auth_1.case0:
+    %7 = mir.mov_imm 100 : i64
+    %8 = mir.add.i64 %1, %7
+    mir.br auth_1.case1(%8)
+  auth_1.case1:
+    %12 = mir.mov_imm 10 : i64
+    %13 = mir.add.i64 %22, %12
+    mir.br auth_1.case2(%13)
+  auth_1.case2:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %21, %17
+    mir.br auth_1.merge(%18)
+  __range_panic_12:
+    %25 = mir.global_addr @__panic_msg_14
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_12:
+    mir.ret %20
+  }
+}
+---

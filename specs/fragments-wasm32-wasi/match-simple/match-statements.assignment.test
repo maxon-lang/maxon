@@ -1,0 +1,42 @@
+// Test: match-statements.assignment
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	match x 'process'
+		1 then result = 100
+		2 then result = 120
+		default then result = 0
+	end 'process'
+	return result
+end 'main'
+---
+ExitCode: 120
+---
+// CompiledIR
+module {
+  func @match-simple.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br process_1.next0()
+  process_1.merge:
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_7(), else: __range_ok_7()]
+  process_1.next0:
+    %7 = mir.mov_imm 2 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: process_1.case1(), else: process_1.case2()]
+  process_1.case1:
+    %9 = mir.mov_imm 120 : i64
+    mir.br process_1.merge(%9)
+  process_1.case2:
+    %10 = mir.mov_imm 0 : i64
+    mir.br process_1.merge(%10)
+  __range_panic_7:
+    %14 = mir.global_addr @__panic_msg_9
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_7:
+    mir.ret %11
+  }
+}
+---

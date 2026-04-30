@@ -1,0 +1,57 @@
+// Test: match-statements.function-call
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(n Integer) returns Integer
+	return n * 2
+end 'double'
+
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	match x 'process'
+		1 then result = double(10)
+		2 then result = double(20)
+		default then result = 0
+	end 'process'
+	return result
+end 'main'
+---
+ExitCode: 40
+---
+// CompiledIR
+module {
+  func @match-simple.double(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @match-simple.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br process_1.next0()
+  process_1.merge:
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_8(), else: __range_ok_8()]
+  process_1.next0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.cmp eq, %0, %8
+    mir.cond_br %9 [then: process_1.case1(), else: process_1.case2()]
+  process_1.case1:
+    %10 = mir.mov_imm 20 : i64
+    %11 = mir.call @match-simple.double(%10)
+    mir.br process_1.merge(%11)
+  process_1.case2:
+    %12 = mir.mov_imm 0 : i64
+    mir.br process_1.merge(%12)
+  __range_panic_8:
+    %16 = mir.global_addr @__panic_msg_10
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_8:
+    mir.ret %13
+  }
+}
+---

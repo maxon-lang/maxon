@@ -1,0 +1,43 @@
+// Test: simple-enum
+enum Direction
+	north
+	south
+	east
+	west
+end 'Direction'
+
+function main() returns ExitCode
+	let dir = Direction.north
+	let result = match dir 'check'
+		north gives 1
+		south gives 0
+		east gives 0
+		west gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br check_1.case0()
+  check_1.merge:
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %17, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  check_1.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%7)
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_0
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %17
+  }
+}
+---

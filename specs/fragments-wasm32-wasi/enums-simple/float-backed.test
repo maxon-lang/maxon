@@ -1,0 +1,57 @@
+// Test: float-backed
+enum FloatBacked
+	North = 1.1
+	South = 2.2
+	East = 3.3
+end 'FloatBacked'
+
+function main() returns ExitCode
+	let f = FloatBacked.North
+	let result = match f 'check'
+		North gives 1
+		South gives 0
+		East gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4607632778762754457 : f64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 4607632778762754457 : f64
+    %4 = mir.cmp feq, %0, %3
+    mir.cond_br %4 [then: check_1.case0(), else: check_1.next0()]
+  check_1.merge:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  check_1.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%7)
+  check_1.next0:
+    %8 = mir.mov_imm 4612136378390124953 : f64
+    %9 = mir.cmp feq, %0, %8
+    mir.cond_br %9 [then: check_1.case1(), else: check_1.next1()]
+  check_1.case1:
+    %10 = mir.mov_imm 0 : i64
+    mir.br check_1.merge(%10)
+  check_1.next1:
+    %11 = mir.mov_imm 4614613358185178726 : f64
+    %12 = mir.cmp feq, %0, %11
+    mir.cond_br %12 [then: check_1.case2(), else: check_1.merge(%2)]
+  check_1.case2:
+    %13 = mir.mov_imm 0 : i64
+    mir.br check_1.merge(%13)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---
