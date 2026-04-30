@@ -9,6 +9,7 @@ import {
 } from 'vscode-languageclient/node';
 import { log, initLogger } from './logger';
 import { CompilerExplorerPanel } from './compilerExplorerPanel';
+import { registerTestController } from './testController';
 
 interface ExtensionState {
 	client: LanguageClient;
@@ -110,6 +111,15 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('Maxon Language Server');
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
+
+	// Register the spec-test controller first so it doesn't depend on LSP
+	// activation succeeding — early returns below would otherwise leave the
+	// Test Explorer empty.
+	try {
+		ctx.subscriptions.push(registerTestController());
+	} catch (error) {
+		log(`Failed to register test controller: ${error}`);
+	}
 
 	// Find the maxon binary — this is the source we watch for changes
 	let sourceExecutable = '';
@@ -301,6 +311,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	// Add client to subscriptions for cleanup
 	ctx.subscriptions.push(client);
+
 	log('Maxon extension activated successfully');
 
 	// Export the client for testing

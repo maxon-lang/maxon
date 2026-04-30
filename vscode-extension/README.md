@@ -9,6 +9,7 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: Format your Maxon code with customizable indentation settings
 - **Compiler Explorer**: View MIR (intermediate representation) and x86-64 assembly output for your code
+- **Spec Test Explorer**: Discover and run spec tests from `specs/*.md` in VS Code's Test Explorer, against the C# bootstrap or self-hosted compiler
 
 Note: LSP features are provided by the embedded Maxon Language Server in the compiler. This extension acts as an LSP client and will only enable advanced language features once the maxon compiler binary (`maxon` or `maxon.exe`) is built and accessible.
 
@@ -149,6 +150,42 @@ The panel automatically updates when you:
 - Switch to a different Maxon file
 
 If there are syntax errors in your code, the panel will display the error messages instead of the generated output.
+
+## Spec Test Explorer
+
+The extension contributes a `Maxon Spec Tests` test controller to VS Code's Test Explorer. Tests are discovered by parsing every markdown file under `specs/` in the workspace root: each `<!-- test: name -->` marker becomes a test item under a parent node named after the spec file (e.g. `arithmetic` → `addition`, `subtraction`, …). The controller activates as soon as the workspace contains a `specs/*.md` file, even if the language server fails to start.
+
+### Run profiles
+
+Two run profiles are registered:
+
+- **C# Bootstrap (maxon-sharp)** — runs `bin/maxon.exe spec-test`. The default profile.
+- **Self-Hosted (maxon-selfhosted)** — runs `maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`.
+
+If the profile's compiler binary is missing the run is aborted with an error message — build the relevant compiler first (see the repo root `CLAUDE.md` for build commands).
+
+Specs marked `status: draft` in their frontmatter are skipped by both profiles. Specs marked `status: selfhosted` are skipped by the C# bootstrap profile (those tests exercise self-hosted-only language features); selected items belonging to a skipped spec are reported as `skipped` in the run.
+
+### Filtering
+
+The controller passes `--filter` to the runner based on the selection:
+
+- Run all tests → no filter, single process (the runner walks every spec in its own worker pool, which is dramatically faster than spawning per-spec).
+- Run a whole spec → `--filter=<specName>/`.
+- Run individual tests → one `--filter=<specName>/<testName>` invocation per test.
+
+### Output parsing
+
+Test results are read from the runner's stderr/stdout. Both runners share the line shapes the controller looks for, modulo a category-code prefix:
+
+- C# (`Logger.cs`):       `[TST] [PASS] foo/bar (12ms)` / `[TST] ERROR: [FAIL] foo (2/3)`
+- Self-hosted (`Logger.maxon`): `[TST] INFO: [PASS] foo/bar`        / `[TST] ERROR: [FAIL] foo (2/3)`
+
+Per-test `[PASS]`/`[FAIL]` lines update the test items live; the per-spec failure block that follows supplies the error message attached to each failure. Failure paths are accepted in either `specs/fragments/...` (C# normalised) or `specs/fragments-{target}/...` (self-hosted) form.
+
+### Refresh
+
+The controller watches `specs/*.md` and re-syncs the corresponding tree node on change/create/delete. Use the Test Explorer's refresh button to force a full re-scan of the directory.
 
 ## Customizing Colors
 
