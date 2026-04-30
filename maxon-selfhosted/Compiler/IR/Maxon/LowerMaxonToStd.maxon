@@ -67,15 +67,18 @@ function encodeI64LE(value IntConstant) returns ByteArray
 	return bytes
 end 'encodeI64LE'
 
-// Walk project.globalVars and feed each one into globalData's data-section
-// table. Idempotent across multiple lowering runs against the same project
-// because lowerMaxonToStd creates a fresh GlobalDataTable per build.
+// Walk project.topLevelVars and feed each one into globalData's
+// data-section table. Idempotent across multiple lowering runs against the
+// same project because lowerMaxonToStd creates a fresh GlobalDataTable per
+// build. The exported function name keeps "Globals" because the data
+// section itself is link-time-global storage; the source-level decls that
+// land here may or may not be `export`ed.
 export function registerGlobalVarsForDataSection(project Project, globalData GlobalDataTable)
-	for (_, info) in project.globalVars 'eachGlobal'
+	for (_, info) in project.topLevelVars 'eachVar'
 		let symbol = dataSymbolName(info.name)
 		let initialBytes = encodeI64LE(info.initialValue)
 		addDataSectionEntry(globalData, name: symbol, initialBytes: initialBytes)
-	end 'eachGlobal'
+	end 'eachVar'
 end 'registerGlobalVarsForDataSection'
 
 // ============================================================
@@ -333,7 +336,7 @@ type MaxonToStdLowering
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
 			globalLoad(result, name, slotType, _) then self.lowerGlobalLoad(result, name: name, slotType: slotType, dstBlock: dstBlock)
-			globalStore(name, value, _, _) then self.lowerGlobalStore(name, value: value, dstBlock: dstBlock)
+			globalStore(name, value, slotType, _) then self.lowerGlobalStore(name, value: value, slotType: slotType, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
 			unop(result, operand, opKind, _, _) then self.lowerUnop(result, operand: operand, opKind: opKind, dstBlock: dstBlock)
 			convert(result, operand, fromType, toType, _, _) then self.lowerConvert(result, operand: operand, fromType: fromType, toType: toType, dstBlock: dstBlock)
@@ -417,15 +420,16 @@ type MaxonToStdLowering
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0)))
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: isFloat)))
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerGlobalLoad'
 
-	function lowerGlobalStore(name String, value ByteArray, dstBlock IrBlock)
+	function lowerGlobalStore(name String, value ByteArray, slotType MaxonType, dstBlock IrBlock)
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: self.resolveName(value))))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerGlobalStore'
 
 	// Lower a binop. If the op is float-family, ensure both operands are
@@ -869,7 +873,8 @@ type MaxonToStdLowering
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: offset)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: offset, isFloat: isFloat)))
 		self.setValueType(resultId, t: fieldType)
 	end 'lowerFieldLoad'
 
@@ -877,12 +882,13 @@ type MaxonToStdLowering
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
-		let (offset, _, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
+		let (offset, fieldType, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
 		if not found 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			return
 		end 'notFound'
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: self.resolveName(value))))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerFieldStore'
 
 	// selfFieldLoad/selfFieldStore: synthesize a fieldLoad/Store against the
@@ -905,7 +911,8 @@ type MaxonToStdLowering
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset, isFloat: isFloat)))
 		self.setValueType(resultId, t: fieldType)
 	end 'lowerSelfFieldLoad'
 
@@ -915,13 +922,14 @@ type MaxonToStdLowering
 			return
 		end 'notInType'
 		let fieldNameStr = String.from(fieldName)
-		let (offset, _, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
+		let (offset, fieldType, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
 		if not found 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: offset, valueId: self.resolveName(value))))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: offset, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerSelfFieldStore'
 
 	// Materialize the __self parameter into a fresh SSA ValueId via a slot

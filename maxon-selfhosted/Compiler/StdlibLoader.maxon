@@ -112,11 +112,15 @@ export function getStdlibModule(project Project) returns MaxonModule
 	logInfo(LogCategory.compiler, message: () gives "Loading stdlib from {stdlibPath}")
 
 	// Try loading pre-compiled stdlib cache from project's .maxon/cache/ directory.
-	// For single-file builds, use the parent directory.
+	// For single-file builds, use the parent directory. The user-supplied path
+	// can be relative (e.g. `maxon build test.maxon` from inside its directory) —
+	// a bare filename has no separator, so .parent() would throw. Resolve against
+	// the current working directory first to guarantee a parent exists.
 	// Save the project dir so loadCacheForTarget uses the same path.
 	var projectDir = project.rootPath
 	if File.exists(project.rootPath) 'isSingleFile'
-		projectDir = try project.rootPath.parent() otherwise panic("single-file path has no parent")
+		let absoluteFile = project.rootPath.resolve(base: Directory.currentPath())
+		projectDir = try absoluteFile.parent() otherwise panic("single-file path has no parent after resolving against cwd: {absoluteFile.toString()}")
 	end 'isSingleFile'
 	if stdlibCacheProjectDirs.count() == 0 'firstSet'
 		stdlibCacheProjectDirs.push(projectDir)

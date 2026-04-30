@@ -99,25 +99,29 @@ export type Project
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
 
-	// Unresolved top-level let registry: every `let NAME = <init>` at module
-	// scope lands here first. The TypeResolution pass walks this map with
-	// DFS + a visiting stack to evaluate initializers in dependency order;
-	// successful evaluations move into `topLevelConstants`, and cycles are
-	// reported as E2012. The keys live alongside `topLevelConstants` keys
-	// during parsing — readers that ask "is this name a known let?" need to
-	// consult both maps.
-	export var unresolvedTopLevelLets UnresolvedTopLevelLetMap
+	// Pending top-level bindings — both immutable `let` constants (which
+	// drain into `topLevelConstants`) and mutable `var` / `static var/let`
+	// globals (which drain into `topLevelVars`). Each entry's `mutable` flag
+	// picks the destination at drain time. The TypeResolution pass walks
+	// the map with DFS + a visiting stack so let-references between entries
+	// resolve in dependency order; cycles are reported as E2012.
+	// Readers that ask "is this name a known let?" need to consult this
+	// map alongside `topLevelConstants` since the resolved value moves out
+	// once it lands in the destination.
+	export var unresolvedTopLevelDecls UnresolvedTopLevelDeclMap
 
-	// Flat arena of expression nodes referenced by UnresolvedTopLevelLet
+	// Flat arena of expression nodes referenced by UnresolvedTopLevelDecl
 	// entries via UnresolvedConstExprId. Shared project-wide because
 	// cross-file `export let` references resolve through the same id space.
 	export var unresolvedConstExprs UnresolvedConstExprArray
 
-	// Mutable globals (top-level `var` and `static var/let` fields). The map
-	// key is the qualified name used at the source level (`counter` for a
-	// top-level var, `Counter.count` for a static field). Writable storage in
-	// the .data section is sized one 8-byte slot per global.
-	export var globalVars GlobalVarMap
+	// Mutable top-level vars (`var` at module scope) and `static var/let`
+	// fields. The map key is the qualified name used at the source level
+	// (`counter` for a top-level var, `Counter.count` for a static field).
+	// Writable storage in the .data section is sized one 8-byte slot per
+	// entry. Export visibility is a separate axis tracked elsewhere — this
+	// registry holds entries from every visibility tier.
+	export var topLevelVars TopLevelVarMap
 
 	// Struct type registry: maps type names to field layouts.
 	// Populated by the TypeResolution pass as it drains unresolvedStructTypes.
@@ -183,9 +187,9 @@ export type Project
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
-			unresolvedTopLevelLets: UnresolvedTopLevelLetMap.create(),
+			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
-			globalVars: GlobalVarMap.create(),
+			topLevelVars: TopLevelVarMap.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			enumTypes: EnumTypeMap.create(),
@@ -628,13 +632,16 @@ export function readConstantValue(project Project, buf ByteArray, offset ByteOff
 	end 'tag'
 end 'readConstantValue'
 
-// --- Unresolved top-level let representation ---
+// --- Unresolved top-level decl representation ---
 // Mirrors the UnresolvedTypealias pattern: the parser captures every
-// `let NAME = <init>` at module scope into an UnresolvedTopLevelLet entry
-// without resolving identifier references. The TypeResolution pass walks
-// the map with DFS + a visiting stack, evaluates each initializer, and
-// populates `topLevelConstants`. Cycles among let initializers surface as
-// E2012 (parserCircularDependency) from the resolver, not the parser.
+// `let NAME = <init>` and `var NAME = <init>` at module scope (plus their
+// `static` field analogues) into an UnresolvedTopLevelDecl entry without
+// resolving identifier references. The TypeResolution pass walks the map
+// with DFS + a visiting stack, evaluates each initializer, and routes the
+// result either into `topLevelConstants` (immutable lets) or `topLevelVars`
+// (mutable vars) based on the entry's `mutable` flag. Cycles among let
+// initializers surface as E2012 (parserCircularDependency) from the
+// resolver, not the parser.
 //
 // The expression tree is stored as a flat arena of UnresolvedConstExpr
 // nodes on Project; UnresolvedConstExprId is an integer index into that
@@ -643,16 +650,46 @@ end 'readConstantValue'
 
 export typealias UnresolvedConstExprId = int(0 to u64.max)
 
+// Cases are grouped so the four "structurally type-pinning" arms
+// (`boolLit`, `floatLit`, `enumCase`, `asCast`) sit at the front as a
+// contiguous block. Every other arm folds to the runtime
+// ConstantValue tag, so they form one contiguous fallback range
+// (`intLit to logicalOr`) that downstream `match` over this union can
+// catch with a single range pattern.
 export union UnresolvedConstExpr
-	// Compile-time literal forms: resolvable without consulting any name.
-	intLit(value IntConstant)
+	// --- Type-pinning forms (decide MaxonType structurally). ---
+
+	// Boolean literal. Slot type is always `MaxonType.boolean` regardless
+	// of fold result.
 	boolLit(value bool)
-	stringLit(stringId StringId)
+
+	// Float literal raw bits. Slot type is always `MaxonType.float`.
 	floatLit(bits IntConstant)
+
+	// Enum case reference (`EnumName.caseName`). Captured structurally
+	// because the enum may not be drained from `unresolvedEnums` into
+	// `enumTypes` at parse time. Resolver folds this to the enum's
+	// integer / float raw value once the enum's drain has run; slot type
+	// is interned from the enum name.
+	enumCase(enumName String, caseName String)
+
+	// `<expr> as TypeName` — a postfix cast against a ranged-primitive
+	// typealias. Resolver validates the operand is in range and threads
+	// the named MaxonType through to the TopLevelVarInfo's slotType so
+	// downstream loads/stores know the alias.
+	asCast(operand UnresolvedConstExprId, typeName String)
+
+	// --- Fallback forms (slot type comes from the folded value). ---
+	// Order is fixed: callers depend on `intLit to logicalOr` being one
+	// contiguous range that excludes the type-pinning arms above.
+
+	// Compile-time integer / string literal.
+	intLit(value IntConstant)
+	stringLit(stringId StringId)
 
 	// Forward-deferred reference to another top-level constant. The
 	// resolver looks `name` up in `topLevelConstants` (already-evaluated)
-	// or `unresolvedTopLevelLets` (recurse with cycle check).
+	// or `unresolvedTopLevelDecls` (recurse with cycle check).
 	nameRef(name String)
 
 	// Unary ops over an arena id.
@@ -686,40 +723,54 @@ end 'UnresolvedConstExpr'
 
 export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
 
-export type UnresolvedTopLevelLet
+// One pending top-level binding awaiting evaluation. Covers both immutable
+// `let NAME = ...` constants (drained into `topLevelConstants`) and mutable
+// `var NAME = ...` / `static var NAME = ...` globals (drained into
+// `topLevelVars` as a `.data` slot). The two destinations are dispatched on
+// `mutable` at drain time, so the parser uses one registration path and
+// the resolver does one walk.
+export type UnresolvedTopLevelDecl
 	export var name String
 	// Index into project.unresolvedConstExprs for the root of the
 	// initializer expression tree.
 	export var rootExprId UnresolvedConstExprId
+	// True for `var` / `static var`; false for `let` / `static let`.
+	// Determines whether the resolved value lands in the writable `.data`
+	// section or as an inlined constant the rewriter substitutes at use sites.
+	export var mutable bool
 	// Parse-time source location for resolver-emitted diagnostics (cycle,
 	// unknown-name). Mirrors UnresolvedTypealias.
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, rootExprId UnresolvedConstExprId, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelLet
-		return Self{name: name, rootExprId: rootExprId, line: line, column: column, filePath: filePath}
+	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
+		return Self{name: name, rootExprId: rootExprId, mutable: mutable, line: line, column: column, filePath: filePath}
 	end 'create'
-end 'UnresolvedTopLevelLet'
+end 'UnresolvedTopLevelDecl'
 
-export typealias UnresolvedTopLevelLetMap = Map with(String, UnresolvedTopLevelLet)
+export typealias UnresolvedTopLevelDeclMap = Map with(String, UnresolvedTopLevelDecl)
 
-// Mutable top-level / static-field global. Stored in the writable .data
-// section with an 8-byte slot per global. Initial value is materialized into
-// the section bytes at link time; load/store at runtime go through
-// RIP-relative addressing of the symbol name.
-export type GlobalVarInfo
+// One top-level / static-field mutable var. The qualified name (used as
+// the map key) is the source-level identifier; the slot lives in the
+// writable .data section as an 8-byte entry per var, with the initial
+// value materialized into the section bytes at link time. Load/store at
+// runtime go through RIP-relative addressing of the symbol name. The IR
+// op family (`globalLoad`/`globalStore`/`globalAddr`) keeps the "global"
+// label because that is the lowering technique — RIP-relative reads
+// against a linker symbol — regardless of whether the source-level decl
+// was exported.
+export type TopLevelVarInfo
 	export var name String
 	export var slotType MaxonType
 	export var initialValue IntConstant
-	export var mutable bool
 
-	export static function create(name String, slotType MaxonType, initialValue IntConstant, mutable bool) returns GlobalVarInfo
-		return Self{name: name, slotType: slotType, initialValue: initialValue, mutable: mutable}
+	export static function create(name String, slotType MaxonType, initialValue IntConstant) returns TopLevelVarInfo
+		return Self{name: name, slotType: slotType, initialValue: initialValue}
 	end 'create'
-end 'GlobalVarInfo'
+end 'TopLevelVarInfo'
 
-export typealias GlobalVarMap = Map with(String, GlobalVarInfo)
+export typealias TopLevelVarMap = Map with(String, TopLevelVarInfo)
 
 export type TypealiasRange
 	export var lower RangeBound

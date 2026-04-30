@@ -617,7 +617,7 @@ export type Parser
 
 	// Parse `TypeName.fieldName = <expr>`. The store target is emitted as
 	// an `unresolvedAssign` op carrying the qualified name; TypeResolution
-	// rewrites it to `globalStore` once `project.globalVars` is known to be
+	// rewrites it to `globalStore` once `project.topLevelVars` is known to be
 	// fully populated. Caller has proven identifier-dot-identifier-equals
 	// via peeks.
 	function parseGlobalAssignment(block IrBlock, qualifiedName String) throws ParserError
@@ -670,104 +670,120 @@ export type Parser
 		reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: message, line: token.line, column: token.column, filePath: filePath)
 	end 'reportLiteralOverflow'
 
-	// --- Top-level let ---
+	// --- Top-level let / var ---
 
-	// Parse top-level `let NAME = <expr>` — captures a structural
-	// representation of the initializer as an `UnresolvedTopLevelLet`
-	// entry, leaving identifier resolution and value evaluation to the
-	// `resolveAllTopLevelLets` pass in TypeResolution.maxon.
+	// Parse a top-level binding:
+	//   `let NAME = <expr>`                      (top-level)
+	//   `var NAME = <expr>`                      (top-level)
+	//   `static var NAME = <expr>`               (inside a type)
+	// Captures the initializer as a structural `UnresolvedConstExpr` arena
+	// tree and registers an `UnresolvedTopLevelDecl` entry; the
+	// `resolveAllTopLevelDecls` pass in TypeResolution.maxon drains the
+	// entry into `topLevelConstants` (immutable lets) or `topLevelVars`
+	// (mutable vars) once enums and typealiases have themselves been
+	// resolved, so identifier / enum-case / `as`-cast references fold
+	// without parser-time peeks into project state.
 	//
-	// The parser does NOT consult `topLevelConstants` here — even bare
-	// identifier references (forward-declared names from other lets) are
-	// captured as `nameRef(name)` nodes and resolved later. The only
-	// errors emitted at parse time are shape errors the structural
-	// representation can't express (string interpolation, function calls,
-	// truly malformed token shapes).
+	// `let` and `var` accept the same initializer shapes — the only
+	// effect of `mutable` is which destination the resolved value lands
+	// in, and (downstream) whether reassignment to the binding is
+	// rejected with E2013.
 	//
-	// entry: cursor AT the token AFTER `let` — the constant name identifier.
-	// Caller (dispatchTopLevel) has already consumed the `let` keyword.
-	function parseTopLevelLet() throws ParserError
+	// `typeName` qualifies the binding with its enclosing type for static
+	// fields (`Counter.count`); it's empty for top-level decls.
+	//
+	// entry: cursor AT the token AFTER `let` / `var` — the binding name.
+	// Caller (dispatchTopLevel / parseStaticVar) has already consumed the
+	// keyword.
+	function parseTopLevelDecl(typeName String, mutable bool) throws ParserError
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
 		try expect(TokenKind.equals)
 
 		let valueToken = cursor.current()
+		let qualifiedName = qualifyName(typeName, name: nameToken.value)
 
+		// String literal initializer (`let GREETING = "hello"`,
+		// `var msg = "hi"`). Captured as a `stringLit` arena node.
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
-			// Step past the string literal. Tolerate EOF because `let x = ""`
-			// at end-of-file is a complete declaration.
-			try cursor.advance() otherwise 'eofAfterString'
-				logTrace(LogCategory.parser, message: () gives "parser: top-level string const at EOF")
-			end 'eofAfterString'
-			// Interpolations have no compile-time meaning at top level —
-			// the operand names they'd reference don't exist yet. Reject
-			// explicitly rather than silently dropping the interpolation.
-			if at(TokenKind.stringInterpStart) 'hasInterp'
-				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "top-level let does not support string interpolation", line: valueToken.line, column: valueToken.column, filePath: filePath)
-				synchronize()
-				return
-			end 'hasInterp'
-			let strId = project.strings.intern(valueToken.value)
-			let exprId = appendConstExpr(UnresolvedConstExpr.stringLit(strId))
-			registerUnresolvedTopLevelLet(nameToken, rootExprId: exprId)
-			logTrace(LogCategory.parser, message: () gives "parser: const string '{nameToken.value}'")
+			try parseTopLevelStringDecl(nameToken, qualifiedName: qualifiedName, valueToken: valueToken, mutable: mutable)
 			return
 		end 'isString'
 
-		// Single-quote strings are not valid top-level constants
+		// Single-quote strings are never valid as top-level initializers.
 		if valueToken.kind == TokenKind.stringLiteral 'isSingleQuoteString'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected constant expression, got '{valueToken.value}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
 			synchronize()
 			return
 		end 'isSingleQuoteString'
 
-		// Float-typed constants — capture as floatLit(bits). The bits
-		// payload mirrors the IEEE 754 raw form MaxonOp.literal uses.
-		if valueToken.kind == TokenKind.floatLiteral 'isFloat'
-			let rawBits = try parseFloatBits(valueToken.value) otherwise 'floatOverflow'
-				reportLiteralOverflow(token: valueToken, message: "Float literal '{tokenValueToString(valueToken.value)}' is outside the range of float")
-				synchronize()
-				return
-			end 'floatOverflow'
-
-			try cursor.advance() otherwise 'eofAfterFloat'
-				logTrace(LogCategory.parser, message: () gives "parser: top-level float const at EOF")
-			end 'eofAfterFloat'
-
-			let exprId = appendConstExpr(UnresolvedConstExpr.floatLit(rawBits))
-			registerUnresolvedTopLevelLet(nameToken, rootExprId: exprId)
-			logTrace(LogCategory.parser, message: () gives "parser: const float '{nameToken.value}' = {rawBits}")
-
+		if rejectCallInitializer(valueToken) 'wasCall'
 			return
-		end 'isFloat'
+		end 'wasCall'
 
-		// Function calls in const initializers get a more specific E2045
-		// rather than the generic "supports string literals and constant
-		// integer expressions" message — distinguishes "you wrote a call,
-		// which we explicitly forbid" from "we couldn't parse this".
-		if valueToken.kind == TokenKind.identifier 'maybeCall'
-			let afterIdent = try cursor.peek(1) otherwise Token.eof()
-			if afterIdent.kind == TokenKind.leftParen 'isCall'
-				reportCompileError(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{valueToken.value}()' is not a constant expression", line: valueToken.line, column: valueToken.column, filePath: filePath)
-				synchronize()
-				return
-			end 'isCall'
-		end 'maybeCall'
+		// `NAME = TypeName.method(...)` — deferred struct-factory
+		// initializer. We can't yet emit runtime init code, but registering
+		// the binding lets a later read / assignment surface E2013 / a
+		// proper diagnostic instead of choking on the leftover `(...)`.
+		// Both `let` and `var` accept this shape; the entry lands in
+		// `topLevelConstants` either way (mutable runtime-init isn't a
+		// distinction the resolver currently tracks).
+		if isRuntimeInitInitializer(valueToken) 'isMethodCall'
+			skipToNextLine()
+			try project.topLevelConstants.insert(qualifiedName, value: ConstantValue.intValue(0)) otherwise ignore
+			logTrace(LogCategory.parser, message: () gives "parser: deferred runtime-init decl '{qualifiedName}' (no init emitted)")
+			return
+		end 'isMethodCall'
 
-		// Capture the integer-typed initializer as a structural tree.
-		// Identifier references become `nameRef` nodes and are resolved by
-		// the TypeResolution pass — the parser never throws "unhandledToken"
-		// for a forward reference, only for malformed token shapes.
+		// Capture the initializer as a structural tree. Identifier
+		// references become `nameRef` nodes resolved later by
+		// `resolveAllTopLevelDecls`.
 		let exprId = try parseConstExpr() otherwise 'notConst'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals and constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level initializer must be a compile-time constant (int / float / bool / string / enum case / `as`-cast / let-ref)", line: valueToken.line, column: valueToken.column, filePath: filePath)
 			synchronize()
 			return
 		end 'notConst'
 
-		registerUnresolvedTopLevelLet(nameToken, rootExprId: exprId)
-		logTrace(LogCategory.parser, message: () gives "parser: const expr '{nameToken.value}' rootExprId={exprId}")
-	end 'parseTopLevelLet'
+		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable)
+	end 'parseTopLevelDecl'
+
+	// Handle the `<name> = "<string>"` shape. Lifted out so the EOF /
+	// interpolation handling stays self-contained.
+	function parseTopLevelStringDecl(nameToken Token, qualifiedName String, valueToken Token, mutable bool) throws ParserError
+		// Step past the string literal. Tolerate EOF because `<name> = ""`
+		// at end-of-file is a complete declaration.
+		try cursor.advance() otherwise 'eofAfterString'
+			logTrace(LogCategory.parser, message: () gives "parser: top-level string const at EOF")
+		end 'eofAfterString'
+		// Interpolations have no compile-time meaning at top level — the
+		// operand names they'd reference don't exist yet. Reject
+		// explicitly rather than silently dropping the interpolation.
+		if at(TokenKind.stringInterpStart) 'hasInterp'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "top-level decl does not support string interpolation", line: valueToken.line, column: valueToken.column, filePath: filePath)
+			synchronize()
+			return
+		end 'hasInterp'
+		let strId = project.strings.intern(valueToken.value)
+		let exprId = appendConstExpr(UnresolvedConstExpr.stringLit(strId))
+		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable)
+		logTrace(LogCategory.parser, message: () gives "parser: const string '{qualifiedName}'")
+	end 'parseTopLevelStringDecl'
+
+	// True when the initializer is shaped like `Identifier . identifier (`,
+	// which the C# bootstrap treats as a deferred struct-factory call. The
+	// self-hosted compiler doesn't emit the runtime init yet, but the
+	// shape needs to be recognized so the trailing `(...)` doesn't
+	// destabilize the dispatch loop.
+	function isRuntimeInitInitializer(valueToken Token) returns bool
+		if valueToken.kind != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		let dotTok = try cursor.peek(1) otherwise Token.eof()
+		let memberTok = try cursor.peek(2) otherwise Token.eof()
+		let parenTok = try cursor.peek(3) otherwise Token.eof()
+		return dotTok.kind == TokenKind.dot and memberTok.kind == TokenKind.identifier and parenTok.kind == TokenKind.leftParen
+	end 'isRuntimeInitInitializer'
 
 	// Append a node to the project-wide expression arena and return its
 	// arena id. Callers use the returned id when building parent nodes
@@ -778,165 +794,50 @@ export type Parser
 		return id
 	end 'appendConstExpr'
 
-	// Register a captured top-level let. Reports E2001 (duplicate) when the
-	// name collides with another pending let, an already-resolved constant,
-	// or a stdlib-cached constant.
-	function registerUnresolvedTopLevelLet(nameToken Token, rootExprId UnresolvedConstExprId)
-		if project.topLevelConstants.contains(nameToken.value) 'dupResolved'
+	// Catch `let NAME = call()` / `var NAME = call()` at the top level and
+	// surface the dedicated E2045 diagnostic before parseConstExpr would
+	// reject the open-paren with a generic "could not parse" message. Returns
+	// `true` when a call was rejected (caller has already been synchronized);
+	// `false` to let normal parsing continue.
+	function rejectCallInitializer(valueToken Token) returns bool
+		if valueToken.kind != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		let afterIdent = try cursor.peek(1) otherwise Token.eof()
+		if afterIdent.kind != TokenKind.leftParen 'notCall'
+			return false
+		end 'notCall'
+		reportCompileError(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{valueToken.value}()' is not a constant expression", line: valueToken.line, column: valueToken.column, filePath: filePath)
+		synchronize()
+		return true
+	end 'rejectCallInitializer'
+
+	// Register a captured top-level decl (let or var). Reports E2001
+	// (duplicate) when `qualifiedName` collides with another pending decl,
+	// an already-resolved constant, an already-resolved var, or a
+	// stdlib-cached constant. The duplicate-check set is the union of all
+	// destinations the resolver might land in.
+	function registerUnresolvedTopLevelDecl(nameToken Token, qualifiedName String, rootExprId UnresolvedConstExprId, mutable bool)
+		if project.topLevelConstants.contains(qualifiedName) or project.topLevelVars.contains(qualifiedName) 'dupResolved'
 			reportDuplicateConstant(nameToken)
 			return
 		end 'dupResolved'
-		let entry = UnresolvedTopLevelLet.create(nameToken.value, rootExprId: rootExprId, line: nameToken.line, column: nameToken.column, filePath: filePath)
-		try project.unresolvedTopLevelLets.insert(nameToken.value, value: entry) otherwise 'dupPending'
+		let entry = UnresolvedTopLevelDecl.create(qualifiedName, rootExprId: rootExprId, mutable: mutable, line: nameToken.line, column: nameToken.column, filePath: filePath)
+		try project.unresolvedTopLevelDecls.insert(qualifiedName, value: entry) otherwise 'dupPending'
 			reportDuplicateConstant(nameToken)
 		end 'dupPending'
-	end 'registerUnresolvedTopLevelLet'
-
-	// Parse a mutable global declaration:
-	//   `var NAME = <const-int-expr>`            (top-level)
-	//   `static var NAME = <const-int-expr>`     (inside a type)
-	// Stores a `GlobalVarInfo` keyed by the qualified name (`NAME` at the top
-	// level, `TypeName.NAME` for a static field) so call sites can resolve the
-	// name to a writable .data slot. Initial value must be a compile-time
-	// constant integer or boolean literal; non-const initializers report a
-	// diagnostic and synchronize without registering the global, so unresolved
-	// reads downstream surface as the more familiar "Undefined variable" error.
-	// entry: cursor AT the token AFTER `var` — the global name identifier.
-	// Caller (dispatchTopLevel / parseStaticVar) has already consumed `var`.
-	function parseTopLevelVar(typeName String) throws ParserError
-		let nameToken = try consume()
-		checkReservedDeclName(nameToken)
-
-		try expect(TokenKind.equals)
-
-		let valueToken = cursor.current()
-		let inferredType = inferGlobalVarType(valueToken)
-		let constValue = try evalConstExpr() otherwise 'notConst'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level var only supports constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'notConst'
-
-		let qualifiedName = qualifyName(typeName, name: nameToken.value)
-
-		let info = GlobalVarInfo.create(qualifiedName, slotType: inferredType, initialValue: constValue, mutable: true)
-		try project.globalVars.insert(qualifiedName, value: info) otherwise 'dupGlobal'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate global '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		end 'dupGlobal'
-		logTrace(LogCategory.parser, message: () gives "parser: global var '{qualifiedName}' = {constValue}")
-	end 'parseTopLevelVar'
-
-	// Pick the slot type for a global from the first token of its initializer.
-	// `true`/`false` give boolean; everything else lands as integer (the existing
-	// constant-expression path only yields ints today, so non-bool initializers
-	// reuse the integer slot encoding without further inspection).
-	function inferGlobalVarType(initToken Token) returns MaxonType
-		if initToken.kind == TokenKind.true or initToken.kind == TokenKind.false 'isBool'
-			return MaxonType.boolean
-		end 'isBool'
-		return MaxonType.integer
-	end 'inferGlobalVarType'
+		logTrace(LogCategory.parser, message: () gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable}")
+	end 'registerUnresolvedTopLevelDecl'
 
 	// Parse `static let NAME = <const-int-expr>` inside a type. The value is
 	// inlined at every use site as a compile-time constant — no runtime
 	// storage. The qualified name (`TypeName.NAME`) is registered in the
 	// project's topLevelConstants map so qualified expression resolution can
 	// substitute the integer value directly.
-	// entry: cursor AT the token AFTER `let` — the constant name identifier.
-	// Caller (parseStaticLet) has already consumed the `let` keyword.
-	function parseTopLevelStaticLet(typeName String) throws ParserError
-		let nameToken = try consume()
-		checkReservedDeclName(nameToken)
-
-		try expect(TokenKind.equals)
-
-		let valueToken = cursor.current()
-		let constValue = try evalConstExpr() otherwise 'notConst'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Static let only supports constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
-			synchronize()
-			return
-		end 'notConst'
-
-		let qualifiedName = "{typeName}.{nameToken.value}"
-		try project.topLevelConstants.insert(qualifiedName, value: ConstantValue.intValue(constValue)) otherwise 'dupStaticLet'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate static let '{qualifiedName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
-		end 'dupStaticLet'
-		logTrace(LogCategory.parser, message: () gives "parser: static let '{qualifiedName}' = {constValue}")
-	end 'parseTopLevelStaticLet'
-
-	// Evaluate a compile-time integer constant expression.
-	// Supports: integer literals, hex literals, `not <expr>`, `-<expr>`,
-	// references to previously declared `let` integer constants, and
-	// `+`/`-` between operands of any of the above.
-	function evalConstExpr() returns ParsedInt throws ParserError
-		let lhs = try evalConstAtom()
-		return try evalConstAddTail(lhs)
-	end 'evalConstExpr'
-
-	function evalConstAddTail(lhs ParsedInt) returns ParsedInt throws ParserError
-		var acc = lhs
-		while true 'tail'
-			if accept(TokenKind.plus) 'isPlus'
-				let rhs = try evalConstAtom()
-				acc = acc + rhs
-			end 'isPlus' else if accept(TokenKind.minus) 'isMinus'
-				let rhs = try evalConstAtom()
-				acc = acc - rhs
-			end 'isMinus' else 'done'
-				break
-			end 'done'
-		end 'tail'
-		return acc
-	end 'evalConstAddTail'
-
-	function evalConstAtom() returns ParsedInt throws ParserError
-		if accept(TokenKind.not) 'isNot'
-			return not try evalConstAtom()
-		end 'isNot'
-
-		if accept(TokenKind.minus) 'isNeg'
-			return 0 - try evalConstAtom()
-		end 'isNeg'
-
-		let token = cursor.current()
-
-		if accept(TokenKind.intLiteral) 'isInt'
-			return try parseInt(token.value)
-		end 'isInt'
-
-		if accept(TokenKind.true) 'isTrue'
-			return 1
-		end 'isTrue'
-
-		if accept(TokenKind.false) 'isFalse'
-			return 0
-		end 'isFalse'
-
-		if token.kind == TokenKind.identifier 'isIdent'
-			let constVal = try project.topLevelConstants.get(token.value) otherwise throw ParserError.unhandledToken
-			let isInt = match constVal 'isIntKind'
-				intValue gives true
-				stringValue gives false
-				floatValue gives false
-			end 'isIntKind'
-			if not isInt 'notInt'
-				throw ParserError.unhandledToken
-			end 'notInt'
-			_ = try consume()
-			return match constVal 'unwrap'
-				intValue(v) gives v
-				default panic("evalConstAtom: impossible non-int arm — isInt guard above guarantees intValue")
-			end 'unwrap'
-		end 'isIdent'
-
-		throw ParserError.unhandledToken
-	end 'evalConstAtom'
-
-	// Structural counterparts to evalConstExpr/evalConstAtom. These build
-	// `UnresolvedConstExpr` nodes in `project.unresolvedConstExprs` instead
-	// of folding the expression to a value at parse time. Identifier
-	// references are captured as `nameRef(name)` regardless of whether the
-	// name is currently resolvable — the TypeResolution pass walks the
+	// Build `UnresolvedConstExpr` nodes in `project.unresolvedConstExprs`
+	// without folding the expression at parse time. Identifier references
+	// are captured as `nameRef(name)` regardless of whether the name is
+	// currently resolvable — the TypeResolution pass walks the
 	// arena with cycle detection and emits E2012 for cyclic references.
 	//
 	// Grammar (precedence high → low): integer literals, hex literals,
@@ -1047,6 +948,37 @@ export type Parser
 	end 'parseConstMul'
 
 	function parseConstAtom() returns UnresolvedConstExprId throws ParserError
+		let baseId = try parseConstUnary()
+		return try parseConstAsCastTail(baseId)
+	end 'parseConstAtom'
+
+	// Apply zero or more `as TypeName` casts to a base const expression.
+	// Each cast wraps the prior id in an `asCast` node carrying the target
+	// type name; the resolver folds these against the project's typealias /
+	// ranged-type registry once typealiases have been drained.
+	function parseConstAsCastTail(baseId UnresolvedConstExprId) returns UnresolvedConstExprId throws ParserError
+		var acc = baseId
+		while accept(TokenKind.as) 'tail'
+			let typeName = try consumeConstCastTargetName()
+			acc = appendConstExpr(UnresolvedConstExpr.asCast(operand: acc, typeName: typeName))
+		end 'tail'
+		return acc
+	end 'parseConstAsCastTail'
+
+	// Read the type-name identifier that follows `as`. Built-in primitive
+	// keywords are accepted as identity casts (no value change at fold time);
+	// identifiers are returned verbatim and resolved by the const evaluator
+	// against `project.typealiases` / `project.typealiasRanges`.
+	function consumeConstCastTargetName() returns String throws ParserError
+		let token = cursor.current()
+		if token.kind == TokenKind.identifier 'isIdent'
+			_ = try consume()
+			return token.value
+		end 'isIdent'
+		throw ParserError.unhandledToken
+	end 'consumeConstCastTargetName'
+
+	function parseConstUnary() returns UnresolvedConstExprId throws ParserError
 		if accept(TokenKind.not) 'isNot'
 			let inner = try parseConstAtom()
 			return appendConstExpr(UnresolvedConstExpr.notOp(operand: inner))
@@ -1057,12 +989,24 @@ export type Parser
 			return appendConstExpr(UnresolvedConstExpr.negate(operand: inner))
 		end 'isNeg'
 
+		return try parseConstPrimary()
+	end 'parseConstUnary'
+
+	function parseConstPrimary() returns UnresolvedConstExprId throws ParserError
 		let token = cursor.current()
 
 		if accept(TokenKind.intLiteral) 'isInt'
 			let v = try parseInt(token.value)
 			return appendConstExpr(UnresolvedConstExpr.intLit(value: v))
 		end 'isInt'
+
+		if accept(TokenKind.floatLiteral) 'isFloat'
+			let bits = try parseFloatBits(token.value) otherwise 'overflow'
+				reportLiteralOverflow(token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
+				throw ParserError.unhandledToken
+			end 'overflow'
+			return appendConstExpr(UnresolvedConstExpr.floatLit(bits: bits))
+		end 'isFloat'
 
 		if accept(TokenKind.true) 'isTrue'
 			return appendConstExpr(UnresolvedConstExpr.boolLit(value: true))
@@ -1072,13 +1016,43 @@ export type Parser
 			return appendConstExpr(UnresolvedConstExpr.boolLit(value: false))
 		end 'isFalse'
 
+		if accept(TokenKind.leftParen) 'isParen'
+			let inner = try parseConstExpr()
+			try expect(TokenKind.rightParen)
+			return inner
+		end 'isParen'
+
 		if token.kind == TokenKind.identifier 'isIdent'
+			let next = try cursor.peek(1) otherwise Token.eof()
+			// Function calls in const initializers are not constant; let the
+			// caller surface E2045 with the right message.
+			if next.kind == TokenKind.leftParen 'isCall'
+				throw ParserError.unhandledToken
+			end 'isCall'
+			// `Name.member` — could be `EnumName.caseName` or a sized-type
+			// bound (`u64.max` / `i32.min`). Capture both structurally.
+			if next.kind == TokenKind.dot 'isDotted'
+				let memberToken = try cursor.peek(2) otherwise Token.eof()
+				if memberToken.kind == TokenKind.identifier 'memberIsIdent'
+					if isSizedTypeName(token.value) and (memberToken.value == "min" or memberToken.value == "max") 'isTypeBound'
+						_ = try consume()
+						try eat(TokenKind.dot)
+						_ = try consume()
+						let bound = resolveTypeBound(token.value, field: memberToken.value)
+						return appendConstExpr(UnresolvedConstExpr.intLit(value: bound))
+					end 'isTypeBound'
+					_ = try consume()
+					try eat(TokenKind.dot)
+					_ = try consume()
+					return appendConstExpr(UnresolvedConstExpr.enumCase(enumName: token.value, caseName: memberToken.value))
+				end 'memberIsIdent'
+			end 'isDotted'
 			_ = try consume()
 			return appendConstExpr(UnresolvedConstExpr.nameRef(name: token.value))
 		end 'isIdent'
 
 		throw ParserError.unhandledToken
-	end 'parseConstAtom'
+	end 'parseConstPrimary'
 
 	// --- Export dispatch ---
 
@@ -1141,8 +1115,8 @@ export type Parser
 			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create())
 			type then try parseTypeDecl()
 			enum then try parseEnumDecl()
-			let then try parseTopLevelLet()
-			var then try parseTopLevelVar(typeName: "")
+			let then try parseTopLevelDecl(typeName: "", mutable: false)
+			var then try parseTopLevelDecl(typeName: "", mutable: true)
 			typealias then try parseTopLevelTypealias()
 			default throws ParserError.unhandledToken
 		end 'k'
@@ -1295,10 +1269,10 @@ export type Parser
 				let afterStatic = cursor.current()
 				if afterStatic.kind == TokenKind.var 'sVar'
 					try eat(TokenKind.var)
-					try parseTopLevelVar(typeName: currentTypeName)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: true)
 				end 'sVar' else if afterStatic.kind == TokenKind.let 'sLet'
 					try eat(TokenKind.let)
-					try parseTopLevelStaticLet(typeName: currentTypeName)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: false)
 				end 'sLet' else 'sFn'
 					try eat(TokenKind.function)
 					try parseFunction(currentTypeName, isInstance: false, fields: fields)
@@ -2675,7 +2649,7 @@ export type Parser
 		// shadow globals, so we check the scope first; only if no local
 		// binding exists do we defer to TypeResolution. The parser emits a
 		// single `unresolvedAssign` op carrying the bare name; TypeResolution
-		// rewrites it to `globalStore` once `project.globalVars` is fully
+		// rewrites it to `globalStore` once `project.topLevelVars` is fully
 		// populated, or surfaces a diagnostic if nothing matches.
 		if not scope.contains(nameToken.value) 'maybeGlobalWrite'
 			module.appendOp(emitBlock, op: MaxonOp.unresolvedAssign(nameToken.value, value: exprName(exprResult), range: stmtRange))
@@ -3358,15 +3332,15 @@ export type Parser
 		// names a registered static var (.data slot) or static let
 		// (compile-time integer constant). Methods take precedence above;
 		// this branch fires when the next token after `.field` is NOT `(`.
-		// The parser doesn't peek into `globalVars` / `topLevelConstants`;
+		// The parser doesn't peek into `topLevelVars` / `topLevelConstants`;
 		// it emits a single `unresolvedRead` op for the qualified name and
 		// lets TypeResolution rewrite it to `globalLoad` (var) or `literal`
-		// (static let — always int per the static-let parser, see
-		// parseTopLevelStaticLet) once project registries are fully
-		// populated. Local-scoped receivers (`localVar.field`) must NOT
-		// take this path — they go through the field-load chain in the
-		// postfix walk. The `not scope.contains(token.value)` guard keeps
-		// local-scope reads on their normal path.
+		// (let — folded to its concrete ConstantValue) once project
+		// registries are fully populated. Local-scoped receivers
+		// (`localVar.field`) must NOT take this path — they go through the
+		// field-load chain in the postfix walk. The
+		// `not scope.contains(token.value)` guard keeps local-scope reads
+		// on their normal path.
 		if at(TokenKind.dot) and not scope.contains(token.value) 'maybeQualifiedRead'
 			let memberToken = try cursor.peek(1) otherwise Token.eof()
 			let afterMember = try cursor.peek(2) otherwise Token.eof()
@@ -3407,7 +3381,7 @@ export type Parser
 		// Sized type bound: u64.max, i32.min, etc.
 		if at(TokenKind.dot) 'maybeTypeBound'
 			let fieldToken = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
-			if fieldToken.kind == TokenKind.identifier and (fieldToken.value == "min" or fieldToken.value == "max") and (token.value == "u8" or token.value == "u16" or token.value == "u32" or token.value == "u64" or token.value == "i8" or token.value == "i16" or token.value == "i32" or token.value == "i64") 'isTypeBound'
+			if fieldToken.kind == TokenKind.identifier and (fieldToken.value == "min" or fieldToken.value == "max") and isSizedTypeName(token.value) 'isTypeBound'
 				let bound = resolveTypeBound(token.value, field: fieldToken.value)
 				try eat(TokenKind.dot)
 				try eat(TokenKind.identifier)
@@ -4387,6 +4361,14 @@ function resolveTypeBound(typeName String, field String) returns BoundValue
 	// Sentinel: 0 means "not a known type-qualified bound"; callers treat 0 as "fall through to literal parsing".
 	return try typeBoundsTable.get(key) otherwise 0
 end 'resolveTypeBound'
+
+// True when `name` is one of the fixed-width integer keywords whose
+// `.min`/`.max` bound expressions exist in `typeBoundsTable`. Inlined at
+// each runtime call site for years; kept as a helper now that the const
+// expression parser also needs the same predicate.
+export function isSizedTypeName(name String) returns bool
+	return name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "i8" or name == "i16" or name == "i32" or name == "i64"
+end 'isSizedTypeName'
 
 // Pick the narrowest StdType that can hold a typealias's range of values.
 // Negative lower bounds fall through to signed i64 because signed narrow

@@ -1477,6 +1477,62 @@ function emitStoreIndirectOp(code ByteArray, baseReg X64Register, offset Machine
 	emitMemDisp(code, regField: srcReg, baseReg: baseReg, offset: offset)
 end 'emitStoreIndirectOp'
 
+// --- Load indirect (XMM): movsd/movss xmm, [base+offset] ---
+// Encoding: F2/F3 [REX] 0F 10 ModRM disp
+// REX.R is set when xmm dest is XMM8..15; REX.B when base is R8..15.
+// No REX.W — operand size is implicit in the F2/F3 prefix.
+function emitLoadIndirectXmmOp(code ByteArray, destReg X64XmmRegister, baseReg X64Register, offset MachineWord, precision FloatPrecision)
+	match precision 'prec'
+		f64 then code.push(0xF2)
+		f32 then code.push(0xF3)
+	end 'prec'
+	let destC = xmmRegCode(destReg)
+	emitXmmMemRexIfNeeded(code, regFieldCode: destC, baseReg: baseReg)
+	code.push(0x0F)
+	code.push(0x10)
+	emitXmmMemDisp(code, regFieldCode: destC, baseReg: baseReg, offset: offset)
+end 'emitLoadIndirectXmmOp'
+
+// --- Store indirect (XMM): movsd/movss [base+offset], xmm ---
+// Same encoding shape as the load with opcode 0x11 instead of 0x10.
+function emitStoreIndirectXmmOp(code ByteArray, baseReg X64Register, offset MachineWord, srcReg X64XmmRegister, precision FloatPrecision)
+	match precision 'prec'
+		f64 then code.push(0xF2)
+		f32 then code.push(0xF3)
+	end 'prec'
+	let srcC = xmmRegCode(srcReg)
+	emitXmmMemRexIfNeeded(code, regFieldCode: srcC, baseReg: baseReg)
+	code.push(0x0F)
+	code.push(0x11)
+	emitXmmMemDisp(code, regFieldCode: srcC, baseReg: baseReg, offset: offset)
+end 'emitStoreIndirectXmmOp'
+
+// REX prefix for the XMM-with-GP-base mem ops above. The reg field carries
+// an XMM (extended bit by `regFieldCode >= 8`); the r/m field carries a GP
+// register whose extended-ness comes from `isExtended(baseReg)`.
+function emitXmmMemRexIfNeeded(code ByteArray, regFieldCode MachineWord, baseReg X64Register)
+	let needRexR = regFieldCode >= 8
+	let needRexB = isExtended(baseReg)
+	if needRexR or needRexB 'needRex'
+		var rex = 0x40
+		if needRexR 'rBit'
+			rex = rex or 0x04
+		end 'rBit'
+		if needRexB 'bBit'
+			rex = rex or 0x01
+		end 'bBit'
+		code.push(rex)
+	end 'needRex'
+end 'emitXmmMemRexIfNeeded'
+
+// ModRM + displacement for XMM mem ops. Mirrors `emitMemDisp` but takes
+// the reg-field as a numeric XMM code (0..15); the high bit was already
+// pushed via REX.R in `emitXmmMemRexIfNeeded`, so only the low 3 bits go
+// into ModRM here.
+function emitXmmMemDisp(code ByteArray, regFieldCode MachineWord, baseReg X64Register, offset MachineWord)
+	emitMemDispBits(code, regBits: regFieldCode and 7, baseReg: baseReg, offset: offset)
+end 'emitXmmMemDisp'
+
 // --- Load indirect: mov dest, [base+offset] ---
 function emitLoadIndirectOp(code ByteArray, destReg X64Register, baseReg X64Register, offset MachineWord, size MachineWord)
 	if size == 8 'qword'
@@ -1503,28 +1559,38 @@ function emitLoadIndirectOp(code ByteArray, destReg X64Register, baseReg X64Regi
 	emitMemDisp(code, regField: destReg, baseReg: baseReg, offset: offset)
 end 'emitLoadIndirectOp'
 
-// Emit ModRM + displacement for [base+offset] addressing
+// Emit ModRM + displacement for [base+offset] addressing.
+// Thin wrapper around `emitMemDispBits` that extracts the GP reg-field code
+// for callers whose reg field is an X64Register (most of the GP path).
 function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, offset MachineWord)
-	let regBits = regCode(regField)
+	emitMemDispBits(code, regBits: regCode(regField), baseReg: baseReg, offset: offset)
+end 'emitMemDisp'
+
+// Shared ModRM + displacement encoder for `[baseReg + offset]` addressing.
+// Caller passes the full reg-field code; the high bit of an extended
+// register (XMM8..15 or R8..15) belongs in REX.R and must already be
+// pushed before calling — only the low 3 bits land in ModRM.reg.
+function emitMemDispBits(code ByteArray, regBits MachineWord, baseReg X64Register, offset MachineWord)
+	let regFieldBits = regBits and 7
 	let baseBits = regCode(baseReg)
 	if offset == 0 and baseBits != 5 'noDisp'
-		// mod=00, no displacement (but rbp/r13 always needs disp8)
-		let modrm = 0x00 or (regBits shl 3) or baseBits
+		// mod=00, no displacement (rbp/r13 are always encoded with disp8 — `baseBits != 5` rules them out).
+		let modrm = 0x00 or (regFieldBits shl 3) or baseBits
 		code.push(modrm)
-		// RSP/R12 base needs SIB byte
+		// RSP/R12 base needs SIB byte.
 		if baseBits == 4 'needSib'
 			code.push(0x24)
 		end 'needSib'
 	end 'noDisp' else 'hasDisp'
 		if offset >= i8.min and offset <= i8.max 'disp8'
-			let modrm = 0x40 or (regBits shl 3) or baseBits
+			let modrm = 0x40 or (regFieldBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
 			end 'needSib'
 			code.push(offset and 0xFF)
 		end 'disp8' else 'disp32'
-			let modrm = 0x80 or (regBits shl 3) or baseBits
+			let modrm = 0x80 or (regFieldBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
@@ -1532,7 +1598,7 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 			writeDword(code, value: offset)
 		end 'disp32'
 	end 'hasDisp'
-end 'emitMemDisp'
+end 'emitMemDispBits'
 
 // --- LEA from stack: lea dest, [rbp+offset] ---
 function emitLeaFromStackOp(code ByteArray, dest X64Register, offset MachineWord)
@@ -1810,8 +1876,8 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		andMaskRipRel(dest, rdataLabel, precision) then emitAndMaskRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
 		storeIndirect(baseReg, offset, srcReg, size) then emitStoreIndirectOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveGpr(srcReg), size: size)
 		loadIndirect(destReg, baseReg, offset, size) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, size: size)
-		storeIndirectXmm then panic("X86 storeIndirectXmm not yet implemented in binary emitter")
-		loadIndirectXmm then panic("X86 loadIndirectXmm not yet implemented in binary emitter")
+		storeIndirectXmm(baseReg, offset, src, precision) then emitStoreIndirectXmmOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveFp(src), precision: precision)
+		loadIndirectXmm(dest, baseReg, offset, precision) then emitLoadIndirectXmmOp(code, destReg: resolveFp(dest), baseReg: resolveGpr(baseReg), offset: offset, precision: precision)
 		globalLoad(dest, name, size) then emitGlobalLoadOp(code, dest: resolveGpr(dest), name: name, size: size)
 		globalStore(name, src, size) then emitGlobalStoreOp(code, src: resolveGpr(src), name: name, size: size)
 		globalLoadXmm then panic("X86 globalLoadXmm not yet implemented in binary emitter")

@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **33 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **286 fragment tests passing** (across both x64-windows and wasm32-wasi targets). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **34 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **334 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -20,7 +20,10 @@ Phase 9:   Enums                  [~] enum decls (int/float-backed), match (stat
                                       methods on enums, keyword-as-case-name; associated values pending
 Phase 10:  Closures               [ ] first-class functions, closure capture
 Phase 11:  Interfaces & Generics  [ ] hybrid model — see sub-phases below
-Phase 12:  Global Variables       [ ] module-level var, static fields
+Phase 12:  Global Variables       [~] top-level let / var (int / float / bool / enum / `as`-cast /
+                                      let-ref initializers), static var/let, float-typed globals
+                                      via XMM load/store; array / struct runtime initializers
+                                      still pending (Phase 6 dependency)
 Phase 13:  Collections            [ ] Map, Set, Vector
 Phase 14:  Math Functions         [ ] sqrt, trig, log, exp, pow, etc.
 Phase 15:  Advanced Features      [~] semantic checks (unused-parameters, duplicate-blocks,
@@ -53,9 +56,9 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (34)
+### Currently whitelisted specs (39)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `enums-simple`, `match-simple`.
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `enums-simple`, `match-simple`, `static-variables` (25/28 — array-literal initializers blocked on Phase 6).
 
 ---
 
@@ -393,22 +396,22 @@ Cross-module / link-time inlining; profile-guided optimization; `@specialize` at
 
 ---
 
-## Phase 12: Global Variables & Static State (~4 specs)
+## Phase 12: Global Variables & Static State (~4 specs) — IN PROGRESS
 
 **Goal**: module-level variables, static fields/methods on types.
 
 ### Specs to unlock
-`static-variables`, `top-level-let` (full), `module-level-struct-var`, `export-var-fields`.
+`static-variables` (25/28 passing), `top-level-let` (full), `module-level-struct-var`, `export-var-fields`.
 
-### Changes
+### Done
+- Parser: module-level `var`/`let` declarations and `static var/let` fields with structural `UnresolvedConstExpr` initializers (deferred resolution after enums/typealiases drain).
+- Const-expr forms supported: int / float / bool literals, `EnumName.caseName`, `<expr> as TypeName` ranged-cast, identifier references to `let` constants, full arithmetic / comparison / logical fold.
+- TypeResolution: `resolveAllTopLevelVars` drains `unresolvedTopLevelVars` into `globalVars`, with slot-type inference from the outermost initializer node.
+- Diagnostics: E2045 for runtime call initializers; E2013 for assignment to immutable `let` (top-level or static); `let X = TypeName.method(...)` is tolerated (no init emitted yet) so the reassignment path can still surface E2013.
+- Std Dialect: `globalLoad` / `globalStore` carry `slotType`. The `isFloat` flag is plumbed through `StdSystemOp.loadIndirect`/`storeIndirect` → `MirOp.load`/`store` → X64 (`loadIndirectXmm` / `storeIndirectXmm` via new `emitLoadIndirectXmmOp` / `emitStoreIndirectXmmOp`) → ARM64 (`fpLoadIndirect` / `fpStoreIndirect`) → WASM (`opF64Load` / `opF64Store`), so float-typed globals and float struct fields land directly in FP registers.
 
-**Parser**: module-level `var` declarations; `static` keyword on struct fields and methods.
-
-**Std Dialect**: `globalLoad`, `globalStore` (typed).
-
-**X64**: RIP-relative addressing for global access. **ARM64**: ADRP+ADD for PC-relative page addressing.
-
-**PE/ELF Writers**: `.data` section emission with startup initialization.
+### Still pending (3/28 failing)
+- **Array literal globals** (`var xs = [1, 2, 3]`): no array-literal value emission yet (Maxon-side `parseArrayLiteralExpr` is still a parse-stub) and no `__module_init` runtime-init function — Phase 6 (managed memory) prerequisite.
 
 ---
 
@@ -456,7 +459,7 @@ These are stdlib types built on Array + generics + Hashable. Requires Phase 6 (m
 **15c: File I/O** — `File.readText`, `File.writeText`, etc. via OS imports.
 **15d: Panic & Stack Traces** — extend existing panic op with frame walking.
 **15e: Tuples** — destructuring in `let`/`var`, tuple return types.
-**15f: Namespaces & Exports** — module system, `export` keyword, qualified names.
+**15f: Namespaces & Exports** — module system, `export` keyword, qualified names. The spec runner now supports multi-file fragments (`// --- file: name.maxon` markers): each file becomes a distinct compilation unit via `compileMultiFileSourceWithIr`, so cross-file references resolve like a real on-disk project.
 **15g: Function Overloads** — overload resolution by parameter types.
 **15h: Method Call Syntax** — `value.method(args)` desugaring.
 

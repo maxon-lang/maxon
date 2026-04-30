@@ -311,12 +311,16 @@ export union StdSystemOp
 	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
 	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
 	loadFramePtr(resultId ValueId)
-	// Load 8 bytes from [addrId + offset] into resultId. Used for stack frame walking.
-	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord)
+	// Load 8 bytes from [addrId + offset] into resultId. `isFloat` selects
+	// between a GP `mov` and a `movsd` at the X64 backend; the lowering
+	// stamps it from the producing op's MaxonType (struct field, global var,
+	// or stack-walk read) so float-typed values land directly in XMM.
+	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool)
 	// Load the absolute address of a named function into resultId.
 	funcAddr(resultId ValueId, name String)
-	// Store 8 bytes from valueId into [addrId + offset]. Used for struct field writes.
-	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId)
+	// Store 8 bytes from valueId into [addrId + offset]. `isFloat` mirrors
+	// `loadIndirect` — chooses the GP vs XMM store at the X64 backend.
+	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool)
 	// Runtime I/O: print a string literal (lowered to std.system.globalAddr + std.call mrt_write_stdout in lowerMaxonToStd).
 	// Carries the StringId from `project.strings` — backends recover the
 	// raw bytes from the interner when emitting the rdata + globalAddr.
@@ -460,11 +464,25 @@ export function sysOpToString(op StdSystemOp) returns String
 		osClose(fdId) gives "sys.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
-		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
+		loadIndirect(resultId, addrId, offset, isFloat) gives stdLoadIndirectToString(resultId, addrId: addrId, offset: offset, isFloat: isFloat)
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
-		storeIndirect(addrId, offset, valueId) gives "sys.store_indirect %{addrId}, {offset}, %{valueId}"
+		storeIndirect(addrId, offset, valueId, isFloat) gives stdStoreIndirectToString(addrId, offset: offset, valueId: valueId, isFloat: isFloat)
 		printLiteral(stringId) gives "sys.print_literal #{stringId}"
 		printInt(valueId) gives "sys.print_int %{valueId}"
 		drop(valueId) gives "sys.drop %{valueId}"
 	end 'print'
 end 'sysOpToString'
+
+function stdLoadIndirectToString(resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool) returns String
+	if isFloat 'float'
+		return "%{resultId} = sys.load_indirect %{addrId}, {offset} : f64"
+	end 'float'
+	return "%{resultId} = sys.load_indirect %{addrId}, {offset}"
+end 'stdLoadIndirectToString'
+
+function stdStoreIndirectToString(addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool) returns String
+	if isFloat 'float'
+		return "sys.store_indirect %{addrId}, {offset}, %{valueId} : f64"
+	end 'float'
+	return "sys.store_indirect %{addrId}, {offset}, %{valueId}"
+end 'stdStoreIndirectToString'

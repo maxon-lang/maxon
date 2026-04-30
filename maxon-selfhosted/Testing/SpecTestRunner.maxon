@@ -40,7 +40,7 @@ let whitelist = ["basics",
 	"stdlib-autodiscovery",
 	"enums-simple",
 	"match-simple",
-	// "static-variables",
+	"static-variables",
 	// "export-keyword",
 	// "lexer-parser-robustness",
 	// "error-handling",
@@ -686,6 +686,36 @@ function sliceFromBytePos(s String, bytePos BytePos) returns String
 	return s.slice(startIdx, endIndex: endIdx)
 end 'sliceFromBytePos'
 
+// Dispatch to single- or multi-file compile based on whether the test
+// authored `// --- file: name.maxon` markers. The single-file branch keeps
+// the fragment's on-disk path so error messages line up with what the
+// reader sees in the editor; the multi-file branch synthesizes per-file
+// virtual paths under a directory derived from the fragment so module
+// visibility (which depends on directory subtree relationships) works.
+function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath) returns CompileWithIrResult throws CompileError
+	let covMapPath = outputExe.changeExtension(".covmap")
+	if not fragment.hasMultiFile 'isSingle'
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath)
+	end 'isSingle'
+
+	// Anchor virtual paths in the fragment's directory so module-visibility
+	// rules (which compare directory subtrees) match the spec author's
+	// intent: a file marker `feature/main.maxon` lands in `<fragmentDir>/feature/main.maxon`.
+	// The runner always gives us an absolute fragment path, so .parent()
+	// should never fail; treat a failure as an invariant break.
+	let fragmentDir = try virtualSourcePath.parent() otherwise panic("compileFragmentInMemory: fragment path '{virtualSourcePath}' has no parent directory")
+	var virtualFiles = VirtualSourceFileArray.create()
+	for pair in fragment.sourceFiles 'eachFile'
+		let path = fragmentDir.join(pair.fileName)
+		// Per-file slices come from the spec parser already trimmed of
+		// trailing whitespace; the parser's tokenizer needs a final newline
+		// so it doesn't hit EOF mid-statement.
+		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
+		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
+	end 'eachFile'
+	return try compileMultiFileSourceWithIr(virtualFiles, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath)
+end 'compileFragmentInMemory'
+
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
 	let tempDir = projectRoot.join("temp")
@@ -713,10 +743,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		startCapturingTrace()
 	end 'enableTrace'
 
-	// Compile source directly from memory, capturing any error output
+	// Compile source directly from memory, capturing any error output.
+	// Multi-file tests (those with `// --- file: name.maxon` markers) feed
+	// each fragment as a distinct compilation unit so cross-file references
+	// resolve like a real on-disk project.
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
-	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: outputExe.changeExtension(".covmap")) otherwise 'compileFailed'
+	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'

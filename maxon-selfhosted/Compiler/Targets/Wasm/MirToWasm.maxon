@@ -853,8 +853,8 @@ type WasmFunctionLowering
 			indirectCall then panic("wasm: indirect calls not yet supported")
 			ret(retValId) then emitRet(retValId: retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
-			load(resultId, baseId, offset) then emitLoad(resultId: resultId, baseId: baseId, offset: offset)
-			store(valueId, baseId, offset) then emitStore(valueId: valueId, baseId: baseId, offset: offset)
+			load(resultId, baseId, offset, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat)
+			store(valueId, baseId, offset, isFloat) then emitStore(valueId: valueId, baseId: baseId, offset: offset, isFloat: isFloat)
 			loadSlot(resultId, slotId) then emitMemRefLoadSlot(resultId: resultId, slotId: slotId)
 			storeSlot(slotId, valueId) then emitMemRefStoreSlot(slotId: slotId, valueId: valueId)
 			stackSlotAddr(resultId, slotId) then emitStackSlotAddr(resultId: resultId, slotId: slotId)
@@ -1064,24 +1064,24 @@ type WasmFunctionLowering
 		// If resultId == paramIndex, the param is already in the right local.
 	end 'emitParam'
 
-	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord)
+	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
 		body.push(opLocalGet)
 		writeUleb128(body, value: baseId as MachineWord)
 		body.push(opI32WrapI64)
-		body.push(opI64Load)
+		body.push(opF64Load if isFloat else opI64Load)
 		body.push(0x03)
 		writeUleb128(body, value: offset)
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as MachineWord)
 	end 'emitLoad'
 
-	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord)
+	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
 		body.push(opLocalGet)
 		writeUleb128(body, value: baseId as MachineWord)
 		body.push(opI32WrapI64)
 		body.push(opLocalGet)
 		writeUleb128(body, value: valueId as MachineWord)
-		body.push(opI64Store)
+		body.push(opF64Store if isFloat else opI64Store)
 		body.push(0x03)
 		writeUleb128(body, value: offset)
 	end 'emitStore'
@@ -1493,8 +1493,8 @@ function getMirOpMaxValueId(op MirOp) returns MachineWord
 		indirectCall(resultId, calleeId, _) gives maxOfTwo(resultId as MachineWord, b: calleeId as MachineWord)
 		ret(retValId) gives retValId as MachineWord
 		param(resultId, _, _) gives resultId as MachineWord
-		load(resultId, baseId, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
-		store(valueId, baseId, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
+		load(resultId, baseId, _, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
+		store(valueId, baseId, _, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
 		loadSlot(resultId, _) gives resultId as MachineWord
 		storeSlot(_, valueId) gives valueId as MachineWord
 		stackSlotAddr(resultId, _) gives resultId as MachineWord

@@ -361,10 +361,10 @@ end 'validateCompareOp'
 // op shapes; the unresolved* arms in LowerMaxonToStd are pure safety panics.
 
 function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath)
-	if let info = try project.globalVars.get(name) 'isGlobalVar'
+	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
 		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedRead: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 		return
-	end 'isGlobalVar'
+	end 'isTopLevelVar'
 	if let constVal = try project.topLevelConstants.get(name) 'isConst'
 		// Enum cases get tagged with the enclosing enum's named MaxonType so
 		// downstream consumers (varDecl slotType inference, match scrutinee
@@ -558,13 +558,19 @@ function matchCaseFromConstantValue(constVal ConstantValue) returns EnumCaseHit
 end 'matchCaseFromConstantValue'
 
 function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
-	if let info = try project.globalVars.get(name) 'isGlobalVar'
+	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
 		try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 		return
-	end 'isGlobalVar'
+	end 'isTopLevelVar'
 	if project.topLevelConstants.contains(name) 'isConst'
-		// Top-level constants are not assignable.
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Cannot assign to top-level constant '{name}'", line: 0, column: 0, filePath: filePath)
+		// Top-level lets are immutable; reassignment is rejected with the
+		// E2013 wording shared with the C# bootstrap. By the time this runs
+		// `resolveAllTopLevelDecls` has drained every let into
+		// `topLevelConstants`, so a single map check suffices. The cursor
+		// location isn't available here (the rewrite walks ops post-parse),
+		// so we pass 0 / 0 / filePath — diagnostics are deduplicated by
+		// message rather than by exact span.
+		reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
 		return
 	end 'isConst'
 	reportUnknownName(project, name: name, filePath: filePath)
@@ -1232,9 +1238,9 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, opIdx OpIn
 	// predicates (`<`, `<=`, `>`, `>=`) on struct types are a type error
 	// caught downstream by validateCompareOp, so we leave those cmps as-is.
 	let dispatch = match predicate 'classify'
-		eq gives 1 as ParsedInt   // dispatch as ==
+		eq gives 1 as ParsedInt  // dispatch as ==
 		ne gives -1 as ParsedInt  // dispatch as !=
-		lt gives 0 as ParsedInt   // not dispatched
+		lt gives 0 as ParsedInt  // not dispatched
 		le gives 0 as ParsedInt
 		gt gives 0 as ParsedInt
 		ge gives 0 as ParsedInt
@@ -1384,18 +1390,20 @@ end 'validateSelfField'
 
 // --- Top-level let resolution ---
 //
-// The parser captures every top-level `let NAME = <init>` as an
-// `UnresolvedTopLevelLet` entry without resolving identifier references in
+// The parser captures every top-level `let NAME = <init>` and `var NAME =
+// <init>` (plus their `static` field analogues) as an
+// `UnresolvedTopLevelDecl` entry without resolving identifier references in
 // the initializer. This pass walks the registry with DFS + a visiting
-// stack, evaluates each initializer in dependency order, and populates
-// `project.topLevelConstants`. Cycles among let initializers surface as
-// E2012 (parserCircularDependency).
+// stack, evaluates each initializer in dependency order, and routes the
+// result either to `project.topLevelConstants` (immutable lets) or
+// `project.topLevelVars` (mutable vars) based on the entry's `mutable` flag.
+// Cycles among let initializers surface as E2012 (parserCircularDependency).
 //
 // Project-wide and idempotent: only the first call drains the registry;
 // later per-module calls walk an empty map.
 
-function resolveAllTopLevelLets(project Project)
-	if project.unresolvedTopLevelLets.count() == 0 'alreadyDone'
+function resolveAllTopLevelDecls(project Project)
+	if project.unresolvedTopLevelDecls.count() == 0 'alreadyDone'
 		return
 	end 'alreadyDone'
 
@@ -1404,39 +1412,40 @@ function resolveAllTopLevelLets(project Project)
 	// Snapshot key set up-front: we'll be removing entries as we evaluate
 	// them, and iterating-while-removing is unsafe for the underlying map.
 	var names = StringArray.create()
-	for (name, _) in project.unresolvedTopLevelLets 'collect'
+	for (name, _) in project.unresolvedTopLevelDecls 'collect'
 		names.push(name)
 	end 'collect'
 
 	for name in names 'evalEach'
-		_ = evaluateTopLevelLet(project, name: name, evaluating: evaluating)
+		_ = evaluateTopLevelDecl(project, name: name, evaluating: evaluating)
 	end 'evalEach'
 
 	// Drain anything still left (cycle victims): we leave them out of
-	// `topLevelConstants`, so downstream `rewriteUnresolvedRead` reports
-	// the standard "Undefined name" diagnostic for any reader that survives
-	// the parser-stage error gate.
+	// `topLevelConstants` / `topLevelVars`, so downstream
+	// `rewriteUnresolvedRead` reports the standard "Undefined name"
+	// diagnostic for any reader that survives the parser-stage error gate.
 	var leftover = StringArray.create()
-	for (name, _) in project.unresolvedTopLevelLets 'collectLeft'
+	for (name, _) in project.unresolvedTopLevelDecls 'collectLeft'
 		leftover.push(name)
 	end 'collectLeft'
 	for name in leftover 'drop'
-		_ = project.unresolvedTopLevelLets.remove(name)
+		_ = project.unresolvedTopLevelDecls.remove(name)
 	end 'drop'
-end 'resolveAllTopLevelLets'
+end 'resolveAllTopLevelDecls'
 
-// Evaluate a single top-level let by name. Returns an empty option-like
-// signal via the bool return: true on successful evaluation (result is in
-// `topLevelConstants`), false on cycle / unknown-name (caller can ignore).
+// Evaluate a single top-level decl by name. Returns the folded
+// ConstantValue so a caller stuck in a `nameRef` chain can keep walking
+// without re-entering the registry. Routing to the destination map is
+// dispatched on `entry.mutable`.
 // `evaluating` is the DFS visit stack; the cycle diagnostic lists every
 // name on the stack joined with ", " — matching the C# bootstrap's output
 // at maxon-sharp/Compiler/2-Parser.cs:4517-4521.
-function evaluateTopLevelLet(project Project, name String, evaluating StringArray) returns ConstantValue
+function evaluateTopLevelDecl(project Project, name String, evaluating StringArray) returns ConstantValue
 	if let cached = try project.topLevelConstants.get(name) 'cached'
 		return cached
 	end 'cached'
 
-	let entry = try project.unresolvedTopLevelLets.get(name) otherwise return ConstantValue.intValue(0)
+	let entry = try project.unresolvedTopLevelDecls.get(name) otherwise return ConstantValue.intValue(0)
 
 	if evaluating.contains(name) 'cycle'
 		let cycleNames = joinStringArray(evaluating, sep: ", ")
@@ -1446,40 +1455,113 @@ function evaluateTopLevelLet(project Project, name String, evaluating StringArra
 
 	evaluating.push(name)
 	let result = evaluateUnresolvedConstExpr(project, exprId: entry.rootExprId, evaluating: evaluating)
-	_ = try evaluating.pop() otherwise panic("evaluateTopLevelLet: stack underflow popping '{name}'")
+	_ = try evaluating.pop() otherwise panic("evaluateTopLevelDecl: stack underflow popping '{name}'")
 
-	try project.topLevelConstants.insert(name, value: result) otherwise ignore
-	_ = project.unresolvedTopLevelLets.remove(name)
+	if entry.mutable 'asGlobal'
+		let slotType = inferSlotTypeFromExpr(project, exprId: entry.rootExprId, value: result)
+		let initialValue = constantValueToInitialBits(result)
+		let info = TopLevelVarInfo.create(name, slotType: slotType, initialValue: initialValue)
+		try project.topLevelVars.insert(name, value: info) otherwise ignore
+	end 'asGlobal' else 'asConst'
+		try project.topLevelConstants.insert(name, value: result) otherwise ignore
+	end 'asConst'
+	_ = project.unresolvedTopLevelDecls.remove(name)
 	return result
-end 'evaluateTopLevelLet'
+end 'evaluateTopLevelDecl'
 
 // Walk the expression arena recursively. Literal arms return their value
-// directly; `nameRef(target)` recurses into `evaluateTopLevelLet` so cycle
+// directly; `nameRef(target)` recurses into `evaluateTopLevelDecl` so cycle
 // detection composes naturally.
 function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExprId, evaluating StringArray) returns ConstantValue
 	let node = try project.unresolvedConstExprs.get(exprId) otherwise panic("evaluateUnresolvedConstExpr: arena get OOB at id={exprId}")
-	return match node 'eval'
-		intLit(value) gives ConstantValue.intValue(value)
-		boolLit(value) gives ConstantValue.intValue(1 if value else 0)
-		stringLit(stringId) gives ConstantValue.stringValue(stringId)
-		floatLit(bits) gives ConstantValue.floatValue(bits)
-		nameRef(target) gives evaluateTopLevelLet(project, name: target, evaluating: evaluating)
-		negate(operand) gives ConstantValue.intValue(0 - evalChildAsInt(project, exprId: operand, evaluating: evaluating))
-		notOp(operand) gives ConstantValue.intValue(not evalChildAsInt(project, exprId: operand, evaluating: evaluating))
-		add(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) + evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		sub(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) - evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		mul(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) * evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		compareEq(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) == evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareNeq(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) != evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareLt(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) < evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareLte(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) <= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareGt(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) > evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		compareGte(left, right) gives ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) >= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
-		logicalAnd(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) and evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		logicalXor(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) xor evalChildAsInt(project, exprId: right, evaluating: evaluating))
-		logicalOr(left, right) gives ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) or evalChildAsInt(project, exprId: right, evaluating: evaluating))
+	match node 'eval'
+		intLit(value) then return ConstantValue.intValue(value)
+		boolLit(value) then return ConstantValue.intValue(1 if value else 0)
+		stringLit(stringId) then return ConstantValue.stringValue(stringId)
+		floatLit(bits) then return ConstantValue.floatValue(bits)
+		nameRef(target) then return evaluateTopLevelDecl(project, name: target, evaluating: evaluating)
+		enumCase(enumName, caseName) then return evaluateEnumCaseConst(project, enumName: enumName, caseName: caseName)
+		asCast(operand, typeName) then return evaluateAsCast(project, operandId: operand, typeName: typeName, evaluating: evaluating)
+		negate(operand) then return ConstantValue.intValue(0 - evalChildAsInt(project, exprId: operand, evaluating: evaluating))
+		notOp(operand) then return ConstantValue.intValue(not evalChildAsInt(project, exprId: operand, evaluating: evaluating))
+		add(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) + evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		sub(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) - evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		mul(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) * evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		compareEq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) == evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareNeq(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) != evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareLt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) < evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareLte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) <= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareGt(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) > evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		compareGte(left, right) then return ConstantValue.intValue(1 if evalChildAsInt(project, exprId: left, evaluating: evaluating) >= evalChildAsInt(project, exprId: right, evaluating: evaluating) else 0)
+		logicalAnd(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) and evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		logicalXor(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) xor evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		logicalOr(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) or evalChildAsInt(project, exprId: right, evaluating: evaluating))
 	end 'eval'
 end 'evaluateUnresolvedConstExpr'
+
+// Look up `EnumName.caseName` in the project's already-populated
+// topLevelConstants map (the enum-decl parser inserted these entries the
+// moment it saw the case). Falls back to intValue(0) if the reference is
+// dangling — TypeResolution's later validation walk catches the typo as a
+// runtime-side `unresolvedRead` rejection.
+function evaluateEnumCaseConst(project Project, enumName String, caseName String) returns ConstantValue
+	let qualifiedName = "{enumName}.{caseName}"
+	if let value = try project.topLevelConstants.get(qualifiedName) 'found'
+		return value
+	end 'found'
+	return ConstantValue.intValue(0)
+end 'evaluateEnumCaseConst'
+
+// Apply an `as TypeName` cast to a const-folded operand. Built-in primitives
+// (int/float/byte/bool) re-tag without changing the bit pattern. Identifier
+// targets resolve through `project.typealiases`; ranged typealiases
+// additionally validate the operand against the declared bounds. Range
+// violations are reported below; unknown identifiers fall through and let
+// the downstream load-site machinery surface the missing-type diagnostic
+// (the cast is structurally valid; only the type name is wrong, which the
+// global-var slot-type path catches when resolveTypes touches the named
+// MaxonType).
+function evaluateAsCast(project Project, operandId UnresolvedConstExprId, typeName String, evaluating StringArray) returns ConstantValue
+	let inner = evaluateUnresolvedConstExpr(project, exprId: operandId, evaluating: evaluating)
+	if isBuiltinPrimitiveTypeName(typeName) 'isPrim'
+		return inner
+	end 'isPrim'
+	if let range = try project.typealiasRanges.get(typeName) 'hasRange'
+		validateCastInRange(project, value: inner, range: range, typeName: typeName)
+	end 'hasRange'
+	return inner
+end 'evaluateAsCast'
+
+// True for the source-level keywords that name a primitive type without an
+// alias — these are accepted as identity casts in const expressions, with
+// no range check.
+function isBuiltinPrimitiveTypeName(name String) returns bool
+	return name == "int" or name == "float" or name == "bool" or name == "byte"
+end 'isBuiltinPrimitiveTypeName'
+
+// Range-check a const-folded operand against a typealias's declared bounds.
+// Float operands are not range-validated here — float-backed aliases lack
+// usable IEEE bounds in the const-fold representation, and the runtime
+// cast still emits the validation at load sites.
+function validateCastInRange(project Project, value ConstantValue, range TypealiasRange, typeName String)
+	match value 'kind'
+		intValue(v) then validateIntInRange(project, value: v, range: range, typeName: typeName)
+		floatValue then return
+		stringValue then return
+	end 'kind'
+end 'validateCastInRange'
+
+function validateIntInRange(project Project, value IntConstant, range TypealiasRange, typeName String)
+	if value < range.lower or value > range.upper 'oor'
+		// No exact token span is available here — the cast was folded from
+		// an UnresolvedConstExpr arena that doesn't carry source positions.
+		// Anchor the diagnostic at a synthetic `__const_eval__` virtual path
+		// so the message format matches other compile-error reports without
+		// fabricating a real-file line:column the user can't open.
+		let bootstrapPath = try FilePath.from("__const_eval__") otherwise panic("validateIntInRange: bootstrap virtual path rejected")
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Value {value} is outside the range of '{typeName}' ({range.lower} to {range.upper})", line: 0, column: 0, filePath: bootstrapPath)
+	end 'oor'
+end 'validateIntInRange'
 
 // Recursive helper used by every arithmetic / unary / comparison /
 // logical arm above. Composing the eval-then-unwrap pair into one call
@@ -1495,6 +1577,57 @@ function evalChildAsInt(project Project, exprId UnresolvedConstExprId, evaluatin
 		default panic("const folder reached non-int operand: only intValue arms are valid for arithmetic / unary const folding")
 	end 'kind'
 end 'evalChildAsInt'
+
+// Pick the source-level MaxonType the global's slot should carry. Four
+// outermost arena nodes pin the type structurally (`asCast` names the
+// target alias, `boolLit` / `floatLit` give the literal kind, `enumCase`
+// names the enum). Every other arm falls back to the folded
+// ConstantValue's runtime tag — sufficient for plain int / float
+// arithmetic, comparisons, and `nameRef` chains that resolve through
+// `topLevelConstants`.
+function inferSlotTypeFromExpr(project Project, exprId UnresolvedConstExprId, value ConstantValue) returns MaxonType
+	let node = try project.unresolvedConstExprs.get(exprId) otherwise panic("inferSlotTypeFromExpr: arena get OOB at id={exprId}")
+	match node 'pick'
+		asCast(_, typeName) then return slotTypeForCastTarget(project, typeName: typeName)
+		boolLit then return MaxonType.boolean
+		floatLit then return MaxonType.float
+		enumCase(enumName, _) then return internMaxonType(project, name: enumName)
+		intLit to logicalOr then return slotTypeFromConstantValue(value)
+	end 'pick'
+end 'inferSlotTypeFromExpr'
+
+function slotTypeForCastTarget(project Project, typeName String) returns MaxonType
+	if typeName == "bool" 'b'
+		return MaxonType.boolean
+	end 'b'
+	if typeName == "float" 'f'
+		return MaxonType.float
+	end 'f'
+	if typeName == "int" or typeName == "byte" 'i'
+		return MaxonType.integer
+	end 'i'
+	return internMaxonType(project, name: typeName)
+end 'slotTypeForCastTarget'
+
+function slotTypeFromConstantValue(value ConstantValue) returns MaxonType
+	return match value 'kind'
+		intValue gives MaxonType.integer
+		floatValue gives MaxonType.float
+		stringValue gives MaxonType.string
+	end 'kind'
+end 'slotTypeFromConstantValue'
+
+// Pack a ConstantValue into the 8-byte payload `TopLevelVarInfo.initialValue`
+// expects. Integer / bool values carry their value directly; float values
+// store the IEEE 754 bits in the same i64 slot; strings would need a
+// separate path (no .data slot today) and surface via a panic if reached.
+function constantValueToInitialBits(value ConstantValue) returns IntConstant
+	match value 'pack'
+		intValue(v) then return v
+		floatValue(bits) then return bits
+		stringValue then panic("constantValueToInitialBits: string-typed top-level var initializer reached the global lowering path; static-variables only supports int / bool / float / enum / ranged-cast initializers")
+	end 'pack'
+end 'constantValueToInitialBits'
 
 function joinStringArray(arr StringArray, sep String) returns String
 	var result = ""
@@ -1521,10 +1654,15 @@ end 'joinStringArray'
 // module's call does real work, every later module-level call walks an
 // empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
-	resolveAllTopLevelLets(project)
 	resolveAllTypealiases(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
+	// Top-level decls (lets and vars together) depend on enums (cases
+	// registered as constants) and typealiases (`as TypeName` casts), so
+	// they sequence after both drains. Lets and vars share one drain pass
+	// so a `var x = LET_NAME + 1` initializer can recurse through any other
+	// pending decl without ordering hazards.
+	resolveAllTopLevelDecls(project)
 
 	for opIdx in 0 upto module.ops.count() 'rewriteUnresolved'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
