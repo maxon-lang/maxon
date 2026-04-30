@@ -616,9 +616,12 @@ type MaxonToStdLowering
 
 	// Resolve a parser-emitted bare callee to its qualified name. Thin
 	// wrapper over the shared `qualifyCalleeForContext` so the parser, DFE,
-	// and lowering all share the same probe order.
+	// and lowering all share the same probe order. The reader path comes
+	// from `currentFilePath` so cross-file fallback can filter candidates
+	// by visibility against the function we're lowering.
 	function qualifyCallee(bare String, callContext CallContext) returns String
-		return qualifyCalleeForContext(self.project, bare: bare, callContext: callContext, currentNamespace: self.currentNamespace)
+		let readerPath = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
+		return qualifyCalleeForContext(self.project, bare: bare, callContext: callContext, currentNamespace: self.currentNamespace, readerFilePath: readerPath)
 	end 'qualifyCallee'
 
 	// Build the Std-level argument id list for a call by:

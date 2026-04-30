@@ -292,6 +292,14 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	clearDepsFor(project, key: key)
 
 	let midModule = try queryAllMid(project)
+	// Gate: semantic errors collected during the mid pipeline (call-
+	// visibility violations, unknown callees, …) must short-circuit
+	// codegen. Lowering trusts that every call op resolves to a
+	// registered function and panics otherwise.
+	if hasErrors(project) 'midErrors'
+		popQuery(project)
+		throw CompileError.compileError
+	end 'midErrors'
 	var globalData = project.globalData
 	let stdlibCache = getStdlibCacheData()
 	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, stdlibCache: stdlibCache)

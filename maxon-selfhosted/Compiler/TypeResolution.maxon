@@ -87,6 +87,9 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		// name and the parser rejects duplicates against both maps before
 		// inserting here, so the resolved insert can never collide.
 		try project.typealiases.insert(name, value: result.stdType) otherwise panic("TypeResolution: typealiases.insert collided for '{name}' — parser duplicate check missed it")
+		// Mirror the visibility tier into the sidecar map so cross-file
+		// uses of the alias as a parameter / return type can be filtered.
+		try project.typealiasVisibilities.insert(name, value: TypealiasVisibilityInfo.create(entry.visibility, sourceFilePath: entry.filePath)) otherwise ignore
 		if result.hasRange 'recordRange'
 			try project.typealiasRanges.insert(name, value: result.range) otherwise panic("TypeResolution: typealiasRanges.insert collided for '{name}' — parser duplicate check missed it")
 		end 'recordRange'
@@ -164,7 +167,7 @@ function resolveAllStructTypes(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedStructTypes 'sweep'
-		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize)
+		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize, visibility: entry.visibility, sourceFilePath: entry.filePath)
 		// Parser rejects duplicates against the unresolved map before
 		// inserting; collisions with the resolved map (e.g. stdlib-cached
 		// structs reusing a name) are silently ignored here so cache restore
@@ -185,7 +188,7 @@ function resolveAllEnumTypes(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
-		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked)
+		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath)
 		try project.enumTypes.insert(name, value: et) otherwise ignore
 		resolvedNames.push(name)
 	end 'sweep'
@@ -451,14 +454,22 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	reportUnknownName(project, name: name, filePath: filePath)
 end 'rewriteUnresolvedRead'
 
-// If `name` looks like `EnumName.case` and `EnumName` is a registered enum,
-// emit E3034 for the unknown case and return true so the caller skips the
-// generic "undefined name" diagnostic. Returns false on every non-enum miss.
+// If `name` looks like `EnumName.case` and `EnumName` is a registered enum
+// visible from `filePath`, emit E3034 for the unknown case and return true
+// so the caller skips the generic "undefined name" diagnostic. When the
+// enum exists but is hidden from the reader, treat it as if it didn't
+// exist — the caller's "Undefined variable" path then matches the C#
+// bootstrap's wording for cross-file private enums.
 function reportEnumUnknownCaseIfApplicable(project Project, name String, range SourceRange, filePath FilePath) returns bool
 	let split = splitQualifiedEnumName(project, qualifiedName: name)
 	if not split.isEnum 'notEnum'
 		return false
 	end 'notEnum'
+	if let enumType = try project.enumTypes.get(split.prefix) 'haveEnum'
+		if not isVisibleFrom(enumType.visibility, declFilePath: enumType.sourceFilePath, readerFilePath: filePath) 'hidden'
+			return false
+		end 'hidden'
+	end 'haveEnum'
 	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: '{split.suffix}'", line: range.line, column: range.column, filePath: filePath)
 	return true
 end 'reportEnumUnknownCaseIfApplicable'
@@ -634,8 +645,30 @@ function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIn
 end 'rewriteUnresolvedAssign'
 
 function reportUnknownName(project Project, name String, filePath FilePath)
-	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined name '{name}'", line: 0, column: 0, filePath: filePath)
+	// Wording matches the C# bootstrap's E2004 phrasing for unresolved
+	// reads. For dotted names (`Foo.bar`) we report the *prefix* before
+	// the first dot — that's the part that didn't resolve to a
+	// variable / type / enum the project knows about.
+	let display = leadingSegment(name)
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{display}'", line: 0, column: 0, filePath: filePath)
 end 'reportUnknownName'
+
+// Return the leading segment of `name` up to (but not including) the
+// first '.', or the full name if there is no dot. Used to extract the
+// receiver-side identifier from a qualified read like `Foo.bar` so the
+// "Undefined variable" diagnostic mentions `Foo` rather than the full
+// dotted name.
+function leadingSegment(name String) returns String
+	let bytes = name.toByteArray()
+	for i in 0 upto bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise return name
+		if b == '.' 'isDot'
+			let prefixBytes = try bytes.slice(0, endIndex: i) otherwise return name
+			return String.from(prefixBytes)
+		end 'isDot'
+	end 'scan'
+	return name
+end 'leadingSegment'
 
 // --- Producer-type map for filling in MaxonType.unresolved operands ---
 //
@@ -719,7 +752,7 @@ end 'methodCallResultType'
 // Resolve a call's result type by qualifying the bare callee name and
 // looking it up in funcReturnTypes. Returns MaxonType.unresolved when the
 // callee isn't registered.
-function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String) returns MaxonType
+function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns MaxonType
 	let bareCallee = String.from(callee)
 	// Math primitives are inlined to a Std unary op by lowering — they have
 	// no entry in funcReturnTypes, so look up their result type directly.
@@ -727,7 +760,7 @@ function callResultType(project Project, callee ByteArray, callContext CallConte
 	if isMath 'isMath'
 		return intrinsicResultType
 	end 'isMath'
-	let qualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace)
+	let qualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
 	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
 	return match returnType 'unwrap'
 		void gives MaxonType.unresolved
@@ -774,17 +807,17 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("recordFuncOpResults: opIdx OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, op: op)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, op: op)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("recordFuncOpResults: terminator OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, op: termOp)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, op: termOp)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'recordFuncOpResults'
 
-function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, op MaxonOp)
+function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, readerFilePath FilePath, op MaxonOp)
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.string)
@@ -800,7 +833,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
 		condBr then return
 		br then return
-		call(result, callee, callContext, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace))
+		call(result, callee, callContext, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath))
 		methodCall(result, receiver, methodName, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName))
 		ret then return
 		printLiteral then return
@@ -1759,6 +1792,18 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 
 	validateSelfFields(project, module: module, filePath: filePath)
 
+	// Visibility filtering: emit E3008 / E3088 for `call` ops whose only
+	// matching candidate is hidden from the reading file. Runs before
+	// arity check so a not-visible candidate doesn't double-report as
+	// "wrong arity" against a now-localName-fallback that doesn't exist.
+	validateCallVisibility(project, module: module, fallbackFilePath: filePath)
+
+	// Visibility filtering for named-type references in `convert` ops
+	// (`expr as TypeName`). When the typealias is hidden from the
+	// reader, treat it as an undefined type so the C# bootstrap's
+	// "Expected type name after 'as'" wording lands.
+	validateNamedTypeVisibility(project, module: module, fallbackFilePath: filePath)
+
 	// Reject calls / methodCalls whose argument count exceeds the registered
 	// signature's user-param slot count. Without this, lowering trusts the
 	// caller's arg vector and panics in the backend when the slot index walks
@@ -1783,6 +1828,179 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	end 'validateOps'
 end 'runTypeResolution'
 
+// Anchor visibility checks at the function's declaring file. Synthesized
+// functions (no parser-stamped source path) fall back to the project's
+// primary source so visibility checks against detached blocks still
+// resolve to *some* file.
+function readerPathOrFallback(func IrFunction, fallback FilePath) returns FilePath
+	if func.sourceFilePath.toString().isEmpty() 'empty'
+		return fallback
+	end 'empty'
+	return func.sourceFilePath
+end 'readerPathOrFallback'
+
+// --- Call-visibility validation ---
+//
+// Walks every function's `call` ops and checks the resolved qualified
+// callee against the reader's file via `isVisibleFrom`. When the only
+// candidate is hidden by visibility, emits E3008 (file-private or non-
+// exported) or E3088 (module-scoped, wrong directory). The diagnostic
+// matches the C# bootstrap's wording so cross-implementation tests share
+// the same fragments.
+//
+// `qualifyCalleeForContext` already filters by visibility on the cross-
+// namespace fallback path — when it fails to find a visible candidate
+// it returns the local namespace name as a fallback. So this pass's
+// signal is: the resolved qualified callee isn't in `funcReturnTypes`,
+// AND `methodNameIndex` has at least one entry for the bare name. The
+// hidden candidate's visibility tier dictates which error code to emit.
+function validateCallVisibility(project Project, module MaxonModule, fallbackFilePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateCallVisibility: funcIdx < count but get failed")
+		let readerPath = readerPathOrFallback(func: func, fallback: fallbackFilePath)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateCallVisibility: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateCallVisibility: opIdx OOB")
+				if op.name == "call" 'isCall'
+					match op 'extractCall'
+						call(_, callee, callContext, _, _, _, _, range) then checkCallVisibility(project, callee: callee, callContext: callContext, currentNamespace: func.namespace, readerFilePath: readerPath, range: range)
+						default panic("unreachable: already checked name == call")
+					end 'extractCall'
+				end 'isCall'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateCallVisibility'
+
+// Check a single `call` op for a visibility violation. Two paths:
+//
+// 1. Qualified call (`Type.method(...)`): the parser already wrote the
+//    fully-qualified callee into the op. Look the function up directly
+//    in `funcVisibilities` and emit E3008 / E3088 if it's hidden from
+//    the reader. The bare diagnostic name is the trailing segment so
+//    the error reads "function 'create' is not exported" instead of
+//    "function 'InternalPoint.create' is not exported", matching the
+//    C# bootstrap.
+//
+// 2. Bare call (`helper()`): when `qualifyCalleeForContext` couldn't
+//    find a visible candidate it returns the local-namespace fallback,
+//    which won't be in `funcReturnTypes`. Scan `methodNameIndex` for
+//    the bare name; if a hidden candidate exists, emit the diagnostic
+//    matching its tier. Missing entirely (no candidate at all) is left
+//    to downstream undefined-name reporting.
+function checkCallVisibility(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, range SourceRange)
+	let bareCallee = String.from(callee)
+	// Math intrinsics are inlined and have no funcReturnTypes entry; they
+	// are always reachable so visibility doesn't apply.
+	let (_, _, isMath) = mathIntrinsicTarget(bare: bareCallee)
+	if isMath 'mathIntrinsic'
+		return
+	end 'mathIntrinsic'
+	if isQualifiedCallContext(callContext) 'isQualified'
+		// `bareCallee` is already qualified (`Type.method`). Diagnostic
+		// uses the full qualified name so the user sees the exact text
+		// they typed (`InternalPoint.create`).
+		if not project.funcReturnTypes.contains(bareCallee) 'unknown'
+			return
+		end 'unknown'
+		let info = funcVisibilityOrDefault(project, qualifiedName: bareCallee)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+			return
+		end 'visible'
+		reportHiddenCalleeError(project, displayName: bareCallee, tier: info.visibility, range: range, filePath: readerFilePath)
+		return
+	end 'isQualified'
+	let qualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	if project.funcReturnTypes.contains(qualified) 'visible'
+		return
+	end 'visible'
+	// Bare call: resolved name doesn't exist; check whether a hidden
+	// candidate would have matched if visibility allowed it.
+	let candidates = project.methodNameIndex.get(bareCallee)
+	for candidate in candidates 'eachCandidate'
+		if not project.funcReturnTypes.contains(candidate) 'notFunc'
+			continue
+		end 'notFunc'
+		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'wouldBeVisible'
+			// Visible candidate exists but `qualifyCalleeForContext` didn't
+			// pick it — call resolution found something else first. Nothing
+			// to report here.
+			continue
+		end 'wouldBeVisible'
+		// Hidden candidate. Emit the diagnostic that matches its tier
+		// and stop scanning — multiple hidden candidates collapse to one
+		// error per call site so the user gets a focused message.
+		reportHiddenCalleeError(project, displayName: bareCallee, tier: info.visibility, range: range, filePath: readerFilePath)
+		return
+	end 'eachCandidate'
+end 'checkCallVisibility'
+
+// Emit the hidden-callee diagnostic for `displayName` with wording that
+// matches the visibility tier. `global` is unreachable because every
+// global candidate satisfies `isVisibleFrom`, so reaching it indicates
+// a bug in the tier filter and panics rather than silently swallowing.
+function reportHiddenCalleeError(project Project, displayName String, tier Visibility, range SourceRange, filePath FilePath)
+	match tier 'tier'
+		global then panic("reportHiddenCalleeError: callee '{displayName}' tagged global but isVisibleFrom returned false")
+		file then reportCompileError(project, code: ErrorCode.semanticSymbolNotExported, message: "function '{displayName}' is not exported", line: range.line, column: range.column, filePath: filePath)
+		module then reportCompileError(project, code: ErrorCode.semanticSymbolNotInModuleScope, message: "function '{displayName}' is module-scoped and not visible from this directory", line: range.line, column: range.column, filePath: filePath)
+	end 'tier'
+end 'reportHiddenCalleeError'
+
+// --- Named-type visibility validation ---
+//
+// Walks every `convert` op (the IR shape for `expr as TypeName`). When
+// the target type is a named type (typealias, struct, or enum) that the
+// reading file can't see, emit "Expected type name after 'as'" matching
+// the C# bootstrap's wording. The walk is per-function so the reader
+// path is the function's own file.
+function validateNamedTypeVisibility(project Project, module MaxonModule, fallbackFilePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateNamedTypeVisibility: funcIdx < count but get failed")
+		let readerPath = readerPathOrFallback(func: func, fallback: fallbackFilePath)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateNamedTypeVisibility: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateNamedTypeVisibility: opIdx OOB")
+				if op.name == "convert" 'isConvert'
+					match op 'extractConvert'
+						convert(_, _, _, toType, _, range) then checkNamedTypeVisibility(project, t: toType, range: range, readerFilePath: readerPath)
+						default panic("unreachable: already checked name == convert")
+					end 'extractConvert'
+				end 'isConvert'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateNamedTypeVisibility'
+
+// Check whether a named MaxonType is visible from the reader's file. If
+// the type resolves to a hidden typealias / struct / enum, report
+// "Expected type name after 'as'" — same wording the C# bootstrap emits
+// when the typealias isn't in scope.
+function checkNamedTypeVisibility(project Project, t MaxonType, range SourceRange, readerFilePath FilePath)
+	let typeName = t.nameOrEmpty(project)
+	if typeName.isEmpty() 'notNamed'
+		return
+	end 'notNamed'
+	// Typealias visibility — sidecar map. Missing entry treated as global
+	// (stdlib aliases never populate the sidecar).
+	if let aliasInfo = try project.typealiasVisibilities.get(typeName) 'aliasHit'
+		if not isVisibleFrom(aliasInfo.visibility, declFilePath: aliasInfo.sourceFilePath, readerFilePath: readerFilePath) 'aliasHidden'
+			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name after 'as'", line: range.line, column: range.column, filePath: readerFilePath)
+			return
+		end 'aliasHidden'
+	end 'aliasHit'
+	// Struct visibility.
+	if let structType = try project.structTypes.get(typeName) 'structHit'
+		if not isVisibleFrom(structType.visibility, declFilePath: structType.sourceFilePath, readerFilePath: readerFilePath) 'structHidden'
+			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name after 'as'", line: range.line, column: range.column, filePath: readerFilePath)
+			return
+		end 'structHidden'
+	end 'structHit'
+end 'checkNamedTypeVisibility'
+
 // --- Arity validation ---
 //
 // Walks every function once, looks up each `call` / `methodCall` op's
@@ -1795,20 +2013,25 @@ function validateCallArities(project Project, module MaxonModule, producerTypesP
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateCallArities: funcIdx < count but get failed")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateCallArities: producerTypesPerFunc.get({funcIdx}) failed")
+		// Use the function's own declaring file as the reader path so
+		// cross-namespace callee qualification can filter by visibility
+		// against the function being checked. The pass-level `filePath`
+		// stays as the diagnostics fallback.
+		let readerPath = func.sourceFilePath
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("validateCallArities: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateCallArities: opIdx OOB")
-				validateCallArityOp(project, op: op, producerTypes: producerTypes, currentNamespace: func.namespace, filePath: filePath)
+				validateCallArityOp(project, op: op, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: readerPath, filePath: filePath)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateCallArities'
 
-function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, filePath FilePath)
+function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, filePath FilePath)
 	if op.name == "call" 'isCall'
 		match op 'extractCall'
-			call(_, callee, callContext, args, argLabels, _, _, range) then checkFreeCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace), args: args, argLabels: argLabels, range: range, filePath: filePath)
+			call(_, callee, callContext, args, argLabels, _, _, range) then checkFreeCallArity(project, qualifiedCallee: qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath), args: args, argLabels: argLabels, range: range, filePath: filePath)
 			default panic("unreachable: already checked name == call")
 		end 'extractCall'
 	end 'isCall'

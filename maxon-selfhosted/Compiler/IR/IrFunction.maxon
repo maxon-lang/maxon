@@ -15,6 +15,19 @@ export type IrFunction
 	// `name` itself can be bare for entrypoints like `main`, so deriving
 	// the namespace from `name` alone is not reliable.
 	export var namespace String
+	// Visibility tier from the declaring source. Stamped by the parser at
+	// dispatch time. Stdlib functions restored from the cache get
+	// `Visibility.global`. Read by TypeResolution's call-visibility walk
+	// when filtering candidates against the reading function's file.
+	export var visibility Visibility
+	// Absolute / virtual path of the file this function was parsed in.
+	// Used as the visibility anchor when cross-file callers look this
+	// function up. Stdlib functions restored from the cache get the
+	// shared stdlib bootstrap path so user code is always allowed to
+	// reach them. Empty when the function was synthesized outside the
+	// parser; visibility filtering treats empty paths as the project
+	// root for fall-through reachability.
+	export var sourceFilePath FilePath
 	export var paramCount ParamCount
 	export var blockRefs BlockRefList
 	export var nextBlockId BlockId
@@ -55,11 +68,17 @@ export type IrFunction
 	export var calleeSavedFps RegIntArray
 
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
-	// populated; Std-phase fields are left at defaults.
+	// populated; Std-phase fields are left at defaults. Visibility defaults
+	// to `file` so the parser must positively widen it to `module` /
+	// `global` — synthesized functions that never go through the parser
+	// stay file-private to their (empty) source path, which keeps stray
+	// helpers from being callable cross-file by accident.
 	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
+			visibility: Visibility.file,
+			sourceFilePath: FilePath from "",
 			paramCount: paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
@@ -78,11 +97,16 @@ export type IrFunction
 	end 'create'
 
 	// Create an IrFunction at the Std phase or later. Std-phase type fields
-	// are populated; Maxon-phase fields are left at defaults.
+	// are populated; Maxon-phase fields are left at defaults. Std-phase
+	// constructors are used by stdlib-cache restore and by passes that
+	// synthesize helper functions; both want the function callable from
+	// anywhere, so visibility defaults to `global`.
 	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
+			visibility: Visibility.global,
+			sourceFilePath: FilePath from "",
 			paramCount: paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: 0,
@@ -104,6 +128,8 @@ export type IrFunction
 		return Self{
 			name: src.name,
 			namespace: src.namespace,
+			visibility: src.visibility,
+			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefList.create(),
 			nextBlockId: src.nextBlockId,

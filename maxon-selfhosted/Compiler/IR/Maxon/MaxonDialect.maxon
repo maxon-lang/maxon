@@ -562,7 +562,24 @@ end 'siblingTypeNameOfContext'
 // LowerMaxonToStd's call lowering — all need the same probe order, so the
 // algorithm lives here. Returns the bare name as a last-resort fallback so
 // downstream diagnostics still see a sensible callee string.
-export function qualifyCalleeForContext(project Project, bare String, callContext CallContext, currentNamespace String) returns String
+//
+// Probe order:
+//   1. sibling type prefix (when inside a method body)
+//   2. local namespace
+//   3. `stdlib` namespace
+//   4. cross-file fallback: any `{otherNs}.{bare}` whose declaring file
+//      is visible from `readerFilePath`. Single visible match wins; if
+//      multiple files are visible, the first one wins (deterministic over
+//      `methodNameIndex` insertion order). When no visible candidate
+//      exists this returns `localName` so downstream diagnostics still
+//      see the name the user wrote, qualified to their own namespace.
+//
+// `readerFilePath` is the file the bare call is being emitted from. It
+// anchors the visibility filter at step 4. Empty string is acceptable —
+// `isVisibleFrom` then only matches `global` candidates, which is
+// exactly what we want for parser-time fallbacks before block source
+// info is available.
+export function qualifyCalleeForContext(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns String
 	// `qualified` short-circuits — caller already produced the final name.
 	if isQualifiedCallContext(callContext) 'isQualified'
 		return bare
@@ -587,5 +604,29 @@ export function qualifyCalleeForContext(project Project, bare String, callContex
 	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
 		return stdlibName
 	end 'isStdlib'
+	// Cross-file fallback: scan candidates with matching trailing
+	// segment, pick the first visible from `readerFilePath`.
+	let candidates = project.methodNameIndex.get(bare)
+	for candidate in candidates 'each'
+		if not project.funcReturnTypes.contains(candidate) 'notFunc'
+			continue
+		end 'notFunc'
+		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+			return candidate
+		end 'visible'
+	end 'each'
 	return localName
 end 'qualifyCalleeForContext'
+
+// Look up the visibility/sourceFilePath for a function. Missing entries
+// default to `(global, stdlibBootstrapPath)` — stdlib functions are
+// restored from the cache without a sidecar entry, and treating them as
+// always-visible matches their actual semantics.
+export function funcVisibilityOrDefault(project Project, qualifiedName String) returns FuncVisibilityInfo
+	if let info = try project.funcVisibilities.get(qualifiedName) 'hit'
+		return info
+	end 'hit'
+	let stdlibPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise FilePath from ""
+	return FuncVisibilityInfo.create(Visibility.global, sourceFilePath: stdlibPath)
+end 'funcVisibilityOrDefault'

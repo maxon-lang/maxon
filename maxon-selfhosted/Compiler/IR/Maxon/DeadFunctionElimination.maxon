@@ -32,8 +32,10 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 		if let func = try funcMap.get(name) 'found'
 			// Use the parser-supplied namespace directly. `func.name` for the
 			// `main` entrypoint is bare so deriving from name is unreliable;
-			// the namespace field is set explicitly by the parser.
-			collectCallees(project, module: module, func: func, currentNamespace: func.namespace, worklist: worklist, seen: seen)
+			// the namespace field is set explicitly by the parser. The
+			// function's `sourceFilePath` anchors visibility-aware
+			// cross-namespace callee resolution.
+			collectCallees(project, module: module, func: func, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, worklist: worklist, seen: seen)
 		end 'found'
 		i = i + 1
 	end 'worklist'
@@ -49,22 +51,22 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 	return module
 end 'eliminateDeadFunctions'
 
-function collectCallees(project Project, module MaxonModule, func IrFunction, currentNamespace String, worklist StringArray, seen StringSet)
+function collectCallees(project Project, module MaxonModule, func IrFunction, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			addCalleesFromOpIndex(project, module: module, opIdx: opIdx, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
+			addCalleesFromOpIndex(project, module: module, opIdx: opIdx, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			addCalleesFromOpIndex(project, module: module, opIdx: block.terminatorIndex(), currentNamespace: currentNamespace, worklist: worklist, seen: seen)
+			addCalleesFromOpIndex(project, module: module, opIdx: block.terminatorIndex(), currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'collectCallees'
 
-function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpIndex, currentNamespace String, worklist StringArray, seen StringSet)
+function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpIndex, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
 	let hlOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	match hlOp 'op'
-		call(_, callee, callContext, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, worklist: worklist, seen: seen)
+		call(_, callee, callContext, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
 		methodCall(_, _, methodName, _, _, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
 		literal to refEq then return
 		condBr to br then return
@@ -78,8 +80,8 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 	end 'op'
 end 'addCalleesFromOpIndex'
 
-function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, worklist StringArray, seen StringSet)
-	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace)
+function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
+	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
 	markCallee(qualified, worklist: worklist, seen: seen)
 end 'markCalleeFromCall'
 

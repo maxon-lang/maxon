@@ -59,6 +59,15 @@ export type Parser
 	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
+	// Visibility tier of the type currently being parsed. Set by `parseTypeDecl`
+	// at body-entry, cleared at body-exit. Static decls and instance methods
+	// inside the body inherit this — `module type T { static var f = 0 }`
+	// makes `T.f` module-scoped without a per-member modifier.
+	var currentTypeVisibility Visibility
+	// Visibility tier of the enum currently being parsed. Set by `parseEnumDecl`
+	// at body-entry, cleared at body-exit. Per-case top-level constants and
+	// the auto-injected typealias for the enum inherit this.
+	var currentEnumVisibility Visibility
 	var scope Scope
 	// Context stacks for break/continue and match
 	var loopStack LoopContextArray
@@ -119,7 +128,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -297,8 +306,11 @@ export type Parser
 	// `__self` parameter and field-load prologue / writeback epilogue are added.
 	// entry: cursor AT the token AFTER `function` — the function-name identifier.
 	// Caller (dispatchTopLevel / dispatchTypeMember / parseStaticMethod) has
-	// already consumed the `function` keyword.
-	function parseFunction(typeName String, isInstance bool, fields StructFieldArray) throws ParserError
+	// already consumed the `function` keyword. `visibility` reflects either an
+	// explicit `export` / `module` modifier or the inherited tier of the
+	// enclosing type / enum (so `module type T { static function f() ... }`
+	// makes `T.f` module-scoped without the user repeating the modifier).
+	function parseFunction(typeName String, isInstance bool, fields StructFieldArray, visibility Visibility) throws ParserError
 		let isMethod = not typeName.isEmpty()
 
 		resetSymbolTable()
@@ -355,6 +367,10 @@ export type Parser
 		// resolve `CallContext.free` callees against `{namespace}.callee`
 		// even when the function's own name is bare (e.g. main entrypoint).
 		func.namespace = namespace
+		// Stamp visibility + declaring file so cross-file call resolution
+		// can filter via `isVisibleFrom` against the reader's path.
+		func.visibility = visibility
+		func.sourceFilePath = filePath
 		// Register return type so callers can determine result kind. Display
 		// the bare name for free functions and the qualified name for methods
 		// in duplicate diagnostics.
@@ -371,10 +387,13 @@ export type Parser
 		// Skip on duplicate — funcReturnTypes.insert already reported it and
 		// the first signature entry wins. Also seed the method-name index so
 		// DFE can dispatch dynamic methodCalls in O(matches) instead of
-		// scanning the full function table.
+		// scanning the full function table. Also stamp the function-visibility
+		// sidecar so call-site qualification can filter cross-namespace
+		// candidates by the reader's path.
 		if not funcIsDuplicate 'registerSignature'
 			try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{qualifiedName}' but funcReturnTypes reported none")
 			project.methodNameIndex.record(qualifiedName)
+			try project.funcVisibilities.insert(qualifiedName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
 		end 'registerSignature'
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 		// Seed the parser's current-function/block tracker — expression-level
@@ -1109,20 +1128,44 @@ export type Parser
 	// contextual keyword (the lexer emits it as an identifier) — it's
 	// only recognized when followed by a decl-opener token, so user code
 	// can still bind `module` as a parameter or local variable name.
+	// `export module` (or `module export`) is rejected at parse time so
+	// the user gets a focused diagnostic instead of a follow-on parse
+	// error on the next token.
 	function consumeVisibilityModifier() returns Visibility
+		let exportToken = cursor.current()
 		if accept(TokenKind.export) 'isExport'
+			if tryConsumeContextualModule() 'doubleModifier'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'export' and 'module' cannot be combined", line: exportToken.line, column: exportToken.column, filePath: filePath)
+			end 'doubleModifier'
 			return Visibility.global
 		end 'isExport'
-		let token = cursor.current()
-		if token.kind == TokenKind.identifier and token.value == "module" 'maybeModuleScoped'
-			let next = try cursor.peek(1) otherwise Token.eof()
-			if isTopLevelOpener(next.kind) 'isModuleScoped'
-				try cursor.advance() otherwise return Visibility.file
-				return Visibility.module
-			end 'isModuleScoped'
-		end 'maybeModuleScoped'
+		let moduleToken = cursor.current()
+		if tryConsumeContextualModule() 'isModuleScoped'
+			// Reject `module export <decl>` symmetrically.
+			if accept(TokenKind.export) 'doubleModifierAfter'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'export' and 'module' cannot be combined", line: moduleToken.line, column: moduleToken.column, filePath: filePath)
+				return Visibility.global
+			end 'doubleModifierAfter'
+			return Visibility.module
+		end 'isModuleScoped'
 		return Visibility.file
 	end 'consumeVisibilityModifier'
+
+	// Consume the contextual `module` identifier when it precedes a
+	// decl-opener token. Returns true on success (cursor now points at
+	// the decl-opener), false otherwise (cursor unchanged).
+	function tryConsumeContextualModule() returns bool
+		let token = cursor.current()
+		if token.kind != TokenKind.identifier or token.value != "module" 'notModule'
+			return false
+		end 'notModule'
+		let next = try cursor.peek(1) otherwise Token.eof()
+		if not isTopLevelOpener(next.kind) 'notDeclOpener'
+			return false
+		end 'notDeclOpener'
+		try cursor.advance() otherwise return false
+		return true
+	end 'tryConsumeContextualModule'
 
 	function reportBadExportAndSkip()
 		let badTok = cursor.current()
@@ -1134,12 +1177,12 @@ export type Parser
 		let token = try consume()
 
 		match token.kind 'k'
-			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create())
-			type then try parseTypeDecl()
-			enum then try parseEnumDecl()
+			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create(), visibility: visibility)
+			type then try parseTypeDecl(visibility)
+			enum then try parseEnumDecl(visibility)
 			let then try parseTopLevelDecl(typeName: "", mutable: false, visibility: visibility)
 			var then try parseTopLevelDecl(typeName: "", mutable: true, visibility: visibility)
-			typealias then try parseTopLevelTypealias()
+			typealias then try parseTopLevelTypealias(visibility)
 			default throws ParserError.unhandledToken
 		end 'k'
 	end 'dispatchInner'
@@ -1153,7 +1196,7 @@ export type Parser
 	// to know whether the RHS depends on another alias here.
 	// entry: cursor AT the token AFTER `typealias` — the alias name identifier.
 	// Caller (dispatchTopLevel) has already consumed the `typealias` keyword.
-	function parseTopLevelTypealias() throws ParserError
+	function parseTopLevelTypealias(visibility Visibility) throws ParserError
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
@@ -1236,7 +1279,7 @@ export type Parser
 			return
 		end 'duplicate'
 
-		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, line: nameToken.line, column: nameToken.column, filePath: filePath))
+		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
@@ -1254,11 +1297,16 @@ export type Parser
 	//
 	// entry: cursor AT the token AFTER `type` — the type-name identifier.
 	// Caller (dispatchTopLevel) has already consumed the `type` keyword.
-	function parseTypeDecl() throws ParserError
+	function parseTypeDecl(visibility Visibility) throws ParserError
 		let typeNameToken = try consume()
 		checkReservedDeclName(typeNameToken)
 
 		currentTypeName = typeNameToken.value
+		// Stash the type's visibility so static fields, static methods, and
+		// instance methods inside the body inherit it without the user
+		// repeating the modifier on every member. Cleared below at end of
+		// body so a sibling type at file scope starts fresh.
+		currentTypeVisibility = visibility
 
 		logTrace(LogCategory.parser, message: () gives "parser: type '{currentTypeName}'")
 
@@ -1275,7 +1323,20 @@ export type Parser
 				break
 			end 'isEnd'
 
+			// Field/method-level visibility modifiers. The C# bootstrap
+			// accepts `export` and the contextual `module` modifier on
+			// instance fields, static fields, static methods, and
+			// instance methods. Self-hosted treats these as advisory for
+			// now — the modifier is consumed but the underlying decl
+			// inherits the enclosing type's visibility tier.
 			_ = accept(TokenKind.export)
+			let maybeMod = cursor.current()
+			if maybeMod.kind == TokenKind.identifier and maybeMod.value == "module" 'maybeModuleField'
+				let nextField = try cursor.peek(1) otherwise Token.eof()
+				if nextField.kind == TokenKind.var or nextField.kind == TokenKind.let or nextField.kind == TokenKind.static or nextField.kind == TokenKind.function 'isModuleField'
+					try cursor.advance() otherwise break
+				end 'isModuleField'
+			end 'maybeModuleField'
 
 			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
@@ -1289,27 +1350,23 @@ export type Parser
 			end 'isField' else if kindToken.kind == TokenKind.static 'isStatic'
 				try eat(TokenKind.static)
 				let afterStatic = cursor.current()
-				// Static fields' visibility tracks the enclosing type:
-				// `export type T { static var f = 0 }` makes `T.f`
-				// reachable wherever `T` is reachable. We don't have the
-				// type's visibility threaded here yet, so static fields
-				// register as `global` to preserve current cross-file
-				// reachability — tightening this is a follow-up once
-				// type-decl visibility is also tracked end-to-end.
+				// Static decls (vars, lets, methods) inherit the enclosing
+				// type's visibility so `T.field` is reachable exactly where
+				// `T` is reachable.
 				if afterStatic.kind == TokenKind.var 'sVar'
 					try eat(TokenKind.var)
-					try parseTopLevelDecl(typeName: currentTypeName, mutable: true, visibility: Visibility.global)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: true, visibility: currentTypeVisibility)
 				end 'sVar' else if afterStatic.kind == TokenKind.let 'sLet'
 					try eat(TokenKind.let)
-					try parseTopLevelDecl(typeName: currentTypeName, mutable: false, visibility: Visibility.global)
+					try parseTopLevelDecl(typeName: currentTypeName, mutable: false, visibility: currentTypeVisibility)
 				end 'sLet' else 'sFn'
 					try eat(TokenKind.function)
-					try parseFunction(currentTypeName, isInstance: false, fields: fields)
+					try parseFunction(currentTypeName, isInstance: false, fields: fields, visibility: currentTypeVisibility)
 				end 'sFn'
 				try skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isMethod'
 				try eat(TokenKind.function)
-				try parseFunction(currentTypeName, isInstance: true, fields: fields)
+				try parseFunction(currentTypeName, isInstance: true, fields: fields, visibility: currentTypeVisibility)
 				try skipNewlines()
 			end 'isMethod' else 'unknown'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in type body: '{tokenValueToString(kindToken.value)}' (expected 'var', 'let', 'static', or 'function')", line: kindToken.line, column: kindToken.column, filePath: filePath)
@@ -1323,12 +1380,13 @@ export type Parser
 			end 'stuck'
 		end 'body'
 
-		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
+		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		try project.unresolvedStructTypes.insert(currentTypeName, value: unresolved) otherwise 'dupType'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
 		currentTypeName = ""
+		currentTypeVisibility = Visibility.file
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
 
@@ -1350,17 +1408,21 @@ export type Parser
 	//
 	// entry: cursor AT the token AFTER `enum` — the enum-name identifier.
 	// Caller (dispatchTopLevel) has already consumed the `enum` keyword.
-	function parseEnumDecl() throws ParserError
+	function parseEnumDecl(visibility Visibility) throws ParserError
 		let enumNameToken = try consume()
 		checkReservedDeclName(enumNameToken)
 
 		currentTypeName = enumNameToken.value
+		// Stash the enum's visibility so per-case `TopLevelConstant`s, the
+		// auto-injected typealias, and any methods declared in the body
+		// inherit the same tier without the user repeating the modifier.
+		currentEnumVisibility = visibility
 		logTrace(LogCategory.parser, message: () gives "parser: enum '{currentTypeName}'")
 
 		// Pre-register an empty enum so method bodies parsed below can resolve
 		// `match self` against the enum's named MaxonType. The full case list
 		// is patched in once the body has been walked.
-		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
 		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupEnumPre'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate enum '{currentTypeName}'", line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
 			currentTypeName = ""
@@ -1480,15 +1542,15 @@ export type Parser
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
-			// Enum-case visibility matches the enum declaration's; we
-			// haven't threaded enum-decl visibility through yet, so cases
-			// register as `global` to preserve cross-file reachability.
+			// Cases inherit the enum's visibility tier so cross-file reads
+			// of `Direction.north` succeed exactly when the enum itself is
+			// reachable from the reading file.
 			let qualifiedName = "{currentTypeName}.{caseName}"
 			var constValue = ConstantValue.intValue(rawValue)
 			if rawIsFloat 'isFloatConst'
 				constValue = ConstantValue.floatValue(rawValue)
 			end 'isFloatConst'
-			let caseEntry = TopLevelConstant.create(constValue, visibility: Visibility.global, sourceFilePath: filePath)
+			let caseEntry = TopLevelConstant.create(constValue, visibility: currentEnumVisibility, sourceFilePath: filePath)
 			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise ignore
 
 			try skipNewlines()
@@ -1506,16 +1568,17 @@ export type Parser
 			enumTypeExpr = UnresolvedTypeExpr.rangedFloat(f64MinBits(), upper: f64MaxBits())
 		end 'asFloatExpr'
 		if not project.typealiases.contains(currentTypeName) and not project.unresolvedTypealiases.contains(currentTypeName) 'registerAlias'
-			project.unresolvedTypealiases.upsert(currentTypeName, value: UnresolvedTypealias.create(currentTypeName, expr: enumTypeExpr, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath))
+			project.unresolvedTypealiases.upsert(currentTypeName, value: UnresolvedTypealias.create(currentTypeName, expr: enumTypeExpr, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath))
 		end 'registerAlias'
 
 		// Patch the pre-registered placeholder with the full case list. The
 		// duplicate-name diagnostic was already issued above when we tried to
 		// insert the placeholder, so this upsert is unconditional.
-		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 
 		currentTypeName = ""
+		currentEnumVisibility = Visibility.file
 		try skipEndAndLabel()
 	end 'parseEnumDecl'
 
@@ -1555,9 +1618,11 @@ export type Parser
 	// parsing purposes — the method gets an implicit `__self` parameter typed
 	// to the enum, and registers under `{enumName}.{methodName}` so dot-call
 	// dispatch finds it. The empty fields array tells parseFunction not to
-	// set up self-field aliases — enums have no fields.
+	// set up self-field aliases — enums have no fields. Method visibility
+	// inherits from `currentEnumVisibility` so cross-file method calls match
+	// whatever the enum-decl declared.
 	function parseEnumMethod(enumName String) throws ParserError
-		try parseFunction(enumName, isInstance: true, fields: StructFieldArray.create())
+		try parseFunction(enumName, isInstance: true, fields: StructFieldArray.create(), visibility: currentEnumVisibility)
 	end 'parseEnumMethod'
 
 	// Read the next int / float literal for an enum raw value, recovering

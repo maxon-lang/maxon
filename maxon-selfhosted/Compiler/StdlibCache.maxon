@@ -608,6 +608,14 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		try data.funcSignatures.insert(sigName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
 	end 'eachSig'
 
+	// Stdlib decls don't carry visibility / sourceFilePath in the cache
+	// codec — every entry is implicitly `global` and originates at the
+	// shared stdlib bootstrap path. Stamping these defaults here lets
+	// user code reach stdlib symbols regardless of where the user's
+	// reading file lives. Declared before the struct loop so the
+	// `StructType.create` call below can stamp it in.
+	let stdlibBootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("readStdlibCache: bootstrap path rejected")
+
 	// Struct types
 	let structCount = readDword(buf, offset: pos)
 	pos = pos + 4
@@ -632,7 +640,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
 		end 'eachField'
 
-		let st = StructType.create(name, fields: fields, byteSize: byteSize)
+		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath)
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'eachStruct'
 
@@ -640,7 +648,6 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	let constCount = readDword(buf, offset: pos)
 	pos = pos + 4
 
-	let stdlibBootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("readStdlibCache: bootstrap path rejected")
 	for _ in 0 upto constCount 'eachConst'
 		let (name, p14) = readString(buf, offset: pos)
 		pos = p14
@@ -788,13 +795,15 @@ function translateMaxonReturnType(project Project, table StringArray, rt MaxonRe
 end 'translateMaxonReturnType'
 
 // Translate a captured StructType: every field's MaxonType has its `named` ids
-// reinterned in the destination project.
+// reinterned in the destination project. Visibility / sourceFilePath round-trip
+// from the source struct so a stdlib-imported type keeps its `(global, stdlib
+// bootstrap path)` stamp into the destination project.
 function translateStructType(project Project, table StringArray, st StructType) returns StructType
 	var fields = StructFieldArray.create()
 	for f in st.fields 'eachField'
 		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, table: table, t: f.fieldType), offset: f.offset))
 	end 'eachField'
-	return StructType.create(st.name, fields: fields, byteSize: st.byteSize)
+	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath)
 end 'translateStructType'
 
 // Capture parser metadata from a project into a StdlibCacheData.

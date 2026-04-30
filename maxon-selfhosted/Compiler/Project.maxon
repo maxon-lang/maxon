@@ -123,6 +123,13 @@ export type Project
 	// the parser.
 	export var typealiases TypealiasMap
 
+	// Typealias visibility sidecar: maps alias names to their declared
+	// visibility tier and source file path. Populated alongside
+	// `typealiases` by the TypeResolution drain. Lookups treat a missing
+	// key as `(global, stdlibBootstrapPath)` so stdlib aliases (which
+	// aren't serialized through the cache visibility-side) stay reachable.
+	export var typealiasVisibilities TypealiasVisibilityMap
+
 	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
 	// Used by the parser to emit runtime range checks on return values.
 	// Populated by the TypeResolution pass alongside `typealiases`.
@@ -138,6 +145,14 @@ export type Project
 
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
+
+	// Function visibility sidecar: maps qualified function names to their
+	// declared visibility tier and source file path. Populated alongside
+	// `funcReturnTypes` inserts in the parser. Lookups treat a missing
+	// key as `(global, stdlib bootstrap path)` so stdlib-cached functions
+	// (which the cache codec doesn't serialize visibility for) stay
+	// reachable from any user file.
+	export var funcVisibilities FuncVisibilityMap
 
 	// Method-name index: maps a bare method name (the trailing segment after
 	// the last '.') to the list of qualified function names that end in
@@ -238,9 +253,11 @@ export type Project
 			calleeNames: CalleeNameInterner.create(),
 			strings: StringInterner.create(),
 			typealiases: TypealiasMap.create(),
+			typealiasVisibilities: TypealiasVisibilityMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			topLevelConstants: ConstantMap.create(),
@@ -481,6 +498,41 @@ export typealias StringArray = Array with String
 // references to a concrete width. Floating-point aliases always map to StdType.f64.
 export typealias TypealiasMap = Map with(String, StdType)
 
+// Sidecar visibility info for a resolved typealias. Stored separately from
+// `TypealiasMap` because that map's value is a primitive `StdType`, so we
+// can't extend it without a wider refactor. Lookups treat a missing key as
+// `(global, stdlib bootstrap path)` — every stdlib alias is implicitly
+// reachable from anywhere, and we don't serialize visibility through the
+// stdlib cache.
+export type TypealiasVisibilityInfo
+	export var visibility Visibility
+	export var sourceFilePath FilePath
+
+	export static function create(visibility Visibility, sourceFilePath FilePath) returns TypealiasVisibilityInfo
+		return Self{visibility: visibility, sourceFilePath: sourceFilePath}
+	end 'create'
+end 'TypealiasVisibilityInfo'
+
+export typealias TypealiasVisibilityMap = Map with(String, TypealiasVisibilityInfo)
+
+// Sidecar visibility info for a function. Mirrors the data on
+// `IrFunction.visibility` / `IrFunction.sourceFilePath` but is keyed by
+// the function's qualified name so cross-file callee resolution can hit
+// O(1) lookup without scanning `module.functions`. Lookups treat a
+// missing key as `(global, stdlib bootstrap path)` — stdlib functions
+// are restored without a sidecar entry and stay reachable from
+// everywhere.
+export type FuncVisibilityInfo
+	export var visibility Visibility
+	export var sourceFilePath FilePath
+
+	export static function create(visibility Visibility, sourceFilePath FilePath) returns FuncVisibilityInfo
+		return Self{visibility: visibility, sourceFilePath: sourceFilePath}
+	end 'create'
+end 'FuncVisibilityInfo'
+
+export typealias FuncVisibilityMap = Map with(String, FuncVisibilityInfo)
+
 // Function return type registry — the name returned to the source-level MaxonType.
 // Keeps source-level fidelity (named aliases stay as named MaxonType) so callers
 // can look up bounds in typealiasRanges.
@@ -612,14 +664,20 @@ end 'UnresolvedTypeExpr'
 export type UnresolvedTypealias
 	export var name String
 	export var expr UnresolvedTypeExpr
+	// Visibility tier from the `export` / `module` modifier on the
+	// `typealias` declaration (or `file` if neither was present).
+	// Forwarded into `typealiasVisibilities` at resolution time so
+	// cross-file uses of the alias as a parameter / return type can
+	// be filtered.
+	export var visibility Visibility
 	// Parse-time source location; carried so resolver-emitted diagnostics
 	// (cycle, unknown-name) can point back at the original declaration.
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, expr UnresolvedTypeExpr, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTypealias
-		return Self{name: name, expr: expr, line: line, column: column, filePath: filePath}
+	export static function create(name String, expr UnresolvedTypeExpr, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTypealias
+		return Self{name: name, expr: expr, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedTypealias'
 
@@ -634,13 +692,18 @@ export type UnresolvedStructType
 	export var name String
 	export var fields StructFieldArray
 	export var byteSize FieldOffset
+	// Visibility tier from the `export` / `module` modifier on the
+	// `type` declaration (or `file` if neither was present). Forwarded
+	// to `StructType` at resolution time and consulted by
+	// TypeResolution's named-type visibility walk.
+	export var visibility Visibility
 	// Source location of the `type Name` token, for duplicate-type diagnostics.
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedStructType
-		return Self{name: name, fields: fields, byteSize: byteSize, line: line, column: column, filePath: filePath}
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedStructType
+		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedStructType'
 
@@ -963,14 +1026,22 @@ export type StructType
 	export var fields StructFieldArray
 	export var byteSize FieldOffset
 	export var fieldByName FieldNameIndexMap
+	// Visibility tier and declaring file path. Cross-file references
+	// (named-type operands, struct-alloc op, dot-prefixed static/method
+	// dispatch) consult these via `isVisibleFrom` against the reader's
+	// path. Stdlib-cached struct types synthesize `(global, stdlib
+	// bootstrap path)` so user code reaching a stdlib struct is always
+	// permitted.
+	export var visibility Visibility
+	export var sourceFilePath FilePath
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset) returns StructType
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath) returns StructType
 		var fieldByName = FieldNameIndexMap.create()
 		for i in 0 upto fields.count() 'buildIndex'
 			let field = try fields.get(i) otherwise panic("StructType.create: fields.get OOB at {i} (count={fields.count()})")
 			try fieldByName.insert(field.name, value: i) otherwise panic("StructType.create: duplicate field '{field.name}' on type '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName}
+		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName, visibility: visibility, sourceFilePath: sourceFilePath}
 	end 'create'
 end 'StructType'
 
@@ -1005,14 +1076,20 @@ export type EnumType
 	export var cases EnumCaseArray
 	export var isFloatBacked bool
 	export var caseByName CaseIndexMap
+	// Visibility tier and declaring file path. Cross-file references
+	// (named-type operands, dot-prefixed case reads when no top-level
+	// constant matches) consult these via `isVisibleFrom` against the
+	// reader's path. Stdlib enums get `(global, stdlib bootstrap path)`.
+	export var visibility Visibility
+	export var sourceFilePath FilePath
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
 			try caseByName.insert(c.name, value: i as CaseOrdinal) otherwise panic("EnumType.create: duplicate case '{c.name}' on enum '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName}
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath}
 	end 'create'
 end 'EnumType'
 
@@ -1022,12 +1099,17 @@ export type UnresolvedEnumType
 	export var name String
 	export var cases EnumCaseArray
 	export var isFloatBacked bool
+	// Visibility tier from the enum declaration's modifier. Used to
+	// stamp the per-case `TopLevelConstant`s and the implicit typealias
+	// the parser registers for the enum's name. The pre-register entry
+	// (created before the body is walked) reuses this when patched.
+	export var visibility Visibility
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedEnumType
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, line: line, column: column, filePath: filePath}
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedEnumType
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedEnumType'
 
