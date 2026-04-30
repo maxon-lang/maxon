@@ -493,7 +493,9 @@ export type Parser
 				block = try parseWhileStatement(func, block: block)
 			end 'isWhile' else if stmtToken.kind == TokenKind.for 'isFor'
 				block = try parseForStatement(func, block: block)
-			end 'isFor' else if stmtToken.kind == TokenKind.break 'isBreak'
+			end 'isFor' else if stmtToken.kind == TokenKind.match 'isMatchStmt'
+				block = try parseMatchStatement(block)
+			end 'isMatchStmt' else if stmtToken.kind == TokenKind.break 'isBreak'
 				block = try parseBreakStatement(func, block: block)
 				lastWasReturn = true
 			end 'isBreak' else if stmtToken.kind == TokenKind.continue 'isContinue'
@@ -1133,6 +1135,7 @@ export type Parser
 		match token.kind 'k'
 			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create())
 			type then try parseTypeDecl()
+			enum then try parseEnumDecl()
 			let then try parseTopLevelLet()
 			var then try parseTopLevelVar(typeName: "")
 			typealias then try parseTopLevelTypealias()
@@ -1320,6 +1323,278 @@ export type Parser
 		currentTypeName = ""
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
+
+	// --- Enum declaration parsing ---
+	//
+	// Parse: enum Name [<cases and methods>] end 'Name'
+	//
+	// Each case becomes a top-level integer (or float) constant under the
+	// `EnumName.caseName` qualified name, so subsequent `EnumName.caseName`
+	// references resolve through the existing `unresolvedRead → literal`
+	// rewrite path. The enum itself is registered as a typealias to int (or
+	// f64 when float-backed) so parameters/return types/var declarations of
+	// the enum type lower to a primitive width without further machinery.
+	//
+	// Methods: an enum may contain `function name(...)` declarations whose
+	// bodies see the enum as the implicit `self` receiver type. They lower
+	// like ordinary instance methods (the calling convention treats the
+	// receiver as a same-width primitive in the first-arg slot).
+	//
+	// entry: cursor AT the token AFTER `enum` — the enum-name identifier.
+	// Caller (dispatchTopLevel) has already consumed the `enum` keyword.
+	function parseEnumDecl() throws ParserError
+		let enumNameToken = try consume()
+		checkReservedDeclName(enumNameToken)
+
+		currentTypeName = enumNameToken.value
+		logTrace(LogCategory.parser, message: () gives "parser: enum '{currentTypeName}'")
+
+		// Pre-register an empty enum so method bodies parsed below can resolve
+		// `match self` against the enum's named MaxonType. The full case list
+		// is patched in once the body has been walked.
+		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupEnumPre'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate enum '{currentTypeName}'", line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+			currentTypeName = ""
+			synchronize()
+			return
+		end 'dupEnumPre'
+
+		try skipNewlines()
+
+		var cases = EnumCaseArray.create()
+		var caseNames = ReferencedVarSet.create()
+		// Backing kind ('none' / 'int' / 'float') is lazily fixed by the
+		// first explicit raw value. Two bool flags rather than a 3-state
+		// union since the resolution rules are simple enough to compute inline.
+		var hasExplicitBacking = false
+		var isFloatBacked = false
+		var nextOrdinal = 0 as IntConstant
+		// Methods are emitted inline as the body is walked. The pre-registered
+		// (empty-cases) UnresolvedEnumType above lets a method's `match self`
+		// resolve `EnumName` as an enum even before the full case list lands.
+
+		while true 'body'
+			let bodyPrevPos = cursor.index()
+			let memberToken = cursor.current()
+
+			// `end` terminates the enum body when it is followed by the
+			// block's `'Label'` literal; otherwise it is a keyword-named case
+			// (covered by the `keyword-as-case-name` spec).
+			if memberToken.kind == TokenKind.end and lookaheadIsBlockEnd() 'isEnd'
+				break
+			end 'isEnd'
+
+			// Disambiguate `function` as method-keyword vs `function` as a
+			// keyword-named enum case. Method form is always followed by an
+			// identifier (the method name); case form is followed by either a
+			// newline, an `=` (for an explicit raw value), or end-of-block.
+			if memberToken.kind == TokenKind.function and lookaheadIsMethodSignature() 'isMethod'
+				try eat(TokenKind.function)
+				try parseEnumMethod(currentTypeName)
+				try skipNewlines()
+				if cursor.index() <= bodyPrevPos 'methodStuck'
+					try cursor.advance() otherwise break
+				end 'methodStuck'
+				continue
+			end 'isMethod'
+
+			// A case name. Identifier or any keyword token (the enum spec
+			// permits keyword tokens like `function`/`return`/`end`/`if` as
+			// case names — the lexer emits them as their keyword TokenKind,
+			// but `.value` carries the raw spelling).
+			let caseToken = try consume()
+			let caseName = caseToken.value
+			checkReservedDeclName(caseToken)
+
+			// Duplicate-case detection (E3030).
+			if caseNames.contains(caseName) 'duplicateCase'
+				reportCompileError(project, code: ErrorCode.semanticEnumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'duplicateCase' else 'recordCase'
+				caseNames.insert(element: caseName)
+			end 'recordCase'
+
+			var rawValue = nextOrdinal
+			var rawIsFloat = false
+
+			if accept(TokenKind.equals) 'hasRawValue'
+				let valueToken = cursor.current()
+				if valueToken.kind == TokenKind.intLiteral 'isInt'
+					try eat(TokenKind.intLiteral)
+					let parsed = parseRawValueForEnum(valueToken, kindLabel: "Integer", isFloat: false)
+					rawValue = parsed
+					rawIsFloat = false
+					if hasExplicitBacking and isFloatBacked 'mismatch'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected float, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'mismatch'
+					hasExplicitBacking = true
+					nextOrdinal = parsed + 1
+				end 'isInt' else if valueToken.kind == TokenKind.floatLiteral 'isFloat'
+					try eat(TokenKind.floatLiteral)
+					let bits = parseRawValueForEnum(valueToken, kindLabel: "Float", isFloat: true)
+					rawValue = bits
+					rawIsFloat = true
+					if hasExplicitBacking and not isFloatBacked 'intMismatch'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected int, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'intMismatch'
+					hasExplicitBacking = true
+					isFloatBacked = true
+					// Float-backed cases don't auto-increment — every case
+					// must specify its raw value explicitly.
+				end 'isFloat' else 'badRawValue'
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int or float literal, got '{tokenValueToString(valueToken.value)}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
+					try cursor.advance() otherwise break
+				end 'badRawValue'
+			end 'hasRawValue' else 'noRaw'
+				if hasExplicitBacking and isFloatBacked 'floatRequiresExplicit'
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "float-backed enum case '{caseName}' requires an explicit raw value", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'floatRequiresExplicit'
+				rawValue = nextOrdinal
+				rawIsFloat = false
+				nextOrdinal = nextOrdinal + 1
+			end 'noRaw'
+
+			// Duplicate-raw-value detection (E3031). Compares stored bit
+			// payloads: int-backed cases use the integer value directly,
+			// float-backed cases compare on IEEE-754 bits (which is exactly
+			// the duplicate semantics — `1.1 == 1.1` shares bits). The
+			// diagnostic shows the raw bit pattern for floats; the spec only
+			// requires the literal to appear in the message.
+			for existing in cases 'checkDup'
+				if existing.rawValue == rawValue 'isDup'
+					reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					break
+				end 'isDup'
+			end 'checkDup'
+
+			let ordinalSlot = cases.count() as CaseOrdinal
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column))
+
+			// Register the case as a top-level constant so the existing
+			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
+			let qualifiedName = "{currentTypeName}.{caseName}"
+			var constValue = ConstantValue.intValue(rawValue)
+			if rawIsFloat 'isFloatConst'
+				constValue = ConstantValue.floatValue(rawValue)
+			end 'isFloatConst'
+			try project.topLevelConstants.insert(qualifiedName, value: constValue) otherwise ignore
+
+			try skipNewlines()
+
+			if cursor.index() <= bodyPrevPos 'caseStuck'
+				try cursor.advance() otherwise break
+			end 'caseStuck'
+		end 'body'
+
+		// Register the enum as a typealias so parameter / return / var
+		// declarations of the enum type resolve via the typealias machinery.
+		// Float-backed enums alias to f64; int-backed alias to int(0 to ord).
+		var enumTypeExpr = UnresolvedTypeExpr.rangedInt(0, upper: enumIntUpperBound(cases))
+		if isFloatBacked 'asFloatExpr'
+			enumTypeExpr = UnresolvedTypeExpr.rangedFloat(f64MinBits(), upper: f64MaxBits())
+		end 'asFloatExpr'
+		if not project.typealiases.contains(currentTypeName) and not project.unresolvedTypealiases.contains(currentTypeName) 'registerAlias'
+			project.unresolvedTypealiases.upsert(currentTypeName, value: UnresolvedTypealias.create(currentTypeName, expr: enumTypeExpr, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath))
+		end 'registerAlias'
+
+		// Patch the pre-registered placeholder with the full case list. The
+		// duplicate-name diagnostic was already issued above when we tried to
+		// insert the placeholder, so this upsert is unconditional.
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
+
+		currentTypeName = ""
+		try skipEndAndLabel()
+	end 'parseEnumDecl'
+
+	// True when the cursor is positioned on `end` *followed by* the
+	// `'Label'` literal that closes a block (or end-of-input). Used by
+	// parseEnumDecl and the match parsers to distinguish the block
+	// terminator from a keyword-named enum case (see `keyword-as-case-name`
+	// spec). Treats EOF as a block end so callers don't spin past the input.
+	function lookaheadIsBlockEnd() returns bool
+		let next = try cursor.peek(1) otherwise return true
+		return next.kind == TokenKind.stringLiteral
+	end 'lookaheadIsBlockEnd'
+
+	// True when the cursor is positioned on a match block's terminating
+	// `end '<label>'`.
+	function isMatchArmsEnd() returns bool
+		if not at(TokenKind.end) 'notEnd'
+			return false
+		end 'notEnd'
+		return lookaheadIsBlockEnd()
+	end 'isMatchArmsEnd'
+
+	// True when the cursor is positioned on `function` *followed by* an
+	// identifier-and-`(` shape — i.e. a method signature. Used by parseEnumDecl
+	// to distinguish method declarations from `function` used as a
+	// keyword-named enum case.
+	function lookaheadIsMethodSignature() returns bool
+		let nameToken = try cursor.peek(1) otherwise return false
+		if nameToken.kind != TokenKind.identifier 'noName'
+			return false
+		end 'noName'
+		let afterName = try cursor.peek(2) otherwise return false
+		return afterName.kind == TokenKind.leftParen
+	end 'lookaheadIsMethodSignature'
+
+	// Parse a method on the enclosing enum. Models the enum as a "type" for
+	// parsing purposes — the method gets an implicit `__self` parameter typed
+	// to the enum, and registers under `{enumName}.{methodName}` so dot-call
+	// dispatch finds it. The empty fields array tells parseFunction not to
+	// set up self-field aliases — enums have no fields.
+	function parseEnumMethod(enumName String) throws ParserError
+		try parseFunction(enumName, isInstance: true, fields: StructFieldArray.create())
+	end 'parseEnumMethod'
+
+	// Read the next int / float literal for an enum raw value, recovering
+	// gracefully on overflow so the enclosing case-collection loop keeps
+	// walking the rest of the body. Float values are returned as raw IEEE-754
+	// bits, so both forms share a single IntConstant return slot.
+	function parseRawValueForEnum(token Token, kindLabel String, isFloat bool) returns IntConstant
+		var parsed = 0 as IntConstant
+		if isFloat 'isFloatLit'
+			parsed = try parseFloatBits(token.value) otherwise 'overflow'
+				reportLiteralOverflow(token: token, message: "{kindLabel} literal '{tokenValueToString(token.value)}' is outside the range of {kindLabel}")
+				return 0
+			end 'overflow'
+		end 'isFloatLit' else 'isIntLit'
+			parsed = try parseInt(token.value) otherwise 'overflow'
+				reportLiteralOverflow(token: token, message: "{kindLabel} literal '{tokenValueToString(token.value)}' is outside the range of {kindLabel}")
+				return 0
+			end 'overflow'
+		end 'isIntLit'
+		return parsed
+	end 'parseRawValueForEnum'
+
+	// IEEE-754 max/min finite double as i64 bit patterns. Used as the synthetic
+	// float range for a float-backed enum's typealias entry. The min pattern
+	// is the max pattern with the sign bit set (0xFFEFFFFFFFFFFFFF), which —
+	// reinterpreted as a signed i64 — is -4503599627370497.
+	function f64MaxBits() returns IntConstant
+		// 0x7FEFFFFFFFFFFFFF — largest finite positive double.
+		return 9218868437227405311
+	end 'f64MaxBits'
+
+	function f64MinBits() returns IntConstant
+		// 0xFFEFFFFFFFFFFFFF as a signed i64 — most-negative finite double.
+		return 0 - 4503599627370497
+	end 'f64MinBits'
+
+	// Pick an upper bound for an int-backed enum's typealias range from the
+	// largest raw value seen. Empty enums fall through with `0`; the typealias
+	// range becomes `0 to 0` and any access is rejected, which matches the
+	// "empty enum has no valid value" semantics.
+	function enumIntUpperBound(cases EnumCaseArray) returns RangeBound
+		var upper = 0 as RangeBound
+		for c in cases 'scan'
+			if c.rawValue > upper 'newMax'
+				upper = c.rawValue
+			end 'newMax'
+		end 'scan'
+		return upper
+	end 'enumIntUpperBound'
 
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(block IrBlock, nameToken Token, fields StructFieldArray)
@@ -1589,6 +1864,194 @@ export type Parser
 
 		return exitBlock
 	end 'parseWhileStatement'
+
+	// --- Match (statement and expression) ---
+	//
+	// Both forms desugar to a chain of `cmp + condBr` blocks:
+	//   ENTRY: br ARM0
+	//   ARM0:  cmp scrutinee == case0; condBr ARM0_BODY ARM1
+	//   ARM1:  cmp scrutinee == case1; condBr ARM1_BODY ARM2
+	//   ...
+	//   ARMN:  cmp scrutinee == caseN; condBr ARMN_BODY MERGE
+	//   ARM*_BODY: <arm body>; br MERGE  (statement form)
+	//   ARM*_BODY: <arm value emit>; varStore result; br MERGE  (expression form)
+	//   MERGE: ...continued...                       (statement form)
+	//   MERGE: result = varLoad slot; ...            (expression form)
+	//
+	// Statement arms use `then`, expression arms use `gives`. Both consume a
+	// single expression following the keyword (statement arms permit any
+	// statement-shape expression — return / break / continue still flow
+	// through the expression parser today). The parser does NO case-name
+	// resolution: it emits each arm's dispatch as a `MaxonOp.enumMatchArm`
+	// terminator carrying the case name verbatim. TypeResolution looks up
+	// the scrutinee's enum and resolves the case to its raw value once the
+	// producer-type map is built.
+
+	// Parse the prelude common to both match forms: `match <expr> '<label>'`
+	// followed by newlines. Returns the scrutinee value/type, the synthesized
+	// `baseLabel` used to derive arm/merge block names, and the freshly-added
+	// merge block. On a missing label the caller-supplied error path runs and
+	// the result's `failed` flag is set.
+	function parseMatchHeader() returns MatchHeader throws ParserError
+		try eat(TokenKind.match)
+		let scrutineeResult = try parseExpression(currentBlock)
+		if not at(TokenKind.stringLiteral) 'noLabel'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected match label after scrutinee", line: tok.line, column: tok.column, filePath: filePath)
+			return MatchHeader.failed()
+		end 'noLabel'
+		let userLabel = try parseOptionalBlockLabel("match")
+		let baseLabel = "{userLabel}_{currentFunc.nextBlockId}"
+		try skipNewlines()
+		let mergeBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: cursor.current().line)
+		return MatchHeader.create(scrutineeName: exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock)
+	end 'parseMatchHeader'
+
+	// Consume one arm header (`caseName then` or `caseName gives`), create
+	// its body and next-arm blocks, and emit the symbolic dispatch terminator
+	// on the current block. The case name flows through verbatim — TR
+	// resolves it to a raw value once the scrutinee's enum is known.
+	function beginMatchArm(header MatchHeader, armIndex IntConstant, separator TokenKind) returns MatchArmBlocks throws ParserError
+		let caseToken = try consume()
+		try expect(separator)
+		let armBodyBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.case{armIndex}", filePath: filePath.toString(), firstLine: caseToken.line)
+		let nextArmBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.next{armIndex}", filePath: filePath.toString(), firstLine: caseToken.line)
+		module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: caseToken.value, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(caseToken)))
+		return MatchArmBlocks.create(caseToken: caseToken, body: armBodyBlock, next: nextArmBlock)
+	end 'beginMatchArm'
+
+	// Parse: match <expr> 'label' <arms> end 'label' — statement form. Each
+	// arm is `caseName then <statement-shape expression>`. A statement match
+	// is currently used only for early `return` / propagation patterns in the
+	// enum-comparison spec, so the per-arm body is parsed as a single
+	// expression that is emitted directly into the arm block.
+	function parseMatchStatement(block IrBlock) returns IrBlock throws ParserError
+		currentBlock = block
+		let header = try parseMatchHeader()
+		if header.failed 'bailout'
+			synchronize()
+			return currentBlock
+		end 'bailout'
+		let mergeBlockId = header.mergeBlock.id
+
+		var armIndex = 0 as IntConstant
+		var anyArmReachesMerge = false
+
+		while not isMatchArmsEnd() 'arms'
+			let arm = try beginMatchArm(header, armIndex: armIndex, separator: TokenKind.then)
+
+			currentBlock = arm.body
+			let armBodyExit = try parseMatchStatementArmBody(arm.body)
+			if not armBodyExit.isTerminated() 'armReachesMerge'
+				anyArmReachesMerge = true
+				module.setTerminator(armBodyExit, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+			end 'armReachesMerge'
+			currentBlock = arm.next
+			armIndex = armIndex + 1
+			try skipNewlines()
+		end 'arms'
+
+		// `currentBlock` now holds the last arm's `next` block — the
+		// "no arm matched" landing pad. When at least one arm reached merge,
+		// fall through to it; otherwise (every arm terminated with
+		// return/throw/etc.) emit a synthetic panic on both the fallback and
+		// merge blocks so the static verifier sees fully-terminated CFG.
+		if anyArmReachesMerge 'wireFallback'
+			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+		end 'wireFallback' else 'allArmsTerminated'
+			emitMatchUnreachableTerminator(currentBlock)
+			currentBlock = header.mergeBlock
+			emitMatchUnreachableTerminator(currentBlock)
+		end 'allArmsTerminated'
+
+		try skipEndAndLabel()
+		currentBlock = header.mergeBlock
+		return header.mergeBlock
+	end 'parseMatchStatement'
+
+	// Emit a `panic` op + synthetic `ret 0` so the static verifier sees the
+	// block terminated. The runtime never reaches these — they only fire on
+	// an exhaustive match where every arm already returned.
+	function emitMatchUnreachableTerminator(block IrBlock)
+		let unreachableMsg = project.strings.intern("unreachable: non-exhaustive match")
+		module.appendOp(block, op: MaxonOp.panic(unreachableMsg, range: SourceRange.none()))
+		let zero = emitLiteral(block, value: 0, valueType: MaxonType.integer)
+		module.setTerminator(block, op: MaxonOp.ret(zero, range: SourceRange.none()))
+	end 'emitMatchUnreachableTerminator'
+
+	// Parse a statement-form arm body. Today this is one expression — for the
+	// enums-simple specs that means a `return <expr>` or another simple call.
+	function parseMatchStatementArmBody(block IrBlock) returns IrBlock throws ParserError
+		currentBlock = block
+		let stmtToken = cursor.current()
+		if stmtToken.kind == TokenKind.return 'isReturn'
+			try parseReturnStatement(block)
+			return currentBlock
+		end 'isReturn'
+		_ = try parseExpression(block)
+		return currentBlock
+	end 'parseMatchStatementArmBody'
+
+	function parseMatchExpression(block IrBlock) returns ExprResult throws ParserError
+		currentBlock = block
+		let header = try parseMatchHeader()
+		if header.failed 'bailout'
+			let dummy = freshSynthName()
+			return ExprResult.direct(dummy, valueType: MaxonType.integer)
+		end 'bailout'
+		let mergeBlockId = header.mergeBlock.id
+
+		// Result-holding slot. Type is unknown until the first arm parses,
+		// so we declare with `unresolved` and let TypeResolution's slot-type
+		// fill-in propagate the actual arm type from the first varStore site
+		// (matching how the bool short-circuit emitter materializes its
+		// result via a slot). Seed with a zero literal so the unreachable
+		// fallback's varLoad reads a well-typed value under wasm's stricter
+		// validation.
+		let resultSlot = scope.declare("__match_{header.userLabel}_{currentFunc.nextBlockId}", varType: MaxonType.unresolved, mutable: true)
+		let seedZero = emitLiteral(currentBlock, value: 0, valueType: MaxonType.integer)
+		module.appendOp(currentBlock, op: MaxonOp.varDecl(resultSlot, value: seedZero, slotType: MaxonType.unresolved, range: SourceRange.none()))
+
+		var armIndex = 0 as IntConstant
+		var resultType = MaxonType.unresolved
+
+		while not isMatchArmsEnd() 'arms'
+			let arm = try beginMatchArm(header, armIndex: armIndex, separator: TokenKind.gives)
+
+			currentBlock = arm.body
+			let armResult = try parseExpression(arm.body)
+			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(armResult), range: SourceRange.ofToken(arm.caseToken)))
+			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+
+			if isUnresolvedMaxonType(resultType) 'firstArmType'
+				resultType = exprType(armResult)
+			end 'firstArmType'
+
+			currentBlock = arm.next
+			armIndex = armIndex + 1
+			try skipNewlines()
+		end 'arms'
+
+		module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
+
+		try skipEndAndLabel()
+
+		currentBlock = header.mergeBlock
+		let resultName = freshSynthName()
+		module.appendOp(currentBlock, op: MaxonOp.varLoad(resultName, slotId: resultSlot, slotType: resultType, range: SourceRange.none()))
+		return ExprResult.direct(resultName, valueType: resultType)
+	end 'parseMatchExpression'
+
+	function isUnresolvedMaxonType(t MaxonType) returns bool
+		return match t 'check'
+			unresolved gives true
+			boolean gives false
+			integer gives false
+			float gives false
+			string gives false
+			named gives false
+		end 'check'
+	end 'isUnresolvedMaxonType'
 
 	// --- For statement ---
 	//
@@ -2485,12 +2948,21 @@ export type Parser
 		if at(TokenKind.dot) and not scope.contains(token.value) 'maybeQualifiedRead'
 			let memberToken = try cursor.peek(1) otherwise Token.eof()
 			let afterMember = try cursor.peek(2) otherwise Token.eof()
-			if memberToken.kind == TokenKind.identifier and afterMember.kind != TokenKind.leftParen 'isFieldRead'
+			// Member name is normally an identifier, but enum-case spellings
+			// permit keyword tokens (`function`, `return`, `end`, `if`, …).
+			// When the prefix is a registered enum, accept any non-`(`-followed
+			// token with a non-empty value as the member name.
+			let prefixIsEnum = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
+			let memberIsIdent = memberToken.kind == TokenKind.identifier
+			let memberIsEnumCaseKeyword = prefixIsEnum and not memberToken.value.isEmpty()
+			if (memberIsIdent or memberIsEnumCaseKeyword) and afterMember.kind != TokenKind.leftParen 'isFieldRead'
 				let qualifiedName = "{token.value}.{memberToken.value}"
 				try eat(TokenKind.dot)
-				try eat(TokenKind.identifier)
+				_ = try consume()
 				let resultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.unresolvedRead(resultName, name: qualifiedName, range: SourceRange.between(token, last: memberToken)))
+				// Producer type is filled in by TypeResolution when it
+				// rewrites the unresolvedRead — see `enumLiteralType`.
 				return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
 			end 'isFieldRead'
 		end 'maybeQualifiedRead'
@@ -2645,6 +3117,8 @@ export type Parser
 	function emitCallAndResult(block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
+		// Call result type is filled in by TypeResolution from
+		// `funcReturnTypes` once registries are fully populated.
 		return ExprResult.direct(callName, valueType: MaxonType.unresolved)
 	end 'emitCallAndResult'
 
@@ -2696,6 +3170,7 @@ export type Parser
 			leftBracket then return try parseArrayLiteralExpr(block)
 			selfType then return try parseSelfExpr(block)
 			self then return try parseSelfInstanceExpr(block)
+			match then return try parseMatchExpression(block)
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
@@ -3393,6 +3868,13 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	if project.structTypes.contains(nameStr) 'isStruct'
 		return nameStr
 	end 'isStruct'
+	// Enums share the method-dispatch path with structs: a method call on
+	// an enum-typed receiver qualifies the callee with the enum's name.
+	// Lookup against `enumTypes` (post-resolution) and `unresolvedEnums`
+	// (parse-time, before resolution drains) covers both phases.
+	if project.enumTypes.contains(nameStr) or project.unresolvedEnums.contains(nameStr) 'isEnum'
+		return nameStr
+	end 'isEnum'
 	return ""
 end 'maxonTypeStructName'
 
@@ -3580,6 +4062,42 @@ type MatchContext
 end 'MatchContext'
 
 typealias MatchContextArray = Array with MatchContext
+
+// Result of parsing a `match <expr> '<label>'` prelude. `failed` is set when
+// the label is missing (the diagnostic was already emitted); callers branch
+// on it to pick a recovery path appropriate to the form (statement vs.
+// expression). `mergeBlock` is created up-front so arm bodies can branch to
+// it without each arm rediscovering it.
+type MatchHeader
+	export var scrutineeName ByteArray
+	export var scrutineeType MaxonType
+	export var userLabel String
+	export var baseLabel String
+	export var mergeBlock IrBlock
+	export var failed bool
+
+	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock) returns MatchHeader
+		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false}
+	end 'create'
+
+	export static function failed() returns MatchHeader
+		return Self{scrutineeName: ByteArray.create(), scrutineeType: MaxonType.unresolved, userLabel: "", baseLabel: "", mergeBlock: IrBlock.create(0 as BlockId, label: ""), failed: true}
+	end 'failed'
+end 'MatchHeader'
+
+// The two blocks freshly created for a match arm: the body block whose
+// content the caller fills in, and the next-arm block control flows to on
+// a non-match. `caseToken` is captured so the caller can attach source
+// ranges for varStore / br ops emitted into the body.
+type MatchArmBlocks
+	export var caseToken Token
+	export var body IrBlock
+	export var next IrBlock
+
+	export static function create(caseToken Token, body IrBlock, next IrBlock) returns MatchArmBlocks
+		return Self{caseToken: caseToken, body: body, next: next}
+	end 'create'
+end 'MatchArmBlocks'
 
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.

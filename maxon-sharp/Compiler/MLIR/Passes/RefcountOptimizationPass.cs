@@ -312,7 +312,10 @@ public static class RefcountOptimizationPass {
   private sealed class DecrefSite {
     public required IrBlock<StandardOp> Block { get; init; }
     public required int OpIndex { get; init; }
+    /// The key under which this decref is indexed in decrefsByVar. May be a dual-index alias.
     public required string VarName { get; init; }
+    /// The actual var name the decref ops on (load source). Differs from VarName when this entry is a dual-index alias.
+    public required string OriginalVarName { get; init; }
   }
 
   /// <summary>
@@ -402,10 +405,14 @@ public static class RefcountOptimizationPass {
     // For each incref candidate, find dominated decrefs and check safety.
     var toRemovePerBlock = new Dictionary<string, HashSet<int>>();
 
+    // VarNames that have their own incref candidate. A decref dual-indexed under
+    // a sibling alias must NOT be removed when that sibling's incref is canceled
+    // if the decref's VarName has its own incref-candidate pair to balance —
+    // otherwise we'd leak the heap object whose only cleanup site was that decref.
+    var varNamesWithIncrefCandidate = new HashSet<string>(increfCandidates.Select(c => c.VarName));
+
     foreach (var inc in increfCandidates) {
-      if (!decrefsByVar.TryGetValue(inc.VarName, out var decrefList)) {
-        continue;
-      }
+      if (!decrefsByVar.TryGetValue(inc.VarName, out var decrefList)) continue;
 
       var effectiveSrcVar = inc.SrcVar!;
 
@@ -546,10 +553,29 @@ public static class RefcountOptimizationPass {
         }
         if (escapes) continue;
       }
+      // Filter out dual-indexed decrefs that belong to a sibling slot which
+      // owns its own incref/decref lifecycle. Example: when `rt` and
+      // `__match_enum_unwrap_3` both alias `__try_result_1`, `decrefsByVar[rt]`
+      // is dual-indexed with the decref of `__match_enum_unwrap_3` (via
+      // firstStoreOf alias). That decref's job is to balance
+      // `__match_enum_unwrap_3`'s own incref — not `rt`'s. Pair-canceling it
+      // under rt's incref leaves the sibling's incref unbalanced and leaks
+      // the heap object. Compare against `OriginalVarName` (the actual var
+      // the load+decref operates on); `VarName` carries the dual-index key
+      // (= `inc.VarName`).
+      var decsToRemove = reachableDecs
+          .Where(dec => dec.OriginalVarName == inc.VarName
+                     || !varNamesWithIncrefCandidate.Contains(dec.OriginalVarName))
+          .ToList();
+      // If the sibling filter dropped any, the safety checks above
+      // (allDominated, non-overlap, post-dominance) were computed over the
+      // full reachable set; the reduced set may not satisfy them anymore.
+      // Abort the cancel rather than proving safety on the reduced set.
+      if (decsToRemove.Count != reachableDecs.Count) continue;
       var incSet = GetOrCreateRemoveSet(toRemovePerBlock, inc.Block.Name);
       incSet.Add(inc.OpIndex);
       TryRemoveFeedingLoad(inc.Block.Operations, inc.OpIndex, useCounts, incSet);
-      foreach (var dec in reachableDecs) {
+      foreach (var dec in decsToRemove) {
         var decSet = GetOrCreateRemoveSet(toRemovePerBlock, dec.Block.Name);
         decSet.Add(dec.OpIndex);
         TryRemoveFeedingLoad(dec.Block.Operations, dec.OpIndex, useCounts, decSet);
@@ -1281,32 +1307,34 @@ public static class RefcountOptimizationPass {
         IsFromStore = isFromStore,
       });
     }, (i, varName) => {
-      AppendDecref(decrefsByVar, block, i, varName);
+      AppendDecref(decrefsByVar, block, i, varName, varName);
       // Dual-index: if this variable is a firstStoreOf alias (aliasFromStore),
       // also index the decref under its source (the canonical first slot).
       if (dualAliasFromStore.Contains(varName)
           && dualAliasSource.TryGetValue(varName, out var fsSource)) {
-        AppendDecref(decrefsByVar, block, i, fsSource);
+        AppendDecref(decrefsByVar, block, i, fsSource, varName);
       }
       // Dual-index: if this variable is a borrowedFrom alias that also has a
       // firstStoreOf predecessor (storeAlias), index the decref under that
       // predecessor too. Handles sibling slots (e.g. __try_result_3 and
       // __managed_list_nav_s*) that hold the same SSA value via different stores.
       if (dualStoreAlias.TryGetValue(varName, out var storeSource)) {
-        AppendDecref(decrefsByVar, block, i, storeSource);
+        AppendDecref(decrefsByVar, block, i, storeSource, varName);
       }
     }, localAliasSource, localAliasFromStore, localStoreAlias);
   }
 
-  /// <summary>Appends a decref site to the per-variable list, creating it if needed.</summary>
+  /// <summary>Appends a decref site to the per-variable list, creating it if needed.
+  /// `indexVar` is the key in decrefsByVar (may be an alias); `originalVarName` is
+  /// the actual var the decref operates on.</summary>
   private static void AppendDecref(
       Dictionary<string, List<DecrefSite>> decrefsByVar,
-      IrBlock<StandardOp> block, int opIndex, string varName) {
-    if (!decrefsByVar.TryGetValue(varName, out var list)) {
+      IrBlock<StandardOp> block, int opIndex, string indexVar, string originalVarName) {
+    if (!decrefsByVar.TryGetValue(indexVar, out var list)) {
       list = [];
-      decrefsByVar[varName] = list;
+      decrefsByVar[indexVar] = list;
     }
-    list.Add(new DecrefSite { Block = block, OpIndex = opIndex, VarName = varName });
+    list.Add(new DecrefSite { Block = block, OpIndex = opIndex, VarName = indexVar, OriginalVarName = originalVarName });
   }
 
   /// <summary>

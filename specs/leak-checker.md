@@ -116,6 +116,60 @@ end 'main'
 42
 ```
 
+<!-- test: no-leak.if-let-try-union-map -->
+### `if let X = try map.get(K)` on union-valued maps
+Assigning to an outer `var` from a `match` destructuring of a value bound by
+`if let X = try map.get(K) 'L'` previously leaked the bound union and the
+extracted inner payload — the if-let block's scope-end cleanup wasn't running
+for X when control fell through the assignment. Surfaced by the self-hosted
+compiler's own method-call return-type lookup.
+```maxon
+typealias TypeNameId = int(0 to u64.max)
+typealias Integer = int(0 to 100)
+
+union MaxonType
+	boolean
+	integer
+	named(id TypeNameId)
+end 'MaxonType'
+
+union ReturnType
+	void
+	value(inner MaxonType)
+end 'ReturnType'
+
+typealias TypeMap = Map with(String, ReturnType)
+
+function dispatch(m TypeMap, key String) returns MaxonType
+	var resultType = MaxonType.integer
+	if let rt = try m.get(key) 'haveRT'
+		resultType = match rt 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+	end 'haveRT'
+	return resultType
+end 'dispatch'
+
+function decode(t MaxonType) returns Integer
+	return match t 'unwrap'
+		named(id) gives id as Integer
+		boolean gives 1
+		integer gives 2
+	end 'unwrap'
+end 'decode'
+
+function main() returns ExitCode
+	var m = TypeMap.create()
+	m.upsert("a", value: ReturnType.value(MaxonType.named(42)))
+	let t = dispatch(m, key: "a")
+	return decode(t) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: no-leak.enum-arg-conditional-use -->
 ### Enum arguments cleaned up when conditionally used
 When a function receives two heap-allocated enum arguments but only uses one

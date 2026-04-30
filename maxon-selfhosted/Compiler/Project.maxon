@@ -130,6 +130,18 @@ export type Project
 	// `structTypes` before any pass that consumes struct layouts runs.
 	export var unresolvedStructTypes UnresolvedStructTypeMap
 
+	// Enum type registry: maps enum names to their case lists. Populated by
+	// the TypeResolution pass as it drains `unresolvedEnums`. Each enum's
+	// cases are also registered as top-level integer constants
+	// (`{EnumName}.{caseName}`), which is how `EnumName.case` references
+	// resolve through the existing `unresolvedRead → literal` rewrite.
+	export var enumTypes EnumTypeMap
+
+	// Unresolved enum registry: every `enum Name ... end` the parser sees lands
+	// here first. The TypeResolution pass drains it into `enumTypes` before
+	// passes that consume enum layouts run.
+	export var unresolvedEnums UnresolvedEnumTypeMap
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -176,6 +188,8 @@ export type Project
 			globalVars: GlobalVarMap.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
+			enumTypes: EnumTypeMap.create(),
+			unresolvedEnums: UnresolvedEnumTypeMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -770,6 +784,12 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 		if project.structTypes.contains(name) 'isStruct'
 			return StdType.i64
 		end 'isStruct'
+		if let enumType = try project.enumTypes.get(name) 'isEnum'
+			if enumType.isFloatBacked 'floatEnum'
+				return StdType.f64
+			end 'floatEnum'
+			return StdType.i64
+		end 'isEnum'
 		panic("resolveNamedToStdType: unknown named type '{name}' — TypeResolution should have rejected this")
 	end 'notAlias'
 	return aliased
@@ -818,3 +838,60 @@ export type StructType
 end 'StructType'
 
 export typealias StructTypeMap = Map with(String, StructType)
+
+// --- Enum types ---
+//
+// Each enum case carries its declaration ordinal (the position in the source
+// case list) and its raw value. Int-backed enums store the raw value as an
+// IntConstant; float-backed enums store the IEEE-754 bits in the same field
+// (the `EnumType.isFloatBacked` flag tells consumers how to interpret it).
+// Source location is captured to anchor parser-time diagnostics (E3030 / E3031
+// / E3032) at the case rather than the enum declaration.
+export type EnumCase
+	export var name String
+	export var ordinal CaseOrdinal
+	export var rawValue IntConstant
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+
+	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line ErrorLineNumber, column ErrorColumnNumber) returns EnumCase
+		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column}
+	end 'create'
+end 'EnumCase'
+
+export typealias CaseOrdinal = int(0 to 65535)
+export typealias EnumCaseArray = Array with EnumCase
+export typealias CaseIndexMap = Map with(String, CaseOrdinal)
+
+export type EnumType
+	export var name String
+	export var cases EnumCaseArray
+	export var isFloatBacked bool
+	export var caseByName CaseIndexMap
+
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool) returns EnumType
+		var caseByName = CaseIndexMap.create()
+		for i in 0 upto cases.count() 'buildIndex'
+			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
+			try caseByName.insert(c.name, value: i as CaseOrdinal) otherwise panic("EnumType.create: duplicate case '{c.name}' on enum '{name}' (parser should reject earlier)")
+		end 'buildIndex'
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName}
+	end 'create'
+end 'EnumType'
+
+export typealias EnumTypeMap = Map with(String, EnumType)
+
+export type UnresolvedEnumType
+	export var name String
+	export var cases EnumCaseArray
+	export var isFloatBacked bool
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedEnumType
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedEnumType'
+
+export typealias UnresolvedEnumTypeMap = Map with(String, UnresolvedEnumType)

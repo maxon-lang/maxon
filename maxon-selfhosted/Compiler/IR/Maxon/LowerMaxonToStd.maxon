@@ -359,6 +359,7 @@ type MaxonToStdLowering
 			// bug, not a user-facing condition.
 			unresolvedRead(_, name, _) then panic("lowerMaxonToStd: unresolvedRead '{name}' survived past TypeResolution")
 			unresolvedAssign(name, _, _) then panic("lowerMaxonToStd: unresolvedAssign '{name}' survived past TypeResolution")
+			enumMatchArm then panic("lowerMaxonToStd: enumMatchArm seen as a regular op (parser bug — should always be a terminator)")
 			// Error anchor: the parser already reported a diagnostic at this span,
 			// so we emit no Std op. `hasErrors(project)` will short-circuit the
 			// batch compile before codegen; the LSP consumes the op directly
@@ -960,28 +961,54 @@ type MaxonToStdLowering
 		return (field.offset, field.fieldType, true)
 	end 'lookupFieldByStructName'
 
-	// The parser only ever produces condBr/br/ret as block terminators, so this
-	// match is exhaustive under the strict phase invariant — any other op kind
-	// appearing here indicates a parser bug.
+	// The parser only ever produces condBr/br/ret/enumMatchArm as block
+	// terminators (plus `error` as a no-op anchor). Anything else appearing
+	// here indicates a parser bug.
 	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 			ret(retVal, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
-			literal to refEq then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
-			call then panic("lowerMaxonTerminatorToStd: call as block terminator (parser bug)")
-			methodCall then panic("lowerMaxonTerminatorToStd: methodCall as block terminator (parser bug)")
-			printLiteral to panic then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
-			structAlloc to selfFieldStore then panic("lowerMaxonTerminatorToStd: non-terminator op kind as block terminator (parser bug)")
-			unresolvedRead then panic("lowerMaxonTerminatorToStd: unresolvedRead as block terminator (parser bug)")
-			unresolvedAssign then panic("lowerMaxonTerminatorToStd: unresolvedAssign as block terminator (parser bug)")
+			enumMatchArm(scrutineeName, caseName, _, rawValue, isFloat, resolved, thenTarget, elseTarget, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
 			// the error op's range.
 			error then return
+			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
 	end 'lowerTerminator'
+
+	// Lower a resolved `enumMatchArm` terminator to the equivalent
+	// `const + cmp_eq + cond_br` Std op sequence. The const + cmp pair go
+	// into the dstBlock as regular ops; the cond_br is set as the
+	// terminator. TypeResolution must have resolved the case name before
+	// lowering — an unresolved op is a TR bug.
+	function lowerEnumMatchArm(scrutineeName ByteArray, caseName String, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+		if not resolved 'unresolved'
+			panic("lowerMaxonToStd: enumMatchArm '.{caseName}' survived past TypeResolution unresolved")
+		end 'unresolved'
+		var caseLiteralType = MaxonType.integer
+		var constOpcode = StdArithConstOpcode.constI64
+		if isFloat 'asFloat'
+			caseLiteralType = MaxonType.float
+			constOpcode = StdArithConstOpcode.constF64
+		end 'asFloat'
+		let caseLitId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: caseLitId, value: rawValue))))
+		self.setIsFloat(caseLitId, isFloat: isFloat)
+		var leftId = self.resolveName(scrutineeName)
+		var rightId = caseLitId
+		if isFloat 'promoteForFloatCmp'
+			leftId = self.promoteToFloat(leftId, dstBlock: dstBlock)
+			rightId = self.promoteToFloat(rightId, dstBlock: dstBlock)
+		end 'promoteForFloatCmp'
+		let cmpOpcode = cmpPredicateToArithOpcode(self.project, predicate: CmpPredicate.eq, operandType: caseLiteralType)
+		let cmpId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: leftId, rightId: rightId))))
+		self.setIsFloat(cmpId, isFloat: false)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+	end 'lowerEnumMatchArm'
 
 	// Allocates a heap struct by calling mrt_alloc with the byte size.
 	// `structName` is the source-level type name; we look up the struct

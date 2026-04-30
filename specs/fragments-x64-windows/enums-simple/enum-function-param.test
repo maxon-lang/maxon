@@ -24,53 +24,37 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @enums-simple.isOn(s: i64) -> i1 {
+  func @enums-simple.isOn(rcx: u8) -> i1 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.xor edx, edx
-    x64.mov [rbp-16], rdx
-    x64.mov [rbp-24], rax
-    x64.jmp enums-simple.isOn.check_0.cmp0
-  check_0.cmp0:
-    x64.mov rax, [rbp-24]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne enums-simple.isOn.check_0.cmp1
-  check_0.case0:
-    x64.mov rax, 1
-    x64.mov [rbp-16], rax
-    x64.jmp enums-simple.isOn.check_0.merge
-  check_0.cmp1:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne enums-simple.isOn.check_0.merge
-  check_0.case1:
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.jmp enums-simple.isOn.check_0.merge
-  check_0.merge:
-    x64.mov rax, [rbp-16]
-    x64.epilogue
+    x64.test rcx, rcx
+    x64.xor r8d, r8d
+    x64.jne check_1.next0
+    x64.jmp check_1.case0
+  check_1.merge:
     x64.ret
+  check_1.case0:
+    x64.mov r8d, 1
+    x64.jmp check_1.merge
+  check_1.next0:
+    x64.cmp rcx, 1
+    x64.jne check_1.merge
+  check_1.case1:
+    x64.xor r8d, r8d
+    x64.jmp check_1.merge
   }
-  func @enums-simple.main() -> u32 {
+  func @enums-simple.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
+    x64.xor ecx, ecx
     x64.call enums-simple.isOn
-    x64.test rax, rax
-    x64.je enums-simple.main.test_0.after
-  test_0:
-    x64.mov rax, 1
+    x64.test r8, r8
+    x64.je test_1.after
+  test_1:
+    x64.mov r8d, 1
     x64.epilogue
     x64.ret
-  test_0.after:
-    x64.xor eax, eax
+  test_1.after:
+    x64.xor r8d, r8d
     x64.epilogue
     x64.ret
   }

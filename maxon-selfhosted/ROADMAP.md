@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **32 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **246 fragment tests passing and 13 failing** (all in `implicit-type-conversion`). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **33 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **286 fragment tests passing** (across both x64-windows and wasm32-wasi targets). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -8,15 +8,16 @@ Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity tog
 
 ```
 Phase 1:   Core Arithmetic        [x] arithmetic, comparison, unary, parentheses, expressions
-Phase 2:   Control Flow           [x] if/else, while, break/continue, return  (match still pending)
+Phase 2:   Control Flow           [x] if/else, while, break/continue, return, match (statement+expression)
 Phase 3:   Function Params        [x] parameters, parameter-labels, assignment, method calls
-Phase 4:   Basic Types            [~] byte/float/type-casting work; implicit-type-conversion failing (13 tests)
+Phase 4:   Basic Types            [~] byte/float/type-casting work; implicit-type-conversion edge cases pending
 Phase 5:   Structs                [~] struct literals, methods, self, type/static methods passing;
                                       challenge-* and field-assign edge cases still pending
 Phase 6:   Managed Memory         [ ] arrays, for-in, ManagedMemory builtins
 Phase 7:   Strings                [ ] real String type — still using bootstrap printLiteral/printInt shims
 Phase 8:   Error Handling         [ ] try/throw/otherwise, throws clause
-Phase 9:   Enums                  [ ] enum decls, match, associated values
+Phase 9:   Enums                  [~] enum decls (int/float-backed), match (statement+expression),
+                                      methods on enums, keyword-as-case-name; associated values pending
 Phase 10:  Closures               [ ] first-class functions, closure capture
 Phase 11:  Interfaces & Generics  [ ] hybrid model — see sub-phases below
 Phase 12:  Global Variables       [ ] module-level var, static fields
@@ -36,8 +37,8 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 ## Current Capabilities
 
 ### Front end
-- **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon), 1077 lines): full DFA tokenizer including hex/binary/octal/underscore/scientific literals, all operator tokens (`/` `%` `&` `|` `^` `<<` `>>` `~` `!` `&&` `||`), keywords (`true`/`false`/`while`/`break`/`continue`/`match`/`for`/`in`/`interface`/`extension`/`extends`/`implements`/`with`/`where`/`from`/`uses`).
-- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 3201 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, variable reassignment, block scoping, integer/float/bool literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`.
+- **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon), 1142 lines): full DFA tokenizer including hex/binary/octal/underscore/scientific literals, all operator tokens (`/` `%` `&` `|` `^` `<<` `>>` `~` `!` `&&` `||`), keywords (`true`/`false`/`while`/`break`/`continue`/`match`/`for`/`in`/`interface`/`extension`/`extends`/`implements`/`with`/`where`/`from`/`uses`).
+- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 4262 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `match` (statement and expression), variable reassignment, block scoping, integer/float/bool literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values.
 
 ### Mid end
 - **Maxon Dialect** ([`Compiler/IR/Maxon/`](Compiler/IR/Maxon/)): MaxonDialect, MaxonPrinter, scope tracking, source ranges, dead-function-elimination, `LowerMaxonToStd`.
@@ -52,9 +53,9 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (32)
+### Currently whitelisted specs (33)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion` (13 fragment failures).
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `enums-simple`.
 
 ---
 
@@ -198,19 +199,19 @@ Parser at [`Parser.maxon:2439`](Compiler/Parser.maxon#L2439) (`parseStructLitera
 
 **Goal**: enum declarations (simple and with associated values), pattern matching with case extraction.
 
-### Specs to unlock
-`enums-simple`, `enum-full`, `enum-match-only`, `match-statements`, `match-simple`, `match-enum-typed-binding`, `enum-struct-field-match`, `enum-hashable`.
+### Done
+- `enums-simple` (14 fragments): enum declarations with int and float raw values, methods on enums, `match` as both statement and expression, `gives` and `then` arms, keyword-token case names (`function`, `return`, `end`, `if`, …), error-path diagnostics E3030 / E3031 / E3032 / E3034.
+- Pipeline integration: enum cases registered as top-level constants so `EnumName.case` flows through the existing `unresolvedRead → literal` rewrite. The enum itself is registered as a typealias to int (or f64 for float-backed) so parameters / return types / locals lower without per-call special cases.
 
-### Changes
+### Still pending
+`enum-full`, `enum-match-only`, `match-statements`, `match-simple`, `match-enum-typed-binding`, `enum-struct-field-match`, `enum-hashable` — associated values, exhaustiveness checks, default arms, fallthrough, range patterns (`1 to 5 then …`).
 
-**Parser**: `enum Name ... end`, `match val 'l' ... Case(x) then ... end 'l'`, enum construction `EnumType.caseName(value)`.
+### Changes still required for full phase
+**Parser**: `match val 'l' ... Case(x) then ... end 'l'` (case-binding form), associated-value enum construction (`EnumType.caseName(value)`), `default` arms, `to`/`upto` range patterns.
 
-**Maxon Dialect**: `enumLiteral`, `enumConstruct`, `enumTag`, `enumPayload`, `enumRawValue`, `enumName`.
+**Maxon Dialect**: `enumConstruct`, `enumTag`, `enumPayload`, `enumRawValue`, `enumName` (only needed when associated values land — simple enums lower to plain integer literals through the existing `literal` op).
 
-**Memory model**: tag (i64) + max-payload-size buffer. Tag identifies the case, payload holds the associated value.
-
-### Files to modify
-- All pipeline files.
+**Memory model**: tag (i64) + max-payload-size buffer for unions. Today's int-backed enums need no payload.
 
 ---
 

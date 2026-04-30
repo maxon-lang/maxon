@@ -392,6 +392,18 @@ export union MaxonOp
 	// not assignable, so a write that resolves to one becomes a diagnostic.
 	// Lowering must never see this op.
 	unresolvedAssign(name String, value ByteArray, range SourceRange)
+	// Parser-emitted block terminator for one match arm's dispatch:
+	// "if scrutinee == EnumName.caseName then thenTarget else elseTarget".
+	// The parser cannot resolve the case name to its raw value at parse
+	// time without breaking the rule that the parser performs no type
+	// inference — so it emits this placeholder carrying the case name
+	// verbatim and lets TypeResolution fill in `rawValue` / `isFloat`
+	// once the scrutinee's enum type is known. `resolved` flips to true
+	// when TR has filled the slot; lowering panics on an unresolved op.
+	// On a TR-detected miss (unknown case, non-enum scrutinee) TR
+	// rewrites the op to `br(elseTarget, ...)` after reporting the
+	// diagnostic, so the block still has a valid terminator.
+	enumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, range SourceRange)
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -439,6 +451,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		selfFieldStore(fieldName, value, _) gives "maxon.self_field_store .{String.from(fieldName)}, %{String.from(value)}"
 		unresolvedRead(result, name, _) gives "%{String.from(result)} = maxon.unresolved_read @{name}"
 		unresolvedAssign(name, value, _) gives "maxon.unresolved_assign @{name}, %{String.from(value)}"
+		enumMatchArm(scrutineeName, caseName, _, _, _, _, thenTarget, elseTarget, _) gives maxonEnumMatchArmToString(scrutineeName, caseName: caseName, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 	end 'print'
 end 'maxonOpToString'
@@ -448,6 +461,12 @@ function maxonCondBrToString(cond ByteArray, thenTarget BlockId, elseTarget Bloc
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
 	return "maxon.cond_br %{String.from(cond)} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonCondBrToString'
+
+function maxonEnumMatchArmToString(scrutineeName ByteArray, caseName String, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+	return "maxon.enum_match_arm %{String.from(scrutineeName)} == .{caseName} [then: {thenLabel}, else: {elseLabel}]"
+end 'maxonEnumMatchArmToString'
 
 function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
 	let label = resolveBlockLabel(target, blocks: blocks)
