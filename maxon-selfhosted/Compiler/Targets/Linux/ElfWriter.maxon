@@ -6,14 +6,37 @@
 // The third segment is emitted only when the backend produced covDataSectionBytes;
 // non-coverage builds stay byte-identical to the two-segment baseline.
 // Linux x64 targets use raw syscalls, so no dynamic linking is needed.
+//
+// Debug symbols: when codeResult.debugSymbols is non-empty, .symtab + .strtab +
+// .shstrtab are appended to the file along with a section header table.
+// Loadable segments are unaffected; debuggers (lldb, llvm-readelf -s) read the
+// section header table to resolve function names.
 
 let ELF_LOAD_ADDR = 0x400000
 let ELF_HEADER_SIZE = 64
 let ELF_PHDR_SIZE = 56
+let ELF_SHDR_SIZE = 64
+let ELF_SYM_SIZE = 24
 let ELF_PAGE_SIZE = 0x1000
+
+// ELF section header types and flags (subset).
+let ELF_SHT_NULL = 0
+let ELF_SHT_PROGBITS = 1
+let ELF_SHT_SYMTAB = 2
+let ELF_SHT_STRTAB = 3
+
+let ELF_SHF_WRITE = 0x1
+let ELF_SHF_ALLOC = 0x2
+let ELF_SHF_EXECINSTR = 0x4
+
+// ELF symbol info (st_info) bindings/types.
+let ELF_STB_GLOBAL = 1
+let ELF_STT_FUNC = 2
 
 // Size of the writable .data section (heap arena for bump allocator).
 let ELF_DATA_SECTION_SIZE = 65536
+
+typealias ElfStrOffsetArray = Array with ByteOffset
 
 // Patch x64 RIP-relative rdata relocations for ELF
 function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord, dataVAddr MachineWord, covdataVAddr MachineWord)
@@ -42,6 +65,39 @@ function patchElfRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocati
 		end 'patchKind'
 	end 'patch'
 end 'patchElfRdataRelocationsArm64'
+
+// Append a NUL-terminated name to the strtab and return the offset where it
+// was placed. The strtab must already have the leading NUL byte from create().
+function appendStrtabName(strtab ByteArray, name String) returns ByteOffset
+	let offset = strtab.count()
+	strtab.append(name.toByteArray())
+	strtab.push(0)
+	return offset
+end 'appendStrtabName'
+
+// Write one Elf64_Shdr (64 bytes).
+function writeElfShdr(elf ByteArray, nameOff MachineWord, shType MachineWord, flags MachineWord, addr MachineWord, offset MachineWord, size MachineWord, link MachineWord, info MachineWord, addralign MachineWord, entsize MachineWord)
+	writeDword(elf, value: nameOff)
+	writeDword(elf, value: shType)
+	writeQword(elf, value: flags)
+	writeQword(elf, value: addr)
+	writeQword(elf, value: offset)
+	writeQword(elf, value: size)
+	writeDword(elf, value: link)
+	writeDword(elf, value: info)
+	writeQword(elf, value: addralign)
+	writeQword(elf, value: entsize)
+end 'writeElfShdr'
+
+// Write one Elf64_Sym (24 bytes).
+function writeElfSym(elf ByteArray, nameOff MachineWord, info MachineWord, other MachineWord, shndx MachineWord, value MachineWord, size MachineWord)
+	writeDword(elf, value: nameOff)
+	elf.push(info and 0xFF)         // st_info
+	elf.push(other and 0xFF)        // st_other
+	writeWord(elf, value: shndx)    // st_shndx
+	writeQword(elf, value: value)   // st_value
+	writeQword(elf, value: size)    // st_size
+end 'writeElfSym'
 
 export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
 	var code = codeResult.code
@@ -111,6 +167,9 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	elf.reserve(totalFileSize)
 
 	// === ELF Header (64 bytes) ===
+	// e_shoff / e_shentsize / e_shnum / e_shstrndx are emitted as zero placeholders
+	// here; if the backend supplied debug symbols, they are backpatched after the
+	// section header table is appended at the end of the file.
 
 	// e_ident[0..16]: magic, class=64, data=LSB, version=1, OS/ABI=SysV, padding
 	elf.append(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -124,17 +183,29 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		default panic("ELF writer not used for WASM targets")
 	end 'cpuMachine'
 	writeWord(elf, value: eMachine)
-	// e_version(1)
-	elf.append(b"\x01\x00\x00\x00")
-	// e_entry: entry point virtual address
+	// e_version (4)
+	writeDword(elf, value: 1)
+	// e_entry (8)
 	writeQword(elf, value: entryPoint)
-	// e_phoff(64), e_shoff(0), e_flags(0)
-	elf.append(b"\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-	// e_ehsize(64), e_phentsize(56)
-	elf.append(b"\x40\x00\x38\x00")
-	// e_phnum (variable), e_shentsize(0), e_shnum(0), e_shstrndx(0)
+	// e_phoff (8): program headers immediately follow the ELF header
+	writeQword(elf, value: ELF_HEADER_SIZE)
+	// e_shoff (8) — patched if debug symbols are emitted
+	let eShoffOffset = elf.count()
+	writeQword(elf, value: 0)
+	// e_flags (4)
+	writeDword(elf, value: 0)
+	// e_ehsize (2), e_phentsize (2)
+	writeWord(elf, value: ELF_HEADER_SIZE)
+	writeWord(elf, value: ELF_PHDR_SIZE)
+	// e_phnum (2)
 	writeWord(elf, value: numPhdrs)
-	elf.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	// e_shentsize (2), e_shnum (2), e_shstrndx (2) — patched if debug symbols emitted
+	let eShentsizeOffset = elf.count()
+	writeWord(elf, value: 0)
+	let eShnumOffset = elf.count()
+	writeWord(elf, value: 0)
+	let eShstrndxOffset = elf.count()
+	writeWord(elf, value: 0)
 
 	// === Program Header 1: code + rdata + symdata (R+X) ===
 	// p_type(PT_LOAD=1), p_flags(PF_R|PF_X=5), p_offset(0)
@@ -209,6 +280,120 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		end 'padToCovdata'
 		elf.append(codeResult.covDataSectionBytes)
 	end 'writeCovdataPayload'
+
+	// === Debug symbol tables ===
+	// Appended after all loadable segments. The section header table sits at the
+	// very end of the file. Loadable PT_LOAD segments are unaffected because the
+	// loader only follows program headers; the section header table is for tools.
+	if codeResult.debugSymbols.count() > 0 'writeSymTables'
+		// Section indices (positions in the section header table). Index 0 is
+		// the SHT_NULL entry. PROGBITS sections (.text, optional .rodata, .data,
+		// optional .covdata) come first, followed by .symtab, .strtab, .shstrtab.
+		// Only `textShndx` (st_shndx for function symbols) and the trailing
+		// indices are read; intermediate PROGBITS shndx values are implicit in
+		// the section-header write order.
+		let textShndx = 1
+		var progbitsCount = 2  // SHT_NULL + .text
+		if rdataSize > 0 'rodataIdx'
+			progbitsCount = progbitsCount + 1
+		end 'rodataIdx'
+		progbitsCount = progbitsCount + 1  // .data
+		if hasCovdata 'covdataIdx'
+			progbitsCount = progbitsCount + 1
+		end 'covdataIdx'
+		let symtabShndx = progbitsCount
+		let strtabShndx = symtabShndx + 1
+		let shstrtabShndx = strtabShndx + 1
+		let shnum = shstrtabShndx + 1
+
+		// Build .strtab (function names) — leading NUL byte is required.
+		var strtab = ByteArray.create()
+		strtab.push(0)
+		var symNameOffsets = ElfStrOffsetArray.create()
+		for sym in codeResult.debugSymbols 'eachSym'
+			let off = appendStrtabName(strtab, name: sym.name)
+			symNameOffsets.push(off)
+		end 'eachSym'
+
+		// Build .shstrtab (section header names) — leading NUL byte is required.
+		var shstrtab = ByteArray.create()
+		shstrtab.push(0)
+		let textNameOff = appendStrtabName(shstrtab, name: ".text")
+		var rodataNameOff = 0
+		if rdataSize > 0 'rodataName'
+			rodataNameOff = appendStrtabName(shstrtab, name: ".rodata")
+		end 'rodataName'
+		let dataNameOff = appendStrtabName(shstrtab, name: ".data")
+		var covdataNameOff = 0
+		if hasCovdata 'covdataName'
+			covdataNameOff = appendStrtabName(shstrtab, name: ".covdata")
+		end 'covdataName'
+		let symtabNameOff = appendStrtabName(shstrtab, name: ".symtab")
+		let strtabNameOff = appendStrtabName(shstrtab, name: ".strtab")
+		let shstrtabNameOff = appendStrtabName(shstrtab, name: ".shstrtab")
+
+		// Lay out the on-disk symtab/strtab/shstrtab blocks (8-byte aligned).
+		let symtabFileOffset = alignUp(elf.count(), alignment: 8)
+		let symtabSize = (codeResult.debugSymbols.count() + 1) * ELF_SYM_SIZE
+		let strtabFileOffset = symtabFileOffset + symtabSize
+		let strtabSize = strtab.count()
+		let shstrtabFileOffset = strtabFileOffset + strtabSize
+		let shstrtabSize = shstrtab.count()
+		let shoffFileOffset = alignUp(shstrtabFileOffset + shstrtabSize, alignment: 8)
+
+		// .symtab: leading STN_UNDEF (all zero) + one Elf64_Sym per function.
+		// All function symbols live in .text, so st_shndx = textShndx.
+		while elf.count() < symtabFileOffset 'padToSymtab'
+			elf.push(0)
+		end 'padToSymtab'
+		writeElfSym(elf, nameOff: 0, info: 0, other: 0, shndx: 0, value: 0, size: 0)
+		let stInfoFunc = (ELF_STB_GLOBAL shl 4) or ELF_STT_FUNC
+		for (iter, sym) in codeResult.debugSymbols.withIterator() 'writeSyms'
+			let nameOff = try symNameOffsets.get(iter.index()) otherwise panic("invariant: symNameOffsets[{iter.index()}] OOB ({symNameOffsets.count()} entries)")
+			writeElfSym(elf, nameOff: nameOff, info: stInfoFunc, other: 0, shndx: textShndx, value: textVAddr + sym.codeOffset, size: 0)
+		end 'writeSyms'
+
+		// .strtab and .shstrtab payloads.
+		elf.append(strtab)
+		elf.append(shstrtab)
+
+		// Section header table — 8-byte aligned.
+		while elf.count() < shoffFileOffset 'padToShoff'
+			elf.push(0)
+		end 'padToShoff'
+
+		// [0] SHT_NULL
+		writeElfShdr(elf, nameOff: 0, shType: ELF_SHT_NULL, flags: 0, addr: 0, offset: 0, size: 0, link: 0, info: 0, addralign: 0, entsize: 0)
+		// [1] .text
+		writeElfShdr(elf, nameOff: textNameOff, shType: ELF_SHT_PROGBITS, flags: ELF_SHF_ALLOC or ELF_SHF_EXECINSTR, addr: textVAddr, offset: headerSize, size: codeSize, link: 0, info: 0, addralign: 16, entsize: 0)
+		// [2] .rodata (optional)
+		if rdataSize > 0 'rodataShdr'
+			writeElfShdr(elf, nameOff: rodataNameOff, shType: ELF_SHT_PROGBITS, flags: ELF_SHF_ALLOC, addr: rdataVAddr, offset: rdataFileOffset, size: rdataSize, link: 0, info: 0, addralign: 8, entsize: 0)
+		end 'rodataShdr'
+		// [n] .data — backed by the on-disk prelude region (the heap arena beyond
+		// dataFileSize is uninitialized, not in any section).
+		writeElfShdr(elf, nameOff: dataNameOff, shType: ELF_SHT_PROGBITS, flags: ELF_SHF_ALLOC or ELF_SHF_WRITE, addr: dataVAddr, offset: dataFileOffset, size: dataFileSize, link: 0, info: 0, addralign: 8, entsize: 0)
+		// [n] .covdata (optional)
+		if hasCovdata 'covdataShdr'
+			writeElfShdr(elf, nameOff: covdataNameOff, shType: ELF_SHT_PROGBITS, flags: ELF_SHF_ALLOC or ELF_SHF_WRITE, addr: covdataVAddr, offset: covdataFileOffset, size: covdataFileSize, link: 0, info: 0, addralign: 8, entsize: 0)
+		end 'covdataShdr'
+		// [n] .symtab — sh_link points at .strtab; sh_info = 1 because the only
+		// non-global symbol is the leading STN_UNDEF (we emit all functions as
+		// STB_GLOBAL).
+		writeElfShdr(elf, nameOff: symtabNameOff, shType: ELF_SHT_SYMTAB, flags: 0, addr: 0, offset: symtabFileOffset, size: symtabSize, link: strtabShndx, info: 1, addralign: 8, entsize: ELF_SYM_SIZE)
+		// [n] .strtab
+		writeElfShdr(elf, nameOff: strtabNameOff, shType: ELF_SHT_STRTAB, flags: 0, addr: 0, offset: strtabFileOffset, size: strtabSize, link: 0, info: 0, addralign: 1, entsize: 0)
+		// [n] .shstrtab
+		writeElfShdr(elf, nameOff: shstrtabNameOff, shType: ELF_SHT_STRTAB, flags: 0, addr: 0, offset: shstrtabFileOffset, size: shstrtabSize, link: 0, info: 0, addralign: 1, entsize: 0)
+
+		// Backpatch the ELF header.
+		patchQword(elf, offset: eShoffOffset, value: shoffFileOffset)
+		patchWord(elf, offset: eShentsizeOffset, value: ELF_SHDR_SIZE)
+		patchWord(elf, offset: eShnumOffset, value: shnum)
+		patchWord(elf, offset: eShstrndxOffset, value: shstrtabShndx)
+
+		logDebug(LogCategory.binary, message: () gives "ELF debug symbols: {codeResult.debugSymbols.count()} entries, section header table at file offset {shoffFileOffset}")
+	end 'writeSymTables'
 
 	// Write to file
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'

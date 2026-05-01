@@ -26,6 +26,30 @@ end 'CallFixup'
 
 export typealias CallFixupArray = Array with CallFixup
 
+// A DebugSymbol pairs a function name with its byte offset in the .text section.
+// Format-neutral: PE writes COFF symbol entries from it, ELF emits Elf64_Sym
+// entries, Mach-O emits nlist_64 entries.
+export type DebugSymbol
+	export var name String
+	export var codeOffset CodeOffset
+
+	export static function create(name String, codeOffset CodeOffset) returns DebugSymbol
+		return Self{name: name, codeOffset: codeOffset}
+	end 'create'
+end 'DebugSymbol'
+
+export typealias DebugSymbolArray = Array with DebugSymbol
+
+// Zip parallel function-name and code-offset arrays into a DebugSymbolArray.
+export function buildDebugSymbols(labelNames StringArray, labelOffsets CodeOffsetArray) returns DebugSymbolArray
+	var symbols = DebugSymbolArray.create()
+	for (iter, name) in labelNames.withIterator() 'each'
+		let offset = try labelOffsets.get(iter.index()) otherwise panic("buildDebugSymbols: labelNames.count()={labelNames.count()} but labelOffsets.get({iter.index()}) failed (count={labelOffsets.count()})")
+		symbols.push(DebugSymbol.create(name, codeOffset: offset))
+	end 'each'
+	return symbols
+end 'buildDebugSymbols'
+
 // Relocation kind for code-to-rdata references.
 export union RdataRelocKind
 	ripRelDisp32
@@ -111,8 +135,12 @@ export type CodeResult
 	// .data section, before the bump allocator's heap arena. Empty for builds
 	// with no top-level mutable globals.
 	export var dataPrelude ByteArray
+	// Function-name → code-offset symbols for debug-symbol emission. Populated
+	// by backends after stdlib linking; consumed by PE/ELF/Mach-O writers to
+	// emit standard symbol tables that debuggers can consume.
+	export var debugSymbols DebugSymbolArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, mirModule MirModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
-		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create()}
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: rdataRelocations, symdata: symdata, covDataSectionBytes: covDataSectionBytes, dataPrelude: ByteArray.create(), debugSymbols: DebugSymbolArray.create()}
 	end 'create'
 end 'CodeResult'

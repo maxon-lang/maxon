@@ -123,6 +123,7 @@ export type Arm64Backend implements TargetBackend
 
 		var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes, globalData: globalData)
 		result.dataPrelude = dataPrelude
+		result.debugSymbols = buildDebugSymbols(labelNames, labelOffsets: labelOffsets)
 		return result
 	end 'emitTargetCode'
 
@@ -446,10 +447,18 @@ export type Arm64Backend implements TargetBackend
 	end 'lowerBoolTestCondBrArm64'
 
 	// Return: move value to X0 (or D0 for float), then emit epilogue+ret.
-	// Void-returning functions still get the move so that the implicit 0 returned
-	// by the parser lands in the canonical return register — keeps the dead
-	// `mov x0, 0` visible instead of letting regalloc pick an arbitrary register.
+	// Void returns skip the move entirely — earlier passes may emit `ret(vid)`
+	// where `vid` was never defined as a virtual (e.g. lowerThrow inserts a
+	// `arith.const 0` that subsequent passes can DCE because no real consumer
+	// reads it). Generating `mov x0, virtual(vid)` for that case leaves an op
+	// that uses an undefined value, which crashes the register allocator.
+	// Mirrors the X64 lowering at MirToX64Conversion.maxon:lowerReturn.
 	function lowerReturnArm64(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
+		if stdReturnTypeIsVoid(returnType) 'voidReturn'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.epilogue)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ret)
+			return
+		end 'voidReturn'
 		if stdReturnTypeIsFloat(returnType) 'floatReturn'
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(Arm64FloatRegister.d0), src: Arm64FpVReg.virtual(retValId), precision: FloatPrecision.f64))
 		end 'floatReturn' else 'intReturn'

@@ -57,6 +57,13 @@ let DYLD_CHAINED_IMPORT = 1
 // Slot 0 = _exit, Slot 1 = write
 let MACHO_IMPORT_COUNT = 2
 
+// nlist_64 type/sect bits used for debug symbols.
+let N_EXT = 0x01
+let N_SECT = 0x0E
+let MACHO_TEXT_SECT_INDEX = 1
+
+typealias MachoStrOffsetArray = Array with ByteOffset
+
 // --- Segment/Section header helpers ---
 
 function writeSegName(buf ByteArray, name String)
@@ -431,8 +438,33 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let chainedFixupsSize = chainedFixupsData.count()
 	let exportsTrieOff = alignUp(chainedFixupsOff + chainedFixupsSize, alignment: 8)
 	let exportsTrieSize = exportsTrieData.count()
-	let strtabOff = alignUp(exportsTrieOff + exportsTrieSize, alignment: 4)
-	let strtabSize = 4
+
+	// Build the symbol string table up front so the layout calculation knows
+	// its on-disk size. Mach-O strtab starts with a NUL byte; each symbol name
+	// is underscore-prefixed (per the Apple platform ABI) and NUL-terminated.
+	let nsyms = codeResult.debugSymbols.count()
+	let hasSymtab = nsyms > 0
+	var machoStrtab = ByteArray.create()
+	machoStrtab.push(0)
+	var machoSymNameOffsets = MachoStrOffsetArray.create()
+	for sym in codeResult.debugSymbols 'eachSymName'
+		let nameOff = machoStrtab.count()
+		machoStrtab.push(0x5F)  // leading underscore '_'
+		machoStrtab.append(sym.name.toByteArray())
+		machoStrtab.push(0)
+		machoSymNameOffsets.push(nameOff)
+	end 'eachSymName'
+	// When no debug symbols, preserve the original 4-byte placeholder strtab so
+	// behavior matches the pre-debug-symbol output bytewise.
+	if not hasSymtab 'noSyms'
+		machoStrtab = ByteArray.create()
+		writeZeros(machoStrtab, n: 4)
+	end 'noSyms'
+
+	let symtabOff = alignUp(exportsTrieOff + exportsTrieSize, alignment: 8)
+	let symtabSize = nsyms * 16
+	let strtabOff = symtabOff + symtabSize
+	let strtabSize = machoStrtab.count()
 
 	// Code signature offset (aligned to 16)
 	let codeSignatureOff = alignUp(strtabOff + strtabSize, alignment: 16)
@@ -494,12 +526,16 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVMAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VM_PROT_READ, initprot: VM_PROT_READ, nsects: 0)
 
 	// === LC_SYMTAB ===
+	// When the backend supplies debugSymbols, points at a real nlist_64 array
+	// followed by its strtab; otherwise nsyms = 0 and symoff degenerates to the
+	// strtab address (preserving the pre-debug-symbol behavior).
 	writeDword(macho, value: LC_SYMTAB)
 	writeDword(macho, value: symtabCmdSize)
-	writeDword(macho, value: strtabOff)  // symoff (point at strtab, 0 symbols)
-	writeDword(macho, value: 0)  // nsyms
-	writeDword(macho, value: strtabOff)  // stroff
-	writeDword(macho, value: strtabSize)  // strsize
+	let lcSymoff = symtabOff if hasSymtab else strtabOff
+	writeDword(macho, value: lcSymoff)
+	writeDword(macho, value: nsyms)
+	writeDword(macho, value: strtabOff)
+	writeDword(macho, value: strtabSize)
 
 	// === LC_DYSYMTAB ===
 	writeDword(macho, value: LC_DYSYMTAB)
@@ -591,10 +627,27 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// Exports trie
 	macho.append(exportsTrieData)
-	padTo(macho, size: strtabOff)
 
-	// String table (4 zero bytes)
-	writeZeros(macho, n: strtabSize)
+	// Symbol table (nlist_64 entries) — present only when debug symbols emitted.
+	if hasSymtab 'writeMachoSyms'
+		padTo(macho, size: symtabOff)
+		// All function symbols live in __text. Mach-O n_type for an external
+		// section-defined symbol is N_EXT | N_SECT.
+		let nType = N_EXT or N_SECT
+		for (iter, sym) in codeResult.debugSymbols.withIterator() 'writeSyms'
+			let nameOff = try machoSymNameOffsets.get(iter.index()) otherwise panic("invariant: machoSymNameOffsets[{iter.index()}] OOB ({machoSymNameOffsets.count()} entries)")
+			writeDword(macho, value: nameOff)            // n_strx
+			macho.push(nType and 0xFF)                    // n_type
+			macho.push(MACHO_TEXT_SECT_INDEX and 0xFF)    // n_sect
+			writeWord(macho, value: 0)                    // n_desc
+			writeQword(macho, value: textSectionVMAddr + sym.codeOffset)  // n_value
+		end 'writeSyms'
+	end 'writeMachoSyms'
+
+	// String table — either the real symbol-name strtab or the pre-debug-symbol
+	// 4-byte placeholder.
+	padTo(macho, size: strtabOff)
+	macho.append(machoStrtab)
 
 	// Pad to code signature offset
 	padTo(macho, size: codeSignatureOff)

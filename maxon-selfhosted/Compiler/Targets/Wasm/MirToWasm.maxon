@@ -465,31 +465,38 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	end 'hasData'
 
 	// --- Name section (custom section for debug info) ---
-	// Encodes function names so wasmtime can show them in stack traces.
-	var namePayload = ByteArray.create()
-	// Function name subsection (id=1)
+	// Encodes module name and function names so wasmtime / Chrome devtools /
+	// wasm-objdump can show them in stack traces and listings. Per the
+	// WebAssembly Name Section spec, subsections must appear in increasing
+	// id order: 0 = module name, 1 = function names, 2 = local names.
+	var nameSection = ByteArray.create()
+	writeWasmName(nameSection, name: b"name")
+
+	// Subsection 0: module name.
+	var moduleNamePayload = ByteArray.create()
+	writeWasmName(moduleNamePayload, name: b"maxon")
+	nameSection.push(0)
+	writeUleb128(nameSection, value: moduleNamePayload.count() as MachineWord)
+	nameSection.append(moduleNamePayload)
+
+	// Subsection 1: function names. Indices cover both WASI imports and
+	// module-defined functions; the index space is shared.
 	var funcNameMap = ByteArray.create()
 	let totalFuncCount = wasiImportCount + funcCount
 	writeUleb128(funcNameMap, value: totalFuncCount)
-	// Import names
 	writeUleb128(funcNameMap, value: 0)
 	writeWasmName(funcNameMap, name: b"proc_exit")
 	writeUleb128(funcNameMap, value: 1)
 	writeWasmName(funcNameMap, name: b"fd_write")
-	// Module function names
 	for i in 0 upto funcCount 'nameFuncs'
 		let name = try funcNames.get(i) otherwise "unknown"
 		writeUleb128(funcNameMap, value: wasiImportCount + i)
 		writeWasmName(funcNameMap, name: name.toByteArray())
 	end 'nameFuncs'
-	// Write subsection: id=1, then length-prefixed content
-	namePayload.push(1)
-	writeUleb128(namePayload, value: funcNameMap.count() as MachineWord)
-	namePayload.append(funcNameMap)
-	// Write custom section: id=0, name="name", then payload
-	var nameSection = ByteArray.create()
-	writeWasmName(nameSection, name: b"name")
-	nameSection.append(namePayload)
+	nameSection.push(1)
+	writeUleb128(nameSection, value: funcNameMap.count() as MachineWord)
+	nameSection.append(funcNameMap)
+
 	writeSection(wasm, sectionId: 0, contents: nameSection)
 
 	return wasm

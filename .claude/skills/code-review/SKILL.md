@@ -29,7 +29,7 @@ Create a task list to perform these steps.
     - Remove functions that are just a thin wrapper around another function call
     - the "try/otherwise panic" structure should be used to handle errors that should never happen
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
-3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass. Do the C# tests first then the self hosted tests.
+3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass. Do the C# tests first then the self hosted tests and the wasm tests.
 
     ### Building the compilers
 

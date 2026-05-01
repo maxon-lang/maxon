@@ -115,6 +115,106 @@ function writeSectionHeader(buf ByteArray, name String, virtualSize ByteCount, v
 	writeDword(buf, value: characteristics)
 end 'writeSectionHeader'
 
+// --- COFF symbol table ---
+// Standard COFF symbol entries appended after all sections. Debuggers (lldb,
+// llvm-objdump) read this table; the loader ignores everything past the last
+// section so runtime behavior is unaffected. Backpatches PointerToSymbolTable
+// and NumberOfSymbols in the COFF header. The custom .symtab runtime section
+// (read by mrt_panic for stack traces) is unrelated and untouched.
+
+// Write one 18-byte COFF symbol entry. Names ≤8 bytes are stored inline (NUL-padded);
+// longer names are placed in the COFF string table and the entry stores a 4-byte
+// offset (with 4 leading zero bytes to mark the long-name form).
+function writeCoffSymbolEntry(pe ByteArray, stringTable ByteArray, name String, value MachineWord, sectionNumber MachineWord, symType MachineWord, storageClass MachineWord, numAux MachineWord)
+	let nameBytes = name.toByteArray()
+	let nameLen = nameBytes.count()
+	if nameLen <= 8 'shortName'
+		pe.append(nameBytes)
+		for _ in nameLen upto 8 'pad'
+			pe.push(0)
+		end 'pad'
+	end 'shortName' else 'longName'
+		writeDword(pe, value: 0)
+		writeDword(pe, value: stringTable.count())
+		stringTable.append(nameBytes)
+		stringTable.push(0)
+	end 'longName'
+	writeDword(pe, value: value)
+	writeWord(pe, value: sectionNumber)
+	writeWord(pe, value: symType)
+	pe.push(storageClass and 0xFF)
+	pe.push(numAux and 0xFF)
+end 'writeCoffSymbolEntry'
+
+// One emitted PE section, paired with the size that goes into its COFF
+// section-definition auxiliary record (raw on-disk size for PROGBITS-style
+// sections like .text/.rdata/.idata/.data/.covdata/.symtab).
+type PeSectionRec
+	export var name String
+	export var rawSize ByteCount
+
+	export static function create(name String, rawSize ByteCount) returns PeSectionRec
+		return Self{name: name, rawSize: rawSize}
+	end 'create'
+end 'PeSectionRec'
+
+typealias PeSectionList = Array with PeSectionRec
+
+// Append section symbols (one per emitted section, with a format-5 auxiliary
+// record carrying the section's raw size) followed by one external function
+// symbol per DebugSymbol entry, then the COFF string table. Returns the total
+// symbol count for the COFF header backpatch.
+function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, idataSize ByteCount, dataRawSize ByteCount, hasCovdata bool, covdataSize ByteCount) returns MachineWord
+	var stringTable = ByteArray.create()
+	// Reserve the leading 4-byte size prefix; patched after all names are appended.
+	writeZeros(stringTable, n: 4)
+
+	// Section-symbol order MUST match the section-emission order in writePe so
+	// the section number assigned here lines up with the COFF section index.
+	var sections = PeSectionList.create()
+	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
+	if hasRdata 'addRdata'
+		sections.push(PeSectionRec.create(".rdata", rawSize: rdataSize))
+	end 'addRdata'
+	if hasSymdata 'addSymtab'
+		sections.push(PeSectionRec.create(".symtab", rawSize: symdataSize))
+	end 'addSymtab'
+	sections.push(PeSectionRec.create(".idata", rawSize: idataSize))
+	sections.push(PeSectionRec.create(".data", rawSize: dataRawSize))
+	if hasCovdata 'addCovdata'
+		sections.push(PeSectionRec.create(".covdata", rawSize: covdataSize))
+	end 'addCovdata'
+
+	var totalSymbolCount = 0 as MachineWord
+	for (iter, section) in sections.withIterator() 'sectionSyms'
+		// IMAGE_SYM_CLASS_STATIC = 3, no type, one auxiliary section-definition record.
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: section.name, value: 0, sectionNumber: iter.index() + 1, symType: 0x0000, storageClass: 3, numAux: 1)
+		totalSymbolCount = totalSymbolCount + 1
+		// Auxiliary format 5 (section definition): 18 bytes total.
+		writeDword(pe, value: section.rawSize)  // Length
+		writeWord(pe, value: 0)                  // NumberOfRelocations
+		writeWord(pe, value: 0)                  // NumberOfLinenumbers
+		writeDword(pe, value: 0)                 // CheckSum
+		writeWord(pe, value: 0)                  // Number (COMDAT)
+		pe.push(0)                               // Selection
+		writeZeros(pe, n: 3)                     // Unused
+		totalSymbolCount = totalSymbolCount + 1
+	end 'sectionSyms'
+
+	// Function symbols: all live in .text (section 1).
+	// IMAGE_SYM_DTYPE_FUNCTION = 0x0020, IMAGE_SYM_CLASS_EXTERNAL = 2.
+	for sym in debugSymbols 'funcSyms'
+		writeCoffSymbolEntry(pe, stringTable: stringTable, name: sym.name, value: sym.codeOffset, sectionNumber: 1, symType: 0x0020, storageClass: 2, numAux: 0)
+		totalSymbolCount = totalSymbolCount + 1
+	end 'funcSyms'
+
+	// String table size prefix is the total table size (including the prefix itself).
+	patchDword(stringTable, offset: 0, value: stringTable.count())
+	pe.append(stringTable)
+
+	return totalSymbolCount
+end 'writeCoffSymbolTable'
+
 // --- Main PE writer ---
 
 // Patch x64 RIP-relative relocations: each relocation is a disp32 at codeOffset
@@ -295,8 +395,15 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	end 'coffCpu'
 	writeWord(pe, value: coffMachine)
 	writeWord(pe, value: numSections)
-	// TimeDateStamp(0), PointerToSymbolTable(0), NumberOfSymbols(0), SizeOfOptionalHeader(240), Characteristics(0x22)
-	pe.append(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf0\x00\x22\x00")
+	// TimeDateStamp stays zero; PointerToSymbolTable + NumberOfSymbols are
+	// backpatched after the COFF symbol table is appended at the end of the file.
+	writeZeros(pe, n: 4)                              // TimeDateStamp
+	let pointerToSymbolTableOffset = pe.count()       // file offset 76
+	writeZeros(pe, n: 4)                              // PointerToSymbolTable (patched later)
+	let numberOfSymbolsOffset = pe.count()            // file offset 80
+	writeZeros(pe, n: 4)                              // NumberOfSymbols (patched later)
+	writeWord(pe, value: 240)                         // SizeOfOptionalHeader
+	writeWord(pe, value: 0x22)                        // Characteristics
 
 	// === Optional Header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")
@@ -392,6 +499,17 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		pe.append(codeResult.covDataSectionBytes)
 		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned + dataRawSize + covdataSizeAligned)
 	end 'writeCovdata'
+
+	// === COFF symbol table + string table ===
+	// Appended past the last loadable section. Image loaders ignore trailing
+	// bytes; debuggers (lldb, llvm-objdump) read this table to resolve names.
+	if codeResult.debugSymbols.count() > 0 'writeCoff'
+		let symbolTableFileOffset = pe.count()
+		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, codeSize: codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, idataSize: idataSize, dataRawSize: dataRawSize, hasCovdata: hasCovdata, covdataSize: covdataSize)
+		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
+		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)
+		logDebug(LogCategory.binary, message: () gives "COFF symbol table: {totalSymbolCount} entries at file offset {symbolTableFileOffset}")
+	end 'writeCoff'
 
 	// Write to file
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'

@@ -204,7 +204,7 @@ Functions: 1, Blocks: 1, Ops: 5
 === After lower-abi (std) ===
 Functions: 1, Blocks: 1, Ops: 5
 === After augment-with-runtime (std) ===
-Functions: 10, Blocks: 41, Ops: 348
+Functions: 12, Blocks: 43, Ops: 358
 lower-std-to-mir: func=mrt_start blocks=1
 lower-std-to-mir: func=mrt_write_stdout blocks=1
 lower-std-to-mir: func=mrt_write_stderr blocks=1
@@ -214,9 +214,11 @@ lower-std-to-mir: func=mrt_panic blocks=8
 lower-std-to-mir: func=mrt_panic_print_frame blocks=9
 lower-std-to-mir: func=mrt_alloc blocks=1
 lower-std-to-mir: func=mrt_printInt blocks=1
+lower-std-to-mir: func=mrt_set_error blocks=1
+lower-std-to-mir: func=mrt_get_error_and_clear blocks=1
 lower-std-to-mir: func=main blocks=1
 === After lower-std-to-mir (mir) ===
-Functions: 10, Blocks: 41, Ops: 255
+Functions: 12, Blocks: 43, Ops: 265
 ```
 
 <!-- test: return-function-call -->

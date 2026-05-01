@@ -77,6 +77,19 @@ export function readQword(buf ByteArray, offset ByteOffset) returns MachineWord
 	return lo or (hi shl 32)
 end 'readQword'
 
+export function patchWord(buf ByteArray, offset ByteOffset, value MachineWord)
+	// Caller's contract: offset+2 <= buf.count(). Both byte writes share this single invariant.
+	try 'writeBytes'
+		buf.set(offset, value: value and 0xFF)
+		buf.set(offset + 1, value: (value shr 8) and 0xFF)
+	end 'writeBytes' otherwise(e) 'badWrite'
+		match e 'kind'
+			indexOutOfBounds then panic("patchWord: caller must ensure offset+2 <= buf.count() (offset={offset}, buf.count={buf.count()})")
+			emptySlot then panic("patchWord: byte slot empty (push-init invariant)")
+		end 'kind'
+	end 'badWrite'
+end 'patchWord'
+
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
 	// Caller's contract: offset+4 <= buf.count(). All four byte writes share this single invariant.
 	try 'writeBytes'
@@ -91,6 +104,11 @@ export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
 		end 'kind'
 	end 'badWrite'
 end 'patchDword'
+
+export function patchQword(buf ByteArray, offset ByteOffset, value MachineWord)
+	patchDword(buf, offset: offset, value: value and 0xFFFFFFFF)
+	patchDword(buf, offset: offset + 4, value: (value shr 32) and 0xFFFFFFFF)
+end 'patchQword'
 
 export function writeDwordBE(buf ByteArray, value MachineWord)
 	buf.push((value shr 24) and 0xFF)
