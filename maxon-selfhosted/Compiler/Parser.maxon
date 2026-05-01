@@ -4132,6 +4132,7 @@ export type Parser
 		var argIndex = 0
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while true 'argLoop'
+				let argStartPos = cursor.index()
 				let labelOpt = try consumeArgLabel(requireNamed: argIndex >= 1)
 				var labelStr = ""
 				if labelOpt.hasValue 'hasLabel'
@@ -4148,6 +4149,15 @@ export type Parser
 				if at(TokenKind.rightParen) 'endArgs'
 					break
 				end 'endArgs'
+				// Stuck-guard: when an inner expression's recovery parks the
+				// cursor on a synchronization-stop token (e.g. `synchronize()`
+				// from `expect(rightParen)` after a malformed inline closure
+				// landed on a newline), the next iteration would re-recover at
+				// the same position — infinite loop. Break out and let the
+				// trailing `expect(rightParen)` report the cascade.
+				if cursor.index() <= argStartPos 'stuckArg'
+					break
+				end 'stuckArg'
 			end 'argLoop'
 		end 'hasArgs'
 		try expect(TokenKind.rightParen)
