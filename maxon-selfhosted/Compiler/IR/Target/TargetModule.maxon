@@ -36,6 +36,15 @@ export type TargetModule
 			cpu: cpu
 		}
 	end 'create'
+
+	// Count ops still reachable from any block. Shared with IrModule via
+	// `countLiveOps`; both modules report block-reachable counts so post-
+	// rewrite passes don't double-count dropped, unreferenced entries in
+	// the underlying op array. Cold path — only called when ir-trace
+	// logging or `--dump-stages` is on.
+	export function liveOpCount() returns OpCount
+		return countLiveOps(self.functions, blocks: self.blocks)
+	end 'liveOpCount'
 end 'TargetModule'
 
 // ============================================================

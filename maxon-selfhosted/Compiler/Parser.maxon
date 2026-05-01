@@ -54,6 +54,24 @@ export typealias BoolArray = Array with bool
 
 typealias TokenIter = ArrayIterator with Token
 
+// Stage E (closures): one entry per distinct outer-scope name captured by
+// a closure body. The parser appends to `closureCaptures` in first-reference
+// order so `index` doubles as the env-array slot at lowering time. Capture
+// is by reference: lowering emits a stackAddr of the outer slot into env[i],
+// and the lifted body's `closureEnvLoad` reads through env[i] to recover
+// the live value at call time.
+export type CaptureInfo
+	export var name String
+	export var captureType MaxonType
+	export var index ParsedInt
+
+	export static function create(name String, captureType MaxonType, index ParsedInt) returns CaptureInfo
+		return Self{name: name, captureType: captureType, index: index}
+	end 'create'
+end 'CaptureInfo'
+
+export typealias CaptureInfoArray = Array with CaptureInfo
+
 export type Parser
 	var project Project
 	// Original token array kept for absolute-index lookups (e.g. "previous
@@ -125,6 +143,20 @@ export type Parser
 	// the match-arm helper can see and process the fallthrough marker.
 	// Saved/restored by callers so nested matches behave correctly.
 	var inMatchArmBody bool
+	// Stage E (closures): set true while parsing a closure body. Toggles the
+	// capture-detection branches in `emitSelfLoad` and the bare-name read
+	// path so outer-scope references emit `closureEnvLoad` ops instead of
+	// crashing with "Undefined variable" against the lifted function's
+	// fresh scope. parseClosure saves/restores both this and `closureCaptures`.
+	var inClosure bool
+	// Stage E (closures): the outer function's scope at the moment we
+	// entered a closure body. Used to discriminate capture references
+	// (declared in the enclosing scope) from genuine undefined names.
+	// `closureCaptures` accumulates a CaptureInfo per distinct outer name
+	// referenced in the body so parseClosure can mint a paired
+	// `closureCreate` op carrying the names + types in env-array order.
+	var closureOuterScope Scope
+	var closureCaptures CaptureInfoArray
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -135,7 +167,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -206,6 +238,56 @@ export type Parser
 
 	// --- Function parsing ---
 
+	// Parse a single type reference. Recognizes either:
+	//   - a single type-name token (identifier or primitive keyword), OR
+	//   - a function type `(T1, T2) returns R` (parameter parens, optional
+	//     `returns` clause; missing `returns` ⇒ void return).
+	// Used by parameter-type and interface-method parameter-type sites so
+	// `function apply(f (Integer) returns Integer, x Integer) ...` parses.
+	// On a missing/malformed type token the helper reports E2003 and
+	// synchronizes the cursor — callers that already have their own
+	// recovery path (parseFunctionParameters' `synchronize() + return`)
+	// preserve that behaviour by checking `at(TokenKind.rightParen)` after
+	// the call and bailing.
+	//
+	// Commas inside the function-type parameter list are skipped at the
+	// lexer (see actionTable's skipOther), so the inner `parseTypeRef` calls
+	// see a flat run of types between the parens.
+	function parseTypeRef() returns MaxonType throws ParserError
+		// Function-type form: `(T1, T2) returns R` or `() returns R` or
+		// `(T1) returns R` (variadic-arity not supported — function types
+		// are fully parenthesized at every call site).
+		if at(TokenKind.leftParen) 'isFn'
+			try eat(TokenKind.leftParen)
+			var fnParamTypes = MaxonTypeArray.create()
+			while not at(TokenKind.rightParen) 'paramTypes'
+				let inner = try parseTypeRef()
+				fnParamTypes.push(inner)
+			end 'paramTypes'
+			try eat(TokenKind.rightParen)
+			// `returns` is optional — its absence means the function type
+			// returns void. Mirrors C# bootstrap's `ParseFunctionType`.
+			var fnReturn = MaxonReturnType.void
+			if accept(TokenKind.returns) 'hasReturn'
+				let inner = try parseTypeRef()
+				fnReturn = MaxonReturnType.value(inner)
+			end 'hasReturn'
+			let id = internFunctionType(project, paramTypes: fnParamTypes, returnType: fnReturn)
+			return MaxonType.function(id)
+		end 'isFn'
+
+		// Single-token type — identical to the legacy parameter-type path.
+		let typeToken = try consumeExpecting("type name")
+		if not isTypeNameToken(typeToken) 'badType'
+			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name", line: typeToken.line, column: typeToken.column, filePath: filePath)
+			synchronize()
+			// Return a placeholder — the caller's synchronize check will
+			// drop this value before it reaches downstream consumers.
+			return MaxonType.unresolved
+		end 'badType'
+		return internMaxonType(project, name: typeToken.value)
+	end 'parseTypeRef'
+
 	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`
 	// with optional default values `name Type = literal`.
 	// Appends each parameter to the symbol table and to paramTypes, and updates
@@ -227,14 +309,15 @@ export type Parser
 
 			checkReservedDeclName(paramNameToken)
 
-			let paramTypeToken = try consumeExpecting("type name")
-			if not isTypeNameToken(paramTypeToken) 'badType'
-				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name", line: paramTypeToken.line, column: paramTypeToken.column, filePath: filePath)
-				synchronize()
+			// `parseTypeRef` handles both the legacy single-token type and
+			// function-type parameter shapes (`f (Integer) returns Integer`).
+			// On a malformed type it reports E2003 and synchronizes — the
+			// `at(rightParen)` test below short-circuits the loop in that
+			// case so we don't push half-consumed state.
+			let paramMaxonType = try parseTypeRef()
+			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramMaxonType) 'recovered'
 				return
-			end 'badType'
-
-			let paramMaxonType = internMaxonType(project, name: paramTypeToken.value)
+			end 'recovered'
 
 			// Define the parameter as a variable so it's accessible in the body
 			_ = defineVariableWithType(paramNameToken.value, varType: paramMaxonType)
@@ -243,6 +326,21 @@ export type Parser
 			paramNames.push(paramNameToken.value)
 			paramDefaults.push(try parseOptionalParamDefault())
 			paramCount = paramCount + 1
+			// Stage E (closures): a function-typed parameter `f (T) returns R`
+			// expands at the ABI level to a (fn-pointer, env-pointer) pair.
+			// Allocate the hidden env slot in the parser's scope here — that
+			// way the slot-id counter and any follow-on `defineVariableWithType`
+			// (later params, locals in the body) automatically pick up the
+			// +1 offset. The env slot has a reserved `__env_<paramName>`
+			// name that user code can't shadow (`__`-prefix is rejected by
+			// `checkReservedDeclName`). The matching paramTypes / paramNames
+			// entry is appended later by parseFunction's caller-side
+			// expansion step so the user-facing FuncSignature stays at the
+			// declared param count.
+			if isFunctionMaxonType(paramMaxonType) 'expandEnv'
+				let envName = "__env_{paramNameToken.value}"
+				_ = scope.declare(envName, varType: MaxonType.integer, mutable: true)
+			end 'expandEnv'
 
 			if cursor.current().kind == TokenKind.rightParen 'endParams'
 				break
@@ -412,6 +510,24 @@ export type Parser
 
 		try parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
 		try expect(TokenKind.rightParen)
+		// Stage E (closures): build the ABI-level paramTypes array by
+		// inserting an i64 env-pointer slot after every function-typed
+		// param. `paramTypes` / `paramNames` / `paramDefaults` stay at
+		// the user-facing count so FuncSignature drives slot-fill +
+		// default insertion against the declared shape; `abiParamTypes`
+		// lands on `IrFunction.maxonParamTypes` and gives Std lowering
+		// the expanded ABI shape. parseFunctionParameters already
+		// allocated the env slot in `scope`, so slot ids here naturally
+		// align with `abiParamTypes` indexing.
+		var abiParamTypes = MaxonTypeArray.create()
+		for i in 0 upto paramTypes.count() 'expandAbi'
+			let pt = try paramTypes.get(i) otherwise panic("parseFunction: paramTypes.get OOB at {i} during ABI expansion")
+			abiParamTypes.push(pt)
+			if isFunctionMaxonType(pt) 'addEnv'
+				abiParamTypes.push(MaxonType.integer)
+			end 'addEnv'
+		end 'expandAbi'
+		let abiParamCount = abiParamTypes.count() as ParamCount
 
 		let returnType_ = try parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
 		// Capture the void-ness up front so we can release the `returnType_`
@@ -425,7 +541,7 @@ export type Parser
 		// instead of throwing through to queryParseOps' generic EOF fallback.
 		_ = skipOptionalNewlines()
 
-		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0, throwsTypeName: throwsTypeName_)
+		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: abiParamCount, maxonParamTypes: abiParamTypes, returnLine: 0, throwsTypeName: throwsTypeName_)
 		// Carry the source-file namespace forward so LowerMaxonToStd can
 		// resolve `CallContext.free` callees against `{namespace}.callee`
 		// even when the function's own name is bare (e.g. main entrypoint).
@@ -1774,14 +1890,15 @@ export type Parser
 				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
 			end 'badName'
 			checkReservedDeclName(paramNameToken)
-			let paramTypeToken = try consumeExpecting("type name")
-			if not isTypeNameToken(paramTypeToken) 'badType'
-				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name", line: paramTypeToken.line, column: paramTypeToken.column, filePath: filePath)
-				synchronize()
+			// Function-typed interface params must work too. Return-type
+			// parsing (below) stays single-token for now — Stage A's tests
+			// don't exercise function-typed interface return positions.
+			let paramType = try parseTypeRef()
+			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramType) 'recovered'
 				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
-			end 'badType'
+			end 'recovered'
 			paramNames.push(paramNameToken.value)
-			paramTypes.push(internMaxonType(project, name: paramTypeToken.value))
+			paramTypes.push(paramType)
 		end 'paramLoop'
 
 		try expect(TokenKind.rightParen)
@@ -2787,11 +2904,7 @@ export type Parser
 	function isUnresolvedMaxonType(t MaxonType) returns bool
 		return match t 'check'
 			unresolved gives true
-			boolean gives false
-			integer gives false
-			float gives false
-			string gives false
-			named gives false
+			boolean to function gives false
 		end 'check'
 	end 'isUnresolvedMaxonType'
 
@@ -3389,11 +3502,8 @@ export type Parser
 	function isNamedMaxonType(t MaxonType) returns bool
 		return match t 'check'
 			named gives true
-			integer gives false
-			float gives false
-			boolean gives false
-			string gives false
-			unresolved gives false
+			boolean to string gives false
+			function to unresolved gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -3837,13 +3947,14 @@ export type Parser
 	end 'defaultReturnLiteralType'
 
 	function defaultLiteralTypeOfInner(inner MaxonType) returns MaxonType
+		// Function-typed inner has no Maxon-numeric default; the parser only
+		// reaches this on a numeric-literal context, so non-float arms all
+		// fall through to integer.
 		return match inner 'pick'
 			float gives MaxonType.float
-			integer gives MaxonType.integer
 			boolean gives MaxonType.integer
-			string gives MaxonType.integer
-			named gives MaxonType.integer
-			unresolved gives MaxonType.integer
+			integer gives MaxonType.integer
+			string to unresolved gives MaxonType.integer
 		end 'pick'
 	end 'defaultLiteralTypeOfInner'
 
@@ -4044,11 +4155,27 @@ export type Parser
 		end 'maybeQualifiedRead'
 
 		if accept(TokenKind.leftParen) 'isCall'
-			// Bare callee — emit a name-symbolic call. CallContext tells lowering
-			// how to qualify (sibling-method probe inside a type body, then free
-			// resolution via currentNamespace + stdlib fallback). Lowering also
-			// detects __self instance-method calls and prepends the receiver.
+			// Stage E (closures): if `bareName` is bound to a function-typed
+			// local, route through `indirectCall` so lowering forwards the
+			// matching `__env_<bareName>` slot. Otherwise emit a regular
+			// name-symbolic call: CallContext tells lowering how to qualify
+			// (sibling-method probe inside a type body, then free resolution
+			// via currentNamespace + stdlib fallback). Lowering also detects
+			// __self instance-method calls and prepends the receiver.
 			let bareCallee = token.value
+			if scope.contains(bareCallee) and isFunctionMaxonType(scope.getType(bareCallee)) 'isIndirect'
+				let calleeSlot = lookupVariable(bareCallee, token: token)
+				let calleeType = scope.getType(bareCallee)
+				let calleeLoadName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.varLoad(calleeLoadName, slotId: calleeSlot, slotType: calleeType, range: SourceRange.ofToken(token)))
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+				let rparenToken = previousToken()
+				let fnTypeId = functionMaxonTypeId(calleeType)
+				let resultName = freshSynthName()
+				let returnType = functionMaxonReturnType(project, t: calleeType)
+				module.appendOp(block, op: MaxonOp.indirectCall(resultName, callee: calleeLoadName, fnTypeId: fnTypeId, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+				return ExprResult.direct(resultName, valueType: maxonReturnTypeValueOrUnresolved(returnType))
+			end 'isIndirect'
 			let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
 			let rparenToken = previousToken()
 			var ctx = CallContext.free
@@ -4078,6 +4205,19 @@ export type Parser
 		if at(TokenKind.leftBrace) 'isStructLiteral'
 			return try parseStructLiteral(block, typeName: token.value, typeToken: token, typeNameConsumed: true)
 		end 'isStructLiteral'
+
+		// Stage E (closures): inside a closure body, an unbound name may name
+		// an outer-scope local that the lifted function captures by reference.
+		// Check the saved enclosing scope before falling through to the
+		// global/top-level resolver; on a hit, route to closureEnvLoad and
+		// register the capture. The closure cannot capture self-field aliases
+		// (their backing __self is captured separately and field access goes
+		// through the post-loaded receiver) so we exclude `isSelfField` here.
+		if inClosure and not scope.contains(token.value) and closureOuterScope.contains(token.value) and not closureOuterScope.isSelfField(token.value) 'captureOuter'
+			let captureType = closureOuterScope.getType(token.value)
+			let captureName = emitClosureCapture(block, name: token.value, captureType: captureType, range: SourceRange.ofToken(token))
+			return ExprResult.direct(captureName, valueType: captureType)
+		end 'captureOuter'
 
 		// Bare identifier that isn't bound as a local: defer name resolution
 		// to TypeResolution. The `unresolvedRead` op is rewritten to
@@ -4513,11 +4653,276 @@ export type Parser
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(block IrBlock) returns ExprResult throws ParserError
+		// Stage B (closures): a leading `(` may open either a parenthesized
+		// expression OR a closure literal (`() gives ...`, `(x T) gives ...`).
+		// Distinguish via lookahead before committing to expression parsing —
+		// otherwise the first token inside `()` reaches `parsePrimary` and
+		// emits E2004 ("Expected expression but got ')'").
+		if isClosure() 'isClos'
+			return try parseClosure(block)
+		end 'isClos'
 		try eat(TokenKind.leftParen)
 		let inner = try parseExpression(block)
 		try expect(TokenKind.rightParen)
 		return inner
 	end 'parseParenExpr'
+
+	// Stage B (closures): lookahead-only test for the closure-expression
+	// shape. Mirrors C# IsClosure() at 2-Parser.cs:18427-18473. Cursor
+	// must be AT a `(`; the helper does not consume any tokens.
+	//
+	// Recognized shapes:
+	//   `()` `gives`                          → empty-param closure
+	//   `(` ident TYPE_STARTER                → typed closure (≥1 param)
+	// where TYPE_STARTER is the start of a `parseTypeRef` form: an
+	// identifier (named type like `Integer`) or `(` (nested function type).
+	//
+	// Untyped closure parameters (`(name) gives expr`) are NOT recognized
+	// here — Stage E adds them. The three closure-self tests use the
+	// typed-and-empty forms only.
+	//
+	// EOF on any peek bails to false rather than throwing; the caller falls
+	// back to the parenthesized-expression path which will surface the
+	// truncated input via its own diagnostic.
+	function isClosure() returns bool
+		if not at(TokenKind.leftParen) 'noLP'
+			return false
+		end 'noLP'
+		// `()` ⇒ closure iff `gives` follows.
+		let p1 = try cursor.peek(1) otherwise return false
+		if p1.kind == TokenKind.rightParen 'emptyParams'
+			let p2 = try cursor.peek(2) otherwise return false
+			return p2.kind == TokenKind.gives
+		end 'emptyParams'
+		// `(name TYPE...` — name is identifier (or `_`, lexed as identifier
+		// with value "_"). TYPE must be a parseTypeRef opener: an identifier
+		// or a `(`.
+		if p1.kind != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		let p2 = try cursor.peek(2) otherwise return false
+		if p2.kind == TokenKind.identifier or p2.kind == TokenKind.leftParen 'isTypeStart'
+			return true
+		end 'isTypeStart'
+		return false
+	end 'isClosure'
+
+	// Stage B (closures): parse a closure-literal expression and emit a
+	// `MaxonOp.functionRef` at the call site. The closure body becomes a
+	// fresh `IrFunction` named `__closure_<N>` appended to the current
+	// module.
+	//
+	// entry: cursor AT the leading `(` (verified by `isClosure`).
+	// exit:  cursor AT the first token AFTER the body expression.
+	//
+	// Capture analysis is Stage E. For now the lifted body parses against
+	// the OUTER scope — references to outer locals will lookup directly,
+	// which is incorrect at runtime but acceptable for Stages B+C: the
+	// only currently-passing target is the `() gives self` shape inside a
+	// free function (test 3), where `parseSelfInstanceExpr` reports E2001
+	// before the body finishes parsing.
+	function parseClosure(block IrBlock) returns ExprResult throws ParserError
+		let leftParenToken = try consume()
+		let closureRange = SourceRange.ofToken(leftParenToken)
+
+		// Parse closure parameters. The `_` underscore name is allowed (it
+		// is the conventional ignore-the-arg shape used by tests 1 and 2);
+		// other identifiers go through the standard reserved-name check.
+		var paramNames = StringArray.create()
+		var paramTypes = MaxonTypeArray.create()
+		var paramCount = 0
+		while not at(TokenKind.rightParen) 'paramLoop'
+			let nameToken = try consumeExpecting("closure parameter name")
+			if nameToken.kind != TokenKind.identifier 'badName'
+				reportTokenMismatch(nameToken, expectedDisplay: "closure parameter name")
+				synchronize()
+				return ExprResult.direct(ByteArray.create(), valueType: MaxonType.integer)
+			end 'badName'
+			if nameToken.value != "_" 'notDiscard'
+				checkReservedDeclName(nameToken)
+			end 'notDiscard'
+
+			let paramType = try parseTypeRef()
+			paramNames.push(nameToken.value)
+			paramTypes.push(paramType)
+			paramCount = paramCount + 1
+			// Commas between params are dropped by the lexer (skipOther),
+			// so the loop just keeps consuming `name Type` pairs until the
+			// matching `)` shows up.
+		end 'paramLoop'
+
+		try expect(TokenKind.rightParen)
+		try eat(TokenKind.gives)
+
+		// Mint the lifted-function name. Per-project counter — see
+		// Project.nextClosureId. Two closures in the same module always
+		// get distinct ids, and two closures in different modules can
+		// safely co-exist when their modules merge.
+		let closureNum = project.nextClosureId()
+		let closureName = "__closure_{closureNum}"
+
+		// We don't yet know the body's return type — it falls out of the
+		// body expression once parsed. Construct the IrFunction with an
+		// `unresolved` placeholder return type and patch it after the
+		// body emits its `ret`. The function-type registry entry is
+		// created the same way and replaced once the body settles, so
+		// downstream type-flow sees a concrete signature rather than the
+		// placeholder.
+		let placeholderReturn = MaxonReturnType.value(MaxonType.unresolved)
+		var liftedFunc = IrFunction.create(closureName, maxonReturnType: placeholderReturn, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: leftParenToken.line)
+		liftedFunc.namespace = namespace
+		liftedFunc.visibility = Visibility.file
+		liftedFunc.sourceFilePath = filePath
+
+		// Save the parser's per-function context so we can switch into the
+		// lifted function for body parsing and restore on exit. Closures
+		// nested inside enclosing instance methods share `currentTypeName`
+		// — `self` inside the closure body still resolves against the
+		// enclosing type, but the access is rewritten by `emitSelfLoad`
+		// into a `closureEnvLoad` that recovers the captured `__self`
+		// pointer at runtime instead of the lifted function's
+		// non-existent `__self` slot.
+		let savedFunc = currentFunc
+		let savedBlock = currentBlock
+		let savedScope = scope
+		let savedParamLocations = paramLocations
+		let savedReferencedVars = referencedVars
+		let savedSynthCounter = synthNameCounter
+		// Stage E (closures): save outer closure-state so nested closures
+		// don't leak captures into one another. The body parses with
+		// `inClosure = true`, the outer scope visible via
+		// `closureOuterScope` (used by the capture lookup branches in
+		// `emitSelfLoad` / `parseIdentifierExpr`), and a fresh empty
+		// `closureCaptures` array that fills as captures are encountered.
+		let savedInClosure = inClosure
+		let savedOuterScope = closureOuterScope
+		let savedCaptures = closureCaptures
+
+		// Switch into the lifted function. Each closure body gets a fresh
+		// scope and synth-name space so the outer function's slot
+		// numbering is undisturbed when we restore. Param locations and
+		// referenced-var tracking are also reset; the lifted function
+		// runs its own (lightweight) unused-param check below.
+		currentFunc = liftedFunc
+		currentBlock = module.addBlockAt(liftedFunc, label: "entry", filePath: filePath.toString(), firstLine: leftParenToken.line)
+		scope = Scope.create()
+		paramLocations = ParamLocationArray.create()
+		referencedVars = ReferencedVarSet.create()
+		synthNameCounter = 0
+		inClosure = true
+		closureOuterScope = savedScope
+		closureCaptures = CaptureInfoArray.create()
+
+		// Register each param in the lifted function's fresh scope so
+		// in-body references resolve through the parser's normal
+		// `lookupVariable` path.
+		for i in 0 upto paramCount 'pushParam'
+			let pName = try paramNames.get(i) otherwise panic("parseClosure: paramNames.get OOB at {i}")
+			let pType = try paramTypes.get(i) otherwise panic("parseClosure: paramTypes.get OOB at {i}")
+			if pName != "_" 'realName'
+				_ = defineVariableWithType(pName, varType: pType)
+				paramLocations.push(ParamLocation.create(pName, line: leftParenToken.line, column: leftParenToken.column))
+			end 'realName'
+		end 'pushParam'
+
+		// Parse the body expression into the lifted function's entry block.
+		let bodyResult = try parseExpression(currentBlock)
+		let bodyType = exprType(bodyResult)
+		let bodyName = exprName(bodyResult)
+
+		// Emit the closure body's terminator: `ret <bodyValue>`.
+		// `currentBlock` may have advanced if the body expression spawned
+		// short-circuit blocks; the final emission lands wherever control
+		// flow currently sits.
+		module.setTerminator(currentBlock, op: MaxonOp.ret(bodyName, range: closureRange))
+
+		// Stage E (closures): if any captures were recorded, append a
+		// synthetic `__env i64` param to the lifted function so its ABI
+		// shape matches a function-typed param's expanded (fnPtr, env)
+		// pair. The env-param does NOT join the FunctionTypeRegistry
+		// signature nor the FuncSignature.paramNames — those describe the
+		// user-facing shape `(Integer) returns Integer`, which is what
+		// `apply`'s caller passes around. The hidden env param is plumbed
+		// through the `fnEnvVarNames` map at lowering time. Capturing
+		// closures emit `closureCreate`; non-capturing closures stay at
+		// `functionRef` with a null env at the indirect-call site.
+		//
+		// Snapshot the user-facing arrays BEFORE we mutate
+		// `liftedFunc.maxonParamTypes` (which aliases the local
+		// `paramTypes` reference); FunctionTypeRegistry and FuncSignature
+		// must see the un-augmented param list.
+		let captures = closureCaptures
+		let captureCount = captures.count()
+		var userParamTypes = MaxonTypeArray.create()
+		var userParamNames = StringArray.create()
+		for i in 0 upto paramCount 'snapshotUserParams'
+			let pt = try paramTypes.get(i) otherwise panic("parseClosure: paramTypes.get OOB at {i} during snapshot")
+			let pn = try paramNames.get(i) otherwise panic("parseClosure: paramNames.get OOB at {i} during snapshot")
+			userParamTypes.push(pt)
+			userParamNames.push(pn)
+		end 'snapshotUserParams'
+		if captureCount > 0 'hasCaptures'
+			liftedFunc.maxonParamTypes.push(MaxonType.integer)
+			liftedFunc.paramCount = liftedFunc.paramCount + 1
+		end 'hasCaptures'
+
+		// Patch the lifted function's return type now that the body type
+		// is known, and rewrite the function-type registry entry to match.
+		let actualReturn = MaxonReturnType.value(bodyType)
+		liftedFunc.maxonReturnType = actualReturn
+		// Intern the user-facing signature (without the hidden env param)
+		// so callers passing this closure to a `(T) returns R`-typed param
+		// see a structurally compatible id.
+		let fnTypeId = internFunctionType(project, paramTypes: userParamTypes, returnType: actualReturn)
+
+		// Restore the outer function's parser context. Body parsing is
+		// done; outer parsing resumes from the token immediately after
+		// the body expression.
+		currentFunc = savedFunc
+		currentBlock = savedBlock
+		scope = savedScope
+		paramLocations = savedParamLocations
+		referencedVars = savedReferencedVars
+		synthNameCounter = savedSynthCounter
+		inClosure = savedInClosure
+		closureOuterScope = savedOuterScope
+		closureCaptures = savedCaptures
+
+		// Append the lifted function to the module and register its
+		// signature so direct-call resolution works. Closures are
+		// file-private — never cross-file callable by name. The
+		// signature stored here mirrors the user-facing param list
+		// (without `__env`) so source-level slot fill, default
+		// insertion, and type-checking of an indirectly-called closure
+		// reuse the same machinery as a normal call.
+		module.functions.push(liftedFunc)
+		var closureParamDefaults = ParamDefaultArray.create()
+		for _ in 0 upto paramCount 'pushDefaults'
+			closureParamDefaults.push(ParamDefault.none)
+		end 'pushDefaults'
+		try project.funcReturnTypes.insert(closureName, value: actualReturn) otherwise panic("parseClosure: duplicate closure name '{closureName}' — counter desync")
+		try project.funcSignatures.insert(closureName, value: FuncSignature.create(userParamNames, paramTypes: userParamTypes, paramDefaults: closureParamDefaults)) otherwise panic("parseClosure: duplicate funcSignatures entry for '{closureName}'")
+		try project.funcVisibilities.insert(closureName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise ignore
+
+		let resultName = freshSynthName()
+		if captureCount > 0 'emitCreate'
+			// Materialize the parallel arrays the `closureCreate` op
+			// carries: capture names in source-encounter order
+			// (matches env-array slot index) and their MaxonTypes for
+			// load-width selection at lowering time.
+			var capturedNames = StringArray.create()
+			var capturedTypes = MaxonTypeArray.create()
+			for i in 0 upto captureCount 'eachCap'
+				let info = try captures.get(i) otherwise panic("parseClosure: captures.get OOB at {i}")
+				capturedNames.push(info.name)
+				capturedTypes.push(info.captureType)
+			end 'eachCap'
+			module.appendOp(block, op: MaxonOp.closureCreate(resultName, funcName: closureName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: closureRange))
+		end 'emitCreate' else 'emitRef'
+			module.appendOp(block, op: MaxonOp.functionRef(resultName, funcName: closureName, fnTypeId: fnTypeId, range: closureRange))
+		end 'emitRef'
+		return ExprResult.direct(resultName, valueType: MaxonType.function(fnTypeId))
+	end 'parseClosure'
 
 	// Return the current token and advance past it. If the consumed token was
 	// the last in the stream, cursor stays at last-valid — consistent with
@@ -4804,12 +5209,50 @@ export type Parser
 	// that holds the struct pointer. Caller must ensure we are inside an
 	// instance method — in a static context lookupVariable("__self", …) will
 	// report "Undefined variable '__self'".
+	//
+	// Inside a closure body (`inClosure == true`), `__self` lives in the
+	// enclosing instance method's scope, NOT in the lifted function's fresh
+	// scope. We re-route through the capture machinery: record the capture
+	// (deduped by name) and emit a `closureEnvLoad` whose lowering walks the
+	// hidden `__env` parameter to recover the captured pointer. Without this
+	// branch the lifted body would crash at parse time with
+	// "Undefined variable '__self'".
 	function emitSelfLoad(block IrBlock, token Token, range SourceRange) returns ByteArray
+		let selfType = internMaxonType(project, name: currentTypeName)
+		if inClosure and not scope.contains("__self") and closureOuterScope.contains("__self") 'captureSelf'
+			return emitClosureCapture(block, name: "__self", captureType: selfType, range: range)
+		end 'captureSelf'
 		let selfSlot = lookupVariable("__self", token: token)
 		let selfLoadName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: internMaxonType(project, name: currentTypeName), range: range))
+		module.appendOp(block, op: MaxonOp.varLoad(selfLoadName, slotId: selfSlot, slotType: selfType, range: range))
 		return selfLoadName
 	end 'emitSelfLoad'
+
+	// Stage E (closures): record (or reuse) a capture entry for `name` and
+	// emit the corresponding `closureEnvLoad` op against the current closure
+	// body block. Returns the fresh result name so callers can compose it
+	// into postfix expressions (`self.field`, `self.method()`, etc.) without
+	// caring whether the receiver came from a `varLoad` or a capture chain.
+	// Capture index assignment is monotonic in source-encounter order, so
+	// `closureCreate` later mirrors the same order when storing captured
+	// addresses into env[i].
+	function emitClosureCapture(block IrBlock, name String, captureType MaxonType, range SourceRange) returns ByteArray
+		var idx = -1
+		for i in 0 upto closureCaptures.count() 'scan'
+			let info = try closureCaptures.get(i) otherwise panic("emitClosureCapture: closureCaptures.get OOB at {i}")
+			if info.name == name 'hit'
+				idx = i
+				break
+			end 'hit'
+		end 'scan'
+		if idx < 0 'fresh'
+			idx = closureCaptures.count()
+			closureCaptures.push(CaptureInfo.create(name, captureType: captureType, index: idx))
+		end 'fresh'
+		let resultName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.closureEnvLoad(resultName, captureIndex: idx, captureName: name.toByteArray(), captureType: captureType, range: range))
+		return resultName
+	end 'emitClosureCapture'
 
 	// Emit `self.<fieldName> = <valueName>` — load self then store the value at
 	// the resolved field offset. Shared by implicit (`field = v`) and explicit
@@ -4825,7 +5268,10 @@ export type Parser
 	// consistent between statement- and expression-context `self`.
 	function reportSelfOutsideType(token Token) returns bool
 		if currentTypeName.isEmpty() 'notInType'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'self' can only be used inside an instance method", line: token.line, column: token.column, filePath: filePath)
+			// Stage C (closures): emit E2001 with the spec's plural phrasing —
+			// "instance methods" — matching closure-self's error fixture and
+			// the C# bootstrap.
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: token.line, column: token.column, filePath: filePath)
 			return true
 		end 'notInType'
 		return false
@@ -4862,7 +5308,14 @@ export type Parser
 	// --- Symbol table helpers ---
 
 	function resetSymbolTable()
-		scope.reset()
+		// Allocate a fresh Scope rather than mutating in place. The
+		// previous function's `func.scope` field on its IrFunction holds
+		// a reference to its Scope object — calling `scope.reset()` here
+		// would wipe that object too, breaking downstream consumers that
+		// later read the prior function's scope (Stage E's
+		// `lookupOuterSlotForCapture` walks the enclosing function's
+		// scope to resolve captured slot ids long after parsing finished).
+		scope = Scope.create()
 		paramLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
 		synthNameCounter = 0
@@ -4920,11 +5373,8 @@ end 'Parser'
 function maxonTypeIsFloat(t MaxonType) returns bool
 	return match t 'check'
 		float gives true
-		integer gives false
-		boolean gives false
-		named gives false
-		string gives false
-		unresolved gives false
+		boolean to integer gives false
+		string to unresolved gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -4934,24 +5384,20 @@ end 'maxonTypeIsFloat'
 // supports method/field-style access. Named/unresolved types are deferred —
 // TypeResolution makes the final call when the receiver shape is known.
 function maxonTypeIsPrimitive(t MaxonType) returns bool
+	// Function types support call syntax, not field access — for E4006's
+	// "primitives have no fields" check, function types behave like named
+	// values (deferred to TypeResolution).
 	return match t 'check'
-		integer gives true
-		float gives true
-		boolean gives true
-		named gives false
+		boolean to float gives true
 		string gives false
-		unresolved gives false
+		named to unresolved gives false
 	end 'check'
 end 'maxonTypeIsPrimitive'
 
 function maxonTypeIsBool(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true
-		integer gives false
-		float gives false
-		named gives false
-		string gives false
-		unresolved gives false
+		integer to unresolved gives false
 	end 'check'
 end 'maxonTypeIsBool'
 

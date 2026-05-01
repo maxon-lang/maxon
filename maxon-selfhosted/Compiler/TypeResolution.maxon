@@ -268,6 +268,13 @@ function substituteMaxonType(project Project, t MaxonType, bindingNames StringAr
 		integer then return MaxonType.integer
 		float then return MaxonType.float
 		string then return MaxonType.string
+		// Function types are structural — they don't carry a name to bind
+		// against — so they pass through substitution unchanged. (Inner
+		// param/return types might mention bound names, but that
+		// substitution is Stage E's concern; today's Stage A doesn't
+		// permit interface methods to take function-typed parameters in
+		// generic positions.)
+		function(id) then return MaxonType.function(id)
 		unresolved then return MaxonType.unresolved
 	end 'kind'
 end 'substituteMaxonType'
@@ -363,6 +370,15 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 		float then return CastCategory.float
 		string then return CastCategory.string
 		named(id) then return namedIdCastCategory(project, id: id)
+		// Stage E (closures): function-typed values lower to i64 pointers.
+		// Cast/compare validation treats them as `int` so a `(T) returns
+		// R`-typed param accepts an i64 fn-pointer arg without spurious
+		// E3005. Structural mismatches between two distinct function
+		// signatures aren't caught here; Stage E's user-facing
+		// FunctionTypeRegistry interning is meant to dedupe identical
+		// shapes, and signature-validation in `slotArgsForCall` would be
+		// a follow-up if we add a true call-site type-check.
+		function then return CastCategory.int
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
@@ -376,12 +392,14 @@ end 'namedIdCastCategory'
 // Used by the post-resolution validation walk that catches type-name typos
 // in struct field declarations, function signatures, and op annotations.
 function maxonTypeIsKnown(project Project, t MaxonType) returns bool
+	// Function types are interned by signature, not by name — every
+	// `MaxonType.function(id)` came from `internFunctionType` which only
+	// hands out ids the registry can resolve. They're always "known" for
+	// struct-field / signature validation purposes.
 	match t 'check'
 		named(id) then return namedIdIsKnown(project, id: id)
-		integer then return true
-		float then return true
-		boolean then return true
-		string then return true
+		boolean to string then return true
+		function then return true
 		unresolved then return false
 	end 'check'
 end 'maxonTypeIsKnown'
@@ -736,11 +754,8 @@ end 'resolveOneEnumMatchArm'
 function enumNameFromMaxonType(project Project, t MaxonType) returns String
 	return match t 'unwrap'
 		named(id) gives enumNameFromTypeNameId(project, id: id)
-		boolean gives ""
-		integer gives ""
-		float gives ""
-		string gives ""
-		unresolved gives ""
+		boolean to string gives ""
+		function to unresolved gives ""
 	end 'unwrap'
 end 'enumNameFromMaxonType'
 
@@ -931,11 +946,8 @@ end 'recordVarStore'
 function maxonTypeIsNamed(t MaxonType) returns bool
 	return match t 'check'
 		named gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		string gives false
-		unresolved gives false
+		boolean to string gives false
+		function to unresolved gives false
 	end 'check'
 end 'maxonTypeIsNamed'
 
@@ -1056,6 +1068,17 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		error then return
 		throw then return
 		tryCall(result, callee, callContext, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath))
+		// Stage E (closures): each closure op's result type derives directly
+		// from a field on the op itself, so the producer-type map gets a
+		// concrete entry without consulting external registries.
+		// `functionRef` / `closureCreate` produce a `MaxonType.function(id)`
+		// where `id` is already interned. `closureEnvLoad` carries the
+		// captured value's MaxonType. `indirectCall` resolves its return
+		// type via Project.functionTypes from the carried fnTypeId.
+		functionRef(result, _, fnTypeId, _) then recordResultType(producerTypes, name: result, t: MaxonType.function(fnTypeId))
+		closureCreate(result, _, fnTypeId, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.function(fnTypeId))
+		closureEnvLoad(result, _, _, captureType, _) then recordResultType(producerTypes, name: result, t: captureType)
+		indirectCall(result, _, fnTypeId, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: maxonReturnTypeValueOrUnresolved(functionTypeIdReturnType(project, id: fnTypeId)))
 	end 'rec'
 end 'recordOpResult'
 
@@ -1073,6 +1096,95 @@ end 'fillType'
 
 // Second-pass: walk ops with the producer-type map and replace any
 // MaxonType.unresolved operand with the concrete type sourced from the
+// Stage E (closures): patch any function whose `maxonReturnType` is still
+// `value(unresolved)` after the producer-type pass. Walks each function's
+// terminator blocks for a `ret` op, looks up the ret-value's name in the
+// producer map, and re-stamps `maxonReturnType` + `funcReturnTypes` with
+// the concrete inner type. Lifted closure bodies (`__closure_<n>`) are
+// the primary client — the parser can't infer the body type when it
+// terminates on a `fieldLoad` / `methodCall` whose result is filled in
+// later. Non-closure functions whose return type was declared in source
+// are already concrete and skipped on the `isUnresolvedType` guard.
+function resolveUnresolvedFunctionReturnTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("resolveUnresolvedFunctionReturnTypes: funcIdx < count but get failed")
+		let needsResolve = match func.maxonReturnType 'check'
+			void gives false
+			value(inner) gives isUnresolvedType(inner)
+		end 'check'
+		if not needsResolve 'skip'
+			continue
+		end 'skip'
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveUnresolvedFunctionReturnTypes: producerTypesPerFunc.get({funcIdx}) failed")
+		let resolved = findRetTypeFromProducers(module, func: func, producerTypes: producerTypes)
+		if isUnresolvedType(resolved) 'stillUnresolved'
+			continue
+		end 'stillUnresolved'
+		let newReturn = MaxonReturnType.value(resolved)
+		func.maxonReturnType = newReturn
+		project.funcReturnTypes.upsert(func.name, value: newReturn)
+	end 'eachFunc'
+end 'resolveUnresolvedFunctionReturnTypes'
+
+// Walk a function's terminators; the first `ret` op's value name yields a
+// concrete type via the producer map. Returns `MaxonType.unresolved` when
+// no `ret` is found or its source name is missing from the map — caller
+// preserves the existing (unresolved) signature in that case.
+function findRetTypeFromProducers(module MaxonModule, func IrFunction, producerTypes ProducerTypeMap) returns MaxonType
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("findRetTypeFromProducers: blockRef OOB")
+		if not block.hasTerminatorOp() 'noTerm'
+			continue
+		end 'noTerm'
+		let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("findRetTypeFromProducers: terminator OOB")
+		let probed = retValueTypeFromProducers(termOp, producerTypes: producerTypes)
+		if not isUnresolvedType(probed) 'hit'
+			return probed
+		end 'hit'
+	end 'eachBlock'
+	return MaxonType.unresolved
+end 'findRetTypeFromProducers'
+
+function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) returns MaxonType
+	return match op 'pick'
+		ret(retVal, _) gives lookupProducerType(producerTypes, name: retVal)
+		literal gives MaxonType.unresolved
+		stringConst gives MaxonType.unresolved
+		varDecl gives MaxonType.unresolved
+		varLoad gives MaxonType.unresolved
+		varStore gives MaxonType.unresolved
+		globalLoad gives MaxonType.unresolved
+		globalStore gives MaxonType.unresolved
+		binop gives MaxonType.unresolved
+		unop gives MaxonType.unresolved
+		convert gives MaxonType.unresolved
+		cmp gives MaxonType.unresolved
+		refEq gives MaxonType.unresolved
+		condBr gives MaxonType.unresolved
+		br gives MaxonType.unresolved
+		call gives MaxonType.unresolved
+		methodCall gives MaxonType.unresolved
+		printLiteral gives MaxonType.unresolved
+		printInt gives MaxonType.unresolved
+		panic gives MaxonType.unresolved
+		structAlloc gives MaxonType.unresolved
+		fieldLoad gives MaxonType.unresolved
+		fieldStore gives MaxonType.unresolved
+		selfFieldLoad gives MaxonType.unresolved
+		selfFieldStore gives MaxonType.unresolved
+		unresolvedRead gives MaxonType.unresolved
+		unresolvedAssign gives MaxonType.unresolved
+		enumMatchArm gives MaxonType.unresolved
+		error gives MaxonType.unresolved
+		throw gives MaxonType.unresolved
+		tryCall gives MaxonType.unresolved
+		functionRef gives MaxonType.unresolved
+		closureCreate gives MaxonType.unresolved
+		closureEnvLoad gives MaxonType.unresolved
+		indirectCall gives MaxonType.unresolved
+	end 'pick'
+end 'retValueTypeFromProducers'
+
 // producer map. Op variants that don't carry MaxonType operands are
 // skipped.
 function fillUnresolvedTypes(module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
@@ -1128,6 +1240,17 @@ function fillUnresolvedTypesForOp(module MaxonModule, opIdx OpIndex, op MaxonOp,
 		error then return
 		throw then return
 		tryCall then return
+		// Stage E (closures): all four ops carry no MaxonType.unresolved
+		// fields that depend on cross-declaration lookups. functionRef /
+		// closureCreate / indirectCall reference an already-interned
+		// FunctionTypeId; closureEnvLoad's captureType was stamped from
+		// the outer scope's recorded type at parse time. Nothing to fill
+		// in here — the recordOpResult pass above produced the concrete
+		// result type, and any consumer sees it directly.
+		functionRef then return
+		closureCreate then return
+		closureEnvLoad then return
+		indirectCall then return
 	end 'fill'
 end 'fillUnresolvedTypesForOp'
 
@@ -1191,7 +1314,7 @@ function fillCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteA
 	let filledLeft = fillType(producerTypes, t: leftType, source: left)
 	let filledRight = fillType(producerTypes, t: rightType, source: right)
 	let filledOperand = pickOperandType(filledLeft, right: filledRight, current: operandType)
-	let unchanged = typesEqual(filledLeft, b: leftType) and typesEqual(filledRight, b: rightType) and typesEqual(filledOperand, b: operandType)
+	let unchanged = maxonTypesStructurallyEqual(filledLeft, b: leftType) and maxonTypesStructurallyEqual(filledRight, b: rightType) and maxonTypesStructurallyEqual(filledOperand, b: operandType)
 	if unchanged 'noChange'
 		return
 	end 'noChange'
@@ -1274,93 +1397,9 @@ end 'fillMethodCall'
 function isUnresolvedType(t MaxonType) returns bool
 	return match t 'check'
 		unresolved gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		string gives false
-		named gives false
+		boolean to function gives false
 	end 'check'
 end 'isUnresolvedType'
-
-// Structural equality on MaxonType. Used by fillCmp to detect whether a
-// fill-in actually changed the op (so we only rewrite when the op
-// substantively changed).
-function typesEqual(a MaxonType, b MaxonType) returns bool
-	return match a 'matchA'
-		boolean gives matchesBoolean(b)
-		integer gives matchesInteger(b)
-		float gives matchesFloat(b)
-		string gives matchesString(b)
-		named(idA) gives matchesNamed(b, idA: idA)
-		unresolved gives matchesUnresolved(b)
-	end 'matchA'
-end 'typesEqual'
-
-function matchesBoolean(b MaxonType) returns bool
-	return match b 'm'
-		boolean gives true
-		integer gives false
-		float gives false
-		string gives false
-		named gives false
-		unresolved gives false
-	end 'm'
-end 'matchesBoolean'
-
-function matchesInteger(b MaxonType) returns bool
-	return match b 'm'
-		integer gives true
-		boolean gives false
-		float gives false
-		string gives false
-		named gives false
-		unresolved gives false
-	end 'm'
-end 'matchesInteger'
-
-function matchesFloat(b MaxonType) returns bool
-	return match b 'm'
-		float gives true
-		boolean gives false
-		integer gives false
-		string gives false
-		named gives false
-		unresolved gives false
-	end 'm'
-end 'matchesFloat'
-
-function matchesString(b MaxonType) returns bool
-	return match b 'm'
-		string gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		named gives false
-		unresolved gives false
-	end 'm'
-end 'matchesString'
-
-function matchesNamed(b MaxonType, idA TypeNameId) returns bool
-	return match b 'm'
-		named(idB) gives idA == idB
-		boolean gives false
-		integer gives false
-		float gives false
-		string gives false
-		unresolved gives false
-	end 'm'
-end 'matchesNamed'
-
-function matchesUnresolved(b MaxonType) returns bool
-	return match b 'm'
-		unresolved gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		string gives false
-		named gives false
-	end 'm'
-end 'matchesUnresolved'
 
 // --- String-const consumer specialization ---
 //
@@ -1432,6 +1471,16 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		error then return
 		throw then return
 		tryCall then return
+		// Stage E (closures): string-const consumer specialization for the
+		// closure ops is not yet implemented. None of the four arms can
+		// carry a string-const operand today (signatures are int-typed
+		// pointers), but matching them explicitly keeps the exhaustive
+		// match honest. Stage E may revisit if a closure call ever
+		// participates in a printInt -> printLiteral rewrite chain.
+		functionRef then return
+		closureCreate then return
+		closureEnvLoad then return
+		indirectCall then return
 	end 'specialize'
 end 'specializeOp'
 
@@ -1987,6 +2036,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	var slotTypesPerFunc = SlotTypeMapArray.create()
 	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 	fillUnresolvedTypes(module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
+	// Stage E (closures): the parser stamps lifted closure functions with
+	// MaxonReturnType.value(MaxonType.unresolved) when the body's expression
+	// type can't be derived without struct-field / function-return lookups.
+	// Now that buildProducerTypes has made every value's type concrete,
+	// patch each function's `maxonReturnType` from its `ret` op's value-name
+	// producer type. Idempotent on already-concrete types — the patch only
+	// runs when the existing return type is unresolved.
+	resolveUnresolvedFunctionReturnTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
 
 	// With every scrutinee's MaxonType now filled, resolve enumMatchArm
 	// case names against the project's enum registry. On success we rewrite

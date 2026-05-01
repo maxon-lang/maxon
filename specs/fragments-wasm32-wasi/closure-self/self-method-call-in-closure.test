@@ -1,0 +1,86 @@
+// Test: self-method-call-in-closure
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+type Doubler
+	export var base Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function doubled() returns Integer
+		return self.base + self.base
+	end 'doubled'
+
+	export function run() returns Integer
+		return apply(f: (_ Integer) gives self.doubled(), x: 0)
+	end 'run'
+end 'Doubler'
+
+function main() returns ExitCode
+	let d = Doubler.create(base: 5)
+	return d.run()
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @closure-self.apply(local0: i64, local1: i64, local2: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %9 = mir.param local2 : i64
+    %6 = mir.indirect_call %7(%9, %8)
+    mir.ret %6
+  }
+  func @Doubler.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @Doubler.doubled(local0: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    %2 = mir.load %6, 0
+    %4 = mir.load %6, 0
+    %5 = mir.add.i64 %2, %4
+    mir.ret %5
+  }
+  func @Doubler.run(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    mir.store_slot slot_0, %7
+    %1 = mir.func_addr @__closure_1
+    %2 = mir.stack_slot_addr slot_0
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.call @closure-self.apply(%1, %4, %5)
+    mir.ret %6
+  }
+  func @closure-self.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.call @Doubler.create(%0)
+    %3 = mir.call @Doubler.run(%1)
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %6 = mir.global_addr @__panic_msg_1
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_1:
+    mir.ret %3
+  }
+}
+---

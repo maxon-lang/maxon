@@ -6,6 +6,11 @@
 // the full native pipeline runs ~20 passes today.
 export typealias DumpPassCounter = int(0 to 1024)
 
+// Stage B (closures): unbounded counter for the `__closure_<N>` name
+// suffix. There is no concrete upper bound on the number of closures a
+// project may declare, so the wide `0 to u64.max` range is appropriate.
+export typealias ClosureCounter = int(0 to u64.max)
+
 // Configuration for `--emit-ir` / `--dump-stages`. Disables query-cache fast
 // paths when active so every compile observes the full pipeline, and carries
 // the per-pass filename counter. Grouped into a struct so the rest of the
@@ -231,6 +236,21 @@ export type Project
 	// that pattern.
 	export var interfaces IrInterfaceMap
 
+	// Function-type interner. Every `(P1, P2) returns R` signature the parser
+	// sees in a parameter position lands here as a parallel-array entry; the
+	// `MaxonType.function(id)` arm is just a stable index into this registry.
+	// Interning by structural identity means two parameters declared with the
+	// same shape share an id, so downstream equality checks on
+	// `MaxonType.function` reduce to integer compare.
+	export var functionTypes FunctionTypeRegistry
+
+	// Stage B (closures): monotonic counter used to mint unique
+	// `__closure_<N>` names for lifted closure bodies. Per-project rather
+	// than per-module so cross-file uniqueness holds even when closures
+	// from multiple files land in the same merged module. Bumped once per
+	// `parseClosure` invocation; the parser never decrements.
+	export var closureCounter ClosureCounter
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -259,6 +279,15 @@ export type Project
 	// every pass runs against a freshly-computed module.
 	export var irDump IrDumpOptions
 
+	// Stage B (closures): hand out the next unique `__closure_<N>` suffix
+	// and bump the counter. Called by the parser at every closure
+	// expression to keep lifted-function names disjoint.
+	export function nextClosureId() returns ClosureCounter
+		let id = closureCounter
+		closureCounter = closureCounter + 1
+		return id
+	end 'nextClosureId'
+
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
@@ -283,6 +312,8 @@ export type Project
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
 			interfaces: IrInterfaceMap.create(),
+			functionTypes: FunctionTypeRegistry.create(),
+			closureCounter: 0,
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -293,6 +324,56 @@ export type Project
 		}
 	end 'create'
 end 'Project'
+
+// --- Function-type registry ---
+//
+// Stores every distinct `(P1, P2) returns R` signature encountered by the
+// parser as a parallel-array tuple. `MaxonType.function(id)` carries an
+// index into this registry. Two parameters declared with the same shape
+// share an id (interned by `internFunctionType` in MaxonDialect), so a
+// downstream equality check on the union arm collapses to an integer
+// compare.
+//
+// The registry is unbounded — there is no concrete upper bound on the
+// number of distinct function-type shapes a project may declare — so
+// `FunctionTypeId` uses the wide `0 to u64.max` typealias from
+// MaxonDialect.
+
+export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
+export typealias MaxonReturnTypeArray = Array with MaxonReturnType
+
+export type FunctionTypeRegistry
+	export var paramTypes MaxonTypeArrayArray
+	export var returnTypes MaxonReturnTypeArray
+
+	export static function create() returns FunctionTypeRegistry
+		return Self{paramTypes: MaxonTypeArrayArray.create(), returnTypes: MaxonReturnTypeArray.create()}
+	end 'create'
+
+	// Number of distinct signatures interned so far. Doubles as the next id
+	// that `append` will hand out.
+	export function count() returns FunctionTypeId
+		return paramTypes.count()
+	end 'count'
+
+	// Append a fresh signature to the registry and return its newly assigned
+	// id. Callers must ensure structural identity has been ruled out (via
+	// `internFunctionType`) before invoking — this routine never dedupes.
+	export function append(params MaxonTypeArray, returnType MaxonReturnType) returns FunctionTypeId
+		let id = paramTypes.count()
+		paramTypes.push(params)
+		returnTypes.push(returnType)
+		return id
+	end 'append'
+
+	// Resolve an id back to the captured signature. Panics on an out-of-range
+	// id because the registry never hands out ids it can't satisfy.
+	export function get(id FunctionTypeId) returns (MaxonTypeArray, MaxonReturnType)
+		let params = try paramTypes.get(id) otherwise panic("FunctionTypeRegistry.get: invalid id {id}")
+		let ret = try returnTypes.get(id) otherwise panic("FunctionTypeRegistry.get: returnTypes desync at id {id}")
+		return (params, ret)
+	end 'get'
+end 'FunctionTypeRegistry'
 
 // --- Method-name index ---
 // Maps a bare method name (e.g. "isOn") to the list of qualified callee
@@ -988,6 +1069,14 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		integer then return StdType.i64
 		float then return StdType.f64
 		named(id) then return resolveNamedIdToStdType(project, id: id)
+		// Function-typed values lower to a (function-pointer, env-pointer)
+		// pair at the ABI level. The fn-pointer slot itself is i64; the
+		// matching env-pointer slot is plumbed alongside via the
+		// `fnEnvVarNames` map in LowerMaxonToStd and emitted as a separate
+		// ABI param. Returning i64 here covers both the fn-pointer slot
+		// type and the producer-result type for `functionRef` /
+		// `closureCreate`.
+		function then return StdType.i64
 		unresolved then panic("resolveMaxonTypeToStd: MaxonType.unresolved survived past TypeResolution. This means a value's producer op was not handled by TypeResolution's first pass (buildProducerTypes in TypeResolution.maxon — see callResultType, fieldLoadResultType, etc.). Recently added op kinds or callee names may need an entry there. Stack trace above shows the consumer that tripped the guard.")
 	end 'stringGuard'
 end 'resolveMaxonTypeToStd'

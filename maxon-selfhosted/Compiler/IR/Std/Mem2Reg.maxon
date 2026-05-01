@@ -79,7 +79,12 @@ function promoteFunction(func IrFunction, module StdModule)
 	let numSlotsLog = slotInfo.maxSlot + 1
 	logDebug(LogCategory.ir, message: () gives "mem2reg: func={func.name} slots={numSlotsLog} promotable={promotableCount} skipped={skippedCount}")
 
-	if not promotable.anyPromoted 'nothingToPromote'
+	// Stage E (closures): even with no promotable slots, we must still
+	// run the rebuild pass when an address-taken param exists — the pass
+	// emits the `func.param` + `memref.storeSlot` pair that materializes
+	// the calling-convention register into the captured stack slot.
+	let hasAddressTakenParam = anyParamSlotAddressTaken(slotInfo, paramCount: paramCount)
+	if not promotable.anyPromoted and not hasAddressTakenParam 'nothingToPromote'
 		return
 	end 'nothingToPromote'
 
@@ -101,7 +106,7 @@ function promoteFunction(func IrFunction, module StdModule)
 	insertBlockArgs(func, module: module, phiMap: phiMap, slotInfo: slotInfo)
 
 	// Phase 6: Rename variables by walking the dominator tree
-	var renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
+	var renameState = createRenameState(func, module: module, slotInfo: slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
 	renameBlock(entryBlockId, func: func, module: module, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
 
 	// Phase 7 & 8: Rewrite the function in-place, removing promoted ops and applying remap
@@ -130,6 +135,13 @@ type SlotInfo
 	// Track which slots have any stores or loads at all
 	export var slotHasStore BoolArray
 	export var slotHasLoad BoolArray
+	// Stage E (closures): slots whose address was taken (by `stackAddr`)
+	// must NOT be promoted. The captured pointer points at the live stack
+	// slot, so the slot has to remain in the frame and have its
+	// initial value materialized via the standard param-store/local-init
+	// path. When this bit is set for a slot, classifyPromotable refuses
+	// promotion regardless of load/store counts.
+	export var slotAddressTaken BoolArray
 
 	static function create() returns SlotInfo
 		return Self{
@@ -139,7 +151,8 @@ type SlotInfo
 			maxSlot: 0,
 			hasAnySlot: false,
 			slotHasStore: BoolArray.create(),
-			slotHasLoad: BoolArray.create()
+			slotHasLoad: BoolArray.create(),
+			slotAddressTaken: BoolArray.create()
 		}
 	end 'create'
 end 'SlotInfo'
@@ -162,6 +175,9 @@ function growSlotInfo(slotId VarSlot, info SlotInfo)
 	while info.slotHasLoad.count() < needed 'growHL'
 		info.slotHasLoad.push(false)
 	end 'growHL'
+	while info.slotAddressTaken.count() < needed 'growAT'
+		info.slotAddressTaken.push(false)
+	end 'growAT'
 end 'growSlotInfo'
 
 function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) returns SlotInfo
@@ -212,9 +228,57 @@ function analyzeSlotOp(opIdx OpIndex, module StdModule, blockId BlockId, info Sl
 		arith then return
 		control then return
 		call then return
-		system then return
+		// Stage E (closures): `stackAddr(slotId)` takes a slot's address —
+		// the slot must remain in the stack frame so the captured pointer
+		// stays valid through a closure call. Mark the slot address-taken
+		// (recorded as both a "store" and a "load") so the promotability
+		// classifier treats it as multi-defed and refuses to fold into
+		// SSA. Without this guard mem2reg would promote a `__self` param
+		// slot whose only direct load is `loadSelfPointer`, leaving the
+		// `stackAddr` site referencing a slot that no longer exists.
+		system(op) then analyzeSlotSysOp(op, blockId: blockId, info: info)
 	end 'dispatch'
 end 'analyzeSlotOp'
+
+function analyzeSlotSysOp(sysOp StdSystemOp, blockId BlockId, info SlotInfo)
+	match sysOp 'check'
+		stackAddr(_, slotId) then markSlotAddressTaken(slotId, blockId: blockId, info: info)
+		syscall then return
+		iatCall then return
+		globalAddr then return
+		memcpy then return
+		storeByte then return
+		loadByte then return
+		osExit then return
+		osWrite then return
+		free then return
+		osWriteErr then return
+		osOpenWrite then return
+		osWriteFd then return
+		osClose then return
+		osGetEnv then return
+		loadFramePtr then return
+		loadIndirect then return
+		funcAddr then return
+		storeIndirect then return
+		printLiteral then return
+		printInt then return
+		drop then return
+	end 'check'
+end 'analyzeSlotSysOp'
+
+// Stage E (closures): an address-taken slot can't be promoted to SSA —
+// the captured pointer must continue to point at the live stack slot.
+// Set the address-taken bit; classifyPromotable will refuse promotion.
+function markSlotAddressTaken(slotId VarSlot, blockId BlockId, info SlotInfo)
+	growSlotInfo(slotId, info: info)
+	try info.slotAddressTaken.set(slotId, value: true) otherwise panic("invariant: info.slotAddressTaken.set OOB in markSlotAddressTaken")
+	if not info.hasAnySlot or slotId > info.maxSlot 'updateMax'
+		info.maxSlot = slotId
+	end 'updateMax'
+	info.hasAnySlot = true
+	logTrace(LogCategory.ir, message: () gives "mem2reg: slot_{slotId} address-taken in block_{blockId} — refusing promotion")
+end 'markSlotAddressTaken'
 
 function analyzeSlotMemRefOp(memOp StdMemoryOp, blockId BlockId, info SlotInfo)
 	match memOp 'check'
@@ -334,6 +398,23 @@ type PromotableInfo
 	end 'create'
 end 'PromotableInfo'
 
+// Stage E (closures): scan the param-slot range of slotAddressTaken to
+// answer "does this function have any address-taken parameter?". The
+// rebuild pass needs the answer at promoteFunction's early-out site so
+// it can keep running for `Holder.readViaClosure` / similar functions
+// that have no other promotable slots but DO need a param-to-slot store
+// emitted at entry.
+function anyParamSlotAddressTaken(slotInfo SlotInfo, paramCount ParamCount) returns bool
+	var pI = 0
+	while pI < paramCount 'scan'
+		if getSlotBool(slotInfo.slotAddressTaken, slotId: pI) 'addressTaken'
+			return true
+		end 'addressTaken'
+		pI = pI + 1
+	end 'scan'
+	return false
+end 'anyParamSlotAddressTaken'
+
 function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
 	var promotable = BoolArray.create()
 	var anyPromoted = false
@@ -342,17 +423,29 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns Pr
 		growBoolArray(promotable, size: slotIdx + 1)
 		// All slots that have stores or loads via memref are promotable.
 		// The IDF algorithm handles all cases: single-store, multi-store,
-		// cross-block, params, etc.
+		// cross-block, params, etc. Address-taken slots (Stage E
+		// closures) are excluded — their captured pointer needs the
+		// stack slot to remain live.
 		let hasStore = getSlotBool(slotInfo.slotHasStore, slotId: slotIdx)
 		let hasLoad = getSlotBool(slotInfo.slotHasLoad, slotId: slotIdx)
+		let addressTaken = getSlotBool(slotInfo.slotAddressTaken, slotId: slotIdx)
+		if addressTaken 'pinSlot'
+			logTrace(LogCategory.ir, message: () gives "mem2reg: skipping slot_{slotIdx} (address-taken)")
+			slotIdx = slotIdx + 1
+			continue
+		end 'pinSlot'
 		if slotIdx < paramCount 'isParam'
 			// Param slots are always promotable (they have an implicit
-			// definition via func.param at block entry)
-			if hasLoad 'paramUsed'
-				try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
-				anyPromoted = true
-				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
-			end 'paramUsed'
+			// definition via func.param at block entry). A param slot
+			// with no observed loads still gets promoted so its
+			// parser-emitted entry storeSlot dies cleanly — leaving the
+			// dead store would clobber a downstream callee's slot in
+			// targets that share linear-memory slot space (wasm). Note
+			// the address-taken guard above already excluded those
+			// slots, so unconditional promotion here is safe.
+			try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
+			anyPromoted = true
+			logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
 		end 'isParam' else 'isLocal'
 			// Local slots: promotable if they have any stores or loads
 			if hasStore or hasLoad 'localUsed'
@@ -659,19 +752,35 @@ type RenameState
 	// Track param ops that need to be emitted in the entry block
 	export var paramValueIds ValueIdArray
 	export var paramSlotIsPromoted BoolArray
+	// Stage E (closures): address-taken param slots are NOT promoted, but
+	// the param register's value still has to land in the slot at function
+	// entry. Track which param slots are address-taken so emitParamOps can
+	// emit a `func.param` (to capture the calling-convention register
+	// value) plus a `memref.storeSlot` (to materialize that value into the
+	// stack slot the captured pointer references).
+	export var paramSlotIsAddressTaken BoolArray
+	// True when the function arrived with an explicit `func.param` op
+	// already in the entry block (e.g. functions parsed from runtime.std).
+	// emitParamOps reads this to suppress duplicate emission — the
+	// existing op is preserved by the in-place rewrite walk and its
+	// result valueId is the one createRenameState recorded in
+	// `paramValueIds` for that index.
+	export var paramSlotHasExistingOp BoolArray
 
-	static function create(currentDef DefStackArray, numSlots VarSlot, paramValueIds ValueIdArray, paramSlotIsPromoted BoolArray) returns RenameState
+	static function create(currentDef DefStackArray, numSlots VarSlot, paramValueIds ValueIdArray, paramSlotIsPromoted BoolArray, paramSlotIsAddressTaken BoolArray, paramSlotHasExistingOp BoolArray) returns RenameState
 		return Self{
 			currentDef: currentDef,
 			remap: ValueIdArray.create(),
 			numSlots: numSlots,
 			paramValueIds: paramValueIds,
-			paramSlotIsPromoted: paramSlotIsPromoted
+			paramSlotIsPromoted: paramSlotIsPromoted,
+			paramSlotIsAddressTaken: paramSlotIsAddressTaken,
+			paramSlotHasExistingOp: paramSlotHasExistingOp
 		}
 	end 'create'
 end 'RenameState'
 
-function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
+function createRenameState(func IrFunction, module StdModule, slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
 	let numSlots = slotInfo.maxSlot + 1
 	var defStacks = DefStackArray.create()
 	var si = 0
@@ -680,28 +789,131 @@ function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef V
 		si = si + 1
 	end 'initStacks'
 
-	// Initialize param slot definitions: allocate a valueId for each promoted param
-	// and push it as the initial definition
+	// Discover existing `func.param` ops at function entry. Functions
+	// parsed from `runtime.std` start with explicit `param N → vId` ops
+	// that mem2reg must reuse — emitting fresh duplicates would leave
+	// two ops claiming the same calling-convention register, with the
+	// body's existing references pointing at the original valueId. Maxon-
+	// parsed user functions have no entry param ops so the scan returns
+	// `(0, false)` for every index and emitParamOps allocates fresh ones
+	// as before.
+	let existingParamIds = findExistingParamIds(func, module: module, paramCount: paramCount)
+
+	// Initialize param slot definitions. Address-taken params (Stage E
+	// closures) get the same treatment but are flagged separately because
+	// they shouldn't participate in SSA renaming (the slot stays in
+	// memory for the captured pointer to dereference).
 	var paramValueIds = ValueIdArray.create()
 	var paramSlotIsPromoted = BoolArray.create()
+	var paramSlotIsAddressTaken = BoolArray.create()
+	var paramSlotHasExistingOp = BoolArray.create()
 	growValueIdArray(paramValueIds, size: paramCount)
 	growBoolArray(paramSlotIsPromoted, size: paramCount)
+	growBoolArray(paramSlotIsAddressTaken, size: paramCount)
+	growBoolArray(paramSlotHasExistingOp, size: paramCount)
 
 	var pIdx = 0
 	while pIdx < paramCount 'initParams'
+		let (existingId, hasExisting) = paramExistingId(existingParamIds, paramIdx: pIdx)
+		var paramId = existingId
+		if not hasExisting 'allocFresh'
+			paramId = allocValueId(funcIdRef)
+		end 'allocFresh'
+		try paramSlotHasExistingOp.set(pIdx, value: hasExisting) otherwise panic("invariant: paramSlotHasExistingOp.set OOB")
 		if getSlotBool(promotable.isPromotable, slotId: pIdx) 'promoted'
-			let paramId = allocValueId(funcIdRef)
 			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
 			try paramSlotIsPromoted.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsPromoted.set OOB")
 			// Push the param valueId as the initial definition for this slot
 			var stack = try defStacks.get(pIdx) otherwise panic("invariant: defStacks sized to numSlots >= paramCount but get({pIdx}) failed")
 			stack.push(paramId)
-		end 'promoted'
+		end 'promoted' else if getSlotBool(slotInfo.slotAddressTaken, slotId: pIdx) 'addressTaken'
+			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
+			try paramSlotIsAddressTaken.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsAddressTaken.set OOB")
+			// Don't push to defStacks — slot stays memory-backed; uses go
+			// through `memref.loadSlot` which we leave intact.
+		end 'addressTaken'
 		pIdx = pIdx + 1
 	end 'initParams'
 
-	return RenameState.create(defStacks, numSlots: numSlots, paramValueIds: paramValueIds, paramSlotIsPromoted: paramSlotIsPromoted)
+	return RenameState.create(defStacks, numSlots: numSlots, paramValueIds: paramValueIds, paramSlotIsPromoted: paramSlotIsPromoted, paramSlotIsAddressTaken: paramSlotIsAddressTaken, paramSlotHasExistingOp: paramSlotHasExistingOp)
 end 'createRenameState'
+
+// Pair of (valueId, hasOp) per param index: hasOp=true means the entry
+// block already contains a `func.param paramIndex` op whose result is
+// `valueId`. Stored as parallel arrays so the param-iteration loop in
+// `createRenameState` can read both with a single index. Empty when no
+// existing ops were found (all hasOp entries default to false).
+type ExistingParamIds
+	export var ids ValueIdArray
+	export var has BoolArray
+
+	export static function create(ids ValueIdArray, has BoolArray) returns ExistingParamIds
+		return Self{ids: ids, has: has}
+	end 'create'
+end 'ExistingParamIds'
+
+function paramExistingId(eps ExistingParamIds, paramIdx VarSlot) returns (ValueId, bool)
+	let hasIt = try eps.has.get(paramIdx) otherwise false
+	if not hasIt 'absent'
+		return (0, false)
+	end 'absent'
+	let id = try eps.ids.get(paramIdx) otherwise panic("paramExistingId: has[{paramIdx}] true but ids.get failed")
+	return (id, true)
+end 'paramExistingId'
+
+// Walk the entry block looking for `func.param N → valueId` ops. Used
+// exclusively by `createRenameState` — see the comment there for why
+// duplicate emission would corrupt the lowering when a function already
+// has explicit param ops (e.g. anything parsed from `runtime.std`).
+function findExistingParamIds(func IrFunction, module StdModule, paramCount ParamCount) returns ExistingParamIds
+	var ids = ValueIdArray.create()
+	var has = BoolArray.create()
+	growValueIdArray(ids, size: paramCount)
+	growBoolArray(has, size: paramCount)
+	if func.blockRefs.count() == 0 'noBlocks'
+		return ExistingParamIds.create(ids, has: has)
+	end 'noBlocks'
+	let entryRef = try func.blockRefs.get(0) otherwise panic("findExistingParamIds: blockRefs.get(0) failed despite count > 0")
+	let entryBlock = try module.blocks.get(entryRef) otherwise panic("findExistingParamIds: blocks.get failed for entry blockRef")
+	for opIdx in entryBlock.opRefs 'eachOp'
+		let stdOp = try module.ops.get(opIdx) otherwise panic("findExistingParamIds: ops.get failed for opIdx in entry block")
+		match stdOp 'check'
+			call(callOp) then recordExistingParam(callOp, paramCount: paramCount, ids: ids, has: has)
+			arith then break 'check'
+			memory then break 'check'
+			control then break 'check'
+			system then break 'check'
+		end 'check'
+	end 'eachOp'
+	return ExistingParamIds.create(ids, has: has)
+end 'findExistingParamIds'
+
+function recordExistingParam(callOp StdCallOp, paramCount ParamCount, ids ValueIdArray, has BoolArray)
+	match callOp 'kind'
+		param(resultId, paramIndex, _) then bindExistingParam(paramIndex, valueId: resultId, paramCount: paramCount, ids: ids, has: has)
+		ret then break 'kind'
+		call then break 'kind'
+		tryCall then break 'kind'
+		funcRef then break 'kind'
+		indirectCall then break 'kind'
+		tailCall then break 'kind'
+	end 'kind'
+end 'recordExistingParam'
+
+function bindExistingParam(paramIndex VarSlot, valueId ValueId, paramCount ParamCount, ids ValueIdArray, has BoolArray)
+	if paramIndex >= paramCount 'outOfRange'
+		return
+	end 'outOfRange'
+	let already = try has.get(paramIndex) otherwise false
+	if already 'duplicateInSource'
+		// Two `param N` ops in the same entry block is malformed input;
+		// keep the first one (matches the order the body's existing
+		// references are likely indexed against) and ignore the rest.
+		return
+	end 'duplicateInSource'
+	try ids.set(paramIndex, value: valueId) otherwise panic("bindExistingParam: ids.set OOB at {paramIndex}")
+	try has.set(paramIndex, value: true) otherwise panic("bindExistingParam: has.set OOB at {paramIndex}")
+end 'bindExistingParam'
 
 function getCurrentDef(renameState RenameState, slotId VarSlot) returns ValueId
 	if slotId >= renameState.currentDef.count() 'outOfRange'
@@ -1187,11 +1399,32 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 	while pI < paramCount 'insertParams'
 		// Sentinel: paramSlotIsPromoted is grown lazily per param; absent entries default to false ("not promoted").
 		let isProm = try renameState.paramSlotIsPromoted.get(pI) otherwise false
-		if isProm 'emitParam'
+		// Stage E (closures): address-taken params still need func.param +
+		// a slot-store at entry so the captured pointer's first deref reads
+		// the param's initial value. The flag is mutually exclusive with
+		// `isProm` because classifyPromotable refuses promotion of
+		// address-taken slots.
+		let isAddrTaken = try renameState.paramSlotIsAddressTaken.get(pI) otherwise false
+		// When the input function already had a `func.param` op for this
+		// index (e.g. a runtime.std-parsed function), the rewrite walk
+		// preserves it intact, so we must NOT emit a duplicate here —
+		// otherwise the backend sees two ops claiming the same calling-
+		// convention register. The existing op's result valueId was
+		// recorded in paramValueIds, so SSA renaming and any address-
+		// taken slot-store still see the right value.
+		let hasExisting = try renameState.paramSlotHasExistingOp.get(pI) otherwise false
+		if isProm and not hasExisting 'emitParam'
 			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
 			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
 			module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
-		end 'emitParam'
+		end 'emitParam' else if isAddrTaken 'emitAddrTakenParam'
+			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
+			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
+			if not hasExisting 'noExistingParam'
+				module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
+			end 'noExistingParam'
+			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(pI, valueId: paramId)))
+		end 'emitAddrTakenParam'
 		pI = pI + 1
 	end 'insertParams'
 end 'emitParamOps'

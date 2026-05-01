@@ -81,8 +81,10 @@ end 'writeSleb128'
 let wasmSectionType = 1
 let wasmSectionImport = 2
 let wasmSectionFunction = 3
+let wasmSectionTable = 4
 let wasmSectionMemory = 5
 let wasmSectionExport = 7
+let wasmSectionElement = 9
 let wasmSectionCode = 10
 let wasmSectionData = 11
 
@@ -114,6 +116,7 @@ export let opBrIf = 0x0D
 export let opBrTable = 0x0E
 export let opReturn = 0x0F
 export let opCall = 0x10
+export let opCallIndirect = 0x11
 export let opDrop = 0x1A
 export let opSelect = 0x1B
 
@@ -337,3 +340,45 @@ export function addFuncImport(imports ByteArray, moduleName ByteArray, fieldName
 	writeUleb128(imports, value: typeIndex)
 	return countRef + 1
 end 'addFuncImport'
+
+// Stage F (closures): table-entry index list. One per addressable user
+// function, in element-section emission order.
+export typealias WasmFuncIndexArray = Array with MachineWord
+
+// Stage F (closures): write a single anyfunc/funcref table with a fixed
+// initial size and no maximum. The table holds function references that
+// `call_indirect` reads using the i32 index supplied at runtime. We emit
+// exactly one table per module so `call_indirect` can hardcode `(table 0)`.
+// The 0x70 element type is the legacy `anyfunc` encoding (renamed to
+// `funcref` in the reference-types proposal but kept binary-compatible).
+export function writeTableSection(module ByteArray, initialSize MachineWord)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: 1)
+	contents.push(0x70)
+	contents.push(0x00)
+	writeUleb128(contents, value: initialSize)
+	writeSection(module, sectionId: wasmSectionTable, contents: contents)
+end 'writeTableSection'
+
+// Stage F (closures): emit the element section as one active segment that
+// fills the function table starting at offset 0 with `funcIndices` in
+// order. The table layout decision is upstream: we just hand the indices
+// back to wasm in iteration order. `funcIndices` are the absolute wasm
+// function indices (post-import-offset) so `call_indirect` reads them
+// directly.
+export function writeElementSection(module ByteArray, funcIndices WasmFuncIndexArray)
+	if funcIndices.count() == 0 'noEntries'
+		return
+	end 'noEntries'
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: 1)
+	writeUleb128(contents, value: 0)
+	contents.push(opI32Const)
+	writeSleb128(contents, value: 0)
+	contents.push(opEnd)
+	writeUleb128(contents, value: funcIndices.count() as MachineWord)
+	for idx in funcIndices 'each'
+		writeUleb128(contents, value: idx)
+	end 'each'
+	writeSection(module, sectionId: wasmSectionElement, contents: contents)
+end 'writeElementSection'

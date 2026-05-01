@@ -44,6 +44,23 @@ export type IrModule uses Op
 		return self.ops.count()
 	end 'opCount'
 
+	// Count ops that are still reachable from any block — i.e., the size
+	// of the `block.opRefs` union plus one per block that has a terminator
+	// op. This differs from `opCount` (which is just the underlying array
+	// size) because passes like mem2reg rebuild blocks by clearing
+	// `opRefs` and appending fresh ops to `module.ops`, leaving the
+	// previous entries as orphans. The orphans never reach codegen but
+	// inflate `opCount` and make the per-pass IR-summary log line read
+	// like ops doubled when in fact the live set shrank.
+	//
+	// Cold path — only called from `summarizeForPass` when the IR trace
+	// log is enabled or `--dump-stages` is on. The walk is O(blocks +
+	// total opRefs entries) per call, dwarfed by anything diagnostic
+	// modes already pay.
+	export function liveOpCount() returns OpCount
+		return countLiveOps(self.functions, blocks: self.blocks)
+	end 'liveOpCount'
+
 	export function appendOps(source Self)
 		self.ops.append(source.ops)
 	end 'appendOps'
@@ -177,6 +194,25 @@ export type IrModule uses Op
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
+
+// Block-reachable op counter shared by IrModule.liveOpCount and
+// TargetModule.liveOpCount. Sums every block's `opRefs.count()` across
+// every function plus one per block that has a terminator op. Lives
+// outside the generic IrModule type so the concrete TargetModule (which
+// is not an IrModule instantiation) can reuse the same walk.
+export function countLiveOps(functions IrFunctionArray, blocks IrBlockArray) returns OpCount
+	var count = 0 as OpCount
+	for func in functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try blocks.get(blockRef) otherwise panic("countLiveOps: blockRef from func.blockRefs not in blocks")
+			count = count + (block.opRefs.count() as OpCount)
+			if block.hasTerminatorOp() 'hasTerm'
+				count = count + 1
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+	return count
+end 'countLiveOps'
 
 // Clone a block, adjusting op indices by the given offset.
 // Used by MergeableModule.merge to relocate blocks into a destination module.

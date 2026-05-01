@@ -43,8 +43,8 @@ let whitelist = ["basics",
 	"module-keyword",
 	"lexer-parser-robustness",
 	"try-otherwise-value-flow",
+	"closure-self",
 	// "error-handling",
-	// "closures",
 	// "reserved-double-underscore",  // most tests pass; enum-case and closure-parameter need enum/closure support first
 	// "arrays",
 	// "export-keyword",
@@ -226,6 +226,14 @@ function warmStdlibCache(target Target)
 	logInfo(LogCategory.testing, message: () gives "Compiling stdlib cache using project dir: {projectDir}")
 	var warmupProject = createProject(projectDir, target: target)
 	_ = getStdlibModule(warmupProject)
+	// Trigger the process-wide runtime-module load + mem2reg-promotion now,
+	// while the global log level is still ERROR. Without this, the first
+	// test that triggers `augmentWithRuntime` pays the load cost AND emits
+	// mem2reg trace lines into its captured RequiredLowering output —
+	// which then desyncs from every subsequent test that hits the cached
+	// (silent) path. Pre-warming makes runtime-loading invisible to test
+	// trace capture.
+	_ = loadRuntimeModule()
 end 'warmStdlibCache'
 
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode

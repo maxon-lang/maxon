@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **35 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **397 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **41 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **404 fragment tests passing** on x64-windows and **404 / 404 on wasm32-wasi** (full parity). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -18,7 +18,9 @@ Phase 7:   Strings                [ ] real String type — still using bootstrap
 Phase 8:   Error Handling         [ ] try/throw/otherwise, throws clause
 Phase 9:   Enums                  [~] enum decls (int/float-backed), match (statement+expression),
                                       methods on enums, keyword-as-case-name; associated values pending
-Phase 10:  Closures               [ ] first-class functions, closure capture
+Phase 10:  Closures               [~] closure-self landed (function types in params, closure expressions,
+                                      env capture for `self`, indirect calls on x64/arm64/wasm);
+                                      general closure-capture (arbitrary outer locals) still pending
 Phase 11:  Interfaces & Generics  [ ] hybrid model — see sub-phases below
 Phase 12:  Global Variables       [~] top-level let / var (int / float / bool / enum / `as`-cast /
                                       let-ref initializers), static var/let, float-typed globals
@@ -41,7 +43,7 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 
 ### Front end
 - **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon), 1142 lines): full DFA tokenizer including hex/binary/octal/underscore/scientific literals, all operator tokens (`/` `%` `&` `|` `^` `<<` `>>` `~` `!` `&&` `||`), keywords (`true`/`false`/`while`/`break`/`continue`/`match`/`for`/`in`/`interface`/`extension`/`extends`/`implements`/`with`/`where`/`from`/`uses`).
-- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 4262 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `match` (statement and expression), variable reassignment, block scoping, integer/float/bool literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values.
+- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 5851 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `match` (statement and expression), variable reassignment, block scoping, integer/float/bool literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values, function-type annotations on parameters and closure literals (`(x T) gives <expr>`) with `self`-capture support.
 
 ### Mid end
 - **Maxon Dialect** ([`Compiler/IR/Maxon/`](Compiler/IR/Maxon/)): MaxonDialect, MaxonPrinter, scope tracking, source ranges, dead-function-elimination, `LowerMaxonToStd`.
@@ -56,9 +58,9 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (39)
+### Currently whitelisted specs (41)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `enums-simple`, `match-simple`, `static-variables` (25/28 — array-literal initializers blocked on Phase 6).
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `enums-simple`, `match-simple`, `module-keyword`, `lexer-parser-robustness`, `try-otherwise-value-flow`, `closure-self`.
 
 ---
 
@@ -219,24 +221,20 @@ Parser at [`Parser.maxon:2439`](Compiler/Parser.maxon#L2439) (`parseStructLitera
 
 ---
 
-## Phase 10: Closures & First-Class Functions (~5 specs)
+## Phase 10: Closures & First-Class Functions (~5 specs) — IN PROGRESS
 
 **Goal**: function pointers, closures with captured variables, indirect calls.
 
-### Specs to unlock
-`first-class-functions`, `closure-capture`, `closures`.
+### Done — `closure-self` (3 fragments, x64-windows + wasm32-wasi parity)
+- **Parser**: function-type annotations on parameters via `parseTypeRef` (`f (Integer) returns Integer`); closure literals (`(x T) gives <expr>`, `() gives <expr>`); per-project `__closure_<N>` lifting; capture-by-reference detection that rewrites `self` reads inside a closure body to `closureEnvLoad`.
+- **MaxonDialect**: `MaxonType.function(id)` arm interned via `Project.functionTypes`; new ops `functionRef`, `closureCreate`, `closureEnvLoad`, `indirectCall`.
+- **Lowering**: function-typed param expansion to a (fn-pointer, env-pointer) ABI pair; `closureCreate` materializes a heap env via `mrt_alloc(N*8)` with stackAddr-based by-reference captures; `indirectCall` forwards the matching env to the callee.
+- **Mem2Reg**: address-taken slot tracking — captured params keep their stack slot live and emit a param-store at function entry so the captured pointer dereferences see the calling-convention value.
+- **Wasm**: function-table + element-section emission, `funcAddr` returns table index, `indirectCall` lowers to `call_indirect (type $T) (table 0)`, type-section dedup interns by signature so direct and indirect calls share entries. Second mem2reg run after `augmentWithRuntime` keeps slot space clean.
+- **DFE**: `functionRef` and `closureCreate` root the lifted body so it survives dead-function elimination.
 
-### Changes
-
-**Parser**: function-type annotations in parameters; closure creation (anonymous functions with capture); indirect calls through function variables.
-
-**Maxon Dialect**: `functionRef`, `functionVarRef`, `indirectCall`, `closureCreate`, `closureEnvLoad`.
-
-**Std Dialect**: `funcRef`, `indirectCall`, `storePtr`, `loadPtr`.
-
-**X64**: `callIndirect(reg)`, `leaFuncAddr(name)`. **ARM64**: `blrReg`, `adrFunc(name)`.
-
-**Closure convention**: 2-word struct (function pointer + environment pointer); environment is a heap-allocated array of captured values. Same on all targets.
+### Specs to unlock (still pending)
+`first-class-functions`, `closure-capture`, `closures` — require general by-reference capture of arbitrary outer locals (not just `self`), plus optional refcount-aware env destruction.
 
 ---
 

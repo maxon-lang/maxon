@@ -45,6 +45,12 @@ type ScheduleState
 	export var latencyTable TargetLatencyTable
 	export var terminatorUseIds ValueIdArray
 	export var terminatorFeeders SchedIntArray
+	// Stored for the flag-barrier pass in `buildDependencies`: when the
+	// block ends in a cond_br, the cmp that produces its condition value
+	// must be the last flag-clobbering op so its flags survive to the
+	// jcc. The match in `terminatorCondId` extracts the condId; storing
+	// the whole Terminator avoids a second match-on-tag here.
+	export var terminator Terminator
 	// Adjacency lists: predecessorsOf[toIdx] = [fromIdx...], successorsOf[fromIdx] = [toIdx...]
 	export var predecessorsOf SchedIntArrayArray
 	export var successorsOf SchedIntArrayArray
@@ -94,6 +100,7 @@ type ScheduleState
 			latencyTable: table,
 			terminatorUseIds: terminatorUseIds,
 			terminatorFeeders: SchedIntArray.create(),
+			terminator: terminator,
 			predecessorsOf: predecessorsOf,
 			successorsOf: successorsOf,
 			useCount: SchedIntArray.create()
@@ -315,6 +322,38 @@ type ScheduleState
 				j = j + 1
 			end 'barrierScan'
 		end 'addParamBarrier'
+
+		// Flag barrier: when the block's terminator is a `cond_br`, the cmp
+		// op that produces the cond_br's condition must be the LAST flag-
+		// clobbering op in the block. Both backends (X64 / ARM64) elide the
+		// `setcc` from `cmp` when the sole consumer is a `cond_br` (see
+		// `determineJumpKindForCond` in MirToX64Conversion / its ARM64
+		// twin), and the `jcc`/`b.<cond>` lowering reads the cmp's flags
+		// directly. If the scheduler placed any flag-clobbering op between
+		// the cmp and the cond_br, the conditional jump would test the
+		// wrong flags. Adding an edge from every other flag-clobberer to
+		// the terminator-cmp pins the cmp to the bottom of the schedule
+		// (in top-down emission order). Non-cond_br terminators and
+		// boolean-test cond_brs (where no MIR cmp directly feeds the
+		// condition) skip this barrier — `tryMirCmpJumpKind` falls back
+		// to `boolTest` in that case, which re-establishes flags from the
+		// boolean value via an explicit `test` and is robust to any
+		// scheduling. The reverse barrier (chaining all flag-clobberers
+		// in source order) would also work but is overly restrictive —
+		// only the cmp adjacency matters for correctness.
+		let condId = terminatorCondId(module, terminator: terminator)
+		if condId != SCHED_NONE 'hasCondBr'
+			let cmpIdx = schedLookup(defMap, index: condId as ValueId)
+			if cmpIdx != SCHED_NONE and isMirCmpPacked(module, packed: try opRefs.get(cmpIdx) otherwise panic("flag barrier: cmpIdx from defMap is a valid op index but opRefs.get failed")) 'foundCmp'
+				var k = 0
+				for flagPacked in opRefs 'flagBarrier'
+					if k != cmpIdx and isFlagClobberingPacked(module, packed: flagPacked) 'addFlagDep'
+						self.addDepEdge(fromIdx: k, toIdx: cmpIdx)
+					end 'addFlagDep'
+					k = k + 1
+				end 'flagBarrier'
+			end 'foundCmp'
+		end 'hasCondBr'
 	end 'buildDependencies'
 
 	// Add a dependency edge and update successor count + adjacency lists.
@@ -734,6 +773,99 @@ function isMirCallOp(op MirOp) returns bool
 		memcpy to loadByte gives false
 	end 'check'
 end 'isMirCallOp'
+
+// Returns true if the MIR op may clobber the x64 condition flags (or
+// equivalently, ARM64's NZCV) when lowered. Used to keep the cmp that
+// feeds a cond_br adjacent to its consumer in the schedule — both
+// backends rely on the cmp's flags surviving until the conditional
+// jump (see `determineJumpKindForCond` in MirToX64Conversion).
+//
+// Conservative: anything that ISN'T a pure register-to-register or
+// memory-to-register move clobbers flags. The exempt ops are those
+// that lower to instructions known not to touch flags on either
+// backend: `mov reg, reg`, `mov reg, [mem]`, `mov reg, imm`,
+// `lea reg, [mem]`. `movImm` with value zero is the one tricky case —
+// x64 typically lowers it to `xor reg, reg` which DOES clobber flags,
+// so movImm is treated as flag-clobbering even though large constants
+// would lower to plain `mov`. Treating it conservatively avoids a
+// per-instruction value-aware classification, at the cost of a few
+// extra scheduling constraints when the constant happens to be non-
+// zero. Calls and OS ops aren't covered here because they already
+// participate in the call-barrier chain.
+function isFlagClobberingMirOp(op MirOp) returns bool
+	return match op 'check'
+		movImm gives true
+		binOp gives true
+		unaryOp gives true
+		cmp gives true
+		movReg gives false
+		condBranch gives false
+		branch gives false
+		call gives false
+		indirectCall gives false
+		ret gives false
+		param gives false
+		load gives false
+		store gives false
+		loadSlot gives false
+		storeSlot gives false
+		stackSlotAddr gives false
+		globalAddr gives false
+		funcAddr gives false
+		loadFramePtr gives false
+		syscall gives false
+		iatCall gives false
+		osExit gives false
+		osWrite gives false
+		osWriteErr gives false
+		osOpenWrite gives false
+		osWriteFd gives false
+		osClose gives false
+		osGetEnv gives false
+		memcpy gives false
+		storeByte gives false
+		loadByte gives false
+	end 'check'
+end 'isFlagClobberingMirOp'
+
+function isFlagClobberingPacked(module MirModule, packed OpIndex) returns bool
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
+	return isFlagClobberingMirOp(op)
+end 'isFlagClobberingPacked'
+
+// Returns true if the MIR op is a `cmp`. Used by the scheduler to find
+// the cmp that produces a cond_br's condition value.
+function isMirCmpPacked(module MirModule, packed OpIndex) returns bool
+	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
+	return match op 'check'
+		cmp gives true
+		movImm to unaryOp gives false
+		condBranch to loadByte gives false
+	end 'check'
+end 'isMirCmpPacked'
+
+// Extract the cond_br's condition valueId from a terminator, or
+// SCHED_NONE if the terminator isn't a cond_br.
+function terminatorCondId(module MirModule, terminator Terminator) returns SchedInt
+	let idx = match terminator 'pick'
+		opIndex(i) gives i
+		unset gives -1
+		dead gives -1
+		fallthrough gives -1
+	end 'pick'
+	if idx < 0 'noTerm'
+		return SCHED_NONE
+	end 'noTerm'
+	let op = try module.ops.get(idx as OpIndex) otherwise panic("invariant: terminator opIdx not in module.ops")
+	return match op 'kind'
+		condBranch(condId, _, _, _, _) gives condId as SchedInt
+		movImm to cmp gives SCHED_NONE
+		branch gives SCHED_NONE
+		call to ret gives SCHED_NONE
+		param gives SCHED_NONE
+		load to loadByte gives SCHED_NONE
+	end 'kind'
+end 'terminatorCondId'
 
 // ============================================================
 // Utility helpers

@@ -95,6 +95,17 @@ export function registerErrorStateForDataSection(globalData GlobalDataTable)
 	addDataSectionEntry(globalData, name: "__data_maxon_error", initialBytes: zeroBytes)
 end 'registerErrorStateForDataSection'
 
+// Stage E (closures): predicate distinguishing parser-lifted closure
+// bodies (`__closure_N`) from ordinary user functions. The parser uses a
+// fixed prefix when minting closure names via `Project.nextClosureId`,
+// and only those functions can carry a synthetic `__env` parameter. Free
+// functions and methods declared by the user can never start with `__`
+// (`checkReservedDeclName` rejects them at parse time), so the prefix
+// match is safe.
+function isLiftedClosureName(name String) returns bool
+	return name.startsWith("__closure_")
+end 'isLiftedClosureName'
+
 // True when the given Maxon return type lowers to a floating-point Std
 // type. Drives the choice of `constF64` vs `constI64` for the default
 // primary return value emitted by `lowerThrow`. `void` returns count as
@@ -105,6 +116,15 @@ function maxonReturnTypeLowersToFloat(project Project, ref MaxonReturnType) retu
 		value(inner) gives stdTypeIsFloat(maxonTypeToStdType(project, ref: inner))
 	end 'pick'
 end 'maxonReturnTypeLowersToFloat'
+
+// Stage E (closures): per-function map keyed on a function-pointer
+// ValueId, returning the matching env-pointer ValueId (or 0 for "no env"
+// — the indirectCall lowering still emits the env arg, with 0 standing in
+// for a null env, which the lifted body's body never dereferences). Plain
+// `Map<ValueId, ValueId>` is enough — we don't need the fancier address-
+// taken bookkeeping here because the closure ABI is uniform: every
+// indirect call has exactly one env in flight at a time.
+typealias FnEnvMap = Map with(ValueId, ValueId)
 
 // ============================================================
 // MaxonToStdLowering type
@@ -156,6 +176,30 @@ type MaxonToStdLowering
 	// retains it), so the scratch is never returned directly.
 	var slotIdsScratch ValueIdArray
 	var slotFilledScratch BoolArray
+	// Stage E (closures): per-function map from a function-pointer
+	// ValueId to the matching env-pointer ValueId. Populated when:
+	//   - lowering a function-typed parameter slot (the param's fn-pointer
+	//     ValueId is paired with its synthetic `__env_<name>` slot's
+	//     load), and
+	//   - lowering a `functionRef` (env = 0 sentinel) or `closureCreate`
+	//     (env = the freshly-mrt_alloc'd block).
+	// Read at every `indirectCall` lowering site to recover the env to
+	// pass alongside the callee. Reset per function in `lower()`.
+	var fnEnvVarNames FnEnvMap
+	// Stage E (closures): per-function value-id of the lifted closure's
+	// hidden `__env` parameter. Written once at function-entry lowering
+	// when the function's last param is the synthetic env, read by
+	// every `closureEnvLoad` op the body emits. 0 means "not a lifted
+	// closure body" — `closureEnvLoad` would never appear in such a
+	// function so the unused-zero is fine.
+	var liftedEnvValueId ValueId
+	// Stage E (closures): the IrFunction currently being lowered. Set at
+	// the top of each function's body walk and read by lowerClosureCreate
+	// to look up the OUTER function's `scope` for capture-slot resolution.
+	// The lowering walks `maxonModule.functions` in order; we can't reach
+	// for "the last function pushed to stdModule" because every function
+	// is pushed upfront in `transferFuncs`.
+	var currentMaxonFunc IrFunction
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -172,7 +216,10 @@ type MaxonToStdLowering
 			currentReturnType: MaxonReturnType.void,
 			valueType: MaxonTypeArray.create(),
 			slotIdsScratch: ValueIdArray.create(),
-			slotFilledScratch: BoolArray.create()
+			slotFilledScratch: BoolArray.create(),
+			fnEnvVarNames: FnEnvMap.create(),
+			liftedEnvValueId: 0,
+			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		}
 	end 'create'
 
@@ -344,10 +391,39 @@ type MaxonToStdLowering
 			// value of the correct width (i64 vs f64). Stamp it here so
 			// `lowerThrow` can read it without re-walking module.functions.
 			self.currentReturnType = srcFunc.maxonReturnType
+			// Stage E (closures): clear the function-pointer→env map so
+			// the previous function's bindings don't leak across function
+			// boundaries. The lifted-closure env ValueId is reset to 0 by
+			// default and overwritten below if the function's last param
+			// is a synthetic `__env` (closure with captures).
+			self.fnEnvVarNames = FnEnvMap.create()
+			self.liftedEnvValueId = 0
+			self.currentMaxonFunc = srcFunc
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setValueType(pIdx, t: pType)
+				// Stage E (closures): pair every function-typed param at
+				// slot i with its env-pointer at slot i+1. The Std-level
+				// param ABI sees them as two consecutive i64 slots; the
+				// lowering's `indirectCall` site reads the env back via
+				// `fnEnvVarNames`.
+				if isFunctionMaxonType(pType) 'pairEnv'
+					let envParamIdx = pIdx + 1
+					if envParamIdx < srcFunc.maxonParamTypes.count() 'inRange'
+						self.fnEnvVarNames.upsert(pIdx, value: envParamIdx)
+					end 'inRange'
+				end 'pairEnv'
 			end 'seedParams'
+			// Stage E (closures): a lifted closure's last param is the
+			// hidden `__env` pointer. Stamp it here so `closureEnvLoad`
+			// ops in the body can recover it without re-deriving from
+			// the function's name. Only flips for `__closure_*` lifted
+			// functions whose maxonParamTypes was extended in
+			// `parseClosure` — non-closure functions reach here with an
+			// unmodified param list and `liftedEnvValueId` stays at 0.
+			if isLiftedClosureName(srcFunc.name) and srcFunc.paramCount > 0 'envParam'
+				self.liftedEnvValueId = (srcFunc.paramCount - 1) as ValueId
+			end 'envParam'
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
@@ -413,6 +489,18 @@ type MaxonToStdLowering
 			// emitted it as a regular op — pure compiler bug.
 			throw then panic("lowerMaxonToStd: MaxonOp.throw seen as regular op (parser bug — should always be a terminator)")
 			tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, dstBlock: dstBlock)
+			// Stage E (closures): function-pointer construction, env capture,
+			// and indirect-through-pointer dispatch. functionRef has no env
+			// (the matching `fnEnvVarNames` entry is 0 — see lowerFunctionRef);
+			// closureCreate captures by reference into a heap-allocated env
+			// block; closureEnvLoad recovers a captured value via a double-
+			// indirect through the lifted function's hidden `__env` slot;
+			// indirectCall forwards the env from `fnEnvVarNames` to the
+			// callee as the trailing arg.
+			functionRef(result, funcName, _, _) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
+			closureCreate(result, funcName, _, capturedNames, _, _) then self.lowerClosureCreate(result, funcName: funcName, capturedNames: capturedNames, dstBlock: dstBlock)
+			closureEnvLoad(result, captureIndex, _, captureType, _) then self.lowerClosureEnvLoad(result, captureIndex: captureIndex, captureType: captureType, dstBlock: dstBlock)
+			indirectCall(result, callee, fnTypeId, args, _, _, _, _) then self.lowerIndirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -456,6 +544,21 @@ type MaxonToStdLowering
 		// the value-type map so downstream consumers (fieldLoad/Store, methodCall)
 		// can resolve the receiver type.
 		self.setValueType(resultId, t: slotType)
+		// Stage E (closures): if this load reads a function-typed param,
+		// emit a sibling load of the matching env-pointer slot and bind
+		// the (resultId → envLoadId) pair in `fnEnvVarNames`. The
+		// indirectCall lowering then forwards the env to the callee
+		// without consulting the param-id directly. This keeps the
+		// fn-pointer-flow well-formed even when the value passes through
+		// var copies, struct-field stores, etc. — every load resolves to
+		// a fresh env binding rooted at the original param.
+		if isFunctionMaxonType(slotType) 'pairEnv'
+			if let envSlot = try self.fnEnvVarNames.get(slotId as ValueId) 'hasEnv'
+				let envLoadId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
+				self.fnEnvVarNames.upsert(resultId, value: envLoadId)
+			end 'hasEnv'
+		end 'pairEnv'
 	end 'lowerVarLoad'
 
 	// Lower a global load: take the .data symbol's address and dereference at
@@ -752,6 +855,14 @@ type MaxonToStdLowering
 		// alias the scratch buffer. When hasLeadingReceiver is set, the
 		// receiver occupies slot 0 and user args follow at slots 1..N — this
 		// folds the method-call receiver-prepend into the same allocation.
+		// Stage E (closures): when a user param is function-typed, the
+		// callee's ABI declares a (fn-pointer, env-pointer) pair at that
+		// slot — so after pushing the fn-pointer arg we also push the
+		// matching env-pointer recovered from `fnEnvVarNames` (or 0 if no
+		// env was recorded; this keeps codegen structurally valid for
+		// values that flow through paths the parser-side capture analysis
+		// didn't tag, e.g. an interface-call site whose declared param
+		// was function-typed).
 		var result = ValueIdArray.create()
 		var totalCount = userParamCount
 		if hasLeadingReceiver 'reserveLead'
@@ -764,6 +875,11 @@ type MaxonToStdLowering
 		for i in 0 upto userParamCount 'copyOut'
 			let v = try self.slotIdsScratch.get(i) otherwise panic("invariant: slotIdsScratch.get OOB at {i} (size {userParamCount})")
 			result.push(v)
+			let paramType = try signature.paramTypes.get(i + paramStartIndex) otherwise MaxonType.integer
+			if isFunctionMaxonType(paramType) 'expandEnv'
+				let envId = try self.fnEnvVarNames.get(v) otherwise 0
+				result.push(envId)
+			end 'expandEnv'
 		end 'copyOut'
 		return result
 	end 'slotArgsForCall'
@@ -1071,6 +1187,132 @@ type MaxonToStdLowering
 		self.setIsFloat(cmpId, isFloat: false)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 	end 'lowerEnumMatchArm'
+
+	// Stage E (closures): emit a function-pointer-of-named-function op.
+	// Records (refId → 0) in `fnEnvVarNames` so a downstream `indirectCall`
+	// through this value passes a 0 env-pointer, matching the paired-
+	// pointer ABI shape that lifted closures and user free functions both
+	// satisfy.
+	function lowerFunctionRef(result ByteArray, funcName String, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(resultId, funcName: funcName)))
+		self.fnEnvVarNames.upsert(resultId, value: 0)
+	end 'lowerFunctionRef'
+
+	// Stage E (closures): construct a closure value as a (fn-pointer, env)
+	// pair. The fn-pointer side is just `funcRef`; the env side allocates
+	// a fresh heap block via `mrt_alloc(N*8)` and stores the address of
+	// each captured outer-scope slot at env[i]. The capture-by-reference
+	// shape lets the closure body observe outer-state mutation between
+	// creation and indirect call. The result name is bound to the fn-
+	// pointer; the env id travels alongside via `fnEnvVarNames`.
+	function lowerClosureCreate(result ByteArray, funcName String, capturedNames StringArray, dstBlock IrBlock)
+		let fnRefId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(fnRefId, funcName: funcName)))
+
+		let captureCount = capturedNames.count()
+		// Materialize each capture's source-slot address. The captured
+		// name maps to a Maxon-level slot via the function's scope —
+		// recovered at lowering time by walking the parser's scope. The
+		// outer function's scope is preserved on the IrFunction's
+		// `scope` field, but lowerClosureCreate runs in the OUTER
+		// function's context (not the lifted body's), so `currentFunc`
+		// here is the enclosing function whose scope we need.
+		var captureAddrs = ValueIdArray.create()
+		for i in 0 upto captureCount 'eachCap'
+			let captureName = try capturedNames.get(i) otherwise panic("lowerClosureCreate: capturedNames.get OOB at {i}")
+			let slotId = self.lookupOuterSlotForCapture(captureName)
+			let addrId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.stackAddr(addrId, slotId: slotId)))
+			captureAddrs.push(addrId)
+		end 'eachCap'
+
+		// Allocate the env block: N i64-pointers wide.
+		let envSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: envSizeId, value: captureCount * 8))))
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(envSizeId)
+		let envBaseId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(envBaseId, callee: "mrt_alloc", argIds: allocArgs)))
+
+		// Store each capture address into env[i*8].
+		for i in 0 upto captureCount 'eachStore'
+			let addrId = try captureAddrs.get(i) otherwise panic("lowerClosureCreate: captureAddrs.get OOB at {i}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(envBaseId, offset: i * 8, valueId: addrId, isFloat: false)))
+		end 'eachStore'
+
+		self.fnEnvVarNames.upsert(fnRefId, value: envBaseId)
+	end 'lowerClosureCreate'
+
+	// Stage E (closures): recover the outer slot id for a captured name.
+	// Captures are by reference — the `stackAddr` op needs the original
+	// local's slot id, not a fresh one. The parser only emits
+	// `closureCreate` for names whose `closureOuterScope.contains(name)`
+	// returned true, and that scope is preserved on the enclosing
+	// function's IrFunction (in `currentMaxonFunc.scope`). A miss here
+	// means the parser handed us a capture name the lowering's outer
+	// function doesn't know about — a compiler bug, not a user error.
+	function lookupOuterSlotForCapture(captureName String) returns VarSlot
+		let func = self.currentMaxonFunc
+		if not func.scope.contains(captureName) 'missing'
+			panic("lowerClosureCreate: captured name '{captureName}' not found in outer scope of '{func.name}' (parser/lowering invariant violated)")
+		end 'missing'
+		return func.scope.getInfo(captureName).slot
+	end 'lookupOuterSlotForCapture'
+
+	// Stage E (closures): inside a lifted closure body, recover a
+	// captured value via two indirect loads. env[i*8] holds the captured
+	// outer slot's address; *<that address> holds the live value. The
+	// load width of the second deref matches the captured value's
+	// MaxonType — pointers and integers go through the GP load,
+	// floats through the XMM one.
+	function lowerClosureEnvLoad(result ByteArray, captureIndex ParsedInt, captureType MaxonType, dstBlock IrBlock)
+		// Recover the env-pointer ValueId by emitting a slot load of the
+		// lifted closure's hidden `__env` parameter. The parser appended
+		// it as the LAST param so its slot id is `paramCount - 1`.
+		let envSlot = self.liftedEnvValueId as VarSlot
+		let envBaseId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envBaseId, slotId: envSlot)))
+
+		// env[i*8] → captured slot's address.
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(addrId, addrId: envBaseId, offset: captureIndex * 8, isFloat: false)))
+
+		// *<address> → the live value.
+		let resultId = self.defineName(result)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: captureType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: isFloat)))
+		self.setValueType(resultId, t: captureType)
+	end 'lowerClosureEnvLoad'
+
+	// Stage E (closures): call through a function-typed value. The callee
+	// ValueId resolves to a function pointer (from `funcRef` /
+	// `closureCreate` / a function-typed param load); its matching env
+	// pointer comes from `fnEnvVarNames`. The env arg is appended as the
+	// LAST positional arg, mirroring the lifted closure's param-list
+	// expansion. `slotArgsForCall` runs against the user-facing
+	// FunctionTypeRegistry signature so default insertion + slot ordering
+	// stay un-affected by the trailing env. argLabels / argTypes /
+	// argRanges from the indirectCall op are intentionally dropped on the
+	// caller side — a future call-site signature validator will read them
+	// from the op directly without a parser rewrite.
+	function lowerIndirectCall(result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, dstBlock IrBlock)
+		let calleeId = self.resolveName(callee)
+		var argIds = self.resolveArgNames(args)
+		// Every function-pointer value reaching an indirect call must have
+		// been bound in `fnEnvVarNames` by an upstream `functionRef` (env
+		// = 0), `closureCreate` (env = freshly-allocated block), or
+		// function-typed-param load (env = paired `__env_<name>` slot).
+		// A miss here is a compiler invariant violation, not a user
+		// error — panic loudly rather than emit a structurally-valid but
+		// semantically-wrong call with a null env.
+		let envId = try self.fnEnvVarNames.get(calleeId) otherwise panic("lowerIndirectCall: no env recorded for function-pointer value (upstream functionRef/closureCreate/param binding missed)")
+		argIds.push(envId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+		let returnType = functionTypeIdReturnType(self.project, id: fnTypeId)
+		self.setValueType(resultId, t: maxonReturnTypeValueOrUnresolved(returnType))
+	end 'lowerIndirectCall'
 
 	// Allocates a heap struct by calling mrt_alloc with the byte size.
 	// `structName` is the source-level type name; we look up the struct

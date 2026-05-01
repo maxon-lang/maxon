@@ -15,6 +15,19 @@
 // one-shot parse is safe — no revision tracking needed. Callers get back a
 // shared reference; each pipeline pass merges a filtered copy into its own
 // StdModule via augmentWithRuntime, so the cached value stays read-only.
+//
+// The cache stores the runtime in **post-mem2reg form**: parsing produces
+// raw `memref.storeSlot`/`loadSlot` ops on every param + local, and we
+// promote those to SSA once at first load instead of re-running mem2reg
+// on every compile (or, on wasm, after every `augmentWithRuntime` splice).
+// Promoting at cache-load time helps both backends:
+//   - native: runtime function bodies reach codegen with values in SSA
+//     locals instead of round-tripping through stack slots — fewer
+//     mem accesses per call into mrt_alloc / mrt_set_error / etc.
+//   - wasm: runtime callees no longer carry param-init storeSlot ops
+//     into the shared `stackBase` slot region, so they can't clobber
+//     the caller's frame slots — fixes the closure-self correctness
+//     bug without needing a second mem2reg pass downstream.
 var cachedRuntimeModule = StdModule.create()
 var runtimeModuleLoaded = false
 
@@ -30,7 +43,8 @@ export function loadRuntimeModule() returns StdModule
 
 	let source = try File.readText(runtimePath) otherwise panic("Failed to read runtime.std at {runtimePath}")
 
-	cachedRuntimeModule = try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse runtime.std at {runtimePath}")
+	var parsed = try parseStdModule(source, startValueId: 0) otherwise panic("Failed to parse runtime.std at {runtimePath}")
+	cachedRuntimeModule = promoteMem2Reg(parsed)
 	runtimeModuleLoaded = true
 	return cachedRuntimeModule
 end 'loadRuntimeModule'

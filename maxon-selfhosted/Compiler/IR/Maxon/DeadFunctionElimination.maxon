@@ -84,6 +84,22 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		// Phase 4: `throw E.v` lowers to a call into mrt_set_error then a
 		// return. Keep the runtime helper alive when any throw is reachable.
 		throw then markCallee("mrt_set_error", worklist: worklist, seen: seen)
+		// Stage D (closures): functionRef / closureCreate name the lifted
+		// closure body (or a free function whose address is taken). Both
+		// must root the named function so DFE doesn't drop a body that is
+		// only reached through an indirect call. The parser emits these
+		// with already-qualified names (lifted closures use synthetic
+		// `__closure_<n>` names; raw function references use the full
+		// qualified name), so we mark them directly without re-running the
+		// CallContext-driven resolver. closureEnvLoad references no
+		// function and indirectCall reaches its target through a
+		// runtime-typed pointer — both stay no-ops here, which is correct
+		// because the upstream functionRef/closureCreate already rooted
+		// every lifted body.
+		functionRef(_, funcName, _, _) then markCallee(funcName, worklist: worklist, seen: seen)
+		closureCreate(_, funcName, _, _, _, _) then markCallee(funcName, worklist: worklist, seen: seen)
+		closureEnvLoad then return
+		indirectCall then return
 	end 'op'
 end 'addCalleesFromOpIndex'
 

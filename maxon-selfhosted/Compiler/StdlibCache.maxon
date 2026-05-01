@@ -775,6 +775,14 @@ end 'mergeStdlibGlobalData'
 // destination project's typeNames using the cache's typeNameTable so the new
 // id is meaningful in the user project. Primitives pass through unchanged.
 function translateMaxonType(project Project, table StringArray, t MaxonType) returns MaxonType
+	// No stdlib function takes a function-typed parameter today, so the
+	// `function` arm should never fire in practice. The match below is
+	// preceded by an explicit panic guard so the round-trip stays loud
+	// rather than silently corrupting the translated type if a future
+	// stdlib function adds one.
+	if isFunctionMaxonType(t) 'unsupported'
+		panic("translateMaxonType: function types are not cached yet (Stage A scope)")
+	end 'unsupported'
 	return match t 'translate'
 		boolean gives MaxonType.boolean
 		integer gives MaxonType.integer
@@ -782,6 +790,7 @@ function translateMaxonType(project Project, table StringArray, t MaxonType) ret
 		string gives MaxonType.string
 		unresolved gives MaxonType.unresolved
 		named(id) gives translateNamedTypeId(project, table: table, id: id)
+		function gives MaxonType.unresolved
 	end 'translate'
 end 'translateMaxonType'
 

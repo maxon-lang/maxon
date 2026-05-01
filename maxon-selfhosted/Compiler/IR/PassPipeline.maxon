@@ -210,13 +210,20 @@ export type PassPipeline
 	// --- Logging / dump helpers ---
 
 	// Returns a module summary appropriate for the pass just run.
+	// Uses `liveOpCount` (block-reachable ops) instead of the raw ops-array
+	// size: passes like mem2reg rebuild blocks by clearing `opRefs` and
+	// appending fresh ops, leaving the previous entries as orphans that
+	// inflate `module.ops.count()` without representing real work. The walk
+	// only runs when ir-trace logging or `--dump-stages` is enabled (the
+	// caller wraps this in a closure passed to `logTrace` / `dumpPassIr`),
+	// so the cost is paid only in diagnostic modes.
 	function summarizeForPass(pass PassKind, name String) returns String
 		let phase = classifyPhase(pass)
 		return match phase 'dump'
-			maxon gives dumpModuleSummary(maxonModule.functions.count(), blockCount: maxonModule.blocks.count(), opCount: maxonModule.ops.count(), dialect: "maxon", passName: name)
-			std gives dumpModuleSummary(stdModule.functions.count(), blockCount: stdModule.blocks.count(), opCount: stdModule.ops.count(), dialect: "std", passName: name)
-			mir gives dumpModuleSummary(mirModule.functions.count(), blockCount: mirModule.blocks.count(), opCount: mirModule.ops.count(), dialect: "mir", passName: name)
-			target gives dumpModuleSummary(targetModule.functions.count(), blockCount: targetModule.blocks.count(), opCount: targetModule.x64Ops.count() + targetModule.arm64Ops.count(), dialect: targetModule.cpu.name, passName: name)
+			maxon gives dumpModuleSummary(maxonModule.functions.count(), blockCount: maxonModule.blocks.count(), opCount: maxonModule.liveOpCount(), dialect: "maxon", passName: name)
+			std gives dumpModuleSummary(stdModule.functions.count(), blockCount: stdModule.blocks.count(), opCount: stdModule.liveOpCount(), dialect: "std", passName: name)
+			mir gives dumpModuleSummary(mirModule.functions.count(), blockCount: mirModule.blocks.count(), opCount: mirModule.liveOpCount(), dialect: "mir", passName: name)
+			target gives dumpModuleSummary(targetModule.functions.count(), blockCount: targetModule.blocks.count(), opCount: targetModule.liveOpCount(), dialect: targetModule.cpu.name, passName: name)
 		end 'dump'
 	end 'summarizeForPass'
 
@@ -295,6 +302,10 @@ end 'buildBackendPipeline'
 
 // Returns the WASM backend pipeline (phase 5 only).
 // WASM branches from MIR directly — no target lowering, regalloc, or prologue.
+// The runtime module is pre-promoted to SSA at `loadRuntimeModule` time
+// (see BackendDispatch.maxon), so functions imported by `augmentWithRuntime`
+// arrive without raw `memref.storeSlot/loadSlot` ops and don't clobber the
+// caller's slots in the shared `stackBase` linear-memory region.
 export function buildWasmBackendPipeline() returns PassKindArray
 	var passes = PassKindArray.create()
 	passes.push(PassKind.augmentWithRuntime)

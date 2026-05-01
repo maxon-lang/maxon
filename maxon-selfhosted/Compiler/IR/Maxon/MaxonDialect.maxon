@@ -49,12 +49,24 @@ export union CallContext
 	qualified
 end 'CallContext'
 
+// Identifier for a function-type signature interned in `Project.functionTypes`.
+// The registry is unbounded (one entry per distinct `(P1, P2) returns R`
+// signature seen in source), so we use the wide `0 to u64.max` range — there
+// is no concrete upper bound to encode.
+export typealias FunctionTypeId = int(0 to u64.max)
+
 export union MaxonType
 	boolean
 	integer
 	float
 	string
 	named(id TypeNameId)
+	// Function-typed parameter (and, eventually, closure value). Carries an
+	// id into `Project.functionTypes` rather than the param/return types
+	// directly so MaxonType stays cheap to copy and so structural identity
+	// (two parameters of the same `(Integer) returns Integer` shape) is a
+	// single integer compare.
+	function(id FunctionTypeId)
 	// Placeholder for type-flow operands the parser cannot fill in without
 	// cross-declaration lookups. Produced by parser sites that previously
 	// peeked into `project.funcReturnTypes`, `project.structTypes`, etc.
@@ -77,6 +89,7 @@ export union MaxonType
 			float gives "float"
 			string gives "String"
 			named(id) gives project.typeNames.get(id)
+			function(id) gives functionTypeToString(project, id: id)
 			unresolved gives "<unresolved>"
 		end 'str'
 	end 'toString'
@@ -84,18 +97,211 @@ export union MaxonType
 	// Returns the source-level name for a named type, or "" for primitives.
 	// Used by serializers (StdlibCache) that round-trip a MaxonType through
 	// a string key — primitives encode their tag separately, so the empty
-	// string is fine for those cases.
+	// string is fine for those cases. Function types have no source-level
+	// "name" — they're structurally typed — so they fall under the same
+	// empty-string convention as primitives.
 	export function nameOrEmpty(project Project) returns String
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
-			boolean gives ""
-			integer gives ""
-			float gives ""
-			string gives ""
-			unresolved gives ""
+			boolean to string gives ""
+			function to unresolved gives ""
 		end 'name'
 	end 'nameOrEmpty'
 end 'MaxonType'
+
+// True iff `t` is a `MaxonType.function(_)`. Cheap discriminator for the
+// parser's indirect-call detection — when a bare callee resolves to a
+// function-typed local, the parser routes through `indirectCall` instead
+// of emitting a name-symbolic `call`.
+export function isFunctionMaxonType(t MaxonType) returns bool
+	return match t 'check'
+		function gives true
+		boolean to named gives false
+		unresolved gives false
+	end 'check'
+end 'isFunctionMaxonType'
+
+// Extract the FunctionTypeId payload from a `MaxonType.function`. Panics
+// for any other arm — callers must guard with `isFunctionMaxonType` first.
+export function functionMaxonTypeId(t MaxonType) returns FunctionTypeId
+	return match t 'unwrap'
+		function(id) gives id
+		default panic("functionMaxonTypeId: MaxonType is not a function arm — caller must guard with isFunctionMaxonType")
+	end 'unwrap'
+end 'functionMaxonTypeId'
+
+// Resolve a `MaxonType.function` to its return-type entry in
+// `Project.functionTypes`. Used by parser `indirectCall` emission to stamp
+// the result's MaxonType without re-walking the registry at every call site.
+export function functionMaxonReturnType(project Project, t MaxonType) returns MaxonReturnType
+	return functionTypeIdReturnType(project, id: functionMaxonTypeId(t))
+end 'functionMaxonReturnType'
+
+// Look up the return type for a FunctionTypeId. Shared by every site
+// that needs the return-type half of a function-type signature (parser
+// indirect-call emission, TypeResolution result-type stamping, and the
+// Std lowering's indirect-call result type stamping).
+export function functionTypeIdReturnType(project Project, id FunctionTypeId) returns MaxonReturnType
+	let (_, returnType) = project.functionTypes.get(id)
+	return returnType
+end 'functionTypeIdReturnType'
+
+// Project a MaxonReturnType to a MaxonType for ExprResult propagation. Void
+// returns get mapped to `unresolved` so the consumer either flags an error
+// (statement-context vs expression-context) or simply drops the value.
+export function maxonReturnTypeValueOrUnresolved(rt MaxonReturnType) returns MaxonType
+	return match rt 'pick'
+		void gives MaxonType.unresolved
+		value(inner) gives inner
+	end 'pick'
+end 'maxonReturnTypeValueOrUnresolved'
+
+// Render a function type as `(P1, P2) returns R` (or `() returns void` for
+// the no-arg / void-return shape). Lives outside `MaxonType` so the union's
+// `toString` arm stays a one-liner; called from there and from anywhere else
+// that wants the display form. Cold path — diagnostics and IR dumps only.
+export function functionTypeToString(project Project, id FunctionTypeId) returns String
+	let (paramTypes, returnType) = project.functionTypes.get(id)
+	var result = "("
+	for i in 0 upto paramTypes.count() 'each'
+		let p = try paramTypes.get(i) otherwise panic("functionTypeToString: paramTypes.get OOB at {i}")
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}{p.toString(project)}"
+	end 'each'
+	result = "{result}) returns {maxonReturnTypeToString(project, ref: returnType)}"
+	return result
+end 'functionTypeToString'
+
+// Intern a function type by structural identity. A linear scan over the
+// registry suffices today — function-typed parameters are rare, and the
+// signatures are small. If profiling shows this is hot we can swap in a
+// hash-keyed lookup, but the identity it preserves (same params + same
+// return type ⇒ same id) is what matters for downstream equality checks.
+export function internFunctionType(project Project, paramTypes MaxonTypeArray, returnType MaxonReturnType) returns FunctionTypeId
+	for i in 0 upto project.functionTypes.count() 'scan'
+		let (existingParams, existingReturn) = project.functionTypes.get(i)
+		if functionTypesEqual(existingParams, existingReturn: existingReturn, paramTypes: paramTypes, returnType: returnType) 'hit'
+			return i
+		end 'hit'
+	end 'scan'
+	return project.functionTypes.append(paramTypes, returnType: returnType)
+end 'internFunctionType'
+
+// Structural equality between two captured signatures. The element-wise
+// MaxonType compare uses the same equality discipline as TypeResolution:
+// matching tags ⇒ matching payload (TypeNameId / FunctionTypeId) — no
+// nominal name walks, so two signatures referencing the same named type
+// via different ids would NOT compare equal here. That's acceptable for
+// today's usage (every named MaxonType comes from `internMaxonType`, which
+// already collapses duplicates by name).
+function functionTypesEqual(aParams MaxonTypeArray, existingReturn MaxonReturnType, paramTypes MaxonTypeArray, returnType MaxonReturnType) returns bool
+	if aParams.count() != paramTypes.count() 'arity'
+		return false
+	end 'arity'
+	for i in 0 upto aParams.count() 'each'
+		let pA = try aParams.get(i) otherwise panic("functionTypesEqual: aParams.get OOB at {i} (arity already validated)")
+		let pB = try paramTypes.get(i) otherwise panic("functionTypesEqual: paramTypes.get OOB at {i} (arity already validated)")
+		if not maxonTypesStructurallyEqual(pA, b: pB) 'mismatch'
+			return false
+		end 'mismatch'
+	end 'each'
+	return maxonReturnTypesStructurallyEqual(existingReturn, b: returnType)
+end 'functionTypesEqual'
+
+// Structural equality on MaxonType. Two function-typed values compare
+// equal iff their interned FunctionTypeId matches — `internFunctionType`
+// guarantees same-shape signatures share an id, so this is the right
+// equivalence even for function types whose param/return types are
+// other function types. Used both by FunctionTypeRegistry interning and
+// by TypeResolution's fillCmp change-detection.
+export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bool
+	return match a 'lhs'
+		boolean gives matchesBooleanArm(b)
+		integer gives matchesIntegerArm(b)
+		float gives matchesFloatArm(b)
+		string gives matchesStringArm(b)
+		named(idA) gives matchesNamedArm(b, idA: idA)
+		function(idA) gives matchesFunctionArm(b, idA: idA)
+		unresolved gives matchesUnresolvedArm(b)
+	end 'lhs'
+end 'maxonTypesStructurallyEqual'
+
+function matchesBooleanArm(b MaxonType) returns bool
+	return match b 'm'
+		boolean gives true
+		integer to unresolved gives false
+	end 'm'
+end 'matchesBooleanArm'
+
+function matchesIntegerArm(b MaxonType) returns bool
+	return match b 'm'
+		integer gives true
+		boolean gives false
+		float to unresolved gives false
+	end 'm'
+end 'matchesIntegerArm'
+
+function matchesFloatArm(b MaxonType) returns bool
+	return match b 'm'
+		float gives true
+		boolean to integer gives false
+		string to unresolved gives false
+	end 'm'
+end 'matchesFloatArm'
+
+function matchesStringArm(b MaxonType) returns bool
+	return match b 'm'
+		string gives true
+		boolean to float gives false
+		named to unresolved gives false
+	end 'm'
+end 'matchesStringArm'
+
+function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
+	return match b 'm'
+		named(idB) gives idA == idB
+		boolean to string gives false
+		function to unresolved gives false
+	end 'm'
+end 'matchesNamedArm'
+
+function matchesFunctionArm(b MaxonType, idA FunctionTypeId) returns bool
+	return match b 'm'
+		function(idB) gives idA == idB
+		boolean to named gives false
+		unresolved gives false
+	end 'm'
+end 'matchesFunctionArm'
+
+function matchesUnresolvedArm(b MaxonType) returns bool
+	return match b 'm'
+		unresolved gives true
+		boolean to function gives false
+	end 'm'
+end 'matchesUnresolvedArm'
+
+function maxonReturnTypesStructurallyEqual(a MaxonReturnType, b MaxonReturnType) returns bool
+	return match a 'lhs'
+		void gives returnTypeIsVoid(b)
+		value(innerA) gives returnTypeMatchesValue(b, innerA: innerA)
+	end 'lhs'
+end 'maxonReturnTypesStructurallyEqual'
+
+function returnTypeIsVoid(b MaxonReturnType) returns bool
+	return match b 'm'
+		void gives true
+		value gives false
+	end 'm'
+end 'returnTypeIsVoid'
+
+function returnTypeMatchesValue(b MaxonReturnType, innerA MaxonType) returns bool
+	return match b 'm'
+		void gives false
+		value(innerB) gives maxonTypesStructurallyEqual(innerA, b: innerB)
+	end 'm'
+end 'returnTypeMatchesValue'
 
 export typealias MaxonTypeArray = Array with MaxonType
 
@@ -171,6 +377,12 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 		float then break
 		string then break
 		named(id) then writeString(buf, s: project.typeNames.get(id))
+		// TODO Stage E (closures): persist function-type signatures so a
+		// stdlib function with a function-typed parameter can survive cache
+		// round-trip. No stdlib function takes a function-typed param today,
+		// so the cache never sees this arm. If we ever try to cache one we
+		// want a loud failure rather than silent corruption.
+		function then panic("writeMaxonType: function types are not cached yet (Stage A scope)")
 	end 'payload'
 end 'writeMaxonType'
 
@@ -189,6 +401,8 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		float then return (MaxonType.float, pos)
 		string then return (MaxonType.string, pos)
 		named then return readMaxonTypeNamed(project, buf: buf, offset: pos)
+		// Symmetric with the writer above — function types aren't cached yet.
+		function then panic("readMaxonType: function types are not cached yet (Stage A scope)")
 		unresolved then panic("readMaxonType: cache contains MaxonType.unresolved — should never have been written")
 	end 'tag'
 end 'readMaxonType'
@@ -430,6 +644,46 @@ export union MaxonOp
 	// bound to `errorBoundName`. Subsequent parser-emitted ops (cmp + condBr)
 	// branch on that flag to either propagate or fall through.
 	tryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
+	// Stage D (closures): address-of a named function with no captured env.
+	// Emitted by parseClosure when the closure body references no outer
+	// locals. `funcName` is the qualified name of the lifted function
+	// (`__closure_<n>` for closure expressions, full qualified name for
+	// raw function references). `fnTypeId` indexes Project.functionTypes
+	// for type-flow propagation. Lowered (Stage E) to an StdCallOp.funcRef
+	// paired with a null env so a downstream indirectCall passes a 0
+	// env-pointer through the standard ABI slot.
+	functionRef(result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange)
+	// Stage D (closures): construct a closure value as a function pointer
+	// plus a heap-allocated env block holding addresses of captured outer
+	// locals. `capturedNames` lists outer-variable names in
+	// capture-index order; `capturedTypes` is parallel and carries each
+	// capture's MaxonType so lowering can pick the correct load width
+	// when materializing dereferences. Lowered (Stage E) to mrt_alloc +
+	// per-capture stackAddr/storeIndirect plus the funcRef pair, with
+	// the env-name recorded in a per-function map keyed by the funcRef
+	// value-id so the matching indirectCall can forward the env.
+	closureCreate(result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange)
+	// Stage D (closures): inside a lifted closure body, recover a captured
+	// value by indirect double-load through the hidden `__env`
+	// parameter. `captureIndex` is the env-array slot index for this
+	// capture; `captureName` is the original outer-variable name (used
+	// by the printer and by capture-bookkeeping diagnostics).
+	// `captureType` is the MaxonType of the captured value, retained so
+	// downstream type-flow sees a concrete type without re-deriving it
+	// from the env layout. Lowered (Stage E) to two loadIndirect ops:
+	// the first reads the captured slot's address from the env array,
+	// the second dereferences it to recover the live value.
+	closureEnvLoad(result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange)
+	// Stage D (closures): call through a function-typed value. `callee`
+	// is the value-name holding the function pointer (always the result
+	// of an upstream functionRef or closureCreate); `fnTypeId` resolves
+	// the calling-convention shape via Project.functionTypes. `args`,
+	// `argLabels`, `argTypes`, `argRanges` mirror the matching fields on
+	// `call` and `methodCall`. Lowered (Stage E) by forwarding the
+	// matching `__env_<callee>` slot as the trailing arg before the
+	// user-visible args, so `apply(f, x)` and a closure-with-captures
+	// share one compiled body via the paired-pointer ABI.
+	indirectCall(result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
@@ -472,6 +726,10 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 		throw(enumName, variantName, _) gives "maxon.throw {enumName}.{variantName}"
 		tryCall(result, callee, callContext, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
+		functionRef(result, funcName, fnTypeId, _) gives "%{String.from(result)} = maxon.function_ref @{funcName} {lb}fnType = #{fnTypeId}{rb}"
+		closureCreate(result, funcName, fnTypeId, capturedNames, _, _) gives "%{String.from(result)} = maxon.closure_create @{funcName} {lb}fnType = #{fnTypeId}{rb} captures=[{formatCaptureNames(capturedNames)}]"
+		closureEnvLoad(result, captureIndex, captureName, _, _) gives "%{String.from(result)} = maxon.closure_env_load idx={captureIndex} name={String.from(captureName)}"
+		indirectCall(result, callee, fnTypeId, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.indirect_call %{String.from(callee)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) {lb}fnType = #{fnTypeId}{rb}"
 	end 'print'
 end 'maxonOpToString'
 
@@ -543,6 +801,22 @@ export function formatArgNamesWithLabels(args ByteArrayArray, argLabels StringAr
 	end 'each'
 	return result
 end 'formatArgNamesWithLabels'
+
+// Comma-joined capture-name list for the closure-create printer. The op
+// stores capture names as plain `String` (not the byte-slice ByteArray used
+// for source identifiers), so this is a straight join — no `String.from`
+// conversion needed.
+export function formatCaptureNames(names StringArray) returns String
+	var result = ""
+	for i in 0 upto names.count() 'each'
+		let n = try names.get(i) otherwise panic("invariant: i < names.count() but get failed")
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}{n}"
+	end 'each'
+	return result
+end 'formatCaptureNames'
 
 // Pretty-print a CallContext for IR dumps. Cold path.
 export function callContextToString(ctx CallContext) returns String

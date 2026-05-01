@@ -1,0 +1,74 @@
+// Test: bare-self-field
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+type Holder
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function readViaClosure() returns Integer
+		return apply(f: (_ Integer) gives self.value, x: 0)
+	end 'readViaClosure'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(value: 7)
+	return h.readViaClosure()
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @closure-self.apply(local0: i64, local1: i64, local2: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %9 = mir.param local2 : i64
+    %6 = mir.indirect_call %7(%9, %8)
+    mir.ret %6
+  }
+  func @Holder.create(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %1 = mir.mov_imm 8 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %4, %2, 0
+    mir.ret %2
+  }
+  func @Holder.readViaClosure(local0: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    mir.store_slot slot_0, %7
+    %1 = mir.func_addr @__closure_0
+    %2 = mir.stack_slot_addr slot_0
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.call @closure-self.apply(%1, %4, %5)
+    mir.ret %6
+  }
+  func @closure-self.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %1 = mir.call @Holder.create(%0)
+    %3 = mir.call @Holder.readViaClosure(%1)
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_0
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

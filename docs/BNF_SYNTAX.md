@@ -398,7 +398,10 @@ type_ref      = 'bool'
               | function_type
               | tuple_type
 
-function_type = '(' [ type_ref { ',' type_ref } ] ')' 'returns' type_ref
+function_type = '(' [ type_ref { ',' type_ref } ] ')' [ 'returns' type_ref ]
+              (* `returns` is optional. Without it, the function type
+                 returns void; with 2+ params and no `returns`, the form
+                 is a tuple_type instead. *)
 ```
 
 ---

@@ -322,21 +322,37 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// 1. WASI proc_exit: (i32) -> ()
 	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32)
 	// 3. Each module function
+	// 4. Stage F (closures): every distinct indirect-call signature used
+	//    by `call_indirect` in any user function body. Direct-call types
+	//    above are interned into `typeIndexMap` first so a matching
+	//    indirect call reuses the same entry.
 	var types = ByteArrayArray.create()
+	var typeIndexMap = WasmTypeIndexMap.create()
 
 	// Type 0: (i32) -> () — proc_exit
 	var procExitType = ByteArray.create()
 	writeFuncType(procExitType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
 	types.push(procExitType)
+	typeIndexMap.upsert(procExitType, value: 0 as MachineWord)
 
 	// Type 1: (i32, i32, i32, i32) -> (i32) — fd_write
 	var fdWriteType = ByteArray.create()
 	writeFuncType(fdWriteType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(fdWriteType)
+	typeIndexMap.upsert(fdWriteType, value: 1 as MachineWord)
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
-		types.push(buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType))
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType)
+		// Module-function types occupy fixed positions in the type table
+		// because the function section indexes into them positionally;
+		// we still record them in the dedup map so a downstream indirect
+		// call with the same signature picks up the existing entry.
+		let myIdx = types.count() as MachineWord
+		types.push(typeBytes)
+		if not typeIndexMap.contains(typeBytes) 'recordDedup'
+			typeIndexMap.upsert(typeBytes, value: myIdx)
+		end 'recordDedup'
 	end 'buildTypes'
 
 	// Types for pre-compiled stdlib functions
@@ -345,8 +361,21 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			continue
 		end 'skip'
 
-		types.push(buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType))
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType)
+		let myIdx = types.count() as MachineWord
+		types.push(typeBytes)
+		if not typeIndexMap.contains(typeBytes) 'recordDedup'
+			typeIndexMap.upsert(typeBytes, value: myIdx)
+		end 'recordDedup'
 	end 'buildStdlibTypes'
+
+	// Stage F (closures): collect indirect-call signatures from every
+	// user function body and intern them into typeIndexMap. New types get
+	// appended to the type table. Stdlib functions don't take addresses
+	// today, so we only scan user code — but the dedup map also covers
+	// stdlib direct-call types above so an indirect call with a matching
+	// shape would still find an entry.
+	collectIndirectCallTypes(module, types: types, typeIndexMap: typeIndexMap)
 
 	writeTypeSection(wasm, types: types)
 
@@ -375,6 +404,15 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	end 'eachFunc'
 	writeFunctionSection(wasm, typeIndices: typeIndices)
 
+	// --- Table section ---
+	// Stage F (closures): emit a single funcref table sized to hold every
+	// module function (user + stdlib). The element section below populates
+	// it with each function's wasm index in order, so call_indirect can
+	// fetch a callee by table index. Table index N in our scheme maps to
+	// wasm function index `wasiImportCount + N` — i.e., the table is just
+	// the contiguous module-function range, with imports excluded.
+	writeTableSection(wasm, initialSize: funcCount)
+
 	// --- Memory section ---
 	// 1 page = 64 KiB. Reserve enough pages for scratch + heap + global data + stack.
 	writeMemorySection(wasm, initialPages: initialMemoryPages as MachineWord)
@@ -394,6 +432,20 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeUleb128(exportSection, value: exportCount)
 	exportSection.append(exports)
 	writeExportSection(wasm, exports: exportSection)
+
+	// --- Element section ---
+	// Stage F (closures): populate the function table with one entry per
+	// module function in the same order as the function section. Table
+	// index N gets wasm function index `wasiImportCount + N`. funcAddr
+	// emits `i32.const N`; call_indirect reads through the table to
+	// recover the absolute index. Entries appear in user-then-stdlib
+	// order, matching the function section, so funcTableIndices below
+	// can use the same `i` counter.
+	var tableEntries = WasmFuncIndexArray.create()
+	for i in 0 upto funcCount 'collectTableEntries'
+		tableEntries.push(wasiImportCount + i)
+	end 'collectTableEntries'
+	writeElementSection(wasm, funcIndices: tableEntries)
 
 	// Merge all stdlib global data entries (WASM uses globalDataOffsets, not rdata relocs)
 	for i in 0 upto stdlibCache.globalData.names.count() 'mergeStdlibData'
@@ -424,6 +476,15 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// --- Code section ---
 	var bodies = ByteArrayArray.create()
 	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: false)
+	// Stage F (closures): hand the type-index map and table-index map to
+	// the lowering so emitFuncAddr / emitIndirectCall don't have to walk
+	// up to module scope. The table-index map mirrors the element section
+	// emitted above — one entry per module function, in the same order.
+	lowering.typeIndices = typeIndexMap
+	for i in 0 upto funcCount 'recordTableIdx'
+		let name = try funcNames.get(i) otherwise panic("invariant: i < funcCount but funcNames.get failed")
+		lowering.funcTableIndices.upsert(name, value: i as MachineWord)
+	end 'recordTableIdx'
 	var noFixups = WasmCallFixupArray.create()
 	for func in module.functions 'emitBodies'
 		let body = lowering.lowerFunction(func, fixups: noFixups)
@@ -506,6 +567,20 @@ end 'emitWasmModule'
 // WasmFunctionLowering — per-function emission state
 // ============================================================
 
+// Stage F (closures): map "type-section signature bytes" → typeIndex
+// for type-section dedup. Direct-call types and indirect-call types
+// share entries — we never emit the same `(params...) -> result` twice.
+typealias WasmTypeIndexMap = Map with(ByteArray, MachineWord)
+
+// Stage F (closures): map "function name" → table index. Every user
+// function lands in the function table at a stable index so `funcAddr`
+// emits a deterministic `i32.const <tableIdx>`. The table index is the
+// position within `module.functions` (0-based); the linker patches the
+// element-section entries with the absolute wasm function index
+// (`wasiImportCount + tableIdx + offset_into_module_funcs`) at module
+// emission time.
+typealias WasmFuncTableIndexMap = Map with(String, MachineWord)
+
 type WasmFunctionLowering
 	// Module-level state (constant across all functions)
 	var module MirModule
@@ -514,6 +589,17 @@ type WasmFunctionLowering
 	var globalDataOffsets GlobalDataOffsetMap
 	var stackBase MachineWord
 	var fixedCalls bool
+	// Stage F (closures): name → table index map for funcAddr lowering.
+	// Empty in stdlib-cache mode (fixedCalls = true) — stdlib doesn't take
+	// function addresses today, so we save the work. Populated by
+	// emitWasmModule before each user function is lowered.
+	export var funcTableIndices WasmFuncTableIndexMap
+	// Stage F (closures): signature-bytes → typeIndex map shared by every
+	// indirect-call site. Pre-populated with the module's own function
+	// types so direct callees and indirect callees with matching shapes
+	// share entries. Pre-populated in emitWasmModule before any function
+	// body is lowered.
+	export var typeIndices WasmTypeIndexMap
 
 	// Per-function state (re-initialized in lowerFunction)
 	var func IrFunction
@@ -529,6 +615,10 @@ type WasmFunctionLowering
 	// branch resolves its target block index in O(1) instead of scanning
 	// the block list per-branch.
 	var blockIndex BlockIndexMap
+	// Per-function float bitset; populated at lowerFunction entry by
+	// findFloatValueIds and read by emitIndirectCall when synthesizing
+	// the call-site signature for type-section dedup.
+	var funcFloatSet BoolArray
 
 	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, fixedCalls bool) returns WasmFunctionLowering
 		return Self{
@@ -538,13 +628,16 @@ type WasmFunctionLowering
 			globalDataOffsets: globalDataOffsets,
 			stackBase: stackBase,
 			fixedCalls: fixedCalls,
+			funcTableIndices: WasmFuncTableIndexMap.create(),
+			typeIndices: WasmTypeIndexMap.create(),
 			callFixups: WasmCallFixupArray.create(),
 			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
 			body: ByteArray.create(),
 			isVoidReturn: true,
 			dispatchLocal: 0 as MachineWord,
 			loopDepth: 0 as MachineWord,
-			blockIndex: BlockIndexMap.create()
+			blockIndex: BlockIndexMap.create(),
+			funcFloatSet: BoolArray.create()
 		}
 	end 'create'
 
@@ -586,7 +679,10 @@ type WasmFunctionLowering
 		let localCount = maxValueId + 1
 
 		// Scan for float value IDs to declare them as f64 instead of i64.
-		let floatSet = findFloatValueIds()
+		// Stored on the lowering instance so emitIndirectCall can read it
+		// to derive the call-site signature for type-section dedup.
+		funcFloatSet = findFloatValueIds()
+		let floatSet = funcFloatSet
 
 		// Build locals declaration: groups of (count, type).
 		// Each local is declared individually to preserve ValueId-to-local-index mapping.
@@ -898,7 +994,7 @@ type WasmFunctionLowering
 			condBranch then panic("wasm: condBranch in single-block function")
 			branch then nop()
 			call(resultId, callee, argIds) then emitCall(resultId: resultId, callee: callee, argIds: argIds)
-			indirectCall then panic("wasm: indirect calls not yet supported")
+			indirectCall(resultId, calleeId, argIds) then emitIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds)
 			ret(retValId) then emitRet(retValId: retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
 			load(resultId, baseId, offset, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat)
@@ -907,7 +1003,7 @@ type WasmFunctionLowering
 			storeSlot(slotId, valueId) then emitMemRefStoreSlot(slotId: slotId, valueId: valueId)
 			stackSlotAddr(resultId, slotId) then emitStackSlotAddr(resultId: resultId, slotId: slotId)
 			globalAddr(resultId, name) then emitGlobalAddr(resultId: resultId, name: name)
-			funcAddr(resultId, _) then emitFuncAddr(resultId: resultId)
+			funcAddr(resultId, name) then emitFuncAddr(resultId: resultId, name: name)
 			loadFramePtr(resultId) then emitLoadFramePtr(resultId: resultId)
 			syscall then panic("wasm: raw syscall not supported")
 			iatCall then panic("wasm: IAT call not supported")
@@ -1272,14 +1368,84 @@ type WasmFunctionLowering
 		writeUleb128(body, value: resultId as MachineWord)
 	end 'emitLoadFramePtr'
 
-	function emitFuncAddr(resultId ValueId)
-		// WASM doesn't support raw function pointers in the same way.
-		// Return 0 — funcAddr is only used by mrt_panic for stack traces.
-		body.push(opI64Const)
-		writeSleb128(body, value: 0)
+	function emitFuncAddr(resultId ValueId, name String)
+		// Stage F (closures): emit the function's table index as an i32,
+		// extended to i64 so the value lives in an i64 local matching the
+		// closure ABI. `funcTableIndices` is populated by emitWasmModule
+		// before any function body is lowered, so every user function has
+		// a stable index here. A miss falls back to the previous "address
+		// of any function = 0" behavior, which is correct for the
+		// mrt_panic stack-walk fallback path that doesn't take real
+		// addresses.
+		let tableIdx = try funcTableIndices.get(name) otherwise 0 as MachineWord
+		body.push(opI32Const)
+		writeSleb128(body, value: tableIdx as ParsedInt)
+		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as MachineWord)
 	end 'emitFuncAddr'
+
+	// Stage F (closures): build the wasm functype encoding for an
+	// indirect call site. argIds drive the param types (i64 vs f64 from
+	// the per-function floatSet); resultId's type comes from the same
+	// bitset. The bytes returned are exactly what `writeFuncType` would
+	// produce, so they can be used as-is for type-section dedup keys.
+	function buildIndirectCallTypeBytes(resultId ValueId, argIds ValueIdArray) returns ByteArray
+		var params = ByteArray.create()
+		for argId in argIds 'eachArg'
+			if isFloatLocal(funcFloatSet, localIdx: argId as MachineWord) 'isFloat'
+				params.push(wasmTypeF64)
+			end 'isFloat' else 'isInt'
+				params.push(wasmTypeI64)
+			end 'isInt'
+		end 'eachArg'
+		var results = ByteArray.create()
+		// Indirect calls into a closure always return a value today — the
+		// closure body's `gives <expr>` desugars to a non-void return.
+		// When/if void closures land, this branch needs an "is the
+		// resultId actually consumed?" check; for now, every call site
+		// produces an i64 or f64 result.
+		if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
+			results.push(wasmTypeF64)
+		end 'floatRes' else 'intRes'
+			results.push(wasmTypeI64)
+		end 'intRes'
+		var funcType = ByteArray.create()
+		writeFuncType(funcType, paramTypes: params, resultTypes: results)
+		return funcType
+	end 'buildIndirectCallTypeBytes'
+
+	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+		// Push args first (matches the wasm call_indirect stack order:
+		// args before callee index). This mirrors emitCall's arg push.
+		for argId in argIds 'pushArgs'
+			body.push(opLocalGet)
+			writeUleb128(body, value: argId as MachineWord)
+		end 'pushArgs'
+
+		// Push callee table index. The closure ABI carries the function
+		// pointer as i64 (table index extended via emitFuncAddr); narrow
+		// it back to the i32 that call_indirect expects.
+		body.push(opLocalGet)
+		writeUleb128(body, value: calleeId as MachineWord)
+		body.push(opI32WrapI64)
+
+		// Look up the type-section index for this call signature, dedup-
+		// shared with direct-call types via the pre-populated map.
+		let typeBytes = buildIndirectCallTypeBytes(resultId, argIds: argIds)
+		let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitIndirectCall: type not pre-registered for indirect call (emitWasmModule must populate typeIndices for every (params,result) shape used by call_indirect)")
+
+		body.push(opCallIndirect)
+		writeUleb128(body, value: typeIdx)
+		writeUleb128(body, value: 0)
+
+		// Store the result. All indirect calls today produce an i64/f64
+		// result that flows into a local; void indirect calls would need
+		// a separate codepath but don't appear in the closure-self
+		// fixtures.
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'emitIndirectCall'
 
 	// ============================================================
 	// Per-function analysis helpers
@@ -1640,6 +1806,150 @@ function stdTypeToWasmType(t StdType) returns MachineWord
 	end 'isFloat'
 	return wasmTypeI64
 end 'stdTypeToWasmType'
+
+// Stage F (closures): scan every user-function body for indirect-call
+// ops, derive each call site's wasm signature, and intern it into
+// `typeIndexMap`. New types get appended to `types` and assigned the
+// next available type-section index. Pre-existing entries (matching a
+// direct-call type) are reused — the dedup is what keeps stdlib's
+// "(i64, i64) -> i64" type entry from being duplicated when a closure
+// happens to have the same shape.
+function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIndexMap WasmTypeIndexMap)
+	for func in module.functions 'eachFunc'
+		// Build a per-function float bitset so signature derivation
+		// classifies each ValueId correctly.
+		let floatSet = computeFloatValueIdsForFunc(module, func: func)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+				match op 'check'
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					movImm to call then break 'check'
+					ret to loadByte then break 'check'
+				end 'check'
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+				match termOp 'checkTerm'
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					movImm to call then break 'checkTerm'
+					ret to loadByte then break 'checkTerm'
+				end 'checkTerm'
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'collectIndirectCallTypes'
+
+function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, argIds ValueIdArray)
+	var params = ByteArray.create()
+	for argId in argIds 'eachArg'
+		if isFloatLocal(floatSet, localIdx: argId as MachineWord) 'isFloat'
+			params.push(wasmTypeF64)
+		end 'isFloat' else 'isInt'
+			params.push(wasmTypeI64)
+		end 'isInt'
+	end 'eachArg'
+	var results = ByteArray.create()
+	if isFloatLocal(floatSet, localIdx: resultId as MachineWord) 'floatRes'
+		results.push(wasmTypeF64)
+	end 'floatRes' else 'intRes'
+		results.push(wasmTypeI64)
+	end 'intRes'
+	var funcType = ByteArray.create()
+	writeFuncType(funcType, paramTypes: params, resultTypes: results)
+	if typeIndexMap.contains(funcType) 'alreadyInterned'
+		return
+	end 'alreadyInterned'
+	let newIdx = types.count() as MachineWord
+	types.push(funcType)
+	typeIndexMap.upsert(funcType, value: newIdx)
+end 'registerIndirectCallType'
+
+// Module-level twin of WasmFunctionLowering.findFloatValueIds —
+// duplicated so collectIndirectCallTypes can run at emitWasmModule
+// scope without instantiating a lowering for each function. The body
+// mirrors findFloatValueIds exactly: seed block-arg floats, then walk
+// ops marking results based on opcode / source.
+function computeFloatValueIdsForFunc(module MirModule, func IrFunction) returns BoolArray
+	var maxId = 0 as MachineWord
+	for blockRef in func.blockRefs 'scanMax'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for blockArg in block.blockArgs 'eachArg'
+			if blockArg.valueId > maxId 'update'
+				maxId = blockArg.valueId as MachineWord
+			end 'update'
+		end 'eachArg'
+		for packed in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(packed) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			let opMax = getMirOpMaxValueId(mirOp)
+			if opMax > maxId 'updateOp'
+				maxId = opMax
+			end 'updateOp'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+			let termMax = getMirOpMaxValueId(termOp)
+			if termMax > maxId 'updateTerm'
+				maxId = termMax
+			end 'updateTerm'
+		end 'hasTerm'
+	end 'scanMax'
+	var floatSet = BoolArray.create()
+	for _ in 0 upto maxId + 1 'init'
+		floatSet.push(false)
+	end 'init'
+	// Seed param locals from func.paramTypes — mem2reg's func.param ops
+	// would normally seed these via markFloatMirOp, but during type
+	// collection we may run before their results are observed (the param
+	// op lives in the entry block's opRefs, which we walk below, so this
+	// step just ensures correctness if a pre-mem2reg call ever lands
+	// here).
+	for pi in 0 upto func.paramCount 'eachParam'
+		let pt = try func.paramTypes.get(pi) otherwise panic("invariant: pi < func.paramCount but paramTypes.get failed")
+		if stdTypeIsFloat(pt) 'isFloat'
+			try floatSet.set(pi as MachineWord, value: true) otherwise panic("invariant: floatSet.set OOB for param")
+		end 'isFloat'
+	end 'eachParam'
+	for blockRef in func.blockRefs 'seedBlockArgs'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for blockArg in block.blockArgs 'eachArg'
+			if stdTypeIsFloat(blockArg.argType) 'isFloat'
+				try floatSet.set(blockArg.valueId as MachineWord, value: true) otherwise panic("invariant: floatSet.set OOB for blockArg")
+			end 'isFloat'
+		end 'eachArg'
+	end 'seedBlockArgs'
+	for blockRef in func.blockRefs 'walkOps'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for packed in block.opRefs 'eachOp'
+			let mirOp = try module.ops.get(packed) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
+			markFloatMirOpStandalone(mirOp, floatSet: floatSet)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
+			markFloatMirOpStandalone(termOp, floatSet: floatSet)
+		end 'hasTerm'
+	end 'walkOps'
+	return floatSet
+end 'computeFloatValueIdsForFunc'
+
+// Module-scope twin of WasmFunctionLowering.markFloatMirOp — same dispatch
+// minus the `call` arm, which would need the lowering's `lookupReturnType`
+// helper. Indirect-call type collection runs at module scope before any
+// function body is lowered, so direct calls don't need to be classified
+// here (the result of a direct call is local-only and doesn't drive
+// indirect-call signature dedup).
+function markFloatMirOpStandalone(op MirOp, floatSet BoolArray)
+	match op 'dispatch'
+		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
+		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
+		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+		unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))
+		cmp to ret then break 'dispatch'
+		load to loadByte then break 'dispatch'
+	end 'dispatch'
+end 'markFloatMirOpStandalone'
 
 // Build a WASM func type entry from parameter/return metadata.
 function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, returnType StdReturnType) returns ByteArray
