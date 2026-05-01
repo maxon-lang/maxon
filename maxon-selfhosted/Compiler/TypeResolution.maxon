@@ -157,17 +157,168 @@ function reportAliasNameUnresolved(project Project, entry UnresolvedTypealias, t
 	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "typealias '{entry.name}' references unknown type '{target}'", line: entry.line, column: entry.column, filePath: entry.filePath)
 end 'reportAliasNameUnresolved'
 
+// --- Interface resolution ---
+
+// Drain `project.unresolvedInterfaces` into `project.interfaces`. Each
+// `UnresolvedInterfaceType` becomes an `IrInterface` carrying the
+// parser-recorded method signatures unchanged — names matching a `usesParams`
+// entry stay as `MaxonType.named(<param-name>)`. Per-conformance
+// substitution into a concrete method set is the conforming type's job
+// (see `computeExpectedMethodsForConformances`).
+//
+// The drain is non-fixed-point: interface declarations don't depend on
+// other interfaces structurally for resolution. `extends` parents are
+// validated by Phase 3b's transitive walk, not here.
+function resolveAllInterfaces(project Project)
+	var resolvedNames = StringArray.create()
+
+	for (name, entry) in project.unresolvedInterfaces 'sweep'
+		let iface = IrInterface.create(entry.name, extendsNames: entry.extendsNames, usesParams: entry.usesParams, methods: entry.methods, visibility: entry.visibility, line: entry.line, column: entry.column, filePath: entry.filePath)
+		// Parser rejects duplicate interfaces against the unresolved map
+		// before inserting. Collisions with the resolved map (e.g. stdlib-
+		// cached interfaces reusing a name) are silently ignored here so
+		// cache restore continues to win — same convention as the struct
+		// and enum drains.
+		try project.interfaces.insert(name, value: iface) otherwise ignore
+		resolvedNames.push(name)
+	end 'sweep'
+
+	for resolvedName in resolvedNames 'drop'
+		_ = project.unresolvedInterfaces.remove(resolvedName)
+	end 'drop'
+end 'resolveAllInterfaces'
+
+// Build the substituted method set a conforming type is expected to
+// provide. Each `Conformance` in `conformances` names an interface and
+// (optionally) a list of `withArgs` that bind the interface's `usesParams`
+// to concrete type names. For each interface method, we walk the
+// signature, replace any `MaxonType.named(<param-name>)` reference with
+// the concrete binding's MaxonType, and append the result.
+//
+// A missing-interface conformance reports E3015 and contributes nothing
+// (Phase 3b only sees what conformances we believe in). An arity-mismatch
+// conformance reports E3015 and contributes nothing for the same reason —
+// substituting against a partial binding map would silently drop or
+// duplicate methods.
+function computeExpectedMethodsForConformances(project Project, declName String, conformances ConformanceArray, declFilePath FilePath) returns InterfaceMethodSigArray
+	var expected = InterfaceMethodSigArray.create()
+
+	for conf in conformances 'eachConf'
+		let iface = try project.interfaces.get(conf.interfaceName) otherwise 'noIface'
+			reportCompileError(project, code: ErrorCode.semanticUnknownInterface, message: "type '{declName}' implements unknown interface '{conf.interfaceName}'", line: conf.line, column: conf.column, filePath: declFilePath)
+			continue
+		end 'noIface'
+
+		if conf.withArgs.count() != iface.usesParams.count() 'arityMismatch'
+			reportCompileError(project, code: ErrorCode.semanticUnknownInterface, message: "interface '{conf.interfaceName}' expects {iface.usesParams.count()} type parameter(s), got {conf.withArgs.count()}", line: conf.line, column: conf.column, filePath: declFilePath)
+			continue
+		end 'arityMismatch'
+
+		// Build the parameter-name → concrete-MaxonType map for this
+		// conformance. Bindings are interned through the project's
+		// type-name table so the substituted `MaxonType.named(id)` shares
+		// the canonical id with every other reference to the same name.
+		var bindingNames = StringArray.create()
+		var bindingTypes = MaxonTypeArray.create()
+		for i in 0 upto iface.usesParams.count() 'buildBindings'
+			let paramName = try iface.usesParams.get(i) otherwise panic("computeExpectedMethodsForConformances: usesParams.get OOB at {i}")
+			let argName = try conf.withArgs.get(i) otherwise panic("computeExpectedMethodsForConformances: withArgs.get OOB at {i}")
+			bindingNames.push(paramName)
+			bindingTypes.push(internMaxonType(project, name: argName))
+		end 'buildBindings'
+
+		for sig in iface.methods 'eachMethod'
+			let substituted = substituteMethodSig(project, sig: sig, bindingNames: bindingNames, bindingTypes: bindingTypes)
+			expected.push(substituted)
+		end 'eachMethod'
+	end 'eachConf'
+
+	return expected
+end 'computeExpectedMethodsForConformances'
+
+// Apply the binding map to one method signature: every parameter type and
+// the return type get walked through `substituteMaxonType`; the throws
+// type name gets the same string-substitution treatment so a method
+// declared as `throws Element` (rare, but valid in principle) ends up
+// throwing the bound concrete type.
+function substituteMethodSig(project Project, sig InterfaceMethodSig, bindingNames StringArray, bindingTypes MaxonTypeArray) returns InterfaceMethodSig
+	var newParamTypes = MaxonTypeArray.create()
+	for pt in sig.paramTypes 'eachParam'
+		newParamTypes.push(substituteMaxonType(project, t: pt, bindingNames: bindingNames, bindingTypes: bindingTypes))
+	end 'eachParam'
+
+	let newReturnType = match sig.returnType 'rt'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(substituteMaxonType(project, t: inner, bindingNames: bindingNames, bindingTypes: bindingTypes))
+	end 'rt'
+
+	let newThrows = substituteThrowsName(sig.throwsTypeName, bindingNames: bindingNames, bindingTypes: bindingTypes, project: project)
+
+	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: newParamTypes, returnType: newReturnType, throwsTypeName: newThrows, line: sig.line, column: sig.column)
+end 'substituteMethodSig'
+
+// Replace one `MaxonType.named(id)` whose name matches a binding with the
+// bound concrete type. Other arms (primitives, unresolved, unmapped named
+// references) pass through unchanged. A primitive can never be a type-
+// parameter binding target since binding names are always identifiers.
+function substituteMaxonType(project Project, t MaxonType, bindingNames StringArray, bindingTypes MaxonTypeArray) returns MaxonType
+	match t 'kind'
+		named(id) then return substituteNamedId(project, id: id, bindingNames: bindingNames, bindingTypes: bindingTypes)
+		boolean then return MaxonType.boolean
+		integer then return MaxonType.integer
+		float then return MaxonType.float
+		string then return MaxonType.string
+		unresolved then return MaxonType.unresolved
+	end 'kind'
+end 'substituteMaxonType'
+
+function substituteNamedId(project Project, id TypeNameId, bindingNames StringArray, bindingTypes MaxonTypeArray) returns MaxonType
+	let name = project.typeNames.get(id)
+	for i in 0 upto bindingNames.count() 'lookup'
+		let bn = try bindingNames.get(i) otherwise panic("substituteNamedId: bindingNames.get OOB at {i}")
+		if bn == name 'hit'
+			return try bindingTypes.get(i) otherwise panic("substituteNamedId: bindingTypes.get OOB at {i}")
+		end 'hit'
+	end 'lookup'
+	return MaxonType.named(id)
+end 'substituteNamedId'
+
+// `throwsTypeName` is a bare string (the parser stored it that way). When
+// the name matches a parameter binding, we resolve through the binding's
+// concrete type and re-stringify; otherwise pass through unchanged. The
+// empty string (non-throwing methods) bypasses the lookup loop because
+// no binding name is ever empty.
+function substituteThrowsName(throwsTypeName String, bindingNames StringArray, bindingTypes MaxonTypeArray, project Project) returns String
+	if throwsTypeName.isEmpty() 'noThrow'
+		return ""
+	end 'noThrow'
+	for i in 0 upto bindingNames.count() 'lookup'
+		let bn = try bindingNames.get(i) otherwise panic("substituteThrowsName: bindingNames.get OOB at {i}")
+		if bn == throwsTypeName 'hit'
+			let bt = try bindingTypes.get(i) otherwise panic("substituteThrowsName: bindingTypes.get OOB at {i}")
+			return bt.nameOrEmpty(project)
+		end 'hit'
+	end 'lookup'
+	return throwsTypeName
+end 'substituteThrowsName'
+
 // --- Struct type resolution ---
 
 // Drain `project.unresolvedStructTypes` into `project.structTypes`. Struct
 // resolution is non-fixed-point — each entry's information is independent
 // (its field MaxonTypes are validated separately, after this drain, against
-// the now-fully-populated registries).
+// the now-fully-populated registries). The expected method set from any
+// `implements` clause is computed here so the resolved `StructType` carries
+// it; Phase 3b consumes the field for E3016 enforcement.
+//
+// The interface drain (`resolveAllInterfaces`) MUST run before this so the
+// expected-method computation can look up named interfaces.
 function resolveAllStructTypes(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedStructTypes 'sweep'
-		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize, visibility: entry.visibility, sourceFilePath: entry.filePath)
+		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
+		let st = StructType.create(entry.name, fields: entry.fields, byteSize: entry.byteSize, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected)
 		// Parser rejects duplicates against the unresolved map before
 		// inserting; collisions with the resolved map (e.g. stdlib-cached
 		// structs reusing a name) are silently ignored here so cache restore
@@ -183,12 +334,16 @@ end 'resolveAllStructTypes'
 
 // Drain `project.unresolvedEnums` into `project.enumTypes`. Mirrors the struct
 // drain — each enum's information is independent (case raw-value uniqueness
-// was validated at parse time), so the drain is non-fixed-point.
+// was validated at parse time), so the drain is non-fixed-point. Conformance
+// substitution mirrors structs: an enum that declares `implements I with X`
+// gets its expected method set computed against the resolved interface
+// before the EnumType is built.
 function resolveAllEnumTypes(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
-		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath)
+		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
+		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected)
 		try project.enumTypes.insert(name, value: et) otherwise ignore
 		resolvedNames.push(name)
 	end 'sweep'
@@ -733,6 +888,57 @@ function recordVarLoad(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, res
 	recordResultType(producerTypes, name: result, t: fromSlot)
 end 'recordVarLoad'
 
+// Record a varStore: refine the slot's recorded type from the stored value's
+// producer type when the value carries a more specific type than the slot
+// already has. Two cases motivate this:
+//   1. The slot's varDecl had unresolved slotType AND the initializer's
+//      producer type was unresolved at varDecl-time (e.g. a methodCall whose
+//      receiver type wasn't known yet). The follow-up varStore now sees the
+//      methodCall's resolved type and can fill in.
+//   2. The slot was seeded with a literal-zero placeholder by the parser
+//      (parseTryFallback / parseMatchExpression) so the merge-block varLoad
+//      reads a well-typed value under wasm validation. The seed pins the
+//      slot type to `integer`; the real varStore later writes a value of the
+//      slot's true type — usually a struct/enum, sometimes a different
+//      primitive — and that has to win over the seed.
+//
+// Refinement rules:
+//   - If the slot's current type is unresolved, take the value's type.
+//   - If the value's type is a `named` (struct/enum) type and the slot's
+//     current type is not `named`, take the value's type — a slot that
+//     legitimately holds a struct can never have started life as a
+//     primitive.
+// Otherwise leave slotTypes alone — the existing entry is at least as
+// specific as the new one.
+function recordVarStore(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray)
+	let fromValue = lookupProducerType(producerTypes, name: value)
+	if isUnresolvedType(fromValue) 'noType'
+		return
+	end 'noType'
+	let current = try slotTypes.get(slotId) otherwise MaxonType.unresolved
+	if isUnresolvedType(current) 'fillUnresolved'
+		slotTypes.upsert(slotId, value: fromValue)
+		return
+	end 'fillUnresolved'
+	if maxonTypeIsNamed(fromValue) and not maxonTypeIsNamed(current) 'replaceSeed'
+		slotTypes.upsert(slotId, value: fromValue)
+	end 'replaceSeed'
+end 'recordVarStore'
+
+// True iff `t` is a struct/enum type. Used by recordVarStore to detect when
+// a varStore's value type out-ranks an integer seed left by the parser's
+// merge-block initialization scheme.
+function maxonTypeIsNamed(t MaxonType) returns bool
+	return match t 'check'
+		named gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		unresolved gives false
+	end 'check'
+end 'maxonTypeIsNamed'
+
 // Resolve a methodCall's result type by combining the receiver's resolved
 // type with the method name. Returns MaxonType.unresolved when the receiver
 // type isn't a known struct or the method isn't registered.
@@ -823,7 +1029,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.string)
 		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
 		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
-		varStore then return
+		varStore(slotId, value, _) then recordVarStore(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value)
 		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
 		globalStore then return
 		binop(result, _, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
@@ -848,6 +1054,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		unresolvedAssign then return
 		enumMatchArm then return
 		error then return
+		throw then return
+		tryCall(result, callee, callContext, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath))
 	end 'rec'
 end 'recordOpResult'
 
@@ -918,6 +1126,8 @@ function fillUnresolvedTypesForOp(module MaxonModule, opIdx OpIndex, op MaxonOp,
 		unresolvedAssign then return
 		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, range: range, producerTypes: producerTypes)
 		error then return
+		throw then return
+		tryCall then return
 	end 'fill'
 end 'fillUnresolvedTypesForOp'
 
@@ -1220,6 +1430,8 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		unresolvedAssign then return
 		enumMatchArm then return
 		error then return
+		throw then return
+		tryCall then return
 	end 'specialize'
 end 'specializeOp'
 
@@ -1746,6 +1958,10 @@ end 'joinStringArray'
 // empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
 	resolveAllTypealiases(project)
+	// Interfaces drain before structs/enums so the conformance walk in
+	// `resolveAllStructTypes` / `resolveAllEnumTypes` can look up named
+	// interfaces and compute substituted expected-method sets.
+	resolveAllInterfaces(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
 	// Top-level decls (lets and vars together) depend on enums (cases

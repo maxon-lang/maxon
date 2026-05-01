@@ -36,6 +36,11 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType MaxonReturnType
 	export var maxonParamTypes MaxonTypeArray
+	// Bare error-enum name from the function's `throws E` clause, or empty
+	// string for non-throwing functions. Recorded by the parser at decl time;
+	// Phase 4 of the interfaces plan will read this to drive error-flag ABI
+	// lowering. Stdlib-restored and synthesized helpers default to empty.
+	export var throwsTypeName String
 	// Persistent symbol table for this function. The parser hands this off
 	// when parsing completes. Today it carries the flat declare/lookup state
 	// at end-of-parse; future iterations will grow a nested tree keyed on
@@ -73,7 +78,7 @@ export type IrFunction
 	// `global` — synthesized functions that never go through the parser
 	// stay file-private to their (empty) source path, which keeps stray
 	// helpers from being callable cross-file by accident.
-	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber) returns IrFunction
+	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber, throwsTypeName String = "") returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -85,6 +90,7 @@ export type IrFunction
 			returnLine: returnLine,
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
+			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
 			paramTypes: StdTypeArray.create(),
@@ -101,7 +107,7 @@ export type IrFunction
 	// constructors are used by stdlib-cache restore and by passes that
 	// synthesize helper functions; both want the function callable from
 	// anywhere, so visibility defaults to `global`.
-	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns IrFunction
+	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName String = "") returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -113,6 +119,7 @@ export type IrFunction
 			returnLine: returnLine,
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
+			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
 			paramTypes: paramTypes,
@@ -136,6 +143,7 @@ export type IrFunction
 			returnLine: src.returnLine,
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
+			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,
 			paramTypes: src.paramTypes,

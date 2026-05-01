@@ -218,6 +218,19 @@ export type Project
 	// passes that consume enum layouts run.
 	export var unresolvedEnums UnresolvedEnumTypeMap
 
+	// Unresolved interface registry: every `interface Name ... end` the parser
+	// sees lands here first. Phase 3 of the interfaces plan drains it into
+	// `interfaces` once every referenced name is known.
+	export var unresolvedInterfaces UnresolvedInterfaceMap
+
+	// Resolved interface registry. Populated by TypeResolution's
+	// `resolveAllInterfaces` drain. Keyed by the source-level interface name.
+	// Conforming-type substitution reads off this map; the C# bootstrap
+	// stores method signatures with `Element`-style type-parameter names
+	// unsubstituted and substitutes at the conformance site, and we mirror
+	// that pattern.
+	export var interfaces IrInterfaceMap
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -268,6 +281,8 @@ export type Project
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			enumTypes: EnumTypeMap.create(),
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
+			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
+			interfaces: IrInterfaceMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -701,9 +716,14 @@ export type UnresolvedStructType
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
+	// Phase 1b: the parsed `implements I1, I2 with X, ...` clause, captured
+	// as bare interface and type-parameter names. Empty when no clause was
+	// present. Phase 3 of the interfaces plan validates conformance and
+	// substitutes associated types — for now this is metadata only.
+	export var implementedInterfaces ConformanceArray
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedStructType
-		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath}
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedStructType
+		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces}
 	end 'create'
 end 'UnresolvedStructType'
 
@@ -1034,14 +1054,29 @@ export type StructType
 	// permitted.
 	export var visibility Visibility
 	export var sourceFilePath FilePath
+	// Source location of the `type Name` token. Used by Phase 3b's
+	// conformance check (E3016) to anchor the diagnostic at the type
+	// declaration rather than the file root. Stdlib-cached struct types
+	// land at (0, 0) — they never carry an `implements` clause, so the
+	// conformance check never reads these fields for them.
+	export var nameLine ErrorLineNumber
+	export var nameColumn ErrorColumnNumber
+	// Phase 3a: the method signatures the type is required to provide,
+	// derived from `implementedInterfaces` with each interface's
+	// type-parameter names (`Element`, `Iter`, ...) substituted by the
+	// concrete types from the conformance's `with` clause. Phase 3b walks
+	// this list against the type's actual methods to enforce conformance
+	// (E3016). Empty when the type declares no `implements` clause or its
+	// clause was rejected with E3015.
+	export var expectedMethods InterfaceMethodSigArray
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath) returns StructType
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray) returns StructType
 		var fieldByName = FieldNameIndexMap.create()
 		for i in 0 upto fields.count() 'buildIndex'
 			let field = try fields.get(i) otherwise panic("StructType.create: fields.get OOB at {i} (count={fields.count()})")
 			try fieldByName.insert(field.name, value: i) otherwise panic("StructType.create: duplicate field '{field.name}' on type '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName, visibility: visibility, sourceFilePath: sourceFilePath}
+		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods}
 	end 'create'
 end 'StructType'
 
@@ -1082,14 +1117,25 @@ export type EnumType
 	// reader's path. Stdlib enums get `(global, stdlib bootstrap path)`.
 	export var visibility Visibility
 	export var sourceFilePath FilePath
+	// Source location of the `enum Name` token. Mirrors `StructType.nameLine`
+	// / `nameColumn` — Phase 3b's E3016 anchors at the enum decl when an
+	// enum's conformance check fails. Stdlib-cached enums land at (0, 0)
+	// because they never carry an `implements` clause.
+	export var nameLine ErrorLineNumber
+	export var nameColumn ErrorColumnNumber
+	// Phase 3a: substituted method signatures from the enum's
+	// `implements` clause. Mirrors `StructType.expectedMethods`. Enums
+	// can declare regular `function` members in their body, so the
+	// conformance check in Phase 3b is identical to structs.
+	export var expectedMethods InterfaceMethodSigArray
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
 			try caseByName.insert(c.name, value: i as CaseOrdinal) otherwise panic("EnumType.create: duplicate case '{c.name}' on enum '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath}
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods}
 	end 'create'
 end 'EnumType'
 
@@ -1107,9 +1153,13 @@ export type UnresolvedEnumType
 	export var line ErrorLineNumber
 	export var column ErrorColumnNumber
 	export var filePath FilePath
+	// Phase 1b: the parsed `implements I1, I2, ...` clause, captured as
+	// bare interface and type-parameter names. Empty when no clause was
+	// present. Phase 3 will validate conformance — currently metadata only.
+	export var implementedInterfaces ConformanceArray
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedEnumType
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath}
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedEnumType
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces}
 	end 'create'
 end 'UnresolvedEnumType'
 

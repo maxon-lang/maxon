@@ -68,6 +68,10 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 	match hlOp 'op'
 		call(_, callee, callContext, _, _, _, _, _) then markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
 		methodCall(_, _, methodName, _, _, _, _, _) then markEveryMethodNamed(project, methodName: String.from(methodName), worklist: worklist, seen: seen)
+		// Phase 4 throwing call: same callee-marking semantics as `call`, plus
+		// keep the runtime helper alive (mrt_get_error_and_clear is invoked
+		// from the lowering output, not the source).
+		tryCall(_, callee, callContext, _, _, _, _, _, _) then markTryCalleeAndRuntime(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
 		literal to refEq then return
 		condBr to br then return
 		ret then return
@@ -77,8 +81,16 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		// hold simple identifiers. DFE walks them as no-ops; TypeResolution
 		// will rewrite them before lowering.
 		unresolvedRead to error then return
+		// Phase 4: `throw E.v` lowers to a call into mrt_set_error then a
+		// return. Keep the runtime helper alive when any throw is reachable.
+		throw then markCallee("mrt_set_error", worklist: worklist, seen: seen)
 	end 'op'
 end 'addCalleesFromOpIndex'
+
+function markTryCalleeAndRuntime(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
+	markCalleeFromCall(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, worklist: worklist, seen: seen)
+	markCallee("mrt_get_error_and_clear", worklist: worklist, seen: seen)
+end 'markTryCalleeAndRuntime'
 
 function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
 	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)

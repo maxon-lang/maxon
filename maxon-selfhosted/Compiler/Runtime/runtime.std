@@ -562,3 +562,35 @@ func mrt_start_with_coverage 0 void
     v3 = std constI64 0
     std ret v3
 end
+
+// mrt_set_error(code): writes `code` into the thread-local error slot
+// (__data_maxon_error). Used by the throw lowering path: a throwing function
+// that wants to signal failure stores the variant ordinal here, then returns a
+// default primary value. The caller's `try EXPR` reads (and clears) the slot
+// via mrt_get_error_and_clear immediately after the call returns. Returns 0.
+//
+// Slot usage:
+//   slot 0 = code (arg)
+func mrt_set_error 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std globalAddr __data_maxon_error
+    std storeIndirect v1 0 v0
+    v2 = std constI64 0
+    std ret v2
+end
+
+// mrt_get_error_and_clear(): reads the thread-local error slot and zeroes it.
+// Returns the prior error code (0 = no error in flight). Used by the tryCall
+// lowering path: the caller emits `let flag = mrt_get_error_and_clear()`
+// immediately after a throwing call returns. The clear-on-read semantics mean
+// a successful call leaves the slot at 0 for the next caller, and a propagated
+// error is observed exactly once at the catch site.
+func mrt_get_error_and_clear 0 i64
+  block entry:
+    v0 = std globalAddr __data_maxon_error
+    v1 = std loadIndirect v0 0
+    v2 = std constI64 0
+    std storeIndirect v0 0 v2
+    std ret v1
+end

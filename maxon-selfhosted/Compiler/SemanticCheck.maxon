@@ -3,6 +3,14 @@
 
 export function runSemanticChecks(project Project, module MaxonModule)
 	logDebug(LogCategory.semantic, message: () gives "semcheck: functions={module.functions.count()}")
+
+	// Phase 3b: enforce E3016 — every type with a non-empty
+	// `expectedMethods` (computed by Phase 3a from its `implements` clause)
+	// must declare a method matching each expected entry by name. Signature
+	// matching is deferred to a follow-up; missing-name detection is enough
+	// to surface the "Partial interface implementation" diagnostic.
+	checkInterfaceConformance(project)
+
 	for func in module.functions 'scan'
 		if func.name == "main" 'isMain'
 			logTrace(LogCategory.semantic, message: () gives "semcheck: main returnType={maxonReturnTypeToString(project, ref: func.maxonReturnType)}")
@@ -15,3 +23,94 @@ export function runSemanticChecks(project Project, module MaxonModule)
 
 	reportSemanticError(project, code: ErrorCode.semanticNoMain, message: "No 'main' function found")
 end 'runSemanticChecks'
+
+// Phase 3b conformance check: walk every struct and enum, and for any with
+// expected method signatures (from a resolved `implements` clause), verify
+// the type declares a method matching each expected name. Methods are stored
+// in `project.funcReturnTypes` under the qualified name `{TypeName}.{method}`,
+// so existence reduces to a map lookup. Missing methods are aggregated per
+// type and reported in a single E3016 diagnostic mirroring the C# bootstrap's
+// shape.
+//
+// Signature equality (parameter types, return type, throws clause) is left
+// for a future pass — Phase 3b stops at name presence so the "missing
+// method(s)" diagnostic surfaces while the richer "wrong signature" form
+// (E3017 in the C# bootstrap) lands later.
+function checkInterfaceConformance(project Project)
+	for (_, st) in project.structTypes 'eachStruct'
+		if st.expectedMethods.count() == 0 'noExpect'
+			continue
+		end 'noExpect'
+		reportMissingMethods(project, typeName: st.name, expected: st.expectedMethods, line: st.nameLine, column: st.nameColumn, filePath: st.sourceFilePath)
+	end 'eachStruct'
+
+	for (_, et) in project.enumTypes 'eachEnum'
+		if et.expectedMethods.count() == 0 'noExpect'
+			continue
+		end 'noExpect'
+		reportMissingMethods(project, typeName: et.name, expected: et.expectedMethods, line: et.nameLine, column: et.nameColumn, filePath: et.sourceFilePath)
+	end 'eachEnum'
+end 'checkInterfaceConformance'
+
+// Compare each expected signature's name against the type's declared
+// methods. Existence is checked via `project.funcReturnTypes.contains` since
+// the parser registers every method there under `{TypeName}.{methodName}`.
+// Builds a list of formatted missing signatures and emits E3016 once when
+// the list is non-empty.
+function reportMissingMethods(project Project, typeName String, expected InterfaceMethodSigArray, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
+	var missing = StringArray.create()
+	for sig in expected 'eachExpected'
+		let qualified = "{typeName}.{sig.name}"
+		if project.funcReturnTypes.contains(qualified) 'present'
+			continue
+		end 'present'
+		missing.push(formatMethodSig(project, sig: sig))
+	end 'eachExpected'
+
+	if missing.count() == 0 'allPresent'
+		return
+	end 'allPresent'
+
+	reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildMissingMessage(typeName, missing: missing), line: line, column: column, filePath: filePath)
+end 'reportMissingMethods'
+
+// Render an InterfaceMethodSig as a one-line declaration string in the
+// shape the C# bootstrap emits:
+//
+//     name(p1 Type1, p2 Type2) returns Ret throws ErrType
+//
+// Empty parameter list collapses to `name()`. Void return types render as
+// ` returns void` to match the C# bootstrap's `FormatResolved`. A
+// non-throwing method omits the `throws` clause.
+function formatMethodSig(project Project, sig InterfaceMethodSig) returns String
+	var paramList = ""
+	let paramCount = sig.paramTypes.count()
+	for i in 0 upto paramCount 'eachParam'
+		if i > 0 'sep'
+			paramList.append(", ")
+		end 'sep'
+		let pname = try sig.paramNames.get(i) otherwise panic("formatMethodSig: paramNames.get OOB at {i}")
+		let ptype = try sig.paramTypes.get(i) otherwise panic("formatMethodSig: paramTypes.get OOB at {i}")
+		paramList.append("{pname} {ptype.toString(project)}")
+	end 'eachParam'
+
+	let returnPart = match sig.returnType 'ret'
+		void gives " returns void"
+		value(inner) gives " returns {inner.toString(project)}"
+	end 'ret'
+
+	let throwsPart = "" if sig.throwsTypeName.isEmpty() else " throws {sig.throwsTypeName}"
+
+	return "{sig.name}({paramList}){returnPart}{throwsPart}"
+end 'formatMethodSig'
+
+// Compose the full E3016 diagnostic body. Each missing entry sits on its own
+// line, indented by two spaces and prefixed with `- `, matching the C#
+// bootstrap's `string.Join("\n", ...)` output.
+function buildMissingMessage(typeName String, missing StringArray) returns String
+	var msg = "Partial interface implementation: type '{typeName}' is missing {missing.count()} method(s):"
+	for entry in missing 'eachMissing'
+		msg.append("\n  - {entry}")
+	end 'eachMissing'
+	return msg
+end 'buildMissingMessage'

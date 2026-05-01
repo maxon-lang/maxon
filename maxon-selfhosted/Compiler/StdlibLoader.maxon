@@ -18,7 +18,7 @@ var stdlibCacheProjectDirs = FilePathArray.create()
 // curated whitelist and grow it as more features come online. Each entry is a
 // path relative to the project root (i.e. the directory that contains
 // `stdlib/`).
-let stdlibWhitelist = ["stdlib/Math.maxon"]
+let stdlibWhitelist = ["stdlib/Math.maxon", "stdlib/Range.maxon"]
 
 // A synthesized stdlib prelude. The real `stdlib/Process.maxon` declares
 // `ExitCode` behind `#if os(...)` — a directive form the self-hosted compiler
@@ -27,7 +27,16 @@ let stdlibWhitelist = ["stdlib/Math.maxon"]
 // has to land in the stdlib namespace before any user code is parsed. The
 // range matches the wasi target's tightest cap (0..125), which is the strictest
 // of the platform variants and so works across all targets.
-let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\n"
+// Synthesized stdlib declarations. Beyond `ExitCode` (see comment above), we
+// also pre-seed the cross-cutting interface family (`Error`, `Iterator`,
+// `BidirectionalIterator`, `Iterable`) and `IterationError` so user code can
+// reference them by name without us having to whitelist `stdlib/Interfaces.maxon`
+// itself — that file uses extensions and `Array with Element` machinery the
+// self-hosted compiler doesn't yet support. We omit the extension blocks and
+// the Hashable/Equatable/Comparable/Cloneable/Stringable/FormattedStringable
+// interfaces; they can be added when a whitelisted stdlib file actually
+// needs them.
+let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\n"
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
 
 export function findStdlibPath() returns FilePath
@@ -128,7 +137,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let stdlibFilesForChecksum = collectStdlibFiles()
-	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum)
+	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum, bootstrap: stdlibBootstrapSource)
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
@@ -343,7 +352,7 @@ function loadCacheForTarget(project Project)
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let stdlibFilesForChecksum = collectStdlibFiles()
-	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum)
+	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum, bootstrap: stdlibBootstrapSource)
 
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 

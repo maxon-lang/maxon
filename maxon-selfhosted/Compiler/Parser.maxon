@@ -281,12 +281,65 @@ export type Parser
 		return ParamDefault.intLiteral(value)
 	end 'parseOptionalParamDefault'
 
-	// Skip an optional `throws ErrorType` clause.
-	function skipThrowsClause() throws ParserError
-		if accept(TokenKind.throws) 'hasThrows'
-			try expect(TokenKind.identifier)
-		end 'hasThrows'
-	end 'skipThrowsClause'
+	// Parse an optional `throws ErrorType` clause. Returns the bare error-enum
+	// name when present, or the empty string when the clause is absent.
+	// Phase 1c records this name on `IrFunction.throwsTypeName`; Phase 4 will
+	// consume it for error-flag ABI lowering.
+	function parseThrowsClause() returns String throws ParserError
+		if not accept(TokenKind.throws) 'noThrows'
+			return ""
+		end 'noThrows'
+		let nameToken = try consumeExpecting("error type name")
+		return nameToken.value
+	end 'parseThrowsClause'
+
+	// Parse an optional `implements I1, I2 with X, I3 with (X, Y)` clause on a
+	// `type` or `enum` declaration. Returns an empty array when the keyword
+	// isn't present. Commas are stripped at the lexer (see actionTable's
+	// skipOther) so a single conformance separates from the next purely by the
+	// next token's kind: another identifier opens a new conformance, anything
+	// else terminates the clause. Bare-name capture only — Phase 3 of the
+	// interfaces plan resolves these against `project.unresolvedInterfaces`
+	// and validates the type-parameter arity.
+	//
+	// Grammar:
+	//     implementsClause = 'implements' conformance (',' conformance)*
+	//     conformance      = IDENT ('with' withArgs)?
+	//     withArgs         = IDENT | '(' IDENT (',' IDENT)* ')'
+	//
+	// The case `Iterator with RangeBound, BidirectionalIterator` parses as two
+	// conformances (`Iterator with RangeBound` and `BidirectionalIterator`):
+	// the bare-identifier `with` form takes exactly one type argument; the
+	// next identifier opens the next conformance.
+	function parseImplementsClause() returns ConformanceArray throws ParserError
+		var list = ConformanceArray.create()
+		if not accept(TokenKind.implements) 'noImpl'
+			return list
+		end 'noImpl'
+
+		// At least one conformance is required after `implements`. Subsequent
+		// conformances are signalled by another identifier in the next slot
+		// (the comma between them is dropped by the lexer).
+		while at(TokenKind.identifier) 'list'
+			let nameToken = try consumeExpecting("interface name")
+			var withArgs = StringArray.create()
+			if accept(TokenKind.with) 'hasWith'
+				if accept(TokenKind.leftParen) 'parenList'
+					while at(TokenKind.identifier) 'argLoop'
+						let argToken = try consumeExpecting("type parameter name")
+						withArgs.push(argToken.value)
+					end 'argLoop'
+					try expect(TokenKind.rightParen)
+				end 'parenList' else 'singleArg'
+					let argToken = try consumeExpecting("type parameter name")
+					withArgs.push(argToken.value)
+				end 'singleArg'
+			end 'hasWith'
+			list.push(Conformance.create(nameToken.value, withArgs: withArgs, line: nameToken.line, column: nameToken.column))
+		end 'list'
+
+		return list
+	end 'parseImplementsClause'
 
 	// Parse an optional `returns Type` clause. Returns MaxonReturnType.void if
 	// the clause is absent. When isMethod is true and the return type is
@@ -365,14 +418,14 @@ export type Parser
 		// borrow before calling into parseStatements (which mutates self.cursor).
 		let returnIsVoid = maxonReturnTypeIsVoid(returnType_)
 
-		try skipThrowsClause()
+		let throwsTypeName_ = try parseThrowsClause()
 
 		// Tolerate EOF here so a truncated source (e.g. `function main()` with no
 		// body) reaches the missing-`end` diagnostic via skipEndAndLabel below
 		// instead of throwing through to queryParseOps' generic EOF fallback.
 		_ = skipOptionalNewlines()
 
-		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
+		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0, throwsTypeName: throwsTypeName_)
 		// Carry the source-file namespace forward so LowerMaxonToStd can
 		// resolve `CallContext.free` callees against `{namespace}.callee`
 		// even when the function's own name is bare (e.g. main entrypoint).
@@ -521,7 +574,18 @@ export type Parser
 			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
 				try parsePanicStatement(block)
 				lastWasReturn = true
-			end 'isPanic' else if stmtToken.kind == TokenKind.if 'isIf'
+			end 'isPanic' else if stmtToken.kind == TokenKind.throw 'isThrow'
+				try parseThrowStatement(block)
+				lastWasReturn = true
+			end 'isThrow' else if stmtToken.kind == TokenKind.try 'isTryStmt'
+				// Statement-form `try EXPR [otherwise FALLBACK]` — reuse the
+				// expression-level parser and discard its result. The success
+				// path leaves currentBlock pointing at the continue/merge
+				// block, so flow continues from there. lastWasReturn stays
+				// false because the success path always falls through.
+				_ = try parseTryExpression(block)
+				block = currentBlock
+			end 'isTryStmt' else if stmtToken.kind == TokenKind.if 'isIf'
 				block = try parseIfStatement(func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
 				block = try parseWhileStatement(func, block: block)
@@ -1092,7 +1156,7 @@ export type Parser
 	// dispatched, but are reserved as recovery anchors so a stray top-level
 	// `union`/`enum` resyncs cleanly once support lands.
 	function isTopLevelOpener(kind TokenKind) returns bool
-		return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.typealias
+		return kind == TokenKind.function or kind == TokenKind.type or kind == TokenKind.union or kind == TokenKind.enum or kind == TokenKind.interface or kind == TokenKind.extension or kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.typealias
 	end 'isTopLevelOpener'
 
 	// Convenience: is cursor positioned at a token that opens a top-level
@@ -1190,6 +1254,8 @@ export type Parser
 			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create(), visibility: visibility)
 			type then try parseTypeDecl(visibility)
 			enum then try parseEnumDecl(visibility)
+			interface then try parseInterfaceDecl(visibility)
+			extension then try parseExtensionStub()
 			let then try parseTopLevelDecl(typeName: "", mutable: false, visibility: visibility)
 			var then try parseTopLevelDecl(typeName: "", mutable: true, visibility: visibility)
 			typealias then try parseTopLevelTypealias(visibility)
@@ -1320,6 +1386,10 @@ export type Parser
 
 		logTrace(LogCategory.parser, message: () gives "parser: type '{currentTypeName}'")
 
+		// Phase 1b: capture `implements I1, I2 with X, ...` as metadata. No
+		// validation here — Phase 3 resolves and checks the conformance set.
+		let conformances = try parseImplementsClause()
+
 		try skipNewlines()
 
 		var fields = StructFieldArray.create()
@@ -1390,7 +1460,7 @@ export type Parser
 			end 'stuck'
 		end 'body'
 
-		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
+		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances)
 		try project.unresolvedStructTypes.insert(currentTypeName, value: unresolved) otherwise 'dupType'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
@@ -1429,10 +1499,15 @@ export type Parser
 		currentEnumVisibility = visibility
 		logTrace(LogCategory.parser, message: () gives "parser: enum '{currentTypeName}'")
 
+		// Phase 1b: capture `implements I1, I2, ...` as metadata. The clause
+		// follows the enum name (and precedes any newlines / cases), mirroring
+		// the placement on `type` declarations. Phase 3 will validate.
+		let conformances = try parseImplementsClause()
+
 		// Pre-register an empty enum so method bodies parsed below can resolve
 		// `match self` against the enum's named MaxonType. The full case list
 		// is patched in once the body has been walked.
-		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances)
 		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupEnumPre'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate enum '{currentTypeName}'", line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
 			currentTypeName = ""
@@ -1584,13 +1659,169 @@ export type Parser
 		// Patch the pre-registered placeholder with the full case list. The
 		// duplicate-name diagnostic was already issued above when we tried to
 		// insert the placeholder, so this upsert is unconditional.
-		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
 		try skipEndAndLabel()
 	end 'parseEnumDecl'
+
+	// --- Interface declaration parsing ---
+	//
+	// Parse: interface Name [extends Parent1, Parent2] [uses Elem1, Elem2]
+	//            function name(params) [returns Type] [throws ErrorType]
+	//            ...
+	//        end 'Name'
+	//
+	// Interface bodies are signature-only: each method line is one statement
+	// with no body and no trailing `end 'name'`. The parser captures the
+	// declaration as an `UnresolvedInterfaceType` and deposits it in
+	// `project.unresolvedInterfaces`. Phase 3 of the interfaces plan drains
+	// the map into a resolved registry once method-signature types resolve.
+	//
+	// entry: cursor AT the token AFTER `interface` — the interface-name identifier.
+	// Caller (dispatchInner) has already consumed the `interface` keyword.
+	function parseInterfaceDecl(visibility Visibility) throws ParserError
+		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
+
+		logTrace(LogCategory.parser, message: () gives "parser: interface '{nameToken.value}'")
+
+		// Commas are skipped at the lexer (see actionTable's skipOther) so the
+		// extends/uses lists land as plain runs of identifiers. The loop stops
+		// when the next token isn't another identifier — which lands us at
+		// `uses`, `function`, `end`, or a newline. Bare-name capture mirrors
+		// stdlib/Interfaces.maxon's `extends Iterator` / `uses Element, Iter`.
+		var extendsNames = StringArray.create()
+		if accept(TokenKind.extends) 'hasExtends'
+			while at(TokenKind.identifier) 'extLoop'
+				let parentToken = try consume()
+				extendsNames.push(parentToken.value)
+			end 'extLoop'
+		end 'hasExtends'
+
+		var usesParams = StringArray.create()
+		if accept(TokenKind.uses) 'hasUses'
+			while at(TokenKind.identifier) 'usesLoop'
+				let paramToken = try consume()
+				usesParams.push(paramToken.value)
+			end 'usesLoop'
+		end 'hasUses'
+
+		try skipNewlines()
+
+		var methods = InterfaceMethodSigArray.create()
+
+		while true 'body'
+			let bodyPrevPos = cursor.index()
+			let memberToken = cursor.current()
+
+			if memberToken.kind == TokenKind.end and lookaheadIsBlockEnd() 'isEnd'
+				break
+			end 'isEnd'
+
+			if memberToken.kind == TokenKind.function 'isMethod'
+				try eat(TokenKind.function)
+				let sig = try parseInterfaceMethodSig()
+				methods.push(sig)
+				try skipNewlines()
+			end 'isMethod' else 'unknown'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in interface body: '{tokenValueToString(memberToken.value)}' (expected 'function' or 'end')", line: memberToken.line, column: memberToken.column, filePath: filePath)
+				skipToNextLine()
+				try skipNewlines()
+			end 'unknown'
+
+			if cursor.index() <= bodyPrevPos 'stuck'
+				try cursor.advance() otherwise break
+			end 'stuck'
+		end 'body'
+
+		if project.unresolvedInterfaces.contains(nameToken.value) 'duplicate'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate interface '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'duplicate' else 'register'
+			let unresolved = UnresolvedInterfaceType.create(nameToken.value, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath)
+			project.unresolvedInterfaces.upsert(nameToken.value, value: unresolved)
+		end 'register'
+
+		try skipEndAndLabel()
+	end 'parseInterfaceDecl'
+
+	// Parse one interface method signature: `name(param Type, ...) [returns Type] [throws ErrorType]`.
+	// No method body, no `end 'name'` — the signature is a single line. Param
+	// types and the return type are interned through `internMaxonType`; the
+	// throws-clause type is captured as the bare error-enum name (empty when
+	// absent) so Phase 3 can resolve it once `unresolvedInterfaces` drains.
+	// entry: cursor AT the method-name identifier (caller ate `function`).
+	// exit:  cursor on the first token AFTER the signature (the trailing newline).
+	function parseInterfaceMethodSig() returns InterfaceMethodSig throws ParserError
+		let nameToken = try consumeExpecting("identifier")
+		checkReservedDeclName(nameToken)
+
+		try expect(TokenKind.leftParen)
+
+		var paramNames = StringArray.create()
+		var paramTypes = MaxonTypeArray.create()
+
+		// Commas are skipped at the lexer, so parameter pairs land as a flat
+		// run of `name Type name Type ...` between the parens. Stop when the
+		// next token is the closing `)`.
+		while not at(TokenKind.rightParen) 'paramLoop'
+			let paramNameToken = try consumeExpecting("identifier")
+			if paramNameToken.kind != TokenKind.identifier 'badName'
+				reportTokenMismatch(paramNameToken, expectedDisplay: "identifier")
+				synchronize()
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
+			end 'badName'
+			checkReservedDeclName(paramNameToken)
+			let paramTypeToken = try consumeExpecting("type name")
+			if not isTypeNameToken(paramTypeToken) 'badType'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Expected type name", line: paramTypeToken.line, column: paramTypeToken.column, filePath: filePath)
+				synchronize()
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
+			end 'badType'
+			paramNames.push(paramNameToken.value)
+			paramTypes.push(internMaxonType(project, name: paramTypeToken.value))
+		end 'paramLoop'
+
+		try expect(TokenKind.rightParen)
+
+		var returnType_ = MaxonReturnType.void
+		if accept(TokenKind.returns) 'hasReturn'
+			let typeToken = try consumeExpecting("type name")
+			returnType_ = MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
+		end 'hasReturn'
+
+		let throwsName = try parseThrowsClause()
+
+		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType_, throwsTypeName: throwsName, line: nameToken.line, column: nameToken.column)
+	end 'parseInterfaceMethodSig'
+
+	// Parse-and-discard top-level `extension` block. Range doesn't need any
+	// of the extension methods declared in stdlib/Interfaces.maxon, but we
+	// must accept the keyword so a stray extension doesn't wedge top-level
+	// dispatch. We chew tokens until the matching `end 'label'` at the
+	// outer depth.
+	// entry: cursor AT the token AFTER `extension` (the extension target name).
+	// Caller (dispatchInner) has already consumed the `extension` keyword.
+	function parseExtensionStub() throws ParserError
+		// Skip everything up to and including the matching `end 'label'`.
+		// `function`/`if`/`while`/`for`/`match`/`else` open nested blocks that
+		// each terminate with their own `end` — count those so we don't stop
+		// at the first inner `end`.
+		var depth = 1
+		for token in cursor 'skip'
+			if token.kind == TokenKind.end 'isEnd'
+				depth = depth - 1
+				if depth == 0 'atExtensionEnd'
+					try skipEndAndLabel()
+					return
+				end 'atExtensionEnd'
+			end 'isEnd' else if token.kind == TokenKind.function or token.kind == TokenKind.if or token.kind == TokenKind.while or token.kind == TokenKind.for or token.kind == TokenKind.match or token.kind == TokenKind.else 'opensBlock'
+				depth = depth + 1
+			end 'opensBlock'
+		end 'skip'
+	end 'parseExtensionStub'
 
 	// True when the cursor is positioned on `end` *followed by* the
 	// `'Label'` literal that closes a block (or end-of-input). Used by
@@ -1696,26 +1927,6 @@ export type Parser
 		end 'eachField'
 	end 'emitFieldWritebacks'
 
-	// Skip over a method body in the first pass of type parsing.
-	// Scans token-by-token counting nested block-opening keywords (if/while/
-	// for/match/else) to find the matching `end` for this method. For-loop
-	// header advances each iteration; body updates depth and breaks when the
-	// method's own `end` is reached so try skipEndAndLabel() can consume it.
-	function skipMethodBody() throws ParserError
-		var depth = 1
-		for token in cursor 'skip'
-			if token.kind == TokenKind.end 'isEnd'
-				depth = depth - 1
-				if depth == 0 'atMethodEnd'
-					try skipEndAndLabel()
-					return
-				end 'atMethodEnd'
-			end 'isEnd' else if token.kind == TokenKind.if or token.kind == TokenKind.while or token.kind == TokenKind.for or token.kind == TokenKind.match or token.kind == TokenKind.else 'opensBlock'
-				depth = depth + 1
-			end 'opensBlock'
-		end 'skip'
-	end 'skipMethodBody'
-
 	// Parse a type bound: a number literal, negative literal, or T.min/T.max.
 	// Mutates pos and returns just BoundValue.
 	// entry: cursor AT first token of the bound (minus, intLit, or identifier).
@@ -1805,6 +2016,23 @@ export type Parser
 		let stringId = project.strings.intern(fullMsg)
 		module.appendOp(block, op: MaxonOp.panic(stringId, range: SourceRange.between(panicToken, last: rparenToken)))
 	end 'parsePanicStatement'
+
+	// Parse: throw EnumName.variantName
+	// Phase 4 lowering: emit MaxonOp.throw, which lowers to a call into
+	// mrt_set_error followed by a return of a default primary value. The
+	// thrown variant ordinal is recovered at lowering time by walking
+	// project.unresolvedEnums / project.enumTypes — the parser stays
+	// agnostic of cross-declaration registries. `throw` is a block
+	// terminator: setTerminator places it as the block's tail op so the
+	// caller marks `lastWasReturn = true` and stops emitting into this
+	// block.
+	function parseThrowStatement(block IrBlock) throws ParserError
+		let throwToken = try consume()  // caller has already dispatched on 'throw'
+		let typeNameToken = try consumeExpecting("error type name")
+		try expect(TokenKind.dot)
+		let variantToken = try consumeExpecting("error variant name")
+		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, range: SourceRange.between(throwToken, last: variantToken)))
+	end 'parseThrowStatement'
 
 	// --- If statement ---
 
@@ -3271,6 +3499,31 @@ export type Parser
 
 	// Unary: -primary | not primary | primary
 	function parseUnary(block IrBlock) returns ExprResult throws ParserError
+		// `try EXPR` (Phase 4): real error-flag propagation through the
+		// thread-local error state. Two forms:
+		//
+		//   try EXPR                    -- propagation. If the call sets the
+		//                                  error flag, re-set it (so the
+		//                                  current function's caller sees
+		//                                  it via mrt_get_error_and_clear)
+		//                                  and return a default primary
+		//                                  value. Otherwise the expression
+		//                                  evaluates to the call's result.
+		//
+		//   try EXPR otherwise FALLBACK -- if the call set the error flag,
+		//                                  evaluate FALLBACK as the
+		//                                  expression's value; otherwise
+		//                                  evaluate to the call's result.
+		//
+		// The inner EXPR must be a function call shape — this is enforced
+		// structurally by rewriting the last appended `call` op into a
+		// `tryCall`. If the inner expression doesn't end in a call, we
+		// emit a parser-level "must be a call" diagnostic and fall
+		// through to plain parsing so the rest of the file still parses.
+		if at(TokenKind.try) 'isTry'
+			return try parseTryExpression(block)
+		end 'isTry'
+
 		if at(TokenKind.minus) 'isNeg'
 			let opToken = try consume()
 			let opRange = SourceRange.ofToken(opToken)
@@ -3304,6 +3557,295 @@ export type Parser
 
 		return try parseAsCasts(block, expr: try parsePostfix(block, expr: try parsePrimary(block)))
 	end 'parseUnary'
+
+	// Parse a `try EXPR [otherwise FALLBACK]` expression. The inner EXPR
+	// must be a function call — enforced by rewriting its terminal `call`
+	// MaxonOp into a `tryCall`. The tryCall's `errorBoundName` slot is
+	// populated by the lowering pass (it emits a follow-up call to
+	// mrt_get_error_and_clear that binds the flag). After the call we emit
+	// a cmp+condBr on the flag:
+	//
+	//   - propagation form (no `otherwise`): the error block re-publishes
+	//     the flag via mrt_set_error(flag) and returns a default primary
+	//     value, mirroring `MaxonOp.throw`'s lowered shape so the
+	//     enclosing function's caller observes the same error.
+	//
+	//   - fallback form (`otherwise FALLBACK`): both arms write into a
+	//     parser-allocated result slot, then merge into a join block
+	//     where the slot is loaded as the expression's value.
+	//
+	// `try EXPR otherwise (e) BLOCK` and the multi-statement
+	// `try BLOCK ... otherwise BLOCK` are out of scope for Phase 4a-c.
+	function parseTryExpression(block IrBlock) returns ExprResult throws ParserError
+		let tryToken = try consume()  // 'try'
+		// Snapshot the op count so we can locate the inner expression's
+		// terminal `call` op after parsing. parseUnary may emit multiple
+		// ops (chained postfix/methodCall) — we look at the last one.
+		let opCountBefore = module.ops.count()
+		let inner = try parseUnary(block)
+		let innerName = exprName(inner)
+		let innerType = exprType(inner)
+		var innerExitBlock = currentBlock
+		let opCountAfter = module.ops.count()
+
+		// Allocate the synthetic flag-binding name up front so it can be
+		// stamped into the rewritten tryCall op.
+		let errorFlagName = freshSynthName()
+
+		// Rewrite the terminal call to a tryCall, or fall back to emitting
+		// an explicit mrt_get_error_and_clear binding for non-call inner
+		// expressions (method calls, etc.).
+		var rewroteCall = false
+		if opCountAfter > opCountBefore 'haveLastOp'
+			let lastIdx = opCountAfter - 1
+			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: ops.get OOB at last idx={lastIdx} (count={opCountAfter})")
+			rewroteCall = tryRewriteCallToTryCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName)
+		end 'haveLastOp'
+		if not rewroteCall 'noRewrite'
+			// Method calls and other non-`call` shapes: emit a follow-up
+			// call to mrt_get_error_and_clear that binds the flag manually.
+			// The lowering pass treats this as an ordinary qualified call.
+			module.appendOp(innerExitBlock, op: MaxonOp.call(errorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(tryToken)))
+		end 'noRewrite'
+
+		// cmp flag != 0 — error when nonzero, success otherwise.
+		let zeroName = emitLiteral(innerExitBlock, value: 0, valueType: MaxonType.integer)
+		let condName = freshSynthName()
+		module.appendOp(innerExitBlock, op: MaxonOp.cmp(condName, left: errorFlagName, right: zeroName, predicate: CmpPredicate.ne, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+
+		let tryFilePath = filePath.toString()
+		let baseLabel = "try_{currentFunc.nextBlockId}"
+
+		if at(TokenKind.otherwise) 'isFallback'
+			return try parseTryFallback(innerExitBlock: innerExitBlock, tryToken: tryToken, condName: condName, callResultName: innerName, callResultType: innerType, baseLabel: baseLabel, tryFilePath: tryFilePath)
+		end 'isFallback'
+
+		return parseTryPropagation(innerExitBlock: innerExitBlock, tryToken: tryToken, condName: condName, errorFlagName: errorFlagName, callResultName: innerName, callResultType: innerType, baseLabel: baseLabel, tryFilePath: tryFilePath)
+	end 'parseTryExpression'
+
+	// Propagation path: when the called function set the error flag, the
+	// current function re-publishes it (mrt_set_error(flag)) and returns
+	// a default primary value of its own return type. Success path falls
+	// through with the call's result. Returns the call's result name as
+	// the expression's value — only the success path reads it.
+	function parseTryPropagation(innerExitBlock IrBlock, tryToken Token, condName ByteArray, errorFlagName ByteArray, callResultName ByteArray, callResultType MaxonType, baseLabel String, tryFilePath String) returns ExprResult
+		// `var` rather than `let` because addBlockAt's IrBlock is mutated
+		// in place by subsequent appendOp/setTerminator calls — the
+		// borrow checker rejects passing a `let`-bound IrBlock to those.
+		var errorBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.err", filePath: tryFilePath, firstLine: tryToken.line)
+		let errorBlockId = errorBlock.id
+		let continueBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.cont", filePath: tryFilePath, firstLine: tryToken.line)
+		let continueBlockId = continueBlock.id
+
+		// condBr: error (cond `flag != 0`) -> errorBlock, else success -> continueBlock.
+		module.setTerminator(innerExitBlock, op: MaxonOp.condBr(condName, thenTarget: errorBlockId, elseTarget: continueBlockId, range: SourceRange.ofToken(tryToken)))
+
+		// errorBlock: re-publish flag via mrt_set_error(flag). We don't have
+		// a `MaxonOp.throw` variant that takes a runtime value — `throw` is
+		// for compile-time-known variants. So emit a direct call and a ret.
+		let setErrResultName = freshSynthName()
+		var setErrArgs = ByteArrayArray.create()
+		setErrArgs.push(errorFlagName)
+		var setErrArgLabels = StringArray.create()
+		setErrArgLabels.push("")
+		var setErrArgTypes = MaxonTypeArray.create()
+		setErrArgTypes.push(MaxonType.integer)
+		var setErrArgRanges = SourceRangeArray.create()
+		setErrArgRanges.push(SourceRange.ofToken(tryToken))
+		module.appendOp(errorBlock, op: MaxonOp.call(setErrResultName, callee: project.calleeNames.intern("mrt_set_error"), callContext: CallContext.qualified, args: setErrArgs, argLabels: setErrArgLabels, argTypes: setErrArgTypes, argRanges: setErrArgRanges, range: SourceRange.ofToken(tryToken)))
+		// Return a default primary value of the function's return type.
+		let defaultName = emitDefaultReturnLiteral(errorBlock, range: SourceRange.ofToken(tryToken))
+		module.setTerminator(errorBlock, op: MaxonOp.ret(defaultName, range: SourceRange.ofToken(tryToken)))
+
+		// Continue parsing in continueBlock; the expression's value is the
+		// successful call's result.
+		currentBlock = continueBlock
+		return ExprResult.direct(callResultName, valueType: callResultType)
+	end 'parseTryPropagation'
+
+	// Fallback path: `otherwise FALLBACK`. The success arm writes the call
+	// result into a slot; the fallback arm either writes a value into the
+	// same slot (expression / `ignore`) or terminates (return / panic /
+	// throw / break / continue). A merge block then reads the slot as the
+	// expression's value.
+	//
+	// Multi-statement `otherwise BLOCK` and `(e) BLOCK` binding forms are
+	// out of scope here — they're handled by a future phase.
+	function parseTryFallback(innerExitBlock IrBlock, tryToken Token, condName ByteArray, callResultName ByteArray, callResultType MaxonType, baseLabel String, tryFilePath String) returns ExprResult throws ParserError
+		try eat(TokenKind.otherwise)
+		// Result slot. Type is `unresolved` until the success arm stores —
+		// TypeResolution propagates the concrete type from there.
+		let resultSlot = scope.declare("__try_{baseLabel}_result", varType: MaxonType.unresolved, mutable: true)
+		// Seed with a zero literal so the merge block's varLoad reads a
+		// well-typed value under wasm's stricter validation, mirroring how
+		// `parseMatchExpression` seeds its result slot.
+		let seedZero = emitLiteral(innerExitBlock, value: 0, valueType: MaxonType.integer)
+		module.appendOp(innerExitBlock, op: MaxonOp.varDecl(resultSlot, value: seedZero, slotType: MaxonType.unresolved, range: SourceRange.ofToken(tryToken)))
+
+		var fallbackBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.otherwise", filePath: tryFilePath, firstLine: tryToken.line)
+		let fallbackBlockId = fallbackBlock.id
+		var successBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.ok", filePath: tryFilePath, firstLine: tryToken.line)
+		let successBlockId = successBlock.id
+
+		// condBr: error (cond `flag != 0`) -> fallback, else success -> success block.
+		module.setTerminator(innerExitBlock, op: MaxonOp.condBr(condName, thenTarget: fallbackBlockId, elseTarget: successBlockId, range: SourceRange.ofToken(tryToken)))
+
+		// Success path: store the call result into the merge slot.
+		module.appendOp(successBlock, op: MaxonOp.varStore(resultSlot, value: callResultName, range: SourceRange.ofToken(tryToken)))
+
+		// Decide what shape the fallback takes by peeking at the first
+		// token after `otherwise`:
+		//   return / panic / throw / break / continue → terminator-shaped
+		//   ignore                                   → discard error, merge
+		//   anything else                            → fallback expression
+		// Terminator-shaped fallbacks seal the fallback block themselves;
+		// only `ignore` and the expression form branch into the merge block.
+		currentBlock = fallbackBlock
+		let dispatchToken = cursor.current()
+		let dispatched = try parseTryFallbackDispatch(fallbackBlock: fallbackBlock, dispatchToken: dispatchToken, resultSlot: resultSlot, callResultType: callResultType, tryToken: tryToken)
+
+		// Merge block: load the slot. Even when the fallback is a
+		// terminator we still emit the merge block — only the success edge
+		// reaches it, but the load needs a home and downstream code has to
+		// continue from somewhere.
+		var mergeBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.merge", filePath: tryFilePath, firstLine: tryToken.line)
+		let mergeBlockId = mergeBlock.id
+
+		module.setTerminator(successBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.ofToken(tryToken)))
+		// Only branch the fallback into the merge block when the fallback
+		// path is an expression (or `ignore`) — terminator forms have
+		// already sealed their block with ret/throw/br/etc.
+		if dispatched.mergesIntoSuccess 'mergesIn'
+			module.setTerminator(dispatched.fallbackExitBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.ofToken(tryToken)))
+		end 'mergesIn'
+
+		// Result type: prefer the call's type, else the fallback expression's
+		// type when present. Either side may be `unresolved` at parse time —
+		// TypeResolution fills both.
+		var resultType = callResultType
+		if isUnresolvedMaxonType(resultType) and dispatched.hasFallbackType 'callUnresolved'
+			resultType = dispatched.fallbackType
+		end 'callUnresolved'
+
+		currentBlock = mergeBlock
+		let resultName = freshSynthName()
+		module.appendOp(mergeBlock, op: MaxonOp.varLoad(resultName, slotId: resultSlot, slotType: resultType, range: SourceRange.ofToken(tryToken)))
+		return ExprResult.direct(resultName, valueType: resultType)
+	end 'parseTryFallback'
+
+	// Dispatch on the token immediately after `otherwise` to pick a
+	// fallback shape. Returns enough metadata for the caller to wire the
+	// merge edges and pick a result type. The fallback block passed in is
+	// the one the caller already created and seeded as currentBlock; this
+	// helper either populates it with a fallback expression's varStore
+	// (and reports the value's type) or installs a terminator that seals
+	// the block from the caller's merge wiring.
+	function parseTryFallbackDispatch(fallbackBlock IrBlock, dispatchToken Token, resultSlot VarSlot, callResultType MaxonType, tryToken Token) returns TryFallbackOutcome throws ParserError
+		if dispatchToken.kind == TokenKind.return 'isReturn'
+			try parseReturnStatement(fallbackBlock)
+			return TryFallbackOutcome.terminator(fallbackBlock)
+		end 'isReturn' else if dispatchToken.kind == TokenKind.panic 'isPanic'
+			try parsePanicStatement(fallbackBlock)
+			// parsePanicStatement only appends MaxonOp.panic — block needs
+			// an explicit terminator so the verifier sees it sealed. Use a
+			// synthetic ret of zero, mirroring emitMatchUnreachableTerminator.
+			let zeroName = emitLiteral(fallbackBlock, value: 0, valueType: MaxonType.integer)
+			module.setTerminator(fallbackBlock, op: MaxonOp.ret(zeroName, range: SourceRange.ofToken(tryToken)))
+			return TryFallbackOutcome.terminator(fallbackBlock)
+		end 'isPanic' else if dispatchToken.kind == TokenKind.throw 'isThrow'
+			try parseThrowStatement(fallbackBlock)
+			return TryFallbackOutcome.terminator(fallbackBlock)
+		end 'isThrow' else if dispatchToken.kind == TokenKind.break 'isBreak'
+			// parseBreakStatement returns a fresh detached block — we
+			// don't care about it because the fallback path is sealed.
+			_ = try parseBreakStatement(currentFunc, block: fallbackBlock)
+			return TryFallbackOutcome.terminator(fallbackBlock)
+		end 'isBreak' else if dispatchToken.kind == TokenKind.continue 'isContinue'
+			_ = try parseContinueStatement(currentFunc, block: fallbackBlock)
+			return TryFallbackOutcome.terminator(fallbackBlock)
+		end 'isContinue' else if dispatchToken.kind == TokenKind.ignore 'isIgnore'
+			try eat(TokenKind.ignore)
+			// `ignore` discards the error and falls through. The slot
+			// needs a well-typed store on the fallback path so the merge
+			// load is well-formed even when control hits the error edge.
+			// Use a default-typed literal of the call's success type —
+			// the user has documented-undefined semantics if they read it.
+			let defaultLitType = defaultIgnoreLiteralType(callResultType)
+			let defaultName = emitLiteral(fallbackBlock, value: 0, valueType: defaultLitType)
+			module.appendOp(fallbackBlock, op: MaxonOp.varStore(resultSlot, value: defaultName, range: SourceRange.ofToken(tryToken)))
+			return TryFallbackOutcome.merges(fallbackBlock)
+		end 'isIgnore'
+
+		// Default: fallback is an expression. parseExpression may swap
+		// currentBlock if the fallback contains short-circuit ops; recover
+		// the actual exit block afterwards.
+		let fallbackResult = try parseExpression(fallbackBlock)
+		var fallbackExitBlock = currentBlock
+		module.appendOp(fallbackExitBlock, op: MaxonOp.varStore(resultSlot, value: exprName(fallbackResult), range: SourceRange.ofToken(tryToken)))
+		return TryFallbackOutcome.mergesWithType(fallbackExitBlock, fallbackType: exprType(fallbackResult))
+	end 'parseTryFallbackDispatch'
+
+	// Pick a literal type for the synthetic store the `ignore` arm emits.
+	// We want the store to type-match the success arm's call result so the
+	// slot's resolved type stays consistent. Falls back to integer when
+	// the call result type is itself unresolved at parse time —
+	// TypeResolution will rebind on the success store anyway.
+	function defaultIgnoreLiteralType(callResultType MaxonType) returns MaxonType
+		if isUnresolvedMaxonType(callResultType) 'unresolved'
+			return MaxonType.integer
+		end 'unresolved'
+		return defaultLiteralTypeOfInner(callResultType)
+	end 'defaultIgnoreLiteralType'
+
+	// Pattern-match the parser's just-emitted op to detect a free-call.
+	// When the inner expression of `try EXPR` ended in `MaxonOp.call`,
+	// rewrite it in place to `MaxonOp.tryCall` carrying the parser-allocated
+	// `errorFlagName` so the lowering pass binds the post-call error flag
+	// at the right spot. Returns true on rewrite, false when the op is some
+	// other shape (method call, postfix chain, etc.) — the caller falls
+	// back to emitting an explicit mrt_get_error_and_clear binding.
+	function tryRewriteCallToTryCall(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray) returns bool
+		if op.name != "call" 'notACall'
+			return false
+		end 'notACall'
+		match op 'shape'
+			call(callResult, callee, callContext, args, argLabels, argTypes, argRanges, range) then return rewriteCallOpToTryCall(opIdx: opIdx, callResult: callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: range)
+			default panic("tryRewriteCallToTryCall: op.name == 'call' but match did not extract")
+		end 'shape'
+	end 'tryRewriteCallToTryCall'
+
+	function rewriteCallOpToTryCall(opIdx OpIndex, callResult ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorFlagName ByteArray, range SourceRange) returns bool
+		try module.ops.set(opIdx, value: MaxonOp.tryCall(callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorFlagName, range: range)) otherwise panic("rewriteCallOpToTryCall: ops.set OOB at idx={opIdx}")
+		return true
+	end 'rewriteCallOpToTryCall'
+
+	// Emit a literal of the current function's return type's family —
+	// 0 (i64) for ints/byte/bool, 0.0 (f64) for floats. void return types
+	// also get an i64 0 (unused, the ret op will be dropped at lowering).
+	// Used by `parseTryPropagation` to manufacture the default primary
+	// value the error path returns.
+	function emitDefaultReturnLiteral(block IrBlock, range SourceRange) returns ByteArray
+		let litType = defaultReturnLiteralType(currentFunc.maxonReturnType)
+		return emitLiteral(block, value: 0, valueType: litType, range: range)
+	end 'emitDefaultReturnLiteral'
+
+	function defaultReturnLiteralType(rt MaxonReturnType) returns MaxonType
+		return match rt 'pick'
+			void gives MaxonType.integer
+			value(inner) gives defaultLiteralTypeOfInner(inner)
+		end 'pick'
+	end 'defaultReturnLiteralType'
+
+	function defaultLiteralTypeOfInner(inner MaxonType) returns MaxonType
+		return match inner 'pick'
+			float gives MaxonType.float
+			integer gives MaxonType.integer
+			boolean gives MaxonType.integer
+			string gives MaxonType.integer
+			named gives MaxonType.integer
+			unresolved gives MaxonType.integer
+		end 'pick'
+	end 'defaultLiteralTypeOfInner'
 
 	// --- Cast expression parsing ---
 
@@ -4761,6 +5303,40 @@ export type MatchStmtArmBodyResult
 		return Self{exitBlock: exitBlock, hadReturn: hadReturn}
 	end 'create'
 end 'MatchStmtArmBodyResult'
+
+// Outcome of parsing one `otherwise FALLBACK` shape. The fallback can
+// either merge into the success path through the merge block (expression
+// or `ignore` shapes — `mergesIntoSuccess: true`) or seal its own block
+// with a terminator like ret/throw/br (return / panic / throw / break /
+// continue — `mergesIntoSuccess: false`). When the fallback is an
+// expression, `hasFallbackType` is true and `fallbackType` holds the
+// expression's type so the caller can fall back to it when the success
+// arm's call type is unresolved at parse time.
+type TryFallbackOutcome
+	export let mergesIntoSuccess bool
+	export let fallbackExitBlock IrBlock
+	export let hasFallbackType bool
+	export let fallbackType MaxonType
+
+	// Terminator-shaped fallback: block is already sealed; merge edge
+	// must NOT be added.
+	export static function terminator(fallbackExitBlock IrBlock) returns TryFallbackOutcome
+		return Self{mergesIntoSuccess: false, fallbackExitBlock: fallbackExitBlock, hasFallbackType: false, fallbackType: MaxonType.unresolved}
+	end 'terminator'
+
+	// `ignore`-shaped fallback: the slot is stored with a typed default
+	// and we branch through to the merge block. No fallback expression
+	// type — the success arm dictates the slot's resolved type.
+	export static function merges(fallbackExitBlock IrBlock) returns TryFallbackOutcome
+		return Self{mergesIntoSuccess: true, fallbackExitBlock: fallbackExitBlock, hasFallbackType: false, fallbackType: MaxonType.unresolved}
+	end 'merges'
+
+	// Expression-shaped fallback: report the expression's type so the
+	// caller can use it when the call's success type is unresolved.
+	export static function mergesWithType(fallbackExitBlock IrBlock, fallbackType MaxonType) returns TryFallbackOutcome
+		return Self{mergesIntoSuccess: true, fallbackExitBlock: fallbackExitBlock, hasFallbackType: true, fallbackType: fallbackType}
+	end 'mergesWithType'
+end 'TryFallbackOutcome'
 
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.

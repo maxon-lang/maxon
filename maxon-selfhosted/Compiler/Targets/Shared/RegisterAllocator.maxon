@@ -712,37 +712,65 @@ end 'findUncoloredRanges'
 // ============================================================
 
 // Result of checking whether a block has the condBr pattern.
+//
+// `inTerminator` is true when the condJump lives in `block.terminator` rather
+// than `block.opRefs[condBrIdx]`. This happens after `eliminateFallthroughJumps`
+// promotes a trailing condJump back into the terminator slot (the trailing
+// unconditional jmp was a fall-through and got dropped). In that case the
+// trampoline-rewrite path must update the terminator, not opRefs.
 type CondBrInfo
 	export var hasCondBr bool
 	export var condBrIdx RegInt
 	export var elseTarget RegInt
+	export var inTerminator bool
 
 	static function none() returns CondBrInfo
-		return Self{hasCondBr: false, condBrIdx: -1, elseTarget: -1}
+		return Self{hasCondBr: false, condBrIdx: -1, elseTarget: -1, inTerminator: false}
 	end 'none'
 
 	static function found(condBrIdx RegInt, elseTarget RegInt) returns CondBrInfo
-		return Self{hasCondBr: true, condBrIdx: condBrIdx, elseTarget: elseTarget}
+		return Self{hasCondBr: true, condBrIdx: condBrIdx, elseTarget: elseTarget, inTerminator: false}
 	end 'found'
+
+	static function foundInTerminator(elseTarget RegInt) returns CondBrInfo
+		return Self{hasCondBr: true, condBrIdx: -1, elseTarget: elseTarget, inTerminator: true}
+	end 'foundInTerminator'
 end 'CondBrInfo'
 
-// Detect the condBr pattern in a block: the last op in block.opRefs is a
-// conditional branch, and the terminator is an unconditional jmp.
+// Detect the condBr pattern in a block. Two layouts are possible:
+//   1. `opRefs: [..., condJump]` + `terminator: jmp(thenTarget)`. The natural
+//      shape produced by `lowerCondBr`.
+//   2. `opRefs: [...]` + `terminator: condJump`. Produced when
+//      `eliminateFallthroughJumps` drops the trailing jmp because the then
+//      target was the next block in layout order, then promotes the trailing
+//      condJump back into the terminator slot.
+// `CondBrInfo.inTerminator` distinguishes the two so callers can rewrite the
+// right slot when inserting a trampoline.
 function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAllocTarget, opQuery TargetOpQuery) returns CondBrInfo
+	// Layout 1: condJump is the last op in opRefs.
 	let opsCount = block.opRefs.count()
-	if opsCount == 0 'empty'
-		return CondBrInfo.none()
-	end 'empty'
+	if opsCount > 0 'hasOps'
+		let lastIdx = opsCount - 1
+		let lastOp = try block.opRefs.get(lastIdx) otherwise panic("invariant: opsCount > 0 just checked but opRefs.get(lastIdx) failed")
 
-	let lastIdx = opsCount - 1
-	let lastOp = try block.opRefs.get(lastIdx) otherwise panic("invariant: opsCount > 0 just checked but opRefs.get(lastIdx) failed")
+		if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
+			let target = regTarget.getCondBrTarget(module, packed: lastOp)
+			if target >= 0 'validTarget'
+				return CondBrInfo.found(lastIdx, elseTarget: target)
+			end 'validTarget'
+		end 'isCondBr'
+	end 'hasOps'
 
-	if opQuery.terminatorIsConditionalBranch(module, packed: lastOp) 'isCondBr'
-		let target = regTarget.getCondBrTarget(module, packed: lastOp)
-		if target >= 0 'validTarget'
-			return CondBrInfo.found(lastIdx, elseTarget: target)
-		end 'validTarget'
-	end 'isCondBr'
+	// Layout 2: condJump was promoted into the terminator slot.
+	if block.hasTerminatorOp() 'hasTerm'
+		let termIdx = block.terminatorIndex()
+		if opQuery.terminatorIsConditionalBranch(module, packed: termIdx) 'isCondBrTerm'
+			let target = regTarget.getCondBrTarget(module, packed: termIdx)
+			if target >= 0 'validTermTarget'
+				return CondBrInfo.foundInTerminator(target)
+			end 'validTermTarget'
+		end 'isCondBrTerm'
+	end 'hasTerm'
 
 	return CondBrInfo.none()
 end 'detectCondBrPattern'
@@ -779,7 +807,12 @@ end 'pickThenTarget'
 
 // Handle else-edge copies for a condBr by creating a trampoline block if needed.
 // Returns the updated nextBlockId.
-function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block IrBlock, condBrIdx RegInt, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
+//
+// `inTerminator` controls where the rewritten condJump op-index is patched
+// back: when true the condJump is `block.terminator`, otherwise it lives at
+// `block.opRefs[condBrIdx]`. Both layouts arise post-`eliminateFallthroughJumps`
+// (see `detectCondBrPattern`).
+function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block IrBlock, condBrIdx RegInt, inTerminator bool, elseTarget RegInt, numBlocks RegInt, trampolineRefs BlockRefList, nextBlockId BlockId, state RegState, regTarget RegAllocTarget) returns BlockId
 	if elseTarget < 0 'invalid'
 		return nextBlockId
 	end 'invalid'
@@ -806,12 +839,21 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 	module.blocks.push(tramp)
 	trampolineRefs.append(trampIdx)
 
-	// Rewrite the condJump in block.opRefs to target the trampoline.
-	// condBrIdx came from detectCondBrPattern (lastIdx of a non-empty opRefs), so it's a valid index.
-	let condPacked = try block.opRefs.get(condBrIdx) otherwise panic("invariant: condBrIdx is the lastIdx of a non-empty opRefs but get failed")
-	let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-	try block.opRefs.remove(at: condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
-	try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
+	if inTerminator 'patchTerminator'
+		// The condJump is in the terminator slot — after eliminateFallthroughJumps
+		// dropped the trailing jmp and promoted the condJump back. Patch the
+		// terminator index in place.
+		let condPacked = block.terminatorIndex()
+		let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
+		block.terminator = Terminator.opIndex(rewritten)
+	end 'patchTerminator' else 'patchOpRefs'
+		// Rewrite the condJump in block.opRefs to target the trampoline.
+		// condBrIdx came from detectCondBrPattern (lastIdx of a non-empty opRefs), so it's a valid index.
+		let condPacked = try block.opRefs.get(condBrIdx) otherwise panic("invariant: condBrIdx is the lastIdx of a non-empty opRefs but get failed")
+		let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
+		try block.opRefs.remove(at: condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
+		try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
+	end 'patchOpRefs'
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
 
@@ -867,7 +909,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			// Else-edge copies: execute when condJump IS taken.
 			// Since condJump branches directly to elseTarget, we need a trampoline
 			// block to insert the copies between the condJump and the else-target.
-			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
+			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, inTerminator: condBrInfo.inTerminator, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.

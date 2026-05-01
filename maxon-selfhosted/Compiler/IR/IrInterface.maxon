@@ -1,0 +1,106 @@
+// Parser-records for `interface Name ... end` declarations.
+//
+// The parser captures interface declarations as `UnresolvedInterfaceType`
+// entries in `project.unresolvedInterfaces` without resolving anything: the
+// `extends` parents are stored as bare names, the `uses` associated-type
+// parameters are stored as bare names, and each method signature carries the
+// raw param/return/throws type names (still strings at this stage). Phase 3
+// of the interfaces plan drains this map into a resolved registry once every
+// referenced name has a concrete `MaxonType`.
+//
+// This is the Phase 1a IR shape — interface bodies emit no MaxonOps because
+// interface methods are signature-only (no body is parsed). Nothing else in
+// the pipeline consumes these records yet; the file exists so the parser has
+// somewhere to deposit them.
+
+// One method signature inside an interface body. `paramNames[i]` and
+// `paramTypes[i]` are parallel arrays of the source-level parameter names and
+// their declared `MaxonType`s. `throwsTypeName` is the bare error-enum name
+// from a trailing `throws E` clause, or the empty string when the method does
+// not throw. Source location anchors any future per-method diagnostics back
+// to the original signature line.
+export type InterfaceMethodSig
+	export var name String
+	export var paramNames StringArray
+	export var paramTypes MaxonTypeArray
+	export var returnType MaxonReturnType
+	export var throwsTypeName String
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+
+	export static function create(name String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName String, line ErrorLineNumber, column ErrorColumnNumber) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, line: line, column: column}
+	end 'create'
+end 'InterfaceMethodSig'
+
+export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
+
+// One pending interface declaration awaiting resolution. `extendsNames` and
+// `usesParams` are stored as bare strings — Phase 3 will validate them
+// against `project.interfaces` (parents) and use them to substitute
+// associated-type bindings into method signatures. `methods` holds the body
+// in declaration order.
+export type UnresolvedInterfaceType
+	export var name String
+	export var extendsNames StringArray
+	export var usesParams StringArray
+	export var methods InterfaceMethodSigArray
+	export var visibility Visibility
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, extendsNames StringArray, usesParams StringArray, methods InterfaceMethodSigArray, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedInterfaceType
+		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedInterfaceType'
+
+export typealias UnresolvedInterfaceMap = Map with(String, UnresolvedInterfaceType)
+
+// Resolved interface descriptor produced by Phase 3a's TypeResolution drain.
+//
+// `methods` carries the parser-recorded `InterfaceMethodSig` entries
+// unchanged: names that match a `usesParams` entry (e.g. `Element`, `Iter`)
+// stay as `MaxonType.named(<param-name>)`. Per-conformance substitution
+// happens at the conforming type — see `StructType.expectedMethods` /
+// `EnumType.expectedMethods` — not on the interface itself.
+//
+// A conforming `type T implements I with X` reads its expected method set
+// off the conforming type, never off the interface, so the interface's own
+// signatures stay generic in the parameter names.
+export type IrInterface
+	export var name String
+	export var extendsNames StringArray
+	export var usesParams StringArray
+	export var methods InterfaceMethodSigArray
+	export var visibility Visibility
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(name String, extendsNames StringArray, usesParams StringArray, methods InterfaceMethodSigArray, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns IrInterface
+		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'IrInterface'
+
+export typealias IrInterfaceMap = Map with(String, IrInterface)
+
+// One entry on a `type` or `enum` declaration's `implements` clause. The
+// `withArgs` array captures the optional `with X` / `with (X, Y)` suffix as
+// bare type-parameter names — Phase 3 of the interfaces plan resolves these
+// against the named interface's `uses` parameter list and substitutes them
+// into the inherited method signatures. `interfaceName` is also a bare name;
+// resolution to a concrete `MaxonType` is deferred. Source location anchors
+// any future per-conformance diagnostics back to the interface-name token.
+export type Conformance
+	export var interfaceName String
+	export var withArgs StringArray
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+
+	export static function create(interfaceName String, withArgs StringArray, line ErrorLineNumber, column ErrorColumnNumber) returns Conformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs, line: line, column: column}
+	end 'create'
+end 'Conformance'
+
+export typealias ConformanceArray = Array with Conformance

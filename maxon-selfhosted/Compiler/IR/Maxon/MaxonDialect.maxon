@@ -413,6 +413,23 @@ export union MaxonOp
 	// Std op for this variant and simply continues — later passes pattern-match
 	// `error` in their `default`/`literal to refEq` bounds and skip it too.
 	error(kind MaxonErrorKind, message String, range SourceRange)
+	// Phase 4: throw a typed enum variant. Terminator. `enumName` is the
+	// bare error-enum name as written (e.g. "FileError"); `variantName` is
+	// the bare case name (e.g. "notFound"). LowerMaxonToStd resolves the
+	// variant ordinal via project.unresolvedEnums / project.enumTypes,
+	// stores `ordinal + 1` (0 reserved for "no error in flight") into the
+	// thread-local error slot via mrt_set_error, then emits a return with a
+	// default value of the enclosing function's primary return type. Phase
+	// 4d-f may move the error code to a register; the Maxon-level shape
+	// stays the same.
+	throw(enumName String, variantName String, range SourceRange)
+	// Phase 4: throwing call. Same shape as `call` plus an `errorBoundName`
+	// — the synthetic name the parser allocated to receive the post-call
+	// error flag. LowerMaxonToStd emits the underlying call as normal, then
+	// follows it with a call to mrt_get_error_and_clear() whose result is
+	// bound to `errorBoundName`. Subsequent parser-emitted ops (cmp + condBr)
+	// branch on that flag to either propagate or fall through.
+	tryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
@@ -453,6 +470,8 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		unresolvedAssign(name, value, _) gives "maxon.unresolved_assign @{name}, %{String.from(value)}"
 		enumMatchArm(scrutineeName, caseName, _, _, _, _, thenTarget, elseTarget, _) gives maxonEnumMatchArmToString(scrutineeName, caseName: caseName, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
+		throw(enumName, variantName, _) gives "maxon.throw {enumName}.{variantName}"
+		tryCall(result, callee, callContext, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
 	end 'print'
 end 'maxonOpToString'
 

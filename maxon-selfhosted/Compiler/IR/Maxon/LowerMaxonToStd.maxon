@@ -81,6 +81,31 @@ export function registerGlobalVarsForDataSection(project Project, globalData Glo
 	end 'eachVar'
 end 'registerGlobalVarsForDataSection'
 
+// Reserve the `__data_maxon_error` slot (8 bytes, zero-initialized) used by
+// `mrt_set_error` / `mrt_get_error_and_clear`. The slot lives in the .data
+// prelude alongside ordinary top-level vars so the two backends' existing
+// `__data_*` relocation handling resolves it without any extra plumbing.
+// Phase 4 of the error-handling rollout uses a thread-local-ish flag here so
+// `throw` / `try` can route a non-zero variant ordinal across a function
+// boundary without changing the call ABI; Phase 4d-f will revisit the flag-
+// in-register design if the call cost ever shows up in profiles.
+export function registerErrorStateForDataSection(globalData GlobalDataTable)
+	var zeroBytes = ByteArray.create()
+	writeQword(zeroBytes, value: 0)
+	addDataSectionEntry(globalData, name: "__data_maxon_error", initialBytes: zeroBytes)
+end 'registerErrorStateForDataSection'
+
+// True when the given Maxon return type lowers to a floating-point Std
+// type. Drives the choice of `constF64` vs `constI64` for the default
+// primary return value emitted by `lowerThrow`. `void` returns count as
+// non-float — the synthesized const is unread by the caller in that case.
+function maxonReturnTypeLowersToFloat(project Project, ref MaxonReturnType) returns bool
+	return match ref 'pick'
+		void gives false
+		value(inner) gives stdTypeIsFloat(maxonTypeToStdType(project, ref: inner))
+	end 'pick'
+end 'maxonReturnTypeLowersToFloat'
+
 // ============================================================
 // MaxonToStdLowering type
 // ============================================================
@@ -112,6 +137,12 @@ type MaxonToStdLowering
 	// reporting matches the user's source layout. Reset when a new function
 	// starts lowering.
 	var currentFilePath String
+	// Function-level return type of the function currently being lowered.
+	// Used by `throw` lowering to emit a default primary return value of
+	// the correct family (i64 vs f64) — the caller's `try ... otherwise`
+	// branch ignores the primary value when the error flag is non-zero, so
+	// any in-range default works. Reset per function in `lower()`.
+	var currentReturnType MaxonReturnType
 	// Per-function value-type map: tracks each SSA value's Maxon-level type.
 	// Populated as ops are lowered so that consumers (fieldLoad/Store,
 	// methodCall, mixed-family binops) can resolve receiver types and pick
@@ -138,6 +169,7 @@ type MaxonToStdLowering
 			currentNamespace: "",
 			currentTypeName: "",
 			currentFilePath: "",
+			currentReturnType: MaxonReturnType.void,
 			valueType: MaxonTypeArray.create(),
 			slotIdsScratch: ValueIdArray.create(),
 			slotFilledScratch: BoolArray.create()
@@ -256,6 +288,9 @@ type MaxonToStdLowering
 		// heap arena. The map iteration is order-stable per project (insertion
 		// order), keeping the linker symbol layout deterministic across builds.
 		registerGlobalVarsForDataSection(self.project, globalData: self.globalData)
+		// Reserve the runtime error-state slot used by throw/try lowering
+		// (Phase 4). Lives in the .data prelude alongside user-declared globals.
+		registerErrorStateForDataSection(self.globalData)
 
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
@@ -304,6 +339,11 @@ type MaxonToStdLowering
 			// E3005 (and any future call-site diagnostic) anchors on the
 			// caller's source file rather than the lowering pass placeholder.
 			self.currentFilePath = entryBlockFilePath(self.maxonModule, func: srcFunc)
+			// Phase 4: throw lowering needs to know the function's return
+			// type family so it can synthesize a default primary return
+			// value of the correct width (i64 vs f64). Stamp it here so
+			// `lowerThrow` can read it without re-walking module.functions.
+			self.currentReturnType = srcFunc.maxonReturnType
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setValueType(pIdx, t: pType)
@@ -368,6 +408,11 @@ type MaxonToStdLowering
 			// batch compile before codegen; the LSP consumes the op directly
 			// from the Maxon IR and never runs lowering.
 			error then return
+			// `throw` is always a block terminator; the parser must place it
+			// via setTerminator. Reaching this match arm means the parser
+			// emitted it as a regular op — pure compiler bug.
+			throw then panic("lowerMaxonToStd: MaxonOp.throw seen as regular op (parser bug — should always be a terminator)")
+			tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -986,6 +1031,12 @@ type MaxonToStdLowering
 			// If it ever does we drop it: a diagnostic was already reported at
 			// the error op's range.
 			error then return
+			// Phase 4: `throw E.v` — write `ordinal+1` (0 reserved for "no
+			// error in flight") into the thread-local error slot via
+			// mrt_set_error, then return a default primary value of the
+			// enclosing function's return type. Caller's `try` will read
+			// (and clear) the slot via mrt_get_error_and_clear.
+			throw(enumName, variantName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, dstBlock: dstBlock)
 			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
 	end 'lowerTerminator'
@@ -1102,6 +1153,81 @@ type MaxonToStdLowering
 	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
 	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
 	// stdlib and user-code compiles stay in disjoint link-time namespaces.
+	// Phase 4: lower MaxonOp.throw(enumName, variantName) to:
+	//   const flag = ordinal_of(enumName, variantName) + 1
+	//   call mrt_set_error(flag)
+	//   ret <default value of enclosing function's return type>
+	//
+	// The +1 reserves 0 for "no error in flight" so the caller's
+	// `mrt_get_error_and_clear` can distinguish a successful call from a
+	// thrown variant. The default return value is just an in-range constant
+	// of the right family (i64 zero for ints, f64 zero for floats, none for
+	// void) — the caller's `try ... otherwise` branch ignores the primary
+	// value when the flag is non-zero, so any default works. Emitted as a
+	// terminator: the producing block ends here with a `ret`.
+	function lowerThrow(enumName String, variantName String, dstBlock IrBlock)
+		let flag = self.lookupVariantOrdinalPlusOne(enumName: enumName, variantName: variantName)
+		// const flag
+		let flagId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: flag))))
+		self.setIsFloat(flagId, isFloat: false)
+		// call mrt_set_error(flag) — discards the i64 0 result.
+		let setErrResultId = allocValueId(self.funcIdRef)
+		var setErrArgs = ValueIdArray.create()
+		setErrArgs.push(flagId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(setErrResultId, callee: "mrt_set_error", argIds: setErrArgs)))
+		// Terminate the block with `ret <default>` of the enclosing return type.
+		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
+		let opcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
+		let zeroId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: zeroId, value: 0))))
+		self.setIsFloat(zeroId, isFloat: isFloat)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(zeroId)))
+	end 'lowerThrow'
+
+	// Resolve `EnumName.variantName` to its declaration ordinal, then add 1.
+	// `+1` keeps 0 reserved for "no error in flight" — the thread-local error
+	// slot is read-then-cleared by `mrt_get_error_and_clear`, so a successful
+	// call leaves it at 0 for the next caller. A miss (unknown enum, unknown
+	// case) reports a compile-error diagnostic and falls back to ordinal `1`
+	// so the lowering pass produces a structurally valid SSA module — the
+	// `hasErrors(project)` short-circuit before codegen prevents the bogus
+	// flag from reaching a real binary.
+	function lookupVariantOrdinalPlusOne(enumName String, variantName String) returns IntConstant
+		// The parser registers every enum into `unresolvedEnums` first;
+		// TypeResolution drains it into `enumTypes`. Either map is acceptable
+		// here because the case ordinals are stable across that move.
+		if let resolved = try self.project.enumTypes.get(enumName) 'resolvedHit'
+			if let ord = try resolved.caseByName.get(variantName) 'caseHit'
+				return (ord as IntConstant) + 1
+			end 'caseHit'
+		end 'resolvedHit'
+		if let unresolved = try self.project.unresolvedEnums.get(enumName) 'unresolvedHit'
+			for i in 0 upto unresolved.cases.count() 'scan'
+				let kase = try unresolved.cases.get(i) otherwise panic("lookupVariantOrdinalPlusOne: cases.get OOB")
+				if kase.name == variantName 'match'
+					return (i as IntConstant) + 1
+				end 'match'
+			end 'scan'
+		end 'unresolvedHit'
+		self.reportLowerError(ErrorCode.semanticEnumUnknownCase, message: "lowerMaxonToStd: throw of unknown variant '{enumName}.{variantName}'")
+		return 1
+	end 'lookupVariantOrdinalPlusOne'
+
+	// Phase 4: lower MaxonOp.tryCall — same shape as a normal call followed
+	// by a read-and-clear of the thread-local error slot. The flag bound to
+	// `errorBoundName` is consumed by parser-emitted ops downstream (typically
+	// a cmp + condBr that either propagates via mrt_set_error or falls
+	// through to a fallback expression).
+	function lowerTryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, dstBlock IrBlock)
+		// Reuse the exact call lowering — same signature/default-fill path.
+		self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
+		// Bind the post-call error flag to the parser-supplied name.
+		let flagId = self.defineName(errorBoundName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(flagId, callee: "mrt_get_error_and_clear", argIds: ValueIdArray.create())))
+		self.setValueType(flagId, t: MaxonType.integer)
+	end 'lowerTryCall'
+
 	function lowerPanicToSys(stringId StringId, dstBlock IrBlock)
 		let nameStr = self.pipeline.nextPanicLabel()
 

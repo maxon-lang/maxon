@@ -118,10 +118,12 @@ end 'StdlibCacheResult'
 // Checksum
 // ============================================================
 
-// Compute a simple checksum over the supplied stdlib source files.
-// Sums all bytes of every file mod 2^32. Caller controls which files
-// participate (so the cache key matches the on-disk whitelist).
-export function computeStdlibChecksum(files FilePathArray) returns CacheChecksum
+// Compute a simple checksum over the supplied stdlib source files plus the
+// in-memory bootstrap source. Sums all bytes mod 2^32. Caller controls which
+// files participate (so the cache key matches the on-disk whitelist) and
+// passes the bootstrap content explicitly so the cache invalidates whenever
+// either the on-disk whitelist or the synthesized prelude changes.
+export function computeStdlibChecksum(files FilePathArray, bootstrap String) returns CacheChecksum
 	var checksum = 0
 	for filePath in files 'eachFile'
 		let bytes = try File.readBinary(filePath) otherwise continue
@@ -129,6 +131,9 @@ export function computeStdlibChecksum(files FilePathArray) returns CacheChecksum
 			checksum = (checksum + b) and 0xFFFFFFFF
 		end 'eachByte'
 	end 'eachFile'
+	for bb in bootstrap.bytes() 'eachBootstrapByte'
+		checksum = (checksum + bb) and 0xFFFFFFFF
+	end 'eachBootstrapByte'
 	return checksum
 end 'computeStdlibChecksum'
 
@@ -640,7 +645,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
 		end 'eachField'
 
-		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath)
+		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'eachStruct'
 
@@ -803,7 +808,7 @@ function translateStructType(project Project, table StringArray, st StructType) 
 	for f in st.fields 'eachField'
 		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, table: table, t: f.fieldType), offset: f.offset))
 	end 'eachField'
-	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath)
+	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: st.expectedMethods)
 end 'translateStructType'
 
 // Capture parser metadata from a project into a StdlibCacheData.
