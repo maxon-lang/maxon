@@ -491,6 +491,15 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		// `sys.free` IS counted (in the heap-allocated case) because freeing
 		// requires the pointer to actually exist at runtime.
 		drop then break 'count'
+		osAllocPages(_, sizeId) then incrementUse(useCount, valueId: sizeId)
+		osAllocPagesLarge(_, sizeId) then incrementUse(useCount, valueId: sizeId)
+		osFreePages(ptrId, sizeId) then countTwoUses(ptrId, b: sizeId, useCount: useCount)
+		atomicInc(addrId) then incrementUse(useCount, valueId: addrId)
+		atomicDec(addrId) then incrementUse(useCount, valueId: addrId)
+		atomicXadd(_, addrId, valId) then countTwoUses(addrId, b: valId, useCount: useCount)
+		osLockInit(addrId) then incrementUse(useCount, valueId: addrId)
+		osLockAcquire(addrId) then incrementUse(useCount, valueId: addrId)
+		osLockRelease(addrId) then incrementUse(useCount, valueId: addrId)
 	end 'count'
 end 'countSysUses'
 
@@ -547,6 +556,7 @@ function isDeadSysOp(op StdSystemOp) returns bool
 	return match op 'check'
 		drop gives true
 		syscall to printInt gives false
+		osAllocPages to osLockRelease gives false
 	end 'check'
 end 'isDeadSysOp'
 

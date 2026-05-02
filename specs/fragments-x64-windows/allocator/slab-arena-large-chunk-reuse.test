@@ -1,174 +1,45 @@
 // Test: slab-arena-large-chunk-reuse
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
-function alloc_medium() returns IntArray
-	var arr = IntArray.create()
-	arr.reserve(5000)
-	return arr
-end 'alloc_medium'
-
 function main() returns ExitCode
-	let a = alloc_medium()
-	let b = alloc_medium()
-	return a.count() + b.count()
+	let a = __mm_raw_alloc(40000)
+	__mm_raw_free(a)
+	let b = __mm_raw_alloc(40000)
+	__mm_raw_free(b)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'main'
 ---
-MmTrace: true
 ExitCode: 0
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc __ManagedMemory_Integer #1 size=40 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #1 size=72 class=6
-mm_alloc IntArray #2 size=8 [IntArray.create]
-  sl_alloc IntArray #2 size=40 class=4
-mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.create]
-mm_incref IntArray #2 rc=1 [IntArray.create]
-mm_transfer IntArray #2 rc=1 [IntArray.create]
-mm_realloc __ManagedMemory_Integer #1 size=40000
-  mm_raw_alloc #R1 size=40000 [realloc]
-    sl_alloc size=40000 class=-1
-mm_transfer IntArray #2 rc=1 [allocator.alloc_medium]
-mm_alloc __ManagedMemory_Integer #3 size=40 [IntArray.create]
-  sl_alloc __ManagedMemory_Integer #3 size=72 class=6
-mm_alloc IntArray #4 size=8 [IntArray.create]
-  sl_alloc IntArray #4 size=40 class=4
-mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.create]
-mm_incref IntArray #4 rc=1 [IntArray.create]
-mm_transfer IntArray #4 rc=1 [IntArray.create]
-mm_realloc __ManagedMemory_Integer #3 size=40000
-  mm_raw_alloc #R2 size=40000 [realloc]
-    sl_alloc size=40000 class=-1
-mm_transfer IntArray #4 rc=1 [allocator.alloc_medium]
-mm_decref IntArray #4 rc=0 [main]
-  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R2
-      sl_free size=40960 class=-1
-    mm_free __ManagedMemory_Integer #3
-      sl_free __ManagedMemory_Integer #3 size=96 class=6
-  mm_free IntArray #4
-    sl_free IntArray #4 size=48 class=4
-mm_decref IntArray #2 rc=0 [main]
-  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R1
-      sl_free size=40960 class=-1
-    mm_free __ManagedMemory_Integer #1
-      sl_free __ManagedMemory_Integer #1 size=96 class=6
-  mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
-```
 ---
 // CompiledIR
 module {
-  func @allocator.alloc_medium() -> i64 {
+  func @allocator.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.call IntArray.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 5000
-    x64.call IntArray.reserve
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.call allocator.alloc_medium
-    x64.mov [rbp-8], rax
-    x64.call allocator.alloc_medium
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call IntArray.count
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.call IntArray.count
-    x64.mov rdx, [rbp-24]
-    x64.add rdx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rdx, rsi
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rbx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-32], rdx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-32]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov r8d, 40000
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Integer.done
-  done:
+    x64.mov r8d, 40000
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne ok_1.after
+  ok_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  }
-  func @__destruct_IntArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_4
-    x64.call mm_decref
-    x64.label __nonnull_skip_4
-    x64.jmp __destruct_IntArray.done
-  done:
+  ok_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
   }

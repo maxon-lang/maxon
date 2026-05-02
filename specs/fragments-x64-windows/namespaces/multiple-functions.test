@@ -21,31 +21,36 @@ module {
   func @namespaces.double(rcx: i64) -> i64 {
   entry:
     x64.mov r9d, 2
-    x64.mov r8, rcx
-    x64.imul r8, r9
+    x64.mov rsi, rcx
+    x64.imul rsi, r9
+    x64.mov r8, rsi
     x64.ret
   }
   func @namespaces.triple(rcx: i64) -> i64 {
   entry:
     x64.mov r9d, 3
-    x64.mov r8, rcx
-    x64.imul r8, r9
+    x64.mov rsi, rcx
+    x64.imul rsi, r9
+    x64.mov r8, rsi
     x64.ret
   }
   func @namespaces.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 5
+    x64.mov r8d, 5
+    x64.mov rcx, r8
     x64.call namespaces.double
     x64.mov r12, r8
-    x64.mov ecx, 4
+    x64.mov r8d, 4
+    x64.mov rcx, r8
     x64.call namespaces.triple
     x64.mov r9, r12
     x64.add r9, r8
     x64.cmp r9, 125
     x64.jbe __range_ok_1
   __range_panic_1:
-    x64.lea rcx, [rip+__panic_msg_1]
+    x64.lea r8, [rip+__panic_msg_1]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_1:
     x64.mov r8, r9

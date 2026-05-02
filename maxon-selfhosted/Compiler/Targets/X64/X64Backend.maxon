@@ -1627,7 +1627,11 @@ end 'emitLeaRipRelOp'
 // prefix. `__data_cov_*` globals live in the dedicated .covdata section and
 // must be checked before the generic `__data_` branch (which would otherwise
 // swallow them). Other `__data_*` labels target the writable .data heap arena,
-// and everything else resolves against .rdata.
+// as do the slab/MM allocator globals (`__slab_*` and `__mm_*`) registered by
+// `registerSlabAndMmGlobalsForDataSection` — these are mutable counters and
+// list heads that get atomic increments and pointer writes, so they MUST live
+// in the writable .data section, not read-only .rdata. Everything else
+// resolves against .rdata.
 function relocKindForLabel(label String) returns RdataRelocKind
 	if label.startsWith("__data_cov_") 'isCovData'
 		return RdataRelocKind.covdataRipRelDisp32
@@ -1635,6 +1639,9 @@ function relocKindForLabel(label String) returns RdataRelocKind
 	if label.startsWith("__data_") 'isDataSection'
 		return RdataRelocKind.dataSectionRipRelDisp32
 	end 'isDataSection'
+	if label.startsWith("__slab_") or label.startsWith("__mm_") 'isAllocatorGlobal'
+		return RdataRelocKind.dataSectionRipRelDisp32
+	end 'isAllocatorGlobal'
 	return RdataRelocKind.ripRelDisp32
 end 'relocKindForLabel'
 
@@ -1699,6 +1706,51 @@ function emitRepStosqOp(code ByteArray)
 	code.push(0x48)
 	code.push(0xAB)
 end 'emitRepStosqOp'
+
+// --- LOCK INC qword ptr [addr] ---
+// Encoding: F0 REX.W FF /0 ModRM
+// REX.B is set when addr is in r8..r15. We delegate ModRM/SIB/disp encoding to
+// the shared `emitMemDispBits` helper with `regBits = 0` for the /0 opcode
+// extension, and offset=0 so it picks the no-displacement form (with SIB for
+// rsp/r12 and the disp8=0 form for rbp/r13 — both handled by the helper).
+function emitLockIncMemoryOp(code ByteArray, addrReg X64Register)
+	code.push(0xF0)
+	// REX.W with the addr register in the r/m field (no reg-field register here,
+	// since ModRM.reg holds the /0 opcode extension).
+	var rex = 0x48
+	if isExtended(addrReg) 'bBit'
+		rex = rex or 0x01
+	end 'bBit'
+	code.push(rex)
+	code.push(0xFF)
+	emitMemDispBits(code, regBits: 0, baseReg: addrReg, offset: 0)
+end 'emitLockIncMemoryOp'
+
+// --- LOCK DEC qword ptr [addr] ---
+// Encoding: F0 REX.W FF /1 ModRM — same shape as INC but with /1 in ModRM.reg.
+function emitLockDecMemoryOp(code ByteArray, addrReg X64Register)
+	code.push(0xF0)
+	var rex = 0x48
+	if isExtended(addrReg) 'bBit'
+		rex = rex or 0x01
+	end 'bBit'
+	code.push(rex)
+	code.push(0xFF)
+	emitMemDispBits(code, regBits: 1, baseReg: addrReg, offset: 0)
+end 'emitLockDecMemoryOp'
+
+// --- LOCK XADD qword ptr [addr], val ---
+// Encoding: F0 REX.W 0F C1 ModRM — `XADD r/m64, r64`. ModRM.reg holds the value
+// register, ModRM.r/m holds the address register. After execution, the value
+// register holds the prior memory contents.
+function emitLockXaddMemRegOp(code ByteArray, addrReg X64Register, valReg X64Register)
+	code.push(0xF0)
+	// REX.W + REX.R for valReg (reg field) + REX.B for addrReg (r/m field).
+	emitRexWPrefix(code, regField: valReg, rmField: addrReg)
+	code.push(0x0F)
+	code.push(0xC1)
+	emitMemDisp(code, regField: valReg, baseReg: addrReg, offset: 0)
+end 'emitLockXaddMemRegOp'
 
 // --- Global load/store ---
 function emitGlobalLoadOp(code ByteArray, dest X64Register, name String, size MachineWord)
@@ -1893,6 +1945,9 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		nullSafeLoad(dest, baseReg, offset) then emitNullSafeLoadOp(code, dest: resolveGpr(dest), baseReg: resolveGpr(baseReg), offset: offset)
 		repMovsb then emitRepMovsbOp(code)
 		repStosq then emitRepStosqOp(code)
+		lockIncMemory(addrReg) then emitLockIncMemoryOp(code, addrReg: resolveGpr(addrReg))
+		lockDecMemory(addrReg) then emitLockDecMemoryOp(code, addrReg: resolveGpr(addrReg))
+		lockXaddMemReg(valReg, addrReg) then emitLockXaddMemRegOp(code, addrReg: resolveGpr(addrReg), valReg: resolveGpr(valReg))
 	end 'emit'
 end 'emitX64Op'
 

@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **41 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **404 fragment tests passing** on x64-windows and **404 / 404 on wasm32-wasi** (full parity). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation and a real optimization pass suite.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **43 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **452 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -13,7 +13,7 @@ Phase 3:   Function Params        [x] parameters, parameter-labels, assignment, 
 Phase 4:   Basic Types            [~] byte/float/type-casting work; implicit-type-conversion edge cases pending
 Phase 5:   Structs                [~] struct literals, methods, self, type/static methods passing;
                                       challenge-* and field-assign edge cases still pending
-Phase 6:   Managed Memory         [ ] arrays, for-in, ManagedMemory builtins
+Phase 6:   Managed Memory         [~] slab allocator + __ManagedMemory builtin done; arrays/for-in deferred to Phase 7+8+11
 Phase 7:   Strings                [ ] real String type — still using bootstrap printLiteral/printInt shims
 Phase 8:   Error Handling         [ ] try/throw/otherwise, throws clause
 Phase 9:   Enums                  [~] enum decls (int/float-backed), match (statement+expression),
@@ -24,8 +24,9 @@ Phase 10:  Closures               [~] closure-self landed (function types in par
 Phase 11:  Interfaces & Generics  [ ] hybrid model — see sub-phases below
 Phase 12:  Global Variables       [~] top-level let / var (int / float / bool / enum / `as`-cast /
                                       let-ref initializers), static var/let, float-typed globals
-                                      via XMM load/store; array / struct runtime initializers
-                                      still pending (Phase 6 dependency)
+                                      via XMM load/store; struct runtime initializers possible
+                                      now (slab allocator landed in Phase 6); Array literal
+                                      globals still need Phases 7+8+11
 Phase 13:  Collections            [ ] Map, Set, Vector
 Phase 14:  Math Functions         [ ] sqrt, trig, log, exp, pow, etc.
 Phase 15:  Advanced Features      [~] semantic checks (unused-parameters, duplicate-blocks,
@@ -58,9 +59,11 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (41)
+### Currently whitelisted specs (43)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `enums-simple`, `match-simple`, `module-keyword`, `lexer-parser-robustness`, `try-otherwise-value-flow`, `closure-self`.
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `enums-simple`, `match-simple`, `module-keyword`, `lexer-parser-robustness`, `try-otherwise-value-flow`, `closure-self`, `allocator`, `managed-memory-builtin`.
+
+The `allocator` and `managed-memory-builtin` specs are marked `status: selfhosted` in their frontmatter — the C# bootstrap runner skips them via [SpecParser.cs](../maxon-sharp/Testing/SpecParser.cs) since the bootstrap doesn't expose the `__mm_*` intrinsics they exercise.
 
 ---
 
@@ -124,33 +127,52 @@ Parser at [`Parser.maxon:2439`](Compiler/Parser.maxon#L2439) (`parseStructLitera
 
 ---
 
-## Phase 6: Managed Memory & Arrays (~10 specs)
+## Phase 6: Managed Memory — MOSTLY DONE
 
-**Goal**: `__ManagedMemory` builtins, `Array<T>` operations (push, get, count, iteration), `for-in` over arrays.
+**Original goal**: `__ManagedMemory` builtins, `Array<T>` operations, `for-in` over arrays.
 
-### Specs to unlock
-`arrays`, `stdlib-array`, `for-in loops`, `collection`, `collection-contains`, `array-managed-elements`, `array-of-bytearray`, `array-hashable`.
+**Actual outcome**: the **allocator + `__ManagedMemory` builtin** landed; **user-facing `Array<T>` / `for-in` / array literals** are deferred to land on top of Phases 7 (Strings), 8 (full `throws`/`throw`), and 11 (interfaces & generics) since [`stdlib/Array.maxon`](../stdlib/Array.maxon) depends on all three. The `__ManagedMemory` primitive done here is the building block those phases will compose on top of.
 
-### Changes
+### What landed (sub-phases 6a + 6b)
 
-**Parser**:
-- Parse `for ... in` over arrays and integer ranges
-- Parse array indexing `arr[i]` and array literals `[1, 2, 3]`
-- Parse method calls on arrays: `arr.push(x)`, `arr.get(i)`, `arr.count()`
+**Sub-phase 6a — port the C# slab allocator (23 steps).** Reproduces the bootstrap's Go-style three-tier slab allocator + MM raw + MM tracked layers ([RuntimeEmitter.Allocator.cs](../maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.Allocator.cs), [RuntimeEmitter.MemoryManager.cs](../maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.MemoryManager.cs)) inside self-hosted's `runtime.std`.
 
-**Std Dialect**:
-- Add `callRuntime(name, args...)` for `maxon_alloc`/`maxon_realloc`/`maxon_free`/`maxon_memmove`
+- **9 new ops added to [`StdSystemOp`](Compiler/IR/Std/StdDialect.maxon) + [`MirOp`](Compiler/IR/MIR/MirDialect.maxon)**: `osAllocPages` / `osAllocPagesLarge` / `osFreePages`, `atomicInc` / `atomicDec` / `atomicXadd`, `osLockInit` / `osLockAcquire` / `osLockRelease`. Full lowering on X64 (`LOCK INC`/`LOCK DEC`/`LOCK XADD` via [`X64Backend.maxon`](Compiler/Targets/X64/X64Backend.maxon); `VirtualAlloc`/`VirtualFree`/`Critical*Section` IAT calls) and ARM64 (LDAXR/STLXR LL/SC sequences via [`Arm64CodeEmitter.maxon`](Compiler/Targets/Arm64/Arm64CodeEmitter.maxon); `mmap`/`munmap` syscalls; locks elided to no-ops since self-hosted compilation is single-threaded).
+- **5 new IAT slots in [PeWriter.maxon](Compiler/Targets/Windows/PeWriter.maxon)**: `VirtualAlloc`, `VirtualFree`, `InitializeCriticalSection`, `EnterCriticalSection`, `LeaveCriticalSection`.
+- **~30 functions ported to [`runtime.std`](Compiler/Runtime/runtime.std)**: bitmap chunk allocator (`__slab_arena_init`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`), mspan / mcentral / mcache fast path (`__slab_alloc_class`, `__slab_refill_mcache`, `__slab_meta_alloc`/`free`), two-level radix arena map (`__slab_arena_map_set`/`get`/`ensure`), OS-direct path for >32KB (`__slab_os_direct_alloc`/`free`), public `__slab_alloc(size)` / `__slab_free(ptr)`, refcounted MM tracked layer (`mm_alloc` with destructor + tag header, `mm_incref`/`mm_decref` via atomic-xadd, `mm_free`/`mm_realloc`), MM raw layer (`mm_raw_alloc`/`free`/`realloc`).
+- **`mrt_start` boots `__slab_init`** before `main()` runs; `mrt_alloc` body replaced with a one-line `mm_raw_alloc` call so all existing struct/closure allocations transparently switch to the new path.
+- **14 mutable globals + 2 read-only size-class tables** registered in [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon) via `registerSlabAndMmGlobalsForDataSection`.
+- **Test intrinsics** `__mm_raw_alloc` / `__mm_alloc` / `__mm_decref` / `__mm_incref` / `__mm_alloc_count` / `__mm_raw_alloc_count` registered as user-callable via `registerMmIntrinsicSignatures` so spec tests can exercise the allocator directly.
+- **27 fragment tests in [`specs/allocator.md`](../specs/allocator.md)** (status: selfhosted) covering basic alloc, multi-size workloads, free + reuse, OS-direct path for 100MB allocations, refcount semantics, all 18 size-class boundaries, arena fill stress, interleaved alloc/free, and mixed raw/tracked allocation. **27/27 passing.**
 
-**Maxon Dialect**:
-- Add `managedMemCreate`, `managedMemGet`, `managedMemSet`, `managedMemGrow`, `managedMemShift`, `managedMemByteGet`, `managedMemByteSet`, `managedMemConcat`, `managedMemSlice`
+**Sub-phase 6b — `__ManagedMemory` builtin (8 steps).** Builds the compiler-builtin `__ManagedMemory` struct that all higher-level collections (Array, Vector, Map, String) will eventually wrap.
 
-**Lowering**:
-- `LowerMaxonToStd` lowers managed memory ops to runtime calls with element-size computation
+- **`__ManagedMemory` registered as a 5-field struct + 8-case `__ManagedMemoryError` enum** at compiler startup in `LowerMaxonToStd.maxon` via `registerManagedMemoryType`. Layout exactly matches the C# bootstrap's `[buffer @ 0, length @ 8, capacity @ 16, element_size @ 24, parent_ptr @ 32]` (40 bytes).
+- **18 builtin method signatures registered** (`length`/`capacity`/`elementSize`/`clear`/`setLength`/`get`/`set`/`remove`/`grow`/`shiftRight`/`shiftLeft`/`byteAt`/`setByte`/`append`/`slice`/`toCString`/`makeCharFromBytes` plus static `create`).
+- **`__destruct___ManagedMemory(self)` runtime function** branches on `parent_ptr` to free the buffer (root: `parent_ptr == -1`), skip (rdata-backed: `parent_ptr == -2`), or `mm_decref` the parent (slice view).
+- **`lowerManagedMemBuiltin`** intercepts `__ManagedMemory.*` method calls in `lowerMethodCall` and dispatches to **12 `__managed_mem_*` runtime helpers** (one per throwing method) that perform bounds checks + emit `mrt_set_error(ordinal+1)` on failure. The Phase-4 `try ... otherwise default` machinery picks up the error flag automatically.
+- **Parser support for `typealias NAME = __ManagedMemory with TYPE`** in [`Parser.maxon`](Compiler/Parser.maxon) so test code can write `typealias IntMem = __ManagedMemory with Int`.
+- **12 fragment tests in [`specs/managed-memory-builtin.md`](../specs/managed-memory-builtin.md)** (status: selfhosted) cover `create`, `setLength`/`get`/`set` round-trip, `grow`, `append`, `slice`, byte-granular access, `clear`, all three out-of-bounds error paths, and the destructor freeing through `mm_decref`. **12/12 passing.**
 
-**Both backends** dispatch `callRuntime` via [`BackendDispatch.maxon`](Compiler/Targets/BackendDispatch.maxon) using `OsDescriptor` (IAT calls on Windows, syscalls on Linux).
+### Real bugs surfaced and fixed during convergence
 
-### Files to modify
-- All pipeline files (both backends), [`OsDescriptor.maxon`](Compiler/Targets/Shared/OsDescriptor.maxon), stdlib integration via [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon).
+The full pipeline running on the new allocator surfaced five latent bugs that had never been exercised before:
+1. `__slab_*` and `__mm_*` globals were being routed to read-only `.rdata` instead of writable `.data`, causing access violations on the first atomic increment of `__mm_raw_alloc_count`. Fixed in [`X64Backend.maxon`](Compiler/Targets/X64/X64Backend.maxon)'s `relocKindForLabel` and the equivalent ARM64 path.
+2. X64 shift lowering could clobber its own count register (RCX) because the regalloc didn't see the implicit physical-register def. Fixed in [`X64RegisterAlloc.maxon`](Compiler/Targets/X64/X64RegisterAlloc.maxon)'s `getImplicitGprDefs`.
+3. `__slab_alloc_class`'s retry loop kept a value live across `__slab_refill_mcache` in a caller-saved register; restructured to recompute after the call.
+4. The instruction scheduler created a self-edge dependency on `osFreePages` because it was classified as both a store and a call. Fixed in [`InstructionScheduler.maxon`](Compiler/Targets/Shared/InstructionScheduler.maxon)'s `buildDependencies`.
+5. `mrt_set_error(0)` collided with the "no error in flight" sentinel — every `__managed_mem_*` helper now sends `ordinal+1` over the wire (matching the existing `lowerThrow` convention).
+
+Plus two non-allocator infra fixes: [`PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon) `dataRawSize` now grows to align the larger prelude; [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon)'s cache-stripping filter was replaced with a runtime-module-list query (added `isRuntimeFunctionName` helper in [`BackendDispatch.maxon`](Compiler/Targets/BackendDispatch.maxon)) so new runtime functions don't need a manual prefix-list update.
+
+### What's deferred and why
+
+The user-facing `arrays` / `stdlib-array` / `collection` / `for-in over arrays` / `array-managed-elements` / `array-of-bytearray` / `array-hashable` specs all depend on [`stdlib/Array.maxon`](../stdlib/Array.maxon), which presupposes:
+- **Phase 7 (real Strings)** for `panic("...")` interpolated messages inside `Array.ensureCapacity` etc.
+- **Phase 8 (full throws/throw)** for `Array.get(i) throws ArrayError`, `try managed.get(...) otherwise throw ArrayError.indexOutOfBounds`, etc.
+- **Phase 11 (interfaces & generics)** for `Array uses Element`, `implements BuiltinArrayLiteral, Iterable with(Element, ArrayIter), Cloneable`, `extension Array where Element is Equatable`.
+
+Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred specs unlock automatically — the `__ManagedMemory` primitive completed in Phase 6 is the building block they all wrap.
 
 ---
 
@@ -410,9 +432,9 @@ Cross-module / link-time inlining; profile-guided optimization; `@specialize` at
 - Visibility: `Visibility` enum (file / module / global); `export` and contextual `module` keywords parsed at `dispatchTopLevel`. Every resolved / unresolved decl entry carries `visibility` + `sourceFilePath`: top-level vars / lets, functions (`IrFunction.visibility`/`sourceFilePath`), struct types, enums, typealiases (sidecar `typealiasVisibilities` map), and enum cases (inherited from enclosing enum). Static fields and inherent-method visibility inherit the enclosing type's tier; enum methods inherit the enum's tier. Cross-file callee resolution falls back through `methodNameIndex` filtered by `isVisibleFrom` against the reading function's file. `qualifyCalleeForContext` takes a `readerFilePath` parameter; per-function rewrite passes derive it from `entryBlockFilePath`. New TR validation passes — `validateCallVisibility` (E3008 / E3088 on hidden `call` ops, both qualified and bare), `validateNamedTypeVisibility` (rejects `as TypeName` against hidden typealias / struct) — sequence after `fillUnresolvedTypes` and before `validateCallArities`. `queryCodeResult` gates codegen behind `hasErrors` so semantic errors short-circuit lowering. Stdlib cache codec stamps `(global, stdlib bootstrap path)` on restore for every function / struct / enum without changing the on-disk format. `module-keyword` (11/11) and `export-keyword` (16/24) specs land on the whitelist; remaining `export-keyword` failures are pre-existing parser gaps (Array typealias parsing) and wording differences (E2001 vs E3061 for duplicate typealiases), all unrelated to visibility.
 
 ### Still pending
-- **Array literal globals** (`var xs = [1, 2, 3]`): no array-literal value emission yet (Maxon-side `parseArrayLiteralExpr` is still a parse-stub) and no `__module_init` runtime-init function — Phase 6 (managed memory) prerequisite.
+- **Array literal globals** (`var xs = [1, 2, 3]`): no array-literal value emission yet (Maxon-side `parseArrayLiteralExpr` is still a parse-stub) and no `__module_init` runtime-init function. Phase 6's slab allocator + `__ManagedMemory` are now in place, but the user-facing `Array<T>` wrapper still depends on Phases 7+8+11.
 - **Cross-file struct field via top-level var** (`shared.value = 42` from another file): self-hosted parses the dotted access as a single `unresolvedRead` rather than a globalLoad → fieldLoad chain. Needed for the `exported-struct-var-cross-file` spec.
-- **Array typealias parsing** (`typealias IntArray = Array with Integer`): self-hosted parser doesn't yet accept the `with` form; affects four `export-keyword` tests that exercise typealias visibility on `Array`-shaped aliases.
+- **Generic `Array with TYPE` typealias parsing**: Phase 6 added narrow support for `typealias NAME = __ManagedMemory with TYPE` only. The general `Array with Integer` form still depends on Phase 11.0; affects four `export-keyword` tests that exercise typealias visibility on `Array`-shaped aliases.
 
 ---
 
@@ -423,7 +445,7 @@ Cross-module / link-time inlining; profile-guided optimization; `@specialize` at
 ### Specs to unlock
 `map`, `set`, `vector`, `array-hashable`, `map-struct-bytearray`, `map-try-otherwise-block`, `stdlib-set`.
 
-These are stdlib types built on Array + generics + Hashable. Requires Phase 6 (managed memory), Phase 8 (errors), Phase 11 (interfaces/generics).
+These are stdlib types built on Array + generics + Hashable. Phase 6's `__ManagedMemory` primitive provides the storage layer they ultimately wrap; the remaining blockers are Phase 7 (Strings, for panic messages and the String element type), Phase 8 (full `throws`/`throw` propagation), and Phase 11 (interfaces/generics for `Hashable`/`Equatable`/conditional extensions).
 
 **Stdlib integration**: parse and compile stdlib `.maxon` files as part of the compilation unit (most work happens in [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon) and [`StdlibCache.maxon`](Compiler/StdlibCache.maxon)).
 

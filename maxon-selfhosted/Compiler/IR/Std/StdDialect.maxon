@@ -329,6 +329,38 @@ export union StdSystemOp
 	printInt(valueId ValueId)
 	// Drop ownership of a heap pointer. Injected by injectDrops; lowered to std.system.free.
 	drop(valueId ValueId)
+	// Allocate `size` bytes of OS pages, page-aligned and zero-filled. Lowered to
+	// VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE) on Windows
+	// and mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0) on Linux.
+	// Returned pointer must be freed via osFreePages.
+	osAllocPages(resultId ValueId, sizeId ValueId)
+	// Same as osAllocPages, but with a large-page hint (MEM_LARGE_PAGES on Windows,
+	// MAP_HUGETLB on Linux). Falls back to regular pages when unsupported.
+	osAllocPagesLarge(resultId ValueId, sizeId ValueId)
+	// Release pages previously allocated via osAllocPages. On Linux requires the
+	// original size; on Windows the size is ignored (VirtualFree with MEM_RELEASE
+	// uses 0 for dwSize).
+	osFreePages(ptrId ValueId, sizeId ValueId)
+	// Atomic 64-bit increment at [addrId]. LOCK INC qword on x86, LDAXR/ADD/STLXR
+	// loop on ARM64. Used by mm_incref and the alloc-count counters.
+	atomicInc(addrId ValueId)
+	// Atomic 64-bit decrement at [addrId]. LOCK DEC qword on x86 (sets ZF when
+	// the result reaches 0, which mm_decref consumes directly), LDAXR/SUB/STLXR
+	// loop on ARM64.
+	atomicDec(addrId ValueId)
+	// Atomic 64-bit fetch-and-add: old = [addrId]; [addrId] += valId; result = old.
+	// LOCK XADD on x86, LDAXR/ADD/STLXR loop on ARM64. Used by debug-stream slot
+	// reservation and as a building block for cmpxchg loops.
+	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId)
+	// Initialize a platform lock at [addrId]. Windows: InitializeCriticalSection.
+	// Linux: no-op (recursive spinlocks zero-init from mmap-allocated pages).
+	osLockInit(addrId ValueId)
+	// Acquire a platform lock at [addrId]. Windows: EnterCriticalSection. Linux:
+	// recursive spinlock acquire (cmpxchg loop on the lock word).
+	osLockAcquire(addrId ValueId)
+	// Release a platform lock at [addrId]. Windows: LeaveCriticalSection. Linux:
+	// recursive spinlock release (decrement count, store-release lock word to 0).
+	osLockRelease(addrId ValueId)
 end 'StdSystemOp'
 
 export typealias StdSystemOpArray = Array with StdSystemOp
@@ -470,6 +502,15 @@ export function sysOpToString(op StdSystemOp) returns String
 		printLiteral(stringId) gives "sys.print_literal #{stringId}"
 		printInt(valueId) gives "sys.print_int %{valueId}"
 		drop(valueId) gives "sys.drop %{valueId}"
+		osAllocPages(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages %{sizeId}"
+		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages_large %{sizeId}"
+		osFreePages(ptrId, sizeId) gives "sys.os_free_pages %{ptrId}, %{sizeId}"
+		atomicInc(addrId) gives "sys.atomic_inc %{addrId}"
+		atomicDec(addrId) gives "sys.atomic_dec %{addrId}"
+		atomicXadd(resultId, addrId, valId) gives "%{resultId} = sys.atomic_xadd %{addrId}, %{valId}"
+		osLockInit(addrId) gives "sys.os_lock_init %{addrId}"
+		osLockAcquire(addrId) gives "sys.os_lock_acquire %{addrId}"
+		osLockRelease(addrId) gives "sys.os_lock_release %{addrId}"
 	end 'print'
 end 'sysOpToString'
 

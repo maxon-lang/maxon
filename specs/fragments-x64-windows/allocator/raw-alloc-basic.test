@@ -1,0 +1,26 @@
+// Test: raw-alloc-basic
+function main() returns ExitCode
+	let p = __mm_raw_alloc(64)
+	__mm_raw_free(p)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8d, 64
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+}
+---

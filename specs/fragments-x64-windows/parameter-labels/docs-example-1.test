@@ -15,20 +15,24 @@ ExitCode: 7
 module {
   func @parameter-labels.add(rcx: i64, rdx: i64) -> i64 {
   entry:
-    x64.mov r8, rcx
-    x64.add r8, rdx
+    x64.mov r9, rcx
+    x64.add r9, rdx
+    x64.mov r8, r9
     x64.ret
   }
   func @parameter-labels.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov edx, 4
-    x64.mov ecx, 3
+    x64.mov r8d, 4
+    x64.mov r9d, 3
+    x64.mov rcx, r9
+    x64.mov rdx, r8
     x64.call parameter-labels.add
     x64.cmp r8, 125
     x64.jbe __range_ok_3
   __range_panic_3:
-    x64.lea rcx, [rip+__panic_msg_3]
+    x64.lea r8, [rip+__panic_msg_3]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_3:
     x64.epilogue

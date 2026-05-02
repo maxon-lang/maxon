@@ -127,6 +127,7 @@ function maybeCommuteOp(module MirModule, opIdx OpIndex, defMap DefMapIndexArray
 		binOp(rid, l, r, oc) then commuteIfBeneficial(module, opIdx: opIdx, resultId: rid, leftId: l, rightId: r, opcode: oc, defMap: defMap)
 		movImm to movReg then break 'extractBin'
 		unaryOp to loadByte then break 'extractBin'
+		osAllocPages to osLockRelease then break 'extractBin'
 	end 'extractBin'
 end 'maybeCommuteOp'
 
@@ -196,6 +197,7 @@ function classifyByDef(defOp MirOp) returns OperandCategory
 		load to loadFramePtr gives OperandCategory.flexible
 		syscall to iatCall gives OperandCategory.fixedBound
 		osExit to loadByte gives OperandCategory.flexible
+		osAllocPages to osLockRelease gives OperandCategory.fixedBound
 	end 'classify'
 end 'classifyByDef'
 
@@ -289,5 +291,14 @@ function mirDefValueId(op MirOp) returns DefMapIndex
 		osGetEnv(resultId, _, _, _, _) gives resultId
 		memcpy to storeByte gives DEF_NONE
 		loadByte(resultId, _, _) gives resultId
+		osAllocPages(resultId, _) gives resultId
+		osAllocPagesLarge(resultId, _) gives resultId
+		osFreePages gives DEF_NONE
+		atomicInc gives DEF_NONE
+		atomicDec gives DEF_NONE
+		atomicXadd(resultId, _, _) gives resultId
+		osLockInit gives DEF_NONE
+		osLockAcquire gives DEF_NONE
+		osLockRelease gives DEF_NONE
 	end 'def'
 end 'mirDefValueId'

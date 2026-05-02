@@ -24,21 +24,25 @@ module {
     x64.cqo
     x64.idiv r8
     x64.add r9, 1
+    x64.add r9, rax
     x64.mov r8, r9
-    x64.add r8, rax
     x64.ret
   }
   func @arithmetic.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov eax, 5
-    x64.mov edx, 2
-    x64.mov ecx, 10
+    x64.mov r8d, 5
+    x64.mov r9d, 2
+    x64.mov esi, 10
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
     x64.call arithmetic.divLive
     x64.cmp r8, 125
     x64.jbe __range_ok_2
   __range_panic_2:
-    x64.lea rcx, [rip+__panic_msg_2]
+    x64.lea r8, [rip+__panic_msg_2]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_2:
     x64.epilogue

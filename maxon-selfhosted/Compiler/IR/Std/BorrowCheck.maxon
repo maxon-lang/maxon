@@ -214,6 +214,15 @@ function recordSysLifetimes(op StdSystemOp, blockId BlockId, opIndex OpIndex, st
 		printLiteral then break 'rec'
 		printInt(valueId) then recordUse(valueId, blockId: blockId, opIndex: opIndex, state: state)
 		drop(valueId) then recordUse(valueId, blockId: blockId, opIndex: opIndex, state: state)
+		osAllocPages(resultId, sizeId) then recordDefAndUse(resultId, usedId: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		osAllocPagesLarge(resultId, sizeId) then recordDefAndUse(resultId, usedId: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		osFreePages(ptrId, sizeId) then recordTwoUses(ptrId, usedId2: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		atomicInc(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
+		atomicDec(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
+		atomicXadd(resultId, addrId, valId) then recordDefAndTwoUses(resultId, usedId1: addrId, usedId2: valId, blockId: blockId, opIndex: opIndex, state: state)
+		osLockInit(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
+		osLockAcquire(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
+		osLockRelease(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
 	end 'rec'
 end 'recordSysLifetimes'
 

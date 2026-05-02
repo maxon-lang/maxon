@@ -1,0 +1,87 @@
+// Test: mixed-raw-and-tracked
+function main() returns ExitCode
+	let p = __mm_raw_alloc(64)
+	let q = __mm_alloc(64, destructor: 0, tag: 0)
+	let r = __mm_raw_alloc(128)
+	let s = __mm_alloc(128, destructor: 0, tag: 0)
+	__mm_raw_free(p)
+	__mm_decref(q)
+	__mm_raw_free(r)
+	__mm_decref(s)
+	let raw = __mm_raw_alloc_count()
+	let tracked = __mm_alloc_count()
+	if raw != 0 'rawFail'
+		return 1
+	end 'rawFail'
+	if tracked != 0 'trackedFail'
+		return 2
+	end 'trackedFail'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov r8d, 64
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r12, r8
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 64
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
+    x64.mov r13, r8
+    x64.mov r8d, 128
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r14, r8
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 128
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
+    x64.mov r15, r8
+    x64.mov rcx, r12
+    x64.call mm_raw_free
+    x64.mov rcx, r13
+    x64.call mm_decref
+    x64.mov rcx, r14
+    x64.call mm_raw_free
+    x64.mov rcx, r15
+    x64.call mm_decref
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.mov rsi, [r8+0] (8b)
+    x64.test r9, r9
+    x64.je rawFail_1.after
+  rawFail_1:
+    x64.mov r9d, 1
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  rawFail_1.after:
+    x64.test rsi, rsi
+    x64.je trackedFail_3.after
+  trackedFail_3:
+    x64.mov r9d, 2
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  trackedFail_3.after:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+}
+---

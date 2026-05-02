@@ -24,8 +24,9 @@ module {
   func @match-simple.double(rcx: i64) -> i64 {
   entry:
     x64.mov r9d, 2
-    x64.mov r8, rcx
-    x64.imul r8, r9
+    x64.mov rsi, rcx
+    x64.imul rsi, r9
+    x64.mov r8, rsi
     x64.ret
   }
   func @match-simple.main() -> u8 {
@@ -41,14 +42,16 @@ module {
     x64.cmp r8, 2
     x64.jne process_1.case2
   process_1.case1:
-    x64.mov ecx, 20
+    x64.mov r8d, 20
+    x64.mov rcx, r8
     x64.call match-simple.double
     x64.jmp process_1.merge
   process_1.case2:
     x64.xor r8d, r8d
     x64.jmp process_1.merge
   __range_panic_8:
-    x64.lea rcx, [rip+__panic_msg_10]
+    x64.lea r8, [rip+__panic_msg_10]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_8:
     x64.epilogue

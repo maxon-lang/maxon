@@ -13,6 +13,11 @@ let IAT_SLOT_WRITE_FILE = 2
 let IAT_SLOT_CREATE_FILE_A = 3
 let IAT_SLOT_CLOSE_HANDLE = 4
 let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
+let IAT_SLOT_VIRTUAL_ALLOC = 6
+let IAT_SLOT_VIRTUAL_FREE = 7
+let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 8
+let IAT_SLOT_ENTER_CRITICAL_SECTION = 9
+let IAT_SLOT_LEAVE_CRITICAL_SECTION = 10
 
 // Constant map: tracks valueId -> immediate value for integer movImm ops.
 // Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
@@ -43,6 +48,7 @@ function buildConstMap(module MirModule, func IrFunction) returns ConstMap
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then constMapSetIfInt(cm, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
+				osAllocPages to osLockRelease then break 'checkMir'
 			end 'checkMir'
 		end 'eachOp'
 	end 'eachBlock'
@@ -107,6 +113,7 @@ function buildAbsorbedConsts(module MirModule, func IrFunction, constMap ConstMa
 			match mirOp 'checkMir'
 				movImm(resultId, value, isFloat) then tryMarkAbsorbed(result, totalUses: totalUses, nonAbsorbUses: nonAbsorbUses, resultId: resultId, value: value, isFloat: isFloat)
 				movReg to loadByte then break 'checkMir'
+				osAllocPages to osLockRelease then break 'checkMir'
 			end 'checkMir'
 		end 'scanOp'
 	end 'scan'
@@ -158,6 +165,15 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
+		osAllocPages(_, sizeId) then ucIncrement(uc, valueId: sizeId)
+		osAllocPagesLarge(_, sizeId) then ucIncrement(uc, valueId: sizeId)
+		osFreePages(ptrId, sizeId) then ucIncrementTwo(uc, a: ptrId, b: sizeId)
+		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
+		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
+		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
+		osLockInit(addrId) then ucIncrement(uc, valueId: addrId)
+		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
+		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
 	end 'count'
 end 'countMirNonAbsorbUses'
 
@@ -300,6 +316,15 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
+		osAllocPages(_, sizeId) then ucIncrement(uc, valueId: sizeId)
+		osAllocPagesLarge(_, sizeId) then ucIncrement(uc, valueId: sizeId)
+		osFreePages(ptrId, sizeId) then ucIncrementTwo(uc, a: ptrId, b: sizeId)
+		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
+		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
+		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
+		osLockInit(addrId) then ucIncrement(uc, valueId: addrId)
+		osLockAcquire(addrId) then ucIncrement(uc, valueId: addrId)
+		osLockRelease(addrId) then ucIncrement(uc, valueId: addrId)
 	end 'count'
 end 'countMirOpUses'
 
@@ -315,6 +340,7 @@ function getTerminatorCondId(module MirModule, block IrBlock) returns ValueId
 		movImm to cmp gives NOT_CONDBR
 		condBranch(condId, _, _, _, _) gives condId
 		branch to loadByte gives NOT_CONDBR
+		osAllocPages to osLockRelease gives NOT_CONDBR
 	end 'mirCheck'
 end 'getTerminatorCondId'
 
@@ -357,6 +383,21 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osClose gives 3
 		// osGetEnv: name buffer slot + null-term temps + 3 iatCall args (GetEnvironmentVariableA)
 		osGetEnv gives 10
+		// osAllocPages on Windows: VirtualAlloc(NULL, size, 0x3000, 0x04) — 4 iatCall args + result slot.
+		// On Linux (x64): mmap(NULL, len, 3, 0x22, -1, 0) — 6 syscall args + result slot.
+		osAllocPages gives 8
+		osAllocPagesLarge gives 8
+		// osFreePages: VirtualFree(ptr, 0, 0x8000) on Windows; munmap(ptr, len) on Linux.
+		osFreePages gives 4
+		// Atomic ops: single LOCK-prefixed instruction on x64, no extra slots needed.
+		atomicInc gives 0
+		atomicDec gives 0
+		atomicXadd gives 1
+		// osLockInit: InitializeCriticalSection(addr) — 1 iatCall arg on Windows.
+		// On Linux it's a zero-fill no-op.
+		osLockInit gives 2
+		osLockAcquire gives 2
+		osLockRelease gives 2
 		movImm to storeSlot gives 0
 	end 'check'
 end 'mirSysTempCount'
@@ -377,6 +418,7 @@ function tryMirCmpJumpKind(mirOp MirOp, condId ValueId) returns JumpKind
 		cmp(resultId, _, _, predicate) then return mirCmpGuard(condId: condId, resultId: resultId, predicate: predicate)
 		movImm to unaryOp then break 'check'
 		condBranch to loadByte then break 'check'
+		osAllocPages to osLockRelease then break 'check'
 	end 'check'
 	return JumpKind.boolTest
 end 'tryMirCmpJumpKind'
@@ -445,6 +487,7 @@ function stashMirEdges(op MirOp, dstBlock IrBlock)
 		condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdges(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
 		movImm to cmp then break 'extract'
 		call to loadByte then break 'extract'
+		osAllocPages to osLockRelease then break 'extract'
 	end 'extract'
 end 'stashMirEdges'
 
@@ -702,7 +745,7 @@ type X64FunctionLowering
 		return match x64Op 'check'
 			jmp(targetBlock) gives targetBlock
 			prologue to condJump gives NOT_A_JUMP_X64
-			movF64Slot to repStosq gives NOT_A_JUMP_X64
+			movF64Slot to lockXaddMemReg gives NOT_A_JUMP_X64
 		end 'check'
 	end 'getX64JumpTarget'
 
@@ -780,6 +823,7 @@ type X64FunctionLowering
 			loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then lowerMirSysOp(op: op, dstBlock: dstBlock)
+			osAllocPages to osLockRelease then lowerMirSysOp(op: op, dstBlock: dstBlock)
 		end 'dispatch'
 	end 'lowerMirOp'
 
@@ -1137,6 +1181,7 @@ type X64FunctionLowering
 			movImm to cmp then break 'lower'
 			call to indirectCall then break 'lower'
 			param to loadByte then break 'lower'
+			osAllocPages to osLockRelease then break 'lower'
 		end 'lower'
 	end 'lowerMirTerminator'
 
@@ -1242,6 +1287,15 @@ type X64FunctionLowering
 			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
 			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
 			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
+			osAllocPages(resultId, sizeId) then lowerOsAllocPages(resultId: resultId, sizeId: sizeId, large: false, dstBlock: dstBlock)
+			osAllocPagesLarge(resultId, sizeId) then lowerOsAllocPages(resultId: resultId, sizeId: sizeId, large: true, dstBlock: dstBlock)
+			osFreePages(ptrId, sizeId) then lowerOsFreePages(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			atomicInc(addrId) then lowerAtomicInc(addrId: addrId, dstBlock: dstBlock)
+			atomicDec(addrId) then lowerAtomicDec(addrId: addrId, dstBlock: dstBlock)
+			atomicXadd(resultId, addrId, valId) then lowerAtomicXadd(resultId: resultId, addrId: addrId, valId: valId, dstBlock: dstBlock)
+			osLockInit(addrId) then lowerOsLockInit(addrId: addrId, dstBlock: dstBlock)
+			osLockAcquire(addrId) then lowerOsLockAcquire(addrId: addrId, dstBlock: dstBlock)
+			osLockRelease(addrId) then lowerOsLockRelease(addrId: addrId, dstBlock: dstBlock)
 			movImm to storeSlot then break 'lower'
 		end 'lower'
 	end 'lowerMirSysOp'
@@ -1625,6 +1679,200 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsGetEnvWindows'
+
+	// ============================================================
+	// Page allocation, atomics, and locks
+	// ============================================================
+	// These are stubs at this checkpoint — actual encodings/IAT calls land in
+	// steps 6a.7 (atomics) and 6a.10 (page allocation + locks). They panic at
+	// compile time so any spec test that exercises them fails loudly until the
+	// real lowering is in place. The slot-temp budgets above (mirSysTempCount)
+	// already reserve room for whatever those eventual implementations need.
+
+	// osAllocPages: page-aligned, read/write OS allocation. Lowered to
+	// VirtualAlloc on Windows (IAT slot 6) and mmap on Linux (syscall 9).
+	// MacOS / wasi panic — those targets aren't supported by this allocator path.
+	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, large bool, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsAllocPagesWindows(resultId: resultId, sizeId: sizeId, large: large, dstBlock: dstBlock)
+			linux then lowerOsAllocPagesLinux(resultId: resultId, sizeId: sizeId, dstBlock: dstBlock)
+			macos then panic("osAllocPages not supported on x64 macos target")
+			wasi then panic("osAllocPages not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsAllocPages'
+
+	// Windows: VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE [|MEM_LARGE_PAGES], PAGE_READWRITE)
+	function lowerOsAllocPagesWindows(resultId ValueId, sizeId ValueId, large bool, dstBlock IrBlock)
+		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+
+		let nullSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		var allocFlags = 0x3000              // MEM_COMMIT | MEM_RESERVE
+		if large 'usingLargePages'
+			allocFlags = 0x20003000          // | MEM_LARGE_PAGES
+		end 'usingLargePages'
+		let flagsSlot = materializeConstSlot(value: allocFlags, dstBlock: dstBlock)
+		let protectSlot = materializeConstSlot(value: 0x04, dstBlock: dstBlock) // PAGE_READWRITE
+
+		var args = VarSlotArray.create()
+		args.push(nullSlot)
+		args.push(sizeSlot)
+		args.push(flagsSlot)
+		args.push(protectSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_VIRTUAL_ALLOC, argSlots: args))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsAllocPagesWindows'
+
+	// Linux: mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0).
+	// The `large` flag is ignored on Linux for now; MAP_HUGETLB needs a
+	// pre-allocated huge-page pool which the bootstrap also doesn't bother with.
+	function lowerOsAllocPagesLinux(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
+		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+
+		let addrSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let protSlot = materializeConstSlot(value: 0x03, dstBlock: dstBlock)        // PROT_READ | PROT_WRITE
+		let flagsSlot = materializeConstSlot(value: 0x22, dstBlock: dstBlock)       // MAP_ANON | MAP_PRIVATE
+		let fdSlot = materializeConstSlot(value: u64.max, dstBlock: dstBlock)       // -1 sign-extended
+		let offsetSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(addrSlot)
+		args.push(sizeSlot)
+		args.push(protSlot)
+		args.push(flagsSlot)
+		args.push(fdSlot)
+		args.push(offsetSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 9, argSlots: args)) // SYS_mmap
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsAllocPagesLinux'
+
+	// osFreePages: counterpart to osAllocPages. Windows ignores the size when
+	// MEM_RELEASE is used; Linux munmap requires it.
+	function lowerOsFreePages(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsFreePagesWindows(ptrId: ptrId, dstBlock: dstBlock)
+			linux then lowerOsFreePagesLinux(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			macos then panic("osFreePages not supported on x64 macos target")
+			wasi then panic("osFreePages not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsFreePages'
+
+	// Windows: VirtualFree(ptr, 0, MEM_RELEASE)
+	function lowerOsFreePagesWindows(ptrId ValueId, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
+		let zeroSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let releaseSlot = materializeConstSlot(value: 0x8000, dstBlock: dstBlock) // MEM_RELEASE
+
+		var args = VarSlotArray.create()
+		args.push(ptrSlot)
+		args.push(zeroSlot)
+		args.push(releaseSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: IAT_SLOT_VIRTUAL_FREE, argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsFreePagesWindows'
+
+	// Linux: munmap(ptr, size)
+	function lowerOsFreePagesLinux(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+
+		var args = VarSlotArray.create()
+		args.push(ptrSlot)
+		args.push(sizeSlot)
+
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 11, argSlots: args)) // SYS_munmap
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsFreePagesLinux'
+
+	// Atomic increment: `LOCK INC qword [addr]`. The address operand is consumed
+	// directly as a virtual register; the regalloc allocates a physical GPR for
+	// it. Memory at [addr] is the read-modify-written location, so no new
+	// virtual value is defined here.
+	function lowerAtomicInc(addrId ValueId, dstBlock IrBlock)
+		let addrReg = X64VReg.virtual(addrId)
+		appendX64Op(target, block: dstBlock, op: X64Op.lockIncMemory(addrReg))
+	end 'lowerAtomicInc'
+
+	// Atomic decrement: `LOCK DEC qword [addr]`. The DEC instruction sets ZF
+	// when the new memory value is zero, which mm_decref relies on for the
+	// "last reference released" branch.
+	function lowerAtomicDec(addrId ValueId, dstBlock IrBlock)
+		let addrReg = X64VReg.virtual(addrId)
+		appendX64Op(target, block: dstBlock, op: X64Op.lockDecMemory(addrReg))
+	end 'lowerAtomicDec'
+
+	// Atomic exchange-and-add: `LOCK XADD qword [addr], val`. The instruction
+	// reads `val` and `[addr]`, swaps them, then stores the sum back into
+	// memory. After the instruction, the register that held `val` holds the
+	// PRIOR memory value — which is what `resultId` semantically refers to.
+	//
+	// Because lockXaddMemReg uses the twoAddr pattern (the val operand is both
+	// used and defined), we must funnel `val` through a fresh virtual register
+	// (the one corresponding to `resultId`) so the regalloc sees a clean
+	// def/use chain. Sequence:
+	//   1. mov resultReg, valReg          ; copy the addend into resultReg
+	//   2. lock xadd [addrReg], resultReg ; resultReg now holds the old [addrReg]
+	function lowerAtomicXadd(resultId ValueId, addrId ValueId, valId ValueId, dstBlock IrBlock)
+		let resultReg = X64VReg.virtual(resultId)
+		let addrReg = X64VReg.virtual(addrId)
+		let valReg = X64VReg.virtual(valId)
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(resultReg, srcReg: valReg))
+		appendX64Op(target, block: dstBlock, op: X64Op.lockXaddMemReg(resultReg, addrReg: addrReg))
+	end 'lowerAtomicXadd'
+
+	// osLockInit / osLockAcquire / osLockRelease: thin wrappers around the
+	// platform's mutex primitive. Windows uses CRITICAL_SECTION (IAT slots
+	// 8/9/10). Linux is a no-op for now — real recursive spinlocks land
+	// in step 6a.23 once runtime.std supports the helper functions; the
+	// 6a.20 spec tests run on x64-windows where the IAT path is exercised.
+	function lowerOsLockInit(addrId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_INITIALIZE_CRITICAL_SECTION, dstBlock: dstBlock)
+			linux then break 'pickOs'  // mmap zero-init memory is already a valid uninit lock
+			macos then panic("osLockInit not supported on x64 macos target")
+			wasi then panic("osLockInit not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsLockInit'
+
+	function lowerOsLockAcquire(addrId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_ENTER_CRITICAL_SECTION, dstBlock: dstBlock)
+			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
+			macos then panic("osLockAcquire not supported on x64 macos target")
+			wasi then panic("osLockAcquire not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsLockAcquire'
+
+	function lowerOsLockRelease(addrId ValueId, dstBlock IrBlock)
+		match osDesc.os 'pickOs'
+			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_LEAVE_CRITICAL_SECTION, dstBlock: dstBlock)
+			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
+			macos then panic("osLockRelease not supported on x64 macos target")
+			wasi then panic("osLockRelease not supported on x64 wasi target")
+		end 'pickOs'
+	end 'lowerOsLockRelease'
+
+	// Shared helper: emit a single-arg IAT call passing `addr` to a kernel32
+	// CRITICAL_SECTION routine. Used for InitializeCriticalSection /
+	// EnterCriticalSection / LeaveCriticalSection.
+	function lowerOsLockCallWindows(addrId ValueId, slotIndex MachineWord, dstBlock IrBlock)
+		let addrSlot = ensureValueInSlot(valueId: addrId, dstBlock: dstBlock)
+		var args = VarSlotArray.create()
+		args.push(addrSlot)
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(resultSlot, slotIndex: slotIndex, argSlots: args))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsLockCallWindows'
 end 'X64FunctionLowering'
 
 // ============================================================

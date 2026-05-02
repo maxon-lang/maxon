@@ -261,13 +261,22 @@ type ScheduleState
 				loadsSinceBarrier.push(i)
 			end 'loadAfterStore'
 
+			// Capture the previous-store/previous-call indices BEFORE either branch
+			// updates them. Some ops (e.g. osFreePages) are classified as both
+			// `isStore` and `isCall`, so the storeOrdering branch sets
+			// `lastStoreIdx = i`; without snapshotting here, the callOrdering branch
+			// would then read its own index back and add a self-edge i→i, which
+			// the scheduler reports as a dependency cycle.
+			let prevStoreIdx = lastStoreIdx
+			let prevCallIdx = lastCallIdx
+
 			// A store must come after the previous store and previous call.
 			if isStore 'storeOrdering'
-				if lastStoreIdx != SCHED_NONE 'afterPrevStore'
-					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+				if prevStoreIdx != SCHED_NONE 'afterPrevStore'
+					self.addDepEdge(fromIdx: prevStoreIdx, toIdx: i)
 				end 'afterPrevStore'
-				if lastCallIdx != SCHED_NONE 'afterPrevCall'
-					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+				if prevCallIdx != SCHED_NONE 'afterPrevCall'
+					self.addDepEdge(fromIdx: prevCallIdx, toIdx: i)
 				end 'afterPrevCall'
 				for loadIdx in loadsSinceBarrier 'loadsBeforeStore'
 					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
@@ -278,11 +287,11 @@ type ScheduleState
 
 			// A call must come after the previous store and previous call.
 			if isCall 'callOrdering'
-				if lastStoreIdx != SCHED_NONE 'afterStore'
-					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+				if prevStoreIdx != SCHED_NONE 'afterStore'
+					self.addDepEdge(fromIdx: prevStoreIdx, toIdx: i)
 				end 'afterStore'
-				if lastCallIdx != SCHED_NONE 'afterCall'
-					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+				if prevCallIdx != SCHED_NONE 'afterCall'
+					self.addDepEdge(fromIdx: prevCallIdx, toIdx: i)
 				end 'afterCall'
 				for loadIdx in loadsSinceBarrier 'loadsBeforeCall'
 					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
@@ -611,6 +620,15 @@ function extractMirDef(op MirOp) returns SchedInt
 		memcpy gives SCHED_NONE
 		storeByte gives SCHED_NONE
 		loadByte(resultId, _, _) gives resultId
+		osAllocPages(resultId, _) gives resultId
+		osAllocPagesLarge(resultId, _) gives resultId
+		osFreePages gives SCHED_NONE
+		atomicInc gives SCHED_NONE
+		atomicDec gives SCHED_NONE
+		atomicXadd(resultId, _, _) gives resultId
+		osLockInit gives SCHED_NONE
+		osLockAcquire gives SCHED_NONE
+		osLockRelease gives SCHED_NONE
 	end 'def'
 end 'extractMirDef'
 
@@ -654,6 +672,15 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
 		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
 		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
+		osAllocPages(_, sizeId) then result.push(sizeId)
+		osAllocPagesLarge(_, sizeId) then result.push(sizeId)
+		osFreePages(ptrId, sizeId) then pushTwo(result, a: ptrId, b: sizeId)
+		atomicInc(addrId) then result.push(addrId)
+		atomicDec(addrId) then result.push(addrId)
+		atomicXadd(_, addrId, valId) then pushTwo(result, a: addrId, b: valId)
+		osLockInit(addrId) then result.push(addrId)
+		osLockAcquire(addrId) then result.push(addrId)
+		osLockRelease(addrId) then result.push(addrId)
 	end 'uses'
 	return result
 end 'extractMirUses'
@@ -699,6 +726,15 @@ function isMirMemoryOp(op MirOp) returns bool
 		memcpy gives true
 		storeByte gives true
 		loadByte gives true
+		osAllocPages gives true
+		osAllocPagesLarge gives true
+		osFreePages gives true
+		atomicInc gives true
+		atomicDec gives true
+		atomicXadd gives true
+		osLockInit gives true
+		osLockAcquire gives true
+		osLockRelease gives true
 		movImm to cmp gives false
 		condBranch to branch gives false
 		ret gives false
@@ -720,6 +756,13 @@ function isMirStoreOp(op MirOp) returns bool
 		storeSlot gives true
 		storeByte gives true
 		memcpy gives true
+		atomicInc gives true
+		atomicDec gives true
+		atomicXadd gives true
+		osLockInit gives true
+		osLockAcquire gives true
+		osLockRelease gives true
+		osFreePages gives true
 		movImm to cmp gives false
 		condBranch to ret gives false
 		param to load gives false
@@ -730,6 +773,8 @@ function isMirStoreOp(op MirOp) returns bool
 		osExit to osWrite gives false
 		osWriteErr to osGetEnv gives false
 		loadByte gives false
+		osAllocPages gives false
+		osAllocPagesLarge gives false
 	end 'check'
 end 'isMirStoreOp'
 
@@ -746,6 +791,7 @@ function isMirParamOpPacked(module MirModule, packed OpIndex) returns bool
 		param gives true
 		movImm to ret gives false
 		load to loadByte gives false
+		osAllocPages to osLockRelease gives false
 	end 'checkMir'
 end 'isMirParamOpPacked'
 
@@ -762,6 +808,12 @@ function isMirCallOp(op MirOp) returns bool
 		osWriteFd gives true
 		osClose gives true
 		osGetEnv gives true
+		osAllocPages gives true
+		osAllocPagesLarge gives true
+		osFreePages gives true
+		osLockInit gives true
+		osLockAcquire gives true
+		osLockRelease gives true
 		// param ops read from physical calling-convention registers and must
 		// be ordered with each other to avoid clobbering.
 		param gives true
@@ -771,6 +823,7 @@ function isMirCallOp(op MirOp) returns bool
 		load to funcAddr gives false
 		loadFramePtr gives false
 		memcpy to loadByte gives false
+		atomicInc to atomicXadd gives false
 	end 'check'
 end 'isMirCallOp'
 
@@ -825,6 +878,15 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		memcpy gives false
 		storeByte gives false
 		loadByte gives false
+		osAllocPages gives false
+		osAllocPagesLarge gives false
+		osFreePages gives false
+		atomicInc gives true
+		atomicDec gives true
+		atomicXadd gives true
+		osLockInit gives false
+		osLockAcquire gives false
+		osLockRelease gives false
 	end 'check'
 end 'isFlagClobberingMirOp'
 
@@ -841,6 +903,7 @@ function isMirCmpPacked(module MirModule, packed OpIndex) returns bool
 		cmp gives true
 		movImm to unaryOp gives false
 		condBranch to loadByte gives false
+		osAllocPages to osLockRelease gives false
 	end 'check'
 end 'isMirCmpPacked'
 
@@ -864,6 +927,7 @@ function terminatorCondId(module MirModule, terminator Terminator) returns Sched
 		call to ret gives SCHED_NONE
 		param gives SCHED_NONE
 		load to loadByte gives SCHED_NONE
+		osAllocPages to osLockRelease gives SCHED_NONE
 	end 'kind'
 end 'terminatorCondId'
 

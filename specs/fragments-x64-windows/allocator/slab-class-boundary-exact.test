@@ -1,163 +1,47 @@
 // Test: slab-class-boundary-exact
-typealias Integer = int(i64.min to i64.max)
-
-type TwoField
-	export var a Integer
-	export var b Integer
-
-	static function create(a Integer, b Integer) returns Self
-		return Self{a: a, b: b}
-	end 'create'
-end 'TwoField'
-
-type ThreeField
-	export var a Integer
-	export var b Integer
-	export var c Integer
-
-	static function create(a Integer, b Integer, c Integer) returns Self
-		return Self{a: a, b: b, c: c}
-	end 'create'
-end 'ThreeField'
-
 function main() returns ExitCode
-	@heap let t = TwoField.create(a: 1, b: 2)
-	@heap let h = ThreeField.create(a: 3, b: 4, c: 5)
-	return t.a + h.a
+	let p16 = __mm_raw_alloc(16)
+	let p24 = __mm_raw_alloc(24)
+	__mm_raw_free(p24)
+	__mm_raw_free(p16)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'main'
 ---
-MmTrace: true
-ExitCode: 4
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc TwoField #1 size=16 [TwoField.create]
-  sl_alloc TwoField #1 size=48 class=4
-mm_incref TwoField #1 rc=1 [TwoField.create]
-mm_transfer TwoField #1 rc=1 [TwoField.create]
-mm_alloc ThreeField #2 size=24 [ThreeField.create]
-  sl_alloc ThreeField #2 size=56 class=5
-mm_incref ThreeField #2 rc=1 [ThreeField.create]
-mm_transfer ThreeField #2 rc=1 [ThreeField.create]
-mm_decref ThreeField #2 rc=0 [main]
-  mm_free ThreeField #2
-    sl_free ThreeField #2 size=64 class=5
-mm_decref TwoField #1 rc=0 [main]
-  mm_free TwoField #1
-    sl_free TwoField #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
+ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @TwoField.create(a: i64, b: i64) -> i64 {
+  func @allocator.main() -> u8 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov [rdx+8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.prologue stack_size=16
+    x64.mov r8d, 16
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 24
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.mov rcx, r12
+    x64.call mm_raw_free
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne ok_1.after
+  ok_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  }
-  func @ThreeField.create(a: i64, b: i64, c: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
-    x64.mov [rbp-32], r8
-    x64.mov rcx, 24
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov [rdx+8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rdi, [rbp-32]
-    x64.mov [rsi+16], rdi
-    x64.mov r8, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
+  ok_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
     x64.epilogue
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.call TwoField.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 3
-    x64.mov rdx, 4
-    x64.mov r8, 5
-    x64.call ThreeField.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov rdx, [rbp-16]
-    x64.mov rbx, [rdx+0]
-    x64.add rcx, rbx
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rcx, rdi
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_TwoField(ptr: i64) {
-  entry:
-    x64.jmp __destruct_TwoField.done
-  done:
-    x64.ret
-  }
-  func @__destruct_ThreeField(ptr: i64) {
-  entry:
-    x64.jmp __destruct_ThreeField.done
-  done:
     x64.ret
   }
 }

@@ -89,6 +89,21 @@ function parseStdlibSource(project Project, allModule MaxonModule, filePath File
 end 'parseStdlibSource'
 
 export function getStdlibModule(project Project) returns MaxonModule
+	// Step 6a.19: register the allocator-runtime intrinsics (`__mm_raw_alloc`,
+	// `__mm_alloc`, etc.) so user Maxon source can call them as plain
+	// functions. Done unconditionally on every project before any of the
+	// cache / parse paths below populate the rest of the registries — these
+	// names are stable across all projects and don't depend on user code or
+	// cached stdlib state. Idempotent: each `try ... insert ... otherwise
+	// ignore` in the helper drops a duplicate silently if a previous call
+	// in the same process already populated the same project.
+	registerMmIntrinsicSignatures(project)
+	// Step 6b.1 + 6b.2: register the `__ManagedMemory` builtin struct, the
+	// `__ManagedMemoryError` enum, and the 18 `__ManagedMemory.*` method
+	// signatures so the type checker accepts user calls like
+	// `mm.length()` / `__ManagedMemory.create(...)`. Idempotent for the
+	// same reason as the intrinsic-signature register above.
+	registerManagedMemoryType(project)
 	if stdlibLoaded 'cached'
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
@@ -208,8 +223,6 @@ end 'getStdlibModule'
 // Build the stdlib cache by compiling the parsed MaxonModule through the
 // full pipeline and capturing per-function machine code output.
 function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cachePath FilePath, contentChecksum CacheChecksum)
-	logInfo(LogCategory.compiler, message: () gives "Building stdlib cache...")
-
 	var globalData = createGlobalDataTable()
 	let sourceFileName = ""
 
@@ -267,17 +280,24 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 
 	// Emit per-function bytecode (dispatched by target). augmentWithRuntime
 	// merged runtime function bodies into the pipeline's module so per-function
-	// lowering could resolve `mrt_*` callees. We strip those `mrt_*` entries
-	// back out of the cache: the user-code pipeline's augmentWithRuntime is
-	// the source of truth for runtime bodies in the final binary.
+	// lowering could resolve runtime callees (mrt_*, __slab_*, mm_*). We strip
+	// those entries back out of the cache: the user-code pipeline's
+	// augmentWithRuntime is the source of truth for runtime bodies in the
+	// final binary.
 	//
 	// Without the filter, the user-code pipeline emits real bodies for
 	// mrt_write_stdout etc. AND the cache also emits empty stubs for the same
 	// names, then funcSigs.upsert resolves the name to the (later-registered)
 	// empty-stub index — main calls the stub instead of the real body, so all
 	// output silently disappears (wasmtime trace shows proc_exit but no fd_write).
+	//
+	// Step 6a.17 generalised the predicate from a `mrt_` prefix check to a
+	// lookup against the runtime module's function list so the slab/MM
+	// allocator runtime (`__slab_*`, `mm_*`) gets stripped too — without that,
+	// every runtime call in stdlib code resolves to a zero-sized stub at the
+	// end of .text instead of the real body.
 	if isWasm 'emitWasm'
-		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter((func) gives not func.name.startsWith("mrt_"))
+		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter((func) gives not isRuntimeFunctionName(func.name))
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
 		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
@@ -286,7 +306,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
-		cacheData.functions = emittedFunctions.filter((func) gives not func.name.startsWith("mrt_"))
+		cacheData.functions = emittedFunctions.filter((func) gives not isRuntimeFunctionName(func.name))
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
 	end 'emitNative'
 

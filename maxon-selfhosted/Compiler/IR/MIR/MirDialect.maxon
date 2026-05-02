@@ -90,6 +90,20 @@ export union MirOp
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
 	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
+	// Page allocation: VirtualAlloc on Windows / mmap on Linux.
+	osAllocPages(resultId ValueId, sizeId ValueId)
+	osAllocPagesLarge(resultId ValueId, sizeId ValueId)
+	osFreePages(ptrId ValueId, sizeId ValueId)
+	// Atomic 64-bit memory ops. atomicDec sets ZF when the result is 0.
+	// atomicXadd returns the prior value.
+	atomicInc(addrId ValueId)
+	atomicDec(addrId ValueId)
+	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId)
+	// Platform locks. Init is a no-op on Linux; spinlock acquire/release on Linux,
+	// CRITICAL_SECTION calls on Windows.
+	osLockInit(addrId ValueId)
+	osLockAcquire(addrId ValueId)
+	osLockRelease(addrId ValueId)
 end 'MirOp'
 
 export typealias MirOpArray = Array with MirOp
@@ -146,6 +160,15 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		memcpy(dstId, srcId, lenId) gives "mir.memcpy %{dstId}, %{srcId}, %{lenId}"
 		storeByte(baseId, offsetId, byteId) gives "mir.store_byte %{baseId}, %{offsetId}, %{byteId}"
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = mir.load_byte %{baseId}, %{offsetId}"
+		osAllocPages(resultId, sizeId) gives "%{resultId} = mir.os_alloc_pages %{sizeId}"
+		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = mir.os_alloc_pages_large %{sizeId}"
+		osFreePages(ptrId, sizeId) gives "mir.os_free_pages %{ptrId}, %{sizeId}"
+		atomicInc(addrId) gives "mir.atomic_inc %{addrId}"
+		atomicDec(addrId) gives "mir.atomic_dec %{addrId}"
+		atomicXadd(resultId, addrId, valId) gives "%{resultId} = mir.atomic_xadd %{addrId}, %{valId}"
+		osLockInit(addrId) gives "mir.os_lock_init %{addrId}"
+		osLockAcquire(addrId) gives "mir.os_lock_acquire %{addrId}"
+		osLockRelease(addrId) gives "mir.os_lock_release %{addrId}"
 	end 'dispatch'
 end 'mirOpToString'
 

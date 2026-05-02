@@ -220,6 +220,9 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		csel(dest, src1, src2, _) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		sxtw(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		nullSafeLoad(dest, baseReg, _) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(baseReg)
+		atomicIncMem(addrReg) gives isVirtualArm64Gpr(addrReg)
+		atomicDecMem(addrReg) gives isVirtualArm64Gpr(addrReg)
+		atomicXaddMem(resultReg, addrReg, valReg) gives isVirtualArm64Gpr(resultReg) or isVirtualArm64Gpr(addrReg) or isVirtualArm64Gpr(valReg)
 	end 'check'
 end 'arm64OpHasVirtualRegs'
 
@@ -305,6 +308,9 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		csel(_, src1, src2, _) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		sxtw(_, src) then incUse(counts, id: arm64VRegId(src))
 		nullSafeLoad(_, baseReg, _) then incUse(counts, id: arm64VRegId(baseReg))
+		atomicIncMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
+		atomicDecMem(addrReg) then incUse(counts, id: arm64VRegId(addrReg))
+		atomicXaddMem(_, addrReg, valReg) then countArm64TwoReads(counts, reg1: addrReg, reg2: valReg)
 	end 'scan'
 end 'countArm64OpReads'
 
@@ -390,7 +396,7 @@ function noteArm64MovRegRegDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64O
 	match op 'extract'
 		movRegReg(destReg, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: destReg)
 		prologue to memcpyOp then break 'extract'
-		spillToStack to nullSafeLoad then break 'extract'
+		spillToStack to atomicXaddMem then break 'extract'
 	end 'extract'
 end 'noteArm64MovRegRegDef'
 
@@ -405,7 +411,7 @@ function noteArm64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
 		movImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		prologue to epilogue then break 'extract'
-		strToSlot to nullSafeLoad then break 'extract'
+		strToSlot to atomicXaddMem then break 'extract'
 	end 'extract'
 end 'noteArm64ConstImm'
 
@@ -438,6 +444,7 @@ function noteArm64ThreeAddr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 		lslRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		asrRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		lsrRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		atomicXaddMem(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		default panic("noteArm64: unexpected op for pattern")
 	end 'extract'
 end 'noteArm64ThreeAddr'
@@ -555,6 +562,9 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		csel(_, src1, src2, _) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
 		sxtw(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		nullSafeLoad(_, baseReg, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
+		atomicIncMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
+		atomicDecMem(addrReg) then recordLastUse(positions, id: arm64VRegId(addrReg), opIdx: opIdx)
+		atomicXaddMem(_, addrReg, valReg) then recordArm64TwoLastUses(positions, reg1: addrReg, reg2: valReg, opIdx: opIdx)
 	end 'scan'
 end 'recordArm64OpLastUses'
 
@@ -579,7 +589,7 @@ export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntA
 		match a64Op 'extractMov'
 			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
 			prologue to memcpyOp then break 'extractMov'
-			spillToStack to nullSafeLoad then break 'extractMov'
+			spillToStack to atomicXaddMem then break 'extractMov'
 		end 'extractMov'
 	end 'isMov' else 'other'
 		countArm64OpReads(usedByNonSink, a64Op: a64Op)
@@ -603,7 +613,7 @@ export function isArm64RetTerminator(module TargetModule, packed OpIndex) return
 	match a64Op 'checkRet'
 		ret then result = true
 		prologue to printInt then break 'checkRet'
-		syscall to nullSafeLoad then break 'checkRet'
+		syscall to atomicXaddMem then break 'checkRet'
 	end 'checkRet'
 	return result
 end 'isArm64RetTerminator'
@@ -616,7 +626,7 @@ function isArm64OpPanicCall(op Arm64Op) returns bool
 	match op 'check'
 		branchLink(target) then return target == "mrt_panic"
 		prologue to branch then break 'check'
-		printLiteral to nullSafeLoad then break 'check'
+		printLiteral to atomicXaddMem then break 'check'
 	end 'check'
 	return false
 end 'isArm64OpPanicCall'
@@ -707,6 +717,7 @@ function arm64OpThreeAddrOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg, Arm
 		lslRegs(dest, src1, src2) gives(dest, src1, src2)
 		asrRegs(dest, src1, src2) gives(dest, src1, src2)
 		lsrRegs(dest, src1, src2) gives(dest, src1, src2)
+		atomicXaddMem(resultReg, addrReg, valReg) gives(resultReg, addrReg, valReg)
 		default panic("arm64OpThreeAddrOperands: unexpected op")
 	end 'get'
 end 'arm64OpThreeAddrOperands'
@@ -730,6 +741,7 @@ function arm64OpWithPhysThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 Re
 		lslRegs gives Arm64Op.lslRegs(dp, src1: s1p, src2: s2p)
 		asrRegs gives Arm64Op.asrRegs(dp, src1: s1p, src2: s2p)
 		lsrRegs gives Arm64Op.lsrRegs(dp, src1: s1p, src2: s2p)
+		atomicXaddMem gives Arm64Op.atomicXaddMem(dp, addrReg: s1p, valReg: s2p)
 		default panic("arm64OpWithPhysThreeAddr: not a threeAddr op")
 	end 'rebuild'
 end 'arm64OpWithPhysThreeAddr'
@@ -967,6 +979,8 @@ end 'colorA64CmpRegs'
 function colorA64SingleUseNodef(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
 		cmpRegZero(src) then colorA64CmpRegZero(module, src: src, coloring: coloring, opRefs: opRefs)
+		atomicIncMem(addrReg) then colorA64AtomicIncMem(module, addrReg: addrReg, coloring: coloring, opRefs: opRefs)
+		atomicDecMem(addrReg) then colorA64AtomicDecMem(module, addrReg: addrReg, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64SingleUseNodef: unexpected op")
 	end 'extract'
 end 'colorA64SingleUseNodef'
@@ -975,6 +989,16 @@ function colorA64CmpRegZero(module TargetModule, src Arm64VReg, coloring Colorin
 	let s = colorArm64Gpr(src, coloring: coloring)
 	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.cmpRegZero(arm64PhysFromOrd(s)))
 end 'colorA64CmpRegZero'
+
+function colorA64AtomicIncMem(module TargetModule, addrReg Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
+	let r = colorArm64Gpr(addrReg, coloring: coloring)
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.atomicIncMem(arm64PhysFromOrd(r)))
+end 'colorA64AtomicIncMem'
+
+function colorA64AtomicDecMem(module TargetModule, addrReg Arm64VReg, coloring ColoringResult, opRefs OpIndexList)
+	let r = colorArm64Gpr(addrReg, coloring: coloring)
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.atomicDecMem(arm64PhysFromOrd(r)))
+end 'colorA64AtomicDecMem'
 
 function colorA64Csel(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
@@ -1325,6 +1349,7 @@ function remapA64ThreeAddr(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 		lslRegs(dest, src1, src2) gives Arm64Op.lslRegs(remapArm64Gpr(dest, remap: remap), src1: remapArm64Gpr(src1, remap: remap), src2: remapArm64Gpr(src2, remap: remap))
 		asrRegs(dest, src1, src2) gives Arm64Op.asrRegs(remapArm64Gpr(dest, remap: remap), src1: remapArm64Gpr(src1, remap: remap), src2: remapArm64Gpr(src2, remap: remap))
 		lsrRegs(dest, src1, src2) gives Arm64Op.lsrRegs(remapArm64Gpr(dest, remap: remap), src1: remapArm64Gpr(src1, remap: remap), src2: remapArm64Gpr(src2, remap: remap))
+		atomicXaddMem(resultReg, addrReg, valReg) gives Arm64Op.atomicXaddMem(remapArm64Gpr(resultReg, remap: remap), addrReg: remapArm64Gpr(addrReg, remap: remap), valReg: remapArm64Gpr(valReg, remap: remap))
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64ThreeAddr'
@@ -1348,6 +1373,8 @@ end 'remapA64TwoUse'
 function remapA64SingleUseNodef(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
 		cmpRegZero(src) gives Arm64Op.cmpRegZero(remapArm64Gpr(src, remap: remap))
+		atomicIncMem(addrReg) gives Arm64Op.atomicIncMem(remapArm64Gpr(addrReg, remap: remap))
+		atomicDecMem(addrReg) gives Arm64Op.atomicDecMem(remapArm64Gpr(addrReg, remap: remap))
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64SingleUseNodef'
@@ -1624,7 +1651,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			condBranch(_, targetBlock) gives targetBlock
 			prologue to cmpRegZero gives -1
-			branch to nullSafeLoad gives -1
+			branch to atomicXaddMem gives -1
 		end 'check'
 	end 'getCondBrTarget'
 
@@ -1633,7 +1660,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch gives true
 			prologue to condBranch gives false
-			branchLink to nullSafeLoad gives false
+			branchLink to atomicXaddMem gives false
 		end 'check'
 	end 'isUnconditionalJmp'
 
@@ -1642,7 +1669,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to nullSafeLoad gives -1
+			branchLink to atomicXaddMem gives -1
 		end 'check'
 	end 'getBranchTarget'
 
@@ -1651,7 +1678,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		return match a64Op 'check'
 			branch(targetBlock) gives targetBlock
 			prologue to condBranch gives -1
-			branchLink to nullSafeLoad gives -1
+			branchLink to atomicXaddMem gives -1
 		end 'check'
 	end 'getUncondJmpTarget'
 
@@ -1660,7 +1687,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			branch gives Arm64Op.branch(newTarget)
 			prologue to condBranch gives a64Op
-			branchLink to nullSafeLoad gives a64Op
+			branchLink to atomicXaddMem gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)
@@ -1672,7 +1699,7 @@ export type Arm64RegAllocTarget implements RegAllocTarget
 		let newOp = match a64Op 'rewrite'
 			condBranch(condition, _) gives Arm64Op.condBranch(condition, targetBlock: newTarget)
 			prologue to cmpRegZero gives a64Op
-			branch to nullSafeLoad gives a64Op
+			branch to atomicXaddMem gives a64Op
 		end 'rewrite'
 		let newIdx = module.arm64Ops.count()
 		module.arm64Ops.push(newOp)

@@ -17,7 +17,7 @@ export function scanX64InstrForFrame(op X64Op, state FrameScanState)
 		callDirect then state.hasCalls = true
 		syscall to xorRegRegSelf then break 'scan'
 		callIndirect then state.hasCalls = true
-		xchgRegReg to repStosq then break 'scan'
+		xchgRegReg to lockXaddMemReg then break 'scan'
 	end 'scan'
 end 'scanX64InstrForFrame'
 
@@ -167,5 +167,8 @@ function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
 		movzx32(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
 		nullSafeLoad(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
 		repMovsb to repStosq then break 'scan'
+		lockIncMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
+		lockDecMemory(addrReg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
+		lockXaddMemReg(valReg, addrReg) then x64ScanTwoGprs(gprSeen, a: valReg, b: addrReg)
 	end 'scan'
 end 'x64ScanOpForCalleeSaved'

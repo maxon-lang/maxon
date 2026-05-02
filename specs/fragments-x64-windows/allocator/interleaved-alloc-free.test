@@ -1,0 +1,127 @@
+// Test: interleaved-alloc-free
+function main() returns ExitCode
+	let a = __mm_raw_alloc(16)
+	let b = __mm_raw_alloc(16)
+	let c = __mm_raw_alloc(16)
+	let d = __mm_raw_alloc(16)
+	let e = __mm_raw_alloc(16)
+	__mm_raw_free(a)
+	__mm_raw_free(b)
+	__mm_raw_free(c)
+	let f = __mm_raw_alloc(16)
+	let g = __mm_raw_alloc(16)
+	let h = __mm_raw_alloc(16)
+	let i = __mm_raw_alloc(16)
+	let j = __mm_raw_alloc(16)
+	__mm_raw_free(d)
+	__mm_raw_free(e)
+	__mm_raw_free(f)
+	__mm_raw_free(g)
+	__mm_raw_free(h)
+	__mm_raw_free(i)
+	__mm_raw_free(j)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    x64.prologue stack_size=112
+    x64.mov r8d, 16
+    x64.mov r12d, 16
+    x64.mov r13d, 16
+    x64.mov r14d, 16
+    x64.mov r15d, 16
+    x64.mov r9d, 16
+    x64.mov [rbp+-24], r9
+    x64.mov r9d, 16
+    x64.mov [rbp+-32], r9
+    x64.mov r9d, 16
+    x64.mov [rbp+-40], r9
+    x64.mov r9d, 16
+    x64.mov [rbp+-56], r9
+    x64.mov r9d, 16
+    x64.mov [rbp+-72], r9
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov [rbp+-16], r8
+    x64.mov rcx, r12
+    x64.call mm_raw_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r13
+    x64.call mm_raw_alloc
+    x64.mov r13, r8
+    x64.mov rcx, r14
+    x64.call mm_raw_alloc
+    x64.mov r14, r8
+    x64.mov rcx, r15
+    x64.call mm_raw_alloc
+    x64.mov r15, r8
+    x64.mov r8, [rbp+-16]
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.mov rcx, r12
+    x64.call mm_raw_free
+    x64.mov rcx, r13
+    x64.call mm_raw_free
+    x64.mov r8, [rbp+-24]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r12, r8
+    x64.mov r8, [rbp+-32]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r13, r8
+    x64.mov r8, [rbp+-40]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-56]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov [rbp+-64], r8
+    x64.mov r8, [rbp+-72]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov [rbp+-80], r8
+    x64.mov rcx, r14
+    x64.call mm_raw_free
+    x64.mov rcx, r15
+    x64.call mm_raw_free
+    x64.mov rcx, r12
+    x64.call mm_raw_free
+    x64.mov rcx, r13
+    x64.call mm_raw_free
+    x64.mov r8, [rbp+-48]
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.mov r8, [rbp+-64]
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.mov r8, [rbp+-80]
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne ok_1.after
+  ok_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+}
+---

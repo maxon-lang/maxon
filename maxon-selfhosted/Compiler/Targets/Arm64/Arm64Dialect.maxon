@@ -225,6 +225,13 @@ export union Arm64Op
 	sxtw(dest Arm64VReg, src Arm64VReg) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.defUse, implicitGprReads: 0, implicitGprDefs: 0}
 	// Null-safe load
 	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
+	// Atomic memory ops emitted as ARMv8 LL/SC sequences. Scratch registers
+	// x16, x17 (and x18 for atomicXaddMem) are outside the regalloc pool so
+	// no implicit defs need to be tracked. The full LL/SC retry loop is
+	// emitted inline by the code emitter using a hardcoded backward branch.
+	atomicIncMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
+	atomicDecMem(addrReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUseNodef, implicitGprReads: 0, implicitGprDefs: 0}
+	atomicXaddMem(resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg) = Arm64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.threeAddr, implicitGprReads: 0, implicitGprDefs: 0}
 end 'Arm64Op'
 
 export typealias Arm64OpArray = Array with Arm64Op
@@ -314,5 +321,8 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		csel(dest, src1, src2, condition) gives "arm64.csel {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}, {condition.name}"
 		sxtw(dest, src) gives "arm64.sxtw {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
 		nullSafeLoad(dest, baseReg, offset) gives "arm64.null_safe_load {arm64VRegToString(dest)}, [{arm64VRegToString(baseReg)}, #{offset}]"
+		atomicIncMem(addrReg) gives "arm64.atomic_inc [{arm64VRegToString(addrReg)}]"
+		atomicDecMem(addrReg) gives "arm64.atomic_dec [{arm64VRegToString(addrReg)}]"
+		atomicXaddMem(resultReg, addrReg, valReg) gives "arm64.atomic_xadd {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(valReg)}"
 	end 'toString'
 end 'arm64OpToString'

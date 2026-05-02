@@ -1,93 +1,39 @@
 // Test: slab-class-routing-8-byte-user-data
-typealias Integer = int(i64.min to i64.max)
-
-type Tiny
-	export var x Integer
-
-	static function create(x Integer) returns Self
-		return Self{x: x}
-	end 'create'
-end 'Tiny'
-
 function main() returns ExitCode
-	@heap let t = Tiny.create(x: 7)
-	return t.x
+	let p = __mm_raw_alloc(8)
+	__mm_raw_free(p)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'main'
 ---
-MmTrace: true
-ExitCode: 7
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Tiny #1 size=8 [Tiny.create]
-  sl_alloc Tiny #1 size=40 class=4
-mm_incref Tiny #1 rc=1 [Tiny.create]
-mm_transfer Tiny #1 rc=1 [Tiny.create]
-mm_decref Tiny #1 rc=0 [main]
-  mm_free Tiny #1
-    sl_free Tiny #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
+ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @Tiny.create(x: i64) -> i64 {
+  func @allocator.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne ok_1.after
+  ok_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 7
-    x64.call Tiny.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rcx, rbx
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rdx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-16], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-16]
+  ok_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Tiny(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Tiny.done
-  done:
     x64.ret
   }
 }

@@ -286,6 +286,7 @@ export type Arm64Backend implements TargetBackend
 			movImm to cmp then break 'lower'
 			call to indirectCall then break 'lower'
 			param to loadByte then break 'lower'
+			osAllocPages to osLockRelease then break 'lower'
 		end 'lower'
 	end 'lowerMirTerminatorArm64'
 
@@ -325,7 +326,7 @@ export type Arm64Backend implements TargetBackend
 			let targetId = match termOp 'check'
 				branch(blk) gives blk
 				prologue to condBranch gives -1
-				branchLink to nullSafeLoad gives -1
+				branchLink to atomicXaddMem gives -1
 			end 'check'
 
 			if targetId >= 0 and targetId == nextBlock.id 'isFallthrough'
@@ -369,6 +370,18 @@ export type Arm64Backend implements TargetBackend
 			osWriteFd gives 0
 			osClose gives 0
 			osGetEnv gives 0
+			// Page allocation, atomics, and locks (added with the slab allocator).
+			// ARM64 lowering lands in step 6a.11; budgets here mirror the X64 side
+			// so the slot accounting is correct when the real emitters are wired up.
+			osAllocPages gives 8
+			osAllocPagesLarge gives 8
+			osFreePages gives 4
+			atomicInc gives 1
+			atomicDec gives 1
+			atomicXadd gives 2
+			osLockInit gives 2
+			osLockAcquire gives 2
+			osLockRelease gives 2
 			movImm to storeSlot gives 0
 		end 'check'
 	end 'mirTempCountArm64'
@@ -379,6 +392,7 @@ export type Arm64Backend implements TargetBackend
 			condBranch(_, thenTarget, thenArgs, elseTarget, elseArgs) then stashCondBrEdgesArm64(dstBlock, thenTarget: thenTarget, thenArgs: thenArgs, elseTarget: elseTarget, elseArgs: elseArgs)
 			movImm to cmp then break 'extract'
 			call to loadByte then break 'extract'
+			osAllocPages to osLockRelease then break 'extract'
 		end 'extract'
 	end 'stashMirEdgesArm64'
 
@@ -406,6 +420,7 @@ export type Arm64Backend implements TargetBackend
 			loadSlot(resultId, slotId) then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(slotId, src: Arm64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osAllocPages to osLockRelease then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 		end 'dispatch'
 		return result
 	end 'lowerMirOpArm64'
@@ -524,7 +539,7 @@ export type Arm64Backend implements TargetBackend
 			addsRegs gives false
 			subsRegs to remRegs gives false
 			negReg to mvnReg gives false
-			andsRegs to nullSafeLoad gives false
+			andsRegs to atomicXaddMem gives false
 		end 'replace'
 	end 'tryReplaceArm64OpWithFlagSetting'
 
@@ -782,10 +797,40 @@ export type Arm64Backend implements TargetBackend
 			memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			osAllocPages(resultId, sizeId) then result = lowerOsAllocPagesArm64(resultId: resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osAllocPagesLarge(resultId, sizeId) then result = lowerOsAllocPagesArm64(resultId: resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			osFreePages(ptrId, sizeId) then result = lowerOsFreePagesArm64(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			atomicInc(addrId) then result = lowerAtomicIncArm64(addrId: addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+			atomicDec(addrId) then result = lowerAtomicDecArm64(addrId: addrId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+			atomicXadd(resultId, addrId, valId) then result = lowerAtomicXaddArm64(resultId: resultId, addrId: addrId, valId: valId, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+			// Linux locks land in step 6a.12 with the runtime.std spinlock helpers.
+			osLockInit then result = nextTempSlot
+			osLockAcquire then result = nextTempSlot
+			osLockRelease then result = nextTempSlot
 			movImm to storeSlot then break 'lower'
 		end 'lower'
 		return result
 	end 'lowerMirSysOpArm64'
+
+	// MIR atomic ops lower directly to the dedicated Arm64Op variants. The
+	// emitter expands each into the full LDAXR/STLXR retry loop. Operands flow
+	// through virtual registers so the regalloc colors them like any other
+	// register-using op; the LL/SC scratch registers (x16/x17/x18) live outside
+	// the allocatable pool so no implicit clobber tracking is required.
+	function lowerAtomicIncArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicIncMem(Arm64VReg.virtual(addrId)))
+		return nextTempSlot
+	end 'lowerAtomicIncArm64'
+
+	function lowerAtomicDecArm64(addrId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicDecMem(Arm64VReg.virtual(addrId)))
+		return nextTempSlot
+	end 'lowerAtomicDecArm64'
+
+	function lowerAtomicXaddArm64(resultId ValueId, addrId ValueId, valId ValueId, dstBlock IrBlock, nextTempSlot SlotIndex) returns SlotIndex
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.atomicXaddMem(Arm64VReg.virtual(resultId), addrReg: Arm64VReg.virtual(addrId), valReg: Arm64VReg.virtual(valId)))
+		return nextTempSlot
+	end 'lowerAtomicXaddArm64'
 
 	// Ensure a value is stored to a VarSlot. For SysOps that need slot-based addressing,
 	// we store the virtual register value into a temp slot.
@@ -1032,6 +1077,115 @@ export type Arm64Backend implements TargetBackend
 			libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot: ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
 		end 'dispatch'
 	end 'lowerOsWriteWithStrategyArm64'
+
+	// Page allocation via the host kernel. ARM64-Linux maps to mmap (syscall 222).
+	// Other ARM64 targets (Windows / macOS / WASI) panic for now, matching the
+	// existing convention used by lowerings such as osOpenWrite. The `large`
+	// flag is accepted for parity with the X64 path but ignored here -- huge
+	// pages would set MAP_HUGETLB (0x40000) on Linux, which we skip in this
+	// step.
+	// Note: `osAllocPagesLarge` and `osAllocPages` share this lowering. Huge-page
+	// support (MAP_HUGETLB=0x40000 on Linux) is deferred to a follow-up step, so
+	// the `large` flag is ignored at this stage and not threaded through.
+	function lowerOsAllocPagesArm64(resultId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'osPick'
+			linux then return lowerOsAllocPagesLinuxArm64(resultId: resultId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			windows then panic("ARM64 osAllocPages not yet implemented for Windows")
+			macos then panic("ARM64 osAllocPages not yet implemented for macOS")
+			wasi then panic("ARM64 osAllocPages not supported on WASI")
+		end 'osPick'
+	end 'lowerOsAllocPagesArm64'
+
+	// mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+	// addr=0, len=size, prot=3, flags=0x22, fd=-1, offset=0. Six-arg syscall 222.
+	function lowerOsAllocPagesLinuxArm64(resultId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// addr = 0
+		let addrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(addrSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// len = size
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		// prot = PROT_READ | PROT_WRITE = 3
+		let protSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 3))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(protSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// flags = MAP_PRIVATE | MAP_ANONYMOUS = 0x22 (ARM64-Linux matches x86_64).
+		// Large-page hint (MAP_HUGETLB=0x40000) intentionally not OR'd in -- step
+		// 6a.11 leaves real huge-page support to a follow-up.
+		let flagsSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0x22))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(flagsSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// fd = -1
+		let fdSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: -1))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// offset = 0
+		let offsetSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(offsetSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// mmap = 222 on ARM64-Linux. The Arm64Op.syscall emitter places the
+		// number in x8 per the ARM64 calling convention; argSlots populate x0..x5.
+		var argSlots = VarSlotArray.create()
+		argSlots.push(addrSlot)
+		argSlots.push(lenSlot)
+		argSlots.push(protSlot)
+		argSlots.push(flagsSlot)
+		argSlots.push(fdSlot)
+		argSlots.push(offsetSlot)
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 222, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return tempSlot + 1
+	end 'lowerOsAllocPagesLinuxArm64'
+
+	// Page release. ARM64-Linux: munmap(ptr, size) via syscall 215.
+	function lowerOsFreePagesArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+		match osDesc.os 'osPick'
+			linux then return lowerOsFreePagesLinuxArm64(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			windows then panic("ARM64 osFreePages not yet implemented for Windows")
+			macos then panic("ARM64 osFreePages not yet implemented for macOS")
+			wasi then panic("ARM64 osFreePages not supported on WASI")
+		end 'osPick'
+	end 'lowerOsFreePagesArm64'
+
+	function lowerOsFreePagesLinuxArm64(ptrId ValueId, sizeId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTempPtr'
+			tempSlot = tempSlot + 1
+		end 'usedTempPtr'
+		let lenSlot = ensureValueInSlotArm64(sizeId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTempLen'
+			tempSlot = tempSlot + 1
+		end 'usedTempLen'
+
+		var argSlots = VarSlotArray.create()
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		// munmap returns int (success/error) but the caller discards it; still
+		// reserve a result slot for the syscall op so the emitter's accounting
+		// stays in sync with mirTempCountArm64.
+		let resultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: 215, argSlots: argSlots))
+		return tempSlot + 1
+	end 'lowerOsFreePagesLinuxArm64'
 
 	function lowerLoadFramePtrArm64(resultId ValueId, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x29)))

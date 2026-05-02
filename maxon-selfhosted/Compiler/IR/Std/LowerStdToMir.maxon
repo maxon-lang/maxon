@@ -217,6 +217,15 @@ type StdToMirLowering
 			printInt then panic("lowerStdToMir: unexpected sys.printInt at MIR lowering")
 			// drop is a no-op at MIR level.
 			drop then break 'dispatch'
+			osAllocPages(resultId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osAllocPages(resultId, sizeId: sizeId))
+			osAllocPagesLarge(resultId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osAllocPagesLarge(resultId, sizeId: sizeId))
+			osFreePages(ptrId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFreePages(ptrId, sizeId: sizeId))
+			atomicInc(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicInc(addrId))
+			atomicDec(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicDec(addrId))
+			atomicXadd(resultId, addrId, valId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicXadd(resultId, addrId: addrId, valId: valId))
+			osLockInit(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockInit(addrId))
+			osLockAcquire(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockAcquire(addrId))
+			osLockRelease(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockRelease(addrId))
 		end 'dispatch'
 	end 'convertStdSystemOp'
 

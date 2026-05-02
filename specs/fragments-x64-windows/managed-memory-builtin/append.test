@@ -1,0 +1,272 @@
+// Test: append
+function main() returns ExitCode
+	let a = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try a.setLength(2) otherwise return 2
+	try a.set(0, value: 1) otherwise return 3
+	try a.set(1, value: 2) otherwise return 3
+	let b = try __ManagedMemory.create(4, elementSize: 8) otherwise return 4
+	try b.setLength(2) otherwise return 5
+	try b.set(0, value: 3) otherwise return 6
+	try b.set(1, value: 4) otherwise return 6
+	try a.append(b) otherwise return 7
+	if a.length() != 4 'badLen'
+		return 8
+	end 'badLen'
+	let v0 = try a.get(0) otherwise return 9
+	let v1 = try a.get(1) otherwise return 9
+	let v2 = try a.get(2) otherwise return 9
+	let v3 = try a.get(3) otherwise return 9
+	if v0 != 1 'badV0'
+		return 10
+	end 'badV0'
+	if v1 != 2 'badV1'
+		return 11
+	end 'badV1'
+	if v2 != 3 'badV2'
+		return 12
+	end 'badV2'
+	if v3 != 4 'badV3'
+		return 13
+	end 'badV3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @managed-memory-builtin.main() -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r8d, 8
+    x64.mov r9d, 4
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call __managed_mem_create
+    x64.mov r12, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_1.merge
+  try_1.otherwise:
+    x64.mov r9d, 1
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_1.merge:
+    x64.mov r8d, 2
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __managed_mem_set_length
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_4.merge
+  try_4.otherwise:
+    x64.mov r9d, 2
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_4.merge:
+    x64.mov r8d, 1
+    x64.xor r9d, r9d
+    x64.mov rcx, r12
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call __managed_mem_set
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_7.merge
+  try_7.otherwise:
+    x64.mov r9d, 3
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_7.merge:
+    x64.mov r8d, 2
+    x64.mov r9d, 1
+    x64.mov rcx, r12
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call __managed_mem_set
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_10.merge
+  try_10.otherwise:
+    x64.mov r9d, 3
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_10.merge:
+    x64.mov r8d, 8
+    x64.mov r9d, 4
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call __managed_mem_create
+    x64.mov r13, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_13.merge
+  try_13.otherwise:
+    x64.mov r9d, 4
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_13.merge:
+    x64.mov r8d, 2
+    x64.mov rcx, r13
+    x64.mov rdx, r8
+    x64.call __managed_mem_set_length
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_16.merge
+  try_16.otherwise:
+    x64.mov r9d, 5
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_16.merge:
+    x64.mov r8d, 3
+    x64.xor r9d, r9d
+    x64.mov rcx, r13
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call __managed_mem_set
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_19.merge
+  try_19.otherwise:
+    x64.mov r9d, 6
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_19.merge:
+    x64.mov r8d, 4
+    x64.mov r9d, 1
+    x64.mov rcx, r13
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call __managed_mem_set
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_22.merge
+  try_22.otherwise:
+    x64.mov r9d, 6
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_22.merge:
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call __managed_mem_append
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_25.merge
+  try_25.otherwise:
+    x64.mov r9d, 7
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_25.merge:
+    x64.mov r8, [r12+8] (8b)
+    x64.cmp r8, 4
+    x64.je badLen_28.after
+  badLen_28:
+    x64.mov r9d, 8
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  badLen_28.after:
+    x64.xor r8d, r8d
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __managed_mem_get
+    x64.mov r13, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_30.merge
+  try_30.otherwise:
+    x64.mov r9d, 9
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_30.merge:
+    x64.mov r8d, 1
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __managed_mem_get
+    x64.mov r14, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_33.merge
+  try_33.otherwise:
+    x64.mov r9d, 9
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_33.merge:
+    x64.mov r8d, 2
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __managed_mem_get
+    x64.mov r15, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_36.merge
+  try_36.otherwise:
+    x64.mov r9d, 9
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_36.merge:
+    x64.mov r8d, 3
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __managed_mem_get
+    x64.mov r12, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_39.merge
+  try_39.otherwise:
+    x64.mov r9d, 9
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  try_39.merge:
+    x64.cmp r13, 1
+    x64.je badV0_42.after
+  badV0_42:
+    x64.mov r9d, 10
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  badV0_42.after:
+    x64.cmp r14, 2
+    x64.je badV1_44.after
+  badV1_44:
+    x64.mov r9d, 11
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  badV1_44.after:
+    x64.cmp r15, 3
+    x64.je badV2_46.after
+  badV2_46:
+    x64.mov r9d, 12
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  badV2_46.after:
+    x64.cmp r12, 4
+    x64.je badV3_48.after
+  badV3_48:
+    x64.mov r9d, 13
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  badV3_48.after:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+}
+---

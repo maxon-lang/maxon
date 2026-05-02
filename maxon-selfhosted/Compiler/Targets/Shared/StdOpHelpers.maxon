@@ -223,6 +223,7 @@ export function scanLoadedSlots(module MirModule, func IrFunction) returns VarSl
 				storeSlot(slotId, _) then loaded.push(slotId)
 				movImm to store then break 'checkMir'
 				globalAddr to loadByte then break 'checkMir'
+				osAllocPages to osLockRelease then break 'checkMir'
 			end 'checkMir'
 		end 'eachOp'
 	end 'eachBlock'
@@ -238,6 +239,7 @@ function isMirOpPanicCall(op MirOp) returns bool
 		call(_, callee, _) then return callee == "mrt_panic"
 		movImm to branch then break 'check'
 		indirectCall to loadByte then break 'check'
+		osAllocPages to osLockRelease then break 'check'
 	end 'check'
 	return false
 end 'isMirOpPanicCall'

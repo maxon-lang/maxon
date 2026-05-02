@@ -279,6 +279,18 @@ export union X64Op
 	// Memcopy/BulkZero
 	repMovsb = X64OpMeta{latency: 5, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 194, implicitGprDefs: 194}
 	repStosq = X64OpMeta{latency: 5, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 131, implicitGprDefs: 130}
+	// Atomic memory ops (LOCK-prefixed). Memory at [addrReg] is read-modify-written.
+	// lockIncMemory / lockDecMemory: `LOCK INC/DEC qword [addr]` — flags set by INC/DEC, ZF
+	// reflects whether the new memory value is zero. Pattern is `singleUse` because the
+	// only register operand is `addrReg` and it is read-only (the def is to memory).
+	lockIncMemory(addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
+	lockDecMemory(addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
+	// lockXaddMemReg: `LOCK XADD qword [addr], val` — atomically swap-add. After the
+	// instruction, `valReg` holds the *prior* memory value (so it is both used and
+	// defined). `addrReg` is read-only. We model this with the `twoAddr` pattern by
+	// listing the use+def operand (valReg) first and the use-only operand (addrReg)
+	// second, mirroring the existing twoAddr ops (addRegReg, etc.).
+	lockXaddMemReg(valReg X64VReg, addrReg X64VReg) = X64OpMeta{latency: 8, isMemory: true, isStore: true, isCall: false, setsFlags: true, pattern: OpPattern.twoAddr, implicitGprReads: 0, implicitGprDefs: 0}
 end 'X64Op'
 
 export typealias X64OpArray = Array with X64Op
@@ -401,5 +413,8 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		nullSafeLoad(dest, baseReg, offset) gives "x64.null_safe_load {x64VRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
 		repMovsb gives "x64.rep movsb"
 		repStosq gives "x64.rep stosq"
+		lockIncMemory(addrReg) gives "x64.lock inc qword ptr [{x64VRegToString(addrReg)}]"
+		lockDecMemory(addrReg) gives "x64.lock dec qword ptr [{x64VRegToString(addrReg)}]"
+		lockXaddMemReg(valReg, addrReg) gives "x64.lock xadd qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(valReg)}"
 	end 'toString'
 end 'x64OpToString'

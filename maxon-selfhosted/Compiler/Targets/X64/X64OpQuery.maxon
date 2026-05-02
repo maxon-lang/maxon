@@ -13,7 +13,7 @@ export type X64OpQuery implements TargetOpQuery
 			jmp(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			condJump(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			prologue to testRaxRax then break 'extract'
-			movF64Slot to repStosq then break 'extract'
+			movF64Slot to lockXaddMemReg then break 'extract'
 		end 'extract'
 	end 'addCfgEdgesForOp'
 
@@ -23,7 +23,7 @@ export type X64OpQuery implements TargetOpQuery
 			let isPanic = match x64Op 'check'
 				callDirect(callee) gives callee == "mrt_panic"
 				prologue to loadRegRbpOffset gives false
-				syscall to repStosq gives false
+				syscall to lockXaddMemReg gives false
 			end 'check'
 			if isPanic 'found'
 				return true
@@ -37,7 +37,7 @@ export type X64OpQuery implements TargetOpQuery
 		return match x64Op 'check'
 			condJump gives true
 			prologue to testRaxRax gives false
-			jmp to repStosq gives false
+			jmp to lockXaddMemReg gives false
 		end 'check'
 	end 'isCondJumpTerminator'
 
@@ -63,7 +63,7 @@ export type X64OpQuery implements TargetOpQuery
 			movRegImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			movRegImm32(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			prologue to ret then break 'check'
-			movSlot to repStosq then break 'check'
+			movSlot to lockXaddMemReg then break 'check'
 		end 'check'
 	end 'detectConstant'
 
@@ -94,7 +94,7 @@ export type X64OpQuery implements TargetOpQuery
 		return match x64Op 'check'
 			epilogue gives true
 			prologue gives false
-			ret to repStosq gives false
+			ret to lockXaddMemReg gives false
 		end 'check'
 	end 'isEpilogueOp'
 
@@ -108,7 +108,7 @@ export type X64OpQuery implements TargetOpQuery
 			movXmmXmm then break 'extractMov'
 			prologue to memcpyOp then break 'extractMov'
 			cmpRegReg to xchgRegReg then break 'extractMov'
-			spillXmmToStack to repStosq then break 'extractMov'
+			spillXmmToStack to lockXaddMemReg then break 'extractMov'
 		end 'extractMov'
 		return probe
 	end 'decodeReturnMovProbe'
@@ -122,7 +122,7 @@ export type X64OpQuery implements TargetOpQuery
 			movXmmXmm(destFp, srcFp, _) then extractX64MovXmmXmmHint(destFp, srcFp: srcFp, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			prologue to memcpyOp then break 'check'
 			cmpRegReg to xchgRegReg then break 'check'
-			spillXmmToStack to repStosq then break 'check'
+			spillXmmToStack to lockXaddMemReg then break 'check'
 		end 'check'
 	end 'extractCopyHints'
 
@@ -133,7 +133,7 @@ export type X64OpQuery implements TargetOpQuery
 		return match x64Op 'check'
 			condJump gives true
 			prologue to testRaxRax gives false
-			jmp to repStosq gives false
+			jmp to lockXaddMemReg gives false
 		end 'check'
 	end 'terminatorIsConditionalBranch'
 
@@ -146,7 +146,7 @@ end 'X64OpQuery'
 
 // --- X64-specific helpers used by the methods above ---
 
-function x64PhysRegMask(vreg X64VReg) returns RegMask
+export function x64PhysRegMask(vreg X64VReg) returns RegMask
 	return match vreg 'check'
 		physical(reg) gives 1 shl x64RegToOrdinal(reg)
 		virtual gives 0

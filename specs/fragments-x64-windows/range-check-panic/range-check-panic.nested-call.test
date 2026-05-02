@@ -26,6 +26,1688 @@ Stack trace:
 ---
 // CompiledIR
 module {
+  func @__slab_memzero(rcx: i64, rdx: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r8, rcx
+    x64.mov r9, rdx
+    x64.xor esi, esi
+  loop:
+    x64.cmp rsi, r9
+    x64.jge done
+  body:
+    x64.xor edi, edi
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], rdi
+    x64.mov byte ptr [rax+0], cl
+    x64.add rsi, 1
+    x64.jmp loop
+  done:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_arena_init() {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov r8d, 67108864
+    x64.mov [rbp-8], r8
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, 12288
+    x64.mov [rbp-24], rax
+    x64.mov rax, 4
+    x64.mov [rbp-32], rax
+    x64.call_import slot_6
+    x64.mov r8, [rbp-40]
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, r8
+    x64.add r9, 16
+    x64.mov rsi, -2
+    x64.mov [r9+0], rsi (8b)
+    x64.mov r9d, 1
+  fill_loop:
+    x64.cmp r9, 128
+    x64.jge fill_done
+  fill_body:
+    x64.mov esi, 3
+    x64.mov rcx, rsi
+    x64.mov rsi, r9
+    x64.shl rsi, rsi, rcx
+    x64.add rsi, 16
+    x64.add rsi, r8
+    x64.mov rdi, -1
+    x64.mov [rsi+0], rdi (8b)
+    x64.add r9, 1
+    x64.jmp fill_loop
+  fill_done:
+    x64.lea r9, [rip+__slab_arena_list_head]
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov [r8+0], rsi (8b)
+    x64.mov [r9+0], r8 (8b)
+    x64.lea r8, [rip+__slab_init_done]
+    x64.mov r9d, 1
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_arena_alloc_chunks(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=112
+    x64.mov rbx, rcx
+    x64.lea r8, [rip+__slab_arena_list_head]
+    x64.mov r9, [r8+0] (8b)
+  arena_loop:
+    x64.test r9, r9
+    x64.jne scan_init
+    x64.jmp grow_arena
+  scan_init:
+    x64.xor r8d, r8d
+    x64.xor esi, esi
+    x64.mov edi, 1
+  bit_loop:
+    x64.cmp rdi, 8192
+    x64.jge next_arena
+  bit_body:
+    x64.mov eax, 6
+    x64.mov edx, 3
+    x64.mov rcx, rax
+    x64.mov rax, rdi
+    x64.shr rax, rax, rcx
+    x64.mov rcx, rdx
+    x64.shl rax, rax, rcx
+    x64.add rax, 16
+    x64.mov rcx, r9
+    x64.add rcx, rax
+    x64.mov rax, [rcx+0] (8b)
+    x64.mov edx, 63
+    x64.mov r12, rdi
+    x64.and r12, rdx
+    x64.mov edx, 1
+    x64.mov rcx, r12
+    x64.shr rax, rax, rcx
+    x64.and rax, rdx
+    x64.test rax, rax
+    x64.jne bit_free
+  bit_used:
+    x64.xor esi, esi
+    x64.jmp bit_advance
+  bit_free:
+    x64.test rsi, rsi
+    x64.jne incr_run
+  set_start:
+    x64.mov r8, rdi
+  incr_run:
+    x64.add rsi, 1
+    x64.cmp rsi, rbx
+    x64.jge found
+  bit_advance:
+    x64.add rdi, 1
+    x64.jmp bit_loop
+  next_arena:
+    x64.mov r9, [r9+0] (8b)
+    x64.jmp arena_loop
+  found:
+    x64.mov rsi, r8
+  clear_loop:
+    x64.mov rdi, r8
+    x64.add rdi, rbx
+    x64.cmp rsi, rdi
+    x64.jge clear_done
+  clear_body:
+    x64.mov edi, 6
+    x64.mov eax, 3
+    x64.mov rcx, rdi
+    x64.mov rdi, rsi
+    x64.shr rdi, rdi, rcx
+    x64.mov rcx, rax
+    x64.shl rdi, rdi, rcx
+    x64.add rdi, 16
+    x64.mov rax, r9
+    x64.add rax, rdi
+    x64.mov rdi, [rax+0] (8b)
+    x64.mov edx, 63
+    x64.mov r12, rsi
+    x64.and r12, rdx
+    x64.mov edx, 1
+    x64.mov rcx, r12
+    x64.shl rdx, rdx, rcx
+    x64.not rdx
+    x64.and rdi, rdx
+    x64.mov [rax+0], rdi (8b)
+    x64.add rsi, 1
+    x64.jmp clear_loop
+  clear_done:
+    x64.lea rsi, [rip+__slab_arena_last_base]
+    x64.mov [rsi+0], r9 (8b)
+    x64.mov esi, 13
+    x64.mov rcx, rsi
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  grow_arena:
+    x64.mov r8d, 67108864
+    x64.mov [rbp-8], r8
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, 12288
+    x64.mov [rbp-24], rax
+    x64.mov rax, 4
+    x64.mov [rbp-32], rax
+    x64.call_import slot_6
+    x64.mov r8, [rbp-40]
+    x64.lea r9, [rip+__slab_arena_list_head]
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov [r8+0], rsi (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 16
+    x64.mov rdi, -2
+    x64.mov [rsi+0], rdi (8b)
+    x64.mov esi, 1
+  grow_fill_loop:
+    x64.cmp rsi, 128
+    x64.jge grow_fill_done
+  grow_fill_body:
+    x64.mov edi, 3
+    x64.mov rcx, rdi
+    x64.mov rdi, rsi
+    x64.shl rdi, rdi, rcx
+    x64.add rdi, 16
+    x64.add rdi, r8
+    x64.mov rax, -1
+    x64.mov [rdi+0], rax (8b)
+    x64.add rsi, 1
+    x64.jmp grow_fill_loop
+  grow_fill_done:
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r9, r8
+    x64.jmp arena_loop
+  }
+  func @__slab_arena_free_chunks(rcx: i64, rdx: i64, rax: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, rcx
+    x64.mov r9, rdx
+  loop:
+    x64.mov rsi, rdx
+    x64.add rsi, rax
+    x64.cmp r9, rsi
+    x64.jge done
+  body:
+    x64.mov esi, 6
+    x64.mov edi, 3
+    x64.mov rcx, rsi
+    x64.mov rsi, r9
+    x64.shr rsi, rsi, rcx
+    x64.mov rcx, rdi
+    x64.shl rsi, rsi, rcx
+    x64.add rsi, 16
+    x64.add rsi, r8
+    x64.mov rdi, [rsi+0] (8b)
+    x64.mov ecx, 63
+    x64.mov rbx, r9
+    x64.and rbx, rcx
+    x64.mov r12d, 1
+    x64.mov rcx, rbx
+    x64.shl r12, r12, rcx
+    x64.or rdi, r12
+    x64.mov [rsi+0], rdi (8b)
+    x64.add r9, 1
+    x64.jmp loop
+  done:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_init() {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__slab_init_done]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne done
+  do_init:
+    x64.call __slab_arena_init
+  done:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_class_size(rcx: i64) -> i64 {
+  entry:
+    x64.test rcx, rcx
+    x64.jne t1
+    x64.jmp c0
+  t1:
+    x64.cmp rcx, 1
+    x64.jne t2
+    x64.jmp c1
+  t2:
+    x64.cmp rcx, 2
+    x64.jne t3
+    x64.jmp c2
+  t3:
+    x64.cmp rcx, 3
+    x64.jne t4
+    x64.jmp c3
+  t4:
+    x64.cmp rcx, 4
+    x64.jne t5
+    x64.jmp c4
+  t5:
+    x64.cmp rcx, 5
+    x64.jne t6
+    x64.jmp c5
+  t6:
+    x64.cmp rcx, 6
+    x64.jne t7
+    x64.jmp c6
+  t7:
+    x64.cmp rcx, 7
+    x64.jne t8
+    x64.jmp c7
+  t8:
+    x64.cmp rcx, 8
+    x64.jne t9
+    x64.jmp c8
+  t9:
+    x64.cmp rcx, 9
+    x64.jne t10
+    x64.jmp c9
+  t10:
+    x64.cmp rcx, 10
+    x64.jne t11
+    x64.jmp c10
+  t11:
+    x64.cmp rcx, 11
+    x64.jne t12
+    x64.jmp c11
+  t12:
+    x64.cmp rcx, 12
+    x64.jne t13
+    x64.jmp c12
+  t13:
+    x64.cmp rcx, 13
+    x64.jne t14
+    x64.jmp c13
+  t14:
+    x64.cmp rcx, 14
+    x64.jne t15
+    x64.jmp c14
+  t15:
+    x64.cmp rcx, 15
+    x64.jne t16
+    x64.jmp c15
+  t16:
+    x64.cmp rcx, 16
+    x64.jne c17
+    x64.jmp c16
+  c0:
+    x64.mov r9d, 8
+    x64.mov r8, r9
+    x64.ret
+  c1:
+    x64.mov r9d, 16
+    x64.mov r8, r9
+    x64.ret
+  c2:
+    x64.mov r9d, 24
+    x64.mov r8, r9
+    x64.ret
+  c3:
+    x64.mov r9d, 32
+    x64.mov r8, r9
+    x64.ret
+  c4:
+    x64.mov r9d, 48
+    x64.mov r8, r9
+    x64.ret
+  c5:
+    x64.mov r9d, 64
+    x64.mov r8, r9
+    x64.ret
+  c6:
+    x64.mov r9d, 96
+    x64.mov r8, r9
+    x64.ret
+  c7:
+    x64.mov r9d, 128
+    x64.mov r8, r9
+    x64.ret
+  c8:
+    x64.mov r9d, 192
+    x64.mov r8, r9
+    x64.ret
+  c9:
+    x64.mov r9d, 256
+    x64.mov r8, r9
+    x64.ret
+  c10:
+    x64.mov r9d, 384
+    x64.mov r8, r9
+    x64.ret
+  c11:
+    x64.mov r9d, 512
+    x64.mov r8, r9
+    x64.ret
+  c12:
+    x64.mov r9d, 1024
+    x64.mov r8, r9
+    x64.ret
+  c13:
+    x64.mov r9d, 2048
+    x64.mov r8, r9
+    x64.ret
+  c14:
+    x64.mov r9d, 4096
+    x64.mov r8, r9
+    x64.ret
+  c15:
+    x64.mov r9d, 8192
+    x64.mov r8, r9
+    x64.ret
+  c16:
+    x64.mov r9d, 16384
+    x64.mov r8, r9
+    x64.ret
+  c17:
+    x64.mov r9d, 32768
+    x64.mov r8, r9
+    x64.ret
+  }
+  func @__slab_objs_per_span(rcx: i64) -> i64 {
+  entry:
+    x64.test rcx, rcx
+    x64.jne t1
+    x64.jmp c0
+  t1:
+    x64.cmp rcx, 1
+    x64.jne t2
+    x64.jmp c1
+  t2:
+    x64.cmp rcx, 2
+    x64.jne t3
+    x64.jmp c2
+  t3:
+    x64.cmp rcx, 3
+    x64.jne t4
+    x64.jmp c3
+  t4:
+    x64.cmp rcx, 4
+    x64.jne t5
+    x64.jmp c4
+  t5:
+    x64.cmp rcx, 5
+    x64.jne t6
+    x64.jmp c5
+  t6:
+    x64.cmp rcx, 6
+    x64.jne t7
+    x64.jmp c6
+  t7:
+    x64.cmp rcx, 7
+    x64.jne t8
+    x64.jmp c7
+  t8:
+    x64.cmp rcx, 8
+    x64.jne t9
+    x64.jmp c8
+  t9:
+    x64.cmp rcx, 9
+    x64.jne t10
+    x64.jmp c9
+  t10:
+    x64.cmp rcx, 10
+    x64.jne t11
+    x64.jmp c10
+  t11:
+    x64.cmp rcx, 11
+    x64.jne t12
+    x64.jmp c11
+  t12:
+    x64.cmp rcx, 12
+    x64.jne t13
+    x64.jmp c12
+  t13:
+    x64.cmp rcx, 13
+    x64.jne t14
+    x64.jmp c13
+  t14:
+    x64.cmp rcx, 14
+    x64.jne t15
+    x64.jmp c14
+  t15:
+    x64.cmp rcx, 15
+    x64.jne t16
+    x64.jmp c15
+  t16:
+    x64.cmp rcx, 16
+    x64.jne c17
+    x64.jmp c16
+  c0:
+    x64.mov r9d, 1024
+    x64.mov r8, r9
+    x64.ret
+  c1:
+    x64.mov r9d, 512
+    x64.mov r8, r9
+    x64.ret
+  c2:
+    x64.mov r9d, 341
+    x64.mov r8, r9
+    x64.ret
+  c3:
+    x64.mov r9d, 256
+    x64.mov r8, r9
+    x64.ret
+  c4:
+    x64.mov r9d, 170
+    x64.mov r8, r9
+    x64.ret
+  c5:
+    x64.mov r9d, 128
+    x64.mov r8, r9
+    x64.ret
+  c6:
+    x64.mov r9d, 85
+    x64.mov r8, r9
+    x64.ret
+  c7:
+    x64.mov r9d, 64
+    x64.mov r8, r9
+    x64.ret
+  c8:
+    x64.mov r9d, 42
+    x64.mov r8, r9
+    x64.ret
+  c9:
+    x64.mov r9d, 32
+    x64.mov r8, r9
+    x64.ret
+  c10:
+    x64.mov r9d, 21
+    x64.mov r8, r9
+    x64.ret
+  c11:
+    x64.mov r9d, 16
+    x64.mov r8, r9
+    x64.ret
+  c12:
+    x64.mov r9d, 8
+    x64.mov r8, r9
+    x64.ret
+  c13:
+    x64.mov r9d, 4
+    x64.mov r8, r9
+    x64.ret
+  c14:
+    x64.mov r9d, 2
+    x64.mov r8, r9
+    x64.ret
+  c15:
+    x64.mov r9d, 4
+    x64.mov r8, r9
+    x64.ret
+  c16:
+    x64.mov r9d, 2
+    x64.mov r8, r9
+    x64.ret
+  c17:
+    x64.mov r9d, 1
+    x64.mov r8, r9
+    x64.ret
+  }
+  func @__slab_meta_alloc() -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea r9, [rip+__slab_meta_free_head]
+    x64.mov r8, [r9+0] (8b)
+    x64.test r8, r8
+    x64.jne pop_free
+    x64.jmp try_bump
+  pop_free:
+    x64.mov rsi, [r8+0] (8b)
+    x64.mov [r9+0], rsi (8b)
+    x64.epilogue
+    x64.ret
+  try_bump:
+    x64.lea r9, [rip+__slab_meta_bump_ptr]
+    x64.mov r8, [r9+0] (8b)
+    x64.lea rsi, [rip+__slab_meta_bump_end]
+    x64.mov rdi, [rsi+0] (8b)
+    x64.mov rsi, r8
+    x64.add rsi, 64
+    x64.cmp rdi, rsi
+    x64.jge do_bump
+    x64.jmp grow
+  do_bump:
+    x64.mov [r9+0], rsi (8b)
+    x64.epilogue
+    x64.ret
+  grow:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call __slab_arena_alloc_chunks
+    x64.mov r9, r8
+    x64.lea r8, [rip+__slab_meta_bump_ptr]
+    x64.mov rsi, r9
+    x64.add rsi, 64
+    x64.mov [r8+0], rsi (8b)
+    x64.lea r8, [rip+__slab_meta_bump_end]
+    x64.mov rsi, r9
+    x64.add rsi, 8192
+    x64.mov [r8+0], rsi (8b)
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_meta_free(rcx: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__slab_meta_free_head]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov [rcx+0], r9 (8b)
+    x64.mov [r8+0], rcx (8b)
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_refill_mcache(rcx: i64) {
+  entry:
+    x64.prologue stack_size=96
+    x64.mov rbx, rcx
+    x64.mov r8d, 4
+    x64.mov rcx, r8
+    x64.mov r8, rbx
+    x64.shl r8, r8, rcx
+    x64.lea r9, [rip+__slab_mcentral_array]
+    x64.add r9, r8
+    x64.mov r8, [r9+0] (8b)
+    x64.mov esi, 3
+    x64.mov rcx, rsi
+    x64.mov rsi, rbx
+    x64.shl rsi, rsi, rcx
+    x64.lea rdi, [rip+__slab_mcache_base]
+    x64.mov r12, rdi
+    x64.add r12, rsi
+    x64.test r8, r8
+    x64.jne take_partial
+    x64.jmp grow_new
+  take_partial:
+    x64.mov rsi, [r8+32] (8b)
+    x64.mov [r9+0], rsi (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.jmp install
+  grow_new:
+    x64.mov rcx, rbx
+    x64.call __slab_class_size
+    x64.mov r13, r8
+    x64.mov rcx, rbx
+    x64.call __slab_objs_per_span
+    x64.mov r14, r8
+    x64.mov r8, r13
+    x64.imul r8, r14
+    x64.mov r9d, 13
+    x64.add r8, 8191
+    x64.mov rcx, r9
+    x64.mov r15, r8
+    x64.shr r15, r15, rcx
+    x64.mov rcx, r15
+    x64.call __slab_arena_alloc_chunks
+    x64.mov [rbp+-32], r8
+    x64.lea r8, [rip+__slab_arena_last_base]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov [rbp+-40], r9
+    x64.call __slab_meta_alloc
+    x64.mov [rbp+-48], r8
+    x64.mov r8, [rbp+-32]
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+0], r8 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r8+8], r13 (8b)
+    x64.mov r8, [rbp+-32]
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+16], r8 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r8+24], r14 (8b)
+    x64.xor r8d, r8d
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+32], r8 (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r8+40], rbx (8b)
+    x64.mov r8, [rbp+-48]
+    x64.mov [r8+48], r14 (8b)
+    x64.mov r8, [rbp+-40]
+    x64.mov r9, [rbp+-48]
+    x64.mov [r9+56], r8 (8b)
+    x64.mov r8, [rbp+-32]
+    x64.mov rcx, r8
+    x64.mov rdx, r15
+    x64.mov r8, [rbp+-48]
+    x64.mov rax, r8
+    x64.call __slab_arena_map_set
+    x64.xor r8d, r8d
+  link_loop:
+    x64.cmp r8, r14
+    x64.mov r9, [rbp+-48]
+    x64.jge __phi_trampoline_3_8
+  link_body:
+    x64.mov r9, r8
+    x64.imul r9, r13
+    x64.mov rsi, r8
+    x64.add rsi, 1
+    x64.mov rdi, [rbp+-32]
+    x64.add r9, rdi
+    x64.cmp rsi, r14
+    x64.jne mid_slot
+    x64.jmp last_slot
+  mid_slot:
+    x64.imul rsi, r13
+    x64.mov rdi, [rbp+-32]
+    x64.add rsi, rdi
+    x64.mov [r9+0], rsi (8b)
+    x64.jmp link_advance
+  last_slot:
+    x64.xor esi, esi
+    x64.mov [r9+0], rsi (8b)
+  link_advance:
+    x64.add r8, 1
+    x64.jmp link_loop
+  install:
+    x64.mov [r12+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_3_8:
+    x64.mov r8, r9
+    x64.jmp install
+  }
+  func @__slab_alloc_class(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.mov r8d, 3
+    x64.mov rcx, r8
+    x64.mov r8, rbx
+    x64.shl r8, r8, rcx
+    x64.lea r9, [rip+__slab_mcache_base]
+    x64.add r9, r8
+    x64.mov r8, [r9+0] (8b)
+    x64.test r8, r8
+    x64.jne check_count
+    x64.jmp do_refill
+  check_count:
+    x64.mov rsi, [r8+24] (8b)
+    x64.test rsi, rsi
+    x64.jne pop_slot
+  do_refill:
+    x64.mov rcx, rbx
+    x64.call __slab_refill_mcache
+    x64.mov r8d, 3
+    x64.mov rcx, r8
+    x64.shl rbx, rbx, rcx
+    x64.lea r8, [rip+__slab_mcache_base]
+    x64.add r8, rbx
+    x64.mov r9, [r8+0] (8b)
+    x64.xchg r9, r8
+  pop_slot:
+    x64.mov rsi, [r8+16] (8b)
+    x64.mov rdi, [rsi+0] (8b)
+    x64.mov [r8+16], rdi (8b)
+    x64.mov rdi, [r8+24] (8b)
+    x64.sub rdi, 1
+    x64.mov [r8+24], rdi (8b)
+    x64.test rdi, rdi
+    x64.jne ret_slot
+  evict:
+    x64.xor r8d, r8d
+    x64.mov [r9+0], r8 (8b)
+  ret_slot:
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_free_class_with_mspan(rcx: i64, rdx: i64) {
+  entry:
+    x64.mov r8, [rdx+16] (8b)
+    x64.mov [rcx+0], r8 (8b)
+    x64.mov [rdx+16], rcx (8b)
+    x64.mov r8, [rdx+24] (8b)
+    x64.add r8, 1
+    x64.mov [rdx+24], r8 (8b)
+    x64.xor r8d, r8d
+    x64.ret
+  }
+  func @__slab_arena_map_ensure(rcx: i64) {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.lea r8, [rip+__slab_arena_map_l1]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne l1_ready
+  alloc_l1:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call __slab_arena_alloc_chunks
+    x64.mov r12, r8
+    x64.mov r8d, 2048
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __slab_memzero
+    x64.lea r8, [rip+__slab_arena_map_l1]
+    x64.mov [r8+0], r12 (8b)
+  l1_ready:
+    x64.lea r8, [rip+__slab_arena_map_l1]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 39
+    x64.mov esi, 3
+    x64.mov rcx, r8
+    x64.mov r8, rbx
+    x64.shr r8, r8, rcx
+    x64.mov rcx, rsi
+    x64.shl r8, r8, rcx
+    x64.mov r12, r9
+    x64.add r12, r8
+    x64.mov r8, [r12+0] (8b)
+    x64.test r8, r8
+    x64.jne l2_have_ptr
+  alloc_l2:
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call __slab_arena_alloc_chunks
+    x64.mov r13, r8
+    x64.mov r8d, 65536
+    x64.mov rcx, r13
+    x64.mov rdx, r8
+    x64.call __slab_memzero
+    x64.mov [r12+0], r13 (8b)
+    x64.jmp compute_l2_idx
+  l2_have_ptr:
+    x64.mov r13, r8
+  compute_l2_idx:
+    x64.mov r8d, 26
+    x64.mov r9d, 8191
+    x64.mov rcx, r8
+    x64.shr rbx, rbx, rcx
+    x64.mov r8d, 3
+    x64.and rbx, r9
+    x64.mov rcx, r8
+    x64.shl rbx, rbx, rcx
+    x64.add r13, rbx
+    x64.mov r8, [r13+0] (8b)
+    x64.test r8, r8
+    x64.jne done
+  alloc_spans:
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call __slab_arena_alloc_chunks
+    x64.mov r12, r8
+    x64.mov r8d, 65536
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call __slab_memzero
+    x64.mov [r13+0], r12 (8b)
+  done:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_arena_map_set(rcx: i64, rdx: i64, rax: i64) {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.xor r8d, r8d
+    x64.mov r14, r8
+  loop:
+    x64.cmp r14, r12
+    x64.jge done
+  body:
+    x64.mov r8d, 13
+    x64.mov rcx, r8
+    x64.mov r8, r14
+    x64.shl r8, r8, rcx
+    x64.mov r15, r8
+    x64.add r15, rbx
+    x64.mov rcx, r15
+    x64.call __slab_arena_map_ensure
+    x64.lea r8, [rip+__slab_arena_map_l1]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 39
+    x64.mov esi, 3
+    x64.mov rcx, r8
+    x64.mov r8, r15
+    x64.shr r8, r8, rcx
+    x64.mov rcx, rsi
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
+    x64.mov r8, [r9+0] (8b)
+    x64.mov r9d, 26
+    x64.mov esi, 8191
+    x64.mov rcx, r9
+    x64.mov r9, r15
+    x64.shr r9, r9, rcx
+    x64.mov edi, 3
+    x64.and r9, rsi
+    x64.mov rcx, rdi
+    x64.shl r9, r9, rcx
+    x64.add r8, r9
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 13
+    x64.mov esi, 8191
+    x64.mov rcx, r8
+    x64.shr r15, r15, rcx
+    x64.mov r8d, 3
+    x64.and r15, rsi
+    x64.mov rcx, r8
+    x64.shl r15, r15, rcx
+    x64.add r9, r15
+    x64.mov [r9+0], r13 (8b)
+    x64.add r14, 1
+    x64.jmp loop
+  done:
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_arena_map_get(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r8, rcx
+    x64.lea r9, [rip+__slab_arena_map_l1]
+    x64.mov rsi, [r9+0] (8b)
+    x64.test rsi, rsi
+    x64.jne check_l2
+    x64.jmp ret_null
+  check_l2:
+    x64.mov r9d, 39
+    x64.mov edi, 3
+    x64.mov rcx, r9
+    x64.mov r9, r8
+    x64.shr r9, r9, rcx
+    x64.mov rcx, rdi
+    x64.shl r9, r9, rcx
+    x64.add rsi, r9
+    x64.mov r9, [rsi+0] (8b)
+    x64.test r9, r9
+    x64.jne check_spans
+    x64.jmp ret_null
+  check_spans:
+    x64.mov esi, 26
+    x64.mov edi, 8191
+    x64.mov rcx, rsi
+    x64.mov rsi, r8
+    x64.shr rsi, rsi, rcx
+    x64.mov eax, 3
+    x64.and rsi, rdi
+    x64.mov rcx, rax
+    x64.shl rsi, rsi, rcx
+    x64.add r9, rsi
+    x64.mov rsi, [r9+0] (8b)
+    x64.test rsi, rsi
+    x64.jne lookup_span
+    x64.jmp ret_null
+  lookup_span:
+    x64.mov r9d, 13
+    x64.mov edi, 8191
+    x64.mov rcx, r9
+    x64.shr r8, r8, rcx
+    x64.mov r9d, 3
+    x64.and r8, rdi
+    x64.mov rcx, r9
+    x64.shl r8, r8, rcx
+    x64.add rsi, r8
+    x64.mov r9, [rsi+0] (8b)
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ret_null:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_os_direct_free(rcx: i64) {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov r8, rcx
+    x64.lea r9, [rip+__slab_os_direct_array]
+    x64.lea rsi, [rip+__slab_os_direct_count]
+    x64.mov rdi, [r9+0] (8b)
+    x64.mov r9, [rsi+0] (8b)
+    x64.xor esi, esi
+  loop:
+    x64.cmp rsi, r9
+    x64.jge not_found
+  check_entry:
+    x64.mov eax, 4
+    x64.mov rcx, rax
+    x64.mov rax, rsi
+    x64.shl rax, rax, rcx
+    x64.mov rdx, rdi
+    x64.add rdx, rax
+    x64.mov rax, [rdx+0] (8b)
+    x64.cmp rax, r8
+    x64.jne advance
+    x64.jmp found
+  advance:
+    x64.add rsi, 1
+    x64.jmp loop
+  found:
+    x64.mov rax, [rdx+8] (8b)
+    x64.sub r9, 1
+    x64.cmp rsi, r9
+    x64.jne do_swap
+    x64.jmp update_count
+  do_swap:
+    x64.mov esi, 4
+    x64.mov rcx, rsi
+    x64.mov rsi, r9
+    x64.shl rsi, rsi, rcx
+    x64.add rdi, rsi
+    x64.mov rsi, [rdi+8] (8b)
+    x64.mov rax, [rdi+0] (8b)
+    x64.mov [rdx+0], rax (8b)
+    x64.mov [rdx+8], rsi (8b)
+  update_count:
+    x64.lea rsi, [rip+__slab_os_direct_count]
+    x64.mov [rsi+0], r9 (8b)
+    x64.mov [rbp-8], r8
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, 32768
+    x64.mov [rbp-24], rax
+    x64.call_import slot_7
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  not_found:
+    x64.mov r8d, 135
+    x64.xor r9d, r9d
+    x64.mov [rbp-16], r8
+    x64.call_import slot_0
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_os_direct_alloc(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=160
+    x64.mov r8, -8192
+    x64.add rcx, 8191
+    x64.mov rbx, rcx
+    x64.and rbx, r8
+    x64.mov [rbp-8], rbx
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.mov rax, 12288
+    x64.mov [rbp-24], rax
+    x64.mov rax, 4
+    x64.mov [rbp-32], rax
+    x64.call_import slot_6
+    x64.mov r12, [rbp-40]
+    x64.lea r8, [rip+__slab_os_direct_capacity]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne arr_ready
+  alloc_arr:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call __slab_arena_alloc_chunks
+    x64.mov r13, r8
+    x64.mov r8d, 8192
+    x64.mov rcx, r13
+    x64.mov rdx, r8
+    x64.call __slab_memzero
+    x64.lea r8, [rip+__slab_os_direct_array]
+    x64.mov [r8+0], r13 (8b)
+    x64.lea r8, [rip+__slab_os_direct_capacity]
+    x64.mov r9d, 512
+    x64.mov [r8+0], r9 (8b)
+  arr_ready:
+    x64.lea r8, [rip+__slab_os_direct_capacity]
+    x64.lea r9, [rip+__slab_os_direct_count]
+    x64.mov rsi, [r8+0] (8b)
+    x64.mov r13, [r9+0] (8b)
+    x64.cmp r13, rsi
+    x64.jge capacity_exceeded
+    x64.jmp do_insert
+  capacity_exceeded:
+    x64.mov r9d, 134
+    x64.xor r14d, r14d
+    x64.mov [rbp-48], r9
+    x64.call_import slot_0
+    x64.mov r8, r14
+    x64.epilogue
+    x64.ret
+  do_insert:
+    x64.lea r8, [rip+__slab_os_direct_array]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 4
+    x64.mov rcx, r8
+    x64.mov r8, r13
+    x64.shl r8, r8, rcx
+    x64.add r9, r8
+    x64.mov [r9+0], r12 (8b)
+    x64.mov [r9+8], rbx (8b)
+    x64.lea r8, [rip+__slab_os_direct_count]
+    x64.add r13, 1
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_alloc(rcx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rbx, rcx
+    x64.cmp rbx, 32768
+    x64.jle small_path
+  os_path:
+    x64.mov rcx, rbx
+    x64.call __slab_os_direct_alloc
+    x64.mov r9, r8
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  small_path:
+    x64.xor ecx, ecx
+    x64.mov r12, rcx
+  class_loop:
+    x64.cmp r12, 18
+    x64.jge no_class
+  class_test:
+    x64.mov rcx, r12
+    x64.call __slab_class_size
+    x64.cmp r8, rbx
+    x64.jl class_advance
+    x64.jmp class_found
+  class_advance:
+    x64.add r12, 1
+    x64.jmp class_loop
+  class_found:
+    x64.mov rcx, r12
+    x64.call __slab_alloc_class
+    x64.mov r9, r8
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  no_class:
+    x64.mov r9d, 136
+    x64.xor ebx, ebx
+    x64.mov [rbp-8], r9
+    x64.call_import slot_0
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
+  func @__slab_free(rcx: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov r12, rcx
+    x64.mov rcx, r12
+    x64.call __slab_arena_map_get
+    x64.mov rbx, r8
+    x64.test rbx, rbx
+    x64.jne slab_path
+  os_direct:
+    x64.mov rcx, r12
+    x64.call __slab_os_direct_free
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  slab_path:
+    x64.mov rcx, r12
+    x64.mov rdx, rbx
+    x64.call __slab_free_class_with_mspan
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_set_length(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r8, [rbx+16] (8b)
+    x64.cmp r12, r8
+    x64.jg err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 4
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov [rbx+8], r12 (8b)
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_get(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r8, [rbx+8] (8b)
+    x64.test r12, r12
+    x64.jge lo_ok
+    x64.jmp err
+  lo_ok:
+    x64.mov r8, [rbx+8] (8b)
+    x64.cmp r12, r8
+    x64.jge err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov rsi, r8
+    x64.imul rsi, r12
+    x64.add r9, rsi
+    x64.cmp r8, 1
+    x64.jne word_path
+  byte_path:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rsi, [rbp-8]
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  word_path:
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_set(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.test r12, r12
+    x64.jge lo_ok
+    x64.jmp err
+  lo_ok:
+    x64.mov r8, [rbx+8] (8b)
+    x64.cmp r12, r8
+    x64.jge err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov rsi, r8
+    x64.imul rsi, r12
+    x64.add r9, rsi
+    x64.cmp r8, 1
+    x64.jne word_path
+  byte_path:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], r8
+    x64.mov [rbp-24], r13
+    x64.mov byte ptr [rax+0], cl
+    x64.xor esi, esi
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  word_path:
+    x64.mov [r9+0], r13 (8b)
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_grow(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r8, [rbx+16] (8b)
+    x64.cmp r12, r8
+    x64.jge ok
+  err:
+    x64.mov r8d, 5
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov rdx, [rbx+24] (8b)
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov r9, rdx
+    x64.imul r9, r12
+    x64.mov rcx, r8
+    x64.mov rdx, r9
+    x64.call mm_raw_realloc
+    x64.mov [rbx+0], r8 (8b)
+    x64.mov [rbx+16], r12 (8b)
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_byte_at(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.test r12, r12
+    x64.jge lo_ok
+    x64.jmp err
+  lo_ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+8] (8b)
+    x64.imul r9, r8
+    x64.cmp r12, r9
+    x64.jge err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 7
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r12
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r9, [rbp-8]
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_set_byte(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.test r12, r12
+    x64.jge lo_ok
+    x64.jmp err
+  lo_ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+8] (8b)
+    x64.imul r9, r8
+    x64.cmp r12, r9
+    x64.jge err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 7
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+0] (8b)
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r12
+    x64.mov [rbp-24], r13
+    x64.mov byte ptr [rax+0], cl
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_remove(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=96
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.test r12, r12
+    x64.jge lo_ok
+    x64.jmp err
+  lo_ok:
+    x64.mov r13, [rbx+8] (8b)
+    x64.cmp r12, r13
+    x64.jge err
+    x64.jmp ok
+  err:
+    x64.mov r8d, 1
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r9, [rbx+24] (8b)
+    x64.mov rsi, [rbx+0] (8b)
+    x64.mov r8, r9
+    x64.imul r8, r12
+    x64.mov rdi, rsi
+    x64.add rdi, r8
+    x64.cmp r9, 1
+    x64.jne read_word
+  read_byte:
+    x64.xor r8d, r8d
+    x64.mov [rbp-8], rdi
+    x64.mov [rbp-16], r8
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov r8, [rbp-8]
+    x64.jmp shift_setup
+  read_word:
+    x64.mov r8, [rdi+0] (8b)
+  shift_setup:
+    x64.add r12, 1
+    x64.mov rdi, r13
+    x64.imul rdi, r9
+    x64.imul r12, r9
+  shift_loop:
+    x64.cmp r12, rdi
+    x64.jge shift_end
+  shift_body:
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], r12
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, r12
+    x64.sub rcx, r9
+    x64.mov [rbp-16], rsi
+    x64.mov [rbp-24], rcx
+    x64.mov [rbp-16], rax
+    x64.mov byte ptr [rax+0], cl
+    x64.add r12, 1
+    x64.jmp shift_loop
+  shift_end:
+    x64.sub r13, 1
+    x64.mov [rbx+8], r13 (8b)
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_shift_right(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.test r12, r12
+    x64.jge idx_ok
+    x64.jmp err
+  idx_ok:
+    x64.test r13, r13
+    x64.jge count_ok
+    x64.jmp err
+  count_ok:
+    x64.mov r8, [rbx+16] (8b)
+    x64.mov r9, r12
+    x64.add r9, r13
+    x64.cmp r9, r8
+    x64.jle ok
+  err:
+    x64.mov r8d, 6
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, r12
+    x64.add r9, r13
+    x64.mov rsi, [rbx+0] (8b)
+    x64.imul r9, r8
+    x64.mov rdi, r8
+    x64.imul rdi, r12
+    x64.sub r9, 1
+  loop_head:
+    x64.cmp r9, rdi
+    x64.jl loop_end
+  loop_body:
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], r9
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, r9
+    x64.add rcx, r8
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-8], rax
+    x64.mov byte ptr [rax+0], cl
+    x64.sub r9, 1
+    x64.jmp loop_head
+  loop_end:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_shift_left(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.cmp r12, 1
+    x64.jge count_check
+    x64.jmp err
+  count_check:
+    x64.test r13, r13
+    x64.jge range_check
+    x64.jmp err
+  range_check:
+    x64.mov r8, [rbx+16] (8b)
+    x64.mov r9, r12
+    x64.add r9, r13
+    x64.cmp r9, r8
+    x64.jle ok
+  err:
+    x64.mov r8d, 6
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  ok:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov rsi, r12
+    x64.add rsi, r13
+    x64.imul rsi, r8
+    x64.mov rdi, r8
+    x64.imul rdi, r12
+  loop_head:
+    x64.cmp rdi, rsi
+    x64.jge loop_end
+  loop_body:
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rdi
+    x64.movzx rax, byte ptr [rax+0]
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, rdi
+    x64.sub rcx, r8
+    x64.mov [rbp-8], r9
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-8], rax
+    x64.mov byte ptr [rax+0], cl
+    x64.add rdi, 1
+    x64.jmp loop_head
+  loop_end:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_append(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=64
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, [r12+8] (8b)
+    x64.mov rdx, [rbx+8] (8b)
+    x64.mov r8, [rbx+16] (8b)
+    x64.mov r14, rdx
+    x64.add r14, r13
+    x64.cmp r8, r14
+    x64.jge do_copy
+  do_grow:
+    x64.mov rcx, rbx
+    x64.mov rdx, r14
+    x64.call __managed_mem_grow
+  do_copy:
+    x64.mov r8, [rbx+24] (8b)
+    x64.mov r9, [rbx+8] (8b)
+    x64.mov rsi, [rbx+0] (8b)
+    x64.mov rdi, [r12+0] (8b)
+    x64.imul r9, r8
+    x64.imul r13, r8
+    x64.add rsi, r9
+    x64.mov [rbp-8], rsi
+    x64.mov [rbp-16], rdi
+    x64.mov [rbp-24], r13
+    x64.rep_movsb
+    x64.mov [rbx+8], r14 (8b)
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_slice(rcx: i64, rdx: i64, rax: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov rbx, rcx
+    x64.mov r12, rdx
+    x64.mov r13, rax
+    x64.test r12, r12
+    x64.jge start_ok
+    x64.jmp err
+  start_ok:
+    x64.cmp r13, r12
+    x64.jge end_ok
+    x64.jmp err
+  end_ok:
+    x64.mov r8, [rbx+8] (8b)
+    x64.cmp r13, r8
+    x64.jle alloc
+  err:
+    x64.mov r8d, 3
+    x64.mov rcx, r8
+    x64.call mrt_set_error
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  alloc:
+    x64.mov r14, [rbx+24] (8b)
+    x64.xor r8d, r8d
+    x64.lea r9, [rip+__destruct___ManagedMemory]
+    x64.mov esi, 40
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
+    x64.mov r15, r8
+    x64.sub r13, r12
+    x64.mov r8, r13
+    x64.mov [rbp+-40], r8
+    x64.mov r8, [rbp+-40]
+    x64.imul r8, r14
+    x64.mov [rbp+-40], r8
+    x64.test r13, r13
+    x64.jne alloc_buf
+    x64.jmp init_empty
+  alloc_buf:
+    x64.mov r8, [rbp+-40]
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r9, [rbx+0] (8b)
+    x64.mov rsi, r14
+    x64.imul rsi, r12
+    x64.add r9, rsi
+    x64.mov [rbp-8], r8
+    x64.mov [rbp-16], r9
+    x64.mov r9, [rbp+-40]
+    x64.mov [rbp-24], r9
+    x64.rep_movsb
+    x64.jmp init_struct
+  init_empty:
+    x64.xor r8d, r8d
+  init_struct:
+    x64.mov [r15+0], r8 (8b)
+    x64.mov [r15+8], r13 (8b)
+    x64.mov [r15+16], r13 (8b)
+    x64.mov [r15+24], r14 (8b)
+    x64.mov r8, -1
+    x64.mov [r15+32], r8 (8b)
+    x64.mov r8, r15
+    x64.epilogue
+    x64.ret
+  }
+  func @__managed_mem_create(rcx: i64, rdx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov r12, rcx
+    x64.mov r13, rdx
+    x64.xor r8d, r8d
+    x64.lea r9, [rip+__destruct___ManagedMemory]
+    x64.mov esi, 40
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
+    x64.mov rbx, r8
+    x64.test r12, r12
+    x64.jg alloc_buf
+    x64.jmp init_empty
+  alloc_buf:
+    x64.mov r8, r12
+    x64.imul r8, r13
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.jmp init_struct
+  init_empty:
+    x64.xor r8d, r8d
+  init_struct:
+    x64.mov [rbx+0], r8 (8b)
+    x64.xor r8d, r8d
+    x64.mov [rbx+8], r8 (8b)
+    x64.mov [rbx+16], r12 (8b)
+    x64.mov [rbx+24], r13 (8b)
+    x64.mov r8, -1
+    x64.mov [rbx+32], r8 (8b)
+    x64.mov r8, rbx
+    x64.epilogue
+    x64.ret
+  }
   func @range-check-panic.validate(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
@@ -33,7 +1715,8 @@ module {
     x64.cmp r8, 100
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea r8, [rip+__panic_msg_0]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -42,11 +1725,14 @@ module {
   func @range-check-panic.process(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
+    x64.mov r8, rcx
+    x64.mov rcx, r8
     x64.call range-check-panic.validate
     x64.cmp r8, 100
     x64.jbe __range_ok_1
   __range_panic_1:
-    x64.lea rcx, [rip+__panic_msg_1]
+    x64.lea r8, [rip+__panic_msg_1]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_1:
     x64.epilogue
@@ -55,12 +1741,14 @@ module {
   func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 200
+    x64.mov r8d, 200
+    x64.mov rcx, r8
     x64.call range-check-panic.process
     x64.cmp r8, 125
     x64.jbe __range_ok_2
   __range_panic_2:
-    x64.lea rcx, [rip+__panic_msg_2]
+    x64.lea r8, [rip+__panic_msg_2]
+    x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_2:
     x64.epilogue

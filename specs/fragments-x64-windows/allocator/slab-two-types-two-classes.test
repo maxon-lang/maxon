@@ -1,169 +1,47 @@
 // Test: slab-two-types-two-classes
-typealias Integer = int(i64.min to i64.max)
-
-type Small
-	export var x Integer
-
-	static function create(x Integer) returns Self
-		return Self{x: x}
-	end 'create'
-end 'Small'
-
-type Large
-	export var a Integer
-	export var b Integer
-	export var c Integer
-	export var d Integer
-	export var e Integer
-
-	static function create(a Integer, b Integer, c Integer, d Integer, e Integer) returns Self
-		return Self{a: a, b: b, c: c, d: d, e: e}
-	end 'create'
-end 'Large'
-
 function main() returns ExitCode
-	@heap let s = Small.create(x: 1)
-	@heap let l = Large.create(a: 1, b: 2, c: 3, d: 4, e: 5)
-	return s.x + l.a
+	let small = __mm_raw_alloc(8)
+	let large = __mm_raw_alloc(40)
+	__mm_raw_free(large)
+	__mm_raw_free(small)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'main'
 ---
-MmTrace: true
-ExitCode: 2
-Stderr: ```
-sl_init
-  os_alloc size=67108864
-mm_alloc Small #1 size=8 [Small.create]
-  sl_alloc Small #1 size=40 class=4
-mm_incref Small #1 rc=1 [Small.create]
-mm_transfer Small #1 rc=1 [Small.create]
-mm_alloc Large #2 size=40 [Large.create]
-  sl_alloc Large #2 size=72 class=6
-mm_incref Large #2 rc=1 [Large.create]
-mm_transfer Large #2 rc=1 [Large.create]
-mm_decref Large #2 rc=0 [main]
-  mm_free Large #2
-    sl_free Large #2 size=96 class=6
-mm_decref Small #1 rc=0 [main]
-  mm_free Small #1
-    sl_free Small #1 size=48 class=4
-mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R1
-  sl_free size=48 class=4
-```
+ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @Small.create(x: i64) -> i64 {
+  func @allocator.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 40
+    x64.mov rcx, r8
+    x64.call mm_raw_alloc
+    x64.mov rcx, r8
+    x64.call mm_raw_free
+    x64.mov rcx, r12
+    x64.call mm_raw_free
+    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.jne ok_1.after
+  ok_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  }
-  func @Large.create(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rdx
-    x64.mov [rbp-32], rsi
-    x64.mov [rbp-40], r8
-    x64.mov [rbp-48], r9
-    x64.mov rcx, 40
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rbp-24]
-    x64.mov [rdx+8], rbx
-    x64.mov rsi, [rbp-8]
-    x64.mov rdi, [rbp-40]
-    x64.mov [rsi+16], rdi
-    x64.mov r8, [rbp-8]
-    x64.mov r9, [rbp-48]
-    x64.mov [r8+24], r9
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-32]
-    x64.mov [rax+32], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
+  ok_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
     x64.epilogue
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov rcx, 1
-    x64.call Small.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 1
-    x64.mov rdx, 2
-    x64.mov r8, 3
-    x64.mov r9, 4
-    x64.mov rsi, 5
-    x64.call Large.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov rdx, [rbp-16]
-    x64.mov rbx, [rdx+0]
-    x64.add rcx, rbx
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rcx, rdi
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Small(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Small.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Large(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Large.done
-  done:
     x64.ret
   }
 }

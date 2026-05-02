@@ -95,6 +95,290 @@ export function registerErrorStateForDataSection(globalData GlobalDataTable)
 	addDataSectionEntry(globalData, name: "__data_maxon_error", initialBytes: zeroBytes)
 end 'registerErrorStateForDataSection'
 
+// Build a `sizeBytes`-byte zero-filled ByteArray for the .data prelude. Used by
+// the slab/MM global registration below for fixed-size scratch arrays
+// (`__slab_mcentral_array`, `__slab_mcache_base`) and single-word state slots.
+function zeroBytesOfSize(sizeBytes IntConstant) returns ByteArray
+	var bytes = ByteArray.create()
+	for _ in 0 upto sizeBytes 'fill'
+		bytes.push(0)
+	end 'fill'
+	return bytes
+end 'zeroBytesOfSize'
+
+// Step 6a.17: register every slab/MM allocator-runtime global in the .data
+// prelude so `globalAddr __slab_*` / `globalAddr __mm_*` resolves to a unique
+// address. Without these entries every name aliased to offset 0 (the
+// `lookupRdataOffset` "miss" sentinel), so the new allocator functions written
+// in steps 6a.12–6a.16 would clobber each other the moment any of them runs.
+//
+// Sizes follow the C# bootstrap (`RuntimeEmitter.Allocator.cs`) so the layout
+// is byte-for-byte compatible:
+//   - Per-class arrays (`__slab_mcentral_array`, `__slab_mcache_base`) are
+//     embedded directly at the registered base address — `__slab_alloc_class`
+//     and `__slab_refill_mcache` index them as `globalAddr + class_idx * stride`
+//     and dereference, so the array IS the global rather than a pointer to a
+//     separately-allocated block.
+//   - All other globals are 8-byte slots holding either a state flag or a
+//     pointer; `buildDataPreludeSection` zero-fills initial bytes that fall
+//     short of `sizeBytes`, but we encode the full zero payload here for clarity.
+//
+// TODO(threading): the per-class mcentral spinlocks (`__slab_mcentral_lock_0`
+// .. `__slab_mcentral_lock_17`) are intentionally NOT registered yet —
+// runtime.std's lock acquire/release helpers are no-ops while the runtime is
+// single-threaded. When threading lands, register one 8-byte slot per class
+// here and wire the helpers in `__slab_refill_mcache` to a real CAS loop.
+export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTable)
+	// Slab bottom-layer state (step 6a.12).
+	addDataSectionEntry(globalData, name: "__slab_init_done", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_arena_list_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_arena_last_base", initialBytes: zeroBytesOfSize(8))
+
+	// Slab middle-layer state (step 6a.13): metadata bump-region + free-list,
+	// per-class mcentral / mcache arrays.
+	addDataSectionEntry(globalData, name: "__slab_meta_free_head", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_meta_bump_ptr", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_meta_bump_end", initialBytes: zeroBytesOfSize(8))
+	// 18 size classes × {partial_head(8), full_head(8)} = 288 bytes.
+	addDataSectionEntry(globalData, name: "__slab_mcentral_array", initialBytes: zeroBytesOfSize(288))
+	// 18 size classes × mspan* (8 bytes) = 144 bytes.
+	addDataSectionEntry(globalData, name: "__slab_mcache_base", initialBytes: zeroBytesOfSize(144))
+
+	// Slab top-layer state (step 6a.14): two-level arena map + OS-direct
+	// (>32KB) tracker.
+	addDataSectionEntry(globalData, name: "__slab_arena_map_l1", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_os_direct_array", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_os_direct_count", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__slab_os_direct_capacity", initialBytes: zeroBytesOfSize(8))
+
+	// MM-layer leak counters (steps 6a.15–6a.16). Atomic-tracked counts of
+	// live allocations; spec tests in step 6a.18+ assert these reach zero.
+	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
+	addDataSectionEntry(globalData, name: "__mm_raw_alloc_count", initialBytes: zeroBytesOfSize(8))
+end 'registerSlabAndMmGlobalsForDataSection'
+
+// Step 6a.19: register the 7 user-callable allocator intrinsics in the
+// project's function registries so plain Maxon source like
+// `__mm_raw_alloc(64)` parses, type-resolves, and arity-validates as a
+// normal function call. The actual lowering is intercepted in `lowerCall`
+// — these signature entries exist only to satisfy TypeResolution and the
+// arity checker; no function body is ever emitted under the registered
+// `stdlib.__mm_*` names. The corresponding interception in `lowerCall`
+// short-circuits before any `StdOp.call` is emitted under those names, so
+// DFE marking the registered name is harmless (the worklist lookup misses
+// in the function map and the entry is dropped).
+//
+// All seven take and return i64 (or void). The actual runtime-side helpers
+// — `mm_raw_alloc`, `mm_raw_free`, `mm_alloc`, `mm_decref`, `mm_incref`,
+// plus the two count-reader globals — live in runtime.std and were ported
+// in steps 6a.15–6a.16. See the table in the step 6a.19 plan for the
+// arg-shape mapping.
+export function registerMmIntrinsicSignatures(project Project)
+	let intReturn = MaxonReturnType.value(MaxonType.integer)
+	let intType = MaxonType.integer
+	registerMmIntrinsicSignature(project, bareName: "__mm_raw_alloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerMmIntrinsicSignature(project, bareName: "__mm_raw_free", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerMmIntrinsicSignature(project, bareName: "__mm_alloc", paramNames: mmParamNames3("size", second: "destructor", third: "tag"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: intReturn)
+	registerMmIntrinsicSignature(project, bareName: "__mm_decref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerMmIntrinsicSignature(project, bareName: "__mm_incref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerMmIntrinsicSignature(project, bareName: "__mm_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerMmIntrinsicSignature(project, bareName: "__mm_raw_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+end 'registerMmIntrinsicSignatures'
+
+// Helper for registerMmIntrinsicSignatures: register a single intrinsic
+// under the qualified name `stdlib.{bareName}` so the second probe in
+// `qualifyCalleeForContext` (the `stdlib.<bare>` fallback) hits and yields
+// a stable qualified name. Idempotent across multiple project instances:
+// the registries reject duplicates with `otherwise ignore`, matching the
+// `restoreStdlibMetadata` pattern.
+function registerMmIntrinsicSignature(project Project, bareName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	let qualifiedName = qualifyName("stdlib", name: bareName)
+	var paramDefaults = ParamDefaultArray.create()
+	for _ in 0 upto paramNames.count() 'fillDefaults'
+		paramDefaults.push(ParamDefault.none)
+	end 'fillDefaults'
+	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
+	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	project.methodNameIndex.record(qualifiedName)
+end 'registerMmIntrinsicSignature'
+
+// Step 6b.1 + 6b.2: register the `__ManagedMemory` builtin struct, the
+// `__ManagedMemoryError` enum, and the 18 `__ManagedMemory.*` method
+// signatures so user Maxon code parses, type-resolves, and arity-validates
+// expressions like `__ManagedMemory.create(4, elementSize: 8)` and
+// `mm.length()`. Bodies are intentionally absent — the lowering pass
+// (step 6b.4) intercepts every `__ManagedMemory.*` call before it would
+// otherwise lower to a `StdOp.call` against an undefined symbol.
+//
+// Field layout matches the C# bootstrap exactly (Compiler/2-Parser.cs:917-928):
+//   offset 0  buffer        i64 (heap pointer to mm_raw_alloc'd buffer)
+//   offset 8  length        i64 (live element count)
+//   offset 16 capacity      i64 (allocated element slots)
+//   offset 24 element_size  i64 (sizeof(Element); 1 for Byte, 8 otherwise)
+//   offset 32 parent_ptr    i64 (-1 root; -2 rdata-backed; otherwise parent ptr)
+// Total byteSize = 40.
+//
+// Enum case ordinals mirror stdlib/Builtins.maxon:97-106 so a stdlib value
+// observed at runtime matches whatever the bootstrap would have emitted.
+//
+// All inserts are idempotent — duplicate-key collisions silently win-on-first
+// to match the `registerMmIntrinsicSignature` and `restoreStdlibMetadata`
+// pattern. Idempotency is required because `getStdlibModule` may run
+// multiple times per process (cache hit vs cache miss vs cross-target).
+export function registerManagedMemoryType(project Project)
+	registerManagedMemoryStruct(project)
+	registerManagedMemoryErrorEnum(project)
+	registerManagedMemoryMethods(project)
+end 'registerManagedMemoryType'
+
+function registerManagedMemoryStruct(project Project)
+	if project.structTypes.contains("__ManagedMemory") 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	let i64Type = MaxonType.integer
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0))
+	fields.push(StructField.create("length", fieldType: i64Type, offset: 8))
+	fields.push(StructField.create("capacity", fieldType: i64Type, offset: 16))
+	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24))
+	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryStruct: stdlib bootstrap path rejected")
+	let st = StructType.create("__ManagedMemory", fields: fields, byteSize: 40, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
+	try project.structTypes.insert("__ManagedMemory", value: st) otherwise ignore
+	// Intern the type name so MaxonType.named lookups resolve later.
+	_ = project.typeNames.intern("__ManagedMemory")
+end 'registerManagedMemoryStruct'
+
+function registerManagedMemoryErrorEnum(project Project)
+	if project.enumTypes.contains("__ManagedMemoryError") 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var cases = EnumCaseArray.create()
+	cases.push(EnumCase.create("indexOutOfBounds", ordinal: 0, rawValue: 0, line: 0, column: 0))
+	cases.push(EnumCase.create("emptySlot", ordinal: 1, rawValue: 1, line: 0, column: 0))
+	cases.push(EnumCase.create("sliceOutOfBounds", ordinal: 2, rawValue: 2, line: 0, column: 0))
+	cases.push(EnumCase.create("invalidLength", ordinal: 3, rawValue: 3, line: 0, column: 0))
+	cases.push(EnumCase.create("invalidCapacity", ordinal: 4, rawValue: 4, line: 0, column: 0))
+	cases.push(EnumCase.create("shiftOutOfBounds", ordinal: 5, rawValue: 5, line: 0, column: 0))
+	cases.push(EnumCase.create("invalidByteRange", ordinal: 6, rawValue: 6, line: 0, column: 0))
+	cases.push(EnumCase.create("invalidAllocation", ordinal: 7, rawValue: 7, line: 0, column: 0))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryErrorEnum: stdlib bootstrap path rejected")
+	let et = EnumType.create("__ManagedMemoryError", cases: cases, isFloatBacked: false, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
+	try project.enumTypes.insert("__ManagedMemoryError", value: et) otherwise ignore
+	_ = project.typeNames.intern("__ManagedMemoryError")
+end 'registerManagedMemoryErrorEnum'
+
+// Register one builtin method signature on `__ManagedMemory`. Mirrors
+// `registerMmIntrinsicSignature` but uses the `__ManagedMemory.{name}`
+// qualified-name form (no `stdlib.` prefix) so `mm.method()` and
+// `__ManagedMemory.staticMethod()` resolve through the same registry as
+// user-defined methods.
+//
+// throwsTypeName is captured into IrFunction at function-creation sites by
+// the parser; FuncSignature itself doesn't carry it. For builtin signatures
+// the type-resolution pass and the call-site arity check only consult
+// FuncSignature/funcReturnTypes, so the throws info is bookkept by 6b.4
+// when it implements the `try ... otherwise` lowering for these calls.
+function registerManagedMemoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	let qualifiedName = "__ManagedMemory.{methodName}"
+	var paramDefaults = ParamDefaultArray.create()
+	for _ in 0 upto paramNames.count() 'fillDefaults'
+		paramDefaults.push(ParamDefault.none)
+	end 'fillDefaults'
+	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
+	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	project.methodNameIndex.record(qualifiedName)
+end 'registerManagedMemoryMethod'
+
+function registerManagedMemoryMethods(project Project)
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	let intType = MaxonType.integer
+	let intReturn = MaxonReturnType.value(intType)
+	let mmReturn = MaxonReturnType.value(mmType)
+	// Element is i64 placeholder for now (real generic-element typing is Phase 11).
+	let elementType = MaxonType.integer
+	let elementReturn = MaxonReturnType.value(elementType)
+
+	// length(self) returns i64
+	registerManagedMemoryMethod(project, methodName: "length", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// capacity(self) returns i64
+	registerManagedMemoryMethod(project, methodName: "capacity", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// elementSize(self) returns i64
+	registerManagedMemoryMethod(project, methodName: "elementSize", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// clear(self) returns void
+	registerManagedMemoryMethod(project, methodName: "clear", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void)
+	// setLength(self, newLength) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "setLength", paramNames: mmParamNames2("self", second: "newLength"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: MaxonReturnType.void)
+	// get(self, index) returns Element throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "get", paramNames: mmParamNames2("self", second: "index"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: elementReturn)
+	// set(self, index, value) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "set", paramNames: mmParamNames3("self", second: "index", third: "value"), paramTypes: mmParamTypes3(mmType, second: intType, third: elementType), returnType: MaxonReturnType.void)
+	// remove(self, index) returns Element throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "remove", paramNames: mmParamNames2("self", second: "index"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: elementReturn)
+	// grow(self, newCapacity) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "grow", paramNames: mmParamNames2("self", second: "newCapacity"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: MaxonReturnType.void)
+	// shiftRight(self, index, count) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "shiftRight", paramNames: mmParamNames3("self", second: "index", third: "count"), paramTypes: mmParamTypes3(mmType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	// shiftLeft(self, index, count) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "shiftLeft", paramNames: mmParamNames3("self", second: "index", third: "count"), paramTypes: mmParamTypes3(mmType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	// byteAt(self, index) returns i64 throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "byteAt", paramNames: mmParamNames2("self", second: "index"), paramTypes: mmParamTypes2(mmType, second: intType), returnType: intReturn)
+	// setByte(self, index, value) returns void throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "setByte", paramNames: mmParamNames3("self", second: "index", third: "value"), paramTypes: mmParamTypes3(mmType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	// append(self, other) returns void
+	registerManagedMemoryMethod(project, methodName: "append", paramNames: mmParamNames2("self", second: "other"), paramTypes: mmParamTypes2(mmType, second: mmType), returnType: MaxonReturnType.void)
+	// slice(self, start, end) returns __ManagedMemory throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "slice", paramNames: mmParamNames3("self", second: "start", third: "endIndex"), paramTypes: mmParamTypes3(mmType, second: intType, third: intType), returnType: mmReturn)
+	// static create(count, elementSize) returns __ManagedMemory throws __ManagedMemoryError
+	registerManagedMemoryMethod(project, methodName: "create", paramNames: mmParamNames2("count", second: "elementSize"), paramTypes: mmParamTypes2(intType, second: intType), returnType: mmReturn)
+	// toCString(self) returns i64
+	registerManagedMemoryMethod(project, methodName: "toCString", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// makeCharFromBytes(self, pos, len) returns i64
+	registerManagedMemoryMethod(project, methodName: "makeCharFromBytes", paramNames: mmParamNames3("self", second: "pos", third: "len"), paramTypes: mmParamTypes3(mmType, second: intType, third: intType), returnType: intReturn)
+end 'registerManagedMemoryMethods'
+
+function mmParamNames1(first String) returns StringArray
+	var names = StringArray.create()
+	names.push(first)
+	return names
+end 'mmParamNames1'
+
+function mmParamNames2(first String, second String) returns StringArray
+	var names = StringArray.create()
+	names.push(first)
+	names.push(second)
+	return names
+end 'mmParamNames2'
+
+function mmParamNames3(first String, second String, third String) returns StringArray
+	var names = StringArray.create()
+	names.push(first)
+	names.push(second)
+	names.push(third)
+	return names
+end 'mmParamNames3'
+
+function mmParamTypes1(first MaxonType) returns MaxonTypeArray
+	var types = MaxonTypeArray.create()
+	types.push(first)
+	return types
+end 'mmParamTypes1'
+
+function mmParamTypes2(first MaxonType, second MaxonType) returns MaxonTypeArray
+	var types = MaxonTypeArray.create()
+	types.push(first)
+	types.push(second)
+	return types
+end 'mmParamTypes2'
+
+function mmParamTypes3(first MaxonType, second MaxonType, third MaxonType) returns MaxonTypeArray
+	var types = MaxonTypeArray.create()
+	types.push(first)
+	types.push(second)
+	types.push(third)
+	return types
+end 'mmParamTypes3'
+
 // Stage E (closures): predicate distinguishing parser-lifted closure
 // bodies (`__closure_N`) from ordinary user functions. The parser uses a
 // fixed prefix when minting closure names via `Project.nextClosureId`,
@@ -338,6 +622,11 @@ type MaxonToStdLowering
 		// Reserve the runtime error-state slot used by throw/try lowering
 		// (Phase 4). Lives in the .data prelude alongside user-declared globals.
 		registerErrorStateForDataSection(self.globalData)
+		// Step 6a.17: reserve the slab + MM allocator's mutable state globals so
+		// `globalAddr __slab_*` / `globalAddr __mm_*` resolve to distinct
+		// addresses. Without this every allocator-state global would alias to
+		// offset 0 the moment `mrt_start` calls `__slab_init`.
+		registerSlabAndMmGlobalsForDataSection(self.globalData)
 
 		// Copy blocks first so block indices stay aligned 1:1 between the source
 		// MaxonModule.blocks and the dest StdModule.blocks. Each resulting
@@ -664,6 +953,29 @@ type MaxonToStdLowering
 		if self.lowerMathIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock) 'didLowerMath'
 			return
 		end 'didLowerMath'
+		// Step 6a.19: allocator-runtime intrinsics (`__mm_raw_alloc`, etc.)
+		// expand inline to a Std-level call into the runtime function (or a
+		// load from the count globals). Their signatures are pre-registered
+		// in `registerMmIntrinsicSignatures` so TypeResolution and arity
+		// validation see them as ordinary functions; this branch intercepts
+		// before the regular signature-driven call emission so no Std op ever
+		// references the synthetic `stdlib.__mm_*` qualifier.
+		if bareCallee.startsWith("__mm_") 'didLowerMm'
+			if self.lowerMmIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMm'
+		// Step 6b.4: static `__ManagedMemory.create(count, elementSize: 8)`
+		// reaches here as a qualified call (parser sets CallContext.qualified
+		// for `Type.method(...)`). Intercept before the regular signature-
+		// driven emission so we expand to the runtime helper sequence rather
+		// than emitting a call to a body-less signature.
+		if bareCallee.startsWith("__ManagedMemory.") 'didLowerMmStatic'
+			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__ManagedMemory.")
+			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMmStatic'
 		let qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
 		// One signature lookup powers both the sibling-instance probe (does
 		// the resolved callee's first param name `__self`?) and the per-arg
@@ -697,6 +1009,16 @@ type MaxonToStdLowering
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
+		// Step 6b.4: instance methods on `__ManagedMemory` (length, get, set, ...)
+		// expand inline to a sequence of Std-IR ops calling runtime helpers.
+		// Same shape as `lowerMmIntrinsic` but indexed by method name; uses the
+		// resolved receiverId as the implicit self pointer.
+		if receiverStructName == "__ManagedMemory" 'didLowerMmMethod'
+			let bareMethodName = String.from(methodName)
+			if self.lowerManagedMemBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMmMethod'
 		let qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
 		// paramStartIndex: 1 because the signature counts __self at slot 0;
 		// user-facing params start at index 1. slotArgsForCall folds the
@@ -761,6 +1083,249 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: resultType)
 		return true
 	end 'lowerMathIntrinsic'
+
+	// Step 6a.19: lower one of the user-callable allocator intrinsics (whose
+	// signatures are pre-registered by `registerMmIntrinsicSignatures`) into
+	// a direct Std-IR sequence. Each `__mm_*` name maps to a single runtime
+	// function call (or, for the count-reader intrinsics, a globalAddr +
+	// loadIndirect pair against the same `__data_*` slot the runtime
+	// increments). Returns true when the bareCallee matched a known
+	// intrinsic; false leaves the caller to fall through to the normal
+	// call-resolution path (which will end up emitting a call against the
+	// pre-registered signature — typically panicking at link time because
+	// no body exists). Treat that fall-through as a bug: a known prefix that
+	// doesn't match here means a missing arm.
+	function lowerMmIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if bareCallee == "__mm_raw_alloc" 'rawAlloc'
+			return self.lowerMmRuntimeCall1(result, callee: "mm_raw_alloc", args: args, dstBlock: dstBlock)
+		end 'rawAlloc'
+		if bareCallee == "__mm_raw_free" 'rawFree'
+			return self.lowerMmRuntimeCall1(result, callee: "mm_raw_free", args: args, dstBlock: dstBlock)
+		end 'rawFree'
+		if bareCallee == "__mm_alloc" 'alloc'
+			return self.lowerMmRuntimeCall3(result, callee: "mm_alloc", args: args, dstBlock: dstBlock)
+		end 'alloc'
+		if bareCallee == "__mm_decref" 'decref'
+			return self.lowerMmRuntimeCall1(result, callee: "mm_decref", args: args, dstBlock: dstBlock)
+		end 'decref'
+		if bareCallee == "__mm_incref" 'incref'
+			return self.lowerMmRuntimeCall1(result, callee: "mm_incref", args: args, dstBlock: dstBlock)
+		end 'incref'
+		if bareCallee == "__mm_alloc_count" 'allocCount'
+			return self.lowerMmCountRead(result, globalName: "__mm_alloc_count", args: args, dstBlock: dstBlock)
+		end 'allocCount'
+		if bareCallee == "__mm_raw_alloc_count" 'rawAllocCount'
+			return self.lowerMmCountRead(result, globalName: "__mm_raw_alloc_count", args: args, dstBlock: dstBlock)
+		end 'rawAllocCount'
+		return false
+	end 'lowerMmIntrinsic'
+
+	// Lower a 1-arg allocator intrinsic to `runtime_callee(arg)`. The
+	// runtime helpers return i64 (or "void" by always returning 0); we
+	// always allocate a result ValueId so subsequent reads resolve, even
+	// when the source-level call is for a void-returning helper like
+	// `mm_raw_free` whose return is discarded.
+	function lowerMmRuntimeCall1(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{callee}: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let argName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let argId = self.resolveName(argName)
+		var argIds = ValueIdArray.create()
+		argIds.push(argId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerMmRuntimeCall1'
+
+	// 3-arg variant: `mm_alloc(size, destructor, tag)`.
+	function lowerMmRuntimeCall3(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 3 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{callee}: expected 3 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let sizeName = try args.get(0) otherwise panic("invariant: args.count() == 3 just checked (size)")
+		let dtorName = try args.get(1) otherwise panic("invariant: args.count() == 3 just checked (destructor)")
+		let tagName = try args.get(2) otherwise panic("invariant: args.count() == 3 just checked (tag)")
+		var argIds = ValueIdArray.create()
+		argIds.push(self.resolveName(sizeName))
+		argIds.push(self.resolveName(dtorName))
+		argIds.push(self.resolveName(tagName))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerMmRuntimeCall3'
+
+	// Lower a count-reader intrinsic (`__mm_alloc_count` /
+	// `__mm_raw_alloc_count`) to `loadIndirect(globalAddr(__data_<name>))`.
+	// These read the same i64 slots that `mm_raw_alloc` / `mm_alloc` increment
+	// atomically — no runtime call needed. Both are zero-arg.
+	function lowerMmCountRead(result ByteArray, globalName String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{globalName}: expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		// The runtime registers `__mm_alloc_count` / `__mm_raw_alloc_count`
+		// in the .data prelude under their bare names (see
+		// `registerSlabAndMmGlobalsForDataSection`); they are NOT user globals
+		// behind the `__data_` qualifier, so we go through `globalAddr` with
+		// the raw name and skip `dataSymbolName`.
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: globalName)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerMmCountRead'
+
+	// Step 6b.4: lower a `__ManagedMemory.METHOD(...)` call (instance or
+	// static) into Std-IR. Simple read-only methods (length / capacity /
+	// elementSize / clear / toCString) inline as direct loadIndirect /
+	// storeIndirect ops. Throwing methods (get / set / grow / slice / ...)
+	// expand to a call into a runtime helper (`__managed_mem_*`) defined
+	// in runtime.std that performs bounds checking and writes
+	// `__data_maxon_error` on failure — the parser's `try ... otherwise`
+	// machinery picks up the flag at the call site.
+	//
+	// Per-method dispatch table:
+	//   length(self)                 -> loadIndirect(self, 8)
+	//   capacity(self)               -> loadIndirect(self, 16)
+	//   elementSize(self)            -> loadIndirect(self, 24)
+	//   clear(self)                  -> storeIndirect(self, 8, 0)
+	//   toCString(self)              -> loadIndirect(self, 0)
+	//   setLength(self, n)           -> __managed_mem_set_length(self, n)
+	//   get(self, i)                 -> __managed_mem_get(self, i)
+	//   set(self, i, v)              -> __managed_mem_set(self, i, v)
+	//   remove(self, i)              -> __managed_mem_remove(self, i)
+	//   grow(self, c)                -> __managed_mem_grow(self, c)
+	//   shiftRight(self, idx, c)     -> __managed_mem_shift_right(self, idx, c)
+	//   shiftLeft(self, idx, c)      -> __managed_mem_shift_left(self, idx, c)
+	//   byteAt(self, i)              -> __managed_mem_byte_at(self, i)
+	//   setByte(self, i, v)          -> __managed_mem_set_byte(self, i, v)
+	//   append(self, other)          -> __managed_mem_append(self, other)
+	//   slice(self, s, e)            -> __managed_mem_slice(self, s, e)
+	//   create(count, elemSize)      -> __managed_mem_create(count, elemSize)
+	//   makeCharFromBytes(self,p,l)  -> panic stub (Phase 7 will implement)
+	//
+	// `slotArgsForCall` handles labels and defaults so positional+labeled
+	// mixes (`mm.set(0, value: 42)`) flow into the runtime call in the
+	// right slot order. Returns true when the method matched a known
+	// builtin; false leaves the caller to fall through to the regular
+	// call-emission path (which would then emit a call to a body-less
+	// signature — a bug since every method registered in
+	// `registerManagedMemoryMethods` MUST have an arm here).
+	function lowerManagedMemBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock) returns bool
+		let qualifiedName = "__ManagedMemory.{methodName}"
+		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
+			return false
+		end 'noSig'
+		var paramStartIndex = 0
+		if hasReceiver 'instance'
+			paramStartIndex = 1
+		end 'instance'
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
+
+		// --- Simple inline paths ----------------------------------------
+		if methodName == "length" 'mLength'
+			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 8, dstBlock: dstBlock)
+		end 'mLength'
+		if methodName == "capacity" 'mCapacity'
+			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 16, dstBlock: dstBlock)
+		end 'mCapacity'
+		if methodName == "elementSize" 'mElemSize'
+			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 24, dstBlock: dstBlock)
+		end 'mElemSize'
+		if methodName == "toCString" 'mCString'
+			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 0, dstBlock: dstBlock)
+		end 'mCString'
+		if methodName == "clear" 'mClear'
+			let zeroId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zeroId, value: 0))))
+			self.setValueType(zeroId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: 8, valueId: zeroId, isFloat: false)))
+			let resId = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resId, value: 0))))
+			self.setValueType(resId, t: MaxonType.integer)
+			return true
+		end 'mClear'
+
+		// --- Runtime-helper dispatch ------------------------------------
+		let helperName = managedMemHelperFor(methodName)
+		if not helperName.isEmpty() 'hasHelper'
+			return self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock)
+		end 'hasHelper'
+
+		// makeCharFromBytes — Phase 7 will implement real UTF-8 decode.
+		// For now lower as a runtime panic so any reaching caller fails
+		// loudly rather than returning bogus data.
+		if methodName == "makeCharFromBytes" 'mMakeChar'
+			return self.lowerManagedMemMakeCharStub(result, dstBlock: dstBlock)
+		end 'mMakeChar'
+
+		// Unknown method on `__ManagedMemory`. Falling through here means
+		// the parser accepted a method name we never registered — drop a
+		// compile-error breadcrumb so the build stops with a clear message
+		// rather than emitting a call to a non-existent runtime helper.
+		self.reportLowerError(ErrorCode.semanticUndefinedVariable, message: "lowerManagedMemBuiltin: unknown method '__ManagedMemory.{methodName}'")
+		let placeholder = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: placeholder, value: 0))))
+		self.setValueType(placeholder, t: MaxonType.integer)
+		return true
+	end 'lowerManagedMemBuiltin'
+
+	// Inline a `loadIndirect(selfPtr, offset)` for one of the simple
+	// `__ManagedMemory.*` getters (length / capacity / elementSize /
+	// toCString). Always emits an i64 load — every field of the 5-field
+	// struct is 8 bytes and integer-typed.
+	function lowerMmFieldLoad(result ByteArray, selfId ValueId, offset ParsedInt, dstBlock IrBlock) returns bool
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerMmFieldLoad'
+
+	// Emit `result = call helperName(...argIds)`. Used for every throwing
+	// `__ManagedMemory.*` method whose body lives in runtime.std as
+	// `__managed_mem_*`. The helper is responsible for bounds checking
+	// and writing `__data_maxon_error` on failure; the caller's
+	// surrounding `try ... otherwise` machinery reads the flag back via
+	// `mrt_get_error_and_clear`.
+	function lowerManagedMemRuntimeCall(result ByteArray, helperName String, argIds ValueIdArray, dstBlock IrBlock) returns bool
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerManagedMemRuntimeCall'
+
+	// Stub `makeCharFromBytes` — Phase 7 will replace with real UTF-8
+	// decode. For now emit `mrt_panic("...is unimplemented")` so any
+	// path that actually invokes it fails loudly. Until a stdlib path
+	// reaches here, the stub never runs and no binary cost accrues.
+	function lowerManagedMemMakeCharStub(result ByteArray, dstBlock IrBlock) returns bool
+		let panicLabel = self.pipeline.nextPanicLabel()
+		var nullTermMsg = ByteArray.create()
+		let panicMsg = "__ManagedMemory.makeCharFromBytes is unimplemented (Phase 7)"
+		let msgRaw = panicMsg.toByteArray()
+		for b in msgRaw 'each'
+			nullTermMsg.push(b)
+		end 'each'
+		nullTermMsg.push(0x0A)  // newline
+		nullTermMsg.push(0)     // null terminator
+		addNamedGlobalData(self.globalData, name: panicLabel, data: nullTermMsg)
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: panicLabel)))
+		var argIds = ValueIdArray.create()
+		argIds.push(addrId)
+		let panicResultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(panicResultId, callee: "mrt_panic", argIds: argIds)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerManagedMemMakeCharStub'
 
 	// Resolve a parser-emitted bare callee to its qualified name. Thin
 	// wrapper over the shared `qualifyCalleeForContext` so the parser, DFE,
@@ -1667,6 +2232,64 @@ function enclosingTypeName(project Project, name String) returns String
 	end 'isType'
 	return ""
 end 'enclosingTypeName'
+
+// Return the runtime helper-function name for a `__ManagedMemory.METHOD`
+// builtin, or "" if the method is handled inline (length / capacity / ...)
+// or has no helper-backed lowering (makeCharFromBytes — panic stub). The
+// runtime helpers live in runtime.std and are responsible for bounds
+// checking + writing `__data_maxon_error` on failure (sentinel-zero return).
+function managedMemHelperFor(methodName String) returns String
+	if methodName == "setLength" 'mSetLen'
+		return "__managed_mem_set_length"
+	end 'mSetLen'
+	if methodName == "get" 'mGet'
+		return "__managed_mem_get"
+	end 'mGet'
+	if methodName == "set" 'mSet'
+		return "__managed_mem_set"
+	end 'mSet'
+	if methodName == "remove" 'mRemove'
+		return "__managed_mem_remove"
+	end 'mRemove'
+	if methodName == "grow" 'mGrow'
+		return "__managed_mem_grow"
+	end 'mGrow'
+	if methodName == "shiftRight" 'mSR'
+		return "__managed_mem_shift_right"
+	end 'mSR'
+	if methodName == "shiftLeft" 'mSL'
+		return "__managed_mem_shift_left"
+	end 'mSL'
+	if methodName == "byteAt" 'mBA'
+		return "__managed_mem_byte_at"
+	end 'mBA'
+	if methodName == "setByte" 'mSB'
+		return "__managed_mem_set_byte"
+	end 'mSB'
+	if methodName == "append" 'mApp'
+		return "__managed_mem_append"
+	end 'mApp'
+	if methodName == "slice" 'mSlice'
+		return "__managed_mem_slice"
+	end 'mSlice'
+	if methodName == "create" 'mCreate'
+		return "__managed_mem_create"
+	end 'mCreate'
+	return ""
+end 'managedMemHelperFor'
+
+// Strip a leading `prefix` from `s` and return the remainder, or "" when
+// the string doesn't begin with prefix. Used by static-method dispatch
+// (`__ManagedMemory.create(...)`) to recover the bare method name.
+function stripPrefixOrEmpty(s String, prefix String) returns String
+	if not s.startsWith(prefix) 'noMatch'
+		return ""
+	end 'noMatch'
+	let bytes = s.toByteArray()
+	let prefixLen = prefix.byteLength()
+	let suffixBytes = try bytes.slice(prefixLen, endIndex: bytes.count()) otherwise panic("invariant: startsWith(prefix) but slice(prefixLen, end) failed")
+	return String.from(suffixBytes)
+end 'stripPrefixOrEmpty'
 
 // --- NameToValueIdMap ------------------------------------------------------
 //

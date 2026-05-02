@@ -19,7 +19,7 @@ export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 		branchLink then state.hasCalls = true
 		printLiteral to reloadFromStack then break 'scan'
 		branchLinkReg then state.hasCalls = true
-		subSpImm to nullSafeLoad then break 'scan'
+		subSpImm to atomicXaddMem then break 'scan'
 	end 'scan'
 end 'scanArm64InstrForFrame'
 
@@ -161,6 +161,9 @@ function arm64ScanOpForCalleeSaved(op Arm64Op, gprSeen RegIntArray, fpSeen RegIn
 		csel(dest, src1, src2, _) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
 		sxtw(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
 		nullSafeLoad(dest, baseReg, _) then arm64ScanTwoGprs(gprSeen, a: dest, b: baseReg)
+		atomicIncMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
+		atomicDecMem(addrReg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: addrReg)
+		atomicXaddMem(resultReg, addrReg, valReg) then arm64ScanThreeGprs(gprSeen, a: resultReg, b: addrReg, c: valReg)
 	end 'scan'
 end 'arm64ScanOpForCalleeSaved'
 

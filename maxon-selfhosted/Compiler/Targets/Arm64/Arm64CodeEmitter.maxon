@@ -496,6 +496,28 @@ function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitCbnz'
 
+// CBNZ Wn, #imm19 — 32-bit variant. imm19 is in instructions, sign-extended.
+function arm64EmitCbnzW(code ByteArray, rn MachineWord, imm19 MachineWord)
+	let insn = 0x35000000 or ((imm19 and 0x7FFFF) shl 5) or rn
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitCbnzW'
+
+// LDAXR Xt, [Xn] — load-acquire exclusive register, 64-bit.
+function arm64EmitLdaxr(code ByteArray, rt MachineWord, rn MachineWord)
+	let insn = 0xC85FFC00 or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLdaxr'
+
+// STLXR Ws, Xt, [Xn] — store-release exclusive register, 64-bit. Ws receives
+// the success status (0 = success, 1 = failure).
+function arm64EmitStlxr(code ByteArray, rs MachineWord, rt MachineWord, rn MachineWord)
+	let insn = 0xC800FC00 or (rs shl 16) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStlxr'
+
+// ADD Xd, Xn, #imm12 helper writes the immediate-form ADD using the standard
+// sf=1 encoding. (arm64EmitAddImm above already does this — alias kept for clarity.)
+
 // MOV Xd, Xn => ORR Xd, XZR, Xn
 function arm64EmitMovReg(code ByteArray, rd MachineWord, rn MachineWord)
 	let insn = 0xAA0003E0 or (rn shl 16) or rd
@@ -1221,6 +1243,9 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		csel(dest, src1, src2, condition) then arm64EmitCsel(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue, cond: condition.rawValue)
 		sxtw(dest, src) then arm64EmitSxtw(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		nullSafeLoad(dest, baseReg, offset) then arm64EmitNullSafeLoadOp(code, dest: dest, baseReg: baseReg, offset: offset)
+		atomicIncMem(addrReg) then arm64EmitAtomicIncMem(code, addrReg: addrReg)
+		atomicDecMem(addrReg) then arm64EmitAtomicDecMem(code, addrReg: addrReg)
+		atomicXaddMem(resultReg, addrReg, valReg) then arm64EmitAtomicXaddMem(code, resultReg: resultReg, addrReg: addrReg, valReg: valReg)
 	end 'emit'
 end 'emitArm64Instruction'
 
@@ -1328,9 +1353,11 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 end 'arm64EmitIatCallOp'
 
 // sys.globalAddr: ADR X0, rdata/data label — patched by binary writer after layout.
-// `__data_cov_*` globals live in .covdata; other `__data_*` globals live in
-// the writable .data heap arena; everything else resolves against .rdata. The
-// .covdata check must come first because its prefix is a superset of __data_.
+// `__data_cov_*` globals live in .covdata; other `__data_*` globals and the
+// slab/MM allocator globals (`__slab_*` and `__mm_*` registered by
+// `registerSlabAndMmGlobalsForDataSection`) live in the writable .data heap
+// arena; everything else resolves against .rdata. The .covdata check must come
+// first because its prefix is a superset of __data_.
 function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// Record relocation at this instruction offset
 	var relocKind = RdataRelocKind.arm64Adr
@@ -1338,7 +1365,9 @@ function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray,
 		relocKind = RdataRelocKind.covdataArm64Adr
 	end 'isCovData' else if name.startsWith("__data_") 'isDataSection'
 		relocKind = RdataRelocKind.dataSectionArm64Adr
-	end 'isDataSection'
+	end 'isDataSection' else if name.startsWith("__slab_") or name.startsWith("__mm_") 'isAllocatorGlobal'
+		relocKind = RdataRelocKind.dataSectionArm64Adr
+	end 'isAllocatorGlobal'
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: relocKind))
 	// Emit placeholder ADR X0, #0
 	arm64EmitAdr(code, rd: 0, offset: 0)
@@ -1681,6 +1710,62 @@ function arm64EmitNullSafeLoadOp(code ByteArray, dest Arm64VReg, baseReg Arm64VR
 	// LDR Xd, [Xn, #offset]
 	arm64EmitLdrImm(code, rt: rd, rn: rn, imm12: offset)
 end 'arm64EmitNullSafeLoadOp'
+
+// --- Atomic ops (LL/SC sequences) ---
+//
+// Each atomic op expands inline to a full ARMv8.0 LDAXR/STLXR retry loop.
+// Scratch registers x16/x17 (and x18 for atomicXaddMem) live outside the
+// regalloc pool, so they cannot collide with any virtual register the
+// allocator has assigned. The backward branch in CBNZ uses a hardcoded
+// negative offset measured in instructions — no label resolution required.
+
+// atomicIncMem(addrReg):
+//   .loop:
+//     LDAXR x16, [Xaddr]            ; load-acquire exclusive
+//     ADD   x16, x16, #1
+//     STLXR w17, x16, [Xaddr]       ; store-release exclusive (w17 = status)
+//     CBNZ  w17, .loop              ; retry on contention
+function arm64EmitAtomicIncMem(code ByteArray, addrReg Arm64VReg)
+	let rn = resolveArm64Gpr(addrReg).rawValue
+	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitAddImm(code, rd: 16, rn: 16, imm12: 1)
+	arm64EmitStlxr(code, rs: 17, rt: 16, rn: rn)
+	// CBNZ W17, -3 instructions (back to LDAXR). imm19 is sign-extended; -3 in
+	// 19-bit two's complement = 0x7FFFD.
+	arm64EmitCbnzW(code, rn: 17, imm19: 0x7FFFD)
+end 'arm64EmitAtomicIncMem'
+
+// atomicDecMem(addrReg): mirrors inc with SUB instead of ADD. AArch64 has no
+// flags-based "is the result zero?" idiom analogous to x86's LOCK DEC ZF; the
+// MIR atomicDec op intentionally exposes no result, so callers that need to
+// branch on zero must read the memory value separately.
+function arm64EmitAtomicDecMem(code ByteArray, addrReg Arm64VReg)
+	let rn = resolveArm64Gpr(addrReg).rawValue
+	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitSubImm(code, rd: 16, rn: 16, imm12: 1)
+	arm64EmitStlxr(code, rs: 17, rt: 16, rn: rn)
+	arm64EmitCbnzW(code, rn: 17, imm19: 0x7FFFD)
+end 'arm64EmitAtomicDecMem'
+
+// atomicXaddMem(resultReg, addrReg, valReg):
+//   .loop:
+//     LDAXR x16, [Xaddr]            ; x16 = prev (preserved across loop)
+//     ADD   x17, x16, Xval          ; x17 = new
+//     STLXR w18, x17, [Xaddr]       ; w18 = status (separate from x16/x17)
+//     CBNZ  w18, .loop
+//     MOV   Xresult, x16            ; result = prior value
+function arm64EmitAtomicXaddMem(code ByteArray, resultReg Arm64VReg, addrReg Arm64VReg, valReg Arm64VReg)
+	let rd = resolveArm64Gpr(resultReg).rawValue
+	let rn = resolveArm64Gpr(addrReg).rawValue
+	let rv = resolveArm64Gpr(valReg).rawValue
+	arm64EmitLdaxr(code, rt: 16, rn: rn)
+	arm64EmitAdd(code, rd: 17, rn: 16, rm: rv)
+	arm64EmitStlxr(code, rs: 18, rt: 17, rn: rn)
+	// CBNZ W18, -3 instructions back to LDAXR.
+	arm64EmitCbnzW(code, rn: 18, imm19: 0x7FFFD)
+	// MOV Xresult, X16 (ORR Xresult, XZR, X16)
+	arm64EmitMovRegReg(code, rd: rd, rn: 16)
+end 'arm64EmitAtomicXaddMem'
 
 // leaFromStack: ADD Xd, X29, #stackOffset (PC-neutral address materialization).
 function arm64EmitLeaFromStackOp(code ByteArray, dest Arm64VReg, stackOffset MachineWord)

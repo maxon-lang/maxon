@@ -13,7 +13,7 @@ export type Arm64OpQuery implements TargetOpQuery
 			branch(targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			condBranch(_, targetBlock) then addCfgEdge(cfg, fromBlock: blockId, toBlock: targetBlock)
 			prologue to cmpRegZero then break 'extract'
-			branchLink to nullSafeLoad then break 'extract'
+			branchLink to atomicXaddMem then break 'extract'
 		end 'extract'
 	end 'addCfgEdgesForOp'
 
@@ -23,7 +23,7 @@ export type Arm64OpQuery implements TargetOpQuery
 			let isPanic = match a64Op 'check'
 				branchLink(callee) gives callee == "mrt_panic"
 				prologue to branch gives false
-				printLiteral to nullSafeLoad gives false
+				printLiteral to atomicXaddMem gives false
 			end 'check'
 			if isPanic 'found'
 				return true
@@ -37,7 +37,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		return match a64Op 'check'
 			condBranch gives true
 			prologue to cmpRegZero gives false
-			branch to nullSafeLoad gives false
+			branch to atomicXaddMem gives false
 		end 'check'
 	end 'isCondJumpTerminator'
 
@@ -62,7 +62,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		match a64Op 'check'
 			movImm(_, value) then markConstant(valueId, value: value, isConst: isConst, constVal: constVal)
 			prologue to epilogue then break 'check'
-			strToSlot to nullSafeLoad then break 'check'
+			strToSlot to atomicXaddMem then break 'check'
 		end 'check'
 	end 'detectConstant'
 
@@ -87,7 +87,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		return match a64Op 'check'
 			epilogue gives true
 			prologue gives false
-			movImm to nullSafeLoad gives false
+			movImm to atomicXaddMem gives false
 		end 'check'
 	end 'isEpilogueOp'
 
@@ -101,7 +101,7 @@ export type Arm64OpQuery implements TargetOpQuery
 			fmovRegReg then break 'extractMov'
 			prologue to memcpyOp then break 'extractMov'
 			spillToStack to strToSpOffset then break 'extractMov'
-			spillFpToStack to nullSafeLoad then break 'extractMov'
+			spillFpToStack to atomicXaddMem then break 'extractMov'
 		end 'extractMov'
 		return probe
 	end 'decodeReturnMovProbe'
@@ -115,7 +115,7 @@ export type Arm64OpQuery implements TargetOpQuery
 			fmovRegReg(destFp, srcFp, _) then setFpCopyHint(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			prologue to memcpyOp then break 'check'
 			spillToStack to strToSpOffset then break 'check'
-			spillFpToStack to nullSafeLoad then break 'check'
+			spillFpToStack to atomicXaddMem then break 'check'
 		end 'check'
 	end 'extractCopyHints'
 
@@ -126,7 +126,7 @@ export type Arm64OpQuery implements TargetOpQuery
 		return match a64Op 'check'
 			condBranch gives true
 			prologue to cmpRegZero gives false
-			branch to nullSafeLoad gives false
+			branch to atomicXaddMem gives false
 		end 'check'
 	end 'terminatorIsConditionalBranch'
 

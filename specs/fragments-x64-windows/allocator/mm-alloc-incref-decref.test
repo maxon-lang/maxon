@@ -1,0 +1,110 @@
+// Test: mm-alloc-incref-decref
+function main() returns ExitCode
+	let p = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	let after3 = __mm_alloc_count()
+	__mm_decref(p)
+	let after4 = __mm_alloc_count()
+	var fail = 0
+	if after3 != 1 'a'
+		fail = 1
+	end 'a'
+	if after4 != 0 'b'
+		fail = fail + 2
+	end 'b'
+	if fail == 0 'ok'
+		return 0
+	end 'ok'
+	if fail == 1 'f1'
+		return 1
+	end 'f1'
+	if fail == 2 'f2'
+		return 2
+	end 'f2'
+	return 3
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 64
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
+    x64.mov r12, r8
+    x64.mov rcx, r12
+    x64.call mm_incref
+    x64.mov rcx, r12
+    x64.call mm_incref
+    x64.mov rcx, r12
+    x64.call mm_incref
+    x64.mov rcx, r12
+    x64.call mm_decref
+    x64.mov rcx, r12
+    x64.call mm_decref
+    x64.mov rcx, r12
+    x64.call mm_decref
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.mov r13, [r8+0] (8b)
+    x64.mov rcx, r12
+    x64.call mm_decref
+    x64.lea r8, [rip+__mm_alloc_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.xor r8d, r8d
+    x64.cmp r13, 1
+    x64.je a_1.after
+  a_1:
+    x64.mov r8d, 1
+  a_1.after:
+    x64.test r9, r9
+    x64.je __phi_trampoline_2_4
+  b_3:
+    x64.add r8, 2
+    x64.mov r9, r8
+  b_3.after:
+    x64.test r9, r9
+    x64.jne ok_5.after
+  ok_5:
+    x64.xor esi, esi
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  ok_5.after:
+    x64.cmp r9, 1
+    x64.jne f1_7.after
+  f1_7:
+    x64.mov esi, 1
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  f1_7.after:
+    x64.cmp r9, 2
+    x64.jne f2_9.after
+  f2_9:
+    x64.mov r9d, 2
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  f2_9.after:
+    x64.mov r9d, 3
+    x64.mov r8, r9
+    x64.epilogue
+    x64.ret
+  __phi_trampoline_2_4:
+    x64.mov r9, r8
+    x64.jmp b_3.after
+  }
+}
+---

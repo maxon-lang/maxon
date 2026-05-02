@@ -49,6 +49,29 @@ export function loadRuntimeModule() returns StdModule
 	return cachedRuntimeModule
 end 'loadRuntimeModule'
 
+// True when `name` is a function defined in `runtime.std`. The stdlib-cache
+// build path uses this to filter runtime stubs out of the cached function
+// list — those bodies are emitted by the user-code pipeline's
+// `augmentWithRuntime`, so leaving them in the cache produces duplicate
+// symbols (one real body + one zero-sized stub) at link time, which then
+// confuses call-target resolution because two labels share the same name.
+//
+// Pre-step-6a.17 the simple `name.startsWith("mrt_")` prefix test caught
+// every runtime function. Step 6a.17 added the `__slab_*` and `mm_*`
+// allocator runtime, which don't carry the `mrt_` prefix; querying the
+// runtime module's function list directly stays correct as new runtime
+// helpers land without each one having to remember to update a hand-written
+// prefix check.
+export function isRuntimeFunctionName(name String) returns bool
+	let runtimeModule = loadRuntimeModule()
+	for func in runtimeModule.functions 'check'
+		if func.name == name 'match'
+			return true
+		end 'match'
+	end 'check'
+	return false
+end 'isRuntimeFunctionName'
+
 export function findRuntimePath() returns FilePath
 	var dir = Directory.currentPath()
 	for _ in 0 upto 10 'search'
@@ -288,6 +311,15 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		memcpy gives 5
 		storeByte gives 3
 		loadByte gives 4
+		osAllocPages gives 50
+		osAllocPagesLarge gives 50
+		osFreePages gives 50
+		atomicInc gives 8
+		atomicDec gives 8
+		atomicXadd gives 8
+		osLockInit gives 5
+		osLockAcquire gives 30
+		osLockRelease gives 5
 	end 'dispatch'
 end 'getMirLatency'
 

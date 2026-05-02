@@ -19,7 +19,12 @@ let IAT_SLOT_WRITE_FILE = 2
 let IAT_SLOT_CREATE_FILE_A = 3
 let IAT_SLOT_CLOSE_HANDLE = 4
 let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
-let IAT_SLOT_COUNT = 6
+let IAT_SLOT_VIRTUAL_ALLOC = 6
+let IAT_SLOT_VIRTUAL_FREE = 7
+let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 8
+let IAT_SLOT_ENTER_CRITICAL_SECTION = 9
+let IAT_SLOT_LEAVE_CRITICAL_SECTION = 10
+let IAT_SLOT_COUNT = 11
 
 type ImportSection
 	export var data ByteArray
@@ -49,7 +54,12 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let hintCreateFileA = hintWriteFile + 12
 	let hintCloseHandle = hintCreateFileA + 14
 	let hintGetEnvironmentVariableA = hintCloseHandle + 14
-	let dllNameOffset = hintGetEnvironmentVariableA + 26
+	let hintVirtualAlloc = hintGetEnvironmentVariableA + 26
+	let hintVirtualFree = hintVirtualAlloc + 16
+	let hintInitializeCriticalSection = hintVirtualFree + 14
+	let hintEnterCriticalSection = hintInitializeCriticalSection + 28
+	let hintLeaveCriticalSection = hintEnterCriticalSection + 24
+	let dllNameOffset = hintLeaveCriticalSection + 24
 
 	// IAT entries: point to hint/name table entries + null terminator
 	writeQword(data, value: idataRva + hintExitProcess)
@@ -58,6 +68,11 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintCreateFileA)
 	writeQword(data, value: idataRva + hintCloseHandle)
 	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
+	writeQword(data, value: idataRva + hintVirtualAlloc)
+	writeQword(data, value: idataRva + hintVirtualFree)
+	writeQword(data, value: idataRva + hintInitializeCriticalSection)
+	writeQword(data, value: idataRva + hintEnterCriticalSection)
+	writeQword(data, value: idataRva + hintLeaveCriticalSection)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 	// ILT entries: same as IAT + null terminator
@@ -67,6 +82,11 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintCreateFileA)
 	writeQword(data, value: idataRva + hintCloseHandle)
 	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
+	writeQword(data, value: idataRva + hintVirtualAlloc)
+	writeQword(data, value: idataRva + hintVirtualFree)
+	writeQword(data, value: idataRva + hintInitializeCriticalSection)
+	writeQword(data, value: idataRva + hintEnterCriticalSection)
+	writeQword(data, value: idataRva + hintLeaveCriticalSection)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
 	// Import Directory entry
@@ -86,6 +106,11 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00CreateFileA\x00")
 	data.append(b"\x00\x00CloseHandle\x00")
 	data.append(b"\x00\x00GetEnvironmentVariableA\x00")
+	data.append(b"\x00\x00VirtualAlloc\x00\x00")
+	data.append(b"\x00\x00VirtualFree\x00")
+	data.append(b"\x00\x00InitializeCriticalSection\x00")
+	data.append(b"\x00\x00EnterCriticalSection\x00\x00")
+	data.append(b"\x00\x00LeaveCriticalSection\x00\x00")
 	data.append(b"kernel32.dll\x00")
 
 	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20)
@@ -342,9 +367,18 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let idataSizeVirtual = alignUp(idataSize, alignment: SECTION_ALIGNMENT)
 
 	// .data section: 64KB heap arena, zero-initialized by the OS loader. The
-	// on-disk image is a single file-aligned block; the rest is uninitialized.
+	// on-disk image is a single file-aligned block sized just large enough to
+	// hold every initialized prelude entry (top-level vars + runtime state
+	// slots like `__data_maxon_error`, `__slab_*`, `__mm_*`); the rest of the
+	// virtual region is uninitialized and the loader zero-fills it. Step 6a.17
+	// pushed the prelude past 512 bytes once the slab/MM allocator state was
+	// registered, so a single FILE_ALIGNMENT block is no longer enough.
 	let dataRva = idataRva + idataSizeVirtual
-	let dataRawSize = FILE_ALIGNMENT
+	let preludeSize = codeResult.dataPrelude.count()
+	var dataRawSize = FILE_ALIGNMENT
+	if preludeSize > dataRawSize 'growDataRaw'
+		dataRawSize = alignUp(preludeSize, alignment: FILE_ALIGNMENT)
+	end 'growDataRaw'
 	let dataSizeVirtual = alignUp(DATA_SECTION_VIRTUAL_SIZE, alignment: SECTION_ALIGNMENT)
 
 	// .covdata section: dedicated writable RVA for coverage counter globals.

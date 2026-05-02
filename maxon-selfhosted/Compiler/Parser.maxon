@@ -1449,8 +1449,48 @@ export type Parser
 		// type. The resolver picks up the chain in a later iteration once
 		// the target alias is itself resolved, so source-text order doesn't
 		// matter — `A` can be declared before or after `B`.
+		//
+		// Step 6b.5: minimal `with TYPE` typealias support. The full generic-
+		// typealias syntax (`typealias Foo = Bar with X`) is Phase 11
+		// (ROADMAP.md:415); the only RHS we accept here is
+		// `__ManagedMemory with TYPE`. The element TYPE is a tag/comment
+		// only — element-size dispatch reads from the runtime struct's
+		// `element_size` field, not from the typealias declaration. Any
+		// other LHS followed by `with` is rejected as not-yet-supported.
 		if not sawValidBase and baseToken.kind == TokenKind.identifier 'isAliasName'
 			let targetToken = try consume()
+			if at(TokenKind.with) 'hasWith'
+				if targetToken.value == "__ManagedMemory" 'isMmWith'
+					try eat(TokenKind.with)
+					// Consume the element-type token. We accept any single
+					// type-name token (primitive keyword like `int`/`bool`/
+					// `byte`/`float`/`array` or a bare identifier — same set
+					// `parseTypeRef` recognizes). The element type is
+					// discarded at this stage — the value's element_size is
+					// set at runtime by `__ManagedMemory.create`.
+					let elementToken = cursor.current()
+					if not isTypeNameToken(elementToken) 'noElement'
+						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '__ManagedMemory with' requires an element-type name, got '{tokenValueToString(elementToken.value)}'", line: elementToken.line, column: elementToken.column, filePath: filePath)
+						skipToNextLine()
+						return
+					end 'noElement'
+					_ = try consume()
+					// Ensure `__ManagedMemory` itself resolves through the
+					// typealias machinery so `aliasName("__ManagedMemory")`
+					// succeeds in the fixed-point drain below.
+					// `__ManagedMemory` is registered as a struct in
+					// `project.structTypes` at stdlib bootstrap time; we
+					// mirror it into `project.typealiases` with `i64` (the
+					// ABI for a struct pointer) so the alias can resolve.
+					// Idempotent — `otherwise ignore` swallows duplicates
+					// from earlier typealias declarations in the same project.
+					try project.typealiases.insert("__ManagedMemory", value: StdType.i64) otherwise ignore
+				end 'isMmWith' else 'unsupportedWith'
+					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': generic 'with' typealiases are not yet supported (only '__ManagedMemory with TYPE' is recognized in this phase)", line: targetToken.line, column: targetToken.column, filePath: filePath)
+					skipToNextLine()
+					return
+				end 'unsupportedWith'
+			end 'hasWith'
 			expr = UnresolvedTypeExpr.aliasName(targetToken.value)
 			sawValidBase = true
 		end 'isAliasName'
@@ -4011,6 +4051,30 @@ export type Parser
 	// `.`, we emit the next chain segment without consulting the receiver's
 	// struct type. Lowering performs the receiver-type lookup when it sees
 	// the resulting fieldLoad / methodCall ops.
+	//
+	// Step 6b.6 TODO (deferred): the bootstrap's `ValidateThrowingBuiltinCallContext`
+	// rejects calls like `mm.set(0, value: 42)` that are NOT wrapped in a
+	// `try ... otherwise` when the resolved callee is one of the throwing
+	// `__ManagedMemory.*` builtins (`setLength`, `get`, `set`, `remove`,
+	// `grow`, `shiftRight`, `shiftLeft`, `byteAt`, `setByte`, `slice`, plus
+	// the static `create`). The self-hosted parser cannot mirror that check
+	// here cleanly because:
+	//   1. Receiver-type discrimination requires resolved types — at parse
+	//      time the receiver is `MaxonType.unresolved`, so we can't tell
+	//      `mm.set(...)` (where `mm: __ManagedMemory`) from
+	//      `widget.set(...)` (where `widget` happens to share the method
+	//      name) without a post-parse pass.
+	//   2. Threading an `inTry` flag through every nested-call parse site
+	//      (parseExpression / parseUnary / parsePrimary / parseTryExpression
+	//      / parseTryFallback) requires save/restore pairs at every recursion
+	//      boundary; getting it wrong silently weakens the diagnostic.
+	// The post-parse home for this check is TypeResolution (where receiver
+	// types are resolved and call ops sit in a flat module-level walk). For
+	// now, malformed user code (forgetting `try`) lowers to a regular
+	// methodCall; the runtime intrinsic still sets the error flag, so the
+	// failure surfaces — just without the front-end E2052 message. Step 6b.7
+	// tests wrap every call in `try ... otherwise`, so this gap doesn't
+	// affect the green-test path.
 	function parsePostfix(block IrBlock, expr ExprResult) returns ExprResult throws ParserError
 		var result = expr
 

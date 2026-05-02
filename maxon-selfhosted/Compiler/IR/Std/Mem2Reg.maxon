@@ -243,27 +243,8 @@ end 'analyzeSlotOp'
 function analyzeSlotSysOp(sysOp StdSystemOp, blockId BlockId, info SlotInfo)
 	match sysOp 'check'
 		stackAddr(_, slotId) then markSlotAddressTaken(slotId, blockId: blockId, info: info)
-		syscall then return
-		iatCall then return
-		globalAddr then return
-		memcpy then return
-		storeByte then return
-		loadByte then return
-		osExit then return
-		osWrite then return
-		free then return
-		osWriteErr then return
-		osOpenWrite then return
-		osWriteFd then return
-		osClose then return
-		osGetEnv then return
-		loadFramePtr then return
-		loadIndirect then return
-		funcAddr then return
-		storeIndirect then return
-		printLiteral then return
-		printInt then return
-		drop then return
+		syscall to memcpy then return
+		storeByte to osLockRelease then return
 	end 'check'
 end 'analyzeSlotSysOp'
 
@@ -1522,6 +1503,15 @@ function maxValueIdInSys(op StdSystemOp) returns ValueId
 		printLiteral gives 0
 		printInt(valueId) gives valueId
 		drop(valueId) gives valueId
+		osAllocPages(resultId, sizeId) gives maxOfTwo(resultId, b: sizeId)
+		osAllocPagesLarge(resultId, sizeId) gives maxOfTwo(resultId, b: sizeId)
+		osFreePages(ptrId, sizeId) gives maxOfTwo(ptrId, b: sizeId)
+		atomicInc(addrId) gives addrId
+		atomicDec(addrId) gives addrId
+		atomicXadd(resultId, addrId, valId) gives maxOfThree(resultId, b: addrId, c: valId)
+		osLockInit(addrId) gives addrId
+		osLockAcquire(addrId) gives addrId
+		osLockRelease(addrId) gives addrId
 	end 'scan'
 end 'maxValueIdInSys'
 
@@ -1659,6 +1649,15 @@ function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		printLiteral(stringId) gives StdSystemOp.printLiteral(stringId)
 		printInt(valueId) gives StdSystemOp.printInt(remapValue(valueId, remap: remap))
 		drop(valueId) gives StdSystemOp.drop(remapValue(valueId, remap: remap))
+		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(resultId, sizeId: remapValue(sizeId, remap: remap))
+		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(resultId, sizeId: remapValue(sizeId, remap: remap))
+		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(remapValue(ptrId, remap: remap), sizeId: remapValue(sizeId, remap: remap))
+		atomicInc(addrId) gives StdSystemOp.atomicInc(remapValue(addrId, remap: remap))
+		atomicDec(addrId) gives StdSystemOp.atomicDec(remapValue(addrId, remap: remap))
+		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(resultId, addrId: remapValue(addrId, remap: remap), valId: remapValue(valId, remap: remap))
+		osLockInit(addrId) gives StdSystemOp.osLockInit(remapValue(addrId, remap: remap))
+		osLockAcquire(addrId) gives StdSystemOp.osLockAcquire(remapValue(addrId, remap: remap))
+		osLockRelease(addrId) gives StdSystemOp.osLockRelease(remapValue(addrId, remap: remap))
 	end 'subst'
 end 'substituteSysOp'
 
