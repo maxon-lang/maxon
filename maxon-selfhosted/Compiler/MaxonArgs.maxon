@@ -23,6 +23,8 @@ export union ArgError implements Error
 	invalidOption(arg String)
 end 'ArgError'
 
+export typealias WorkerCount = int(1 to u64.max)
+
 export type MaxonArgs
 	export var command Command
 	export var path String
@@ -34,6 +36,10 @@ export type MaxonArgs
 	export var updateRequired bool
 	export var verbose bool
 	export var coverage bool
+	// Number of parallel batch-worker processes (default 5). 1 = serial.
+	export var workers WorkerCount
+	// Internal flag set by the parent to make this process run one spec's batch only.
+	export var workerSpec String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -48,7 +54,9 @@ export type MaxonArgs
 			trackAllocs: false,
 			updateRequired: false,
 			verbose: false,
-			coverage: false
+			coverage: false,
+			workers: 5,
+			workerSpec: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -112,7 +120,16 @@ export type MaxonArgs
 				args.verbose = true
 			end 'isVerbose' else if arg == "--coverage" 'isCoverage'
 				args.coverage = true
-			end 'isCoverage' else if not arg.startsWith("--") 'isPositional'
+			end 'isCoverage' else if arg.startsWith("--workers=") 'isWorkers'
+				let workersStr = try CommandLine.optionValue(arg) otherwise ""
+				let w = try int.fromString(workersStr) otherwise throw ArgError.invalidOption(arg)
+				if w < 1 'badWorkers'
+					throw ArgError.invalidOption(arg)
+				end 'badWorkers'
+				args.workers = w as WorkerCount
+			end 'isWorkers' else if arg.startsWith("--worker-spec=") 'isWorkerSpec'
+				args.workerSpec = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerSpec' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

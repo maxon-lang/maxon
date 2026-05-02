@@ -1176,3 +1176,544 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 	end 'insertAtEnd'
 	return result2
 end 'updateLoweringBlock'
+
+// ─── Parallel batch infrastructure ───────────────────────────────────────────
+
+// Prefix for the machine-readable result line a batch worker emits to stdout.
+let workerBatchResultMarker = "WORKER_BATCH_RESULT:"
+
+// Join a StringArray with "|" separators (used for encoding skipped test names).
+function joinPipe(names StringArray) returns String
+	var result = ""
+	var first = true
+	for name in names 'each'
+		if first 'isFirst'
+			result = name
+			first = false
+		end 'isFirst' else 'notFirst'
+			result = "{result}|{name}"
+		end 'notFirst'
+	end 'each'
+	return result
+end 'joinPipe'
+
+// Run multiple specs' batches in worker mode. Invoked when --worker-spec= is set;
+// the value is a comma-separated list of spec names assigned to this worker.
+// Warms the stdlib cache once, then runs each spec's batch sequentially, emitting
+// one WORKER_BATCH_RESULT line per spec. All log output goes to stderr so it does
+// not contaminate the result lines the parent needs to parse.
+export function runSpecBatchWorker(workerSpecs String, filter String, target Target, verbose bool) returns ExitCode
+	let root = try findSpecsRoot() otherwise 'noRoot'
+		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		return 1
+	end 'noRoot'
+
+	// Suppress INFO messages while warming the stdlib cache so workers don't
+	// emit redundant "Compiling stdlib cache..." lines to their stderr output.
+	setLogLevel(LogLevel.ERROR)
+	warmStdlibCache(target)
+	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
+
+	let targetKey = targetToString(target)
+	let specDir = root.join("specs")
+	let fragmentDir = specDir.join("fragments-{targetKey}")
+	let specCacheDir = fragmentDir.join(".spec-cache")
+
+	if not Directory.exists(fragmentDir) 'noFragDir'
+		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+	end 'noFragDir'
+	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
+		_ = Directory.create(specCacheDir)
+	end 'noSpecCacheDir'
+
+	let specNames = workerSpecs.split(",")
+	for specName in specNames 'eachSpec'
+		let cacheSpecDir = specCacheDir.join(specName)
+		let fragSpecDir = fragmentDir.join(specName)
+		if not Directory.exists(cacheSpecDir) 'noCacheSpecDir'
+			_ = Directory.create(cacheSpecDir)
+		end 'noCacheSpecDir'
+		if not Directory.exists(fragSpecDir) 'noFragSpecDir'
+			_ = Directory.create(fragSpecDir)
+		end 'noFragSpecDir'
+
+		let specPath = specDir.join("{specName}.md")
+		let content = try File.readText(specPath) otherwise 'readErr'
+			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			print("{workerBatchResultMarker}{specName}:0:compileMs:0:skipped:\n")
+			continue
+		end 'readErr'
+
+		let fm = parseFrontmatter(content)
+		if fm.status == "draft" 'isDraft'
+			print("{workerBatchResultMarker}{specName}:0:compileMs:0:skipped:\n")
+			continue
+		end 'isDraft'
+
+		let tests = parseSpecFile(content, targetKey: targetKey)
+		var batchable = SpecTestArray.create()
+		for test in tests 'partitionTests'
+			let testPath = "{specName}/{test.name}"
+			if not filter.isEmpty() 'hasFilter'
+				if not testPath.contains(filter) 'noMatch'
+					continue
+				end 'noMatch'
+			end 'hasFilter'
+			if test.expectation.hasAnyRequiredLowering and not test.expectation.hasRequiredLowering 'missingTargetLowering'
+				continue
+			end 'missingTargetLowering'
+			if isBatchable(specName, test: test) 'isBatch'
+				batchable.push(test)
+			end 'isBatch'
+		end 'partitionTests'
+
+		if batchable.count() == 0 'noBatch'
+			print("{workerBatchResultMarker}{specName}:0:compileMs:0:skipped:\n")
+			continue
+		end 'noBatch'
+
+		// Reset per-spec so the result line reports this spec's compile time only.
+		totalCompileMs = 0
+		let outcome = runSpecBatch(batchable, specName: specName, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target)
+
+		if verbose 'showBatch'
+			for verboseLine in outcome.verboseLines 'eachVerbose'
+				logInfo(LogCategory.testing, message: () gives verboseLine)
+			end 'eachVerbose'
+		end 'showBatch'
+
+		let skippedStr = joinPipe(outcome.skippedTestNames)
+		print("{workerBatchResultMarker}{specName}:{outcome.passed}:compileMs:{totalCompileMs}:skipped:{skippedStr}\n")
+	end 'eachSpec'
+	return 0
+end 'runSpecBatchWorker'
+
+// A running batch worker subprocess. `specNames` is the comma-joined list of
+// spec names assigned to this worker; used to detect missing result lines.
+type BatchWorkerHandle
+	export var specNames String
+	export var handle ProcessHandle
+
+	export static function create(specNames String, handle ProcessHandle) returns BatchWorkerHandle
+		return Self{specNames: specNames, handle: handle}
+	end 'create'
+end 'BatchWorkerHandle'
+
+export typealias BatchWorkerHandleArray = Array with BatchWorkerHandle
+
+// Assemble the command to run this executable as a batch worker.
+// `workerSpecs` is a comma-joined list of spec names.
+// --workers=1 prevents the child from spawning its own sub-workers.
+function buildBatchWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns String
+	var cmd = "{exePath} spec-test --worker-spec={workerSpecs} --target={targetStr} --workers=1"
+	if not filter.isEmpty() 'hasFilter'
+		cmd = "{cmd} --filter={filter}"
+	end 'hasFilter'
+	if verbose 'isVerbose'
+		cmd = "{cmd} --verbose"
+	end 'isVerbose'
+	return cmd
+end 'buildBatchWorkerCommand'
+
+// Parsed outcome from one spec's WORKER_BATCH_RESULT stdout line.
+type BatchWorkerResult
+	export var specName String
+	export var passed TestCount
+	export var compileMs Millis
+	export var skippedNames StringArray
+	export var valid bool
+
+	export static function invalid() returns BatchWorkerResult
+		return Self{specName: "", passed: 0, compileMs: 0, skippedNames: StringArray.create(), valid: false}
+	end 'invalid'
+
+	export static function create(specName String, passed TestCount, compileMs Millis, skippedNames StringArray) returns BatchWorkerResult
+		return Self{specName: specName, passed: passed, compileMs: compileMs, skippedNames: skippedNames, valid: true}
+	end 'create'
+end 'BatchWorkerResult'
+
+// Parse WORKER_BATCH_RESULT:{specName}:{passed}:compileMs:{ms}:skipped:{name1|name2|...}
+// Returns invalid() on any parse failure; the caller then routes all batchable
+// tests for this spec to the per-fragment fallback path.
+function parseBatchWorkerResult(line String) returns BatchWorkerResult
+	let parts = line.split(":")
+	// [0]=WORKER_BATCH_RESULT [1]=specName [2]=passed [3]=compileMs [4]=ms [5]=skipped [6]=pipe-names
+	if parts.count() < 7 'tooFew'
+		return BatchWorkerResult.invalid()
+	end 'tooFew'
+	let tag = try parts.get(0) otherwise return BatchWorkerResult.invalid()
+	if tag != "WORKER_BATCH_RESULT" 'wrongTag'
+		return BatchWorkerResult.invalid()
+	end 'wrongTag'
+	let specName = try parts.get(1) otherwise return BatchWorkerResult.invalid()
+	if specName.isEmpty() 'noSpec'
+		return BatchWorkerResult.invalid()
+	end 'noSpec'
+	let passedStr = try parts.get(2) otherwise return BatchWorkerResult.invalid()
+	let passed = try int.fromString(passedStr) otherwise return BatchWorkerResult.invalid()
+	let compileMsStr = try parts.get(4) otherwise return BatchWorkerResult.invalid()
+	let compileMs = try int.fromString(compileMsStr) otherwise return BatchWorkerResult.invalid()
+	let skippedStr = try parts.get(6) otherwise return BatchWorkerResult.invalid()
+	var skippedNames = StringArray.create()
+	if not skippedStr.isEmpty() 'hasSkipped'
+		let nameList = skippedStr.split("|")
+		for rawName in nameList 'eachName'
+			let name = trimWhitespace(rawName)
+			if not name.isEmpty() 'nonEmpty'
+				skippedNames.push(name)
+			end 'nonEmpty'
+		end 'eachName'
+	end 'hasSkipped'
+	return BatchWorkerResult.create(specName, passed: passed as TestCount, compileMs: compileMs as Millis, skippedNames: skippedNames)
+end 'parseBatchWorkerResult'
+
+// Find a SpecWorkUnit by spec name. Panics if not found — callers only query
+// for names they previously inserted into `units`.
+function findUnitByName(units SpecWorkUnitArray, specName String) returns SpecWorkUnit
+	for unit in units 'each'
+		if unit.specName == specName 'match'
+			return unit
+		end 'match'
+	end 'each'
+	panic("findUnitByName: spec '{specName}' not found in units")
+end 'findUnitByName'
+
+// Per-spec work unit: partitioned tests and pre-computed missing-lowering failures.
+type SpecWorkUnit
+	export var specName String
+	export var nonBatchable SpecTestArray
+	export var batchable SpecTestArray
+	export var missingLoweringFailures TextLineArray
+	// Count of tests that failed due to missing RequiredLowering blocks.
+	export var missingLoweringCount TestCount
+
+	export static function create(specName String, nonBatchable SpecTestArray, batchable SpecTestArray, missingLoweringFailures TextLineArray, missingLoweringCount TestCount) returns SpecWorkUnit
+		return Self{specName: specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount}
+	end 'create'
+end 'SpecWorkUnit'
+
+export typealias SpecWorkUnitArray = Array with SpecWorkUnit
+
+// Run per-fragment tests for `unit`. Also counts pre-computed missing-lowering
+// failures toward the returned failed count.
+// Returns (passed, failed, failureMessages).
+function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, specCacheDir FilePath, target Target, verbose bool) returns (TestCount, TestCount, TextLineArray)
+	let specName = unit.specName
+	var specPassed = 0 as TestCount
+	var specFailed = unit.missingLoweringCount
+	var specFailures = TextLineArray.create()
+
+	for msg in unit.missingLoweringFailures 'copyMissing'
+		specFailures.push(msg)
+	end 'copyMissing'
+
+	for test in unit.nonBatchable 'eachSingle'
+		let testPath = "{specName}/{test.name}"
+		let fragPath = fragmentDir.join(specName).join("{test.name}.test")
+		writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+
+		let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
+			logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
+			specFailed = specFailed + 1
+			specFailures.push(fragPath.toString())
+			specFailures.push("  Failed to parse fragment file")
+			continue
+		end 'parseFailed'
+
+		let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName, specCacheDir: specCacheDir)
+
+		if not result.compileIr.isEmpty() 'hasIr'
+			writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
+		end 'hasIr'
+
+		if result.passed 'pass'
+			specPassed = specPassed + 1
+		end 'pass' else 'fail'
+			specFailed = specFailed + 1
+			specFailures.push(fragPath.toString())
+			if not result.errorMessage.isEmpty() 'hasErr'
+				specFailures.push("  {result.errorMessage}")
+			end 'hasErr'
+		end 'fail'
+
+		if verbose 'showTest'
+			if result.passed 'showPass'
+				logInfo(LogCategory.testing, message: () gives "[PASS] {testPath}")
+			end 'showPass' else 'showFail'
+				logInfo(LogCategory.testing, message: () gives "[FAIL] {testPath}")
+			end 'showFail'
+		end 'showTest'
+	end 'eachSingle'
+
+	return (specPassed, specFailed, specFailures)
+end 'runSingleTests'
+
+// Run spec tests with batch workers spawned as parallel processes.
+// Single tests (per-fragment path) always run in-process; only batch compilations
+// are offloaded to subprocess workers. Specs with batchable tests are divided
+// among exactly `workerCount` workers via round-robin so each worker amortizes
+// the stdlib-cache warm-up cost across multiple spec batches.
+export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
+	let root = try findSpecsRoot() otherwise 'noRoot'
+		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		return 1
+	end 'noRoot'
+
+	setLogLevel(LogLevel.ERROR)
+	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
+
+	let startTime = Process.currentTimeMs()
+	totalCompileMs = 0
+
+	let targetKey = targetToString(target)
+	let specDir = root.join("specs")
+	let fragmentDir = specDir.join("fragments-{targetKey}")
+	let tempDir = root.join("temp")
+
+	if not Directory.exists(fragmentDir) 'noFragDir'
+		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+	end 'noFragDir'
+
+	// Warm the stdlib cache for the in-process single-test path.
+	warmStdlibCache(target)
+
+	if updateRequired 'preUpdate'
+		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+	end 'preUpdate'
+
+	let specCacheDir = fragmentDir.join(".spec-cache")
+	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
+		_ = Directory.create(specCacheDir)
+	end 'noSpecCacheDir'
+
+	// Pre-create all fragment and cache subdirs so workers don't race on creation.
+	for specName2 in whitelist 'createDirs'
+		let cacheSubDir = specCacheDir.join(specName2)
+		if not Directory.exists(cacheSubDir) 'noCacheSub'
+			_ = Directory.create(cacheSubDir)
+		end 'noCacheSub'
+		let fragSubDir = fragmentDir.join(specName2)
+		if not Directory.exists(fragSubDir) 'noFragSub'
+			_ = Directory.create(fragSubDir)
+		end 'noFragSub'
+	end 'createDirs'
+
+	// Phase 1: Parse all specs and partition tests into batchable / non-batchable.
+	var units = SpecWorkUnitArray.create()
+	var totalTests = 0
+
+	for specName in whitelist 'parseSpecs'
+		let specPath = specDir.join("{specName}.md")
+		let content = try File.readText(specPath) otherwise 'readErr'
+			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			continue
+		end 'readErr'
+
+		let fm = parseFrontmatter(content)
+		if fm.status == "draft" 'isDraft'
+			continue
+		end 'isDraft'
+
+		let tests = parseSpecFile(content, targetKey: targetKey)
+		var batchable = SpecTestArray.create()
+		var nonBatchable = SpecTestArray.create()
+		var missingLoweringFailures = TextLineArray.create()
+		var missingLoweringCount = 0 as TestCount
+
+		for test in tests 'partition'
+			let testPath = "{specName}/{test.name}"
+			if not filter.isEmpty() 'hasFilter'
+				if not testPath.contains(filter) 'noMatch'
+					continue
+				end 'noMatch'
+			end 'hasFilter'
+			totalTests = totalTests + 1
+			if test.expectation.hasAnyRequiredLowering and not test.expectation.hasRequiredLowering 'missingTargetLowering'
+				missingLoweringFailures.push("specs/{specName}.md::{test.name}")
+				missingLoweringFailures.push("  Missing RequiredLowering:{targetKey} block — other targets have one for this test. Run with --update-required to populate, or remove the existing target-specific blocks.")
+				missingLoweringCount = missingLoweringCount + 1
+				continue
+			end 'missingTargetLowering'
+			if isBatchable(specName, test: test) 'isBatch'
+				batchable.push(test)
+			end 'isBatch' else 'isSingle'
+				nonBatchable.push(test)
+			end 'isSingle'
+		end 'partition'
+
+		units.push(SpecWorkUnit.create(specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount))
+	end 'parseSpecs'
+
+	if totalTests == 0 'noTests'
+		logInfo(LogCategory.testing, message: () gives "No tests found")
+		return 0
+	end 'noTests'
+
+	// Phase 2: Distribute specs with batchable tests across `workerCount` workers
+	// using round-robin. All workers start before the parent waits for any —
+	// this is what enables OS-level parallelism.
+	let exePath = Process.executablePath().toString()
+	let targetStr = targetToString(target)
+	var workers = BatchWorkerHandleArray.create()
+
+	// Collect the names of specs that have batchable tests, in whitelist order.
+	var batchableSpecNames = StringArray.create()
+	for unit in units 'collectBatchable'
+		if unit.batchable.count() > 0 'hasBatch'
+			batchableSpecNames.push(unit.specName)
+		end 'hasBatch'
+	end 'collectBatchable'
+
+	let batchableCount = batchableSpecNames.count()
+	var numWorkers = workerCount as TestCount
+	if batchableCount < numWorkers 'fewerSpecsThanWorkers'
+		numWorkers = batchableCount as TestCount
+	end 'fewerSpecsThanWorkers'
+
+	// Round-robin: worker i gets specs at positions i, i+numWorkers, i+2*numWorkers, ...
+	// Build a comma-joined spec list for each worker, then spawn them all at once.
+	for i in 0 upto numWorkers 'spawnWorkers'
+		var specStr = ""
+		var j = i
+		while j < batchableCount 'collectChunk'
+			let sn = try batchableSpecNames.get(j) otherwise break
+			if specStr.isEmpty() 'firstInChunk'
+				specStr = sn
+			end 'firstInChunk' else 'notFirstInChunk'
+				specStr = "{specStr},{sn}"
+			end 'notFirstInChunk'
+			j = j + numWorkers
+		end 'collectChunk'
+		if not specStr.isEmpty() 'hasChunk'
+			let cmd = buildBatchWorkerCommand(exePath, workerSpecs: specStr, targetStr: targetStr, filter: filter, verbose: verbose)
+			let handle = Process.captureStart(cmd)
+			workers.push(BatchWorkerHandle.create(specStr, handle: handle))
+		end 'hasChunk'
+	end 'spawnWorkers'
+
+	// Phase 3: Run all single tests in-process while batch workers compile in background.
+	var totalPassed = 0
+	var totalFailed = 0
+	var totalFragmentsWritten = 0
+
+	for unit in units 'runSingles'
+		let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
+		totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
+		totalPassed = totalPassed + sp
+		totalFailed = totalFailed + sf
+		if sf > 0 'hasSingleFail'
+			let specTotal = sp + sf
+			logError(LogCategory.testing, message: () gives "[FAIL] {unit.specName} ({sp}/{specTotal})")
+			for failMsg in failures 'printFails'
+				logError(LogCategory.testing, message: () gives failMsg)
+			end 'printFails'
+		end 'hasSingleFail'
+	end 'runSingles'
+
+	// Phase 4: Collect batch worker results.
+	// captureStdout blocks until the worker exits; all other workers continue
+	// running in the OS background while we wait for each in turn.
+	// Each worker emits one WORKER_BATCH_RESULT line per spec it was assigned.
+	var fallbackUnits = SpecWorkUnitArray.create()
+
+	for worker in workers 'collectWorkers'
+		let stdout = Process.captureStdout(worker.handle)
+		let stderr = Process.captureStderr(worker.handle)
+		_ = Process.captureWait(worker.handle, timeoutMs: 0)
+
+		// Forward the worker's log output to our stderr.
+		if not stderr.isEmpty() 'hasWorkerStderr'
+			printError(stderr)
+		end 'hasWorkerStderr'
+
+		// Track which specs this worker was assigned so we can detect missing results.
+		var pendingSpecs = worker.specNames.split(",")
+
+		let lines = stdout.split("\n")
+		for line in lines 'parseResultLines'
+			let trimmedLine = trimWhitespace(line)
+			if not trimmedLine.startsWith(workerBatchResultMarker) 'notResult'
+				continue
+			end 'notResult'
+			let result = parseBatchWorkerResult(trimmedLine)
+			if not result.valid 'invalidResult'
+				logError(LogCategory.testing, message: () gives "[BATCH ERROR] malformed result line from worker: {trimmedLine}")
+				continue
+			end 'invalidResult'
+
+			// Remove this spec from the pending list.
+			var remaining = StringArray.create()
+			for pn in pendingSpecs 'filterPending'
+				if pn != result.specName 'keep'
+					remaining.push(pn)
+				end 'keep'
+			end 'filterPending'
+			pendingSpecs = remaining
+
+			totalCompileMs = totalCompileMs + result.compileMs
+			totalPassed = totalPassed + result.passed
+
+			if result.skippedNames.count() > 0 'hasSkipped'
+				let unit = findUnitByName(units, specName: result.specName)
+				var fallbackTests = SpecTestArray.create()
+				for skipName in result.skippedNames 'buildFallback'
+					for test in unit.batchable 'findTest'
+						if test.name == skipName 'matchTest'
+							fallbackTests.push(test)
+						end 'matchTest'
+					end 'findTest'
+				end 'buildFallback'
+				if fallbackTests.count() > 0 'hasFallback'
+					let fallbackUnit = SpecWorkUnit.create(result.specName, nonBatchable: fallbackTests, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
+					fallbackUnits.push(fallbackUnit)
+				end 'hasFallback'
+			end 'hasSkipped'
+		end 'parseResultLines'
+
+		// Any spec still pending produced no result — worker crashed or was skipped.
+		// Re-run all its batchable tests via the per-fragment fallback path.
+		for pendingName in pendingSpecs 'handleMissing'
+			let pn = trimWhitespace(pendingName)
+			if pn.isEmpty() 'emptyName'
+				continue
+			end 'emptyName'
+			logError(LogCategory.testing, message: () gives "[BATCH FALLBACK] {pn}: no result from worker, re-running batchable tests")
+			let unit = findUnitByName(units, specName: pn)
+			let fallbackUnit = SpecWorkUnit.create(pn, nonBatchable: unit.batchable, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
+			fallbackUnits.push(fallbackUnit)
+		end 'handleMissing'
+	end 'collectWorkers'
+
+	// Phase 5: Run fallback tests in-process (per-fragment path).
+	for unit in fallbackUnits 'runFallbacks'
+		let (sp, sf, failures) = runSingleTests(unit, root: root, fragmentDir: fragmentDir, specCacheDir: specCacheDir, target: target, verbose: verbose)
+		totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
+		totalPassed = totalPassed + sp
+		totalFailed = totalFailed + sf
+		if sf > 0 'hasFallbackFail'
+			let specTotal = sp + sf
+			logError(LogCategory.testing, message: () gives "[FAIL] {unit.specName} fallback ({sp}/{specTotal})")
+			for failMsg in failures 'printFails2'
+				logError(LogCategory.testing, message: () gives failMsg)
+			end 'printFails2'
+		end 'hasFallbackFail'
+	end 'runFallbacks'
+
+	if totalFragmentsWritten > 0 'showFrags'
+		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
+	end 'showFrags'
+
+	let elapsedMs = Process.currentTimeMs() - startTime
+	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
+
+	if totalFailed == 0 'allPass'
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
+	end 'allPass' else 'someFail'
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
+	end 'someFail'
+
+	if totalFailed > 0 'hasFail'
+		return 1
+	end 'hasFail'
+	return 0
+end 'runAllSpecTestsParallel'
