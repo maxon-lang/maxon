@@ -108,7 +108,8 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 		printError("error: cannot run spec tests for {targetToString(target)} on {targetToString(host)} host (cross-execution not supported; only the host target and wasm32-wasi can be tested)\n")
 		return 1
 	end 'unsupported'
-	// Worker mode: this process is a batch worker for one spec; run that spec only.
+	// Worker mode: this process was spawned by a parent runner; run only the
+	// comma-separated spec batch it was assigned and emit machine-readable results.
 	if not args.workerSpec.isEmpty() 'isWorker'
 		return runSpecBatchWorker(args.workerSpec, filter: args.filter, target: target, verbose: args.verbose)
 	end 'isWorker'
@@ -116,7 +117,7 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	if args.workers == 1 'isSerial'
 		return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose)
 	end 'isSerial'
-	// Parallel mode: spawn one batch worker subprocess per spec.
+	// Parallel mode: distribute batchable specs across `workers` subprocesses (round-robin).
 	return runAllSpecTestsParallel(args.filter, target: target, workerCount: args.workers, updateRequired: args.updateRequired, verbose: args.verbose)
 end 'runSpecTestsForTarget'
 
