@@ -443,12 +443,12 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	let val = try mayFail() otherwise "wrong type"
+	let val = try mayFail() otherwise 5.0
 	return val
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:15:12: type mismatch: 'otherwise type 'String' does not match expected type 'int''
+error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'int''
 ```
 
 <!-- test: error.throwing-function-requires-try -->
@@ -476,18 +476,23 @@ error E3057: specs/fragments/error-handling/error.throwing-function-requires-try
 
 <!-- test: error.throwing-method-requires-try -->
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Integer = int(i64.min to i64.max)
 
-// Calling a throwing method without try is an error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let val = arr.get(0)
-	return 0
+	let val = mayFail()
+	return val
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:8:16: throwing function requires try: 'stdlib.Array.get'
+error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:13:12: throwing function requires try: 'mayFail'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -506,39 +511,46 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:12: try requires a throwing function: ''error-handling.noFail' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:12: try requires a throwing function: 'error-handling.noFail' does not throw'
 ```
 
 <!-- test: error.try-on-non-throwing-method -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+
+function foo() returns Int
+  return 42
+end 'foo'
 
 // Using try on a non-throwing method is an error
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let val = try arr.count() otherwise 0
+	let val = try foo() otherwise 0
 	return val
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:8:12: try requires a throwing function: ''stdlib.Array.count' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:10:12: try requires a throwing function: 'error-handling.foo' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Integer = int(i64.min to i64.max)
 
-// Using otherwise without try is an error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let val = arr.get(0) otherwise 0
+	let val = mayFail() otherwise 0
 	return val
 end 'main'
 ```
 ```maxoncstderr
-error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:8:23: otherwise requires try expression
+error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:13:22: otherwise requires try expression
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->

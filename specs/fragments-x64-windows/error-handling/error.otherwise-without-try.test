@@ -1,16 +1,21 @@
 // Test: error.otherwise-without-try
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Integer = int(i64.min to i64.max)
 
-// Using otherwise without try is an error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let val = arr.get(0) otherwise 0
+	let val = mayFail() otherwise 0
 	return val
 end 'main'
 ---
 MaxoncStderr: ```
-error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:8:23: otherwise requires try expression
+error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:13:22: otherwise requires try expression
 ```
 ---
 ---

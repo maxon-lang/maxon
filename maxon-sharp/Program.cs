@@ -161,7 +161,7 @@ class Program {
       var projectDir = Path.GetDirectoryName(Path.GetFullPath(path))!;
 
       if (useCache && BuildCache.IsCacheValid(projectDir, fileSources, outputPath, target)) {
-        Console.WriteLine($"Compiled -> {outputPath} (cached)");
+        Console.WriteLine($"Compiled -> {outputPath}");
         return 0;
       }
 
@@ -199,7 +199,7 @@ class Program {
         if (useCache && BuildCache.IsCacheValid(path, allSources, null, target)) {
           var cachedOutput = BuildCache.GetCachedOutputPath(path);
           if (cachedOutput != null) {
-            Console.WriteLine($"Compiled -> {cachedOutput} (cached)");
+            Console.WriteLine($"Compiled -> {cachedOutput}");
             return 0;
           }
         }
@@ -280,7 +280,7 @@ class Program {
       var outputPath = ResolveOutputPath(mainFile, ext);
 
       if (useCache && BuildCache.IsCacheValid(path, sources, outputPath, target)) {
-        Console.WriteLine($"Compiled -> {outputPath} (cached)");
+        Console.WriteLine($"Compiled -> {outputPath}");
         return 0;
       }
 

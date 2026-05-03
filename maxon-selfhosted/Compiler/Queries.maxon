@@ -69,24 +69,17 @@ export function queryTokens(project Project, path FilePath) returns TokenArray t
 end 'queryTokens'
 
 // Derive a namespace from the file path.
-// For .test files, uses the spec category name (part before first dot in stem).
+// For .test files, uses the parent directory name (the spec folder, e.g. "error-handling").
 // For .maxon files, uses the filename stem.
 function deriveNamespace(filePath FilePath) returns String
-	let stem = filePath.stem()
-	// For spec test fragments (.test files), use the part before the first dot
-	// e.g. "panic.in-function" -> "panic"
 	let ext = filePath.fileExtension()
 	if ext == ".test" 'isTest'
-		let stemBytes = stem.toByteArray()
-		let dotByte = 0x2E as byte
-		for i in 0 upto stemBytes.count() 'findDot'
-			let b = try stemBytes.get(i) otherwise panic("deriveNamespace.findDot: i < stemBytes.count() but get({i}) failed")
-			if b == dotByte 'isDot'
-				return String.from(try stemBytes.slice(0, endIndex: i) otherwise panic("deriveNamespace: slice invariant violated"))
-			end 'isDot'
-		end 'findDot'
+		// The fragment lives at <fragmentDir>/<specName>/<testName>.test,
+		// so the parent directory name is always the spec name.
+		let parentDir = try filePath.parent() otherwise return filePath.stem()
+		return parentDir.filename()
 	end 'isTest'
-	return stem
+	return filePath.stem()
 end 'deriveNamespace'
 
 // --- Per-file derived query: parse ---

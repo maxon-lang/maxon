@@ -151,6 +151,11 @@ export type Project
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
 
+	// Maps qualified function names to their throws-clause error type name.
+	// Empty string means non-throwing. Populated by the parser at decl time;
+	// read by checkErrorHandlingRules to validate try/otherwise usage.
+	export var funcThrowsTypes FuncThrowsTypeMap
+
 	// Function visibility sidecar: maps qualified function names to their
 	// declared visibility tier and source file path. Populated alongside
 	// `funcReturnTypes` inserts in the parser. Lookups treat a missing
@@ -299,6 +304,7 @@ export type Project
 			typealiasRanges: TypealiasRangeMap.create(),
 			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
+			funcThrowsTypes: FuncThrowsTypeMap.create(),
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
@@ -633,6 +639,8 @@ export typealias FuncVisibilityMap = Map with(String, FuncVisibilityInfo)
 // Keeps source-level fidelity (named aliases stay as named MaxonType) so callers
 // can look up bounds in typealiasRanges.
 export typealias FuncReturnTypeMap = Map with(String, MaxonReturnType)
+
+export typealias FuncThrowsTypeMap = Map with(String, String)
 
 // Per-parameter default value. None = no default (argument is mandatory);
 // intLiteral(v) = literal integer default used when the call site omits the

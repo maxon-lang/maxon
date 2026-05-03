@@ -88,6 +88,15 @@ function parseStdlibSource(project Project, allModule MaxonModule, filePath File
 	allModule.merge(parsed)
 end 'parseStdlibSource'
 
+// Parse the synthesized stdlib bootstrap source into the project. Both cache
+// fast-paths in getStdlibModule call this so unresolvedInterfaces (Error,
+// Iterator, etc.) is populated before typealiases are restored. The merged
+// module is discarded — the bootstrap exists purely to seed parser registries.
+function parseStdlibBootstrap(project Project)
+	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected")
+	parseStdlibSource(project, allModule: MaxonModule.create(), filePath: bootstrapFp, content: stdlibBootstrapSource)
+end 'parseStdlibBootstrap'
+
 export function getStdlibModule(project Project) returns MaxonModule
 	// Step 6a.19: register the allocator-runtime intrinsics (`__mm_raw_alloc`,
 	// `__mm_alloc`, etc.) so user Maxon source can call them as plain
@@ -105,6 +114,16 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// same reason as the intrinsic-signature register above.
 	registerManagedMemoryType(project)
 	if stdlibLoaded 'cached'
+		// Parse the synthesized bootstrap first so unresolvedInterfaces
+		// (Error, Iterator, etc.) is populated for this project before
+		// typealiases are restored. runTypeResolution drains it into
+		// project.interfaces, which conformance checks rely on.
+		// Parsing first (before the restore below) avoids a duplicate-typealias
+		// error: the parser's duplicate check fires against project.typealiases,
+		// which is still empty here. After parsing, the restore paths use
+		// `otherwise ignore` so they silently skip names already registered.
+		parseStdlibBootstrap(project)
+
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
 			restoreStdlibMetadata(project, data: cachedStdlibCacheData)
@@ -158,6 +177,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
+
+		// Parse the synthesized bootstrap first so unresolvedInterfaces is
+		// populated before typealiases are restored — same ordering rationale
+		// as the in-process fast path above.
+		parseStdlibBootstrap(project)
 
 		// Restore parser metadata so user code can reference stdlib types
 		restoreStdlibMetadata(project, data: cacheResult.data)

@@ -83,15 +83,16 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		if not result.success 'wait'
 			continue
 		end 'wait'
-		// Insert into the resolved maps. The unresolved map is keyed by
-		// name and the parser rejects duplicates against both maps before
-		// inserting here, so the resolved insert can never collide.
-		try project.typealiases.insert(name, value: result.stdType) otherwise panic("TypeResolution: typealiases.insert collided for '{name}' — parser duplicate check missed it")
+		// Insert into the resolved maps. Duplicate insertions are ignored:
+		// stdlib metadata restore may have already placed identical values
+		// for bootstrap typealiases (ExitCode, IterStep, etc.) before the
+		// unresolved map is drained, so collisions are benign.
+		try project.typealiases.insert(name, value: result.stdType) otherwise ignore
 		// Mirror the visibility tier into the sidecar map so cross-file
 		// uses of the alias as a parameter / return type can be filtered.
 		try project.typealiasVisibilities.insert(name, value: TypealiasVisibilityInfo.create(entry.visibility, sourceFilePath: entry.filePath)) otherwise ignore
 		if result.hasRange 'recordRange'
-			try project.typealiasRanges.insert(name, value: result.range) otherwise panic("TypeResolution: typealiasRanges.insert collided for '{name}' — parser duplicate check missed it")
+			try project.typealiasRanges.insert(name, value: result.range) otherwise ignore
 		end 'recordRange'
 		resolvedNames.push(name)
 	end 'sweep'
@@ -384,6 +385,9 @@ end 'convertCastCategory'
 
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
 	let name = project.typeNames.get(id)
+	if not namedIdIsKnown(project, id: id) 'unknown'
+		panic("namedIdCastCategory: unknown named type '{name}' — caller must run reportIfUnknownType first")
+	end 'unknown'
 	return resolveNamedToStdType(project, name: name).rawValue.castCategory
 end 'namedIdCastCategory'
 
@@ -408,6 +412,18 @@ function namedIdIsKnown(project Project, id TypeNameId) returns bool
 	let name = project.typeNames.get(id)
 	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.enumTypes.contains(name) or project.funcReturnTypes.contains(name)
 end 'namedIdIsKnown'
+
+// Emit E3009 if `t` references an unknown named type and return true so the
+// caller can bail out. Returns false (no diagnostic) when `t` is known.
+// resolveNamedToStdType panics on unknown names, so any cast/compare validator
+// that touches a user-supplied type must call this first.
+function reportIfUnknownType(project Project, t MaxonType, filePath FilePath) returns bool
+	if maxonTypeIsKnown(project, t: t) 'known'
+		return false
+	end 'known'
+	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "unknown type '{t.toString(project)}'", line: 0, column: 0, filePath: filePath)
+	return true
+end 'reportIfUnknownType'
 
 // Scan ops up to `opIdx` (exclusive) to locate the op that produced
 // `targetId`. Returns true if found and the value it carries is between 0
@@ -466,10 +482,12 @@ function validateConvertOp(project Project, module MaxonModule, opIdx OpIndex, o
 end 'validateConvertOp'
 
 function validateConvert(project Project, module MaxonModule, opIdx OpIndex, operandName ByteArray, fromType MaxonType, toType MaxonType, filePath FilePath)
-	// Categorize both endpoints. An unknown named type is reported separately
-	// via the unresolved-name scan; validateConvert trusts the lookups to
-	// succeed for the purpose of picking categories (they fall back to int via
-	// resolveNamedToStdType, which preserves the old behavior).
+	if reportIfUnknownType(project, t: fromType, filePath: filePath) 'unknownFrom'
+		return
+	end 'unknownFrom'
+	if reportIfUnknownType(project, t: toType, filePath: filePath) 'unknownTo'
+		return
+	end 'unknownTo'
 	let sourceCategory = convertCastCategory(project, t: fromType)
 	let targetCategory = convertCastCategory(project, t: toType)
 
@@ -505,6 +523,12 @@ end 'validateConvert'
 // narrow exception — a byte operand may be compared to an in-range int
 // literal. Any other mismatch emits E3005.
 function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, filePath FilePath)
+	if reportIfUnknownType(project, t: leftType, filePath: filePath) 'unknownLeft'
+		return
+	end 'unknownLeft'
+	if reportIfUnknownType(project, t: rightType, filePath: filePath) 'unknownRight'
+		return
+	end 'unknownRight'
 	let leftCategory = convertCastCategory(project, t: leftType)
 	let rightCategory = convertCastCategory(project, t: rightType)
 	if leftCategory == rightCategory 'sameCategory'

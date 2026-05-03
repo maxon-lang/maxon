@@ -382,9 +382,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		if specFailed > 0 'hasSpecFail'
 			let specTotal = specPassed + specFailed
 			logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({specPassed}/{specTotal})")
-			for failMsg in specFailures 'printFails'
-				logError(LogCategory.testing, message: () gives failMsg)
-			end 'printFails'
+			logSpecFailureMessages(specFailures)
 		end 'hasSpecFail'
 	end 'eachSpec'
 
@@ -1154,6 +1152,20 @@ end 'updateLoweringBlock'
 // Prefix for the machine-readable result line a batch worker emits to stdout.
 let workerBatchResultMarker = "WORKER_BATCH_RESULT:"
 
+// Print one spec's failure messages, separating each failure with a blank
+// line. Failure groups start with the fragment path (no leading spaces);
+// indented lines that follow describe the failure cause. The blank-line
+// gap before each new path keeps consecutive fragment failures visually
+// distinct in the test runner output.
+function logSpecFailureMessages(failures TextLineArray)
+	for failMsg in failures 'eachFailure'
+		if not failMsg.startsWith("  ") 'isPath'
+			logError(LogCategory.testing, message: () gives "")
+		end 'isPath'
+		logError(LogCategory.testing, message: () gives failMsg)
+	end 'eachFailure'
+end 'logSpecFailureMessages'
+
 // Join a StringArray with "|" separators (used for encoding skipped test names).
 function joinPipe(names StringArray) returns String
 	var result = ""
@@ -1602,9 +1614,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		if sf > 0 'hasSingleFail'
 			let specTotal = sp + sf
 			logError(LogCategory.testing, message: () gives "[FAIL] {unit.specName} ({sp}/{specTotal})")
-			for failMsg in failures 'printFails'
-				logError(LogCategory.testing, message: () gives failMsg)
-			end 'printFails'
+			logSpecFailureMessages(failures)
 		end 'hasSingleFail'
 	end 'runSingles'
 
@@ -1685,9 +1695,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		if sf > 0 'hasFallbackFail'
 			let specTotal = sp + sf
 			logError(LogCategory.testing, message: () gives "[FAIL] {unit.specName} fallback ({sp}/{specTotal})")
-			for failMsg in failures 'printFails2'
-				logError(LogCategory.testing, message: () gives failMsg)
-			end 'printFails2'
+			logSpecFailureMessages(failures)
 		end 'hasFallbackFail'
 	end 'runFallbacks'
 

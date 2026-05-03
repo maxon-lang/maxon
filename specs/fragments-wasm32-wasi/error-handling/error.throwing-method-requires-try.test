@@ -1,16 +1,21 @@
 // Test: error.throwing-method-requires-try
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Integer = int(i64.min to i64.max)
 
-// Calling a throwing method without try is an error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	return 42
+end 'mayFail'
+
 function main() returns ExitCode
-	var arr = IntArray.create()
-	let val = arr.get(0)
-	return 0
+	let val = mayFail()
+	return val
 end 'main'
 ---
 MaxoncStderr: ```
-error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:8:16: throwing function requires try: 'stdlib.Array.get'
+error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:13:12: throwing function requires try: 'mayFail'
 ```
 ---
 ---

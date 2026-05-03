@@ -7720,7 +7720,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
         if (callee != null && callee.ThrowsType == null) {
           throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-            $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+            $"try requires a throwing function: '{callOp.Callee}' does not throw'",
             tryToken.Line, tryToken.Column);
         }
         calleeThrowsType = callee?.ThrowsType;
@@ -8102,11 +8102,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       defaultKind = defaultBackingKind;
     }
 
-    // Type-check: otherwise expression must match the success type
-    // Allow numeric coercions (int literal to byte/short) and generic type parameters
+    // Type-check: otherwise expression must match the success type.
+    // Numeric coercion is restricted to the int/byte/short family — float vs int
+    // is a real mismatch even though both pass IsNumericKind.
     if (defaultKind != expectedKind
         && expectedKind != MaxonValueKind.TypeParameter
-        && !(IsNumericKind(defaultKind) && IsNumericKind(expectedKind))) {
+        && !(IsIntegerFamilyKind(defaultKind) && IsIntegerFamilyKind(expectedKind))) {
       var defaultTypeName = defaultValue is MaxonStruct ds ? ds.TypeName : KindToTypeName(defaultKind);
       var expectedTypeName = tryInfo.ResultStructTypeName ?? KindToTypeName(expectedKind);
       throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
@@ -10241,7 +10242,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       callee = _currentModule!.FindFunctionByExactName(callOp.Callee);
       if (callee != null && callee.ThrowsType == null) {
         throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
-          $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+          $"try requires a throwing function: '{callOp.Callee}' does not throw'",
           tryToken.Line, tryToken.Column);
       }
 
@@ -11561,9 +11562,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     };
   }
 
-  private static bool IsNumericKind(MaxonValueKind kind) =>
-    kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32
-        or MaxonValueKind.Byte or MaxonValueKind.Short;
+  // Used by the otherwise type-check to allow int-literal coercion to
+  // byte/short while still rejecting int↔float.
+  private static bool IsIntegerFamilyKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
 
   private static string KindToTypeName(MaxonValueKind kind) => kind switch {
     MaxonValueKind.Integer => "int",

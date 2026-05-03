@@ -183,15 +183,15 @@ export enum TokenKind
 	// Literals
 	intLiteral = "integer literal"
 	floatLiteral = "float literal"
-	stringLiteral = "single-quoted string literal"
-	doubleStringLiteral = "string literal"
+	charLiteral = "character literal"
+	stringLiteral = "string literal"
 	// Delimiters for pre-lexed interpolation expressions. A double-quoted
 	// string containing `{...}` interpolations emits as:
-	//   doubleStringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
-	//   doubleStringLiteral("fragment1") stringInterpStart <expr tokens> stringInterpEnd
+	//   stringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
+	//   stringLiteral("fragment1") stringInterpStart <expr tokens> stringInterpEnd
 	//   ...
-	//   doubleStringLiteral("fragmentN")
-	// Strings without interpolations emit a single doubleStringLiteral as
+	//   stringLiteral("fragmentN")
+	// Strings without interpolations emit a single stringLiteral as
 	// before. This lets the parser consume interpolated expressions inline
 	// from the main token stream instead of re-lexing the expression bytes
 	// through a sub-parser for every `{...}` segment.
@@ -498,7 +498,7 @@ type Lexer
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol, valueBytes: valueBytes, startByte: numStart, endByte: endByte))
 	end 'emitNumber'
 
-	// Emit a string-literal-shaped token (stringLiteral/doubleStringLiteral)
+	// Emit a string-literal-shaped token (charLiteral/stringLiteral)
 	// capturing source byte range and raw-byte slice alongside the String value.
 	function emitStringLit(kind TokenKind, strStart CharOffset, endByte ByteOffset, startLine LineNumber, startCol ColumnNumber)
 		let valueBytes = try bytes.slice(strStart, endIndex: endByte) otherwise panic("Lexer.emitStringLit: invariant violated")
@@ -611,7 +611,7 @@ type Lexer
 		while cursor.index() < len 'strBody'
 			let sc = cursor.current()
 			if sc == Ascii.quote 'endStr'
-				emitStringLit(TokenKind.stringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				if not tryAdvance() 'squoteEof'
 					try finishAtEof()
 				end 'squoteEof'
@@ -624,14 +624,14 @@ type Lexer
 		// Unterminated string at EOF — stash an unterminatedString lexer
 		// error and unwind via CursorError. run() reads the stashed
 		// LexerError and surfaces it to the caller.
-		emitStringLit(TokenKind.stringLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
+		emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
 		hasPendingError = true
 		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
 		throw CursorError.exhausted
 	end 'scanSingleQuoteString'
 
 	// Opening double-quote already consumed by main loop. Scans body bytes,
-	// emitting a doubleStringLiteral for each fragment bounded by `{` / `}`
+	// emitting a stringLiteral for each fragment bounded by `{` / `}`
 	// interpolations. Within `{...}` the main DFA is re-driven (via scanInterp)
 	// so interpolation expressions are lexed once, inline, into the main token
 	// stream — the parser consumes them as ordinary tokens bracketed by
@@ -643,7 +643,7 @@ type Lexer
 		while cursor.index() < len 'dstrBody'
 			let dc = cursor.current()
 			if dc == Ascii.dquote 'endDstr'
-				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				if not tryAdvance() 'dquoteEof'
 					try finishAtEof()
 				end 'dquoteEof'
@@ -654,7 +654,7 @@ type Lexer
 				// partial fragment then stash the unterminated-string error
 				// so the lexer surfaces a diagnostic instead of silently
 				// accepting a string that never had a closing quote.
-				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				hasPendingError = true
 				pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
 				throw CursorError.exhausted
@@ -673,7 +673,7 @@ type Lexer
 			end 'esc'
 			if dc == '{' 'openInterp'
 				// Emit the literal fragment accumulated before the `{`.
-				emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
+				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				let interpLine = line
 				let interpCol = column
 				tokens.push(Token.create(TokenKind.stringInterpStart, value: "\{", line: interpLine, column: interpCol))
@@ -704,7 +704,7 @@ type Lexer
 		// lexer error and unwind via CursorError. run() reads the stashed
 		// LexerError and surfaces it to the caller so queryTokens can route
 		// it through the project's diagnostic sink.
-		emitStringLit(TokenKind.doubleStringLiteral, strStart: fragStart, endByte: cursor.index() + 1, startLine: fragLine, startCol: fragCol)
+		emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index() + 1, startLine: fragLine, startCol: fragCol)
 		hasPendingError = true
 		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
 		throw CursorError.exhausted

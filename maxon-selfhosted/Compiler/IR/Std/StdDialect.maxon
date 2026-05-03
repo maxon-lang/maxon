@@ -33,6 +33,19 @@ export function castCategoryName(cat CastCategory) returns String
 	return cat.name
 end 'castCategoryName'
 
+// True for numeric integer-family categories (int and byte). Used by the
+// otherwise-type-mismatch check to allow int literals to coerce to byte-sized
+// named types (e.g. ExitCode = i8), mirroring the C# compiler's IsNumericKind logic.
+export function castCategoryIsIntegerFamily(cat CastCategory) returns bool
+	return match cat 'check'
+		int gives true
+		byte gives true
+		float gives false
+		bool gives false
+		string gives false
+	end 'check'
+end 'castCategoryIsIntegerFamily'
+
 // --- StdTypeInfo: metadata carried by each StdType case ---
 
 export type StdTypeInfo

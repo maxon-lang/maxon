@@ -11,6 +11,10 @@ export function runSemanticChecks(project Project, module MaxonModule)
 	// to surface the "Partial interface implementation" diagnostic.
 	checkInterfaceConformance(project)
 
+	// Phase 4e error-handling rules: E3054 (main cannot throw),
+	// E3055 (try on non-throwing function), E3057 (missing try on throwing call).
+	checkErrorHandlingRules(project, module: module)
+
 	for func in module.functions 'scan'
 		if func.name == "main" 'isMain'
 			logTrace(LogCategory.semantic, message: () gives "semcheck: main returnType={maxonReturnTypeToString(project, ref: func.maxonReturnType)}")
@@ -114,3 +118,65 @@ function buildMissingMessage(typeName String, missing StringArray) returns Strin
 	end 'eachMissing'
 	return msg
 end 'buildMissingMessage'
+
+// Phase 4e error-handling rules.
+// Walks every function in the module and checks:
+//   E3054 — main cannot declare a throws clause.
+//   E3057 — plain `call` op targets a throwing function (user forgot `try`).
+//   E3055 — `tryCall` op targets a non-throwing function (spurious `try`).
+//
+// funcThrowsTypes maps qualified function names to their declared throws type
+// (empty string = non-throwing). Functions not in the map (stdlib intrinsics,
+// synthesized helpers) are skipped and treated as non-throwing for E3057.
+function checkErrorHandlingRules(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		// E3054: main cannot declare a throws clause.
+		if func.name == "main" and not func.throwsTypeName.isEmpty() 'mainThrows'
+			reportCompileError(project, code: ErrorCode.semanticMainCannotThrow, message: "main cannot throw: 'main'", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		end 'mainThrows'
+		let readerFilePath = func.sourceFilePath
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkErrorHandlingRules: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkErrorHandlingRules: opIdx OOB")
+				if op.name == "call" 'isCall'
+					match op 'checkCallOp'
+						call(_, callee, callContext, _, _, _, _, range) then checkCallForThrowsViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
+						default panic("checkErrorHandlingRules: op.name == call but match failed")
+					end 'checkCallOp'
+				end 'isCall'
+				if op.name == "tryCall" 'isTryCall'
+					match op 'checkTryCallOp'
+						tryCall(_, callee, callContext, _, _, _, _, _, range) then checkTryCallForNonThrowingViolation(project, callee: callee, callContext: callContext, funcNamespace: func.namespace, readerFilePath: readerFilePath, range: range)
+						default panic("checkErrorHandlingRules: op.name == tryCall but match failed")
+					end 'checkTryCallOp'
+				end 'isTryCall'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkErrorHandlingRules'
+
+// E3057: calling a throwing function without `try`.
+// The callee is the unqualified name; qualify it before looking up in funcThrowsTypes.
+function checkCallForThrowsViolation(project Project, callee ByteArray, callContext CallContext, funcNamespace String, readerFilePath FilePath, range SourceRange)
+	let bareCallee = String.from(callee)
+	let qualifiedCallee = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: funcNamespace, readerFilePath: readerFilePath)
+	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
+	if throwsType.isEmpty() 'nonThrowing'
+		return
+	end 'nonThrowing'
+	// Surface the unqualified call-site name so cross-namespace diagnostics
+	// match what the user actually typed.
+	reportCompileError(project, code: ErrorCode.semanticThrowingFunctionRequiresTry, message: "throwing function requires try: '{bareCallee}'", line: range.line, column: range.column, filePath: readerFilePath)
+end 'checkCallForThrowsViolation'
+
+// E3055: using `try` on a non-throwing function.
+// Only fires when the qualified callee is explicitly registered with an empty throws type.
+function checkTryCallForNonThrowingViolation(project Project, callee ByteArray, callContext CallContext, funcNamespace String, readerFilePath FilePath, range SourceRange)
+	let qualifiedCallee = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: funcNamespace, readerFilePath: readerFilePath)
+	let throwsType = try project.funcThrowsTypes.get(qualifiedCallee) otherwise return
+	if not throwsType.isEmpty() 'isThrowing'
+		return
+	end 'isThrowing'
+	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)
+end 'checkTryCallForNonThrowingViolation'
