@@ -20,9 +20,8 @@ export typealias CovDataEntryArray = Array with CovDataEntry
 
 // A .data section entry. Used for top-level `var` and `static var/let`
 // globals: writable storage with an initial value emitted into the section's
-// raw on-disk bytes. Resolved through the same `__data_*` relocation kind as
-// `__data_heap`; offsets are assigned by buildDataPreludeSection at backend
-// time before the heap arena.
+// raw on-disk bytes. Resolved through the `__data_*` relocation kind;
+// offsets are assigned by buildDataPreludeSection at backend time.
 export type DataSectionEntry
 	export var name String
 	export var initialBytes ByteArray
@@ -296,10 +295,7 @@ end 'addDataSectionEntry'
 // Serialize all .data section entries into a contiguous prelude block laid
 // out at the very start of the writable .data section. Populates `map` with
 // (name -> offset) entries so `__data_<global>` relocations resolve to the
-// right offset, and registers `__data_heap` at the byte just past the
-// prelude. The bump-allocator control word and arena live at and after that
-// offset and rely on the writer zero-filling the rest of the .data region
-// at load time.
+// right offset.
 export function buildDataPreludeSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
 	var prelude = ByteArray.create()
 	for entry in table.dataSectionEntries 'build'
@@ -310,7 +306,6 @@ export function buildDataPreludeSection(table GlobalDataTable, map RdataOffsetMa
 			prelude.push(0)
 		end 'align'
 	end 'build'
-	map.record("__data_heap", offset: prelude.count())
 	return prelude
 end 'buildDataPreludeSection'
 

@@ -11,17 +11,15 @@ let wasiImportCount = 2
 
 // --- Linear memory layout ---
 // We reserve a block of linear memory for various runtime needs. The layout is:
-//   0..1024        scratch (iovec buffer for fd_write)
-//   1024..65536    heap region (__data_heap), zero-initialized by WASM
-//                    [0..7]   = current bump offset
-//                    [8..15]  = reserved
-//                    [16..]   = heap arena
-//   65536..dataOffset  global data (string literals, etc.)
-//   dataOffset..    stack slots (per-function frames)
+//   0..1024              scratch (iovec buffer for fd_write)
+//   1024..dataOffset     global data (string literals, top-level vars, stdlib data)
+//   dataOffset..         stack slots (per-function frames)
 //
-// The heap is placed BEFORE global data so that mrt_alloc's bookkeeping
-// counter (at heapBase + 0) is not clobbered by string literal data. WASM
-// linear memory is zero-initialized, so the counter starts at 0 naturally.
+// Heap allocations no longer live at a fixed offset: the slab allocator
+// (runtime.std) calls osAllocPages, which lowers to `memory.grow` and returns
+// the byte offset of pages appended above the initial memory. The legacy
+// `__data_heap` bump arena that used to occupy 1024..65536 was abandoned when
+// mrt_alloc became a thin wrapper around mm_raw_alloc.
 //
 // iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
 // nwritten at offset 8
@@ -29,10 +27,10 @@ let wasiImportCount = 2
 let iovecBase = 0
 let nwrittenBase = 8
 let scratchEnd = 1024
-let heapBase = 1024
-let heapEnd = 65536
 
-// Initial memory pages: enough for scratch + heap + reasonable stack.
+// Initial memory pages: enough for scratch + global data + reasonable stack.
+// The slab allocator grows linear memory on demand via memory.grow, so this
+// only needs to cover what's laid out at module-init time.
 // 16 pages = 1 MiB.
 let initialMemoryPages = 16
 
@@ -153,8 +151,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 
 	// Compute global data offsets (same layout as emitWasmModule)
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise panic("emitWasmPerFunction: __data_heap insert into fresh map failed")
-	var dataOffset = heapEnd as MachineWord
+	var dataOffset = scratchEnd as MachineWord
 
 	for i in 0 upto globalData.values.count() 'computeOffsets'
 		let name = try globalData.names.get(i) otherwise panic("emitWasmPerFunction: globalData.names.get({i}) failed — names/values arrays out of sync")
@@ -459,19 +456,16 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	end 'mergeStdlibData'
 
 	// --- Compute memory layout for global data and stack ---
-	// Heap region comes first (right after scratch); global data is placed
-	// AFTER the heap so that mrt_alloc's bookkeeping counter at heapBase is
-	// not clobbered by string literal segments. Stack slots start after
-	// global data. Top-level / static-field globals (top-level `var counter
-	// = 42`, etc.) live in `dataSectionEntries` and follow the rdata payloads
-	// — `layoutWasmGlobalData` mirrors the native `buildDataPreludeSection`
-	// layout so MirOp.globalAddr resolves `__data_<name>` symbols against
-	// `globalDataOffsets`.
+	// Global data lives immediately after the iovec scratch (1024..). Stack
+	// slots follow global data. Top-level / static-field globals (top-level
+	// `var counter = 42`, etc.) live in `dataSectionEntries` and follow the
+	// rdata payloads — `layoutWasmGlobalData` mirrors the native
+	// `buildDataPreludeSection` layout so MirOp.globalAddr resolves
+	// `__data_<name>` symbols against `globalDataOffsets`. Heap allocations
+	// do not occupy a fixed range; the slab allocator grows linear memory on
+	// demand via osAllocPages → memory.grow.
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	// Register the runtime heap label pointing at our reserved heap region.
-	// mrt_alloc loads its bump counter from the first 8 bytes of this region.
-	try globalDataOffsets.insert("__data_heap", value: heapBase as MachineWord) otherwise panic("emitWasmModule: __data_heap insert into fresh map failed")
-	let (dataChunks, dataEnd) = layoutWasmGlobalData(globalData, baseOffset: heapEnd as MachineWord, offsets: globalDataOffsets)
+	let (dataChunks, dataEnd) = layoutWasmGlobalData(globalData, baseOffset: scratchEnd as MachineWord, offsets: globalDataOffsets)
 	let stackBase = alignUp(dataEnd, alignment: 16)
 
 	// --- Code section ---
@@ -1019,15 +1013,15 @@ type WasmFunctionLowering
 			memcpy(dstId, srcId, lenId) then emitMemcpy(dstId: dstId, srcId: srcId, lenId: lenId)
 			storeByte(baseId, offsetId, byteId) then emitStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId)
 			loadByte(resultId, baseId, offsetId) then emitLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId)
-			osAllocPages then panic("wasm: osAllocPages not implemented (Wasm allocator is a separate Phase)")
-			osAllocPagesLarge then panic("wasm: osAllocPagesLarge not implemented (Wasm allocator is a separate Phase)")
-			osFreePages then panic("wasm: osFreePages not implemented (Wasm allocator is a separate Phase)")
-			atomicInc then panic("wasm: atomicInc not implemented (Wasm allocator is a separate Phase)")
-			atomicDec then panic("wasm: atomicDec not implemented (Wasm allocator is a separate Phase)")
-			atomicXadd then panic("wasm: atomicXadd not implemented (Wasm allocator is a separate Phase)")
-			osLockInit then panic("wasm: osLockInit not implemented (Wasm allocator is a separate Phase)")
-			osLockAcquire then panic("wasm: osLockAcquire not implemented (Wasm allocator is a separate Phase)")
-			osLockRelease then panic("wasm: osLockRelease not implemented (Wasm allocator is a separate Phase)")
+			osAllocPages(resultId, sizeId) then emitOsAllocPages(resultId: resultId, sizeId: sizeId)
+			osAllocPagesLarge(resultId, sizeId) then emitOsAllocPages(resultId: resultId, sizeId: sizeId)
+			osFreePages then nop()
+			atomicInc(addrId) then emitAtomicAddOne(addrId: addrId, isSubtract: false)
+			atomicDec(addrId) then emitAtomicAddOne(addrId: addrId, isSubtract: true)
+			atomicXadd(resultId, addrId, valId) then emitAtomicXadd(resultId: resultId, addrId: addrId, valId: valId)
+			osLockInit then nop()
+			osLockAcquire then nop()
+			osLockRelease then nop()
 		end 'dispatch'
 	end 'emitMirOp'
 
@@ -1378,6 +1372,121 @@ type WasmFunctionLowering
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as MachineWord)
 	end 'emitLoadFramePtr'
+
+	// `local.get localId` then truncate the i64 down to the i32 that wasm
+	// memory ops require. Maxon ValueIds always live in i64 locals, so every
+	// memory access has to wrap.
+	function emitLocalAsI32(localId ValueId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: localId as MachineWord)
+		body.push(opI32WrapI64)
+	end 'emitLocalAsI32'
+
+	// `local.set localId` — pops the wasm stack into the named local.
+	function emitLocalSet(localId ValueId)
+		body.push(opLocalSet)
+		writeUleb128(body, value: localId as MachineWord)
+	end 'emitLocalSet'
+
+	// i64.load with align=3 (8 bytes) and zero immediate offset. The memory
+	// address is expected to already be on the wasm stack as i32.
+	function emitI64LoadAtZero()
+		body.push(opI64Load)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+	end 'emitI64LoadAtZero'
+
+	// i64.store with align=3 (8 bytes) and zero immediate offset. Both address
+	// (i32) and value (i64) are expected to already be on the wasm stack.
+	function emitI64StoreAtZero()
+		body.push(opI64Store)
+		body.push(0x03)
+		writeUleb128(body, value: 0)
+	end 'emitI64StoreAtZero'
+
+	// Slab-allocator OS primitive on WASM: grow linear memory by ceil(size/64KiB)
+	// pages and return the byte offset of the newly-allocated region. The slab
+	// runtime always passes 64KiB-multiple sizes (64MiB arenas, 8KiB-aligned
+	// OS-direct blocks ≥ 32KiB), but we round up defensively. memory.grow
+	// returns -1 (i32) on OOM; we widen to i64 so the test stays in the i64
+	// world used by every Maxon ValueId, then trap via `unreachable` —
+	// convertWasmtimeStderr surfaces this as a recognizable runtime trap.
+	function emitOsAllocPages(resultId ValueId, sizeId ValueId)
+		// pages = (size + 65535) >> 16
+		body.push(opLocalGet)
+		writeUleb128(body, value: sizeId as MachineWord)
+		body.push(opI64Const)
+		writeSleb128(body, value: 65535)
+		body.push(opI64Add)
+		body.push(opI64Const)
+		writeSleb128(body, value: 16)
+		body.push(opI64ShrU)
+		body.push(opI32WrapI64)
+
+		// memory.grow with memory index 0
+		body.push(opMemoryGrow)
+		body.push(0x00)
+
+		// Sign-extend the i32 result so -1 (OOM) widens to -1 i64; positive
+		// prev-page-counts widen to themselves (top bit unused for the address
+		// range we care about).
+		body.push(opI64ExtendI32S)
+		emitLocalSet(localId: resultId)
+
+		// if (resultId == -1i64) unreachable
+		body.push(opLocalGet)
+		writeUleb128(body, value: resultId as MachineWord)
+		body.push(opI64Const)
+		writeSleb128(body, value: -1)
+		body.push(opI64Eq)
+		body.push(opIf)
+		body.push(wasmTypeVoid)
+		body.push(opUnreachable)
+		body.push(opEnd)
+
+		// resultId = prevPages * 65536 (the byte offset of the freshly-grown region)
+		body.push(opLocalGet)
+		writeUleb128(body, value: resultId as MachineWord)
+		body.push(opI64Const)
+		writeSleb128(body, value: 16)
+		body.push(opI64Shl)
+		emitLocalSet(localId: resultId)
+	end 'emitOsAllocPages'
+
+	// Single-threaded RMW on a 64-bit word: *addr = *addr <op> 1.
+	// wasm32-wasi MVP has no concurrency so a plain load/op/store is correct;
+	// the LOCK prefix on x86 and the LDAXR/STLXR loop on ARM64 are only there
+	// to guard against contention that cannot exist here.
+	// TODO(wasm-threads): swap for the 0xFE-prefixed atomic-rmw ops if the
+	// threads target ever lands.
+	function emitAtomicAddOne(addrId ValueId, isSubtract bool)
+		// store-address operand goes first on the wasm stack
+		emitLocalAsI32(localId: addrId)
+		// load current value at *addr
+		emitLocalAsI32(localId: addrId)
+		emitI64LoadAtZero()
+		body.push(opI64Const)
+		writeSleb128(body, value: 1)
+		body.push(opI64Sub if isSubtract else opI64Add)
+		emitI64StoreAtZero()
+	end 'emitAtomicAddOne'
+
+	// Fetch-and-add: resultId receives the prior value (mm_decref tests
+	// `prior == 1` to detect the last reference), then write prior+val back.
+	function emitAtomicXadd(resultId ValueId, addrId ValueId, valId ValueId)
+		// resultId = *addr
+		emitLocalAsI32(localId: addrId)
+		emitI64LoadAtZero()
+		emitLocalSet(localId: resultId)
+		// *addr = resultId + val
+		emitLocalAsI32(localId: addrId)
+		body.push(opLocalGet)
+		writeUleb128(body, value: resultId as MachineWord)
+		body.push(opLocalGet)
+		writeUleb128(body, value: valId as MachineWord)
+		body.push(opI64Add)
+		emitI64StoreAtZero()
+	end 'emitAtomicXadd'
 
 	function emitFuncAddr(resultId ValueId, name String)
 		// Stage F (closures): emit the function's table index as an i32,
