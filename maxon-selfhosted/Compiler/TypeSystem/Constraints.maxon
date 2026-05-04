@@ -1,0 +1,178 @@
+// Phase 11.1 (step 5): conformance lookup and where-clause checking.
+//
+// `Constraints.maxon` answers two questions on top of the substitution
+// primitive in `Substitution.maxon`:
+//
+//   1. "Does this concrete type conform to this interface?" — the
+//      `typeConformsTo` family. Built-in primitives (Int, Bool, Float, String)
+//      hard-conform to the universal traits (Equatable, Hashable, Comparable,
+//      Cloneable). Named types defer to `project.conformances` (populated by
+//      the validateConformances + processExtensions passes during
+//      TypeResolution). `genericInstance` types defer to their base — this is
+//      a structural lookup; conditional conformances are enforced at the call
+//      site by `whereClauseSatisfied`. Type-parameter types defer to the
+//      param's declared constraints in `project.typeParameters`.
+//
+//   2. "Are every where-clause's required traits satisfied for this
+//      substitution?" — `whereClauseSatisfied`. Walks the constraint set,
+//      pulls each clause's `(declaringTypeName, paramName)` to recover the
+//      type-param id, looks up the bound concrete in `subst`, and asks
+//      `typeConformsTo`. Used by Step 6/7 when emitting conditional
+//      conformance witness tables and by Step 4's resolution pass when a
+//      generic call site needs to verify the call's type-args satisfy the
+//      callee's constraints.
+//
+// This file performs no IR mutation, no diagnostic emission, and no caching:
+// it answers questions about already-recorded metadata. Diagnostic-friendly
+// wrappers (the ones that emit E3015 / E3016 / etc) live in TypeResolution
+// and call into this file.
+
+// Built-in primitive types automatically conform to a small core of
+// universal traits. Hard-coded for now — every built-in is one of (bool,
+// int, float, String) and the trait surface is small enough that a name
+// switch is clearer than a registration table. Step 7+ may grow this when
+// it surfaces additional builtin conformances (e.g. tuple types adopting
+// Hashable when their fields are Hashable).
+function builtinConformsTo(interfaceName String) returns bool
+	if interfaceName == "Equatable" 'eq'
+		return true
+	end 'eq'
+	if interfaceName == "Hashable" 'hashable'
+		return true
+	end 'hashable'
+	if interfaceName == "Comparable" 'comparable'
+		return true
+	end 'comparable'
+	if interfaceName == "Cloneable" 'cloneable'
+		return true
+	end 'cloneable'
+	return false
+end 'builtinConformsTo'
+
+// Top-level dispatcher. Every consumer that asks "does this type satisfy
+// this interface" calls through here; the per-arm helpers below specialize
+// to the kind of `MaxonType` involved.
+//
+// For the `function` arm we always return false: function types don't
+// conform to anything in Phase 11.1's surface. Step 7's interface-typed
+// values may grow this when first-class function-typed conformances are
+// needed, but no stdlib code requires it today.
+//
+// For `unresolved` we return false rather than panicking: the caller
+// (typically a downstream constraint-validation walk) wants the
+// "does not conform" verdict to flow through to its own diagnostic.
+export function typeConformsTo(project Project, t MaxonType, interfaceName String) returns bool
+	return match t 'check'
+		boolean gives builtinConformsTo(interfaceName)
+		integer gives builtinConformsTo(interfaceName)
+		float gives builtinConformsTo(interfaceName)
+		string gives builtinConformsTo(interfaceName)
+		named(id) gives namedConformsTo(project, id: id, interfaceName: interfaceName)
+		genericInstance(gid) gives genericInstanceConformsTo(project, gid: gid, interfaceName: interfaceName)
+		typeParameter(id) gives typeParamConformsTo(project, id: id, interfaceName: interfaceName)
+		interface(id) gives interfaceConformsTo(project, id: id, interfaceName: interfaceName)
+		function gives false
+		unresolved gives false
+	end 'check'
+end 'typeConformsTo'
+
+// Named type: a struct or enum. Conformance lives in `project.conformances`,
+// populated by TypeResolution's `validateConformances` pass when the type
+// declared `implements I` and by `processExtensions` for added conformances.
+function namedConformsTo(project Project, id TypeNameId, interfaceName String) returns bool
+	let typeName = project.typeNames.get(id)
+	return project.conformances.contains(typeName, interfaceName: interfaceName)
+end 'namedConformsTo'
+
+// Generic instance: structural conformance lookup against the base type.
+// `Array with Int` conforms to `Iterable` iff `Array` itself conforms.
+// Conditional conformances (e.g. `extension Array implements Hashable
+// where Element is Hashable`) are also recorded under the base name in
+// `project.conformances`; the where-clause that gates them is checked
+// separately by `whereClauseSatisfied` at the call site, so this lookup
+// is the unconditional structural step.
+function genericInstanceConformsTo(project Project, gid GenericInstanceId, interfaceName String) returns bool
+	let (baseId, _) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	return project.conformances.contains(baseName, interfaceName: interfaceName)
+end 'genericInstanceConformsTo'
+
+// Type parameter: its constraints live as a String list on the
+// type-parameter registry, populated by the parser when a `where T is Trait`
+// clause was seen. A type-parameter conforms to `interfaceName` exactly
+// when the trait appears in its declared constraint set — the parser
+// already deduped constraint names, so this is a single linear scan.
+function typeParamConformsTo(project Project, id TypeParamId, interfaceName String) returns bool
+	let constraints = project.typeParameters.getConstraints(id)
+	for i in 0 upto constraints.count() 'scan'
+		let c = try constraints.get(i) otherwise panic("typeParamConformsTo: constraints.get OOB at {i}")
+		if c == interfaceName 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'typeParamConformsTo'
+
+// Interface-typed existential value (`var x Iterable with Int`): the value
+// itself carries an interface name. By definition the value conforms to
+// its own interface. For the inheritance walk (`BidirectionalIterator`
+// extends `Iterator`, so a `BidirectionalIterator` value also conforms to
+// `Iterator`) we walk `extendsNames` transitively. Step 7 needs this when
+// it emits witness tables for the parent interface alongside the child's.
+function interfaceConformsTo(project Project, id InterfaceTypeId, interfaceName String) returns bool
+	let valueIfaceName = project.interfaceRegistry.getName(id)
+	if valueIfaceName == interfaceName 'self'
+		return true
+	end 'self'
+	return interfaceExtendsTransitive(project, ifaceName: valueIfaceName, target: interfaceName)
+end 'interfaceConformsTo'
+
+// Walk `ifaceName`'s `extends` chain looking for `target`. The interface
+// registry is populated by TypeResolution's `resolveAllInterfaces` drain,
+// so by the time a constraint check runs every interface is reachable.
+// Linear walk is fine — interface inheritance is shallow in practice
+// (Iterator -> BidirectionalIterator is the deepest path in stdlib).
+function interfaceExtendsTransitive(project Project, ifaceName String, target String) returns bool
+	let iface = try project.interfaces.get(ifaceName) otherwise return false
+	for i in 0 upto iface.extendsNames.count() 'scan'
+		let parent = try iface.extendsNames.get(i) otherwise panic("interfaceExtendsTransitive: extendsNames.get OOB at {i}")
+		if parent == target 'directHit'
+			return true
+		end 'directHit'
+		if interfaceExtendsTransitive(project, ifaceName: parent, target: target) 'transHit'
+			return true
+		end 'transHit'
+	end 'scan'
+	return false
+end 'interfaceExtendsTransitive'
+
+// Verify every where-clause is satisfied under a substitution. Each clause
+// names the type-param scope it belongs to (Phase 11.1's WhereClause carries
+// `declaringTypeName`); the (declaringTypeName, paramName) tuple is the
+// type-param id key, so we re-intern through that to recover the id, look
+// up the substitution's binding, and ask `typeConformsTo`.
+//
+// A clause whose `declaringTypeName` is empty is a legacy parser entry from
+// before step 5 — we treat it as a satisfied no-op rather than panicking
+// so old callers continue to work; the parser change to set the
+// declaringTypeName on every emitted WhereClause is in the same step.
+//
+// A clause whose param resolves to `unresolved` (no binding in the
+// substitution) is treated as unsatisfied — the caller is expected to
+// supply a complete substitution before asking; an incomplete
+// substitution in this slot is a programming error one tier up, not a
+// silent pass.
+export function whereClauseSatisfied(project Project, constraints WhereClauseArray, subst TypeSubstitution) returns bool
+	for i in 0 upto constraints.count() 'scan'
+		let c = try constraints.get(i) otherwise panic("whereClauseSatisfied: constraints.get OOB at {i}")
+		if c.declaringTypeName.isEmpty() 'noScope'
+			continue
+		end 'noScope'
+		let paramId = project.typeParameters.intern(c.declaringTypeName, paramName: c.paramName)
+		let concrete = subst.lookup(paramId)
+		if not typeConformsTo(project, t: concrete, interfaceName: c.requiredTraitName) 'fail'
+			return false
+		end 'fail'
+	end 'scan'
+	return true
+end 'whereClauseSatisfied'

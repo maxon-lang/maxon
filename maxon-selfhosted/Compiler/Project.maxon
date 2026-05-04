@@ -178,6 +178,19 @@ export type Project
 	// parameters without a default are a compile error at the call site.
 	export var funcSignatures FuncSignatureMap
 
+	// Minimal first-param overload registry. When the parser detects a
+	// duplicate qualified function name and the two functions differ in their
+	// first non-`self` parameter type, both functions are re-keyed under
+	// mangled names (`Array.contains` -> `Array.contains$Element`,
+	// `Array.contains$Array_Element`) and this map records the bare ->
+	// variants mapping. Call-site resolution (lowerCall, lowerMethodCall,
+	// callResultType, methodCallResultType) consults this map before falling
+	// back to the bare lookup so an overloaded callee dispatches to the
+	// matching mangled name. Non-overloaded callees never appear here and
+	// pay nothing on the lookup path. Real duplicates (same first-param-type
+	// suffix) still report E2001.
+	export var overloadedNames OverloadedNameMap
+
 	// Top-level constants (compile-time evaluated string and integer values)
 	export var topLevelConstants ConstantMap
 
@@ -216,6 +229,15 @@ export type Project
 	// `structTypes` before any pass that consumes struct layouts runs.
 	export var unresolvedStructTypes UnresolvedStructTypeMap
 
+	// Phase 11.0 step 4: parser-recorded `extension TargetType ... end`
+	// blocks. Method bodies inside each extension are registered as
+	// qualified `TargetType.methodName` callees at parse time; this
+	// registry only stores per-extension metadata (added conformances,
+	// where-clauses, type-parameter rebindings) for later resolution.
+	// Multiple extensions may target the same type, so this is an array
+	// rather than a map.
+	export var unresolvedExtensions UnresolvedExtensionArray
+
 	// Enum type registry: maps enum names to their case lists. Populated by
 	// the TypeResolution pass as it drains `unresolvedEnums`. Each enum's
 	// cases are also registered as top-level integer constants
@@ -248,6 +270,44 @@ export type Project
 	// same shape share an id, so downstream equality checks on
 	// `MaxonType.function` reduce to integer compare.
 	export var functionTypes FunctionTypeRegistry
+
+	// Phase 11.0: type-parameter registry. Keyed by the
+	// (declaringTypeName, paramName) pair the parser collected while walking
+	// a generic `type Foo uses Element` (or `extension`/`function`) header.
+	// Stores the constraint set as a list of interface names — initially
+	// empty; populated when a `where` clause names the constraint set. The
+	// `MaxonType.typeParameter(id)` arm is a stable index into this table.
+	export var typeParameters TypeParamRegistry
+
+	// Phase 11.0: generic-instance interner. Every distinct `Base with (Args)`
+	// MaxonType the parser produces lands here as a parallel-array entry; the
+	// `MaxonType.genericInstance(baseId, args)` arm carries the args inline,
+	// but downstream consumers that want a stable id (Phase 11.2 layout
+	// descriptors, Phase 11.3 witness tables) intern through this registry.
+	// For Phase 11.0 the registry primarily exists so the parser-AST surface
+	// has a place to record observed instances.
+	export var genericInstances GenericInstanceRegistry
+
+	// Phase 11.0: conformance registry. Keyed by (typeName, interfaceName).
+	// Stores the source-level `with` arguments captured by the parser at the
+	// `implements` clause; later phases will fill in resolved methodImpls and
+	// the witness-table label. Phase 11.0 only seeds the keys.
+	export var conformances ConformanceRegistry
+
+	// Phase 11.0 step 2: project-wide table of resolved generic typealiases.
+	// Generic aliases (`typealias E = Base with(...)`) cannot live in
+	// `typealiases TypealiasMap` (StdType-typed) because their resolved form
+	// is a `MaxonType.genericInstance(...)`. The drain in TypeResolution
+	// promotes `UnresolvedTypeExpr.genericAlias(...)` into entries here.
+	export var genericTypealiases GenericTypealiasMap
+
+	// Phase 11.0: parallel registry of interface-typed value identifiers.
+	// `MaxonType.interface(id)` carries an InterfaceTypeId into this table;
+	// the table maps id back to the source-level interface name. Distinct
+	// from `interfaces IrInterfaceMap` (which is keyed by name and stores the
+	// resolved declaration). Interning by name means two `interface Iterable`
+	// arms share an id so structural equality reduces to integer compare.
+	export var interfaceRegistry InterfaceTypeRegistry
 
 	// Stage B (closures): monotonic counter used to mint unique
 	// `__closure_<N>` names for lifted closure bodies. Per-project rather
@@ -308,17 +368,24 @@ export type Project
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			overloadedNames: OverloadedNameMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
 			topLevelVars: TopLevelVarMap.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
+			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			enumTypes: EnumTypeMap.create(),
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
 			unresolvedInterfaces: UnresolvedInterfaceMap.create(),
 			interfaces: IrInterfaceMap.create(),
 			functionTypes: FunctionTypeRegistry.create(),
+			typeParameters: TypeParamRegistry.create(),
+			genericInstances: GenericInstanceRegistry.create(),
+			conformances: ConformanceRegistry.create(),
+			genericTypealiases: GenericTypealiasMap.create(),
+			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
 			rootPath: rootPath,
 			target: target,
@@ -380,6 +447,265 @@ export type FunctionTypeRegistry
 		return (params, ret)
 	end 'get'
 end 'FunctionTypeRegistry'
+
+// --- Phase 11.0 generic-aware registries ---
+//
+// All four registries follow the FunctionTypeRegistry pattern: parallel
+// arrays for the captured payload, a `count()`/`get()`/`intern()`/`getName()`
+// API, and a wide-range integer id type that mirrors the union arm. Keep
+// them minimal in Phase 11.0 — substitution / lookup machinery lands in
+// Phase 11 step 5; today these are just storage so the parser can record
+// what it sees.
+
+export typealias TypeParamConstraintArray = Array with StringArray
+
+// Phase 11.0: captured (declaringTypeName, paramName) entries for every
+// `T` / `Element` the parser sees in a `uses` clause. `constraints[i]` is
+// the list of required interface names for entry `i` (initially empty;
+// Phase 11.0 step 1g writes into it from `where` clauses). The display
+// name returned by `getName` is just the bare param name — the
+// declaringTypeName context isn't part of the printed form.
+export type TypeParamRegistry
+	export var declaringTypeNames StringArray
+	export var paramNames StringArray
+	export var constraints TypeParamConstraintArray
+
+	export static function create() returns TypeParamRegistry
+		return Self{declaringTypeNames: StringArray.create(), paramNames: StringArray.create(), constraints: TypeParamConstraintArray.create()}
+	end 'create'
+
+	// Number of distinct (declaringTypeName, paramName) pairs interned. Doubles
+	// as the next id `intern` will hand out for a fresh entry.
+	export function count() returns TypeParamId
+		return paramNames.count()
+	end 'count'
+
+	// Intern a type-parameter binding. Returns an existing id when the same
+	// (declaringTypeName, paramName) pair has already been recorded. Linear
+	// scan suffices for Phase 11.0 — generic decls are rare.
+	export function intern(declaringTypeName String, paramName String) returns TypeParamId
+		for i in 0 upto paramNames.count() 'scan'
+			let p = try paramNames.get(i) otherwise panic("TypeParamRegistry.intern: paramNames.get OOB at {i}")
+			let d = try declaringTypeNames.get(i) otherwise panic("TypeParamRegistry.intern: declaringTypeNames desync at {i}")
+			if p == paramName and d == declaringTypeName 'hit'
+				return i
+			end 'hit'
+		end 'scan'
+		let id = paramNames.count()
+		declaringTypeNames.push(declaringTypeName)
+		paramNames.push(paramName)
+		constraints.push(StringArray.create())
+		return id
+	end 'intern'
+
+	// Return the bare param name for an interned id (e.g. "Element"). Used by
+	// `MaxonType.toString` / `nameOrEmpty`. Returns the empty string for ids
+	// outside the interned range so cascading-error diagnostics paths don't
+	// turn an already-reported E3011/E3015 into a hard compiler crash —
+	// matches the same defensive contract as `TypeNameInterner.get`.
+	export function getName(id TypeParamId) returns String
+		return try paramNames.get(id) otherwise ""
+	end 'getName'
+
+	// True when the registry already has a binding for the given pair.
+	// Helper for callers that want to skip interning.
+	export function contains(declaringTypeName String, paramName String) returns bool
+		for i in 0 upto paramNames.count() 'scan'
+			let p = try paramNames.get(i) otherwise panic("TypeParamRegistry.contains: paramNames.get OOB at {i}")
+			let d = try declaringTypeNames.get(i) otherwise panic("TypeParamRegistry.contains: declaringTypeNames desync at {i}")
+			if p == paramName and d == declaringTypeName 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'contains'
+
+	// Append an interface-name constraint to an existing entry. Used by the
+	// parser's `where` clause walker; later phases consume the list during
+	// conformance validation. Idempotent — duplicate constraint names are
+	// silently dropped.
+	export function addConstraint(id TypeParamId, traitName String)
+		var bucket = try constraints.get(id) otherwise panic("TypeParamRegistry.addConstraint: invalid id {id}")
+		for i in 0 upto bucket.count() 'dedup'
+			let existing = try bucket.get(i) otherwise panic("TypeParamRegistry.addConstraint: bucket.get OOB at {i}")
+			if existing == traitName 'hit'
+				return
+			end 'hit'
+		end 'dedup'
+		bucket.push(traitName)
+	end 'addConstraint'
+
+	// Phase 11.1 (step 5): return the declared interface-name constraint list
+	// for a type-parameter id. Empty array on missing id (caller treats as
+	// "no constraints"); the empty StringArray makes the constraint walk
+	// in `Constraints.typeParamConformsTo` self-terminating.
+	export function getConstraints(id TypeParamId) returns StringArray
+		return try constraints.get(id) otherwise StringArray.create()
+	end 'getConstraints'
+
+	// Phase 11.1 (step 5): return every param name declared against
+	// `declaringTypeName`, in declaration order. Used by
+	// `Substitution.buildSubstitution` to pair a generic type's
+	// `usesParams` with a concrete `args` list. Empty array on miss
+	// (the caller `buildSubstitution` then returns an empty substitution).
+	export function getParamNames(declaringTypeName String) returns StringArray
+		var result = StringArray.create()
+		for i in 0 upto paramNames.count() 'scan'
+			let d = try declaringTypeNames.get(i) otherwise panic("TypeParamRegistry.getParamNames: declaringTypeNames.get OOB at {i}")
+			if d == declaringTypeName 'hit'
+				let p = try paramNames.get(i) otherwise panic("TypeParamRegistry.getParamNames: paramNames.get OOB at {i}")
+				result.push(p)
+			end 'hit'
+		end 'scan'
+		return result
+	end 'getParamNames'
+
+	// Phase 11.1 (step 5): return the declaring-type name for an interned id
+	// (e.g. "Array" for the `Element` param declared on Array). Used by
+	// `whereClauseSatisfied` to pair a where-clause's bare param name with
+	// the substitution's id space.
+	export function getDeclaringTypeName(id TypeParamId) returns String
+		return try declaringTypeNames.get(id) otherwise panic("TypeParamRegistry.getDeclaringTypeName: invalid id {id}")
+	end 'getDeclaringTypeName'
+end 'TypeParamRegistry'
+
+// Phase 11.0: interner for `MaxonType.genericInstance(baseId, args)`. Two
+// genericInstance arms with the same baseId and structurally equal args
+// share an id, so downstream equality checks reduce to integer compare.
+export type GenericInstanceRegistry
+	export var baseIds TypeNameIdArray
+	export var argLists MaxonTypeArrayArray
+
+	export static function create() returns GenericInstanceRegistry
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create()}
+	end 'create'
+
+	export function count() returns GenericInstanceId
+		return baseIds.count()
+	end 'count'
+
+	// Intern a (baseId, args) pair by structural identity. Linear scan over
+	// the existing entries — generic instances are rare enough that a hash
+	// lookup is overkill in Phase 11.0.
+	export function intern(baseId TypeNameId, args MaxonTypeArray) returns GenericInstanceId
+		for i in 0 upto baseIds.count() 'scan'
+			let existingBase = try baseIds.get(i) otherwise panic("GenericInstanceRegistry.intern: baseIds.get OOB at {i}")
+			let existingArgs = try argLists.get(i) otherwise panic("GenericInstanceRegistry.intern: argLists desync at {i}")
+			if existingBase == baseId and maxonTypeArraysStructurallyEqual(existingArgs, b: args) 'hit'
+				return i
+			end 'hit'
+		end 'scan'
+		let id = baseIds.count()
+		baseIds.push(baseId)
+		argLists.push(args)
+		return id
+	end 'intern'
+
+	// Resolve an id back to its (baseId, args) payload.
+	export function get(id GenericInstanceId) returns (TypeNameId, MaxonTypeArray)
+		let baseId = try baseIds.get(id) otherwise panic("GenericInstanceRegistry.get: invalid id {id}")
+		let args = try argLists.get(id) otherwise panic("GenericInstanceRegistry.get: argLists desync at id {id}")
+		return (baseId, args)
+	end 'get'
+end 'GenericInstanceRegistry'
+
+export typealias GenericInstanceId = int(0 to u64.max)
+export typealias TypeNameIdArray = Array with TypeNameId
+
+// Phase 11.0: registry of distinct interface-typed values. Keyed by
+// (typeName, interfaceName) the parser saw on `implements` clauses, but
+// also seeded by `MaxonType.interface(id)` arms parsed from type positions.
+// For Phase 11.0 we only need the bare interface name lookup; the
+// (typeName, interfaceName) matrix and method-impl table land in step 5+.
+export type ConformanceRegistry
+	export var typeNames StringArray
+	export var interfaceNames StringArray
+	export var withArgsList ConformanceWithArgsArray
+
+	export static function create() returns ConformanceRegistry
+		return Self{typeNames: StringArray.create(), interfaceNames: StringArray.create(), withArgsList: ConformanceWithArgsArray.create()}
+	end 'create'
+
+	export function count() returns ConformanceId
+		return typeNames.count()
+	end 'count'
+
+	// Intern a (typeName, interfaceName) pair with its captured `with` args.
+	// Returns an existing id on a duplicate insert (parser may revisit the
+	// same conformance during recovery).
+	export function intern(typeName String, interfaceName String, withArgs MaxonTypeArray) returns ConformanceId
+		for i in 0 upto typeNames.count() 'scan'
+			let t = try typeNames.get(i) otherwise panic("ConformanceRegistry.intern: typeNames.get OOB at {i}")
+			let n = try interfaceNames.get(i) otherwise panic("ConformanceRegistry.intern: interfaceNames desync at {i}")
+			if t == typeName and n == interfaceName 'hit'
+				return i
+			end 'hit'
+		end 'scan'
+		let id = typeNames.count()
+		typeNames.push(typeName)
+		interfaceNames.push(interfaceName)
+		withArgsList.push(withArgs)
+		return id
+	end 'intern'
+
+	// Resolve an id back to its (typeName, interfaceName, withArgs) payload.
+	export function get(id ConformanceId) returns (String, String, MaxonTypeArray)
+		let t = try typeNames.get(id) otherwise panic("ConformanceRegistry.get: invalid id {id}")
+		let n = try interfaceNames.get(id) otherwise panic("ConformanceRegistry.get: interfaceNames desync at id {id}")
+		let a = try withArgsList.get(id) otherwise panic("ConformanceRegistry.get: withArgsList desync at id {id}")
+		return (t, n, a)
+	end 'get'
+
+	// True when the registry has an entry for the given pair.
+	export function contains(typeName String, interfaceName String) returns bool
+		for i in 0 upto typeNames.count() 'scan'
+			let t = try typeNames.get(i) otherwise panic("ConformanceRegistry.contains: typeNames.get OOB at {i}")
+			let n = try interfaceNames.get(i) otherwise panic("ConformanceRegistry.contains: interfaceNames desync at {i}")
+			if t == typeName and n == interfaceName 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'contains'
+end 'ConformanceRegistry'
+
+export typealias ConformanceId = int(0 to u64.max)
+export typealias ConformanceWithArgsArray = Array with MaxonTypeArray
+
+// Phase 11.0: registry of interface-typed values for the
+// `MaxonType.interface(id)` arm. Maintains a String name table indexed by
+// id; interns by name so the existential value-type representation collapses
+// to integer compare under structural equality.
+export type InterfaceTypeRegistry
+	export var names StringArray
+
+	export static function create() returns InterfaceTypeRegistry
+		return Self{names: StringArray.create()}
+	end 'create'
+
+	export function count() returns InterfaceTypeId
+		return names.count()
+	end 'count'
+
+	// Intern an interface-typed value by name; returns an existing id on a
+	// duplicate intern.
+	export function intern(name String) returns InterfaceTypeId
+		for i in 0 upto names.count() 'scan'
+			let existing = try names.get(i) otherwise panic("InterfaceTypeRegistry.intern: names.get OOB at {i}")
+			if existing == name 'hit'
+				return i
+			end 'hit'
+		end 'scan'
+		let id = names.count()
+		names.push(name)
+		return id
+	end 'intern'
+
+	// Return the bare interface name for an interned id.
+	export function getName(id InterfaceTypeId) returns String
+		return try names.get(id) otherwise panic("InterfaceTypeRegistry.getName: invalid id {id}")
+	end 'getName'
+end 'InterfaceTypeRegistry'
 
 // --- Method-name index ---
 // Maps a bare method name (e.g. "isOn") to the list of qualified callee
@@ -480,10 +806,19 @@ export type TypeNameInterner
 		return existing
 	end 'intern'
 
-	// Resolve a TypeNameId back to its String name. Panics on an invalid id
-	// because the interner never hands out ids it can't resolve.
+	// Resolve a TypeNameId back to its String name. Returns the empty string
+	// for ids outside the interned range — under cascading type-resolution
+	// failures, a `MaxonType.named(badId)` may surface in diagnostic-formatting
+	// paths (`maxonTypeStructName` → `nameOrEmpty` → here) before the resolver
+	// has a chance to clean it up. Panicking here would turn an already-reported
+	// E3011/E3015 cascade into a hard compiler crash; returning empty makes the
+	// downstream consumers ("no struct match" / "<unresolved>") treat the bad
+	// id as "unknown type" and continue, so the user sees a clean error count
+	// and exit. The interner never hands out ids outside the range during
+	// normal operation, so the empty-string path is exclusively a
+	// diagnostics-cascade fallback.
 	export function get(id TypeNameId) returns String
-		return try names.get(id) otherwise panic("TypeNameInterner: invalid id {id}")
+		return try names.get(id) otherwise ""
 	end 'get'
 end 'TypeNameInterner'
 
@@ -733,6 +1068,31 @@ export type FuncSignature
 end 'FuncSignature'
 
 export typealias FuncSignatureMap = Map with(String, FuncSignature)
+
+// Minimal first-param overload registry. Maps a bare qualified function name
+// (the source-level name before mangling, e.g. `Array.contains`) to the list
+// of mangled variant names registered under it. Used by call-site resolution
+// to disambiguate overloaded callees by argument type. Empty for any name
+// with a single registration; only collisions populate this map.
+export typealias OverloadedNameMap = Map with(String, QualifiedNameArray)
+
+// Result of the parser's collision-handling helper. `isOverload` distinguishes
+// the "the two functions differ in their first non-self param type — registered
+// as overloads under mangled names" case from the "real duplicate — caller
+// should emit E2001" case. The `mangledName` field is meaningful only when
+// `isOverload` is true.
+export type OverloadResolution
+	export var isOverload bool
+	export var mangledName String
+
+	export static function overload(mangledName String) returns OverloadResolution
+		return Self{isOverload: true, mangledName: mangledName}
+	end 'overload'
+
+	export static function duplicate() returns OverloadResolution
+		return Self{isOverload: false, mangledName: ""}
+	end 'duplicate'
+end 'OverloadResolution'
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
 export typealias IntConstant = int(i64.min to i64.max)
@@ -763,6 +1123,12 @@ export union UnresolvedTypeExpr
 	// the resolved typealiases map; the fixed-point resolver picks the
 	// chain up regardless of the source-text order between A and B.
 	aliasName(name String)
+	// Phase 11.0 step 2: generic typealias `typealias E = Base with(A, B)`.
+	// `baseName` is the bare LHS name, `args` are the source-level arg names
+	// captured at parse time. The resolver pass turns this into a
+	// `MaxonType.genericInstance(...)` and stores it in `project.genericTypealiases`,
+	// not `project.typealiases` (which is StdType-typed).
+	genericAlias(baseName String, args StringArray)
 end 'UnresolvedTypeExpr'
 
 export type UnresolvedTypealias
@@ -787,6 +1153,19 @@ end 'UnresolvedTypealias'
 
 export typealias UnresolvedTypealiasMap = Map with(String, UnresolvedTypealias)
 
+// Phase 11.0 step 2: per-type table of inner `typealias Foo = ...` declarations
+// that appear inside a `type Body ... end` block. Stored as raw
+// `UnresolvedTypeExpr` so the resolver can promote them to concrete MaxonTypes
+// after type-name interning is complete. Keyed by the inner alias name.
+export typealias InnerAliasMap = Map with(String, UnresolvedTypeExpr)
+
+// Phase 11.0 step 2: project-wide table of resolved generic-typealias names
+// (e.g. `ElementMemory` at top level → `MaxonType.genericInstance(...)`). The
+// existing `typealiases TypealiasMap` is StdType-typed and cannot represent a
+// generic instance, so generic aliases live in this sidecar map. Lookup sites
+// that resolve typealiases by name should consult both maps.
+export typealias GenericTypealiasMap = Map with(String, MaxonType)
+
 // Parser-record for a `type Name` declaration awaiting registration. The
 // parser emits one of these instead of writing `project.structTypes` directly
 // — the type-resolution pass drains them into `structTypes` after every
@@ -810,13 +1189,70 @@ export type UnresolvedStructType
 	// present. Phase 3 of the interfaces plan validates conformance and
 	// substitutes associated types — for now this is metadata only.
 	export var implementedInterfaces ConformanceArray
+	// Phase 11.0: the parsed `uses T1, T2` clause's bare param names. Empty
+	// when no clause was present. Step 5+ resolves these against
+	// `project.typeParameters` and uses them to substitute generic field /
+	// method types.
+	export var typeParams StringArray
+	// Phase 11.0: the parsed `where T is Trait1 and Trait2, ...` clause as
+	// a flat array of (paramName, requiredTraitName) pairs (conjunctions
+	// expanded at parse time). Empty when no clause was present.
+	export var whereClauses WhereClauseArray
+	// Phase 11.0 step 2: inner `typealias Name = ...` declarations parsed
+	// inside the type body (e.g. `typealias ElementMemory = __ManagedMemory
+	// with Element` in `Array.maxon`). Stored as raw `UnresolvedTypeExpr` —
+	// the resolver promotes these into concrete MaxonTypes alongside the
+	// surrounding struct's resolution. Step 5+ consumes them during
+	// substitution; for now they are recorded only.
+	export var innerAliases InnerAliasMap
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedStructType
-		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces}
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, typeParams StringArray, whereClauses WhereClauseArray, innerAliases InnerAliasMap) returns UnresolvedStructType
+		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, typeParams: typeParams, whereClauses: whereClauses, innerAliases: innerAliases}
 	end 'create'
 end 'UnresolvedStructType'
 
 export typealias UnresolvedStructTypeMap = Map with(String, UnresolvedStructType)
+
+// Phase 11.0 step 4: parser record for an `extension TargetType ... end`
+// block. Method bodies inside the extension are registered into
+// `project` directly as qualified methods on `targetTypeName` at parse
+// time — this record only captures the per-extension metadata that
+// later resolution / witness-table passes need (added conformances,
+// where-clauses, declared type-parameter rebinding). Step 5 consumes
+// this registry to enforce conditional conformance and to validate
+// where-clauses at call-sites; step 7 walks it to emit conditional
+// witness tables.
+export type UnresolvedExtension
+	// Bare name of the type being extended (e.g. "Array").
+	export var targetTypeName String
+	// Type-parameter rebinding when the extension uses `extension Array
+	// uses E` syntax to give the target's parameters local names. Empty
+	// when the extension inherits the target's parameter names verbatim
+	// (the common case for `extension Array where Element is ...`).
+	export var targetTypeParams StringArray
+	// Conformances introduced by this extension's `implements I1, I2`
+	// clause. Empty when the extension only adds methods.
+	export var addedConformances ConformanceArray
+	// Constraints from the `where T is Trait1 and Trait2 ...` clause that
+	// gate when this extension's methods / conformances apply. Empty for
+	// unconditional extensions.
+	export var whereClauses WhereClauseArray
+	// Visibility tier inherited by every method declared inside the body.
+	// `export extension Array ...` makes added methods cross-file visible;
+	// a bare `extension Array ...` keeps them file-scoped.
+	export var visibility Visibility
+	// Source location of the target-type token, for any future
+	// per-extension diagnostic.
+	export var line ErrorLineNumber
+	export var column ErrorColumnNumber
+	export var filePath FilePath
+
+	export static function create(targetTypeName String, targetTypeParams StringArray, addedConformances ConformanceArray, whereClauses WhereClauseArray, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedExtension
+		return Self{targetTypeName: targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'UnresolvedExtension'
+
+export typealias UnresolvedExtensionArray = Array with UnresolvedExtension
 
 export union ConstantValue
 	// String-typed constants store an interned StringId (not raw bytes) so
@@ -1086,6 +1522,18 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		// `closureCreate`.
 		function then return StdType.i64
 		unresolved then panic("resolveMaxonTypeToStd: MaxonType.unresolved survived past TypeResolution. This means a value's producer op was not handled by TypeResolution's first pass (buildProducerTypes in TypeResolution.maxon — see callResultType, fieldLoadResultType, etc.). Recently added op kinds or callee names may need an entry there. Stack trace above shows the consumer that tripped the guard.")
+		// Phase 11.0 step 8b: generic-aware arms reach lowering once the
+		// hybrid-generic code paths are wired. Each variant currently
+		// lowers to a single i64 ABI slot — typeParameters carry whatever
+		// concrete value flows at the call site, genericInstance values are
+		// represented by their (struct-pointer-or-payload) i64 word, and
+		// interfaces are eventually fat pointers (16 bytes) but for the
+		// minimum-Array slice we treat them as i64 since interface-typed
+		// values inside generic bodies don't yet differentiate the witness
+		// pointer from the value at this layer.
+		typeParameter then return StdType.i64
+		genericInstance then return StdType.i64
+		interface then return StdType.i64
 	end 'stringGuard'
 end 'resolveMaxonTypeToStd'
 
@@ -1107,6 +1555,22 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 			end 'floatEnum'
 			return StdType.i64
 		end 'isEnum'
+		// Phase 11.0 step 8b: a named-type that survived TypeResolution
+		// without resolving to a primitive/struct/enum is most often a
+		// generic-typealias placeholder (`ElementMemory = __ManagedMemory
+		// with Element`) or an inner-alias defined on a struct body
+		// (`ElementMemory` inside `type Array uses Element`). Both
+		// ultimately lower to a single i64 ABI slot — generic instances of
+		// these aliases always shape themselves around a managed-memory or
+		// struct pointer, and inner-alias placeholders carry the same
+		// representation. Returning i64 here lets generic body lowering
+		// proceed without needing a separate substitution-walking pass.
+		if project.genericTypealiases.contains(name) 'isGenericAlias'
+			return StdType.i64
+		end 'isGenericAlias'
+		if anyStructHasInnerAlias(project, aliasName: name) 'isInnerAlias'
+			return StdType.i64
+		end 'isInnerAlias'
 		panic("resolveNamedToStdType: unknown named type '{name}' — TypeResolution should have rejected this")
 	end 'notAlias'
 	return aliased
@@ -1115,6 +1579,21 @@ end 'resolveNamedToStdType'
 export function resolveNamedIdToStdType(project Project, id TypeNameId) returns StdType
 	return resolveNamedToStdType(project, name: project.typeNames.get(id))
 end 'resolveNamedIdToStdType'
+
+// Phase 11.0 step 8b: scan struct bodies for an inner-alias entry matching
+// `aliasName`. Used by `resolveNamedToStdType` to recognize names that
+// originated from per-struct inner typealiases (e.g. `ElementMemory`
+// declared inside `type Array uses Element`) so they can lower to the
+// shared i64 ABI representation rather than triggering the
+// "unknown named type" panic.
+export function anyStructHasInnerAlias(project Project, aliasName String) returns bool
+	for (_, st) in project.structTypes 'eachStruct'
+		if st.innerAliases.contains(aliasName) 'hit'
+			return true
+		end 'hit'
+	end 'eachStruct'
+	return false
+end 'anyStructHasInnerAlias'
 
 // Struct field descriptor: name, type, and byte offset within the struct.
 export type StructField
@@ -1166,18 +1645,30 @@ export type StructType
 	// (E3016). Empty when the type declares no `implements` clause or its
 	// clause was rejected with E3015.
 	export var expectedMethods InterfaceMethodSigArray
+	// Phase 11.0 step 2: resolved inner-typealias table for this type.
+	// Promoted from `UnresolvedStructType.innerAliases` during the struct
+	// drain pass. Empty when the type body declared no inner typealiases.
+	// Step 5+ consults this map during substitution so a method body that
+	// names `ElementMemory` can resolve it back to the concrete generic
+	// instance the parser captured.
+	export var innerAliases ResolvedInnerAliasMap
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray) returns StructType
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray, innerAliases ResolvedInnerAliasMap) returns StructType
 		var fieldByName = FieldNameIndexMap.create()
 		for i in 0 upto fields.count() 'buildIndex'
 			let field = try fields.get(i) otherwise panic("StructType.create: fields.get OOB at {i} (count={fields.count()})")
 			try fieldByName.insert(field.name, value: i) otherwise panic("StructType.create: duplicate field '{field.name}' on type '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods}
+		return Self{name: name, fields: fields, byteSize: byteSize, fieldByName: fieldByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, innerAliases: innerAliases}
 	end 'create'
 end 'StructType'
 
 export typealias StructTypeMap = Map with(String, StructType)
+
+// Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
+// `GenericTypealiasMap`'s shape; lives on `StructType` so per-type
+// substitution can resolve names declared inside the type body.
+export typealias ResolvedInnerAliasMap = Map with(String, MaxonType)
 
 // --- Enum types ---
 //

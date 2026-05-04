@@ -8,14 +8,16 @@ Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity tog
 
 ```
 Phase 1:   Core Arithmetic        [x] arithmetic, comparison, unary, parentheses, expressions
-Phase 2:   Control Flow           [x] if/else, while, break/continue, return, match (statement+expression)
+Phase 2:   Control Flow           [x] if/else, while, break/continue (with for-range step block), return, match (statement+expression), for-range over integers, for-range over ASCII char literals
 Phase 3:   Function Params        [x] parameters, parameter-labels, assignment, method calls
 Phase 4:   Basic Types            [~] byte/float/type-casting work; implicit-type-conversion edge cases pending
 Phase 5:   Structs                [~] struct literals, methods, self, type/static methods passing;
                                       challenge-* and field-assign edge cases still pending
-Phase 6:   Managed Memory         [~] slab allocator + __ManagedMemory builtin done; arrays/for-in deferred to Phase 7+8+11
+Phase 6:   Managed Memory         [~] slab allocator + __ManagedMemory builtin done; arrays/for-in deferred to Phase 7+11
 Phase 7:   Strings                [ ] real String type — still using bootstrap printLiteral/printInt shims
-Phase 8:   Error Handling         [ ] try/throw/otherwise, throws clause
+Phase 8:   Error Handling         [~] throws/throw/try parsed; otherwise EXPR / 'label' block / (e) 'label' binding /
+                                      ignore / return / panic / throw / break / continue all work; E3059
+                                      type-mismatch checked at parse + TypeResolution time
 Phase 9:   Enums                  [~] enum decls (int/float-backed), match (statement+expression),
                                       methods on enums, keyword-as-case-name; associated values pending
 Phase 10:  Closures               [~] closure-self landed (function types in params, closure expressions,
@@ -44,13 +46,13 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 
 ### Front end
 - **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon), 1142 lines): full DFA tokenizer including hex/binary/octal/underscore/scientific literals, all operator tokens (`/` `%` `&` `|` `^` `<<` `>>` `~` `!` `&&` `||`), keywords (`true`/`false`/`while`/`break`/`continue`/`match`/`for`/`in`/`interface`/`extension`/`extends`/`implements`/`with`/`where`/`from`/`uses`).
-- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 5851 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `match` (statement and expression), variable reassignment, block scoping, integer/float/bool literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values, function-type annotations on parameters and closure literals (`(x T) gives <expr>`) with `self`-capture support.
+- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon), 5851 lines): function declarations with parameters and parameter labels, `var`/`let`, type annotations, `return`, `print()`, full `if`/`else if`/`else`, `while`/`break`/`continue`, `for VAR in N to/upto M 'label'` (integer or single-byte char-literal bounds; dedicated step block so `continue` advances the iter), `match` (statement and expression), `try ... otherwise ...` in seven dispatch shapes including labeled-block and binding-block forms, `throws` clause and `throw EnumName.case`, variable reassignment, block scoping, integer/float/bool/single-byte char literals, full operator precedence with all arithmetic/bitwise/comparison/logical/unary operators, parenthesized expressions, function calls with arguments, string interpolation in print, type casting (`int(x)`, `float(x)`, `byte(x)`), struct literals + field access, instance/static/type methods, `self`, `enum` declarations with int and float raw values, function-type annotations on parameters and closure literals (`(x T) gives <expr>`) with `self`-capture support.
 
 ### Mid end
 - **Maxon Dialect** ([`Compiler/IR/Maxon/`](Compiler/IR/Maxon/)): MaxonDialect, MaxonPrinter, scope tracking, source ranges, dead-function-elimination, `LowerMaxonToStd`.
 - **Std Dialect** ([`Compiler/IR/Std/`](Compiler/IR/Std/), 16 files): StdDialect/Module/Printer plus passes — `BorrowCheck`, `Canonicalize`, `CfgAnalysis`, `CommonSubexpressionElimination`, `DeadCodeElimination`, `InjectDrops`, `InsertRangeChecks`, `InstrumentCoverage`, `LoopInvariantCodeMotion`, `LowerABI`, `LowerStdToMir`, `Mem2Reg`.
 - **MIR** ([`Compiler/IR/MIR/`](Compiler/IR/MIR/)): SSA-form MIR dialect, printer, copy-coalescing pass.
-- **Type resolution** ([`TypeResolution.maxon`](Compiler/TypeResolution.maxon)) — name lookup, cast / compare validation between Maxon and Std lowering.
+- **Type resolution** ([`TypeResolution.maxon`](Compiler/TypeResolution.maxon)) — name lookup, cast / compare validation between Maxon and Std lowering, plus `validateTryOtherwiseTypes` for the post-typealias-resolution E3059 check on `__try_*_result` slots.
 - **Query system** ([`Queries.maxon`](Compiler/Queries.maxon), [`QueryDatabase.maxon`](Compiler/QueryDatabase.maxon), [`QueryEngine.maxon`](Compiler/QueryEngine.maxon)) — query-based incremental pipeline.
 
 ### Back end
@@ -81,11 +83,12 @@ All operators (`+`/`-`/`*`/`/`/`mod`/`and`/`or`/`xor`/`shl`/`shr`/`not`/comparis
 
 **Specs unlocked**: `if-statements` (full else-if chains), `return-statement`, plus `while`/`break`/`continue` exercised through other passing specs.
 
-Parser entry points exist at [`Parser.maxon:1372`](Compiler/Parser.maxon#L1372) (`parseWhileStatement`), [`Parser.maxon:1442`](Compiler/Parser.maxon#L1442) (`parseBreakStatement`), [`Parser.maxon:1454`](Compiler/Parser.maxon#L1454) (`parseContinueStatement`). Lowering uses existing `condBr`/`br`/`label` ops on both backends.
+Parser entry points exist at [`Parser.maxon:1372`](Compiler/Parser.maxon#L1372) (`parseWhileStatement`), [`Parser.maxon:1442`](Compiler/Parser.maxon#L1442) (`parseBreakStatement`), [`Parser.maxon:1454`](Compiler/Parser.maxon#L1454) (`parseContinueStatement`), [`Parser.maxon:2985`](Compiler/Parser.maxon#L2985) (`parseForStatement`). Lowering uses existing `condBr`/`br`/`label` ops on both backends.
+
+**For-range support**: `for VAR in START to/upto END 'label'` over integer bounds and ASCII byte char literals (`'a' to 'z'`). The loop emits a dedicated step block that increments the iter variable; `continue` jumps to the step block (was previously the header, which spun forever) — see `LoopContext.continueBlockId`. The `ranges` spec now passes 15/22 fragments (the remaining 7 need the `Range` stdlib type with iterator protocol — Phase 11 — and string interpolation on Character — Phase 7).
 
 **Still pending in this area**:
 - richer `if-statements` edge cases (commented in whitelist)
-- `for ... in` over integer ranges — needed before Phase 6's array iteration
 
 ---
 
@@ -200,25 +203,22 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 
 ---
 
-## Phase 8: Error Handling (~5 specs)
+## Phase 8: Error Handling — MOSTLY DONE
 
 **Goal**: `try`/`throw`/`otherwise`, `throws` clause, error propagation.
 
-### Specs to unlock
-`error-handling`, `if-try`, `missing-return-error` (already passing — sanity-check it stays green).
+### Done
+- **Parser**: `throws ErrorType` in signatures, `throw EnumName.case` statements, `try CALL` propagation form, `try CALL otherwise FALLBACK` with seven dispatch shapes — single expression, `ignore`, `return`, `panic`, `throw`, `break`, `continue`, plus the labeled-block forms `'label' STMTS end 'label'` (plain) and `(e) 'label' STMTS end 'label'` (binding form that exposes the error enum value to the handler body) — all in [`Parser.maxon:3765`](Compiler/Parser.maxon#L3765) (`parseTryExpression`) → [`parseTryFallbackDispatch`](Compiler/Parser.maxon#L3951) → [`finalizeFallbackHandler`](Compiler/Parser.maxon#L4078).
+- **Maxon Dialect**: `tryCall` op (rewritten in place from `call` by [`tryRewriteCallToTryCall`](Compiler/Parser.maxon#L4091)), `throw` op (terminator: emits `mrt_set_error(ordinal+1)` + default ret).
+- **Std Dialect / runtime**: `mrt_set_error(flag)` and `mrt_get_error_and_clear()` runtime helpers carry the error flag across the function-return ABI; lowering at [`LowerMaxonToStd.maxon:1975`](Compiler/IR/Maxon/LowerMaxonToStd.maxon#L1975) (`lowerThrow`) and [`LowerMaxonToStd.maxon:2024`](Compiler/IR/Maxon/LowerMaxonToStd.maxon#L2024) (`lowerTryCall`).
+- **Type checking**: E3059 type-mismatch between the call's success type and the `otherwise` fallback type runs in two places — at parse time when both types are concrete primitives (parseTryFallbackDispatch's category check, gated by `maxonTypeIsKnown`), and again at TypeResolution time via [`validateTryOtherwiseTypes`](Compiler/TypeResolution.maxon) which catches the typealias-named-call case (e.g. `try mayFail() otherwise 5.0` where `mayFail returns Integer`) that the parse-time check must skip because typealiases panic in `convertCastCategory` pre-resolution.
+- **`error-handling` spec**: 29/33 fragments now pass — all `try`/`otherwise` shapes, error-flag propagation, type-mismatch diagnostics, throwing-without-`try` rejection, and `try` against a non-throwing callee rejection.
 
-### Changes
-
-**Parser**: `throws` in signatures, `throw` statements, `try ... otherwise 'label' ... end 'label'`, `if try`.
-
-**Maxon Dialect**: `throwOp`, `tryCallOp` (returns result + error flag).
-
-**Std Dialect**: `tryCall`, `errorReturn` (return with error flag register).
-
-**Backends**: error flag register is RDX on x64, X1 on ARM64 (matches C# bootstrap convention). After `tryCall`, check flag and branch to `otherwise` block.
-
-### Files to modify
-- All pipeline files (both backends).
+### Still pending
+- 3 `error-handling` fragments need Phase 9's union types for associated-value error enums (`assoc-value-throw-catch{,-2}`, `otherwise-block-reused-binding`).
+- 1 `error-handling` fragment needs Phase 7 (`otherwise-return-string`).
+- `if-try` spec not yet whitelisted; sanity-check it parses and runs through the existing infrastructure.
+- The spec is **not** yet on the whitelist because per-fragment skip isn't implemented; whitelisting requires landing the four stragglers above.
 
 ---
 

@@ -645,7 +645,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
 		end 'eachField'
 
-		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
+		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'eachStruct'
 
@@ -791,6 +791,15 @@ function translateMaxonType(project Project, table StringArray, t MaxonType) ret
 		unresolved gives MaxonType.unresolved
 		named(id) gives translateNamedTypeId(project, table: table, id: id)
 		function gives MaxonType.unresolved
+		// TODO Phase 11.1+: cache the new generic-aware arms. No stdlib decl
+		// surfaced through `captureStdlibMetadata` produces these yet, so the
+		// cache never sees them. Pass placeholder unresolved for now (matching
+		// the `function` arm pattern) — a loud failure would block the
+		// existing cache round-trip the moment any stdlib type carries a
+		// generic field.
+		typeParameter gives MaxonType.unresolved
+		genericInstance gives MaxonType.unresolved
+		interface gives MaxonType.unresolved
 	end 'translate'
 end 'translateMaxonType'
 
@@ -817,7 +826,7 @@ function translateStructType(project Project, table StringArray, st StructType) 
 	for f in st.fields 'eachField'
 		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, table: table, t: f.fieldType), offset: f.offset))
 	end 'eachField'
-	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: st.expectedMethods)
+	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: st.expectedMethods, innerAliases: st.innerAliases)
 end 'translateStructType'
 
 // Capture parser metadata from a project into a StdlibCacheData.

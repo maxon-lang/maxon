@@ -1,0 +1,49 @@
+// Test: slab-os-direct-sorted-array
+function main() returns ExitCode
+	let a = __mm_raw_alloc(83886080)
+	let b = __mm_raw_alloc(83886080)
+	let c = __mm_raw_alloc(83886080)
+	let d = __mm_raw_alloc(83886080)
+	__mm_raw_free(d)
+	__mm_raw_free(c)
+	__mm_raw_free(b)
+	__mm_raw_free(a)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 83886080 : i64
+    %1 = mir.call @mm_raw_alloc(%0)
+    %2 = mir.mov_imm 83886080 : i64
+    %3 = mir.call @mm_raw_alloc(%2)
+    %4 = mir.mov_imm 83886080 : i64
+    %5 = mir.call @mm_raw_alloc(%4)
+    %6 = mir.mov_imm 83886080 : i64
+    %7 = mir.call @mm_raw_alloc(%6)
+    %9 = mir.call @mm_raw_free(%7)
+    %11 = mir.call @mm_raw_free(%5)
+    %13 = mir.call @mm_raw_free(%3)
+    %15 = mir.call @mm_raw_free(%1)
+    %16 = mir.global_addr @__mm_raw_alloc_count
+    %17 = mir.load %16, 0
+    %19 = mir.mov_imm 0 : i64
+    %20 = mir.cmp eq, %17, %19
+    mir.cond_br %20 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %21 = mir.mov_imm 0 : i64
+    mir.ret %21
+  ok_1.after:
+    %22 = mir.mov_imm 1 : i64
+    mir.ret %22
+  }
+}
+---

@@ -325,6 +325,17 @@ function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArr
 	if newThen == thenTarget and newElse == elseTarget 'noChange'
 		return RewrittenTerminator.none
 	end 'noChange'
+	// If skip-through collapsed both arms onto the same successor, the
+	// condition is dead — emit an unconditional branch. The destroySSA
+	// pass relies on `pickThenTarget` finding an edge whose target differs
+	// from the recorded elseTarget, which doesn't hold once thenTarget ==
+	// elseTarget; without this normalization we'd panic at the target
+	// phase. Keeping the then-arm args is safe because both arms forward
+	// to the same block in this rewrite.
+	if newThen == newElse 'collapsed'
+		logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr collapsed both arms -> br block_{newThen}")
+		return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(newThen, argIds: newThenArgs)))
+	end 'collapsed'
 	logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
 	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
 end 'rewriteCondBr'

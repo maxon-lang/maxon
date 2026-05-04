@@ -1,0 +1,66 @@
+// Test: mixed-raw-and-tracked
+function main() returns ExitCode
+	let p = __mm_raw_alloc(64)
+	let q = __mm_alloc(64, destructor: 0, tag: 0)
+	let r = __mm_raw_alloc(128)
+	let s = __mm_alloc(128, destructor: 0, tag: 0)
+	__mm_raw_free(p)
+	__mm_decref(q)
+	__mm_raw_free(r)
+	__mm_decref(s)
+	let raw = __mm_raw_alloc_count()
+	let tracked = __mm_alloc_count()
+	if raw != 0 'rawFail'
+		return 1
+	end 'rawFail'
+	if tracked != 0 'trackedFail'
+		return 2
+	end 'trackedFail'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 64 : i64
+    %1 = mir.call @mm_raw_alloc(%0)
+    %2 = mir.mov_imm 64 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.call @mm_alloc(%2, %3, %4)
+    %6 = mir.mov_imm 128 : i64
+    %7 = mir.call @mm_raw_alloc(%6)
+    %8 = mir.mov_imm 128 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @mm_alloc(%8, %9, %10)
+    %13 = mir.call @mm_raw_free(%1)
+    %15 = mir.call @mm_decref(%5)
+    %17 = mir.call @mm_raw_free(%7)
+    %19 = mir.call @mm_decref(%11)
+    %20 = mir.global_addr @__mm_raw_alloc_count
+    %21 = mir.load %20, 0
+    %22 = mir.global_addr @__mm_alloc_count
+    %23 = mir.load %22, 0
+    %25 = mir.mov_imm 0 : i64
+    %26 = mir.cmp ne, %21, %25
+    mir.cond_br %26 [then: rawFail_1(), else: rawFail_1.after()]
+  rawFail_1:
+    %27 = mir.mov_imm 1 : i64
+    mir.ret %27
+  rawFail_1.after:
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp ne, %23, %29
+    mir.cond_br %30 [then: trackedFail_3(), else: trackedFail_3.after()]
+  trackedFail_3:
+    %31 = mir.mov_imm 2 : i64
+    mir.ret %31
+  trackedFail_3.after:
+    %32 = mir.mov_imm 0 : i64
+    mir.ret %32
+  }
+}
+---

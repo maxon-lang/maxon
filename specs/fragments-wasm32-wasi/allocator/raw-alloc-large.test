@@ -1,0 +1,35 @@
+// Test: raw-alloc-large
+function main() returns ExitCode
+	let big = 100 * 1024 * 1024
+	let p = __mm_raw_alloc(big)
+	__mm_raw_free(p)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 104857600 : i64
+    %6 = mir.call @mm_raw_alloc(%4)
+    %8 = mir.call @mm_raw_free(%6)
+    %9 = mir.global_addr @__mm_raw_alloc_count
+    %10 = mir.load %9, 0
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.cmp eq, %10, %12
+    mir.cond_br %13 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  ok_1.after:
+    %15 = mir.mov_imm 1 : i64
+    mir.ret %15
+  }
+}
+---

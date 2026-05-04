@@ -3104,9 +3104,13 @@ func __managed_mem_set 3 i64
     std condBr v4 err lo_ok
 
   block lo_ok:
-    // if idx < length -> ok else -> err
+    // if idx < capacity -> ok else -> err. set() bounds-checks against
+    // capacity, NOT length, so push()'s "set then setLength" sequence is
+    // valid: push reserves capacity for len+1, writes the new element at
+    // slot `len` (which is < capacity but == length), then bumps length.
+    // Matches C# bootstrap semantics in `LowerManagedMemSet`.
     v5 = std loadSlot 0
-    v6 = std loadIndirect v5 8
+    v6 = std loadIndirect v5 16
     v7 = std loadSlot 1
     v8 = std cmpI64Lt v7 v6
     std condBr v8 ok err

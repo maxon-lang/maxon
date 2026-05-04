@@ -100,6 +100,12 @@ function addCalleesFromOpIndex(project Project, module MaxonModule, opIdx OpInde
 		closureCreate(_, funcName, _, _, _, _) then markCallee(funcName, worklist: worklist, seen: seen)
 		closureEnvLoad then return
 		indirectCall then return
+		// Phase 11 Step 9 (parser-only): forInIterable carries no callee
+		// names — the iterator-protocol method resolution that *would*
+		// reference `Iterable.createIterator` etc. is deferred to Step 8.
+		// No worklist seeding happens here; if Step 8 needs to keep
+		// iterator-protocol implementations alive it will hook in then.
+		forInIterable then return
 	end 'op'
 end 'addCalleesFromOpIndex'
 

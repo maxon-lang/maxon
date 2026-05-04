@@ -84,6 +84,14 @@ export type Parser
 	var namespace String
 	// Current type name when parsing inside a type declaration (for Self resolution)
 	var currentTypeName String
+	// Phase 11.0: bare names of the in-scope type parameters declared by the
+	// enclosing `type X uses A, B` (or `extension`/`function`) header. Set on
+	// type-body entry, cleared on type-body exit. `parseTypeRef` consults
+	// this list before its single-token type lookup so a bare identifier
+	// matching one of the entries lowers to `MaxonType.typeParameter(id)`
+	// instead of falling through to `internMaxonType` (which would treat the
+	// name as a regular `MaxonType.named`).
+	var currentTypeParams StringArray
 	// Visibility tier of the type currently being parsed. Set by `parseTypeDecl`
 	// at body-entry, cleared at body-exit. Static decls and instance methods
 	// inside the body inherit this — `module type T { static var f = 0 }`
@@ -167,7 +175,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -277,6 +285,23 @@ export type Parser
 			return MaxonType.function(id)
 		end 'isFn'
 
+		// Phase 11.0 step 3b: bare `Self` in any type position resolves to the
+		// enclosing type's name. The lexer emits `Self` as a dedicated
+		// `selfType` keyword token, so `isTypeNameToken` (identifier/primitive
+		// only) doesn't accept it — handle it here before the generic single-
+		// token path. Outside a type/extension body the keyword is meaningless;
+		// report a clean diagnostic and synchronize.
+		let maybeSelf = cursor.current()
+		if maybeSelf.kind == TokenKind.selfType 'isSelfType'
+			if currentTypeName.isEmpty() 'noCtx'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "'Self' is only valid inside a type or extension body", line: maybeSelf.line, column: maybeSelf.column, filePath: filePath)
+				synchronize()
+				return MaxonType.unresolved
+			end 'noCtx'
+			try eat(TokenKind.selfType)
+			return internMaxonType(project, name: currentTypeName)
+		end 'isSelfType'
+
 		// Single-token type — identical to the legacy parameter-type path.
 		let typeToken = try consumeExpecting("type name")
 		if not isTypeNameToken(typeToken) 'badType'
@@ -286,8 +311,58 @@ export type Parser
 			// drop this value before it reaches downstream consumers.
 			return MaxonType.unresolved
 		end 'badType'
+
+		// Phase 11.0: a bare identifier matching one of the in-scope type
+		// parameters lowers to `MaxonType.typeParameter(id)`. The lookup
+		// table is empty outside generic type bodies, so non-generic code
+		// pays only the .count() check. We don't apply this rule to keyword
+		// tokens (Self, primitive type names) since those have their own
+		// resolution paths.
+		if typeToken.kind == TokenKind.identifier and isTypeParameterName(typeToken.value) 'isTypeParam'
+			let pid = project.typeParameters.intern(currentTypeName, paramName: typeToken.value)
+			return MaxonType.typeParameter(pid)
+		end 'isTypeParam'
+
+		// Phase 11.0: extend `Base with Args`. After consuming the base name,
+		// peek for `with`; if present, parse a comma-separated arg list (or a
+		// single arg) and intern through the genericInstance registry. The
+		// `Base` half of `Base with X` always resolves through the regular
+		// type-name interner — generic-instance rewriting only kicks in once
+		// `with` is observed.
+		if at(TokenKind.with) 'isGenericInstance'
+			try eat(TokenKind.with)
+			var args = MaxonTypeArray.create()
+			if accept(TokenKind.leftParen) 'parenList'
+				while not at(TokenKind.rightParen) 'argLoop'
+					let inner = try parseTypeRef()
+					args.push(inner)
+				end 'argLoop'
+				try expect(TokenKind.rightParen)
+			end 'parenList' else 'singleArg'
+				let inner = try parseTypeRef()
+				args.push(inner)
+			end 'singleArg'
+			let baseId = project.typeNames.intern(typeToken.value)
+			let giid = project.genericInstances.intern(baseId, args: args)
+			return MaxonType.genericInstance(giid)
+		end 'isGenericInstance'
+
 		return internMaxonType(project, name: typeToken.value)
 	end 'parseTypeRef'
+
+	// Phase 11.0: True iff `name` is one of the in-scope type-parameter bare
+	// names (collected from a `uses` clause on the enclosing type/extension).
+	// `currentTypeParams` is empty outside generic bodies, so the loop
+	// short-circuits to false in non-generic code.
+	function isTypeParameterName(name String) returns bool
+		for i in 0 upto currentTypeParams.count() 'scan'
+			let p = try currentTypeParams.get(i) otherwise return false
+			if p == name 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'isTypeParameterName'
 
 	// Parse a parenthesized parameter list of the form `name Type, name Type, ...`
 	// with optional default values `name Type = literal`.
@@ -392,6 +467,51 @@ export type Parser
 		return nameToken.value
 	end 'parseThrowsClause'
 
+	// Phase 11.0: parse an optional `where T is Trait1 [and Trait2]* [, T2 is
+	// Trait3 ...]*` clause. Conjunction is expanded at parse time so the
+	// returned array stores one (paramName, requiredTraitName) entry per
+	// requirement. Bare-name capture only — Phase 11 step 5 resolves trait
+	// names against the interface registries.
+	//
+	// Grammar:
+	//     whereClause = 'where' constraint (',' constraint)*
+	//     constraint  = IDENT 'is' IDENT ('and' IDENT)*
+	//
+	// `is` is a TokenKind keyword in expression contexts (reference identity),
+	// but the where-clause grammar disambiguates positionally: the cursor only
+	// reaches this slot when the parent decl-header parser explicitly invokes
+	// `parseWhereClause`. Commas separating successive constraints are
+	// dropped by the lexer's `skipOther`, so the loop's inner identifier
+	// check naturally picks up the next constraint without an explicit
+	// `accept(TokenKind.comma)`.
+	function parseWhereClause() returns WhereClauseArray throws ParserError
+		var clauses = WhereClauseArray.create()
+		if not accept(TokenKind.where) 'noWhere'
+			return clauses
+		end 'noWhere'
+		while at(TokenKind.identifier) 'paramLoop'
+			let paramToken = try consume()
+			// `is` is a TokenKind keyword. Use accept (not at-then-eat) so a
+			// missing `is` reports through the regular tokenMismatch path
+			// rather than infinite-looping on a malformed clause.
+			if not accept(TokenKind.is) 'missingIs'
+				let stray = cursor.current()
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "expected 'is' after type-parameter name in where clause, got '{tokenValueToString(stray.value)}'", line: stray.line, column: stray.column, filePath: filePath)
+				return clauses
+			end 'missingIs'
+			// First trait name is mandatory; subsequent `and`-joined names
+			// are optional. Each (paramName, traitName) pair becomes its own
+			// WhereClause entry — the conjunction is flat at the AST level.
+			var firstTrait = true
+			while firstTrait or accept(TokenKind.and) 'traitLoop'
+				firstTrait = false
+				let traitToken = try consumeExpecting("trait name")
+				clauses.push(WhereClause.create(paramToken.value, requiredTraitName: traitToken.value))
+			end 'traitLoop'
+		end 'paramLoop'
+		return clauses
+	end 'parseWhereClause'
+
 	// Parse an optional `implements I1, I2 with X, I3 with (X, Y)` clause on a
 	// `type` or `enum` declaration. Returns an empty array when the keyword
 	// isn't present. Commas are stripped at the lexer (see actionTable's
@@ -441,22 +561,18 @@ export type Parser
 	end 'parseImplementsClause'
 
 	// Parse an optional `returns Type` clause. Returns MaxonReturnType.void if
-	// the clause is absent. When isMethod is true and the return type is
-	// `Self`, resolves to the enclosing type (typeName). For plain functions,
-	// `Self` is consumed via the normal identifier path.
-	function parseOptionalReturnType(isMethod bool, typeName String) returns MaxonReturnType throws ParserError
+	// the clause is absent. The return-type slot routes through `parseTypeRef`,
+	// which is the canonical entry that handles `Self`, generic instances
+	// (`Base with X`), type-parameter names, and function types uniformly.
+	// `Self` resolves against `currentTypeName` inside parseTypeRef.
+	function parseOptionalReturnType() returns MaxonReturnType throws ParserError
 		if not at(TokenKind.returns) 'noReturns'
 			return MaxonReturnType.void
 		end 'noReturns'
 
 		try eat(TokenKind.returns)
-		if isMethod and at(TokenKind.selfType) 'isSelfReturn'
-			try eat(TokenKind.selfType)
-			return MaxonReturnType.value(internMaxonType(project, name: typeName))
-		end 'isSelfReturn'
-
-		let typeToken = try consumeExpecting("type name")
-		return MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
+		let returnType = try parseTypeRef()
+		return MaxonReturnType.value(returnType)
 	end 'parseOptionalReturnType'
 
 	// Unified parser for both free functions and methods (static or instance).
@@ -530,12 +646,21 @@ export type Parser
 		end 'expandAbi'
 		let abiParamCount = abiParamTypes.count() as ParamCount
 
-		let returnType_ = try parseOptionalReturnType(isMethod: isMethod, typeName: typeName)
+		let returnType_ = try parseOptionalReturnType()
 		// Capture the void-ness up front so we can release the `returnType_`
 		// borrow before calling into parseStatements (which mutates self.cursor).
 		let returnIsVoid = maxonReturnTypeIsVoid(returnType_)
 
 		let throwsTypeName_ = try parseThrowsClause()
+
+		// Phase 11.0: optional function-level `where T is Trait` clause. We
+		// parse and discard for now — function-level constraint enforcement
+		// is Phase 11 step 5's job and Array.maxon doesn't carry any
+		// function-level `where` clauses (its `where`s all live on
+		// `extension` declarations). Parsing here keeps any future
+		// generic-function header round-tripping through this path without a
+		// special-case parser branch.
+		_ = try parseWhereClause()
 
 		// Tolerate EOF here so a truncated source (e.g. `function main()` with no
 		// body) reaches the missing-`end` diagnostic via skipEndAndLabel below
@@ -558,15 +683,32 @@ export type Parser
 		// Register return type so callers can determine result kind. Display
 		// the bare name for free functions and the qualified name for methods
 		// in duplicate diagnostics.
+		//
+		// Minimal first-param overload support: when the bare qualified name
+		// is already taken, attempt to mangle both functions by their first
+		// non-self parameter type. If the suffixes differ the two functions
+		// coexist under mangled names and the bare name is recorded in
+		// `project.overloadedNames` so call-site resolution can disambiguate.
+		// Same suffixes still report E2001 — that's a real duplicate.
 		var funcIsDuplicate = false
+		var registrationName = qualifiedName
 		try project.funcReturnTypes.insert(qualifiedName, value: returnType_) otherwise 'dupFunc'
-			funcIsDuplicate = true
-			if isMethod 'methodDisplay'
-				reportDuplicateFunction(qualifiedName, nameToken: nameToken)
-			end 'methodDisplay' else 'freeDisplay'
-				reportDuplicateFunction(nameToken.value, nameToken: nameToken)
-			end 'freeDisplay'
+			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, hasSelf: isInstance, returnType: returnType_)
+			if resolution.isOverload 'isOverload'
+				registrationName = resolution.mangledName
+			end 'isOverload' else 'realDup'
+				funcIsDuplicate = true
+				if isMethod 'methodDisplay'
+					reportDuplicateFunction(qualifiedName, nameToken: nameToken)
+				end 'methodDisplay' else 'freeDisplay'
+					reportDuplicateFunction(nameToken.value, nameToken: nameToken)
+				end 'freeDisplay'
+			end 'realDup'
 		end 'dupFunc'
+		// Stamp the (possibly-mangled) registration name onto the IrFunction
+		// so downstream passes (LowerMaxonToStd, codegen) emit the function
+		// under the same key the call-site lookup hits.
+		func.name = registrationName
 		// Register signature for call-site named-arg reordering and defaults.
 		// Skip on duplicate — funcReturnTypes.insert already reported it and
 		// the first signature entry wins. Also seed the method-name index so
@@ -575,11 +717,11 @@ export type Parser
 		// sidecar so call-site qualification can filter cross-namespace
 		// candidates by the reader's path.
 		if not funcIsDuplicate 'registerSignature'
-			try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{qualifiedName}' but funcReturnTypes reported none")
-			project.methodNameIndex.record(qualifiedName)
-			try project.funcVisibilities.insert(qualifiedName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
+			try project.funcSignatures.insert(registrationName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{registrationName}' but funcReturnTypes reported none")
+			project.methodNameIndex.record(registrationName)
+			try project.funcVisibilities.insert(registrationName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
 			// Register the throws-clause type name (empty string = non-throwing).
-			try project.funcThrowsTypes.insert(qualifiedName, value: throwsTypeName_) otherwise ignore
+			try project.funcThrowsTypes.insert(registrationName, value: throwsTypeName_) otherwise ignore
 		end 'registerSignature'
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 		// Seed the parser's current-function/block tracker — expression-level
@@ -889,6 +1031,92 @@ export type Parser
 	function reportDuplicateFunction(displayName String, nameToken Token)
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{displayName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 	end 'reportDuplicateFunction'
+
+	// Try to register the current function as a first-param overload of an
+	// already-registered function with the same qualified name. Called from
+	// parseFunction's collision branch (when funcReturnTypes.insert reported
+	// a duplicate). Returns:
+	//   - isOverload=true,  mangledName=<new function's mangled name> — the
+	//     existing function has been re-keyed under its own mangled form,
+	//     `overloadedNames` has been updated, and the caller should register
+	//     the new function under `mangledName`.
+	//   - isOverload=false, mangledName="" — the two signatures share the
+	//     same first-param suffix (a real duplicate). The caller emits E2001.
+	//
+	// `paramTypes` is the new function's full param list including __self
+	// when isInstance; `hasSelf` controls the slot-0 skip when computing the
+	// first-param suffix.
+	function tryRegisterOverload(qualifiedName String, paramTypes MaxonTypeArray, hasSelf bool, returnType MaxonReturnType) returns OverloadResolution
+		let newSuffix = mangleSuffixForFirstParam(project, paramTypes: paramTypes, hasSelf: hasSelf)
+		// Existing function's first-param type comes from its registered
+		// FuncSignature. If we don't find one, we can't compute its suffix
+		// and must fall back to the duplicate diagnostic.
+		let existingSig = try project.funcSignatures.get(qualifiedName) otherwise return OverloadResolution.duplicate()
+		let existingHasSelf = signatureFirstParamIsSelf(existingSig)
+		let existingSuffix = mangleSuffixForFirstParam(project, paramTypes: existingSig.paramTypes, hasSelf: existingHasSelf)
+		if existingSuffix == newSuffix 'sameSuffix'
+			return OverloadResolution.duplicate()
+		end 'sameSuffix'
+		let existingMangled = "{qualifiedName}{existingSuffix}"
+		let newMangled = "{qualifiedName}{newSuffix}"
+		// Re-key the existing entry under its mangled form. We compute the
+		// re-keyed values BEFORE removing so a missing intermediate (e.g. a
+		// stdlib-restored function with no funcVisibilities entry) doesn't
+		// strand the bare name.
+		rekeyExistingFunction(qualifiedName, mangledName: existingMangled)
+		// Register the bare-name overload bucket. Both names go in so a
+		// future third overload can extend the same bucket.
+		var bucket = try project.overloadedNames.get(qualifiedName) otherwise QualifiedNameArray.create()
+		if bucket.count() == 0 'fresh'
+			bucket.push(existingMangled)
+		end 'fresh'
+		bucket.push(newMangled)
+		project.overloadedNames.upsert(qualifiedName, value: bucket)
+		// Insert the new function's funcReturnTypes entry under its mangled
+		// name; the caller handles funcSignatures / funcVisibilities /
+		// funcThrowsTypes / methodNameIndex inserts under `registrationName`.
+		try project.funcReturnTypes.insert(newMangled, value: returnType) otherwise panic("tryRegisterOverload: funcReturnTypes.insert collision on freshly-mangled name '{newMangled}'")
+		return OverloadResolution.overload(newMangled)
+	end 'tryRegisterOverload'
+
+	// Re-key an existing funcReturnTypes / funcSignatures / funcVisibilities /
+	// funcThrowsTypes / IrFunction.name entry from `bareName` to `mangledName`.
+	// methodNameIndex receives an additional bucket entry for `mangledName`;
+	// the stale `bareName` entry is left in place because the bucket is an
+	// Array (no remove API) — call-site lookups filter out stale entries
+	// when funcReturnTypes.contains returns false.
+	function rekeyExistingFunction(bareName String, mangledName String)
+		if let rt = try project.funcReturnTypes.get(bareName) 'haveRt'
+			try project.funcReturnTypes.insert(mangledName, value: rt) otherwise ignore
+			_ = project.funcReturnTypes.remove(bareName)
+		end 'haveRt'
+		if let sig = try project.funcSignatures.get(bareName) 'haveSig'
+			try project.funcSignatures.insert(mangledName, value: sig) otherwise ignore
+			_ = project.funcSignatures.remove(bareName)
+		end 'haveSig'
+		if let vis = try project.funcVisibilities.get(bareName) 'haveVis'
+			try project.funcVisibilities.insert(mangledName, value: vis) otherwise ignore
+			_ = project.funcVisibilities.remove(bareName)
+		end 'haveVis'
+		if let th = try project.funcThrowsTypes.get(bareName) 'haveTh'
+			try project.funcThrowsTypes.insert(mangledName, value: th) otherwise ignore
+			_ = project.funcThrowsTypes.remove(bareName)
+		end 'haveTh'
+		project.methodNameIndex.record(mangledName)
+		// Walk the current module's functions for an IrFunction whose .name
+		// matches the bare key and rewrite it. Cross-file overloads aren't
+		// supported in this minimal pass — the existing function is expected
+		// to live in the same module being parsed (Array.maxon's two
+		// `contains` overloads sit in one extension block, satisfying this).
+		for i in 0 upto module.functions.count() 'eachFunc'
+			var f = try module.functions.get(i) otherwise continue
+			if f.name == bareName 'match'
+				f.name = mangledName
+				try module.functions.set(i, value: f) otherwise ignore
+				return
+			end 'match'
+		end 'eachFunc'
+	end 'rekeyExistingFunction'
 
 	// Reports a literal-overflow error at `token` with the fully-formatted
 	// `message`. Callers are responsible for any cursor advancement appropriate
@@ -1390,7 +1618,7 @@ export type Parser
 			type then try parseTypeDecl(visibility)
 			enum then try parseEnumDecl(visibility)
 			interface then try parseInterfaceDecl(visibility)
-			extension then try parseExtensionStub()
+			extension then try parseExtension(visibility)
 			let then try parseTopLevelDecl(typeName: "", mutable: false, visibility: visibility)
 			var then try parseTopLevelDecl(typeName: "", mutable: true, visibility: visibility)
 			typealias then try parseTopLevelTypealias(visibility)
@@ -1413,13 +1641,41 @@ export type Parser
 
 		try expect(TokenKind.equals)
 
+		let (expr, ok) = try parseTypealiasRhs(nameToken)
+		if not ok 'rhsBad'
+			return
+		end 'rhsBad'
+
+		// Duplicate detection runs against both unresolved and resolved
+		// registries — the latter catches duplicates that survive a stdlib
+		// pre-seed where some aliases are already in `typealiases` before the
+		// parser starts.
+		if project.typealiases.contains(nameToken.value) or project.unresolvedTypealiases.contains(nameToken.value) 'duplicate'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			skipToNextLine()
+			return
+		end 'duplicate'
+
+		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+		skipToNextLine()
+	end 'parseTopLevelTypealias'
+
+	// Phase 11.0 step 2: shared RHS parser used by both top-level and
+	// inner-body typealias declarations. Returns the captured expression and
+	// a success flag — when `false` the caller should bail out (the helper
+	// has already emitted a diagnostic and called `skipToNextLine`). The
+	// token cursor is positioned just past the RHS on success and somewhere
+	// on the next line on failure. `nameToken` is used only for diagnostic
+	// anchoring — the helper does not consume the alias name itself.
+	function parseTypealiasRhs(nameToken Token) returns (UnresolvedTypeExpr, bool) throws ParserError
 		let baseToken = cursor.current()
 
 		// `expr` is the captured RHS; `sawValidBase` tracks whether we saw
 		// something we know how to capture. Recognized RHS forms are `bool`,
-		// `int(L to U)`, `byte(L to U)`, `float(L to U)`, and a bare
-		// identifier (`typealias A = B`). The resolver pass takes the
-		// captured form and computes the eventual StdType.
+		// `int(L to U)`, `byte(L to U)`, `float(L to U)`, a bare identifier
+		// (`typealias A = B`), and a generic instance (`Base with(A,B)` or
+		// `Base with X`). The resolver pass takes the captured form and
+		// computes the eventual StdType (or, for genericAlias, MaxonType).
 		var expr = UnresolvedTypeExpr.boolPrim
 		var sawValidBase = false
 
@@ -1442,7 +1698,7 @@ export type Parser
 				end 'byteEx'
 				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: filePath)
 				skipToNextLine()
-				return
+				return (expr, false)
 			end 'noParen'
 
 			try eat(TokenKind.leftParen)
@@ -1469,70 +1725,96 @@ export type Parser
 		// the target alias is itself resolved, so source-text order doesn't
 		// matter — `A` can be declared before or after `B`.
 		//
-		// Step 6b.5: minimal `with TYPE` typealias support. The full generic-
-		// typealias syntax (`typealias Foo = Bar with X`) is Phase 11
-		// (ROADMAP.md:415); the only RHS we accept here is
-		// `__ManagedMemory with TYPE`. The element TYPE is a tag/comment
-		// only — element-size dispatch reads from the runtime struct's
-		// `element_size` field, not from the typealias declaration. Any
-		// other LHS followed by `with` is rejected as not-yet-supported.
+		// Phase 11.0 step 2: generalized `typealias Foo = Base with(Args...)`.
+		// Any base name is accepted; resolution into a `MaxonType.genericInstance`
+		// is the resolver pass's job (TypeResolution.resolveAllGenericTypealiases).
+		// The legacy `__ManagedMemory → i64` typealias-table seeding is preserved
+		// as a side effect when the LHS is `__ManagedMemory`, so existing single-
+		// arg `__ManagedMemory with X` aliases continue to resolve through the
+		// StdType-typed `project.typealiases` map until step 5 swaps them over.
 		if not sawValidBase and baseToken.kind == TokenKind.identifier 'isAliasName'
 			let targetToken = try consume()
 			if at(TokenKind.with) 'hasWith'
-				if targetToken.value == "__ManagedMemory" 'isMmWith'
-					try eat(TokenKind.with)
-					// Consume the element-type token. We accept any single
-					// type-name token (primitive keyword like `int`/`bool`/
-					// `byte`/`float`/`array` or a bare identifier — same set
-					// `parseTypeRef` recognizes). The element type is
-					// discarded at this stage — the value's element_size is
-					// set at runtime by `__ManagedMemory.create`.
-					let elementToken = cursor.current()
-					if not isTypeNameToken(elementToken) 'noElement'
-						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '__ManagedMemory with' requires an element-type name, got '{tokenValueToString(elementToken.value)}'", line: elementToken.line, column: elementToken.column, filePath: filePath)
+				try eat(TokenKind.with)
+				var argNames = StringArray.create()
+				if accept(TokenKind.leftParen) 'parenList'
+					while not at(TokenKind.rightParen) 'argLoop'
+						let argToken = cursor.current()
+						if not isTypeNameToken(argToken) 'badArg'
+							reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': expected type-name argument in 'with(...)', got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
+							skipToNextLine()
+							return (expr, false)
+						end 'badArg'
+						_ = try consume()
+						argNames.push(argToken.value)
+					end 'argLoop'
+					try expect(TokenKind.rightParen)
+				end 'parenList' else 'singleArg'
+					let argToken = cursor.current()
+					if not isTypeNameToken(argToken) 'badSingle'
+						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '{targetToken.value} with' requires a type-name argument, got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
 						skipToNextLine()
-						return
-					end 'noElement'
+						return (expr, false)
+					end 'badSingle'
 					_ = try consume()
-					// Ensure `__ManagedMemory` itself resolves through the
-					// typealias machinery so `aliasName("__ManagedMemory")`
-					// succeeds in the fixed-point drain below.
-					// `__ManagedMemory` is registered as a struct in
-					// `project.structTypes` at stdlib bootstrap time; we
-					// mirror it into `project.typealiases` with `i64` (the
-					// ABI for a struct pointer) so the alias can resolve.
-					// Idempotent — `otherwise ignore` swallows duplicates
-					// from earlier typealias declarations in the same project.
+					argNames.push(argToken.value)
+				end 'singleArg'
+
+				if targetToken.value == "__ManagedMemory" 'isMmWith'
+					// Preserve the legacy seeding so `__ManagedMemory` resolves
+					// through the StdType typealias machinery. Phase 11.0 step 8a
+					// ALSO captures the generic-alias form so per-instance type
+					// flow (inner-alias substitution at methodCall sites) sees
+					// the real `genericInstance(__ManagedMemory, [Element])`
+					// rather than a bare named placeholder.
 					try project.typealiases.insert("__ManagedMemory", value: StdType.i64) otherwise ignore
-				end 'isMmWith' else 'unsupportedWith'
-					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': generic 'with' typealiases are not yet supported (only '__ManagedMemory with TYPE' is recognized in this phase)", line: targetToken.line, column: targetToken.column, filePath: filePath)
-					skipToNextLine()
-					return
-				end 'unsupportedWith'
-			end 'hasWith'
-			expr = UnresolvedTypeExpr.aliasName(targetToken.value)
-			sawValidBase = true
+				end 'isMmWith'
+				expr = UnresolvedTypeExpr.genericAlias(targetToken.value, args: argNames)
+				sawValidBase = true
+			end 'hasWith' else 'noWith'
+				expr = UnresolvedTypeExpr.aliasName(targetToken.value)
+				sawValidBase = true
+			end 'noWith'
 		end 'isAliasName'
 
 		if not sawValidBase 'unsupported'
 			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' RHS must be 'bool', a ranged primitive (int(...)/float(...)/byte(...)), or another type name; got '{tokenValueToString(baseToken.value)}'", line: baseToken.line, column: baseToken.column, filePath: filePath)
 			skipToNextLine()
-			return
+			return (expr, false)
 		end 'unsupported'
 
-		// Duplicate detection runs against both unresolved and resolved
-		// registries — the latter catches duplicates that survive a stdlib
-		// pre-seed where some aliases are already in `typealiases` before the
-		// parser starts.
-		if project.typealiases.contains(nameToken.value) or project.unresolvedTypealiases.contains(nameToken.value) 'duplicate'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		return (expr, true)
+	end 'parseTypealiasRhs'
+
+	// Phase 11.0 step 2: parse a `typealias Name = ...` declaration that
+	// appears inside a `type Body ... end` block. Cursor is AT the alias
+	// name identifier (caller already consumed `typealias`). Records the
+	// alias in `innerAliases` so the resolver pass can promote it once the
+	// surrounding type is being lowered. Inner aliases are scoped to the
+	// enclosing type — they are not added to `project.unresolvedTypealiases`.
+	function parseInnerTypealias(typeName String, innerAliases InnerAliasMap) throws ParserError
+		let nameToken = try consume()
+		checkReservedDeclName(nameToken)
+
+		try expect(TokenKind.equals)
+
+		let (expr, ok) = try parseTypealiasRhs(nameToken)
+		if not ok 'rhsBad'
+			return
+		end 'rhsBad'
+
+		// Duplicate detection within the same type body. The map key is the
+		// bare alias name — collisions across types are fine (alias names
+		// are scoped to the type that declares them).
+		if innerAliases.contains(nameToken.value) 'duplicate'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate inner typealias '{nameToken.value}' in type '{typeName}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			skipToNextLine()
 			return
 		end 'duplicate'
 
-		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+		innerAliases.upsert(nameToken.value, value: expr)
 		skipToNextLine()
-	end 'parseTopLevelTypealias'
+	end 'parseInnerTypealias'
 
 	// --- Type declaration parsing ---
 
@@ -1561,14 +1843,52 @@ export type Parser
 
 		logTrace(LogCategory.parser, message: () gives "parser: type '{currentTypeName}'")
 
+		// Phase 11.0: capture `uses T1, T2` (mirrors `parseInterfaceDecl`).
+		// Commas are stripped at the lexer; the loop stops at the next
+		// non-identifier token (`implements`, `where`, newline, function...).
+		// Each name is also interned into `project.typeParameters` so a later
+		// pass can resolve `MaxonType.typeParameter(id)` references back to
+		// their constraint set. Bound into `currentTypeParams` for the body
+		// so `parseTypeRef` can recognize them.
+		var usesParams = StringArray.create()
+		if accept(TokenKind.uses) 'hasUses'
+			while at(TokenKind.identifier) 'usesLoop'
+				let paramToken = try consume()
+				usesParams.push(paramToken.value)
+				_ = project.typeParameters.intern(currentTypeName, paramName: paramToken.value)
+			end 'usesLoop'
+		end 'hasUses'
+		currentTypeParams = usesParams
+
 		// Phase 1b: capture `implements I1, I2 with X, ...` as metadata. No
 		// validation here — Phase 3 resolves and checks the conformance set.
 		let conformances = try parseImplementsClause()
+
+		// Phase 11.0: capture `where T is Trait1 and Trait2, ...`. Each
+		// constraint is also recorded against `project.typeParameters` so
+		// later phases can resolve constraint sets without re-walking the
+		// `whereClauses` array.
+		var whereClauses = try parseWhereClause()
+		// Phase 11.1 (step 5): stamp the declaring-type name onto every
+		// where-clause entry so later substitution / constraint-checking can
+		// disambiguate which type-parameter scope `wc.paramName` belongs to
+		// (the `(declaringTypeName, paramName)` tuple is the type-param id key).
+		for i in 0 upto whereClauses.count() 'recordConstraint'
+			let wc = try whereClauses.get(i) otherwise panic("parseTypeDecl: whereClauses.get OOB at {i}")
+			let pid = project.typeParameters.intern(currentTypeName, paramName: wc.paramName)
+			project.typeParameters.addConstraint(pid, traitName: wc.requiredTraitName)
+			let scoped = WhereClause.createScoped(wc.paramName, requiredTraitName: wc.requiredTraitName, declaringTypeName: currentTypeName)
+			try whereClauses.set(i, value: scoped) otherwise panic("parseTypeDecl: whereClauses.set OOB at {i}")
+		end 'recordConstraint'
 
 		try skipNewlines()
 
 		var fields = StructFieldArray.create()
 		var fieldOffset = 0 as FieldOffset
+		// Phase 11.0 step 2: per-type table of `typealias Foo = ...` decls
+		// that appear inside this body. Step 5+ consumes the table during
+		// substitution; this step only stores them.
+		var innerAliases = InnerAliasMap.create()
 
 		while true 'body'
 			let bodyPrevPos = cursor.index()
@@ -1588,7 +1908,7 @@ export type Parser
 			let maybeMod = cursor.current()
 			if maybeMod.kind == TokenKind.identifier and maybeMod.value == "module" 'maybeModuleField'
 				let nextField = try cursor.peek(1) otherwise Token.eof()
-				if nextField.kind == TokenKind.var or nextField.kind == TokenKind.let or nextField.kind == TokenKind.static or nextField.kind == TokenKind.function 'isModuleField'
+				if nextField.kind == TokenKind.var or nextField.kind == TokenKind.let or nextField.kind == TokenKind.static or nextField.kind == TokenKind.function or nextField.kind == TokenKind.typealias 'isModuleField'
 					try cursor.advance() otherwise break
 				end 'isModuleField'
 			end 'maybeModuleField'
@@ -1598,11 +1918,20 @@ export type Parser
 				try eat(kindToken.kind)
 				let fieldNameToken = try consume()
 				checkReservedDeclName(fieldNameToken)
-				let fieldTypeToken = try consume()
-				fields.push(StructField.create(fieldNameToken.value, fieldType: internMaxonType(project, name: fieldTypeToken.value), offset: fieldOffset))
+				// Phase 11.0 step 3c: route field types through `parseTypeRef`
+				// so `Self`, in-scope type parameters (`Element`), generic
+				// instances (`__ManagedMemory with Element`), and function
+				// types are all handled uniformly. The legacy single-token
+				// consume couldn't see any of these shapes.
+				let fieldType = try parseTypeRef()
+				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset))
 				fieldOffset = fieldOffset + 8
 				try skipNewlines()
-			end 'isField' else if kindToken.kind == TokenKind.static 'isStatic'
+			end 'isField' else if kindToken.kind == TokenKind.typealias 'isInnerAlias'
+				try eat(TokenKind.typealias)
+				try parseInnerTypealias(currentTypeName, innerAliases: innerAliases)
+				try skipNewlines()
+			end 'isInnerAlias' else if kindToken.kind == TokenKind.static 'isStatic'
 				try eat(TokenKind.static)
 				let afterStatic = cursor.current()
 				// Static decls (vars, lets, methods) inherit the enclosing
@@ -1624,7 +1953,7 @@ export type Parser
 				try parseFunction(currentTypeName, isInstance: true, fields: fields, visibility: currentTypeVisibility)
 				try skipNewlines()
 			end 'isMethod' else 'unknown'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in type body: '{tokenValueToString(kindToken.value)}' (expected 'var', 'let', 'static', or 'function')", line: kindToken.line, column: kindToken.column, filePath: filePath)
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in type body: '{tokenValueToString(kindToken.value)}' (expected 'var', 'let', 'static', 'function', or 'typealias')", line: kindToken.line, column: kindToken.column, filePath: filePath)
 				skipToNextLine()
 				try skipNewlines()
 			end 'unknown'
@@ -1635,13 +1964,17 @@ export type Parser
 			end 'stuck'
 		end 'body'
 
-		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances)
+		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances, typeParams: usesParams, whereClauses: whereClauses, innerAliases: innerAliases)
 		try project.unresolvedStructTypes.insert(currentTypeName, value: unresolved) otherwise 'dupType'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
 		currentTypeName = ""
 		currentTypeVisibility = Visibility.file
+		// Phase 11.0: clear the in-scope type-param list so a sibling type at
+		// file scope starts fresh. parseTypeRef checks for emptiness via
+		// .count() so an empty StringArray is the correct sentinel.
+		currentTypeParams = StringArray.create()
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
 
@@ -1884,9 +2217,39 @@ export type Parser
 			end 'usesLoop'
 		end 'hasUses'
 
+		// Parse-time inheritance of `uses` parameters from `extends` parents.
+		// `interface BidirectionalIterator extends Iterator` is supposed to
+		// inherit Iterator's `uses Element` so user code can write
+		// `BidirectionalIterator with Element`. Without this, the conformance
+		// check in computeExpectedMethodsForConformances reports
+		// "expects 0 type parameter(s), got 1".
+		//
+		// Only inherit when the child has no `uses` clause of its own —
+		// an explicit `uses` in the child means the user is opting out of
+		// inheritance. Lookup is best-effort: if the parent isn't yet in
+		// `unresolvedInterfaces` (e.g. forward reference within the same
+		// file), the child is left with an empty `usesParams`, matching
+		// the prior behavior.
+		if usesParams.count() == 0 'maybeInherit'
+			for parentName in extendsNames 'eachParent'
+				let parent = try project.unresolvedInterfaces.get(parentName) otherwise continue
+				for paramName in parent.usesParams 'copyParam'
+					usesParams.push(paramName)
+				end 'copyParam'
+			end 'eachParent'
+		end 'maybeInherit'
+
 		try skipNewlines()
 
 		var methods = InterfaceMethodSigArray.create()
+
+		// Phase 9.7: stamp the interface name as the current type so
+		// `Self` inside method signatures (`function clone() returns Self`,
+		// `function equals(other Self) returns bool`) resolves to the
+		// interface's own type slot. Saved/restored so a nested decl (none
+		// today, but future-proof) doesn't lose the outer context.
+		let savedTypeName = currentTypeName
+		currentTypeName = nameToken.value
 
 		while true 'body'
 			let bodyPrevPos = cursor.index()
@@ -1911,6 +2274,8 @@ export type Parser
 				try cursor.advance() otherwise break
 			end 'stuck'
 		end 'body'
+
+		currentTypeName = savedTypeName
 
 		if project.unresolvedInterfaces.contains(nameToken.value) 'duplicate'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate interface '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
@@ -1973,31 +2338,181 @@ export type Parser
 		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType_, throwsTypeName: throwsName, line: nameToken.line, column: nameToken.column)
 	end 'parseInterfaceMethodSig'
 
-	// Parse-and-discard top-level `extension` block. Range doesn't need any
-	// of the extension methods declared in stdlib/Interfaces.maxon, but we
-	// must accept the keyword so a stray extension doesn't wedge top-level
-	// dispatch. We chew tokens until the matching `end 'label'` at the
-	// outer depth.
-	// entry: cursor AT the token AFTER `extension` (the extension target name).
+	// Phase 11.0 step 4: real parser for `extension TargetType ... end`.
+	// Methods declared inside the body are registered as qualified
+	// `TargetType.methodName` callees on `project` at parse time (via the
+	// shared `parseFunction` path). The per-extension metadata —
+	// type-parameter rebinding, added conformances, where-clauses — is
+	// captured into `project.unresolvedExtensions` for later resolution.
+	//
+	// Grammar (matches stdlib/Array.maxon):
+	//     extension Target [uses T1, T2] [implements I1, I2] [where T is Trait1 and Trait2]
+	//         [export] [static] function ... end
+	//         ...
+	//     end 'Target'
+	//
+	// entry: cursor AT the token AFTER `extension` (the target-type name).
 	// Caller (dispatchInner) has already consumed the `extension` keyword.
-	function parseExtensionStub() throws ParserError
-		// Skip everything up to and including the matching `end 'label'`.
-		// `function`/`if`/`while`/`for`/`match`/`else` open nested blocks that
-		// each terminate with their own `end` — count those so we don't stop
-		// at the first inner `end`.
-		var depth = 1
-		for token in cursor 'skip'
-			if token.kind == TokenKind.end 'isEnd'
-				depth = depth - 1
-				if depth == 0 'atExtensionEnd'
-					try skipEndAndLabel()
-					return
-				end 'atExtensionEnd'
-			end 'isEnd' else if token.kind == TokenKind.function or token.kind == TokenKind.if or token.kind == TokenKind.while or token.kind == TokenKind.for or token.kind == TokenKind.match or token.kind == TokenKind.else 'opensBlock'
-				depth = depth + 1
-			end 'opensBlock'
-		end 'skip'
-	end 'parseExtensionStub'
+	function parseExtension(visibility Visibility) throws ParserError
+		let targetNameToken = try consumeExpecting("type name")
+		let targetTypeName = targetNameToken.value
+
+		// Optional `uses T1, T2` rebinds the target type's parameter names
+		// for the body of this extension. When absent, we inherit the
+		// target's `uses` parameters verbatim by looking the target up in
+		// `unresolvedStructTypes` (works in-file because Maxon parses
+		// declarations top-down, and stdlib/Array.maxon places its
+		// extensions after the `type Array uses Element` declaration).
+		var targetTypeParams = StringArray.create()
+		if accept(TokenKind.uses) 'hasUses'
+			while at(TokenKind.identifier) 'usesLoop'
+				let paramToken = try consume()
+				targetTypeParams.push(paramToken.value)
+				_ = project.typeParameters.intern(targetTypeName, paramName: paramToken.value)
+			end 'usesLoop'
+		end 'hasUses' else 'inheritParams'
+			// Target hasn't been parsed yet (cross-file extension or
+			// out-of-order declaration) → leave `targetTypeParams` empty
+			// so step 5 can diagnose at resolution time. Otherwise inherit
+			// the target's `uses` parameter names verbatim.
+			if let target = try project.unresolvedStructTypes.get(targetTypeName) 'haveTarget'
+				for i in 0 upto target.typeParams.count() 'copyParams'
+					let p = try target.typeParams.get(i) otherwise panic("parseExtension: typeParams.get OOB at {i}")
+					targetTypeParams.push(p)
+				end 'copyParams'
+			end 'haveTarget'
+		end 'inheritParams'
+
+		// Push the parser's type-context stack so method bodies can resolve
+		// `Self`, the target type's parameters (`Element`), and field
+		// references (handled below via the `fields` argument to
+		// `parseFunction`).
+		let savedTypeName = currentTypeName
+		let savedTypeParams = currentTypeParams
+		let savedTypeVisibility = currentTypeVisibility
+		currentTypeName = targetTypeName
+		currentTypeParams = targetTypeParams
+		currentTypeVisibility = visibility
+
+		// Optional `implements I1, I2 [with(...)]` clause for added
+		// conformances. Step 5 validates these against the target type
+		// once the where-clause is satisfied for an observed instantiation.
+		let addedConformances = try parseImplementsClause()
+
+		// Optional `where T is Trait1 and Trait2 [, T2 is Trait3 ...]`
+		// clause. Each pair is also recorded against
+		// `project.typeParameters` so later passes can resolve constraint
+		// sets uniformly with type-decl `where` clauses.
+		var whereClauses = try parseWhereClause()
+		// Phase 11.1 (step 5): stamp the target-type name onto every where-clause
+		// entry so substitution-time constraint checking can resolve `wc.paramName`
+		// through the same id space the parser used when interning constraints.
+		for i in 0 upto whereClauses.count() 'recordConstraint'
+			let wc = try whereClauses.get(i) otherwise panic("parseExtension: whereClauses.get OOB at {i}")
+			let pid = project.typeParameters.intern(targetTypeName, paramName: wc.paramName)
+			project.typeParameters.addConstraint(pid, traitName: wc.requiredTraitName)
+			let scoped = WhereClause.createScoped(wc.paramName, requiredTraitName: wc.requiredTraitName, declaringTypeName: targetTypeName)
+			try whereClauses.set(i, value: scoped) otherwise panic("parseExtension: whereClauses.set OOB at {i}")
+		end 'recordConstraint'
+
+		try skipNewlines()
+
+		// Resolve the target type's field list so instance methods inside
+		// the extension can resolve bare identifiers as `self.field`. When
+		// the target hasn't been parsed yet, fall through with an empty
+		// list; bare-field references will fail to resolve and surface as
+		// regular undefined-identifier diagnostics.
+		var fields = StructFieldArray.create()
+		if let targetForFields = try project.unresolvedStructTypes.get(targetTypeName) 'haveTargetFields'
+			for f in targetForFields.fields 'copyFields'
+				fields.push(f)
+			end 'copyFields'
+		end 'haveTargetFields'
+
+		// Inner `typealias` declarations (e.g. `typealias ElementArray =
+		// Array with Element` inside an extension body) parse through the
+		// same inner-typealias entry as a type declaration's body. They
+		// land on a per-call local map; step 5+ folds the entries into the
+		// target struct's `innerAliases` during resolution.
+		var extInnerAliases = InnerAliasMap.create()
+
+		while true 'body'
+			let bodyPrevPos = cursor.index()
+			let memberToken = cursor.current()
+
+			if memberToken.kind == TokenKind.end 'isEnd'
+				break
+			end 'isEnd'
+
+			// Visibility prefix on extension methods is allowed — the
+			// extension's own visibility tier is the inherited default,
+			// so the `export` token is consumed but ignored (mirrors the
+			// type-body dispatch at parseTypeDecl).
+			_ = accept(TokenKind.export)
+
+			let kindToken = cursor.current()
+			if kindToken.kind == TokenKind.typealias 'isInnerAlias'
+				try eat(TokenKind.typealias)
+				try parseInnerTypealias(targetTypeName, innerAliases: extInnerAliases)
+				try skipNewlines()
+			end 'isInnerAlias' else if kindToken.kind == TokenKind.static 'isStatic'
+				try eat(TokenKind.static)
+				try eat(TokenKind.function)
+				try parseFunction(targetTypeName, isInstance: false, fields: fields, visibility: currentTypeVisibility)
+				try skipNewlines()
+			end 'isStatic' else if kindToken.kind == TokenKind.function 'isFn'
+				try eat(TokenKind.function)
+				try parseFunction(targetTypeName, isInstance: true, fields: fields, visibility: currentTypeVisibility)
+				try skipNewlines()
+			end 'isFn' else 'unknown'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in extension body: '{tokenValueToString(kindToken.value)}' (expected 'function', 'static', or 'typealias')", line: kindToken.line, column: kindToken.column, filePath: filePath)
+				skipToNextLine()
+				try skipNewlines()
+			end 'unknown'
+
+			// Stuck-guard: malformed extension body must not infinite-loop.
+			if cursor.index() <= bodyPrevPos 'stuck'
+				try cursor.advance() otherwise break
+			end 'stuck'
+		end 'body'
+
+		// Restore the parser's type-context stack before returning.
+		currentTypeName = savedTypeName
+		currentTypeParams = savedTypeParams
+		currentTypeVisibility = savedTypeVisibility
+
+		// Record the extension metadata for step 5+'s where-clause and
+		// conditional-conformance resolution. Methods themselves are
+		// already in `project.funcSignatures` etc. via the parseFunction
+		// calls above, qualified as `targetTypeName.methodName`.
+		let unresolvedExt = UnresolvedExtension.create(targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: targetNameToken.line, column: targetNameToken.column, filePath: filePath)
+		project.unresolvedExtensions.push(unresolvedExt)
+
+		// Phase 11.0 step 8a: merge inner-typealias entries declared inside
+		// the extension body into the target's UnresolvedStructType so the
+		// post-parse resolver promotes them through the same path as the
+		// type's own inner aliases. Skip silently when the target was
+		// already drained or never declared in this project — the original
+		// extension methods will surface that error on their own.
+		if extInnerAliases.count() > 0 'mergeInner'
+			mergeExtensionInnerAliases(targetTypeName, extInnerAliases: extInnerAliases)
+		end 'mergeInner'
+
+		try skipEndAndLabel()
+	end 'parseExtension'
+
+	// Phase 11.0 step 8a helper: lift the mutating-call out of `parseExtension`
+	// so the `try ... otherwise return` form skips silently when the target
+	// type isn't declared yet (or was already drained).
+	function mergeExtensionInnerAliases(targetTypeName String, extInnerAliases InnerAliasMap)
+		var target = try project.unresolvedStructTypes.get(targetTypeName) otherwise return
+		for (aliasName, aliasExpr) in extInnerAliases 'eachAlias'
+			if not target.innerAliases.contains(aliasName) 'novel'
+				target.innerAliases.upsert(aliasName, value: aliasExpr)
+			end 'novel'
+		end 'eachAlias'
+		project.unresolvedStructTypes.upsert(targetTypeName, value: target)
+	end 'mergeExtensionInnerAliases'
 
 	// True when the cursor is positioned on `end` *followed by* the
 	// `'Label'` literal that closes a block (or end-of-input). Used by
@@ -2964,6 +3479,7 @@ export type Parser
 		return match t 'check'
 			unresolved gives true
 			boolean to function gives false
+			typeParameter to interface gives false
 		end 'check'
 	end 'isUnresolvedMaxonType'
 
@@ -2996,15 +3512,28 @@ export type Parser
 
 		try expect(TokenKind.in)
 
-		// Parse START into the entry block.
+		// Parse START into the entry block. For for-range this is the lower
+		// bound; for for-in over an iterable it is the source expression
+		// (renamed locally as `sourceExpr` once we know which path we're on).
 		currentBlock = block
 		let startResult = try parseExpression(block)
 
 		let isInclusive = at(TokenKind.to)
 		let sawRange = accept(TokenKind.to) or accept(TokenKind.upto)
 		if not sawRange 'noRange'
+			// Phase 11 Step 9 (parser-only): if the next token is the loop
+			// label (a charLiteral, optionally preceded by newlines), this is
+			// a for-in over an arbitrary iterable rather than a for-range.
+			// Emit a `forInIterable` placeholder so the body still parses;
+			// downstream lowering panics with a "Step 8 not implemented yet"
+			// message until the iterator-protocol witness-call sequence
+			// lands. Only loops in functions that ultimately reach lowering
+			// hit the panic — the parser itself accepts the syntax.
+			if at(TokenKind.charLiteral) or at(TokenKind.newline) 'iterablePath'
+				return try parseForInIterable(func, block: block, forToken: forToken, iterName: iterName, sourceExpr: startResult)
+			end 'iterablePath'
 			let tok = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected 'upto' or 'to' in for-range", line: tok.line, column: tok.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected 'upto', 'to', or loop label after for-in source", line: tok.line, column: tok.column, filePath: filePath)
 			synchronize()
 			return block
 		end 'noRange'
@@ -3092,6 +3621,178 @@ export type Parser
 		try skipEndAndLabel()
 		return exitBlock
 	end 'parseForStatement'
+
+	// Phase 11 Step 8.6: handle `for X in iterable 'label' ... end` by
+	// desugaring in the parser to the iterator-protocol shape:
+	//
+	//   ENTRY (current `block`):
+	//     %iter = source.createIterator()         # methodCall (throws)
+	//     %errFlag = call mrt_get_error_and_clear
+	//     varDecl iterSlot = %iter
+	//     %cmp = errFlag != 0
+	//     cond_br cmp -> EXIT, PREAMBLE
+	//
+	//   PREAMBLE:
+	//     br BODY                                 # skip leading advance
+	//
+	//   HEADER (continue target):
+	//     %iterRef = varLoad iterSlot
+	//     %_ = %iterRef.advance()                 # methodCall (throws)
+	//     %errFlag2 = call mrt_get_error_and_clear
+	//     %cmp2 = errFlag2 != 0
+	//     cond_br cmp2 -> EXIT, BODY
+	//
+	//   BODY:
+	//     %iterRef2 = varLoad iterSlot
+	//     %item = %iterRef2.current()             # methodCall
+	//     varDecl iterName = %item                # bind loop variable
+	//     <user statements>
+	//     br HEADER                               # natural fall-through
+	//
+	//   EXIT
+	//
+	// Method-name resolution (Array.createIterator, ArrayIterator.current,
+	// ArrayIterator.advance) is left to lowerMethodCall, which qualifies
+	// `methodCall(receiver, "name", ...)` via the receiver's resolved struct
+	// type. The iter slot's type is filled by TypeResolution's
+	// methodCallResultType (which looks up `{ReceiverType}.createIterator`'s
+	// return type) — same path as a hand-written `var iter = arr.createIterator()`.
+	//
+	// `break` exits the loop; `continue` jumps to HEADER (which advances
+	// before re-entering BODY) — symmetric with for-range's step block.
+	//
+	// Cases that don't statically resolve (interface-typed sources, sources
+	// whose type the parser can't determine) flow through the same shape.
+	// They'll surface a clean error at lowering time when methodCall fails
+	// to resolve `.createIterator` on an unresolved receiver — the same
+	// failure mode any unresolved methodCall produces today.
+	function parseForInIterable(func IrFunction, block IrBlock, forToken Token, iterName String, sourceExpr ExprResult) returns IrBlock throws ParserError
+		let forFilePath = filePath.toString()
+		let stmtRange = SourceRange.between(forToken, last: previousToken())
+
+		// Loop label is mandatory (matches `while` and the for-range branch).
+		// Allow newlines between the source expression and the label.
+		try skipNewlines()
+		if not at(TokenKind.charLiteral) 'noLabel'
+			let tok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop label after for-in source", line: tok.line, column: tok.column, filePath: filePath)
+			synchronize()
+			return block
+		end 'noLabel'
+		let userLabel = try parseOptionalBlockLabel("loop")
+
+		let sourceValue = exprName(sourceExpr)
+
+		// Allocate fresh scope. The iter slot holds the iterator value
+		// (returned by createIterator); the loop variable holds each
+		// element (returned by current()). The iter slot lives outside
+		// the loop variable's binding scope so the user can't shadow it.
+		scope.pushScope()
+		let iterStorageName = "__forin_iter_{forToken.line}_{forToken.column}"
+		let iterStorageSlot = scope.declare(iterStorageName, varType: MaxonType.unresolved, mutable: true)
+
+		// ENTRY: %iter = source.createIterator(); bind err flag; check.
+		let createIterResultName = freshSynthName()
+		let createIterArgs = ByteArrayArray.create()
+		let createIterArgLabels = StringArray.create()
+		let createIterArgTypes = MaxonTypeArray.create()
+		let createIterArgRanges = SourceRangeArray.create()
+		let createIterMethodName = "createIterator".toByteArray()
+		module.appendOp(block, op: MaxonOp.methodCall(createIterResultName, receiver: sourceValue, methodName: createIterMethodName, args: createIterArgs, argLabels: createIterArgLabels, argTypes: createIterArgTypes, argRanges: createIterArgRanges, range: stmtRange))
+		// Bind the post-call error flag. mirroring parseTryExpression's
+		// non-`call` fallback path (parser.maxon:4441-4445).
+		let createErrorFlagName = freshSynthName()
+		let getErrArgs1 = ByteArrayArray.create()
+		let getErrArgLabels1 = StringArray.create()
+		let getErrArgTypes1 = MaxonTypeArray.create()
+		let getErrArgRanges1 = SourceRangeArray.create()
+		module.appendOp(block, op: MaxonOp.call(createErrorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: getErrArgs1, argLabels: getErrArgLabels1, argTypes: getErrArgTypes1, argRanges: getErrArgRanges1, range: stmtRange))
+		// Stash the iterator value into the iter slot.
+		module.appendOp(block, op: MaxonOp.varDecl(iterStorageSlot, value: createIterResultName, slotType: MaxonType.unresolved, range: stmtRange))
+
+		// Allocate the four blocks: preamble, header, body, exit.
+		var preambleBlock = module.addBlockAt(func, label: "{userLabel}_{block.id}.preamble", filePath: forFilePath, firstLine: forToken.line)
+		let preambleBlockId = preambleBlock.id
+		var headerBlock = module.addBlockAt(func, label: "{userLabel}_{block.id}.header", filePath: forFilePath, firstLine: forToken.line)
+		let headerBlockId = headerBlock.id
+		var bodyBlock = module.addBlockAt(func, label: "{userLabel}_{block.id}", filePath: forFilePath, firstLine: forToken.line)
+		let bodyBlockId = bodyBlock.id
+		let exitBlock = module.addBlockAt(func, label: "{userLabel}_{block.id}.exit", filePath: forFilePath, firstLine: forToken.line)
+		let exitBlockId = exitBlock.id
+
+		// ENTRY: cmp errFlag != 0; if error -> exit, else -> preamble.
+		let zeroEntryName = emitLiteral(block, value: 0, valueType: MaxonType.integer)
+		let cmpEntryName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(cmpEntryName, left: createErrorFlagName, right: zeroEntryName, predicate: CmpPredicate.ne, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: stmtRange))
+		module.setTerminator(block, op: MaxonOp.condBr(cmpEntryName, thenTarget: exitBlockId, elseTarget: preambleBlockId, range: SourceRange.none()))
+
+		// PREAMBLE: br body — skip leading advance() so the first iteration
+		// observes the cursor at its initial (already-positioned) element.
+		module.setTerminator(preambleBlock, op: MaxonOp.br(bodyBlockId, range: SourceRange.none()))
+
+		// HEADER: load iter, advance, bind err flag, check, branch.
+		let iterRefHdrName = freshSynthName()
+		module.appendOp(headerBlock, op: MaxonOp.varLoad(iterRefHdrName, slotId: iterStorageSlot, slotType: MaxonType.unresolved, range: stmtRange))
+		let advanceResultName = freshSynthName()
+		let advanceArgs = ByteArrayArray.create()
+		let advanceArgLabels = StringArray.create()
+		let advanceArgTypes = MaxonTypeArray.create()
+		let advanceArgRanges = SourceRangeArray.create()
+		let advanceMethodName = "advance".toByteArray()
+		module.appendOp(headerBlock, op: MaxonOp.methodCall(advanceResultName, receiver: iterRefHdrName, methodName: advanceMethodName, args: advanceArgs, argLabels: advanceArgLabels, argTypes: advanceArgTypes, argRanges: advanceArgRanges, range: stmtRange))
+		let advanceErrorFlagName = freshSynthName()
+		let getErrArgs2 = ByteArrayArray.create()
+		let getErrArgLabels2 = StringArray.create()
+		let getErrArgTypes2 = MaxonTypeArray.create()
+		let getErrArgRanges2 = SourceRangeArray.create()
+		module.appendOp(headerBlock, op: MaxonOp.call(advanceErrorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: getErrArgs2, argLabels: getErrArgLabels2, argTypes: getErrArgTypes2, argRanges: getErrArgRanges2, range: stmtRange))
+		let zeroHdrName = emitLiteral(headerBlock, value: 0, valueType: MaxonType.integer)
+		let cmpHdrName = freshSynthName()
+		module.appendOp(headerBlock, op: MaxonOp.cmp(cmpHdrName, left: advanceErrorFlagName, right: zeroHdrName, predicate: CmpPredicate.ne, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: stmtRange))
+		module.setTerminator(headerBlock, op: MaxonOp.condBr(cmpHdrName, thenTarget: exitBlockId, elseTarget: bodyBlockId, range: SourceRange.none()))
+
+		// BODY: load iter, call current(), bind loop variable, parse user
+		// statements. Iter slot's slotType isn't carried through varLoad
+		// reliably (currentBlock varies by analysis); rely on TR's
+		// producer-type fill for the methodCall result.
+		let iterRefBodyName = freshSynthName()
+		module.appendOp(bodyBlock, op: MaxonOp.varLoad(iterRefBodyName, slotId: iterStorageSlot, slotType: MaxonType.unresolved, range: stmtRange))
+		let currentResultName = freshSynthName()
+		let currentArgs = ByteArrayArray.create()
+		let currentArgLabels = StringArray.create()
+		let currentArgTypes = MaxonTypeArray.create()
+		let currentArgRanges = SourceRangeArray.create()
+		let currentMethodName = "current".toByteArray()
+		module.appendOp(bodyBlock, op: MaxonOp.methodCall(currentResultName, receiver: iterRefBodyName, methodName: currentMethodName, args: currentArgs, argLabels: currentArgLabels, argTypes: currentArgTypes, argRanges: currentArgRanges, range: stmtRange))
+
+		// Bind the loop variable inside an inner scope so `break`/`continue`
+		// inside the body still close over the iter slot scope.
+		scope.pushScope()
+		var loopVarSlot = 0
+		if iterName == "_" 'discardIter'
+			loopVarSlot = scope.declare("__forin_var_{forToken.line}_{forToken.column}", varType: MaxonType.unresolved, mutable: false)
+		end 'discardIter' else 'namedIter'
+			loopVarSlot = defineVariableWithType(iterName, varType: MaxonType.unresolved)
+		end 'namedIter'
+		module.appendOp(bodyBlock, op: MaxonOp.varDecl(loopVarSlot, value: currentResultName, slotType: MaxonType.unresolved, range: stmtRange))
+
+		// Parse the body inside the loop context so `break`/`continue`
+		// resolve to this loop's labels. `continue` -> header (where advance
+		// runs), `break` -> exit. Natural fall-through goes to header.
+		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: headerBlockId))
+		let bodyExit = try parseStatements(func, block: bodyBlock, lastWasReturn: false)
+		try loopStack.pop() otherwise panic("loopStack.pop: stack unexpectedly empty after for-in iterable body parse")
+
+		if not bodyExit.isTerminated() 'needsHeader'
+			module.setTerminator(bodyExit, op: MaxonOp.br(headerBlockId, range: SourceRange.none()))
+		end 'needsHeader'
+
+		scope.popScope()  // pop loop-variable scope
+		scope.popScope()  // pop iter-slot scope
+
+		try skipEndAndLabel()
+		return exitBlock
+	end 'parseForInIterable'
 
 	// --- Break / continue statements ---
 
@@ -3580,6 +4281,7 @@ export type Parser
 			named gives true
 			boolean to string gives false
 			function to unresolved gives false
+			typeParameter to interface gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -4168,6 +4870,7 @@ export type Parser
 			boolean gives MaxonType.integer
 			integer gives MaxonType.integer
 			string to unresolved gives MaxonType.integer
+			typeParameter to interface gives MaxonType.integer
 		end 'pick'
 	end 'defaultLiteralTypeOfInner'
 
@@ -4265,7 +4968,13 @@ export type Parser
 			let receiverName = exprName(result)
 
 			if accept(TokenKind.leftParen) 'isMethodCall'
-				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+				// Method calls defer the named-arg-required check (E3005) to
+				// TypeResolution because at parse time we cannot tell a
+				// builtin like `mm.set(idx, val)` (where `mm: __ManagedMemory`)
+				// from a user-defined `widget.set(idx, val)` without resolving
+				// the receiver type. `validateCallArgLabels` re-applies the
+				// rule with receiver-type awareness.
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
 				let methodResultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
@@ -4337,7 +5046,10 @@ export type Parser
 					try eat(TokenKind.dot)
 					try eat(TokenKind.identifier)
 					try eat(TokenKind.leftParen)
-					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+					// methodCall on a local receiver — defer the named-arg-required
+					// check (E3005) to TypeResolution. See the parsePostfix
+					// methodCall site above for rationale.
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 					let rparenToken = previousToken()
 					let methodResultName = freshSynthName()
 					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
@@ -4501,7 +5213,7 @@ export type Parser
 	// slotting that lived in parseCallArgsWithSignature.
 	// entry: cursor AT first-arg-first-token OR AT `)` if no args.
 	// exit:  cursor on the token AFTER `)`.
-	function parseCallArgsRaw(block IrBlock) returns (ByteArrayArray, StringArray, MaxonTypeArray, SourceRangeArray) throws ParserError
+	function parseCallArgsRaw(block IrBlock, requireNamed bool = true) returns (ByteArrayArray, StringArray, MaxonTypeArray, SourceRangeArray) throws ParserError
 		var args = ByteArrayArray.create()
 		var labels = StringArray.create()
 		var argTypes = MaxonTypeArray.create()
@@ -4510,7 +5222,7 @@ export type Parser
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while true 'argLoop'
 				let argStartPos = cursor.index()
-				let labelOpt = try consumeArgLabel(requireNamed: argIndex >= 1)
+				let labelOpt = try consumeArgLabel(requireNamed: requireNamed and argIndex >= 1)
 				var labelStr = ""
 				if labelOpt.hasValue 'hasLabel'
 					labelStr = labelOpt.token.value
@@ -4545,6 +5257,18 @@ export type Parser
 	// When requireNamed is true and no label is present, reports E3005. When
 	// a label is present (regardless of requireNamed), consumes both tokens
 	// and returns them; otherwise returns an empty OptionalToken.
+	//
+	// Method-call call sites pass `requireNamed: false` from
+	// `parseCallArgsRaw` (because the receiver type isn't resolved at parse
+	// time and we cannot tell a builtin like `mm.set(...)` apart from a
+	// user-defined `widget.set(...)`). For methodCall ops the post-
+	// resolution validator `validateCallArgLabels` in TypeResolution
+	// re-applies the rule using the resolved receiver type, exempting
+	// `__ManagedMemory.*` and other compiler-builtin types to match the
+	// C# bootstrap's `allowAllPositional: true` behavior in
+	// `ParseBuiltinMethodArgs`. Free / qualified `call` ops keep the parse-
+	// time check because the bare callee name is enough to identify a
+	// builtin (anything that starts with `__`).
 	function consumeArgLabel(requireNamed bool) returns OptionalToken throws ParserError
 		let maybeLabel = cursor.current()
 		let afterLabel = try cursor.peek(1) otherwise 'eof'
@@ -5624,6 +6348,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 		float gives true
 		boolean to integer gives false
 		string to unresolved gives false
+		typeParameter to interface gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -5635,11 +6360,15 @@ end 'maxonTypeIsFloat'
 function maxonTypeIsPrimitive(t MaxonType) returns bool
 	// Function types support call syntax, not field access — for E4006's
 	// "primitives have no fields" check, function types behave like named
-	// values (deferred to TypeResolution).
+	// values (deferred to TypeResolution). Generic-aware arms (Phase 11.0)
+	// behave like named values for the same reason — their concrete shape
+	// is decided post-substitution, so primitive-ness can't be determined
+	// at parse time.
 	return match t 'check'
 		boolean to float gives true
 		string gives false
 		named to unresolved gives false
+		typeParameter to interface gives false
 	end 'check'
 end 'maxonTypeIsPrimitive'
 
@@ -5647,6 +6376,7 @@ function maxonTypeIsBool(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true
 		integer to unresolved gives false
+		typeParameter to interface gives false
 	end 'check'
 end 'maxonTypeIsBool'
 

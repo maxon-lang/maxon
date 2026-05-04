@@ -77,9 +77,26 @@ function tryFoldControlTerminator(module StdModule, block IrBlock, constMap Valu
 end 'tryFoldControlTerminator'
 
 // Apply the fold when we have a condBr whose fields are already extracted.
-// Checks whether condId is a known constant; if so, replaces the condBr with
-// an unconditional branch to the taken target.
+// Two fold opportunities are checked:
+//   1. Both targets point at the same successor — the condition is dead even
+//      if it isn't statically known. Rewrite as an unconditional br to the
+//      shared target. This case arises when DCE skip-through collapses both
+//      arms of a condBr into the same surviving block (see
+//      DeadCodeElimination.rewriteCondBr); without this normalization the
+//      target-phase destroySSA pass can't tell which edge is the "then"
+//      because pickThenTarget looks for an edge whose target differs from
+//      `elseTarget` and finds none.
+//   2. The condition is a known integer constant — pick the taken arm.
 function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
+	if thenTarget == elseTarget 'sameTarget'
+		// Edge args may differ structurally (the parser/DCE both emit
+		// independent arg vectors for each arm), but for this fold the
+		// arms are equivalent because the predicate is dead — keep the
+		// then-arm args.
+		module.setTerminator(block, op: StdOp.control(StdControlOp.br(thenTarget, argIds: thenArgIds)))
+		logTrace(LogCategory.ir, message: () gives "canonicalize: folded condBr (both arms -> block_{thenTarget})")
+		return
+	end 'sameTarget'
 	let condVal = constMapGet(constMap, valueId: condId)
 	if condVal == CONST_UNKNOWN 'notConst'
 		return

@@ -55,6 +55,17 @@ end 'CallContext'
 // is no concrete upper bound to encode.
 export typealias FunctionTypeId = int(0 to u64.max)
 
+// Phase 11.0: identifier for a type-parameter binding interned in
+// `Project.typeParameters`. Mirrors FunctionTypeId — wide range, no concrete
+// upper bound on the number of distinct (declaringTypeName, paramName) pairs
+// a project may carry.
+export typealias TypeParamId = int(0 to u64.max)
+
+// Phase 11.0: identifier for an interface-typed value interned in
+// `Project.interfaces` registry by interface name. Used to represent
+// existential interface values like `Iterable with Element` as a value type.
+export typealias InterfaceTypeId = int(0 to u64.max)
+
 export union MaxonType
 	boolean
 	integer
@@ -78,6 +89,23 @@ export union MaxonType
 	// Lowering must never see this arm — TypeResolution should have removed
 	// it. Lowering's match arms panic if they encounter it.
 	unresolved
+	// Phase 11.0: an unbound type parameter (`T`, `Element`) declared via
+	// `type Foo uses Element` or `extension Foo uses Element`. Carries an id
+	// into `Project.typeParameters` (keyed by declaringTypeName + paramName)
+	// where the constraint set lives.
+	typeParameter(id TypeParamId)
+	// Phase 11.0: an instantiated generic type like `Array with Int` or
+	// `__ManagedMemory with Element`. Carries a GenericInstanceId interned
+	// through `Project.genericInstances`; the registry stores the (baseId,
+	// args) pair. We can't inline `args MaxonTypeArray` here — that would
+	// give MaxonType a recursive aggregate which the language rejects with
+	// E4014 (`Array with MaxonType` recurses through `MaxonType`).
+	genericInstance(id GenericInstanceId)
+	// Phase 11.0: an existential interface-typed value (e.g. a variable of
+	// type `Iterable with Int`). Carries an InterfaceTypeId. Lowering will
+	// represent these as fat pointers in Phase 11.3; for now the arm exists
+	// only on the parser-AST surface.
+	interface(id InterfaceTypeId)
 
 	// Render the source-level spelling of this type, or its display name
 	// for primitives. Used by diagnostic messages and IR printers — the
@@ -91,6 +119,9 @@ export union MaxonType
 			named(id) gives project.typeNames.get(id)
 			function(id) gives functionTypeToString(project, id: id)
 			unresolved gives "<unresolved>"
+			typeParameter(id) gives project.typeParameters.getName(id)
+			genericInstance(id) gives genericInstanceIdToString(project, id: id)
+			interface(id) gives project.interfaceRegistry.getName(id)
 		end 'str'
 	end 'toString'
 
@@ -105,6 +136,9 @@ export union MaxonType
 			named(id) gives project.typeNames.get(id)
 			boolean to string gives ""
 			function to unresolved gives ""
+			typeParameter(id) gives project.typeParameters.getName(id)
+			genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
+			interface(id) gives project.interfaceRegistry.getName(id)
 		end 'name'
 	end 'nameOrEmpty'
 end 'MaxonType'
@@ -118,6 +152,7 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 		function gives true
 		boolean to named gives false
 		unresolved gives false
+		typeParameter to interface gives false
 	end 'check'
 end 'isFunctionMaxonType'
 
@@ -129,6 +164,23 @@ export function functionMaxonTypeId(t MaxonType) returns FunctionTypeId
 		default panic("functionMaxonTypeId: MaxonType is not a function arm — caller must guard with isFunctionMaxonType")
 	end 'unwrap'
 end 'functionMaxonTypeId'
+
+// Phase 11.0: structural equality between two MaxonTypeArrays. Used by the
+// generic-instance interner when checking whether an existing instance entry
+// matches a fresh `(baseId, args)` candidate.
+export function maxonTypeArraysStructurallyEqual(a MaxonTypeArray, b MaxonTypeArray) returns bool
+	if a.count() != b.count() 'arity'
+		return false
+	end 'arity'
+	for i in 0 upto a.count() 'each'
+		let pA = try a.get(i) otherwise panic("maxonTypeArraysStructurallyEqual: a.get OOB at {i} (arity already validated)")
+		let pB = try b.get(i) otherwise panic("maxonTypeArraysStructurallyEqual: b.get OOB at {i} (arity already validated)")
+		if not maxonTypesStructurallyEqual(pA, b: pB) 'mismatch'
+			return false
+		end 'mismatch'
+	end 'each'
+	return true
+end 'maxonTypeArraysStructurallyEqual'
 
 // Resolve a `MaxonType.function` to its return-type entry in
 // `Project.functionTypes`. Used by parser `indirectCall` emission to stamp
@@ -173,6 +225,45 @@ export function functionTypeToString(project Project, id FunctionTypeId) returns
 	result = "{result}) returns {maxonReturnTypeToString(project, ref: returnType)}"
 	return result
 end 'functionTypeToString'
+
+// Phase 11.0: render a `genericInstance` MaxonType (resolved through its id)
+// as `BaseName with (Arg1, Arg2)`. Single-arg form drops the parens to match
+// the source-level spelling (`Array with Int`); zero-arg should never be
+// produced by the parser but is rendered defensively. Cold path —
+// diagnostics and IR dumps only.
+export function genericInstanceIdToString(project Project, id GenericInstanceId) returns String
+	let (baseId, args) = project.genericInstances.get(id)
+	return genericInstanceToString(project, baseId: baseId, args: args)
+end 'genericInstanceIdToString'
+
+// Phase 11.0: name-only accessor for `nameOrEmpty`. Returns just the base
+// type's interned name (no `with ...` suffix) so callers using the printable
+// form for diagnostic messages match the spelling user-side code carries.
+export function genericInstanceIdBaseName(project Project, id GenericInstanceId) returns String
+	let (baseId, _) = project.genericInstances.get(id)
+	return project.typeNames.get(baseId)
+end 'genericInstanceIdBaseName'
+
+export function genericInstanceToString(project Project, baseId TypeNameId, args MaxonTypeArray) returns String
+	let baseName = project.typeNames.get(baseId)
+	if args.count() == 0 'noArgs'
+		return "{baseName} with ()"
+	end 'noArgs'
+	if args.count() == 1 'oneArg'
+		let only = try args.get(0) otherwise panic("genericInstanceToString: args.get(0) failed despite count==1")
+		return "{baseName} with {only.toString(project)}"
+	end 'oneArg'
+	var result = "{baseName} with ("
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise panic("genericInstanceToString: args.get OOB at {i}")
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}{a.toString(project)}"
+	end 'each'
+	result = "{result})"
+	return result
+end 'genericInstanceToString'
 
 // Intern a function type by structural identity. A linear scan over the
 // registry suffices today — function-typed parameters are rare, and the
@@ -225,6 +316,9 @@ export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bo
 		named(idA) gives matchesNamedArm(b, idA: idA)
 		function(idA) gives matchesFunctionArm(b, idA: idA)
 		unresolved gives matchesUnresolvedArm(b)
+		typeParameter(idA) gives matchesTypeParameterArm(b, idA: idA)
+		genericInstance(idA) gives matchesGenericInstanceArm(b, idA: idA)
+		interface(idA) gives matchesInterfaceArm(b, idA: idA)
 	end 'lhs'
 end 'maxonTypesStructurallyEqual'
 
@@ -232,6 +326,7 @@ function matchesBooleanArm(b MaxonType) returns bool
 	return match b 'm'
 		boolean gives true
 		integer to unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesBooleanArm'
 
@@ -240,6 +335,7 @@ function matchesIntegerArm(b MaxonType) returns bool
 		integer gives true
 		boolean gives false
 		float to unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesIntegerArm'
 
@@ -248,6 +344,7 @@ function matchesFloatArm(b MaxonType) returns bool
 		float gives true
 		boolean to integer gives false
 		string to unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesFloatArm'
 
@@ -256,6 +353,7 @@ function matchesStringArm(b MaxonType) returns bool
 		string gives true
 		boolean to float gives false
 		named to unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesStringArm'
 
@@ -264,6 +362,7 @@ function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
 		named(idB) gives idA == idB
 		boolean to string gives false
 		function to unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesNamedArm'
 
@@ -272,6 +371,7 @@ function matchesFunctionArm(b MaxonType, idA FunctionTypeId) returns bool
 		function(idB) gives idA == idB
 		boolean to named gives false
 		unresolved gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesFunctionArm'
 
@@ -279,8 +379,34 @@ function matchesUnresolvedArm(b MaxonType) returns bool
 	return match b 'm'
 		unresolved gives true
 		boolean to function gives false
+		typeParameter to interface gives false
 	end 'm'
 end 'matchesUnresolvedArm'
+
+function matchesTypeParameterArm(b MaxonType, idA TypeParamId) returns bool
+	return match b 'm'
+		typeParameter(idB) gives idA == idB
+		boolean to unresolved gives false
+		genericInstance to interface gives false
+	end 'm'
+end 'matchesTypeParameterArm'
+
+function matchesGenericInstanceArm(b MaxonType, idA GenericInstanceId) returns bool
+	return match b 'm'
+		genericInstance(idB) gives idA == idB
+		boolean to unresolved gives false
+		typeParameter gives false
+		interface gives false
+	end 'm'
+end 'matchesGenericInstanceArm'
+
+function matchesInterfaceArm(b MaxonType, idA InterfaceTypeId) returns bool
+	return match b 'm'
+		interface(idB) gives idA == idB
+		boolean to unresolved gives false
+		typeParameter to genericInstance gives false
+	end 'm'
+end 'matchesInterfaceArm'
 
 function maxonReturnTypesStructurallyEqual(a MaxonReturnType, b MaxonReturnType) returns bool
 	return match a 'lhs'
@@ -383,6 +509,15 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 		// so the cache never sees this arm. If we ever try to cache one we
 		// want a loud failure rather than silent corruption.
 		function then panic("writeMaxonType: function types are not cached yet (Stage A scope)")
+		// Phase 11.0 step 8b: persist generic-aware MaxonType arms as their
+		// printable-name string. Round-trip via re-interning into the type
+		// registries on the read side. Names are stable across the
+		// declaration site → cache → restore path because every name we
+		// emit was registered through TypeNameInterner before it reached
+		// the writer.
+		typeParameter(id) then writeString(buf, s: project.typeParameters.getName(id))
+		genericInstance(id) then writeString(buf, s: genericInstanceIdToString(project, id: id))
+		interface(id) then writeString(buf, s: project.interfaceRegistry.getName(id))
 	end 'payload'
 end 'writeMaxonType'
 
@@ -390,6 +525,16 @@ function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) r
 	let (name, nextPos) = readString(buf, offset: offset)
 	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
 end 'readMaxonTypeNamed'
+
+// Phase 11.0 step 8b: read a generic-aware MaxonType arm from the cache as
+// a named placeholder. Avoids needing to round-trip TypeParamRegistry /
+// GenericInstanceRegistry / InterfaceTypeRegistry payloads through the
+// cache file format; Phase 11 hybrid-generic lowering treats every
+// generic-aware reference as i64 anyway.
+function readMaxonTypeNamedPlaceholder(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let (name, nextPos) = readString(buf, offset: offset)
+	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
+end 'readMaxonTypeNamedPlaceholder'
 
 export function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let raw = readDword(buf, offset: offset)
@@ -404,6 +549,15 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		// Symmetric with the writer above — function types aren't cached yet.
 		function then panic("readMaxonType: function types are not cached yet (Stage A scope)")
 		unresolved then panic("readMaxonType: cache contains MaxonType.unresolved — should never have been written")
+		// Phase 11.0 step 8b: round-trip generic-aware arms by reading the
+		// printable name back. Restored types are used as opaque ABI hints
+		// (every Phase 11 generic body lowers to i64 today), so we replay
+		// the type as a `named()` placeholder; downstream lowering treats
+		// it through the same i64 fallback paths the original
+		// genericInstance/typeParameter take.
+		typeParameter then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
+		genericInstance then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
+		interface then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
 	end 'tag'
 end 'readMaxonType'
 
@@ -684,6 +838,25 @@ export union MaxonOp
 	// user-visible args, so `apply(f, x)` and a closure-with-captures
 	// share one compiled body via the paired-pointer ABI.
 	indirectCall(result ByteArray, callee ByteArray, fnTypeId FunctionTypeId, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
+	// Phase 11 Step 9 (parser-only): a `for X in iterable 'label'` loop whose
+	// source is an arbitrary expression (not a `to`/`upto` range). The
+	// parser emits this placeholder as a regular op so the body still
+	// parses and downstream errors surface; full lowering through the
+	// iterator-protocol witness calls (`createIterator`/`current`/
+	// `advance`) is deferred to Step 8 of the Phase 11 plan. Reaching
+	// `LowerMaxonToStd` with this op panics ("not implemented yet —
+	// Step 8") because no current code path emits it for a function
+	// that downstream actually compiles.
+	//   - iterName: source-level loop variable name
+	//   - iterType: inferred element type (MaxonType.unresolved at parse
+	//     time; later filled by Step 8's resolution)
+	//   - sourceValue: the value-name of the iterable expression's result
+	//   - sourceType: parser-inferred MaxonType of `sourceValue` (may be
+	//     unresolved; resolution fills it)
+	//   - bodyBlockId: first block of the parsed loop body
+	//   - exitBlockId: post-loop join block (target of break)
+	//   - label: source-level loop label (already without surrounding `'`)
+	forInIterable(iterName String, iterSlot VarSlot, iterType MaxonType, sourceValue ByteArray, sourceType MaxonType, bodyBlockId BlockId, exitBlockId BlockId, label String, range SourceRange)
 end 'MaxonOp'
 
 export typealias MaxonOpArray = Array with MaxonOp
@@ -730,6 +903,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		closureCreate(result, funcName, fnTypeId, capturedNames, _, _) gives "%{String.from(result)} = maxon.closure_create @{funcName} {lb}fnType = #{fnTypeId}{rb} captures=[{formatCaptureNames(capturedNames)}]"
 		closureEnvLoad(result, captureIndex, captureName, _, _) gives "%{String.from(result)} = maxon.closure_env_load idx={captureIndex} name={String.from(captureName)}"
 		indirectCall(result, callee, fnTypeId, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.indirect_call %{String.from(callee)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) {lb}fnType = #{fnTypeId}{rb}"
+		forInIterable(iterName, _, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, _) gives "maxon.for_in_iterable {iterName} : {iterType.toString(project)} in %{String.from(sourceValue)} : {sourceType.toString(project)} {lb}body = {resolveBlockLabel(bodyBlockId, blocks: blocks)}, exit = {resolveBlockLabel(exitBlockId, blocks: blocks)}, label = '{label}'{rb}"
 	end 'print'
 end 'maxonOpToString'
 
@@ -873,9 +1047,14 @@ end 'siblingTypeNameOfContext'
 // exactly what we want for parser-time fallbacks before block source
 // info is available.
 export function qualifyCalleeForContext(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns String
-	// `qualified` short-circuits — caller already produced the final name.
+	// `qualified` short-circuits to the user-written name, but Phase 11.0
+	// typealiases (`typealias IntArray = Array with Integer`) mean the head
+	// segment of `IntArray.create` may be a typealias for a registered
+	// struct (`Array`). Run the typealias chase so callers (TypeResolution
+	// `callResultType`, lowering `lowerCall`) see the canonical struct
+	// name and can find the registered signature/return type.
 	if isQualifiedCallContext(callContext) 'isQualified'
-		return bare
+		return chaseTypealiasInQualifiedCallee(project, callee: bare, enclosingType: "")
 	end 'isQualified'
 	// `sibling` first tries the enclosing-type prefix; on miss, falls
 	// through to the same probe order as `free`.
@@ -923,3 +1102,222 @@ export function funcVisibilityOrDefault(project Project, qualifiedName String) r
 	let stdlibPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise FilePath from ""
 	return FuncVisibilityInfo.create(Visibility.global, sourceFilePath: stdlibPath)
 end 'funcVisibilityOrDefault'
+
+// Phase 11.0 step 8b: chase per-struct inner typealiases on the receiver
+// portion of a qualified callee like `ArrayIter.create` or `IntArray.create`.
+// When the head is an inner alias of `ArrayIterator with Element` on the
+// enclosing struct, or a top-level generic typealias for `Array with
+// Integer`, swap it for the alias's base struct name. Falls through
+// unchanged on any miss (no dot, unknown receiver, no alias, etc.).
+//
+// Used by both TypeResolution (`callResultType`/`qualifyCalleeForContext`)
+// and lowering (`LowerMaxonToStd.lowerCall`/`lowerMethodCall`) so a
+// qualified call always resolves to a registered struct/method name.
+export function chaseTypealiasInQualifiedCallee(project Project, callee String, enclosingType String) returns String
+	let bytes = callee.toByteArray()
+	let count = bytes.count()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= count 'noDot'
+		return callee
+	end 'noDot'
+	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	if project.structTypes.contains(head) 'alreadyResolved'
+		return callee
+	end 'alreadyResolved'
+	let resolved = chaseTypealiasNameToStruct(project, name: head, enclosingType: enclosingType)
+	if resolved.isEmpty() 'unresolved'
+		return callee
+	end 'unresolved'
+	if resolved == head 'sameName'
+		return callee
+	end 'sameName'
+	let tail = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: count)
+	return "{resolved}.{tail}"
+end 'chaseTypealiasInQualifiedCallee'
+
+export typealias ByteSliceIndex = int(0 to u64.max)
+
+// Copy a half-open byte slice [startIndex, endIndex) out of `bytes` and
+// return it as a String. Both bounds must already be validated by the
+// caller — out-of-range get's panic. Shared between the qualified-callee
+// splitter above and TypeResolution's `enclosingTypeNameForFunc` so each
+// site doesn't re-implement the same byte-array slice loop.
+export function byteSliceToString(bytes ByteArray, startIndex ByteSliceIndex, endIndex ByteSliceIndex) returns String
+	var out = ByteArray.create()
+	for i in startIndex upto endIndex 'copy'
+		let b = try bytes.get(i) otherwise panic("byteSliceToString: get OOB at {i}")
+		out.push(b)
+	end 'copy'
+	return String.from(out)
+end 'byteSliceToString'
+
+// Index of the rightmost ASCII '.' (byte 46) in `bytes`, or `bytes.count()`
+// when no dot is present. Used by qualified-callee parsing to split
+// `Type.method` into receiver + method-name halves; shared with the
+// TypeResolution pass via the export.
+export typealias DotByteIndex = int(0 to u64.max)
+
+export function lastIndexOfDotByte(bytes ByteArray) returns DotByteIndex
+	let count = bytes.count()
+	var i = count
+	while i > 0 'scan'
+		let next = i - 1
+		let ch = try bytes.get(next) otherwise panic("lastIndexOfDotByte: OOB at {next}")
+		if ch == 46 'dot'
+			return next
+		end 'dot'
+		i = next
+	end 'scan'
+	return count
+end 'lastIndexOfDotByte'
+
+// Resolve `name` through inner-aliases on `enclosingType`, then through
+// `genericTypealiases`, returning the underlying struct name. Empty string
+// when no path resolves to a registered struct.
+export function chaseTypealiasNameToStruct(project Project, name String, enclosingType String) returns String
+	if not enclosingType.isEmpty() 'tryInner'
+		let st = try project.structTypes.get(enclosingType) otherwise 'noStruct'
+			return chaseTypealiasNameThroughGeneric(project, name: name)
+		end 'noStruct'
+		let inner = try st.innerAliases.get(name) otherwise return chaseTypealiasNameThroughGeneric(project, name: name)
+		return baseNameOfMaxonType(project, t: inner)
+	end 'tryInner'
+	return chaseTypealiasNameThroughGeneric(project, name: name)
+end 'chaseTypealiasNameToStruct'
+
+function chaseTypealiasNameThroughGeneric(project Project, name String) returns String
+	let resolved = try project.genericTypealiases.get(name) otherwise return ""
+	return baseNameOfMaxonType(project, t: resolved)
+end 'chaseTypealiasNameThroughGeneric'
+
+export function baseNameOfMaxonType(project Project, t MaxonType) returns String
+	return match t 'pick'
+		named(id) gives project.typeNames.get(id)
+		genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		interface gives ""
+	end 'pick'
+end 'baseNameOfMaxonType'
+
+// --- First-param overload mangling ---
+//
+// Compute a stable mangle suffix from a single MaxonType. Used by both the
+// parser-side collision handling and the call-site disambiguation walk so
+// the same type produces the same suffix at registration and lookup. The
+// suffix always begins with `$` so the mangled name (`Array.contains$Element`)
+// stays distinguishable from a naturally-occurring qualified name.
+//
+// Encoding (kept narrow on purpose; matches the minimum needed for
+// `Array.contains(Element)` vs `Array.contains(Array<Element>)`):
+//   - primitives:        `$bool`, `$int`, `$float`, `$String`
+//   - named types:       `$<TypeName>`
+//   - type parameters:   `$<ParamName>`        (bare param name like `Element`)
+//   - generic instances: `$<Base>_<Arg1>_...`  (e.g. `$Array_Element`)
+//   - function/interface/unresolved: `$_` (degenerate fallback; these never
+//     produce overload collisions in current stdlib)
+export function mangleSuffixForMaxonType(project Project, t MaxonType) returns String
+	return match t 'mangle'
+		boolean gives "$bool"
+		integer gives "$int"
+		float gives "$float"
+		string gives "$String"
+		named(id) gives "${project.typeNames.get(id)}"
+		typeParameter(id) gives "${project.typeParameters.getName(id)}"
+		genericInstance(id) gives "${mangleSuffixForGenericInstance(project, id: id)}"
+		function gives "$_"
+		interface(id) gives "${project.interfaceRegistry.getName(id)}"
+		unresolved gives "$_"
+	end 'mangle'
+end 'mangleSuffixForMaxonType'
+
+// Helper: render a genericInstance as `Base_Arg1_Arg2`, recursing into args
+// so nested generics still produce a stable string. Returns the raw token
+// (no leading `$`) so the caller can prepend `$` exactly once.
+function mangleSuffixForGenericInstance(project Project, id GenericInstanceId) returns String
+	let (baseId, args) = project.genericInstances.get(id)
+	var result = project.typeNames.get(baseId)
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("mangleSuffixForGenericInstance: args.get OOB at {i}")
+		result = "{result}_{mangleTokenForMaxonType(project, t: a)}"
+	end 'eachArg'
+	return result
+end 'mangleSuffixForGenericInstance'
+
+// Bare-token (no `$` prefix) variant for use when the token is being joined
+// with `_` separators inside a larger mangle string.
+function mangleTokenForMaxonType(project Project, t MaxonType) returns String
+	return match t 'token'
+		boolean gives "bool"
+		integer gives "int"
+		float gives "float"
+		string gives "String"
+		named(id) gives project.typeNames.get(id)
+		typeParameter(id) gives project.typeParameters.getName(id)
+		genericInstance(id) gives mangleSuffixForGenericInstance(project, id: id)
+		function gives "_"
+		interface(id) gives project.interfaceRegistry.getName(id)
+		unresolved gives "_"
+	end 'token'
+end 'mangleTokenForMaxonType'
+
+// Compute the mangle suffix for a function's first non-self parameter type.
+// `paramTypes` is the parser-collected user-facing param list (instance
+// methods carry __self at index 0). Zero-arg methods (and instance methods
+// with only __self) get `$` as their suffix — there is no value-type to
+// disambiguate on, so a bare-name collision is a real duplicate.
+export function mangleSuffixForFirstParam(project Project, paramTypes MaxonTypeArray, hasSelf bool) returns String
+	var startIdx = 0
+	if hasSelf 'skipSelf'
+		startIdx = 1
+	end 'skipSelf'
+	if startIdx >= paramTypes.count() 'noParam'
+		return "$"
+	end 'noParam'
+	let firstType = try paramTypes.get(startIdx) otherwise panic("mangleSuffixForFirstParam: paramTypes.get OOB at {startIdx}")
+	return mangleSuffixForMaxonType(project, t: firstType)
+end 'mangleSuffixForFirstParam'
+
+// Resolve a call's qualified callee against the overload registry. When the
+// bare qualified name has overload variants registered, pick the one whose
+// first non-self param-type suffix matches the call's first non-self
+// argument-type suffix. `hasSelf` mirrors the receiver-prefix rule used at
+// registration: methodCall sites pass true (receiver consumes slot 0 of
+// the candidate signature), free-call sites pass false.
+//
+// Returns the bare name unchanged when:
+//   - the bare name has no overload variants (the common case), or
+//   - no variant's first-param suffix matches the call's first-arg suffix
+//     (caller's downstream lookup will then miss and report appropriately).
+//
+// Returns the bare name when multiple variants match (currently unreachable —
+// the parser rejects same-suffix overloads as E2001 — but kept defensive).
+export function resolveOverloadedCallee(project Project, bareQualifiedName String, argTypes MaxonTypeArray, hasSelf bool) returns String
+	let variants = try project.overloadedNames.get(bareQualifiedName) otherwise return bareQualifiedName
+	var startIdx = 0
+	if hasSelf 'skipSelf'
+		startIdx = 1
+	end 'skipSelf'
+	if startIdx >= argTypes.count() 'noArg'
+		// Zero-arg call against an overloaded set — pick the zero-arg variant
+		// if one exists. The parser registers it under the bare name + `$`.
+		let zeroArgCandidate = "{bareQualifiedName}$"
+		for v in variants 'scanZero'
+			if v == zeroArgCandidate 'hit'
+				return zeroArgCandidate
+			end 'hit'
+		end 'scanZero'
+		return bareQualifiedName
+	end 'noArg'
+	let firstArgType = try argTypes.get(startIdx) otherwise return bareQualifiedName
+	let argSuffix = mangleSuffixForMaxonType(project, t: firstArgType)
+	let target = "{bareQualifiedName}{argSuffix}"
+	for v in variants 'scan'
+		if v == target 'hit'
+			return target
+		end 'hit'
+	end 'scan'
+	return bareQualifiedName
+end 'resolveOverloadedCallee'

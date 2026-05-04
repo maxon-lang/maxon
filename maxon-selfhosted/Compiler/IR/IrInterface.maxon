@@ -104,3 +104,35 @@ export type Conformance
 end 'Conformance'
 
 export typealias ConformanceArray = Array with Conformance
+
+// Phase 11.0: one entry on a `where` clause. The clause `T is Equatable and
+// Hashable` parses as two WhereClause entries: `(paramName="T",
+// requiredTraitName="Equatable")` and `(paramName="T",
+// requiredTraitName="Hashable")`. Conjunction expands at parse time so
+// downstream consumers can iterate without a per-clause sub-loop. Bare-name
+// capture mirrors `Conformance.interfaceName` — Phase 11 step 5 resolves
+// the trait name against `project.unresolvedInterfaces` / `project.interfaces`.
+//
+// Phase 11.1 (step 5): `declaringTypeName` records the enclosing type or
+// extension's target name (e.g. `Array` for an extension `extension Array
+// where Element is Equatable`). Without this, `Constraints.whereClauseSatisfied`
+// can't disambiguate which type-parameter scope `paramName` belongs to —
+// type-parameter ids are interned by `(declaringTypeName, paramName)` and
+// the same bare name (`Element`, `T`) appears across many declarations.
+// The parser fills this when constructing a WhereClause; legacy callers that
+// don't yet know the scope may pass "" and the resolver will warn.
+export type WhereClause
+	export var paramName String
+	export var requiredTraitName String
+	export var declaringTypeName String
+
+	export static function create(paramName String, requiredTraitName String) returns WhereClause
+		return Self{paramName: paramName, requiredTraitName: requiredTraitName, declaringTypeName: ""}
+	end 'create'
+
+	export static function createScoped(paramName String, requiredTraitName String, declaringTypeName String) returns WhereClause
+		return Self{paramName: paramName, requiredTraitName: requiredTraitName, declaringTypeName: declaringTypeName}
+	end 'createScoped'
+end 'WhereClause'
+
+export typealias WhereClauseArray = Array with WhereClause

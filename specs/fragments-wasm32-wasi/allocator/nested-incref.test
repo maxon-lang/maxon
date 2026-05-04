@@ -1,0 +1,56 @@
+// Test: nested-incref
+function main() returns ExitCode
+	let p = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 64 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @mm_alloc(%0, %1, %2)
+    %5 = mir.call @mm_incref(%3)
+    %7 = mir.call @mm_incref(%3)
+    %9 = mir.call @mm_incref(%3)
+    %11 = mir.call @mm_incref(%3)
+    %13 = mir.call @mm_incref(%3)
+    %15 = mir.call @mm_decref(%3)
+    %17 = mir.call @mm_decref(%3)
+    %19 = mir.call @mm_decref(%3)
+    %21 = mir.call @mm_decref(%3)
+    %23 = mir.call @mm_decref(%3)
+    %25 = mir.call @mm_decref(%3)
+    %26 = mir.global_addr @__mm_alloc_count
+    %27 = mir.load %26, 0
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp eq, %27, %29
+    mir.cond_br %30 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %31 = mir.mov_imm 0 : i64
+    mir.ret %31
+  ok_1.after:
+    %32 = mir.mov_imm 1 : i64
+    mir.ret %32
+  }
+}
+---

@@ -1,0 +1,186 @@
+// Phase 11.1 (step 5): pure type-substitution helpers.
+//
+// A `TypeSubstitution` maps a generic declaration's type-parameter ids
+// (`TypeParamId`, interned through `Project.typeParameters`) to concrete
+// `MaxonType`s. It is the contract every later phase exercises:
+//
+//   - Step 6 (layout descriptors) consults a substitution to walk the field
+//     types of a `Array with Int` instance and compute the runtime layout.
+//   - Step 7 (witness tables) substitutes interface methods' associated-type
+//     parameters when emitting per-conformance method-impl entries.
+//   - Step 8 (generic body lowering) consults the substitution at every
+//     call site to materialize a layout descriptor and witness pointer.
+//
+// This file is pure bookkeeping: it constructs / queries substitutions and
+// recursively rewrites a `MaxonType` under one. It does NOT perform
+// where-clause checking (that lives in `Constraints.maxon`), validate
+// conformances, or touch the IR. Substitution is the lowest-level primitive
+// the rest of the type-system layer is built on.
+
+// Parallel-array store of `(paramId, concrete)` bindings. Linear scan suffices
+// — type parameters per substitution are always small (Array's `Element`,
+// Iterable's `(Element, Iter)`, etc.). Bindings are append-only; callers
+// build a substitution once per call site / per conformance and discard it.
+export type TypeSubstitution
+	export var paramIds TypeParamIdArray
+	export var concreteTypes MaxonTypeArray
+
+	export static function create() returns TypeSubstitution
+		return Self{paramIds: TypeParamIdArray.create(), concreteTypes: MaxonTypeArray.create()}
+	end 'create'
+
+	// Append `(paramId -> concrete)`. Duplicate ids are NOT deduped: the
+	// first binding wins on `lookup` because the scan returns at the first
+	// hit. This keeps the API symmetric with TypeParamRegistry.intern (which
+	// also returns the first hit on a re-intern) and lets a caller layer
+	// extension bindings over a base substitution by pushing without
+	// having to walk the existing entries first.
+	export function bind(paramId TypeParamId, concrete MaxonType)
+		paramIds.push(paramId)
+		concreteTypes.push(concrete)
+	end 'bind'
+
+	// Resolve `paramId` to its bound concrete type. Returns `MaxonType.unresolved`
+	// when the parameter is not bound — the caller decides whether to leave
+	// the type-parameter in place (e.g. lowering inside a generic body where
+	// the param flows through unsubstituted) or report a diagnostic.
+	export function lookup(paramId TypeParamId) returns MaxonType
+		for i in 0 upto paramIds.count() 'scan'
+			let p = try paramIds.get(i) otherwise panic("TypeSubstitution.lookup: paramIds.get OOB at {i}")
+			if p == paramId 'hit'
+				return try concreteTypes.get(i) otherwise panic("TypeSubstitution.lookup: concreteTypes desync at {i}")
+			end 'hit'
+		end 'scan'
+		return MaxonType.unresolved
+	end 'lookup'
+
+	// True iff this substitution carries no bindings. Lets `substituteType`
+	// short-circuit the recursive walk on the common identity case.
+	export function isEmpty() returns bool
+		return paramIds.count() == 0
+	end 'isEmpty'
+
+	// Number of bindings currently in the substitution. Used by
+	// `whereClauseSatisfied` and tests.
+	export function count() returns TypeParamId
+		return paramIds.count()
+	end 'count'
+end 'TypeSubstitution'
+
+// Phase 11.1: parallel-array shape for `TypeSubstitution.paramIds`. Lives at
+// file scope because the Project module's typealias section can't easily
+// reach into TypeSystem (and the type is purely a TypeSystem concern).
+export typealias TypeParamIdArray = Array with TypeParamId
+
+// Walk `t` and substitute every `MaxonType.typeParameter(id)` with its
+// bound concrete from `subst`. Recurses into `genericInstance` argument
+// lists so a `Array with (Pair with Element)` properly becomes
+// `Array with (Pair with Int)` when `Element -> Int`. Other arms
+// (primitives, named, interface, function, unresolved) pass through
+// unchanged: function types are structural and Phase 11 does not yet
+// substitute through them; named types resolve to concrete struct/enum
+// names that don't carry type-parameter slots; interface arms refer to
+// existential value-types whose own parameter substitution is handled
+// when the existential is constructed, not when the value type is
+// referenced.
+//
+// An unbound type-parameter (`subst.lookup` returns `unresolved`) is
+// rewritten to `unresolved` rather than left as `typeParameter(id)` —
+// the caller is expected to either supply a complete substitution or
+// pass an empty one (in which case `isEmpty()` short-circuits).
+export function substituteType(project Project, t MaxonType, subst TypeSubstitution) returns MaxonType
+	if subst.isEmpty() 'noop'
+		return t
+	end 'noop'
+	return match t 'sub'
+		boolean gives MaxonType.boolean
+		integer gives MaxonType.integer
+		float gives MaxonType.float
+		string gives MaxonType.string
+		named gives t
+		function gives t
+		unresolved gives MaxonType.unresolved
+		typeParameter(id) gives subst.lookup(id)
+		interface gives t
+		genericInstance(gid) gives substituteGenericInstance(project, gid: gid, subst: subst)
+	end 'sub'
+end 'substituteType'
+
+// Recursive case for `substituteType`: walks the genericInstance's arg
+// list, substitutes each arg, and re-interns the result so structural
+// equality continues to be a single id compare. The `baseId` itself is
+// not substituted — base names are the static handle the registry interns
+// against, and a generic-instance whose base is itself a type-parameter
+// would be a higher-kinded thing the language does not yet have.
+function substituteGenericInstance(project Project, gid GenericInstanceId, subst TypeSubstitution) returns MaxonType
+	let (baseId, args) = project.genericInstances.get(gid)
+	var newArgs = MaxonTypeArray.create()
+	var changed = false
+	for i in 0 upto args.count() 'argLoop'
+		let a = try args.get(i) otherwise panic("substituteGenericInstance: args.get OOB at {i}")
+		let na = substituteType(project, t: a, subst: subst)
+		if not maxonTypesStructurallyEqual(a, b: na) 'diff'
+			changed = true
+		end 'diff'
+		newArgs.push(na)
+	end 'argLoop'
+	if not changed 'unchanged'
+		return MaxonType.genericInstance(gid)
+	end 'unchanged'
+	let newGid = project.genericInstances.intern(baseId, args: newArgs)
+	return MaxonType.genericInstance(newGid)
+end 'substituteGenericInstance'
+
+// Build a substitution by pairing the type-parameter names declared on
+// `declaringTypeName` with a concrete-arg list (in declaration order).
+// Used at every call site that resolves a generic instantiation:
+//
+//   - Resolving `Array with Int` → ask the registry for Array's
+//     `usesParams` (`["Element"]`), pair with `[Int]`, bind
+//     `(Array, Element) -> Int`.
+//   - Validating a generic call site → pair the callee's declared
+//     params with the receiver's `withArgs`.
+//
+// When the registry has no params for `declaringTypeName` (non-generic
+// type, or the type wasn't recorded with a `uses` clause), the result
+// is an empty substitution. `args.count()` mismatches against the
+// declared param count silently bind whatever overlaps; full
+// arity validation lives at the call site (or in
+// `validateConformances`), not here — substitution is the primitive,
+// not the gatekeeper.
+export function buildSubstitution(project Project, declaringTypeName String, args MaxonTypeArray) returns TypeSubstitution
+	var subst = TypeSubstitution.create()
+	let paramNames = project.typeParameters.getParamNames(declaringTypeName)
+	let count = paramNames.count()
+	let argCount = args.count()
+	var limit = count
+	if argCount < limit 'pickArg'
+		limit = argCount
+	end 'pickArg'
+	for i in 0 upto limit 'bindLoop'
+		let paramName = try paramNames.get(i) otherwise panic("buildSubstitution: paramNames.get OOB at {i}")
+		let paramId = project.typeParameters.intern(declaringTypeName, paramName: paramName)
+		let concrete = try args.get(i) otherwise panic("buildSubstitution: args.get OOB at {i}")
+		subst.bind(paramId, concrete: concrete)
+	end 'bindLoop'
+	return subst
+end 'buildSubstitution'
+
+// Convenience: build a substitution from a `genericInstance` MaxonType.
+// Resolves the base type-name and arg list through the registry, then
+// delegates to `buildSubstitution`. The single-call form callers want
+// when they already hold a `MaxonType.genericInstance(...)` and need
+// the matching substitution to walk its body.
+export function buildSubstitutionForInstance(project Project, t MaxonType) returns TypeSubstitution
+	return match t 'pick'
+		genericInstance(gid) gives buildSubstitutionFromGenericInstance(project, gid: gid)
+		boolean to typeParameter gives TypeSubstitution.create()
+		interface gives TypeSubstitution.create()
+	end 'pick'
+end 'buildSubstitutionForInstance'
+
+function buildSubstitutionFromGenericInstance(project Project, gid GenericInstanceId) returns TypeSubstitution
+	let (baseId, args) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	return buildSubstitution(project, declaringTypeName: baseName, args: args)
+end 'buildSubstitutionFromGenericInstance'

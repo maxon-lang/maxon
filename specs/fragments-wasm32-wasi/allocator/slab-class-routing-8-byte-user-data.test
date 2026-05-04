@@ -1,0 +1,34 @@
+// Test: slab-class-routing-8-byte-user-data
+function main() returns ExitCode
+	let p = __mm_raw_alloc(8)
+	__mm_raw_free(p)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 8 : i64
+    %1 = mir.call @mm_raw_alloc(%0)
+    %3 = mir.call @mm_raw_free(%1)
+    %4 = mir.global_addr @__mm_raw_alloc_count
+    %5 = mir.load %4, 0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp eq, %5, %7
+    mir.cond_br %8 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %9 = mir.mov_imm 0 : i64
+    mir.ret %9
+  ok_1.after:
+    %10 = mir.mov_imm 1 : i64
+    mir.ret %10
+  }
+}
+---

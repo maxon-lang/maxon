@@ -229,7 +229,78 @@ export function registerManagedMemoryType(project Project)
 	registerManagedMemoryStruct(project)
 	registerManagedMemoryErrorEnum(project)
 	registerManagedMemoryMethods(project)
+	registerManagedMemoryCursorStruct(project)
+	registerManagedMemoryCursorMethods(project)
+	registerManagedMemoryCursorOnMm(project)
 end 'registerManagedMemoryType'
+
+// Phase 11.0 step 8a: register the `__ManagedMemoryCursor` builtin struct
+// so Array's iterator wrapping (`__ManagedMemoryCursor with Element`) has
+// somewhere for the parser/type-resolver to chase method-call result
+// types. Layout matches what Phase 6's slab + cursor runtime advertises:
+//   offset 0  buffer    i64 (parent __ManagedMemory pointer)
+//   offset 8  position  i64 (current cursor index)
+// Total byteSize = 16. Phase 11 lowers `__ManagedMemoryCursor.*` calls
+// through Phase 6 runtime helpers; the type registration here gives the
+// type-resolver the metadata it needs to compute method-call result
+// types in user code (Array.maxon and friends) before that lowering
+// fires.
+function registerManagedMemoryCursorStruct(project Project)
+	if project.structTypes.contains("__ManagedMemoryCursor") 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	let i64Type = MaxonType.integer
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0))
+	fields.push(StructField.create("position", fieldType: i64Type, offset: 8))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryCursorStruct: stdlib bootstrap path rejected")
+	let st = StructType.create("__ManagedMemoryCursor", fields: fields, byteSize: 16, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+	try project.structTypes.insert("__ManagedMemoryCursor", value: st) otherwise ignore
+	_ = project.typeNames.intern("__ManagedMemoryCursor")
+end 'registerManagedMemoryCursorStruct'
+
+function registerManagedMemoryCursorMethods(project Project)
+	let cursorType = MaxonType.named(project.typeNames.intern("__ManagedMemoryCursor"))
+	let intType = MaxonType.integer
+	let intReturn = MaxonReturnType.value(intType)
+	let elementType = MaxonType.integer
+	let elementReturn = MaxonReturnType.value(elementType)
+
+	// current(self) returns Element
+	registerCursorMethod(project, methodName: "current", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(cursorType), returnType: elementReturn)
+	// index(self) returns i64
+	registerCursorMethod(project, methodName: "index", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(cursorType), returnType: intReturn)
+	// advance(self) returns void throws __ManagedMemoryError
+	registerCursorMethod(project, methodName: "advance", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(cursorType), returnType: MaxonReturnType.void)
+	// retreat(self) returns void throws __ManagedMemoryError
+	registerCursorMethod(project, methodName: "retreat", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(cursorType), returnType: MaxonReturnType.void)
+	// seek(self, index) returns void throws __ManagedMemoryError
+	registerCursorMethod(project, methodName: "seek", paramNames: mmParamNames2("self", second: "index"), paramTypes: mmParamTypes2(cursorType, second: intType), returnType: MaxonReturnType.void)
+	// peek(self, ahead) returns Element throws __ManagedMemoryError
+	registerCursorMethod(project, methodName: "peek", paramNames: mmParamNames2("self", second: "ahead"), paramTypes: mmParamTypes2(cursorType, second: intType), returnType: elementReturn)
+end 'registerManagedMemoryCursorMethods'
+
+function registerCursorMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	let qualifiedName = "__ManagedMemoryCursor.{methodName}"
+	var paramDefaults = ParamDefaultArray.create()
+	for _ in 0 upto paramNames.count() 'fillDefaults'
+		paramDefaults.push(ParamDefault.none)
+	end 'fillDefaults'
+	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
+	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	project.methodNameIndex.record(qualifiedName)
+end 'registerCursorMethod'
+
+// Phase 11.0 step 8a: register `__ManagedMemory.createCursor(self) returns
+// __ManagedMemoryCursor throws __ManagedMemoryError`. Lives outside the
+// main `registerManagedMemoryMethods` block so the cursor type is
+// available before this fires (createCursor's return type names it).
+function registerManagedMemoryCursorOnMm(project Project)
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	let cursorType = MaxonType.named(project.typeNames.intern("__ManagedMemoryCursor"))
+	let cursorReturn = MaxonReturnType.value(cursorType)
+	registerManagedMemoryMethod(project, methodName: "createCursor", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: cursorReturn)
+end 'registerManagedMemoryCursorOnMm'
 
 function registerManagedMemoryStruct(project Project)
 	if project.structTypes.contains("__ManagedMemory") 'alreadyDone'
@@ -243,7 +314,7 @@ function registerManagedMemoryStruct(project Project)
 	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24))
 	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32))
 	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryStruct: stdlib bootstrap path rejected")
-	let st = StructType.create("__ManagedMemory", fields: fields, byteSize: 40, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
+	let st = StructType.create("__ManagedMemory", fields: fields, byteSize: 40, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 	try project.structTypes.insert("__ManagedMemory", value: st) otherwise ignore
 	// Intern the type name so MaxonType.named lookups resolve later.
 	_ = project.typeNames.intern("__ManagedMemory")
@@ -790,6 +861,17 @@ type MaxonToStdLowering
 			closureCreate(result, funcName, _, capturedNames, _, _) then self.lowerClosureCreate(result, funcName: funcName, capturedNames: capturedNames, dstBlock: dstBlock)
 			closureEnvLoad(result, captureIndex, _, captureType, _) then self.lowerClosureEnvLoad(result, captureIndex: captureIndex, captureType: captureType, dstBlock: dstBlock)
 			indirectCall(result, callee, fnTypeId, args, _, _, _, _) then self.lowerIndirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, dstBlock: dstBlock)
+			// Phase 11.0 step 8.5: for-in over arbitrary iterables is
+			// diagnosed as a compile error in the parser
+			// (`parseForInIterable`), so reaching this point means the
+			// parser's diagnostic was suppressed or the build proceeded
+			// past errors. The op itself has no Std lowering — the
+			// iterator-protocol witness-call expansion (Phase 11.1-11.3
+			// follow-up) is still unimplemented. Emit nothing so the
+			// body block (which is detached from the CFG by the parser)
+			// is silently dropped; the parser-side diagnostic remains
+			// the user-visible signal that this loop did not compile.
+			forInIterable then return
 		end 'lower'
 	end 'lowerOp'
 
@@ -976,7 +1058,18 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
-		let qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
+		var qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
+		// Phase 11.0 step 8b: chase per-struct inner-typealiases on the
+		// receiver name so `ArrayIter.create` (where `ArrayIter` is an
+		// inner-alias of `ArrayIterator with Element` declared inside Array)
+		// resolves to the underlying `ArrayIterator.create`.
+		qualifiedCallee = chaseTypealiasInQualifiedCallee(self.project, callee: qualifiedCallee, enclosingType: self.currentTypeName)
+		// First-param overload disambiguation: when the bare qualified name
+		// is registered in the overload index, pick the variant matching the
+		// call's first non-self argument type. `hasSelf` is false here —
+		// free / qualified `Type.method` calls don't carry a receiver in the
+		// arg list (sibling-instance calls add __self below via leadingId).
+		qualifiedCallee = resolveOverloadedCallee(self.project, bareQualifiedName: qualifiedCallee, argTypes: argTypes, hasSelf: false)
 		// One signature lookup powers both the sibling-instance probe (does
 		// the resolved callee's first param name `__self`?) and the per-arg
 		// type-check / default-fill in slotArgsForCall. Without this fold,
@@ -1007,8 +1100,28 @@ type MaxonToStdLowering
 	// the receiver prepended as the implicit __self argument.
 	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
-		let receiverType = self.getValueType(receiverId)
+		let rawReceiverType = self.getValueType(receiverId)
+		// Phase 11.0 step 8b: normalize named-typealiases (`ElementMemory`) and
+		// inner-aliases declared inside the enclosing struct's body
+		// (`ElementArray`) into their underlying generic-instance form so
+		// `maxonTypeStructName` returns the real struct name (`__ManagedMemory`,
+		// `Array`, ...).
+		let receiverType = normalizeReceiverInContext(self.project, t: rawReceiverType, enclosingType: self.currentTypeName)
 		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
+		// Phase 11.0 Step 8.7c: when the receiver's type didn't reduce to
+		// a concrete struct name (it's an interface, a free type
+		// parameter, or unresolved), interface-style dynamic dispatch
+		// would have to thread through a witness table — that's the
+		// territory of Phase 11.4 (not yet wired). For now we lower the
+		// call to a runtime-panic stub so the build completes; any code
+		// path that actually executes it terminates cleanly with a
+		// diagnostic. The stdlib (`Array.from`, `for item in source`)
+		// reaches here at parse-time but is never invoked by the
+		// bootstrap compilation itself, so the stub never runs.
+		if receiverStructName.isEmpty() 'noStruct'
+			self.lowerInterfaceMethodCallStub(result, methodName: methodName, dstBlock: dstBlock)
+			return
+		end 'noStruct'
 		// Step 6b.4: instance methods on `__ManagedMemory` (length, get, set, ...)
 		// expand inline to a sequence of Std-IR ops calling runtime helpers.
 		// Same shape as `lowerMmIntrinsic` but indexed by method name; uses the
@@ -1019,7 +1132,24 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
-		let qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
+		// Phase 11.0 step 8b: __ManagedMemoryCursor methods all lower to
+		// no-op placeholders today. The cursor is aliased to its parent
+		// ManagedMemory pointer (see createCursor above), and iterator-
+		// protocol semantics arrive in step 8e.
+		if receiverStructName == "__ManagedMemoryCursor" 'didLowerCursor'
+			let bareMethodName = String.from(methodName)
+			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerCursor'
+		var qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
+		// First-param overload disambiguation: when the receiver-type prefix
+		// resolves to a name in the overload index, pick the variant matching
+		// the call's first non-self argument type. methodCall's argTypes
+		// vector starts with the user-facing args (no __self), so hasSelf is
+		// false here — the candidate signatures will have __self at slot 0,
+		// but the suffix is computed over user-facing params only.
+		qualifiedCallee = resolveOverloadedCallee(self.project, bareQualifiedName: qualifiedCallee, argTypes: argTypes, hasSelf: false)
 		// paramStartIndex: 1 because the signature counts __self at slot 0;
 		// user-facing params start at index 1. slotArgsForCall folds the
 		// receiver into slot 0 of the returned arg list — no second copy.
@@ -1241,6 +1371,17 @@ type MaxonToStdLowering
 		if methodName == "toCString" 'mCString'
 			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 0, dstBlock: dstBlock)
 		end 'mCString'
+		// Phase 11.0 step 8b: createCursor returns an opaque __ManagedMemoryCursor
+		// stamped with the parent ManagedMemory pointer. There is no runtime
+		// helper today — and Phase 11's iterator-protocol lowering is deferred
+		// to step 8e — so we alias the cursor to the receiver pointer
+		// itself. Downstream `cursor.*` calls lower in lowerCursorBuiltin
+		// below; they treat the cursor as a degenerate one-position iterator.
+		if methodName == "createCursor" 'mCreateCursor'
+			self.aliasName(result, toId: receiverId)
+			self.setValueType(receiverId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemoryCursor")))
+			return true
+		end 'mCreateCursor'
 		if methodName == "clear" 'mClear'
 			let zeroId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zeroId, value: 0))))
@@ -1276,6 +1417,27 @@ type MaxonToStdLowering
 		return true
 	end 'lowerManagedMemBuiltin'
 
+	// Phase 11.0 step 8b: lower a `__ManagedMemoryCursor.method` call to
+	// a placeholder. The cursor is aliased to its parent __ManagedMemory
+	// pointer at createCursor time (see lowerManagedMemBuiltin above),
+	// and Phase 11's iterator-protocol witness-table dispatch hasn't
+	// shipped yet, so each cursor call lowers to a benign zero-valued
+	// constant (no runtime effect). Returns true to indicate the dispatch
+	// was handled.
+	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, dstBlock IrBlock) returns bool
+		// `current()` returns the element at the cursor's position. Today the
+		// cursor is the parent __ManagedMemory pointer (so receiverId is the
+		// MM ptr), so reading element 0 gives a representative value;
+		// that's enough for compile-time well-formedness on Array.maxon's
+		// reachable code paths (the body blocks behind for-in iterables
+		// are detached today, see lowerOp).
+		logTrace(LogCategory.parser, message: () gives "lowerManagedMemoryCursorBuiltin: method={methodName} recv={receiverId}")
+		let resId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resId, value: 0))))
+		self.setValueType(resId, t: MaxonType.integer)
+		return true
+	end 'lowerManagedMemoryCursorBuiltin'
+
 	// Inline a `loadIndirect(selfPtr, offset)` for one of the simple
 	// `__ManagedMemory.*` getters (length / capacity / elementSize /
 	// toCString). Always emits an i64 load — every field of the 5-field
@@ -1299,6 +1461,35 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerManagedMemRuntimeCall'
+
+	// Phase 11.0 Step 8.7c: stub for method calls whose receiver type
+	// didn't reduce to a concrete struct (interface-typed receivers,
+	// free type-parameters, or types the resolver couldn't pin down).
+	// Witness-table dispatch arrives in Phase 11.4; until then, lower
+	// to `mrt_panic("...is unimplemented")` so the build completes and
+	// any actual runtime invocation surfaces a clear error.
+	function lowerInterfaceMethodCallStub(result ByteArray, methodName ByteArray, dstBlock IrBlock)
+		let panicLabel = self.pipeline.nextPanicLabel()
+		let methodNameStr = String.from(methodName)
+		var nullTermMsg = ByteArray.create()
+		let panicMsg = "interface dispatch for method '{methodNameStr}' is unimplemented (Phase 11.4)"
+		let msgRaw = panicMsg.toByteArray()
+		for b in msgRaw 'each'
+			nullTermMsg.push(b)
+		end 'each'
+		nullTermMsg.push(0x0A)
+		nullTermMsg.push(0)
+		addNamedGlobalData(self.globalData, name: panicLabel, data: nullTermMsg)
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: panicLabel)))
+		var argIds = ValueIdArray.create()
+		argIds.push(addrId)
+		let panicResultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(panicResultId, callee: "mrt_panic", argIds: argIds)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerInterfaceMethodCallStub'
 
 	// Stub `makeCharFromBytes` — Phase 7 will replace with real UTF-8
 	// decode. For now emit `mrt_panic("...is unimplemented")` so any
@@ -1462,6 +1653,18 @@ type MaxonToStdLowering
 	// real E3005 diagnostic. Reporting the type error first is also more
 	// useful: it points at the actual problem.
 	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
+		// Phase 11.0 Step 8.7a: when either side carries a generic-aware
+		// type that the type-resolver couldn't pin down to a concrete
+		// CastCategory (an unresolved producer-type, a free type parameter,
+		// a generic instance, or an interface), skip the cast/compare
+		// validation and pass the value through. Generic body lowering
+		// inherits the user-side type-checking that already happened during
+		// resolveAllTopLevelDecls; the runtime ABI is uniform (i64 / pointer)
+		// for every supported instantiation, so no implicit conversion is
+		// required at the call site.
+		if isGenericAwareOrUnresolvedType(argType) or isGenericAwareOrUnresolvedType(paramType) 'genericPassThrough'
+			return self.resolveName(argName)
+		end 'genericPassThrough'
 		let argCategory = convertCastCategory(self.project, t: argType)
 		let paramCategory = convertCastCategory(self.project, t: paramType)
 		if argCategory == paramCategory 'sameCategory'
@@ -1903,7 +2106,73 @@ type MaxonToStdLowering
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: argIds)))
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern(structNameStr)))
+		// Phase 11.0 step 8.8 (mirrors C# bootstrap `EmitEmptyBuiltinManagedLiteral`):
+		// auto-initialize fields whose declared type resolves to the
+		// `__ManagedMemory` builtin. Without this, `Array.create()`
+		// (which lowers to `Self{}` with no fieldStores) leaves
+		// `managed` as a null pointer; subsequent `arr.push` calls
+		// then dereference null when reading length/capacity.
+		// Subsequent explicit `fieldStore` ops in user code (e.g.
+		// `Self{managed: someManaged}`) overwrite the synthesized
+		// pointer, so this is safe to do unconditionally.
+		self.synthesizeManagedFieldInits(parentId: resultId, structType: structType, dstBlock: dstBlock)
 	end 'lowerStructAlloc'
+
+	// For each field on `structType` whose declared type resolves to the
+	// `__ManagedMemory` builtin, allocate a 40-byte __ManagedMemory record
+	// (zero buffer/length/capacity, element_size = 8, parent_ptr = 0) and
+	// store its pointer at the field's offset in the parent struct. This
+	// matches the C# bootstrap's parser-time synthesis for missing managed
+	// fields in `Self{}` literals — in the hybrid generic model the
+	// concrete element_size will eventually come from a layout descriptor
+	// (Phase 11.4); for now, every user-visible Array element type is
+	// 8 bytes, so the constant 8 is correct.
+	function synthesizeManagedFieldInits(parentId ValueId, structType StructType, dstBlock IrBlock)
+		for field in structType.fields 'eachField'
+			// Chase named/inner-aliases on the field type so a declared
+			// `var managed ElementMemory` (where `ElementMemory` is the
+			// inner alias `__ManagedMemory with Element`) resolves to
+			// the underlying `__ManagedMemory` builtin.
+			let directBase = baseNameOfMaxonType(self.project, t: field.fieldType)
+			var fieldBaseName = ""
+			fieldBaseName = directBase
+			if directBase != "__ManagedMemory" 'tryChase'
+				let chased = chaseTypealiasNameToStruct(self.project, name: directBase, enclosingType: structType.name)
+				if not chased.isEmpty() 'didChase'
+					fieldBaseName = chased
+				end 'didChase'
+			end 'tryChase'
+			if fieldBaseName != "__ManagedMemory" 'notManaged'
+				continue
+			end 'notManaged'
+			// Allocate 40 bytes for the inner __ManagedMemory record.
+			let mmSizeId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
+			self.setValueType(mmSizeId, t: MaxonType.integer)
+			var mmArgIds = ValueIdArray.create()
+			mmArgIds.push(mmSizeId)
+			let mmId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
+			self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+			// Initialize fields: buffer=0, length=0, capacity=0,
+			// element_size=8, parent_ptr=0.
+			self.storeI64Const(addrId: mmId, offset: 0, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(addrId: mmId, offset: 8, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(addrId: mmId, offset: 16, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(addrId: mmId, offset: 24, value: 8, dstBlock: dstBlock)
+			self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+			// Store mmId pointer at field's offset in the parent.
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: mmId, isFloat: false)))
+		end 'eachField'
+	end 'synthesizeManagedFieldInits'
+
+	// Helper: emit `constI64 value` then `storeIndirect addrId offset value`.
+	function storeI64Const(addrId ValueId, offset FieldOffset, value ParsedInt, dstBlock IrBlock)
+		let valId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: valId, value: value))))
+		self.setValueType(valId, t: MaxonType.integer)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valId, isFloat: false)))
+	end 'storeI64Const'
 
 	// Lower printLiteral(stringId) to:
 	//   globalAddr(addrId, "__istr_N")
@@ -2238,6 +2507,10 @@ end 'enclosingTypeName'
 // or has no helper-backed lowering (makeCharFromBytes — panic stub). The
 // runtime helpers live in runtime.std and are responsible for bounds
 // checking + writing `__data_maxon_error` on failure (sentinel-zero return).
+// Phase 11.0 step 8b helpers (chaseTypealiasInQualifiedCallee, ...) live in
+// MaxonDialect.maxon so both TypeResolution and lowering apply the same
+// canonicalization to qualified callee names.
+
 function managedMemHelperFor(methodName String) returns String
 	if methodName == "setLength" 'mSetLen'
 		return "__managed_mem_set_length"

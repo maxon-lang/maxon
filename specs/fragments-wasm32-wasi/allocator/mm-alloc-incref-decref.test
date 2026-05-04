@@ -1,0 +1,94 @@
+// Test: mm-alloc-incref-decref
+function main() returns ExitCode
+	let p = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_incref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	__mm_decref(p)
+	let after3 = __mm_alloc_count()
+	__mm_decref(p)
+	let after4 = __mm_alloc_count()
+	var fail = 0
+	if after3 != 1 'a'
+		fail = 1
+	end 'a'
+	if after4 != 0 'b'
+		fail = fail + 2
+	end 'b'
+	if fail == 0 'ok'
+		return 0
+	end 'ok'
+	if fail == 1 'f1'
+		return 1
+	end 'f1'
+	if fail == 2 'f2'
+		return 2
+	end 'f2'
+	return 3
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 64 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @mm_alloc(%0, %1, %2)
+    %5 = mir.call @mm_incref(%3)
+    %7 = mir.call @mm_incref(%3)
+    %9 = mir.call @mm_incref(%3)
+    %11 = mir.call @mm_decref(%3)
+    %13 = mir.call @mm_decref(%3)
+    %15 = mir.call @mm_decref(%3)
+    %16 = mir.global_addr @__mm_alloc_count
+    %17 = mir.load %16, 0
+    %19 = mir.call @mm_decref(%3)
+    %20 = mir.global_addr @__mm_alloc_count
+    %21 = mir.load %20, 0
+    %22 = mir.mov_imm 0 : i64
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.cmp ne, %17, %24
+    mir.cond_br %25 [then: a_1(), else: a_1.after(%22)]
+  a_1:
+    %26 = mir.mov_imm 1 : i64
+    mir.br a_1.after(%26)
+  a_1.after:
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.cmp ne, %21, %28
+    mir.cond_br %29 [then: b_3(), else: b_3.after(%47)]
+  b_3:
+    %31 = mir.mov_imm 2 : i64
+    %32 = mir.add.i64 %47, %31
+    mir.br b_3.after(%32)
+  b_3.after:
+    %34 = mir.mov_imm 0 : i64
+    %35 = mir.cmp eq, %46, %34
+    mir.cond_br %35 [then: ok_5(), else: ok_5.after()]
+  ok_5:
+    %36 = mir.mov_imm 0 : i64
+    mir.ret %36
+  ok_5.after:
+    %38 = mir.mov_imm 1 : i64
+    %39 = mir.cmp eq, %46, %38
+    mir.cond_br %39 [then: f1_7(), else: f1_7.after()]
+  f1_7:
+    %40 = mir.mov_imm 1 : i64
+    mir.ret %40
+  f1_7.after:
+    %42 = mir.mov_imm 2 : i64
+    %43 = mir.cmp eq, %46, %42
+    mir.cond_br %43 [then: f2_9(), else: f2_9.after()]
+  f2_9:
+    %44 = mir.mov_imm 2 : i64
+    mir.ret %44
+  f2_9.after:
+    %45 = mir.mov_imm 3 : i64
+    mir.ret %45
+  }
+}
+---

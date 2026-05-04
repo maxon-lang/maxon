@@ -1,0 +1,49 @@
+// Test: arena-fill-then-free
+function main() returns ExitCode
+	var i = 0
+	while i < 1000 'loop'
+		let p = __mm_raw_alloc(8)
+		__mm_raw_free(p)
+		i = i + 1
+	end 'loop'
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br loop_1.header(%0)
+  loop_1.header:
+    %2 = mir.mov_imm 1000 : i64
+    %3 = mir.cmp lt, %18, %2
+    mir.cond_br %3 [then: loop_1(), else: loop_1.exit()]
+  loop_1:
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mm_raw_alloc(%4)
+    %7 = mir.call @mm_raw_free(%5)
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %18, %9
+    mir.br loop_1.header(%10)
+  loop_1.exit:
+    %11 = mir.global_addr @__mm_raw_alloc_count
+    %12 = mir.load %11, 0
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.cmp eq, %12, %14
+    mir.cond_br %15 [then: ok_4(), else: ok_4.after()]
+  ok_4:
+    %16 = mir.mov_imm 0 : i64
+    mir.ret %16
+  ok_4.after:
+    %17 = mir.mov_imm 1 : i64
+    mir.ret %17
+  }
+}
+---

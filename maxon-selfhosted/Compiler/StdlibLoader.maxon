@@ -18,7 +18,7 @@ var stdlibCacheProjectDirs = FilePathArray.create()
 // curated whitelist and grow it as more features come online. Each entry is a
 // path relative to the project root (i.e. the directory that contains
 // `stdlib/`).
-let stdlibWhitelist = ["stdlib/Math.maxon", "stdlib/Range.maxon"]
+let stdlibWhitelist = ["stdlib/Math.maxon", "stdlib/Range.maxon", "stdlib/Array.maxon"]
 
 // A synthesized stdlib prelude. The real `stdlib/Process.maxon` declares
 // `ExitCode` behind `#if os(...)` — a directive form the self-hosted compiler
@@ -29,14 +29,14 @@ let stdlibWhitelist = ["stdlib/Math.maxon", "stdlib/Range.maxon"]
 // of the platform variants and so works across all targets.
 // Synthesized stdlib declarations. Beyond `ExitCode` (see comment above), we
 // also pre-seed the cross-cutting interface family (`Error`, `Iterator`,
-// `BidirectionalIterator`, `Iterable`) and `IterationError` so user code can
-// reference them by name without us having to whitelist `stdlib/Interfaces.maxon`
+// `BidirectionalIterator`, `Iterable`, plus the Hashable/Equatable/Comparable/
+// Cloneable/Stringable/FormattedStringable/BuiltinArrayLiteral protocol set
+// and the `Ordering` enum) and `IterationError` so user code can reference
+// them by name without us having to whitelist `stdlib/Interfaces.maxon`
 // itself — that file uses extensions and `Array with Element` machinery the
-// self-hosted compiler doesn't yet support. We omit the extension blocks and
-// the Hashable/Equatable/Comparable/Cloneable/Stringable/FormattedStringable
-// interfaces; they can be added when a whitelisted stdlib file actually
-// needs them.
-let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\n"
+// self-hosted compiler doesn't yet support. We omit the extension blocks
+// (those bring in `Array with Element` machinery that's not yet supported).
+let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\n"
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
 
 export function findStdlibPath() returns FilePath

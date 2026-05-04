@@ -1,0 +1,39 @@
+// Test: slab-two-types-two-classes
+function main() returns ExitCode
+	let small = __mm_raw_alloc(8)
+	let large = __mm_raw_alloc(40)
+	__mm_raw_free(large)
+	__mm_raw_free(small)
+	let count = __mm_raw_alloc_count()
+	if count == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @allocator.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 8 : i64
+    %1 = mir.call @mm_raw_alloc(%0)
+    %2 = mir.mov_imm 40 : i64
+    %3 = mir.call @mm_raw_alloc(%2)
+    %5 = mir.call @mm_raw_free(%3)
+    %7 = mir.call @mm_raw_free(%1)
+    %8 = mir.global_addr @__mm_raw_alloc_count
+    %9 = mir.load %8, 0
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp eq, %9, %11
+    mir.cond_br %12 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  ok_1.after:
+    %14 = mir.mov_imm 1 : i64
+    mir.ret %14
+  }
+}
+---
