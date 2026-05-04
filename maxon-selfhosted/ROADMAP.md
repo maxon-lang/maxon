@@ -268,7 +268,7 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 
 - **Layouts are monomorphized** — `Array<Int>` stores i64s inline, `Array<String>` stores pointers; size/alignment/inline-vs-pointer is per-instantiation
 - **Methods are NOT monomorphized** — generic method bodies are compiled once and dispatched through layout descriptors and witness tables (Swift-style)
-- **Aggressive inlining at static call sites** recovers monomorphized-quality code on hot paths
+- **Analysis-driven inlining at static call sites** recovers monomorphized-quality code on hot paths
 
 **Why hybrid instead of full monomorphization** (which the C# bootstrap uses):
 
@@ -277,7 +277,7 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 3. **Smaller binaries** — typically 2–3× smaller code section, better icache behavior.
 4. **Dynamic dispatch as a first-class language feature** — heterogeneous collections of trait objects, plugin systems, hot-reload all become tractable.
 5. **Cleaner errors and IDE experience** — diagnostics reference the source generic, not a mangled specialization.
-6. **Preserved runtime perf** — `@inlinable` on hot stdlib paths recovers monomorphized output at static call sites.
+6. **Preserved runtime perf** — the inliner uses cost/benefit analysis (callee size, call-site context, generic-arg concreteness) to recover monomorphized output at hot static call sites without any source-level annotations.
 
 **Why now**: this is the cheapest moment in the project to commit to this design. After Phase 11 ships with a different model, retrofitting witness tables means tearing apart the type system, the dispatch story, every cached MIR, and every emitted symbol.
 
@@ -296,7 +296,7 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 | 11.3 | Witness tables | 2–3 weeks | Medium |
 | 11.4 | Generic body lowering | 4–6 weeks | **High (pivotal piece)** |
 | 11.5 | Per-function incremental queries | 2–3 weeks | Medium |
-| 11.6 | Inliner + `@inlinable` | 3–5 weeks | Medium |
+| 11.6 | Analysis-based inliner | 3–5 weeks | Medium |
 | 11.7 | Validation & polish | 2–3 weeks | Low |
 | **Total** | | **~16–30 weeks** (4–7 months) | |
 
@@ -373,19 +373,37 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 
 **Cache invalidation**: function body change ⇒ only that function's MIR/code; signature change ⇒ callers recomputed; non-callers untouched.
 
-### Phase 11.6 — Inliner + `@inlinable` annotations
+### Phase 11.6 — Analysis-based inliner
 
-**Goal**: aggressive inlining at static call sites recovers monomorphized-quality code. **Drives runtime perf cost of the hybrid model toward zero on typical code.**
+**Goal**: aggressive inlining at static call sites recovers monomorphized-quality code. **Drives runtime perf cost of the hybrid model toward zero on typical code.** No source-level annotations — the compiler decides entirely from IR analysis.
+
+**Design principle**: the user shouldn't have to think about which functions are hot. The compiler has the call graph, the callee bodies, and the call-site context — it has strictly more information than the programmer. Annotation-based inlining (Swift's `@inlinable`, Rust's `#[inline]`) leaks an implementation concern into the surface language and creates a steady tax on stdlib maintenance every time perf-relevant code shifts.
 
 **New pass**: `Compiler/Passes/Inliner.maxon` (operates on Std-level IR before MIR).
 
-**Heuristics**: always inline `@inlinable` / single-call-site / <20 ops; size-balanced for medium; never for recursive / `@noinline` / truly dynamic.
+**Inputs the analyzer uses**:
+- **Callee size**: op count of the lowered Std-level body (cheap, exact, not source LOC).
+- **Call-site count**: number of static call sites for the callee across the whole module — a single-call-site callee is always inlined (it's a clean refactor with zero size cost).
+- **Recursion**: callees that are part of a recursion SCC in the call graph are never inlined.
+- **Indirect calls**: `indirectCall` ops aren't inlinable (no static target). The fat-pointer ABI from 11.3 means interface dispatch falls into this bucket unless devirtualized first.
+- **Generic-arg concreteness**: when a call site passes a fully concrete layout descriptor, the inliner can constant-fold descriptor loads inside the inlined body. This is what closes the gap with monomorphized output on `Array<Int>.push` etc.
+- **Loop depth at call site**: call sites inside loops get a higher size budget (matches monomorphized hot-loop behavior).
+- **Argument shape**: closure literals and constants at the call site enable downstream constant folding / closure inlining and shift the cost/benefit toward inlining.
 
-**New annotations**: `@inlinable`, `@noinline`, `@alwaysInline`.
+**Decision rule** (in priority order):
+1. Never inline if recursive, indirect, or marked `@noinline` (see "escape hatch" below).
+2. Always inline if the callee has exactly one static call site. Bodies with one caller are functionally a paste-in.
+3. Always inline tiny callees (≤ ~10 Std ops) — accessor-shaped methods like `Array.length`, `Array.get`, `Optional.unwrap`.
+4. Inline medium callees (≤ ~50 ops) if any of: call site is in a loop; the callee receives a concrete layout descriptor that unlocks descriptor folding; the callee receives a closure literal.
+5. Otherwise don't inline.
 
-**Stdlib annotation pass**: ~20–30 hot stdlib methods (`Array.push`, `Array.get`, `Array.length`, iterators, `Optional.unwrap`).
+These thresholds are starting points to be tuned in 11.7 against the perf targets — not a contract.
 
-**Constant folding extensions**: extend the existing canonicalize pass to recognize loads from known descriptor addresses → constants.
+**Constant folding extensions**: extend the existing canonicalize pass to recognize loads from known descriptor addresses → constants. Run a second canonicalize + DCE pass after each inlining batch — that's where the descriptor-fold cascade actually lands and recovers monomorphized-quality code.
+
+**Escape hatch**: a single `@noinline` annotation, parsed but not required for any stdlib code. Reserved for the rare case where a developer needs to defeat inlining for debugging or deliberate code-size control. **No `@inlinable` and no `@alwaysInline`** — those are the annotations the design is rejecting.
+
+**Stdlib**: zero annotations. `Array.push`, `Array.get`, iterators, `Optional.unwrap` are recovered by the size + call-site-count rules above. If the analyzer doesn't pick them up, that's a tuning bug to fix in the inliner, not a hole to patch with an annotation.
 
 ### Phase 11.7 — Validation, polish, parity
 
@@ -407,7 +425,7 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 | 11.3 | New: `Compiler/Passes/BuildWitnessTables.maxon` |
 | 11.4 | [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon), [`StdDialect.maxon`](Compiler/IR/Std/StdDialect.maxon) |
 | 11.5 | [`Queries.maxon`](Compiler/Queries.maxon), [`PassPipeline.maxon`](Compiler/IR/PassPipeline.maxon), [`IncrementalTestRunner.maxon`](Testing/IncrementalTestRunner.maxon) |
-| 11.6 | New: `Compiler/Passes/Inliner.maxon`; stdlib annotations |
+| 11.6 | New: `Compiler/Passes/Inliner.maxon`; extensions to [`Canonicalize.maxon`](Compiler/IR/Std/Canonicalize.maxon) for descriptor-load folding; call-graph helper for SCC detection |
 | 11.7 | All pipeline files (perf tuning); architecture docs |
 
 ### Out of scope for this phase
