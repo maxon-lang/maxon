@@ -162,7 +162,7 @@ module {
     %6 = maxon.binop %3, %5 {op = or}
     maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at return-function-call.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at return-function-call.test:10: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
     maxon.return %1
@@ -187,7 +187,7 @@ module {
   __range_panic_0:
     %7 = memref.lea_symdata __panic_msg_0
     %8 = std.ptr_to_i64 %7
-    std.call_runtime @maxon_panic %8
+    std.call_runtime @mrt_panic %8
   __range_ok_0:
     func.return %1
   }
@@ -206,7 +206,7 @@ module {
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
-    arm64.mov x1, #4294967295
+    arm64.mov w1, #4294967295
     arm64.cmp x0, x1
     arm64.cset x3, gt
     arm64.orr x1, x2, x3
@@ -217,7 +217,7 @@ module {
     arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
-    arm64.bl maxon_panic
+    arm64.bl mrt_panic
   __range_ok_0:
     arm64.epilogue stack_size=16
     arm64.ret

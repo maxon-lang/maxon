@@ -292,6 +292,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonProcessClose();
     EmitMaxonProcessCreateWithCapture();
     EmitMaxonProcessReadPipe();
+    EmitMaxonProcessDrainBoth();
     EmitMaxonProcessGetHandle();
     EmitMaxonProcessCloseCapture();
     EmitMaxonProcessReadStdout();
@@ -5677,8 +5678,15 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 44, 4); // stderr_pipe[1]
     EmitCallImport("close");
 
-    // Allocate capture struct (24 bytes) via mm_alloc
-    EmitMovRegImm(ARM64Register.X0, 24);
+    // Allocate capture struct (40 bytes) via mm_alloc.
+    // Layout:
+    //   +0  = pid
+    //   +8  = stdout fd (zeroed once consumed)
+    //   +16 = stderr fd (zeroed once consumed)
+    //   +24 = drainedStdout cstring ptr (0 until drained / once claimed)
+    //   +32 = drainedStderr cstring ptr (0 until drained / once claimed)
+    // mm_alloc zeroes memory, so the drained slots start at 0 with no extra code.
+    EmitMovRegImm(ARM64Register.X0, 40);
     EmitMovRegImm(ARM64Register.X1, 0); // destructor
     EmitMovRegImm(ARM64Register.X2, 0); // tag
     EmitMovRegImm(ARM64Register.X3, 0); // scope
@@ -5824,6 +5832,267 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
+  /// Load the qword at the given X29-relative stack slot into X0, then call
+  /// close(fd) when the value is non-zero. Used by drain_both for the cached
+  /// pipe fds after the read loop completes.
+  /// </summary>
+  private void EmitCloseFdAtStackSlotIfNonZero(int stackSlot, string skipLabel) {
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, stackSlot, 8);
+    EmitCbz(ARM64Register.X0, skipLabel);
+    EmitCallImport("close");
+    DefineLabel(skipLabel);
+  }
+
+  /// <summary>
+  /// After drain finishes, append a NUL byte at buf[len], reallocating to
+  /// len+1 first if the buffer is exactly full (cap == len). Slots are
+  /// X29-relative offsets; labelPrefix disambiguates the realloc-skip label
+  /// between the stdout and stderr emissions.
+  /// </summary>
+  private void EmitNullTerminateGrowingBuffer(int bufOffset, int capOffset, int lenOffset, string labelPrefix) {
+    string nulltermLabel = $"{labelPrefix}_nullterm";
+
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, lenOffset, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, capOffset, 8);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchCond(ARM64ConditionCode.Lt, nulltermLabel);
+
+    // cap == len: realloc to len+1 so we have room for the terminator.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, bufOffset, 8); // X0 = old buf
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, capOffset, 8); // X1 = old size
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, lenOffset, 8);
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: true);                       // X2 = new size = len+1
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, capOffset, 8); // store new cap
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitBranchLink("mm_realloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, bufOffset, 8);
+
+    DefineLabel(nulltermLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, bufOffset, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, lenOffset, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);          // X0 = buf + len
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0x39000000, ARM64Register.X1, ARM64Register.X0, 0, 1);           // STRB W1, [X0]
+  }
+
+  /// <summary>
+  /// Emit one read-when-poll-says-ready step for a single pipe inside
+  /// maxon_process_drain_both. Each emission inspects pollfd.revents, reads if
+  /// non-zero, grows the output buffer first if there's no headroom, and
+  /// updates the EOF flag on read() returning &lt;=0.
+  ///
+  /// Layout parameters use frame offsets relative to X29 within drain_both's
+  /// frame:
+  ///   pollfdOffset — start of this pipe's pollfd struct (8 bytes:
+  ///                  fd:i32, events:i16, revents:i16)
+  ///   bufOffset, capOffset, lenOffset — growing-buffer state
+  ///   eofOffset — qword EOF flag
+  ///   fdOffset — cached fd qword (still holds the real fd even after we set
+  ///              pollfd.fd=-1 to skip an EOF'd pipe in the next poll)
+  ///   bytesReadOffset — scratch slot for the read() return value
+  ///   suffix — disambiguates labels between the two emissions ("out"/"err")
+  /// </summary>
+  private void EmitArm64DrainPipeOnce(
+      int pollfdOffset, int bufOffset, int capOffset, int lenOffset,
+      int eofOffset, int fdOffset, int bytesReadOffset, string suffix) {
+    string skipLabel = $"__pdb_skip_{suffix}";
+    string growDoneLabel = $"__pdb_grow_done_{suffix}";
+    string markEofLabel = $"__pdb_mark_eof_{suffix}";
+    string doneLabel = $"__pdb_done_{suffix}";
+
+    // If already EOF, skip.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, eofOffset, 8);
+    EmitCbnz(ARM64Register.X0, skipLabel);
+
+    // Load revents (2 bytes at pollfdOffset+6) and skip if zero.
+    // LDRH Wn, [X29, #(pollfdOffset+6)]
+    EmitLoadStoreUnsignedImm(0x79400000, ARM64Register.X0, ARM64Register.X29, pollfdOffset + 6, 2);
+    EmitCbz(ARM64Register.X0, doneLabel);
+
+    // Make sure buf has at least 4096 bytes of headroom: while (cap - len < 4097) cap *= 2.
+    string growLoopLabel = $"__pdb_grow_loop_{suffix}";
+    DefineLabel(growLoopLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, capOffset, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, lenOffset, 8);
+    EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);         // X0 = cap - len
+    EmitCmpImm(ARM64Register.X0, 4097);                                                       // need 4096 read + 1 nullterm
+    EmitBranchCond(ARM64ConditionCode.Ge, growDoneLabel);
+
+    // Realloc buffer: new_cap = cap * 2. mm_realloc(old_buf, old_size, new_size, scope).
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, bufOffset, 8); // X0 = old buf
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, capOffset, 8); // X1 = old size
+    EmitAluRegReg(0x8B000000, ARM64Register.X2, ARM64Register.X1, ARM64Register.X1);         // X2 = X1+X1 (= cap*2)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, capOffset, 8); // store new cap
+    EmitMovRegImm(ARM64Register.X3, 0);                                                       // scope = 0
+    EmitBranchLink("mm_realloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, bufOffset, 8);
+    EmitBranch(growLoopLabel);
+
+    DefineLabel(growDoneLabel);
+    // read(fd, buf+len, 4096)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, fdOffset, 8);    // X0 = fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, bufOffset, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, lenOffset, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X1, ARM64Register.X1, ARM64Register.X2);            // X1 = buf + len
+    EmitMovRegImm(ARM64Register.X2, 4096);
+    EmitCallImport("read");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, bytesReadOffset, 8);
+
+    // read <= 0 → broken pipe / closed writer / EAGAIN-after-poll: treat as EOF.
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, markEofLabel);
+
+    // len += bytesRead
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, bytesReadOffset, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, lenOffset, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X0, ARM64Register.X1, ARM64Register.X0);            // X0 = len + bytesRead
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, lenOffset, 8);
+    EmitBranch(doneLabel);
+
+    DefineLabel(markEofLabel);
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, eofOffset, 8);
+    // Set pollfd.fd = -1 so subsequent poll() calls ignore this slot.
+    EmitMovRegImm(ARM64Register.X0, -1);
+    // STR W0, [X29, #pollfdOffset]
+    EmitLoadStoreUnsignedImm(0xB9000000, ARM64Register.X0, ARM64Register.X29, pollfdOffset, 4);
+
+    DefineLabel(doneLabel);
+    DefineLabel(skipLabel);
+  }
+
+  /// <summary>
+  /// maxon_process_drain_both(capture_ptr) -> void.
+  /// POSIX twin of the Windows drain: uses a single poll(2) to wait for either
+  /// pipe to become readable (or hang up), reads what's available, and repeats
+  /// until both pipes report EOF. Stores the resulting cstring buffers in the
+  /// capture struct at +24 (stdout) and +32 (stderr); read_stdout/read_stderr
+  /// pick them up afterwards. Closes both fds on the way out.
+  ///
+  /// Stack layout (frame size 0x80):
+  ///   [x29+16]  = capture_ptr (arg)
+  ///   [x29+24]  = stdoutBuf       [x29+72] = stdoutFd (cached, signed 64-bit)
+  ///   [x29+32]  = stdoutCap       [x29+80] = stderrFd
+  ///   [x29+40]  = stdoutLen       [x29+88] = pollfd[0] (fd:4 events:2 revents:2)
+  ///   [x29+48]  = stderrBuf       [x29+96] = pollfd[1]
+  ///   [x29+56]  = stderrCap       [x29+104] = bytesRead scratch
+  ///   [x29+64]  = stderrLen       [x29+112] = stdoutEof
+  ///                               [x29+120] = stderrEof
+  /// </summary>
+  private void EmitMaxonProcessDrainBoth() {
+    EmitRuntimeFunctionStart("maxon_process_drain_both", 1, 0x80);
+
+    // Cache fds from struct, then null both fd slots so close_capture / repeat
+    // calls won't try to consume them again.
+    EmitReloadArg(0);                                                                     // X0 = capture_ptr
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8);       // X1 = stdoutFd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 72, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 16, 8);      // X1 = stderrFd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 80, 8);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 8, 8);       // capture[8] = 0
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 16, 8);      // capture[16] = 0
+
+    // Allocate stdout buffer (4KB) via mm_alloc(size, dtor=0, tag=0, scope=0).
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitBranchLink("mm_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);     // stdoutBuf
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);     // stdoutCap
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);     // stdoutLen
+
+    // Allocate stderr buffer (4KB).
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitBranchLink("mm_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);     // stderrBuf
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);     // stderrCap
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8);     // stderrLen
+
+    // Initialize EOF flags = 0.
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 112, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 120, 8);
+
+    // Initialize pollfd[0] and pollfd[1]: fd = cached, events = POLLIN (1), revents = 0.
+    // pollfd[0] @ +88: fd@+88 (4), events@+92 (2), revents@+94 (2)
+    // pollfd[1] @ +96: fd@+96 (4), events@+100 (2), revents@+102 (2)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 72, 8);     // stdoutFd
+    EmitLoadStoreUnsignedImm(0xB9000000, ARM64Register.X0, ARM64Register.X29, 88, 4);     // pollfd[0].fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 80, 8);     // stderrFd
+    EmitLoadStoreUnsignedImm(0xB9000000, ARM64Register.X0, ARM64Register.X29, 96, 4);     // pollfd[1].fd
+    EmitMovRegImm(ARM64Register.X0, 1);                                                    // POLLIN
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 92, 2);     // pollfd[0].events
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 100, 2);    // pollfd[1].events
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 94, 2);     // pollfd[0].revents
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 102, 2);    // pollfd[1].revents
+
+    DefineLabel("__pdb_loop");
+    // Reset revents fields before each poll so a stale value can't fake "ready".
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 94, 2);
+    EmitLoadStoreUnsignedImm(0x79000000, ARM64Register.X0, ARM64Register.X29, 102, 2);
+
+    // poll(pollfds, 2, -1) — block until any event.
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 88, isAdd: true);                  // X0 = &pollfd[0]
+    EmitMovRegImm(ARM64Register.X1, 2);                                                    // X1 = nfds
+    EmitMovRegImm(ARM64Register.X2, -1);                                                   // X2 = -1 (infinite)
+    EmitCallImport("poll");
+
+    // poll < 0 → error; mark both EOF and exit loop.
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, "__pdb_poll_err");
+
+    // Drain stdout if its slot says ready.
+    EmitArm64DrainPipeOnce(
+        pollfdOffset: 88, bufOffset: 24, capOffset: 32, lenOffset: 40,
+        eofOffset: 112, fdOffset: 72, bytesReadOffset: 104, suffix: "out");
+
+    // Drain stderr if its slot says ready.
+    EmitArm64DrainPipeOnce(
+        pollfdOffset: 96, bufOffset: 48, capOffset: 56, lenOffset: 64,
+        eofOffset: 120, fdOffset: 80, bytesReadOffset: 104, suffix: "err");
+
+    // Loop exit: stdoutEof && stderrEof.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 112, 8);
+    EmitCbz(ARM64Register.X0, "__pdb_loop");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 120, 8);
+    EmitCbz(ARM64Register.X0, "__pdb_loop");
+    EmitBranch("__pdb_finalize");
+
+    DefineLabel("__pdb_poll_err");
+    // poll failed (e.g. EBADF on a closed fd). Treat as "drain over."
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 112, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 120, 8);
+
+    DefineLabel("__pdb_finalize");
+    EmitNullTerminateGrowingBuffer(bufOffset: 24, capOffset: 32, lenOffset: 40, "__pdb_out");
+    EmitNullTerminateGrowingBuffer(bufOffset: 48, capOffset: 56, lenOffset: 64, "__pdb_err");
+
+    // Close cached fds. pipe() never returns 0, so a 0 slot means "no fd cached."
+    EmitCloseFdAtStackSlotIfNonZero(stackSlot: 72, "__pdb_skip_close_out");
+    EmitCloseFdAtStackSlotIfNonZero(stackSlot: 80, "__pdb_skip_close_err");
+
+    // Store result cstrings into capture struct at +24 (stdout) and +32 (stderr).
+    EmitReloadArg(0);                                                                      // X0 = capture
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8);     // stdoutBuf
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 24, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);     // stderrBuf
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 32, 8);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
   /// maxon_process_get_handle(capture_ptr) -> pid.
   /// </summary>
   private void EmitMaxonProcessGetHandle() {
@@ -5838,74 +6107,102 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
+  /// Reload capture_ptr ([x29+16]) into X0, load the qword at +fieldOffset
+  /// into X1, and skip <paramref name="callEmitter"/> if X1 is zero. The emitted
+  /// callee receives the loaded value in X0 (so callers don't need to repeat
+  /// the X1→X0 move). Used by close_capture for both fd-close and buffer-free.
+  /// </summary>
+  private void EmitCallOnCaptureFieldIfNonZero(int fieldOffset, string skipLabel, System.Action callEmitter) {
+    EmitReloadArg(0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, fieldOffset, 8);
+    EmitCbz(ARM64Register.X1, skipLabel);
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
+    callEmitter();
+    DefineLabel(skipLabel);
+  }
+
+  /// <summary>
   /// maxon_process_close_capture(capture_ptr) -> void.
-  /// Frees the capture struct via mm_free.
+  /// Defensively closes any still-open pipe fds, frees any unclaimed drained
+  /// buffers (in case the caller dropped the capture without reading), then
+  /// frees the struct itself. In normal flow the drain has already zeroed the
+  /// fd slots and read_stdout/read_stderr have taken ownership of the buffers.
   /// </summary>
   private void EmitMaxonProcessCloseCapture() {
     EmitRuntimeFunctionStart("maxon_process_close_capture", 1, 0x30);
-    EmitReloadArg(0); // X0 = capture_ptr
+    EmitReloadArg(0);
     EmitCbz(ARM64Register.X0, "__pcc_null");
+
+    // Defensive cleanup — these slots are normally zeroed by drain_both / read_*.
+    System.Action closeFd = () => EmitCallImport("close");
+    System.Action freeBuffer = () => EmitBranchLink("mm_free");
+
+    EmitCallOnCaptureFieldIfNonZero(8, "__pcc_skip_close_out", closeFd);
+    EmitCallOnCaptureFieldIfNonZero(16, "__pcc_skip_close_err", closeFd);
+    EmitCallOnCaptureFieldIfNonZero(24, "__pcc_skip_free_out", freeBuffer);
+    EmitCallOnCaptureFieldIfNonZero(32, "__pcc_skip_free_err", freeBuffer);
+
+    // Free the capture struct itself.
+    EmitReloadArg(0);
     EmitBranchLink("mm_free");
+
     DefineLabel("__pcc_null");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
-  /// maxon_process_read_stdout(capture_ptr) -> cstring_ptr.
-  /// Reads stdout pipe from capture struct, returns null-terminated heap string.
-  /// Returns pointer to empty string if capture_ptr is null or fd is 0.
+  /// Shared body for maxon_process_read_stdout / read_stderr. On first call (or
+  /// if the caller invoked drain_both ahead of time), runs the drain and hands
+  /// back the buffered cstring at <paramref name="drainedSlotOffset"/>;
+  /// subsequent calls just pick up the buffered cstring without re-draining.
+  /// Returns the static empty cstring if capture_ptr is null or both pipe fds
+  /// have already been zeroed.
   /// </summary>
-  private void EmitMaxonProcessReadStdout() {
-    DefineSymdata("__rt_empty_cstring", [0x00]);
+  private void EmitMaxonProcessReadCaptured(string fnName, int drainedSlotOffset, string labelPrefix) {
+    string emptyLabel = $"{labelPrefix}_empty";
+    string needDrainLabel = $"{labelPrefix}_need_drain";
+    string doDrainLabel = $"{labelPrefix}_do_drain";
 
-    EmitRuntimeFunctionStart("maxon_process_read_stdout", 1, 0x30);
-    EmitReloadArg(0); // X0 = capture_ptr
-    EmitCbz(ARM64Register.X0, "__prso_empty");
+    EmitRuntimeFunctionStart(fnName, 1, 0x30);
+    EmitReloadArg(0);
+    EmitCbz(ARM64Register.X0, emptyLabel);
 
-    // Load stdout fd
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8);
-    EmitCbz(ARM64Register.X1, "__prso_empty");
-
-    // Zero the fd in capture to prevent double-read
+    // Already drained? Hand back the cstring and clear the slot (ownership transfer).
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, drainedSlotOffset, 8);
+    EmitCbz(ARM64Register.X1, needDrainLabel);
     EmitMovRegImm(ARM64Register.X2, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 8, 8);
-
-    // Read pipe: X0 = fd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, drainedSlotOffset, 8);
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranchLink("maxon_process_read_pipe");
-    // X0 = cstring ptr, return it directly
     EmitRuntimeFunctionEnd();
 
-    DefineLabel("__prso_empty");
+    DefineLabel(needDrainLabel);
+    // Both pipe fds already 0 means nothing to drain — return empty.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8);
+    EmitCbnz(ARM64Register.X1, doDrainLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 16, 8);
+    EmitCbz(ARM64Register.X1, emptyLabel);
+
+    DefineLabel(doDrainLabel);
+    EmitBranchLink("maxon_process_drain_both");
+    EmitReloadArg(0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, drainedSlotOffset, 8);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, drainedSlotOffset, 8);
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel(emptyLabel);
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_empty_cstring");
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>
-  /// maxon_process_read_stderr(capture_ptr) -> cstring_ptr.
-  /// Same as read_stdout but uses offset +16 (stderr fd).
-  /// </summary>
+  private void EmitMaxonProcessReadStdout() {
+    DefineSymdata("__rt_empty_cstring", [0x00]);
+    EmitMaxonProcessReadCaptured("maxon_process_read_stdout", drainedSlotOffset: 24, labelPrefix: "__prso");
+  }
+
   private void EmitMaxonProcessReadStderr() {
-    EmitRuntimeFunctionStart("maxon_process_read_stderr", 1, 0x30);
-    EmitReloadArg(0); // X0 = capture_ptr
-    EmitCbz(ARM64Register.X0, "__prse_empty");
-
-    // Load stderr fd
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 16, 8);
-    EmitCbz(ARM64Register.X1, "__prse_empty");
-
-    // Zero the fd in capture
-    EmitMovRegImm(ARM64Register.X2, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 16, 8);
-
-    // Read pipe
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranchLink("maxon_process_read_pipe");
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel("__prse_empty");
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_empty_cstring");
-    EmitRuntimeFunctionEnd();
+    EmitMaxonProcessReadCaptured("maxon_process_read_stderr", drainedSlotOffset: 32, labelPrefix: "__prse");
   }
 
   // ===========================================================================================

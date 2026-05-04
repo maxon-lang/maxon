@@ -2337,7 +2337,7 @@ export type Parser
 		module.setTerminator(condExitBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
 
 		// Push loop context for break/continue
-		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId))
+		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId, continueBlockId: condBlockId))
 
 		// Parse body in bodyBlock
 		let bodyExit = try parseScopedStatements(func, block: bodyBlock)
@@ -3048,6 +3048,8 @@ export type Parser
 		let headerBlockId = headerBlock.id
 		var bodyBlock = module.addBlockAt(func, label: "{userLabel}_{headerBlockId}", filePath: forFilePath, firstLine: forToken.line)
 		let bodyBlockId = bodyBlock.id
+		var stepBlock = module.addBlockAt(func, label: "{userLabel}_{headerBlockId}.step", filePath: forFilePath, firstLine: forToken.line)
+		let stepBlockId = stepBlock.id
 		let exitBlock = module.addBlockAt(func, label: "{userLabel}_{headerBlockId}.exit", filePath: forFilePath, firstLine: forToken.line)
 		let exitBlockId = exitBlock.id
 		// Keep header label distinct from any other loop's "cond" labels.
@@ -3065,20 +3067,25 @@ export type Parser
 		module.appendOp(headerBlock, op: MaxonOp.cmp(cmpName, left: curName, right: endValName, predicate: predicate, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: stmtRange))
 		module.setTerminator(headerBlock, op: MaxonOp.condBr(cmpName, thenTarget: bodyBlockId, elseTarget: exitBlockId, range: SourceRange.none()))
 
-		// BODY: parse user statements, then emit the increment + back-branch.
-		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId))
+		// STEP: increment iter, branch to header. `continue` jumps here so the
+		// iter advances; without this block, `continue` would re-enter the
+		// header with the iter unchanged and spin forever.
+		let cur2Name = freshSynthName()
+		module.appendOp(stepBlock, op: MaxonOp.varLoad(cur2Name, slotId: iterSlot, slotType: MaxonType.integer, range: stmtRange))
+		let oneName = emitLiteral(stepBlock, value: 1, valueType: MaxonType.integer)
+		let incName = freshSynthName()
+		module.appendOp(stepBlock, op: MaxonOp.binop(incName, left: cur2Name, right: oneName, opKind: BinOpKind.add, operandType: MaxonType.integer, range: stmtRange))
+		module.appendOp(stepBlock, op: MaxonOp.varStore(iterSlot, value: incName, range: stmtRange))
+		module.setTerminator(stepBlock, op: MaxonOp.br(headerBlockId, range: SourceRange.none()))
+
+		// BODY: parse user statements; natural fall-through goes to the step block.
+		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: stepBlockId))
 		var bodyExit = try parseStatements(func, block: bodyBlock, lastWasReturn: false)
 		try loopStack.pop() otherwise panic("loopStack.pop: stack unexpectedly empty after for-range body parse")
 
-		if not bodyExit.isTerminated() 'needsIncrement'
-			let cur2Name = freshSynthName()
-			module.appendOp(bodyExit, op: MaxonOp.varLoad(cur2Name, slotId: iterSlot, slotType: MaxonType.integer, range: stmtRange))
-			let oneName = emitLiteral(bodyExit, value: 1, valueType: MaxonType.integer)
-			let incName = freshSynthName()
-			module.appendOp(bodyExit, op: MaxonOp.binop(incName, left: cur2Name, right: oneName, opKind: BinOpKind.add, operandType: MaxonType.integer, range: stmtRange))
-			module.appendOp(bodyExit, op: MaxonOp.varStore(iterSlot, value: incName, range: stmtRange))
-			module.setTerminator(bodyExit, op: MaxonOp.br(headerBlockId, range: SourceRange.none()))
-		end 'needsIncrement'
+		if not bodyExit.isTerminated() 'needsStep'
+			module.setTerminator(bodyExit, op: MaxonOp.br(stepBlockId, range: SourceRange.none()))
+		end 'needsStep'
 
 		scope.popScope()
 
@@ -3120,7 +3127,7 @@ export type Parser
 	// entry: cursor AT the token after `break`/`continue` (caller already consumed the keyword).
 	function resolveLoopTarget(useExit bool) returns BlockId throws ParserError
 		let innermostCtx = try loopStack.get(loopStack.count() - 1) otherwise panic("resolveLoopTarget: empty loopStack")
-		let target = innermostCtx.exitBlockId if useExit else innermostCtx.headerBlockId
+		let target = innermostCtx.exitBlockId if useExit else innermostCtx.continueBlockId
 
 		if cursor.current().kind != TokenKind.charLiteral 'noLabel'
 			return target
@@ -3131,7 +3138,7 @@ export type Parser
 		for i in 0 upto loopStack.count() 'search'
 			let ctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveLoopTarget: loop index out of bounds")
 			if ctx.sourceLabel == labelToken.value 'found'
-				return ctx.exitBlockId if useExit else ctx.headerBlockId
+				return ctx.exitBlockId if useExit else ctx.continueBlockId
 			end 'found'
 		end 'search'
 
@@ -5845,9 +5852,14 @@ type LoopContext
 	export var sourceLabel String
 	export var headerBlockId BlockId
 	export var exitBlockId BlockId
+	// Where `continue` jumps. For while-loops this is the cond/header block; for
+	// for-range loops it's a step block that increments the iter then branches
+	// to the header — without that step, `continue` would re-enter the header
+	// with the iter unchanged and spin forever.
+	export var continueBlockId BlockId
 
-	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId) returns LoopContext
-		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId}
+	export static function create(sourceLabel String, headerBlockId BlockId, exitBlockId BlockId, continueBlockId BlockId) returns LoopContext
+		return Self{sourceLabel: sourceLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: continueBlockId}
 	end 'create'
 end 'LoopContext'
 
