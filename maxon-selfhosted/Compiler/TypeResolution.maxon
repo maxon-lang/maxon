@@ -2109,6 +2109,14 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// looked up against the same producer-type map fillUnresolvedTypes built.
 	validateCallArities(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
+	// E3059: re-emit the otherwise-type-mismatch check at TypeResolution time.
+	// The parser version skips when either side names a type the project
+	// hasn't seen yet (typealiases panic in convertCastCategory pre-resolution),
+	// so an int-vs-float mismatch through `typealias Integer = int(...)` slips
+	// through. By here, fillUnresolvedTypes has resolved producer types, so
+	// the check can run safely against typealiased call results.
+	validateTryOtherwiseTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'
@@ -2325,6 +2333,182 @@ function validateCallArities(project Project, module MaxonModule, producerTypesP
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateCallArities'
+
+// --- E3059: try/otherwise type-mismatch validation ---
+//
+// The parser allocates a slot named "__try_<label>_result" for every
+// `try CALL otherwise FALLBACK` site, with two stores into it: one
+// success-side (the call result) and one fallback-side (the otherwise
+// expression). By TypeResolution time the producer-type map has
+// resolved typealiased call results, so we can compare the two stores'
+// cast categories and emit E3059 on a mismatch — catching the
+// `mayFail() returns Integer otherwise 5.0` case the parser-side check
+// must skip (typealiases panic in convertCastCategory pre-resolution).
+//
+// The check identifies the success-side store by matching its value
+// name against a preceding tryCall op's result, so the diagnostic
+// always says "expected = call type, got = fallback type" regardless
+// of block-emission order.
+typealias TrySlotSet = Set with VarSlot
+typealias SlotCastCategoryMap = Map with(VarSlot, CastCategory)
+typealias SlotSourceRangeMap = Map with(VarSlot, SourceRange)
+typealias TryCallResultSet = Set with ByteArray
+
+// Track everything we need per try-result slot to validate the fallback
+// store: which slots are try-result slots, the success-side category, and
+// the success-side store range used for the diagnostic location.
+type TryResultIndex
+	export var slots TrySlotSet
+	export var tryCallResults TryCallResultSet
+	export var expectedCat SlotCastCategoryMap
+	export var expectedRange SlotSourceRangeMap
+
+	export static function create() returns TryResultIndex
+		return Self{slots: TrySlotSet.create(), tryCallResults: TryCallResultSet.create(), expectedCat: SlotCastCategoryMap.create(), expectedRange: SlotSourceRangeMap.create()}
+	end 'create'
+end 'TryResultIndex'
+
+function validateTryOtherwiseTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateTryOtherwiseTypes: funcIdx < count but get failed")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateTryOtherwiseTypes: producerTypesPerFunc.get({funcIdx}) failed")
+
+		var index = TryResultIndex.create()
+		collectTryResultSlots(func.scope, slots: index.slots)
+		if index.slots.count() == 0 'nothingToCheck'
+			continue
+		end 'nothingToCheck'
+
+		// Pass 1: collect names produced by tryCall ops so we can later tell
+		// success-side stores (value came from tryCall) apart from fallback-
+		// side stores (any other producer).
+		collectTryCallResults(module, func: func, results: index.tryCallResults)
+		// Pass 2: walk varStores into try-result slots; for success-side stores
+		// record the expected category. We need this before pass 3 because the
+		// fallback store can appear in an earlier block than the success store.
+		recordSuccessStoreCategories(project, module: module, func: func, producerTypes: producerTypes, index: index)
+		// Pass 3: with the expected category for each slot known, compare each
+		// fallback store against it and emit E3059 on mismatch.
+		validateFallbackStoreCategories(project, module: module, func: func, producerTypes: producerTypes, index: index, filePath: filePath)
+	end 'eachFunc'
+end 'validateTryOtherwiseTypes'
+
+// Mark every slot whose name matches the parser's `__try_<label>_result`
+// pattern. Subsequent passes only inspect these slots.
+function collectTryResultSlots(scope Scope, slots TrySlotSet)
+	for (name, info) in scope.allVars() 'collect'
+		if not name.startsWith("__try_") 'notTry'
+			continue
+		end 'notTry'
+		if not name.endsWith("_result") 'notResult'
+			continue
+		end 'notResult'
+		slots.insert(info.slot)
+	end 'collect'
+end 'collectTryResultSlots'
+
+function collectTryCallResults(module MaxonModule, func IrFunction, results TryCallResultSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectTryCallResults: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectTryCallResults: opIdx OOB")
+			if op.name != "tryCall" 'notTryCall'
+				continue
+			end 'notTryCall'
+			match op 'extract'
+				tryCall(result, _, _, _, _, _, _, _, _) then results.insert(result)
+				default panic("unreachable: already checked name == tryCall")
+			end 'extract'
+		end 'eachOp'
+	end 'eachBlock'
+end 'collectTryCallResults'
+
+function recordSuccessStoreCategories(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, index TryResultIndex)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("recordSuccessStoreCategories: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("recordSuccessStoreCategories: opIdx OOB")
+			if op.name != "varStore" 'notStore'
+				continue
+			end 'notStore'
+			match op 'extract'
+				varStore(slotId, value, range) then recordExpectedTryCategory(project, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index)
+				default panic("unreachable: already checked name == varStore")
+			end 'extract'
+		end 'eachOp'
+	end 'eachBlock'
+end 'recordSuccessStoreCategories'
+
+function validateFallbackStoreCategories(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, index TryResultIndex, filePath FilePath)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("validateFallbackStoreCategories: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("validateFallbackStoreCategories: opIdx OOB")
+			if op.name != "varStore" 'notStore'
+				continue
+			end 'notStore'
+			match op 'extract'
+				varStore(slotId, value, range) then validateFallbackCategory(project, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index, filePath: filePath)
+				default panic("unreachable: already checked name == varStore")
+			end 'extract'
+		end 'eachOp'
+	end 'eachBlock'
+end 'validateFallbackStoreCategories'
+
+enum CategoryResolution implements Error
+	unresolved
+end 'CategoryResolution'
+
+// Resolve a producer name to its CastCategory if the type is fully resolved
+// and known to the project. Throws CategoryResolution.unresolved otherwise so
+// callers can `try ... otherwise return` to skip the check.
+function resolveCategoryForValue(project Project, producerTypes ProducerTypeMap, value ByteArray) returns CastCategory throws CategoryResolution
+	let valType = lookupProducerType(producerTypes, name: value)
+	if isUnresolvedType(valType) 'unresolved'
+		throw CategoryResolution.unresolved
+	end 'unresolved'
+	if not maxonTypeIsKnown(project, t: valType) 'unknown'
+		throw CategoryResolution.unresolved
+	end 'unknown'
+	return convertCastCategory(project, t: valType)
+end 'resolveCategoryForValue'
+
+function recordExpectedTryCategory(project Project, slotId VarSlot, value ByteArray, range SourceRange, producerTypes ProducerTypeMap, index TryResultIndex)
+	if not index.slots.contains(slotId) 'notTrySlot'
+		return
+	end 'notTrySlot'
+	if not index.tryCallResults.contains(value) 'notSuccessStore'
+		return
+	end 'notSuccessStore'
+	let cat = try resolveCategoryForValue(project, producerTypes: producerTypes, value: value) otherwise return
+	index.expectedCat.upsert(slotId, value: cat)
+	index.expectedRange.upsert(slotId, value: range)
+end 'recordExpectedTryCategory'
+
+function validateFallbackCategory(project Project, slotId VarSlot, value ByteArray, range SourceRange, producerTypes ProducerTypeMap, index TryResultIndex, filePath FilePath)
+	if not index.slots.contains(slotId) 'notTrySlot'
+		return
+	end 'notTrySlot'
+	if index.tryCallResults.contains(value) 'isSuccessStore'
+		return
+	end 'isSuccessStore'
+	if not index.expectedCat.contains(slotId) 'noExpected'
+		return
+	end 'noExpected'
+	let actualCat = try resolveCategoryForValue(project, producerTypes: producerTypes, value: value) otherwise return
+	let expectedCat = try index.expectedCat.get(slotId) otherwise panic("validateFallbackCategory: slot in expectedCat but get failed")
+	if expectedCat == actualCat 'sameCategory'
+		return
+	end 'sameCategory'
+	// Allow numeric coercions: int↔byte across the success/fallback edges.
+	if castCategoryIsIntegerFamily(expectedCat) and castCategoryIsIntegerFamily(actualCat) 'bothIntegerFamily'
+		return
+	end 'bothIntegerFamily'
+	let expectedRange = try index.expectedRange.get(slotId) otherwise range
+	let expectedName = castCategoryName(expectedCat)
+	let actualName = castCategoryName(actualCat)
+	reportCompileError(project, code: ErrorCode.semanticOtherwiseTypeMismatch, message: "type mismatch: 'otherwise type '{actualName}' does not match expected type '{expectedName}''", line: expectedRange.line, column: expectedRange.column, filePath: filePath)
+end 'validateFallbackCategory'
 
 function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, filePath FilePath)
 	if op.name == "call" 'isCall'

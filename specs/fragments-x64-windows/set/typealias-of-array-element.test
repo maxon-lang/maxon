@@ -1,0 +1,120 @@
+// Test: typealias-of-array-element
+typealias ByteArraySet = Set with ByteArray
+
+function main() returns ExitCode
+	var s = ByteArraySet.create()
+	let key = ByteArray.create()
+	s.insert(key)
+	if s.count() != 1 'count'
+		return 1
+	end 'count'
+	if not s.contains(key) 'present'
+		return 2
+	end 'present'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @set.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call ByteArraySet.create
+    x64.mov [rbp-8], rax
+    x64.call ByteArray.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call ByteArraySet.insert
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call ByteArraySet.count
+    x64.mov rbx, 1
+    x64.cmp rax, rbx
+    x64.je set.main.count_0.after
+  count_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_46
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_46
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_47
+    x64.call mm_decref
+    x64.label __nonnull_skip_47
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  count_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call ByteArraySet.contains$element
+    x64.mov rdx, 1
+    x64.xor rax, rdx
+    x64.test rax, rax
+    x64.je set.main.present_1.after
+  present_1:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_48
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_48
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_49
+    x64.call mm_decref
+    x64.label __nonnull_skip_49
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  present_1.after:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_50
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_50
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_51
+    x64.call mm_decref
+    x64.label __nonnull_skip_51
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteArraySet(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_174
+    x64.call mm_decref
+    x64.label __nonnull_skip_174
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_175
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_175
+    x64.jmp __destruct_ByteArraySet.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

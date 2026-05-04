@@ -98,10 +98,21 @@ internal class TypeSubstitution {
       if (!map.TryGetValue(assocTypeName, out var assocType)) continue;
       if (assocType is not IrStructType assocStruct) continue;
 
-      // If the type is a type alias, resolve to its source first
+      // If the type is a type alias, resolve to its source first.
+      // Skip when the alias is already fully concrete (all its TypeParams are
+      // bound, like ByteArray = Array<Byte>) — that's a user-facing instantiation,
+      // not an abstract inner alias that needs re-specialization. Re-resolving
+      // it would wrap a concrete Element (ByteArray) in another Array layer
+      // (Array<ByteArray>), which is wrong. Only re-resolve when the alias is
+      // an inner abstract template like `ArrayIter = ArrayIterator with Element`
+      // whose TypeParams reference unbound type-parameters.
       var resolveSourceName = assocStruct.Name;
-      if (module.TypeAliasSources.TryGetValue(resolveSourceName, out var aliasInfo))
+      if (module.TypeAliasSources.TryGetValue(resolveSourceName, out var aliasInfo)) {
+        bool aliasIsAbstract = aliasInfo.TypeParams != null
+          && aliasInfo.TypeParams.Values.Any(t => t is IrTypeParameterType);
+        if (!aliasIsAbstract) continue;
         resolveSourceName = aliasInfo.SourceTypeName;
+      }
 
       // Only resolve if the resolved source is a DIFFERENT type from the enclosing one.
       // When resolveSourceName == sourceStruct.Name (e.g., Element=ByteArray → source Array,

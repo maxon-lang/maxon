@@ -4626,7 +4626,7 @@ export type Parser
 			floatLiteral then return try parseFloatLiteral(block)
 			identifier then return try parseIdentifierExpr(block)
 			stringLiteral then return try parseStringLiteral()
-			charLiteral then return try parseCharLiteralExpr()
+			charLiteral then return try parseCharLiteralExpr(block)
 			true then return try parseBoolLiteral(block, value: 1)
 			false then return try parseBoolLiteral(block, value: 0)
 			leftParen then return try parseParenExpr(block)
@@ -4658,17 +4658,29 @@ export type Parser
 		return ExprResult.direct(dummy, valueType: MaxonType.integer)
 	end 'parseArrayLiteralExpr'
 
-	// Single-quote string in expression position. Self-hosted doesn't support
-	// character-literal values (those are used as block labels everywhere
-	// else), so this primarily exists to validate escape sequences (matching
-	// C#'s `EmitCharLiteral` diagnostic) and then reject the literal as a
-	// non-expression. Returns a dummy ExprResult so the surrounding Pratt
-	// loop continues without cascading.
-	function parseCharLiteralExpr() returns ExprResult throws ParserError
+	// Single-quote literal in expression position. The lexer also produces
+	// charLiteral tokens for block labels (`'loop'`); the parser
+	// distinguishes by context — labels are consumed by parseOptionalBlockLabel
+	// before the expression parser ever sees them. Emits an integer literal
+	// carrying the byte value of an ASCII character (e.g. `'a'` → 97), which
+	// matches the way the rest of self-hosted treats Character (single byte).
+	// Multi-byte / EGC literals require the full stdlib Character type; report
+	// them as a diagnostic instead of silently producing the wrong byte.
+	function parseCharLiteralExpr(block IrBlock) returns ExprResult throws ParserError
 		let token = try consume()
 		validateEscapes(token, kind: "character literal")
-		let dummy = freshSynthName()
-		return ExprResult.stringConst(dummy, stringId: project.strings.intern(""))
+		let decoded = decodeStringEscapes(token.value)
+		if decoded.count() == 1 'singleByte'
+			let byteVal = try decoded.get(0) otherwise panic("parseCharLiteralExpr: count==1 but get(0) failed")
+			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
+			return ExprResult.direct(name, valueType: MaxonType.integer)
+		end 'singleByte'
+		// Multi-byte char literal (Unicode/EGC) — needs real Character/String.
+		// Emit a literal of zero so the surrounding parse continues, but
+		// report the diagnostic so the user sees why it didn't compile.
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Multi-byte character literal not yet supported in self-hosted (single-byte ASCII only)", line: token.line, column: token.column, filePath: filePath)
+		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
+		return ExprResult.direct(zeroName, valueType: MaxonType.integer)
 	end 'parseCharLiteralExpr'
 
 	function parseSelfExpr(block IrBlock) returns ExprResult throws ParserError

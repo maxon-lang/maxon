@@ -273,3 +273,28 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: typealias-of-array-element -->
+A `Set` whose Element is itself a typealias to a generic instantiation
+(here `ByteArray = Array with Byte`) must monomorphize Set's nested
+`typealias ElementArray = Array with Element` correctly.
+
+```maxon
+typealias ByteArraySet = Set with ByteArray
+
+function main() returns ExitCode
+	var s = ByteArraySet.create()
+	let key = ByteArray.create()
+	s.insert(key)
+	if s.count() != 1 'count'
+		return 1
+	end 'count'
+	if not s.contains(key) 'present'
+		return 2
+	end 'present'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
