@@ -146,7 +146,28 @@ export function trimWhitespace(s String) returns String
 	return s.slice(startPos, endIndex: lastNonWsEnd)
 end 'trimWhitespace'
 
+// Drop the trailing three bytes (the closing ```) from a line. Callers gate
+// this on `line.endsWith("```")` so the underflow case is unreachable.
+function stripTrailingFence(line String) returns String
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	if n <= 3 'allFence'
+		return ""
+	end 'allFence'
+	var head = ByteArray.create()
+	for i in 0 upto (n - 3) 'copy'
+		let b = try bytes.get(i) otherwise panic("stripTrailingFence: byte get OOB at {i} (n={n})")
+		head.push(b)
+	end 'copy'
+	return String.from(head)
+end 'stripTrailingFence'
+
 // Read lines from startLine until a closing ``` is found, joining with newlines.
+// A line that *ends* with ``` (e.g. `42```` written without a trailing newline
+// before the fence) is treated as the closing fence, with any leading content
+// included in the block. Without this, the reader greedily swallows the next
+// test's source until it finds a standalone ``` line, mis-attributing the
+// neighbour's exitcode/stdout to the malformed test.
 export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
 	var result = ""
 	var first = true
@@ -155,6 +176,17 @@ export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCou
 		if line.startsWith("```") 'endBlock'
 			break
 		end 'endBlock'
+		// Trailing-fence form: the closing ``` shares the line with content.
+		// Strip the fence and append the content as the block's last line.
+		if line.endsWith("```") 'inlineEnd'
+			let stripped = stripTrailingFence(line)
+			if first 'isFirstInline'
+				result = stripped
+			end 'isFirstInline' else 'notFirstInline'
+				result = "{result}\n{stripped}"
+			end 'notFirstInline'
+			break
+		end 'inlineEnd'
 		if first 'isFirst'
 			result = line
 			first = false
@@ -172,6 +204,10 @@ export function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCou
 		if line.startsWith("```") 'endBlock'
 			return i + 1
 		end 'endBlock'
+		if line.endsWith("```") 'inlineEnd'
+			// Inline closing fence: this line *is* the last line of the block.
+			return i + 1
+		end 'inlineEnd'
 	end 'scan'
 	return lineCount
 end 'skipCodeBlock'

@@ -178,6 +178,21 @@ export type Project
 	// parameters without a default are a compile error at the call site.
 	export var funcSignatures FuncSignatureMap
 
+	// Per-call-site substituted paramTypes — the FuncSignature's declared
+	// paramTypes resolved against each call's enclosing-struct innerAliases
+	// + receiver's genericInstance arg bindings. Populated by TypeResolution
+	// after the regular fillCall/fillMethodCall pass and asserted to contain
+	// no `typeParameter` / unresolved arms before lowering runs. Keyed by
+	// the OpIndex of the call/methodCall op. Lowering reads this directly;
+	// no substitution work happens after TypeResolution finishes.
+	export var callParamTypes CallParamTypesMap
+
+	// Per-call-site resolved callee name (post typealias chase + overload
+	// disambiguation). Populated by the same TypeResolution pass that fills
+	// `callParamTypes`; consumed by LowerMaxonToStd to skip the resolver
+	// chain. Missing entries mean the resolver bailed (interface stub path).
+	export var resolvedCallees ResolvedCalleesMap
+
 	// Minimal first-param overload registry. When the parser detects a
 	// duplicate qualified function name and the two functions differ in their
 	// first non-`self` parameter type, both functions are re-keyed under
@@ -368,6 +383,8 @@ export type Project
 			funcVisibilities: FuncVisibilityMap.create(),
 			methodNameIndex: MethodNameIndex.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			callParamTypes: CallParamTypesMap.create(),
+			resolvedCallees: ResolvedCalleesMap.create(),
 			overloadedNames: OverloadedNameMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
@@ -1068,6 +1085,31 @@ export type FuncSignature
 end 'FuncSignature'
 
 export typealias FuncSignatureMap = Map with(String, FuncSignature)
+
+// Per-call-site cache of paramTypes substituted into the call's context.
+// Keyed by the OpIndex of the `call` / `methodCall` op. Populated by
+// `resolveAllCalls` (TypeResolution's final pass) after `funcSignatures`
+// is stable; consumed by LowerMaxonToStd to coerce each argument without
+// re-running the substitution. The vector matches the callee
+// signature's `paramTypes` slot-for-slot (including any leading __self),
+// with every `typeParameter` / inner-alias / generic-instance arm
+// rewritten to the concrete type the call site observes. No entry is
+// inserted for ops whose callee has no registered signature (lowering
+// takes the no-coerce fallback path) or whose dispatch resolves to an
+// interface stub before reaching slot fill.
+export typealias CallParamTypesMap = Map with(OpIndex, MaxonTypeArray)
+
+// Per-call-site cache of the resolved qualified callee name. For `call`
+// ops this is the parser-emitted bare name passed through
+// `qualifyCalleeForContext` → `chaseTypealiasInQualifiedCallee` →
+// `resolveOverloadedCallee`. For `methodCall` ops it is
+// `{receiverStructName}.{methodName}` after `resolveOverloadedCallee`.
+// LowerMaxonToStd reads this directly instead of redoing the resolver
+// chain, keeping the lowering pass free of any name-resolution work.
+// No entry is inserted when the resolver bails (e.g. methodCall on a
+// receiver whose type didn't reduce to a concrete struct — the
+// interface-dispatch stub path).
+export typealias ResolvedCalleesMap = Map with(OpIndex, String)
 
 // Minimal first-param overload registry. Maps a bare qualified function name
 // (the source-level name before mangling, e.g. `Array.contains`) to the list

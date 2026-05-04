@@ -12,6 +12,27 @@ var stdlibCacheCpuOrd = 0
 var stdlibCacheOsOrd = 0
 var stdlibCacheProjectDirs = FilePathArray.create()
 
+// Discovery cache for the BuiltinArrayLiteral protocol. The parser walks
+// `project.unresolvedStructTypes` once at parse time and writes the
+// implementing type's name here; subsequent array-literal expansions in the
+// same process read the cached value rather than re-walking. The disk-cache
+// write/read paths plumb this through `StdlibCacheData.builtinArrayLiteralTypeName`
+// so cache-hit runs (which skip the stdlib parse) still find the type name.
+//
+// Stored as ByteArray rather than String because top-level var initializers
+// only accept compile-time constants and struct constructors; an empty
+// ByteArray.create() is a valid such initializer while a `""` String literal
+// is not (E2004). Accessors round-trip through String at the boundary.
+var cachedBuiltinArrayLiteralTypeName = ByteArray.create()
+
+export function getCachedBuiltinArrayLiteralTypeName() returns String
+	return String.from(cachedBuiltinArrayLiteralTypeName)
+end 'getCachedBuiltinArrayLiteralTypeName'
+
+export function setCachedBuiltinArrayLiteralTypeName(name String)
+	cachedBuiltinArrayLiteralTypeName = name.toByteArray()
+end 'setCachedBuiltinArrayLiteralTypeName'
+
 // The self-hosted compiler isn't yet feature-complete enough to compile every
 // file under `stdlib/` — many use language features (generics, interface
 // dispatch, error handling) that are still unimplemented. We start from a

@@ -1557,16 +1557,93 @@ function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases Resol
 		function gives t
 		unresolved gives t
 		typeParameter gives t
-		genericInstance gives t
+		genericInstance(gid) gives applyInnerAliasInGenericInstance(project, gid: gid, innerAliases: innerAliases)
 		interface gives t
 	end 'check'
 end 'applyInnerAliasIfNamed'
+
+// Recurse `applyInnerAliasIfNamed` into a genericInstance's arg list so
+// that paramTypes like `Iterable with(Element, ElementIterator)` — where
+// `ElementIterator` is itself an inner-alias — collapse all the way to
+// the underlying generic-instance form. Without this, a cast/compare
+// validator that walks the args (or a downstream substitution that
+// expects the args to be free of named-inner-alias placeholders) trips
+// on the unresolved inner reference.
+function applyInnerAliasInGenericInstance(project Project, gid GenericInstanceId, innerAliases ResolvedInnerAliasMap) returns MaxonType
+	let (baseId, args) = project.genericInstances.get(gid)
+	var newArgs = MaxonTypeArray.create()
+	var changed = false
+	for i in 0 upto args.count() 'argLoop'
+		let a = try args.get(i) otherwise panic("applyInnerAliasInGenericInstance: args.get OOB at {i}")
+		let na = applyInnerAliasIfNamed(project, t: a, innerAliases: innerAliases)
+		if not maxonTypesStructurallyEqual(a, b: na) 'diff'
+			changed = true
+		end 'diff'
+		newArgs.push(na)
+	end 'argLoop'
+	if not changed 'unchanged'
+		return MaxonType.genericInstance(gid)
+	end 'unchanged'
+	let newGid = project.genericInstances.intern(baseId, args: newArgs)
+	return MaxonType.genericInstance(newGid)
+end 'applyInnerAliasInGenericInstance'
 
 function lookupInnerAliasOrPassThrough(project Project, id TypeNameId, innerAliases ResolvedInnerAliasMap) returns MaxonType
 	let name = project.typeNames.get(id)
 	let resolved = try innerAliases.get(name) otherwise return MaxonType.named(id)
 	return resolved
 end 'lookupInnerAliasOrPassThrough'
+
+// Phase 11.0 Step 8.7c (proper substitution): given a callee's declared
+// `paramType` (read off the global FuncSignature, which may carry inner-
+// alias names like `MaxonType.named("ElementMemory")` or free
+// type-parameters like `MaxonType.typeParameter(Element)`), resolve it to
+// the concrete shape the call site would observe — using the callee's
+// enclosing struct's `innerAliases` table for the alias lookup and the
+// receiver type's `genericInstance` args for the type-parameter binding.
+//
+// Mirrors `resolveFieldTypeInContext` but plumbs the substitution context
+// through a qualifiedCallee instead of a structType handle so the
+// LowerMaxonToStd pass can call this without re-resolving the callee's
+// enclosing struct each time.
+//
+// Returns the input `paramType` unchanged when the callee isn't a method
+// on a registered struct (e.g. free functions), when the receiver carries
+// no generic args (non-generic struct), and the inner-alias map is empty —
+// the cheap-path for non-generic call sites pays only one map lookup.
+export function resolveCalleeParamTypeInContext(project Project, paramType MaxonType, calleeQualifiedName String, receiverType MaxonType) returns MaxonType
+	let enclosingType = enclosingTypeNameForCallee(project, callee: calleeQualifiedName)
+	if enclosingType.isEmpty() 'noEnclosing'
+		return paramType
+	end 'noEnclosing'
+	let structType = try project.structTypes.get(enclosingType) otherwise return paramType
+	let aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: structType.innerAliases)
+	let subst = buildSubstitutionForInstance(project, t: receiverType)
+	if subst.isEmpty() 'noSubst'
+		return aliasResolved
+	end 'noSubst'
+	return substituteType(project, t: aliasResolved, subst: subst)
+end 'resolveCalleeParamTypeInContext'
+
+// Split `Type.method` into `Type` (or empty for free callees / non-struct
+// namespaces). Method bodies are registered as `TypeName.methodName`
+// (`Array.push`, `__ManagedMemory.length`, ...). Free functions either lack
+// a `.` (`main`) or qualify under a namespace that isn't a struct
+// (`stdlib.foo`); both cases return the empty string so downstream
+// inner-alias / self-receiver lookups skip cleanly.
+export function enclosingTypeNameForCallee(project Project, callee String) returns String
+	let bytes = callee.toByteArray()
+	let count = bytes.count()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= count 'noDot'
+		return ""
+	end 'noDot'
+	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	if not project.structTypes.contains(head) 'notStruct'
+		return ""
+	end 'notStruct'
+	return head
+end 'enclosingTypeNameForCallee'
 
 // First-pass: walk ops per-function and record the result type of every
 // value-producing op. Names of types that depend on receiver types
@@ -1591,7 +1668,7 @@ function buildProducerTypes(project Project, module MaxonModule, producerTypesPe
 end 'buildProducerTypes'
 
 function recordFuncOpResults(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
-	let enclosingType = enclosingTypeNameForFunc(project, func: func)
+	let enclosingType = enclosingTypeNameForCallee(project, callee: func.name)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
@@ -1605,26 +1682,6 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 		end 'hasTerm'
 	end 'eachBlock'
 end 'recordFuncOpResults'
-
-// Phase 11.0 Step 8a: derive the enclosing type-name for a function from
-// its qualified name. Method bodies are registered as `TypeName.methodName`
-// (`Array.push`, `__ManagedMemory.length`, ...). Free functions either lack
-// a `.` (`main`) or qualify under a namespace that isn't a struct
-// (`stdlib.foo`); both cases return the empty string so downstream
-// inner-alias / self-receiver lookups skip cleanly.
-export function enclosingTypeNameForFunc(project Project, func IrFunction) returns String
-	let bytes = func.name.toByteArray()
-	let count = bytes.count()
-	let dotIdx = lastIndexOfDotByte(bytes)
-	if dotIdx >= count 'noDot'
-		return ""
-	end 'noDot'
-	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
-	if not project.structTypes.contains(head) 'notStruct'
-		return ""
-	end 'notStruct'
-	return head
-end 'enclosingTypeNameForFunc'
 
 function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, op MaxonOp)
 	match op 'rec'
@@ -1997,37 +2054,13 @@ function fillMethodCall(module MaxonModule, opIdx OpIndex, result ByteArray, rec
 	try module.ops.set(opIdx, value: MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: newArgTypes, argRanges: argRanges, range: range)) otherwise panic("fillMethodCall: ops.set OOB at idx={opIdx}")
 end 'fillMethodCall'
 
-function isUnresolvedType(t MaxonType) returns bool
+export function isUnresolvedType(t MaxonType) returns bool
 	return match t 'check'
 		unresolved gives true
 		boolean to function gives false
 		typeParameter to interface gives false
 	end 'check'
 end 'isUnresolvedType'
-
-// Phase 11.0 Step 8.7a: a "generic-aware" MaxonType is one that the
-// concrete cast/compare validator can't reduce to a primitive
-// CastCategory — either the resolver hadn't pinned it down (unresolved),
-// or it's one of the generic-machinery arms (typeParameter,
-// genericInstance, interface). The lowering pass relaxes its
-// arg-vs-param category check whenever either side falls in this set:
-// generic body lowering inherits the user-side type-checking that ran
-// during resolveAllTopLevelDecls, and at runtime the ABI is uniform
-// (i64 / pointer) for every supported instantiation.
-export function isGenericAwareOrUnresolvedType(t MaxonType) returns bool
-	return match t 'check'
-		unresolved gives true
-		typeParameter gives true
-		genericInstance gives true
-		interface gives true
-		boolean gives false
-		integer gives false
-		float gives false
-		string gives false
-		named gives false
-		function gives false
-	end 'check'
-end 'isGenericAwareOrUnresolvedType'
 
 // --- String-const consumer specialization ---
 //
@@ -2745,6 +2778,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// the check can run safely against typealiased call results.
 	validateTryOtherwiseTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
+	// Per-call-site resolution: replicate the resolver chain lowering used to
+	// run on the fly (typealias chase, overload disambiguation, receiver
+	// substitution) and stash the results in `project.resolvedCallees` /
+	// `project.callParamTypes` so the lowering pass becomes a pure consumer.
+	// Must run after `fillUnresolvedTypes` (so receiver types in
+	// `producerTypesPerFunc` are concrete) and after `validateCallArities`
+	// (so arity errors are reported before any panic tripwire could fire).
+	resolveAllCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
+
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "convert" 'isConvert'
@@ -2934,6 +2976,165 @@ function checkNamedTypeVisibility(project Project, t MaxonType, range SourceRang
 		end 'structHidden'
 	end 'structHit'
 end 'checkNamedTypeVisibility'
+
+// --- Per-call-site resolution ---
+//
+// Walks every function once, replicates the callee-resolution chain
+// lowering used to perform on the fly (`qualifyCalleeForContext` →
+// `chaseTypealiasInQualifiedCallee` → `resolveOverloadedCallee` for
+// `call`; receiver-struct-name lookup + `resolveOverloadedCallee` for
+// `methodCall`), and stores the resolved qualified name in
+// `project.resolvedCallees` plus the per-arg substituted paramTypes in
+// `project.callParamTypes`. Lowering then becomes a pure consumer of
+// these tables — no name resolution and no per-arg substitution.
+//
+// Substitution context:
+//   - inner-aliases: the callee's enclosing struct's `innerAliases` map
+//     (e.g. Array's `ElementMemory` → `__ManagedMemory with Element`)
+//   - type parameters: the receiver's `genericInstance` arg list bound
+//     against the enclosing struct's `usesParams` (e.g. receiver
+//     `Array with Integer` binds `Element → Integer`)
+//
+// Skipped (no entry inserted):
+//   - bare callees prefixed with `__mm_` (lowered as runtime intrinsics)
+//   - math intrinsics (sqrt/floor/ceil/round/abs/trunc/min/max — lowered
+//     as Std unary/binary ops without going through call resolution)
+//   - methodCalls whose receiver type didn't reduce to a concrete struct
+//     (interface-dispatch stub path)
+//   - resolved callees with no `funcSignatures` entry (lowering's
+//     no-signature fallback emits the call verbatim with no coercion)
+//
+// Tripwire: a substituted paramType that still contains `typeParameter`
+// or an `unresolved` arm at this point indicates a substitution gap —
+// either the receiver carried no generic args when it should have, or
+// the callee's enclosing struct's innerAliases map was incomplete. We
+// panic loudly rather than silently passing an unresolved type to
+// lowering, where it would surface as a less-actionable cast-category
+// failure deep inside `coerceArgToParam`.
+function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("resolveAllCalls: funcIdx < count but get failed")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveAllCalls: producerTypesPerFunc.get({funcIdx}) failed")
+		let enclosingType = enclosingTypeNameForCallee(project, callee: func.name)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCalls: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("resolveAllCalls: opIdx OOB")
+				resolveOneCallOp(project, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'resolveAllCalls'
+
+// Per-op dispatcher: routes `call` / `methodCall` to its resolver and
+// passes other ops through. Centralising here keeps the per-function
+// walker above shape-agnostic and lets future op shapes (Stage E
+// indirect calls) hook in with a single arm.
+function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String)
+	if op.name == "call" 'isCall'
+		match op 'extract'
+			call(_, callee, callContext, _, _, argTypes, _, _) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, argTypes: argTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName)
+			default panic("unreachable: already checked op.name == call")
+		end 'extract'
+		return
+	end 'isCall'
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'extract'
+			methodCall(_, receiver, methodName, _, _, argTypes, _, _) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName)
+			default panic("unreachable: already checked op.name == methodCall")
+		end 'extract'
+		return
+	end 'isMethodCall'
+	// `tryCall` shares `call`'s shape (with an extra error-binding name we
+	// don't need for resolution) and lowers via `lowerCall`, so it needs the
+	// same sidetable entries.
+	if op.name == "tryCall" 'isTryCall'
+		match op 'extract'
+			tryCall(_, callee, callContext, _, _, argTypes, _, _, _) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, argTypes: argTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName)
+			default panic("unreachable: already checked op.name == tryCall")
+		end 'extract'
+		return
+	end 'isTryCall'
+end 'resolveOneCallOp'
+
+// `call` op resolution. Free / qualified callees (no implicit receiver):
+// substitution carries no generic-arg bindings (receiverType =
+// MaxonType.unresolved → empty subst), so type-parameter paramTypes
+// won't resolve here. That is fine for non-generic free calls; for
+// `Type.method(...)` static calls into a generic struct (e.g.
+// `IntArray.create()`), the chase rewrites the head to the base struct
+// and inner-aliases of the base do still resolve through
+// `applyInnerAliasIfNamed`.
+function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, argTypes MaxonTypeArray, currentNamespace String, readerFilePath FilePath, enclosingTypeName String)
+	let bareCallee = String.from(callee)
+	if shouldSkipCallSite(bareCallee) 'skip'
+		return
+	end 'skip'
+	let initialQualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	let chased = chaseTypealiasInQualifiedCallee(project, callee: initialQualified, enclosingType: enclosingTypeName)
+	let resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false)
+	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+	let signature = try project.funcSignatures.get(resolved) otherwise return
+	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: MaxonType.unresolved)
+	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
+end 'resolveCallSite'
+
+// `methodCall` op resolution. The receiver's MaxonType comes from
+// `producerTypes` (filled by `buildProducerTypes`/`fillUnresolvedTypes`
+// earlier in the pipeline). After normalising named typealiases we
+// extract the receiver's struct name; an empty result indicates an
+// interface-dispatch site that lowering will route through its stub
+// emitter, so we skip both the resolved-name and paramTypes inserts.
+function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArray, methodName ByteArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String)
+	let rawReceiverType = lookupProducerType(producerTypes, name: receiver)
+	let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingTypeName)
+	let receiverStructName = maxonTypeStructName(project, t: receiverType)
+	if receiverStructName.isEmpty() 'noStruct'
+		return
+	end 'noStruct'
+	let bareMethodName = String.from(methodName)
+	let baseQualified = "{receiverStructName}.{bareMethodName}"
+	let resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
+	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+	let signature = try project.funcSignatures.get(resolved) otherwise return
+	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
+	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
+end 'resolveMethodCallSite'
+
+// Build the substituted paramTypes vector for one call site by running
+// every signature paramType through the existing
+// `resolveCalleeParamTypeInContext` (single-slot substitution). A
+// still-`typeParameter` arm after substitution is *not* an error — it
+// occurs naturally when the caller is itself a generic body (e.g.
+// `Array.from` calling `result.push(item)` with `Element` still free).
+// Lowering treats those slots as ABI-uniform pass-through, identical
+// to the cache-time `MaxonType.unresolved` builtin slots.
+function substituteParamTypes(project Project, signature FuncSignature, qualifiedCallee String, receiverType MaxonType) returns MaxonTypeArray
+	var substituted = MaxonTypeArray.create()
+	for i in 0 upto signature.paramTypes.count() 'eachParam'
+		let raw = try signature.paramTypes.get(i) otherwise panic("substituteParamTypes: signature.paramTypes.get({i}) failed for callee={qualifiedCallee}")
+		let resolved = resolveCalleeParamTypeInContext(project, paramType: raw, calleeQualifiedName: qualifiedCallee, receiverType: receiverType)
+		substituted.push(resolved)
+	end 'eachParam'
+	return substituted
+end 'substituteParamTypes'
+
+// `call` ops we skip entirely — these never reach `slotArgsForCall` in
+// lowering, so caching their resolution is wasted work. The list mirrors
+// the early-return prefix checks in `lowerCall` itself.
+function shouldSkipCallSite(bareCallee String) returns bool
+	if bareCallee.startsWith("__mm_") 'isMmIntrinsic'
+		return true
+	end 'isMmIntrinsic'
+	return isMathIntrinsicName(bareCallee)
+end 'shouldSkipCallSite'
+
+// The math-primitive callees that lowering inlines as Std unary/binary
+// ops. Centralised so `shouldSkipCallSite` and `lowerMathIntrinsic` agree
+// on the set without either side accidentally drifting.
+function isMathIntrinsicName(name String) returns bool
+	return name == "sqrt" or name == "floor" or name == "ceil" or name == "round" or name == "abs" or name == "trunc" or name == "min" or name == "max"
+end 'isMathIntrinsicName'
 
 // --- Arity validation ---
 //

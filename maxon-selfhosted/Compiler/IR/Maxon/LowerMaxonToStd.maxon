@@ -791,7 +791,7 @@ type MaxonToStdLowering
 
 				for opIdx in srcBlock.opRefs 'eachOp'
 					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("invariant: opIdx from srcBlock.opRefs not in maxonModule.ops")
-					self.lowerOp(hlOp, dstBlock: dstBlock)
+					self.lowerOp(hlOp, opIdx: opIdx, dstBlock: dstBlock)
 				end 'eachOp'
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
@@ -804,7 +804,7 @@ type MaxonToStdLowering
 		return self.stdModule
 	end 'lower'
 
-	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
+	function lowerOp(hlOp MaxonOp, opIdx OpIndex, dstBlock IrBlock)
 		match hlOp 'lower'
 			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			stringConst(result, stringId, _) then self.lowerStringConst(result, stringId: stringId, dstBlock: dstBlock)
@@ -820,8 +820,8 @@ type MaxonToStdLowering
 			refEq(result, left, right, negate, _) then self.lowerRefEq(result, left: left, right: right, negate: negate, dstBlock: dstBlock)
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			call(result, callee, callContext, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
-			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
+			call(result, callee, _, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
+			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
 			printLiteral(stringId, _) then self.lowerPrintLiteral(stringId, dstBlock: dstBlock)
 			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
@@ -848,7 +848,7 @@ type MaxonToStdLowering
 			// via setTerminator. Reaching this match arm means the parser
 			// emitted it as a regular op — pure compiler bug.
 			throw then panic("lowerMaxonToStd: MaxonOp.throw seen as regular op (parser bug — should always be a terminator)")
-			tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, dstBlock: dstBlock)
+			tryCall(result, callee, _, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, opIdx: opIdx, dstBlock: dstBlock)
 			// Stage E (closures): function-pointer construction, env capture,
 			// and indirect-through-pointer dispatch. functionRef has no env
 			// (the matching `fnEnvVarNames` entry is 0 — see lowerFunctionRef);
@@ -1027,7 +1027,7 @@ type MaxonToStdLowering
 	//      into their declared positions, fill in integer-literal defaults.
 	//   3. Emit the Std call. Record the result's MaxonType so subsequent
 	//      consumers (field loads on the result, etc.) can resolve.
-	function lowerCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
+	function lowerCall(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
 		let bareCallee = String.from(callee)
 		// Math primitives (sqrt/floor/ceil/round/abs/trunc) inline to a single
 		// Std unary op rather than going through call resolution — see
@@ -1054,26 +1054,16 @@ type MaxonToStdLowering
 		// than emitting a call to a body-less signature.
 		if bareCallee.startsWith("__ManagedMemory.") 'didLowerMmStatic'
 			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__ManagedMemory.")
-			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock) 'handled'
+			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock) 'handled'
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
-		var qualifiedCallee = self.qualifyCallee(bare: bareCallee, callContext: callContext)
-		// Phase 11.0 step 8b: chase per-struct inner-typealiases on the
-		// receiver name so `ArrayIter.create` (where `ArrayIter` is an
-		// inner-alias of `ArrayIterator with Element` declared inside Array)
-		// resolves to the underlying `ArrayIterator.create`.
-		qualifiedCallee = chaseTypealiasInQualifiedCallee(self.project, callee: qualifiedCallee, enclosingType: self.currentTypeName)
-		// First-param overload disambiguation: when the bare qualified name
-		// is registered in the overload index, pick the variant matching the
-		// call's first non-self argument type. `hasSelf` is false here —
-		// free / qualified `Type.method` calls don't carry a receiver in the
-		// arg list (sibling-instance calls add __self below via leadingId).
-		qualifiedCallee = resolveOverloadedCallee(self.project, bareQualifiedName: qualifiedCallee, argTypes: argTypes, hasSelf: false)
-		// One signature lookup powers both the sibling-instance probe (does
-		// the resolved callee's first param name `__self`?) and the per-arg
-		// type-check / default-fill in slotArgsForCall. Without this fold,
-		// every call paid two redundant funcSignatures hash ops.
+		// Resolved callee name (post typealias-chase + overload disambiguation)
+		// was stashed by `resolveAllCalls` during TypeResolution. The pass
+		// visits every `call` / `tryCall` op in the module, so a miss here
+		// is a compiler bug (op introduced after TypeResolution, or the
+		// resolver pass returned early on a shape it should have handled).
+		let qualifiedCallee = try self.project.resolvedCallees.get(opIdx) otherwise panic("lowerCall: opIdx={opIdx} (callee={bareCallee}) missing from project.resolvedCallees — invariant violated, resolveAllCalls did not visit this op")
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
 			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock)
 			return
@@ -1090,7 +1080,13 @@ type MaxonToStdLowering
 		if isSiblingInstance 'getSelf'
 			leadingId = self.loadSelfPointer(dstBlock)
 		end 'getSelf'
-		let finalArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStart, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
+		// Free / qualified call: pass calleeQualifiedName so the per-arg
+		// substitution can chase inner-aliases on the callee's enclosing
+		// struct. No receiver-derived type-arg substitution available
+		// (free callee or `Type.staticMethod`); receiverTypeForSubst stays
+		// `unresolved` and `buildSubstitutionForInstance` short-circuits to
+		// the empty subst.
+		let finalArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStart, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
 		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock)
 	end 'lowerCall'
 
@@ -1098,7 +1094,7 @@ type MaxonToStdLowering
 	// the per-function value-type map; we then resolve `{Type.method}` and
 	// dispatch through the same slot/default fill path as a free call, with
 	// the receiver prepended as the implicit __self argument.
-	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock)
+	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
 		let rawReceiverType = self.getValueType(receiverId)
 		// Phase 11.0 step 8b: normalize named-typealiases (`ElementMemory`) and
@@ -1128,7 +1124,7 @@ type MaxonToStdLowering
 		// resolved receiverId as the implicit self pointer.
 		if receiverStructName == "__ManagedMemory" 'didLowerMmMethod'
 			let bareMethodName = String.from(methodName)
-			if self.lowerManagedMemBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock) 'handled'
+			if self.lowerManagedMemBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock) 'handled'
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
@@ -1142,14 +1138,10 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerCursor'
-		var qualifiedCallee = "{receiverStructName}.{String.from(methodName)}"
-		// First-param overload disambiguation: when the receiver-type prefix
-		// resolves to a name in the overload index, pick the variant matching
-		// the call's first non-self argument type. methodCall's argTypes
-		// vector starts with the user-facing args (no __self), so hasSelf is
-		// false here — the candidate signatures will have __self at slot 0,
-		// but the suffix is computed over user-facing params only.
-		qualifiedCallee = resolveOverloadedCallee(self.project, bareQualifiedName: qualifiedCallee, argTypes: argTypes, hasSelf: false)
+		// Resolved callee name (post-overload disambiguation) was stashed by
+		// `resolveAllCalls` during TypeResolution. Same invariant as
+		// `lowerCall`: a missing entry is a compiler bug.
+		let qualifiedCallee = try self.project.resolvedCallees.get(opIdx) otherwise panic("lowerMethodCall: opIdx={opIdx} (receiver={receiverStructName}, method={String.from(methodName)}) missing from project.resolvedCallees — invariant violated")
 		// paramStartIndex: 1 because the signature counts __self at slot 0;
 		// user-facing params start at index 1. slotArgsForCall folds the
 		// receiver into slot 0 of the returned arg list — no second copy.
@@ -1158,7 +1150,7 @@ type MaxonToStdLowering
 			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock)
 			return
 		end 'noSig'
-		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
 		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock)
 	end 'lowerMethodCall'
 
@@ -1347,7 +1339,7 @@ type MaxonToStdLowering
 	// call-emission path (which would then emit a call to a body-less
 	// signature — a bug since every method registered in
 	// `registerManagedMemoryMethods` MUST have an arm here).
-	function lowerManagedMemBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, dstBlock IrBlock) returns bool
+	function lowerManagedMemBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock) returns bool
 		let qualifiedName = "__ManagedMemory.{methodName}"
 		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
 			return false
@@ -1356,7 +1348,7 @@ type MaxonToStdLowering
 		if hasReceiver 'instance'
 			paramStartIndex = 1
 		end 'instance'
-		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
 
 		// --- Simple inline paths ----------------------------------------
 		if methodName == "length" 'mLength'
@@ -1396,7 +1388,18 @@ type MaxonToStdLowering
 		// --- Runtime-helper dispatch ------------------------------------
 		let helperName = managedMemHelperFor(methodName)
 		if not helperName.isEmpty() 'hasHelper'
-			return self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock)
+			let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock)
+			// Per-method result-type refinement. The generic helper-call path
+			// stamps integer; for methods whose declared return type is a
+			// non-integer (e.g. `create returns __ManagedMemory`,
+			// `slice returns __ManagedMemory`, `get returns Element`) the
+			// generic stamp is wrong and downstream method dispatch on the
+			// result would fall through to the interface-stub path. Look up
+			// the registered MaxonReturnType and re-stamp when it disagrees.
+			if lowered 'refineType'
+				self.refineMmCallResultType(result, methodName: methodName)
+			end 'refineType'
+			return lowered
 		end 'hasHelper'
 
 		// makeCharFromBytes — Phase 7 will implement real UTF-8 decode.
@@ -1462,6 +1465,34 @@ type MaxonToStdLowering
 		return true
 	end 'lowerManagedMemRuntimeCall'
 
+	// After lowerManagedMemRuntimeCall stamps the call result as integer,
+	// re-stamp it with the method's actual declared return type when that
+	// disagrees. Critical for callers that chain method calls on the result
+	// (e.g. `__ManagedMemory.create(...).set(...)`) without binding through
+	// a typed `var` first — without this, lowerMethodCall sees integer and
+	// can't pick the `__ManagedMemory` method-table arm.
+	function refineMmCallResultType(result ByteArray, methodName String)
+		let qualifiedName = "__ManagedMemory.{methodName}"
+		let returnType = try self.project.funcReturnTypes.get(qualifiedName) otherwise return
+		let resultType = match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		// Skip the re-stamp when the declared type is integer — the generic
+		// helper-call stamp already covered it.
+		let isInteger = match resultType 'isInt'
+			integer gives true
+			boolean gives false
+			float to unresolved gives false
+			typeParameter to interface gives false
+		end 'isInt'
+		if isInteger 'skipReStamp'
+			return
+		end 'skipReStamp'
+		let resultId = self.resolveName(result)
+		self.setValueType(resultId, t: resultType)
+	end 'refineMmCallResultType'
+
 	// Phase 11.0 Step 8.7c: stub for method calls whose receiver type
 	// didn't reduce to a concrete struct (interface-typed receivers,
 	// free type-parameters, or types the resolver couldn't pin down).
@@ -1523,10 +1554,6 @@ type MaxonToStdLowering
 	// and lowering all share the same probe order. The reader path comes
 	// from `currentFilePath` so cross-file fallback can filter candidates
 	// by visibility against the function we're lowering.
-	function qualifyCallee(bare String, callContext CallContext) returns String
-		let readerPath = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
-		return qualifyCalleeForContext(self.project, bare: bare, callContext: callContext, currentNamespace: self.currentNamespace, readerFilePath: readerPath)
-	end 'qualifyCallee'
 
 	// Build the Std-level argument id list for a call by:
 	//   - Looking up the callee's signature (paramNames + paramTypes +
@@ -1551,7 +1578,7 @@ type MaxonToStdLowering
 	// index 0 and the user args at indices 1..userParamCount. The slot/
 	// default-fill scratch buffers stay user-arg-indexed (the receiver is
 	// not a "user param") so paramStartIndex math is unchanged.
-	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
+	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, opIdx OpIndex, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		if userParamCount < 0 'badArity'
 			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
@@ -1560,6 +1587,13 @@ type MaxonToStdLowering
 		if userParamCount == 0 'noUserParams'
 			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
 		end 'noUserParams'
+		// Pre-substituted paramTypes were stashed by `resolveAllCalls` during
+		// TypeResolution. By contract, every call op that reaches
+		// `slotArgsForCall` also has a `resolvedCallees` entry (the lookup in
+		// `lowerCall` / `lowerMethodCall` upstream succeeded), and the
+		// resolver pass inserts both keys together — so a miss here means a
+		// pass-ordering or visit-set bug.
+		let resolvedParamTypes = try self.project.callParamTypes.get(opIdx) otherwise panic("slotArgsForCall: opIdx={opIdx} missing from project.callParamTypes despite having a resolvedCallees entry — resolveAllCalls invariant violated")
 		// General path: reuse scratch buffers. resize() zero-fills new slots
 		// — slot=0, filled=false — matching the old per-call init loop.
 		self.slotIdsScratch.clear()
@@ -1583,7 +1617,7 @@ type MaxonToStdLowering
 			if slot >= userParamCount 'overflow'
 				continue
 			end 'overflow'
-			let paramType = try signature.paramTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
+			let paramType = try resolvedParamTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
 			let paramName = try signature.paramNames.get(slot + paramStartIndex) otherwise ""
 			let coercedId = self.coerceArgToParam(argName: arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
 			try self.slotIdsScratch.set(slot, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
@@ -1602,7 +1636,7 @@ type MaxonToStdLowering
 				let constId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: defaultValue.value))))
 				self.setValueType(constId, t: MaxonType.integer)
-				let paramType = try signature.paramTypes.get(paramIdx) otherwise MaxonType.integer
+				let paramType = try resolvedParamTypes.get(paramIdx) otherwise MaxonType.integer
 				let coercedId = self.coerceValueToParam(valueId: constId, fromType: MaxonType.integer, toType: paramType, dstBlock: dstBlock)
 				try self.slotIdsScratch.set(userIdx, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
 			end 'hasDefault'
@@ -1653,18 +1687,13 @@ type MaxonToStdLowering
 	// real E3005 diagnostic. Reporting the type error first is also more
 	// useful: it points at the actual problem.
 	function coerceArgToParam(argName ByteArray, argType MaxonType, paramType MaxonType, paramName String, range SourceRange, dstBlock IrBlock) returns ValueId
-		// Phase 11.0 Step 8.7a: when either side carries a generic-aware
-		// type that the type-resolver couldn't pin down to a concrete
-		// CastCategory (an unresolved producer-type, a free type parameter,
-		// a generic instance, or an interface), skip the cast/compare
-		// validation and pass the value through. Generic body lowering
-		// inherits the user-side type-checking that already happened during
-		// resolveAllTopLevelDecls; the runtime ABI is uniform (i64 / pointer)
-		// for every supported instantiation, so no implicit conversion is
-		// required at the call site.
-		if isGenericAwareOrUnresolvedType(argType) or isGenericAwareOrUnresolvedType(paramType) 'genericPassThrough'
+		// paramType comes from `project.callParamTypes` — substitution has
+		// already run during TypeResolution. The one defensive short-circuit
+		// left is `MaxonType.unresolved` on either side: that signals a
+		// type-resolver gap and `convertCastCategory` below would panic on it.
+		if isUnresolvedType(argType) or isUnresolvedType(paramType) 'unresolvedPassThrough'
 			return self.resolveName(argName)
-		end 'genericPassThrough'
+		end 'unresolvedPassThrough'
 		let argCategory = convertCastCategory(self.project, t: argType)
 		let paramCategory = convertCastCategory(self.project, t: paramType)
 		if argCategory == paramCategory 'sameCategory'
@@ -2295,9 +2324,11 @@ type MaxonToStdLowering
 	// `errorBoundName` is consumed by parser-emitted ops downstream (typically
 	// a cmp + condBr that either propagates via mrt_set_error or falls
 	// through to a fallback expression).
-	function lowerTryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, dstBlock IrBlock)
+	function lowerTryCall(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, opIdx OpIndex, dstBlock IrBlock)
 		// Reuse the exact call lowering — same signature/default-fill path.
-		self.lowerCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, dstBlock: dstBlock)
+		// Pass through the tryCall's opIdx so resolved-callee / paramTypes
+		// sidetable lookups pull this site's resolution, not some neighbour's.
+		self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 		// Bind the post-call error flag to the parser-supplied name.
 		let flagId = self.defineName(errorBoundName)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(flagId, callee: "mrt_get_error_and_clear", argIds: ValueIdArray.create())))

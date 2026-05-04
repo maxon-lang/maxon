@@ -19,7 +19,13 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // param names + defaults to TypeResolution's arity validator (arity errors
 // for stdlib calls used to silently no-op when the cache was warm because
 // project.funcSignatures is only populated when stdlib source is reparsed).
-let CACHE_FORMAT_VERSION = 5
+// v7: round-trip generic-aware MaxonType arms (typeParameter,
+// genericInstance, interface) with their full payload, and persist each
+// struct's `innerAliases` map. Earlier versions collapsed the
+// generic-aware arms to a printable name and dropped innerAliases on
+// restore, so cache hits surfaced unresolved inner-alias names like
+// `MaxonType.named("ElementMemory")` to the lowering pass.
+let CACHE_FORMAT_VERSION = 7
 
 // ============================================================
 // Types
@@ -87,6 +93,14 @@ export type StdlibCacheData
 	// id space, so restoreStdlibMetadata uses this map to translate captured
 	// ids back to names and re-intern them in the destination project.
 	export var typeNameTable StringArray
+	// Discovery cache for the BuiltinArrayLiteral protocol. The parser writes
+	// `[1, 2, 3]` literals through whichever stdlib type implements
+	// `BuiltinArrayLiteral`; the discovery walk runs once, at parse time, over
+	// `project.unresolvedStructTypes`. On a cache hit those entries are gone
+	// (the parser doesn't re-parse stdlib), so we persist the discovered name
+	// here and the loader re-publishes it after restore. Empty string means
+	// no implementing type was observed in this stdlib.
+	export var builtinArrayLiteralTypeName String
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -99,7 +113,8 @@ export type StdlibCacheData
 			funcSignatures: FuncSignatureMap.create(),
 			structTypes: StructTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
-			typeNameTable: StringArray.create()
+			typeNameTable: StringArray.create(),
+			builtinArrayLiteralTypeName: ""
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -301,6 +316,18 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 			writeMaxonType(project, buf: buf, t: field.fieldType)
 			writeDword(buf, value: field.offset)
 		end 'eachField'
+
+		// Cache v7: persist the per-struct inner-typealias map so cache-hit
+		// lowering can resolve names like `ElementMemory` (declared inside
+		// `type Array uses Element`) the same way a cache-miss parse would.
+		// Without this round-trip, `applyInnerAliasIfNamed` sees an empty
+		// map post-restore and lets the bare placeholder reach
+		// `namedIdCastCategory`, which panics.
+		writeDword(buf, value: st.innerAliases.count())
+		for (aliasName, aliasType) in st.innerAliases 'eachInnerAlias'
+			writeString(buf, s: aliasName)
+			writeMaxonType(project, buf: buf, t: aliasType)
+		end 'eachInnerAlias'
 	end 'eachStruct'
 
 	// Top-level constants. Visibility / sourceFilePath are not serialized:
@@ -311,6 +338,13 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		writeString(buf, s: name)
 		writeConstantValue(project, buf: buf, cv: entry.value)
 	end 'eachConst'
+
+	// BuiltinArrayLiteral discovery. Empty string means no implementing type
+	// was observed in this stdlib build. Persisted so the parser can resolve
+	// `[a, b, c]` after a cache hit, where the `unresolvedStructTypes`
+	// registry has been drained and the conformance metadata is otherwise
+	// gone.
+	writeString(buf, s: data.builtinArrayLiteralTypeName)
 
 	// Ensure parent directory (and any missing ancestors) exist
 	let parentDir = try path.parent() otherwise FilePath from ""
@@ -645,7 +679,23 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
 		end 'eachField'
 
-		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+		// Cache v7: read back the per-struct inner-typealias map. The
+		// resolved MaxonTypes were re-interned into the destination
+		// project's registries by `readMaxonType` above, so the resulting
+		// map is directly usable by `applyInnerAliasIfNamed` without any
+		// translation step.
+		let innerAliasCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var innerAliases = ResolvedInnerAliasMap.create()
+		for _ in 0 upto innerAliasCount 'eachInnerAlias'
+			let (aliasName, pIa1) = readString(buf, offset: pos)
+			pos = pIa1
+			let (aliasType, pIa2) = readMaxonType(project, buf: buf, offset: pos)
+			pos = pIa2
+			try innerAliases.insert(aliasName, value: aliasType) otherwise ignore
+		end 'eachInnerAlias'
+
+		let st = StructType.create(name, fields: fields, byteSize: byteSize, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: innerAliases)
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'eachStruct'
 
@@ -661,6 +711,11 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 		let entry = TopLevelConstant.create(cv, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath)
 		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'eachConst'
+
+	// BuiltinArrayLiteral discovery.
+	let (builtinArrayLiteralName, pBal) = readString(buf, offset: pos)
+	pos = pBal
+	data.builtinArrayLiteralTypeName = builtinArrayLiteralName
 
 	// Populate data.typeNameTable from the destination project's interner so
 	// `restoreStdlibMetadata`'s translation step is a no-op identity. The
@@ -791,15 +846,14 @@ function translateMaxonType(project Project, table StringArray, t MaxonType) ret
 		unresolved gives MaxonType.unresolved
 		named(id) gives translateNamedTypeId(project, table: table, id: id)
 		function gives MaxonType.unresolved
-		// TODO Phase 11.1+: cache the new generic-aware arms. No stdlib decl
-		// surfaced through `captureStdlibMetadata` produces these yet, so the
-		// cache never sees them. Pass placeholder unresolved for now (matching
-		// the `function` arm pattern) — a loud failure would block the
-		// existing cache round-trip the moment any stdlib type carries a
-		// generic field.
-		typeParameter gives MaxonType.unresolved
-		genericInstance gives MaxonType.unresolved
-		interface gives MaxonType.unresolved
+		// Cache v7: generic-aware arms are re-interned into the destination
+		// project's registries by `readMaxonType`, so by the time
+		// `translateMaxonType` sees them their ids are already meaningful.
+		// Pass through unchanged. Earlier versions could not reach this arm
+		// because the reader collapsed these arms to `named` placeholders.
+		typeParameter gives t
+		genericInstance gives t
+		interface gives t
 	end 'translate'
 end 'translateMaxonType'
 
@@ -861,6 +915,12 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 	for (name, entry) in project.topLevelConstants 'copyConsts'
 		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'copyConsts'
+
+	// BuiltinArrayLiteral discovery — sourced from the parser's static via the
+	// loader-side accessor. Populated during the cache-miss parse, then carried
+	// here so cache-hit runs in the same process (and the on-disk cache write
+	// below) see the discovered name without re-parsing stdlib.
+	data.builtinArrayLiteralTypeName = getCachedBuiltinArrayLiteralTypeName()
 end 'captureStdlibMetadata'
 
 export function restoreStdlibMetadata(project Project, data StdlibCacheData)
@@ -909,4 +969,10 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	for (name, entry) in data.topLevelConstants 'restoreConsts'
 		try project.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'restoreConsts'
+
+	// Republish BuiltinArrayLiteral discovery so the parser-side cache is live
+	// for the user-code parse that follows. Empty string means stdlib didn't
+	// declare an implementing type (or this cache predates v6); the parser
+	// will emit a diagnostic on the first array literal in that case.
+	setCachedBuiltinArrayLiteralTypeName(data.builtinArrayLiteralTypeName)
 end 'restoreStdlibMetadata'

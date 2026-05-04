@@ -1969,6 +1969,25 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
+		// Eager BuiltinArrayLiteral discovery. Walking conformances at type-
+		// registration time means the static cache is populated by the time
+		// stdlib parsing finishes — which is critical because user code's
+		// array literals trigger after stdlib's `unresolvedStructTypes` has
+		// been drained by `resolveAllStructTypes`. The diagnostic on
+		// duplicate implementing types fires here (parse-time) so the
+		// downstream parser-side discovery walk can stay assumption-free.
+		for conf in conformances 'discoverBal'
+			if conf.interfaceName != "BuiltinArrayLiteral" 'notBal'
+				continue
+			end 'notBal'
+			let prior = getCachedBuiltinArrayLiteralTypeName()
+			if not prior.isEmpty() and prior != currentTypeName 'duplicateImpl'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "BuiltinArrayLiteral already implemented by '{prior}'; '{currentTypeName}' would overlap", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
+			end 'duplicateImpl' else 'firstImpl'
+				setCachedBuiltinArrayLiteralTypeName(currentTypeName)
+			end 'firstImpl'
+		end 'discoverBal'
+
 		currentTypeName = ""
 		currentTypeVisibility = Visibility.file
 		// Phase 11.0: clear the in-scope type-param list so a sibling type at
@@ -5362,25 +5381,233 @@ export type Parser
 		end 'primary'
 	end 'parsePrimaryMatch'
 
-	// Array literal in expression position. Self-hosted doesn't yet
-	// implement array-literal value emission outside top-level constants
-	// (`let xs = [1, 2, 3]`), so this primarily exists to consume a
-	// well-formed `[...]` and surface targeted diagnostics on truncated
-	// or malformed inputs. Returns a dummy ExprResult so the surrounding
-	// Pratt loop continues without cascading.
+	// Discover (once per process) the stdlib type that implements the
+	// `BuiltinArrayLiteral` interface. The compiler knows nothing about
+	// "Array" specifically — it only knows the protocol contract: the type
+	// declares `static function init(<single __ManagedMemory param>) returns
+	// Self`, and the parser desugars `[e0, ..., eN]` into a `T.init(__mm)`
+	// call where T is whichever type opted in via the conformance.
+	//
+	// Walks `project.unresolvedStructTypes` because that's the parser-time
+	// registry that still carries `implementedInterfaces`. After cache hits
+	// the walk finds nothing — but `restoreStdlibMetadata` republishes the
+	// previously-discovered name into the static cache before user code is
+	// parsed, so the static path covers cache-hit runs too.
+	function discoverBuiltinArrayLiteralType() returns String
+		let cached = getCachedBuiltinArrayLiteralTypeName()
+		if not cached.isEmpty() 'haveCached'
+			return cached
+		end 'haveCached'
+		var foundName = ""
+		var ambiguous = false
+		for (typeName, entry) in project.unresolvedStructTypes 'scan'
+			for conf in entry.implementedInterfaces 'confLoop'
+				if conf.interfaceName != "BuiltinArrayLiteral" 'notMatch'
+					continue
+				end 'notMatch'
+				if foundName != "" and foundName != typeName 'duplicate'
+					ambiguous = true
+				end 'duplicate' else 'firstHit'
+					foundName = typeName
+				end 'firstHit'
+			end 'confLoop'
+		end 'scan'
+		if ambiguous 'ambig'
+			return ""
+		end 'ambig'
+		if not foundName.isEmpty() 'cacheIt'
+			setCachedBuiltinArrayLiteralTypeName(foundName)
+		end 'cacheIt'
+		return foundName
+	end 'discoverBuiltinArrayLiteralType'
+
+	// Array literal in expression position. Desugars `[e0, e1, ..., eN]` via
+	// the BuiltinArrayLiteral protocol into:
+	//
+	//     __mm = __ManagedMemory.create(N, elementSize: 8)
+	//     __mm.set(0, value: e0); _ = mrt_get_error_and_clear()
+	//     ...
+	//     __mm.set(N-1, value: eN); _ = mrt_get_error_and_clear()
+	//     __mm.setLength(N);       _ = mrt_get_error_and_clear()
+	//     __arr = T.init(__mm)
+	//
+	// where T is the stdlib type that opted in via `implements
+	// BuiltinArrayLiteral`. Element size is hardcoded to 8 (the default for
+	// the runtime's bit-packed __ManagedMemory layout); generalizing this
+	// requires per-element type-info that isn't yet plumbed through —
+	// recorded as a TODO below.
+	//
+	// On the throw-handling side we rely on a structural invariant: capacity
+	// is exactly the literal's element count, and `__managed_mem_set` /
+	// `__managed_mem_set_length` bounds-check against capacity (see
+	// LowerMaxonToStd Step 8.8). So OOB cannot happen by construction. The
+	// `mrt_get_error_and_clear` calls drain the post-call error flag without
+	// ever observing a nonzero — equivalent to a `try ... otherwise panic`
+	// arm whose panic is statically unreachable, but emitted without the
+	// CFG-construction overhead of building condBr + panic blocks per element.
+	//
+	// Empty `[]` literals still emit the create + init pair so the result is
+	// a real T value (TypeResolution lifts the result type from T.init's
+	// return shape).
+	//
+	// Commas between elements are stripped by the lexer (see actionTable's
+	// `skipOther`), so the inner loop just keeps parsing expressions until
+	// it sees `]`.
 	function parseArrayLiteralExpr(block IrBlock) returns ExprResult throws ParserError
 		consumeExpectedDisplay = "expression"
+		let bracketToken = cursor.current()
 		try eat(TokenKind.leftBracket)
-		// Empty `[]` — allow but produce a dummy value.
-		if accept(TokenKind.rightBracket) 'emptyArr'
-			let emptyDummy = freshSynthName()
-			return ExprResult.direct(emptyDummy, valueType: MaxonType.integer)
-		end 'emptyArr'
-		_ = try parseExpression(block)
+
+		// Phase 1: collect element expressions and per-element ranges so we
+		// know N (capacity) before we emit `__ManagedMemory.create`. Stuck-
+		// guard mirrors parseCallArgsRaw: an inner expression's recovery may
+		// park the cursor without advancing — break out so the trailing
+		// `expect(rightBracket)` reports the cascade instead of looping.
+		var elemNames = ByteArrayArray.create()
+		var elemTypes = MaxonTypeArray.create()
+		var elemRanges = SourceRangeArray.create()
+		if not at(TokenKind.rightBracket) 'hasElements'
+			while true 'elemLoop'
+				let elemStartPos = cursor.index()
+				let elemFirstToken = cursor.current()
+				let parsedElem = try parseExpression(block)
+				let elemLastToken = previousToken()
+				let elemRange = SourceRange.between(elemFirstToken, last: elemLastToken)
+
+				// String literals are returned as `stringConst` ExprResults
+				// without a backing IR op; materialize one before threading the
+				// name into a method-call argument list, mirroring other
+				// call-emission sites.
+				let elemResult = materializeStringConstIfNeeded(block, expr: parsedElem, range: elemRange)
+				elemNames.push(exprName(elemResult))
+				elemTypes.push(exprType(elemResult))
+				elemRanges.push(elemRange)
+
+				if at(TokenKind.rightBracket) 'doneList'
+					break
+				end 'doneList'
+				if cursor.index() <= elemStartPos 'stuckElem'
+					break
+				end 'stuckElem'
+			end 'elemLoop'
+		end 'hasElements'
 		try expect(TokenKind.rightBracket)
-		let dummy = freshSynthName()
-		return ExprResult.direct(dummy, valueType: MaxonType.integer)
+
+		let literalRange = SourceRange.between(bracketToken, last: previousToken())
+
+		// Phase 2: discover the stdlib type implementing BuiltinArrayLiteral.
+		// Empty / ambiguous returns trip a parser-time diagnostic and we fall
+		// back to a dummy ExprResult so downstream parsing stays well-formed.
+		let arrayTypeName = discoverBuiltinArrayLiteralType()
+		if arrayTypeName.isEmpty() 'noArrayType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "array literal: no stdlib type implements BuiltinArrayLiteral (or multiple do)", line: bracketToken.line, column: bracketToken.column, filePath: filePath)
+			let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: literalRange)
+			return ExprResult.direct(zeroName, valueType: MaxonType.unresolved)
+		end 'noArrayType'
+
+		// Phase 3: allocate __ManagedMemory with capacity = element count.
+		// TODO(elementSize): all current callers store 8-byte values, so the
+		// stride is hardcoded. Generalizing requires either (a) propagating
+		// the per-element MaxonType through TypeResolution to a real
+		// elementSize, or (b) lowering the array literal in a later pass
+		// after types are resolved.
+		let elemCount = elemNames.count() as ParsedInt
+		let countLitName = emitLiteral(block, value: elemCount, valueType: MaxonType.integer, range: literalRange)
+		let elemSizeLitName = emitLiteral(block, value: 8, valueType: MaxonType.integer, range: literalRange)
+
+		let mmName = freshSynthName()
+		var createArgs = ByteArrayArray.create()
+		createArgs.push(countLitName)
+		createArgs.push(elemSizeLitName)
+		var createLabels = StringArray.create()
+		createLabels.push("")
+		createLabels.push("elementSize")
+		var createArgTypes = MaxonTypeArray.create()
+		createArgTypes.push(MaxonType.integer)
+		createArgTypes.push(MaxonType.integer)
+		var createArgRanges = SourceRangeArray.create()
+		createArgRanges.push(literalRange)
+		createArgRanges.push(literalRange)
+		module.appendOp(block, op: MaxonOp.call(mmName, callee: project.calleeNames.intern("__ManagedMemory.create"), callContext: CallContext.qualified, args: createArgs, argLabels: createLabels, argTypes: createArgTypes, argRanges: createArgRanges, range: literalRange))
+		// __ManagedMemory.create signals OOM via the error flag; drain it so a
+		// subsequent `try` doesn't see a stale flag. By construction (capacity
+		// = elemCount, no other concurrent allocations) the only failure mode
+		// is OOM — silently swallowing it here is consistent with how the
+		// stdlib's `Array.create` already behaves.
+		emitErrorFlagDrain(block, range: literalRange)
+
+		// Phase 4: per-element `__mm.set(i, value: elem)`, each followed by
+		// an error-flag drain. set's bounds-check is against capacity (which
+		// we just sized to elemCount), so OOB is statically impossible — the
+		// drain reads zero on every iteration.
+		let setMethodName = "set".toByteArray()
+		for i in 0 upto elemNames.count() 'eachElem'
+			let elemName = try elemNames.get(i) otherwise panic("array literal: elemNames.get OOB at {i} (count={elemNames.count()})")
+			let elemType = try elemTypes.get(i) otherwise panic("array literal: elemTypes.get OOB at {i}")
+			let elemRange = try elemRanges.get(i) otherwise panic("array literal: elemRanges.get OOB at {i}")
+
+			let indexLitName = emitLiteral(block, value: i as ParsedInt, valueType: MaxonType.integer, range: elemRange)
+
+			let setResultName = freshSynthName()
+			var setArgs = ByteArrayArray.create()
+			setArgs.push(indexLitName)
+			setArgs.push(elemName)
+			var setLabels = StringArray.create()
+			setLabels.push("")
+			setLabels.push("value")
+			var setArgTypes = MaxonTypeArray.create()
+			setArgTypes.push(MaxonType.integer)
+			setArgTypes.push(elemType)
+			var setArgRanges = SourceRangeArray.create()
+			setArgRanges.push(elemRange)
+			setArgRanges.push(elemRange)
+			module.appendOp(block, op: MaxonOp.methodCall(setResultName, receiver: mmName, methodName: setMethodName, args: setArgs, argLabels: setLabels, argTypes: setArgTypes, argRanges: setArgRanges, range: elemRange))
+			emitErrorFlagDrain(block, range: elemRange)
+		end 'eachElem'
+
+		// Phase 5: `__mm.setLength(elemCount)`. Same drain rationale as
+		// per-element set: setLength's check is against capacity.
+		let lengthLitName = emitLiteral(block, value: elemCount, valueType: MaxonType.integer, range: literalRange)
+		let setLenResultName = freshSynthName()
+		var setLenArgs = ByteArrayArray.create()
+		setLenArgs.push(lengthLitName)
+		var setLenLabels = StringArray.create()
+		setLenLabels.push("")
+		var setLenArgTypes = MaxonTypeArray.create()
+		setLenArgTypes.push(MaxonType.integer)
+		var setLenArgRanges = SourceRangeArray.create()
+		setLenArgRanges.push(literalRange)
+		let setLenMethodName = "setLength".toByteArray()
+		module.appendOp(block, op: MaxonOp.methodCall(setLenResultName, receiver: mmName, methodName: setLenMethodName, args: setLenArgs, argLabels: setLenLabels, argTypes: setLenArgTypes, argRanges: setLenArgRanges, range: literalRange))
+		emitErrorFlagDrain(block, range: literalRange)
+
+		// Phase 6: wrap via `T.init(__mm)`. The single user param is
+		// positional (label="") so the lowering's slot resolver matches by
+		// position rather than by name — keeping the parser ignorant of the
+		// stdlib's chosen parameter spelling.
+		let arrName = freshSynthName()
+		var initArgs = ByteArrayArray.create()
+		initArgs.push(mmName)
+		var initLabels = StringArray.create()
+		initLabels.push("")
+		var initArgTypes = MaxonTypeArray.create()
+		initArgTypes.push(MaxonType.unresolved)
+		var initArgRanges = SourceRangeArray.create()
+		initArgRanges.push(literalRange)
+		let initCallee = "{arrayTypeName}.init"
+		module.appendOp(block, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+
+		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
 	end 'parseArrayLiteralExpr'
+
+	// Emit a `_ = mrt_get_error_and_clear()` op that drains the post-call
+	// error flag set by the previous throwing call. The result is named with
+	// a fresh synthetic and never read — its sole purpose is to clear the
+	// flag so a later real `try` doesn't see a stale signal.
+	function emitErrorFlagDrain(block IrBlock, range SourceRange)
+		let drainName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.call(drainName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: range))
+	end 'emitErrorFlagDrain'
 
 	// Single-quote literal in expression position. The lexer also produces
 	// charLiteral tokens for block labels (`'loop'`); the parser

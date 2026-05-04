@@ -494,10 +494,12 @@ end 'maxonReturnTypeName'
 export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 	writeDword(buf, value: t.ordinal)
 	match t 'payload'
-		// `unresolved` should never reach the cache: this serializer is only
-		// invoked for declaration-site types (struct fields, function signatures),
-		// which the parser fills with concrete primitives or named refs.
-		unresolved then panic("writeMaxonType: MaxonType.unresolved cannot be cached — declaration sites (struct fields, function signatures) reach this serializer with concrete types only")
+		// `unresolved` is the polymorphic-slot sentinel used by builtin
+		// signatures (notably `__ManagedMemory.set/get/...`'s Element axis,
+		// see registerManagedMemoryType). Serialise as a payload-less variant
+		// so the slot survives the cache round trip and continues to trigger
+		// `coerceArgToParam`'s early-exit on the user-code side.
+		unresolved then break
 		boolean then break
 		integer then break
 		float then break
@@ -509,32 +511,97 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType)
 		// so the cache never sees this arm. If we ever try to cache one we
 		// want a loud failure rather than silent corruption.
 		function then panic("writeMaxonType: function types are not cached yet (Stage A scope)")
-		// Phase 11.0 step 8b: persist generic-aware MaxonType arms as their
-		// printable-name string. Round-trip via re-interning into the type
-		// registries on the read side. Names are stable across the
-		// declaration site → cache → restore path because every name we
-		// emit was registered through TypeNameInterner before it reached
-		// the writer.
-		typeParameter(id) then writeString(buf, s: project.typeParameters.getName(id))
-		genericInstance(id) then writeString(buf, s: genericInstanceIdToString(project, id: id))
+		// Phase 11.0 (cache v7): persist generic-aware MaxonType arms with
+		// enough payload that the read side can re-intern into the
+		// destination project's registries and reproduce the *same* MaxonType
+		// shape (typeParameter/genericInstance/interface). Earlier versions
+		// of this codec collapsed these arms to a printable name and read
+		// them back as `MaxonType.named(intern(name))`, which broke the
+		// inner-typealias substitution path on stdlib cache hits — e.g.
+		// `Array.init(managed ElementMemory)` would surface a bare
+		// `MaxonType.named("ElementMemory")` that lowering's namedIdCastCategory
+		// could not resolve.
+		typeParameter(id) then writeTypeParameterPayload(project, buf: buf, id: id)
+		genericInstance(id) then writeGenericInstancePayload(project, buf: buf, id: id)
 		interface(id) then writeString(buf, s: project.interfaceRegistry.getName(id))
 	end 'payload'
 end 'writeMaxonType'
+
+// Phase 11 cache v7: a typeParameter is interned in `Project.typeParameters`
+// by `(declaringTypeName, paramName)`. Persist both halves so the reader can
+// reproduce the same id by re-interning into the destination project's
+// registry. Constraints (where-clause traits) are not persisted because
+// stdlib generic decls don't surface where-clauses through `funcSignatures`
+// — every constraint is enforced at declaration parse time, not at the
+// stdlib's function-call boundaries the cache replays.
+function writeTypeParameterPayload(project Project, buf ByteArray, id TypeParamId)
+	writeString(buf, s: project.typeParameters.getDeclaringTypeName(id))
+	writeString(buf, s: project.typeParameters.getName(id))
+end 'writeTypeParameterPayload'
+
+// Phase 11 cache v7: a genericInstance is interned in
+// `Project.genericInstances` by `(baseId, args)`. Persist the base name +
+// recursive arg list so the reader can reintern by walking into
+// `readMaxonType` for each arg. Recursion bottoms out at primitive arms /
+// named arms / typeParameter arms — generic instances of bounded depth
+// only.
+function writeGenericInstancePayload(project Project, buf ByteArray, id GenericInstanceId)
+	let (baseId, args) = project.genericInstances.get(id)
+	writeString(buf, s: project.typeNames.get(baseId))
+	writeDword(buf, value: args.count())
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("writeGenericInstancePayload: args.get OOB at {i}")
+		writeMaxonType(project, buf: buf, t: a)
+	end 'eachArg'
+end 'writeGenericInstancePayload'
 
 function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let (name, nextPos) = readString(buf, offset: offset)
 	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
 end 'readMaxonTypeNamed'
 
-// Phase 11.0 step 8b: read a generic-aware MaxonType arm from the cache as
-// a named placeholder. Avoids needing to round-trip TypeParamRegistry /
-// GenericInstanceRegistry / InterfaceTypeRegistry payloads through the
-// cache file format; Phase 11 hybrid-generic lowering treats every
-// generic-aware reference as i64 anyway.
-function readMaxonTypeNamedPlaceholder(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+// Phase 11 cache v7: read a typeParameter payload (declaringTypeName,
+// paramName) and re-intern through `Project.typeParameters` so the
+// returned id is meaningful in the destination project's registry. The
+// destination project is the user project (already populated with the
+// stdlib decls' bare struct/interface names), so this intern call also
+// has the side effect of registering the type-parameter binding the
+// stdlib decl used — which is exactly what `buildSubstitution` needs to
+// produce when it later resolves a generic call site.
+function readMaxonTypeParameter(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let (declaringTypeName, p1) = readString(buf, offset: offset)
+	let (paramName, p2) = readString(buf, offset: p1)
+	let id = project.typeParameters.intern(declaringTypeName, paramName: paramName)
+	return (MaxonType.typeParameter(id), p2)
+end 'readMaxonTypeParameter'
+
+// Phase 11 cache v7: read a genericInstance payload (baseName, args) and
+// re-intern through `Project.genericInstances`. Recurses into
+// `readMaxonType` for each arg so any nested generic-aware MaxonType is
+// rebuilt with the destination project's id space.
+function readMaxonGenericInstance(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
+	let (baseName, p1) = readString(buf, offset: offset)
+	let argCount = readDword(buf, offset: p1)
+	var pos = p1 + 4
+	var args = MaxonTypeArray.create()
+	for _ in 0 upto argCount 'eachArg'
+		let (a, p2) = readMaxonType(project, buf: buf, offset: pos)
+		pos = p2
+		args.push(a)
+	end 'eachArg'
+	let baseId = project.typeNames.intern(baseName)
+	let gid = project.genericInstances.intern(baseId, args: args)
+	return (MaxonType.genericInstance(gid), pos)
+end 'readMaxonGenericInstance'
+
+// Phase 11 cache v7: read an interface payload (name) and re-intern
+// through `Project.interfaceRegistry`. Symmetric counterpart to the
+// `interface(id)` writer arm.
+function readMaxonInterface(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let (name, nextPos) = readString(buf, offset: offset)
-	return (MaxonType.named(project.typeNames.intern(name)), nextPos)
-end 'readMaxonTypeNamedPlaceholder'
+	let id = project.interfaceRegistry.intern(name)
+	return (MaxonType.interface(id), nextPos)
+end 'readMaxonInterface'
 
 export function readMaxonType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset)
 	let raw = readDword(buf, offset: offset)
@@ -548,16 +615,14 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		named then return readMaxonTypeNamed(project, buf: buf, offset: pos)
 		// Symmetric with the writer above — function types aren't cached yet.
 		function then panic("readMaxonType: function types are not cached yet (Stage A scope)")
-		unresolved then panic("readMaxonType: cache contains MaxonType.unresolved — should never have been written")
-		// Phase 11.0 step 8b: round-trip generic-aware arms by reading the
-		// printable name back. Restored types are used as opaque ABI hints
-		// (every Phase 11 generic body lowers to i64 today), so we replay
-		// the type as a `named()` placeholder; downstream lowering treats
-		// it through the same i64 fallback paths the original
-		// genericInstance/typeParameter take.
-		typeParameter then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
-		genericInstance then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
-		interface then return readMaxonTypeNamedPlaceholder(project, buf: buf, offset: pos)
+		unresolved then return (MaxonType.unresolved, pos)
+		// Phase 11 cache v7: round-trip generic-aware arms with their full
+		// payload so the reader rebuilds the same MaxonType the writer saw.
+		// The earlier "named placeholder" reader broke inner-alias
+		// substitution on stdlib cache hits (see writeMaxonType comment).
+		typeParameter then return readMaxonTypeParameter(project, buf: buf, offset: pos)
+		genericInstance then return readMaxonGenericInstance(project, buf: buf, offset: pos)
+		interface then return readMaxonInterface(project, buf: buf, offset: pos)
 	end 'tag'
 end 'readMaxonType'
 
