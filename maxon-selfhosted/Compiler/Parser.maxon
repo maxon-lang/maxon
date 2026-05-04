@@ -4037,8 +4037,12 @@ export type Parser
 		let fallbackResult = try parseExpression(fallbackBlock)
 		let fallbackType = exprType(fallbackResult)
 		// E3059: otherwise expression type must match the success type.
-		// Skip when either side is still unresolved at parse time.
-		if not isUnresolvedMaxonType(callResultType) and not isUnresolvedMaxonType(fallbackType) 'doTypeCheck'
+		// Skip the parse-time check when either side is still unresolved or
+		// names a type the project hasn't seen yet (typealiases resolve in
+		// TypeResolution; calling convertCastCategory on an unknown name
+		// panics). TypeResolution's validateTryOtherwiseTypes re-runs this
+		// check after resolution completes.
+		if not isUnresolvedMaxonType(callResultType) and not isUnresolvedMaxonType(fallbackType) and maxonTypeIsKnown(project, t: callResultType) and maxonTypeIsKnown(project, t: fallbackType) 'doTypeCheck'
 			let expectedCategory = convertCastCategory(project, t: callResultType)
 			let actualCategory = convertCastCategory(project, t: fallbackType)
 			// Allow numeric coercions: int literals coerce to byte-sized named types (e.g. ExitCode).

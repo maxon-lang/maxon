@@ -6134,8 +6134,8 @@ public partial class ARM64CodeEmitter {
     EmitCbz(ARM64Register.X0, "__pcc_null");
 
     // Defensive cleanup — these slots are normally zeroed by drain_both / read_*.
-    System.Action closeFd = () => EmitCallImport("close");
-    System.Action freeBuffer = () => EmitBranchLink("mm_free");
+    void closeFd() => EmitCallImport("close");
+    void freeBuffer() => EmitBranchLink("mm_free");
 
     EmitCallOnCaptureFieldIfNonZero(8, "__pcc_skip_close_out", closeFd);
     EmitCallOnCaptureFieldIfNonZero(16, "__pcc_skip_close_err", closeFd);

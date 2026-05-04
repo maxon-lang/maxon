@@ -2913,8 +2913,8 @@ public partial class X86CodeEmitter {
     EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
 
     // Defensive cleanup — these slots are normally zeroed by drain_both / read_*.
-    System.Action closeHandle = () => EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    System.Action freeBuffer = () => { EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0); };
+    void closeHandle() => EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    void freeBuffer() { EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0); }
 
     EmitCallOnCaptureFieldIfNonZero(0x08, "rt_pcc_skip_close_out", closeHandle);
     EmitCallOnCaptureFieldIfNonZero(0x10, "rt_pcc_skip_close_err", closeHandle);
@@ -7955,10 +7955,10 @@ public partial class X86CodeEmitter {
   // NTSTATUS exception codes. Spelled as `0xC0000005L` (not `(int)0xC0000005`) so
   // EmitMovRegImm picks the zero-extending MOV r32 form — the OS-loaded code is also
   // a zero-extended DWORD, so equality compares both sides bit-identically.
-  private const long ExceptionCodeAccessViolation   = 0xC0000005L;
-  private const long ExceptionCodeIntDivideByZero   = 0xC0000094L;
-  private const long ExceptionCodeIntOverflow       = 0xC0000095L;
-  private const long ExceptionCodeStackOverflow     = 0xC00000FDL;
+  private const long ExceptionCodeAccessViolation = 0xC0000005L;
+  private const long ExceptionCodeIntDivideByZero = 0xC0000094L;
+  private const long ExceptionCodeIntOverflow = 0xC0000095L;
+  private const long ExceptionCodeStackOverflow = 0xC00000FDL;
 
   // VEH return values.
   private const int VehContinueSearch = 0;
@@ -8024,8 +8024,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRip);
-    EmitMovRegIndirectMem(X86Register.R8,  X86Register.Rax, ContextOffRsp);
-    EmitMovRegIndirectMem(X86Register.R9,  X86Register.Rax, ContextOffRbp);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, ContextOffRsp);
+    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rax, ContextOffRbp);
 
     EmitCallRuntimeLabel(sharedHandlerLabel);
     // RAX = sentinel (0 = recover, FaultCodeDontRecover = chain). Fall through.
@@ -8041,7 +8041,7 @@ public partial class X86CodeEmitter {
     EmitLoadCurrentGtInline(X86Register.R11);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffFaultRedirectRip);
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.R11, GtOffFaultRedirectRsp);
-    EmitMovRegIndirectMem(X86Register.R8,  X86Register.R11, GtOffFaultRedirectFp);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.R11, GtOffFaultRedirectFp);
 
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
