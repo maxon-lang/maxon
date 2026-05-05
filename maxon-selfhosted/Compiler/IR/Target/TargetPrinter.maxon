@@ -80,24 +80,34 @@ end 'arm64OpIdxToString'
 
 // Runtime/stdlib/internal functions excluded from spec IR output so the
 // captured fragments focus on user code, not the runtime support functions.
+// Convention: `__` prefix marks compiler internals (slab allocator,
+// managed-memory builtins, layout/witness/destruct helpers). Names
+// synthesized FROM user code (lifted closures) use the `_$` prefix instead
+// — `$` is rejected by the lexer so user identifiers can't collide — and
+// remain visible in spec IR because the user wrote the originating
+// expression. `mrt_` / `maxon_` / `mm_` / `stdlib.` cover the remaining
+// runtime/stdlib namespaces that don't use the `__` prefix.
 export function skipFunction(name String) returns bool
-	if name.startsWith("mrt_") 'mrtPrefix'
-		return true
-	end 'mrtPrefix'
-	if name.startsWith("__destruct_") 'destructPrefix'
-		return true
-	end 'destructPrefix'
-	if name.startsWith("maxon_") 'maxonPrefix'
-		return true
-	end 'maxonPrefix'
-	if name.startsWith("mm_") 'mmPrefix'
-		return true
-	end 'mmPrefix'
-	if name.startsWith("stdlib.") 'stdlibPrefix'
-		return true
-	end 'stdlibPrefix'
+	for prefix in runtimePrefixes() 'eachPrefix'
+		if name.startsWith(prefix) 'matched'
+			return true
+		end 'matched'
+	end 'eachPrefix'
 	return false
 end 'skipFunction'
+
+// Single source of truth for the runtime/stdlib name prefixes hidden from
+// spec IR snapshots. Update this list when a new compiler-internal helper
+// family lands in `runtime.std` or the stdlib.
+function runtimePrefixes() returns StringArray
+	var prefixes = StringArray.create()
+	prefixes.push("__")
+	prefixes.push("mrt_")
+	prefixes.push("maxon_")
+	prefixes.push("mm_")
+	prefixes.push("stdlib.")
+	return prefixes
+end 'runtimePrefixes'
 
 // Name of the register the n-th parameter lands in, for pretty-printing
 // function signatures in the spec IR output.

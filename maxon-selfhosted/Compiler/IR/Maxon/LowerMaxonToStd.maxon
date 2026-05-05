@@ -666,14 +666,12 @@ function mmParamTypes3(first MaxonType, second MaxonType, third MaxonType) retur
 end 'mmParamTypes3'
 
 // Stage E (closures): predicate distinguishing parser-lifted closure
-// bodies (`__closure_N`) from ordinary user functions. The parser uses a
-// fixed prefix when minting closure names via `Project.nextClosureId`,
-// and only those functions can carry a synthetic `__env` parameter. Free
-// functions and methods declared by the user can never start with `__`
-// (`checkReservedDeclName` rejects them at parse time), so the prefix
-// match is safe.
+// bodies (`_$closure_N`) from ordinary user functions. The parser uses a
+// fixed prefix when minting closure names via `Project.nextClosureId`.
+// `$` is rejected by the Maxon lexer so user code can never declare a
+// function named `_$closure_N`; the prefix match is unambiguous.
 function isLiftedClosureName(name String) returns bool
-	return name.startsWith("__closure_")
+	return name.startsWith("_$closure_")
 end 'isLiftedClosureName'
 
 // True when the given Maxon return type lowers to a floating-point Std
@@ -1132,7 +1130,7 @@ type MaxonToStdLowering
 			// Stage E (closures): a lifted closure's last param is the
 			// hidden `__env` pointer. Stamp it here so `closureEnvLoad`
 			// ops in the body can recover it without re-deriving from
-			// the function's name. Only flips for `__closure_*` lifted
+			// the function's name. Only flips for `_$closure_*` lifted
 			// functions whose maxonParamTypes was extended in
 			// `parseClosure` — non-closure functions reach here with an
 			// unmodified param list and `liftedEnvValueId` stays at 0.

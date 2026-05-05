@@ -68,8 +68,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private int _blockCounter;
   // Stdlib and user closures use separate label namespaces so that the cached
   // stdlib's lifted closure functions never collide with user-code closures
-  // whose counter resets each compile. A user `__closure_0` and a stdlib
-  // `__closure_0` would otherwise both be added to the same module under the
+  // whose counter resets each compile. A user `_$closure_0` and a stdlib
+  // `_$closure_0` would otherwise both be added to the same module under the
   // same name, and only one wins in the function table.
   [ThreadStatic] private static int _closureCounter;
   [ThreadStatic] private static int _stdlibClosureCounter;
@@ -18519,8 +18519,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Determine return type from expression (we'll infer it after parsing)
     // Create a unique name for the closure
     var closureName = _isStdlib
-      ? $"__stdlib_closure_{_stdlibClosureCounter++}"
-      : $"__closure_{_closureCounter++}";
+      ? $"_$stdlib_closure_{_stdlibClosureCounter++}"
+      : $"_$closure_{_closureCounter++}";
 
     // Save current parsing state
     var savedVars = _variables.SaveAll();
