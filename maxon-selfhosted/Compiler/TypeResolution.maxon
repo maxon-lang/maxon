@@ -2891,7 +2891,75 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 			end 'extract'
 		end 'isCmp'
 	end 'validateOps'
+
+	// Sentinel-leak check: every call's substituted paramTypes vector must
+	// be fully resolved by here (no `MaxonType.unresolved` left over).
+	// `unresolved` is the polymorphic-slot placeholder used by builtin
+	// signatures (e.g. `__ManagedMemory.set/get/...`'s Element axis); a
+	// concrete instantiation (`Array with Integer`) should have substituted
+	// every such slot before lowering ever runs. A leak here points at a
+	// resolver gap — turn it into an explicit compile error so lowering
+	// doesn't either silently skip the type-check (`coerceArgToParam`'s
+	// unresolved-passthrough) or trip a generic-instance panic later.
+	validateNoUnresolvedAfterTypeResolution(project, module: module, filePath: filePath)
 end 'runTypeResolution'
+
+// Walk every call op's substituted paramTypes and surface a leak diagnostic
+// if any slot still names `MaxonType.unresolved`. Keys off
+// `project.callParamTypes` so methodCall / call / tryCall share one walk;
+// ops without an entry never reach lowering's slot loop. The diagnostic uses
+// the call op's own SourceRange (recoverable for the three call shapes;
+// other ops aren't in callParamTypes so the partial extraction is safe).
+function validateNoUnresolvedAfterTypeResolution(project Project, module MaxonModule, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateNoUnresolvedAfterTypeResolution: funcIdx OOB")
+		let readerPath = readerPathOrFallback(func, fallback: filePath)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateNoUnresolvedAfterTypeResolution: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let paramTypes = try project.callParamTypes.get(opIdx) otherwise continue
+				let op = try module.ops.get(opIdx) otherwise panic("validateNoUnresolvedAfterTypeResolution: opIdx OOB")
+				let calleeName = callOpDisplayName(project, opIdx: opIdx, op: op)
+				let opRange = callOpRange(op)
+				for slot in 0 upto paramTypes.count() 'eachSlot'
+					let pt = try paramTypes.get(slot) otherwise panic("validateNoUnresolvedAfterTypeResolution: paramTypes.get OOB at {slot}")
+					if isUnresolvedType(pt) 'leaked'
+						reportCompileError(project, code: ErrorCode.semanticTypeResolutionLeak, message: "TypeResolution leak: param slot {slot} of call '{calleeName}' remained MaxonType.unresolved — substitution failed to fill a polymorphic slot", line: opRange.line, column: opRange.column, filePath: readerPath)
+					end 'leaked'
+				end 'eachSlot'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateNoUnresolvedAfterTypeResolution'
+
+// Returns the callee's qualified name (preferring the resolved entry from
+// TypeResolution; falling back to the parser-stamped bytes when none was
+// recorded). Non-call ops never reach this helper (the caller filters by
+// `callParamTypes` membership), so the dispatch list is exhaustive enough
+// — the `default` branch is a hard panic so an unexpected op shape
+// surfaces as a compiler bug, not silent fallback.
+function callOpDisplayName(project Project, opIdx OpIndex, op MaxonOp) returns String
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise ""
+	if not resolved.isEmpty() 'haveResolved'
+		return resolved
+	end 'haveResolved'
+	return match op 'pick'
+		call(_, callee, _, _, _, _, _, _) gives String.from(callee)
+		tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
+		methodCall(_, _, methodName, _, _, _, _, _) gives String.from(methodName)
+		default panic("callOpDisplayName: callParamTypes carries non-call op — invariant violation")
+	end 'pick'
+end 'callOpDisplayName'
+
+// Returns the SourceRange off any of the three call-shaped ops.
+function callOpRange(op MaxonOp) returns SourceRange
+	return match op 'pick'
+		call(_, _, _, _, _, _, _, range) gives range
+		tryCall(_, _, _, _, _, _, _, _, range) gives range
+		methodCall(_, _, _, _, _, _, _, range) gives range
+		default panic("callOpRange: callParamTypes carries non-call op — invariant violation")
+	end 'pick'
+end 'callOpRange'
 
 // Anchor visibility checks at the function's declaring file. Synthesized
 // functions (no parser-stamped source path) fall back to the project's

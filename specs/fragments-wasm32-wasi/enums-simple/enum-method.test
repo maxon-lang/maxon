@@ -1370,37 +1370,49 @@ module {
     mir.store %1302, %1293, 32
     mir.ret %1293
   }
-  func @Direction.isNorth(local0: u8) -> i1 {
+  func @__layout_word_load(local0: i64) -> i64 {
   entry:
-    %12 = mir.param local0 : u8
-    %2 = mir.mov_imm 0 : i64
-    %3 = mir.mov_imm 0 : i64
-    %4 = mir.cmp eq, %12, %3
-    mir.cond_br %4 [then: check_1.case0(), else: check_1.next0()]
-  check_1.merge:
-    mir.ret %11
-  check_1.case0:
-    %7 = mir.mov_imm 1 : i64
-    mir.br check_1.merge(%7)
-  check_1.next0:
-    %8 = mir.mov_imm 1 : i64
-    %9 = mir.cmp eq, %12, %8
-    mir.cond_br %9 [then: check_1.case1(), else: check_1.merge(%2)]
-  check_1.case1:
-    %10 = mir.mov_imm 0 : i64
-    mir.br check_1.merge(%10)
+    %1303 = mir.param local0 : i64
+    %1304 = mir.load %1303, 0
+    mir.ret %1304
+  }
+  func @__layout_word_store(local0: i64, local1: i64) {
+  entry:
+    %1305 = mir.param local0 : i64
+    %1306 = mir.param local1 : i64
+    mir.store %1306, %1305, 0
+    %1307 = mir.mov_imm 0 : i64
+    mir.ret %1307
   }
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %2 = mir.call @Direction.isNorth(%0)
-    mir.cond_br %2 [then: test_1(), else: test_1.after()]
+    mir.br inlined_Direction.isNorth_0()
   test_1:
     %3 = mir.mov_imm 1 : i64
     mir.ret %3
   test_1.after:
     %4 = mir.mov_imm 0 : i64
     mir.ret %4
+  inlined_Direction.isNorth_0:
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp eq, %0, %6
+    mir.cond_br %7 [then: inlined_Direction.isNorth_2(), else: inlined_Direction.isNorth_3()]
+  inlined_Direction.isNorth_1:
+    mir.br inline_cont_main_0(%11)
+  inlined_Direction.isNorth_2:
+    %8 = mir.mov_imm 1 : i64
+    mir.br inlined_Direction.isNorth_1(%8)
+  inlined_Direction.isNorth_3:
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.cmp eq, %0, %9
+    mir.cond_br %10 [then: inlined_Direction.isNorth_4(), else: inlined_Direction.isNorth_1(%5)]
+  inlined_Direction.isNorth_4:
+    %11 = mir.mov_imm 0 : i64
+    mir.br inlined_Direction.isNorth_1(%11)
+  inline_cont_main_0:
+    mir.cond_br %12 [then: test_1(), else: test_1.after()]
   }
 }
 ---

@@ -2457,20 +2457,21 @@ export type Parser
 		let addedConformances = try parseImplementsClause()
 
 		// Optional `where T is Trait1 and Trait2 [, T2 is Trait3 ...]`
-		// clause. Each pair is also recorded against
-		// `project.typeParameters` so later passes can resolve constraint
-		// sets uniformly with type-decl `where` clauses.
+		// clause for a *conditional* extension. Unlike a type declaration's
+		// own where-clause, an extension's constraints don't restrict the
+		// base type itself — `Array with Integer` is still well-formed when
+		// `Integer` isn't `Equatable`; only the methods added by
+		// `extension Array where Element is Equatable` become unavailable.
+		// So we must NOT call `project.typeParameters.addConstraint` here:
+		// doing so would make `validateConstraintsFor` fire E3017 on every
+		// `Array with X` instantiation. The constraints stay attached to the
+		// UnresolvedExtension and drive conditional dispatch at lowering.
 		var whereClauses = try parseWhereClause()
-		// Phase 11.1 (step 5): stamp the target-type name onto every where-clause
-		// entry so substitution-time constraint checking can resolve `wc.paramName`
-		// through the same id space the parser used when interning constraints.
-		for i in 0 upto whereClauses.count() 'recordConstraint'
+		for i in 0 upto whereClauses.count() 'stampDeclaringType'
 			let wc = try whereClauses.get(i) otherwise panic("parseExtension: whereClauses.get OOB at {i}")
-			let pid = project.typeParameters.intern(targetTypeName, paramName: wc.paramName)
-			project.typeParameters.addConstraint(pid, traitName: wc.requiredTraitName)
 			let scoped = WhereClause.createScoped(wc.paramName, requiredTraitName: wc.requiredTraitName, declaringTypeName: targetTypeName)
 			try whereClauses.set(i, value: scoped) otherwise panic("parseExtension: whereClauses.set OOB at {i}")
-		end 'recordConstraint'
+		end 'stampDeclaringType'
 
 		try skipNewlines()
 

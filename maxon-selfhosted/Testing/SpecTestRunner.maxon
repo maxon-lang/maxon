@@ -38,7 +38,7 @@ let whitelist = ["basics",
 	"namespaces",
 	"stdlib-basic",
 	"stdlib-autodiscovery",
-	// "enums-simple", — disabled: Phase 11.x in-progress failures
+	"enums-simple",
 	"match-simple",
 	"module-keyword",
 	"lexer-parser-robustness",
@@ -51,7 +51,11 @@ let whitelist = ["basics",
 	//             ASCII-byte char literals. Remaining 7 need string
 	//             interpolation on Character (1) and the Range stdlib type
 	//             with iterator protocol (6, Phase 11).
-	// "arrays",
+	//"arrays", // 39/46. Remaining: 4 top-level array literal initializers
+	// (need const-folding of [1,2,3] at parse time), 2 String
+	// array tests (Phase 7 String), and 1 stderr-mismatch where
+	// E3062 should fire before E2010 on an unused-typealias top-
+	// level let.
 	// "export-keyword",
 	// "static-variables",
 	// "vector",
@@ -1600,28 +1604,103 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 		end 'hasFail'
 	end 'parseLines'
 
+	// A worker that crashed mid-batch leaves its remaining specs unreported.
+	// Re-run each missing test in its own subprocess so a single panicking
+	// test only blames itself; everything else in the same batch still gets
+	// a real pass/fail. The retry walks every pending spec → every test in
+	// that spec → one subprocess per test.
 	for pendingName in pending 'handleMissing'
 		let pn = trimWhitespace(pendingName)
 		if pn.isEmpty() 'emptyName'
 			continue
 		end 'emptyName'
-		var crashedCount = 0 as TestCount
-		for unit in fallbackUnits 'findCount'
+		var crashedTests = SpecTestArray.create()
+		for unit in fallbackUnits 'findUnit'
 			if unit.specName == pn 'matched'
-				crashedCount = unit.nonBatchable.count() as TestCount
+				crashedTests = cloneSpecTests(unit.nonBatchable)
 				break
 			end 'matched'
-		end 'findCount'
-		if crashedCount == 0 'noFallback'
+		end 'findUnit'
+		if crashedTests.count() == 0 'noFallback'
 			continue
 		end 'noFallback'
-		totalFailed = totalFailed + crashedCount
-		logError(LogCategory.testing, message: () gives "[FAIL] {pn} ({crashedCount} fallback test(s)): worker crashed (panic, timeout, or non-zero exit)")
-		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: pn)
+		let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: crashedTests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: "fallback")
+		totalPassed = totalPassed + rp
+		totalFailed = totalFailed + rf
 	end 'handleMissing'
 
 	return (totalPassed, totalFailed)
 end 'runFallbackPhase'
+
+// Retry crashed tests one-per-subprocess, accumulate the results into the
+// caller's running totals, and log the [FAIL] lines (per-test crashes plus
+// regular failures). `phaseLabel` distinguishes "fallback" vs the singles
+// phase label in log output. Returns (added passed, added failed) so the
+// caller can keep its own running totals in sync.
+function retryAndAccountCrashedSpec(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray, phaseLabel String) returns (TestCount, TestCount)
+	let (rp, rf, rfMissing) = retryFallbackTestsIndividually(specName, tests: tests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads)
+	let specTotal = rp + rf
+	if rf > 0 'someFailed'
+		logError(LogCategory.testing, message: () gives "[FAIL] {specName} {phaseLabel} ({rp}/{specTotal})")
+		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: specName)
+	end 'someFailed'
+	if rfMissing > 0 'someMissing'
+		logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({rfMissing} {phaseLabel} test(s) crashed individually too)")
+	end 'someMissing'
+	return (rp, rf)
+end 'retryAndAccountCrashedSpec'
+
+// Run each test in `tests` in a fresh fallback-worker subprocess. A panic in
+// one test only kills its own subprocess, leaving the others' results intact.
+// Returns (passed, failed, stillCrashed) — stillCrashed counts subprocesses
+// that produced no result line (worker died before reporting).
+function retryFallbackTestsIndividually(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray) returns (TestCount, TestCount, TestCount)
+	var passed = 0 as TestCount
+	var failed = 0 as TestCount
+	var crashed = 0 as TestCount
+	for t in tests 'eachTest'
+		let groupsArg = "{specName}:{t.name}"
+		let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: "", verbose: verbose)
+		let pr = Process.captureOutput(cmd, timeoutMs: 0)
+		if not pr.stderr.isEmpty() 'hasStderr'
+			printError(pr.stderr)
+		end 'hasStderr'
+		var sawResult = false
+		let lines = pr.stdout.split("\n")
+		for line in lines 'parseLines'
+			let trimmedLine = trimWhitespace(line)
+			if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
+				let payload = parseSinglesFailLine(trimmedLine, specName: specName)
+				if not payload.isEmpty() or trimmedLine == "{workerSingleFailMarker}{specName}:" 'isPnMatch'
+					failOwners.push(specName)
+					failPayloads.push(payload)
+				end 'isPnMatch'
+				continue
+			end 'isFail'
+			if not trimmedLine.startsWith(workerSingleResultMarker) 'notResult'
+				continue
+			end 'notResult'
+			let result = parseSinglesResultLine(trimmedLine)
+			if not result.valid 'invalidResult'
+				continue
+			end 'invalidResult'
+			totalCompileMs = totalCompileMs + result.compileMs
+			passed = passed + result.passed
+			failed = failed + result.failed
+			sawResult = true
+		end 'parseLines'
+		if not sawResult 'workerCrashed'
+			// One subprocess per test, so a missing result means *this* test's
+			// compile crashed. Charge the failure to it specifically rather
+			// than re-blaming the whole spec.
+			failed = failed + (1 as TestCount)
+			crashed = crashed + (1 as TestCount)
+			failOwners.push(specName)
+			failPayloads.push("  {specName}/{t.name}: worker crashed (panic, timeout, or non-zero exit)")
+		end 'workerCrashed'
+	end 'eachTest'
+	return (passed, failed, crashed)
+end 'retryFallbackTestsIndividually'
 
 // Aggregated outcome for one spec collected from a singles worker's stdout.
 type SinglesWorkerResult
@@ -1833,23 +1912,31 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 		end 'parseLines'
 
 		// Specs the worker never reported a RESULT for — the worker crashed
-		// (panic, timeout, or non-zero exit). Count every non-batchable test
-		// (plus the spec's missing-lowering failures) as failed; any failure
-		// lines we collected for this spec before the crash are still printed
-		// so the user can see partial diagnostics.
+		// (panic, timeout, or non-zero exit). For each, re-run every test in
+		// its own subprocess so a single panicking test doesn't blame its
+		// peers. The missing-lowering tally is structurally inert (it counts
+		// tests excluded by the rewriter, not crashed compiles), so it folds
+		// into `totalFailed` directly.
 		for pendingName in pendingSpecs 'handleMissing'
 			let pn = trimWhitespace(pendingName)
 			if pn.isEmpty() 'emptyName'
 				continue
 			end 'emptyName'
 			let unit = findUnitByName(units, specName: pn)
-			let crashedCount = (unit.nonBatchable.count() as TestCount) + unit.missingLoweringCount
+			let nonBatchableCount = unit.nonBatchable.count() as TestCount
+			let crashedCount = nonBatchableCount + unit.missingLoweringCount
 			if crashedCount == 0 'noSingles'
 				continue
 			end 'noSingles'
-			totalFailed = totalFailed + crashedCount
-			logError(LogCategory.testing, message: () gives "[FAIL] {pn} ({crashedCount} {phaseLabel} test(s)): worker crashed (panic, timeout, or non-zero exit)")
-			logSpecFailuresFor(failOwners, payloads: failPayloads, specName: pn)
+			totalFailed = totalFailed + unit.missingLoweringCount
+			if nonBatchableCount > 0 'hasNonBatchable'
+				let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: unit.nonBatchable, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: phaseLabel)
+				totalPassed = totalPassed + rp
+				totalFailed = totalFailed + rf
+			end 'hasNonBatchable' else 'onlyMissing'
+				logError(LogCategory.testing, message: () gives "[FAIL] {pn} ({crashedCount} {phaseLabel} test(s)): worker crashed (panic, timeout, or non-zero exit)")
+				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: pn)
+			end 'onlyMissing'
 		end 'handleMissing'
 	end 'collect'
 
@@ -2018,6 +2105,26 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 
 	return SpecWorkUnit.create(specName, nonBatchable: nonBatchable, batchable: batchable, missingLoweringFailures: missingLoweringFailures, missingLoweringCount: missingLoweringCount)
 end 'partitionSpecTests'
+
+// Build a fallback-only SpecWorkUnit: every supplied test is filed under
+// `nonBatchable` (so the per-fragment retry loop picks them up), batchable
+// is empty, and no missing-lowering tally is carried. Used to convert a
+// crashed batch into a fallback unit whose individual tests get retried
+// in their own subprocesses.
+function makeFallbackOnlyUnit(specName String, tests SpecTestArray) returns SpecWorkUnit
+	return SpecWorkUnit.create(specName, nonBatchable: tests, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
+end 'makeFallbackOnlyUnit'
+
+// Copy `src` into a fresh SpecTestArray. Used at the boundary where a worker
+// crash hands a unit's test list to the per-test retry loop and we need a
+// freshly-owned vector.
+function cloneSpecTests(src SpecTestArray) returns SpecTestArray
+	var dest = SpecTestArray.create()
+	for t in src 'eachTest'
+		dest.push(t)
+	end 'eachTest'
+	return dest
+end 'cloneSpecTests'
 
 // Look up tests in `batchable` by name and append matches to `dest`. Used to
 // route tests the batch rewriter rejected (or that a batch-wide failure forced
@@ -2273,30 +2380,26 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 				var fallbackTests = SpecTestArray.create()
 				appendSkippedToFallback(fallbackTests, batchable: unit.batchable, skippedNames: result.skippedNames)
 				if fallbackTests.count() > 0 'hasFallback'
-					let fallbackUnit = SpecWorkUnit.create(result.specName, nonBatchable: fallbackTests, batchable: SpecTestArray.create(), missingLoweringFailures: TextLineArray.create(), missingLoweringCount: 0 as TestCount)
-					fallbackUnits.push(fallbackUnit)
+					fallbackUnits.push(makeFallbackOnlyUnit(result.specName, tests: fallbackTests))
 				end 'hasFallback'
 			end 'hasSkipped'
 		end 'parseResultLines'
 
 		// Any spec still pending produced no result — worker crashed (panic,
-		// timeout, or non-zero exit). Count every batchable test in that spec
-		// as failed; do NOT retry in-process, because a deterministic panic
-		// would then take down the parent runner and lose the totals line.
-		// Worker stderr was already forwarded above, so the panic message
-		// (if any) is visible to the user.
+		// timeout, or non-zero exit). Push every batchable test onto the
+		// fallback unit list so the Phase-5 fallback path (and its
+		// per-test retry-on-crash) gets a chance to identify the single
+		// offending test rather than blaming the whole spec.
 		for pendingName in pendingSpecs 'handleMissing'
 			let pn = trimWhitespace(pendingName)
 			if pn.isEmpty() 'emptyName'
 				continue
 			end 'emptyName'
 			let unit = findUnitByName(units, specName: pn)
-			let crashedCount = unit.batchable.count()
-			if crashedCount == 0 'noBatchable'
+			if unit.batchable.count() == 0 'noBatchable'
 				continue
 			end 'noBatchable'
-			totalFailed = totalFailed + crashedCount
-			logError(LogCategory.testing, message: () gives "[FAIL] {pn} ({crashedCount} batchable test(s)): worker crashed (panic, timeout, or non-zero exit)")
+			fallbackUnits.push(makeFallbackOnlyUnit(pn, tests: cloneSpecTests(unit.batchable)))
 		end 'handleMissing'
 	end 'collectWorkers'
 
