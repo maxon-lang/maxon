@@ -48,6 +48,7 @@ function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocation
 			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataVAddr + reloc.rdataOffset - ripAtReloc)
 			covdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: covdataVAddr + reloc.rdataOffset - ripAtReloc)
 			arm64Adr to covdataArm64Adr then break 'kind'
+			funcAbs64InRdata then break 'kind'
 		end 'kind'
 	end 'patch'
 end 'patchElfRdataRelocationsX86'
@@ -62,6 +63,7 @@ function patchElfRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocati
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: symdataVAddr)
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: dataVAddr + reloc.rdataOffset)
 			covdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: covdataVAddr + reloc.rdataOffset)
+			funcAbs64InRdata then break 'patchKind'
 		end 'patchKind'
 	end 'patch'
 end 'patchElfRdataRelocationsArm64'
@@ -162,6 +164,14 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		arm64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr, dataVAddr: dataVAddr, covdataVAddr: covdataVAddr)
 		wasm32 then panic("ELF writer not used for WASM targets")
 	end 'patchRdata'
+
+	// Phase 11.2: bake absolute VAs of layout-descriptor copy/destroy
+	// thunks (and witness-table methods) into the on-disk rdata image.
+	// ELF mirrors PE's strategy: a static ET_EXEC at a fixed load address
+	// (ELF_LOAD_ADDR = 0x400000) with no dynamic linker involvement, so
+	// absolute VAs can be baked at write time. A future PIE/ET_DYN writer
+	// would need a `.rela.rdata` section so the loader can apply these.
+	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: textVAddr, debugSymbols: codeResult.debugSymbols)
 
 	var elf = ByteArray.create()
 	elf.reserve(totalFileSize)

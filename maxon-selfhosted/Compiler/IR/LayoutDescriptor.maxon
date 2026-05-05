@@ -1,0 +1,136 @@
+// Phase 11.2: per-instantiation layout descriptors.
+//
+// Every concrete `genericInstance(gid)` MaxonType the project mentions
+// gets one fixed-shape 56-byte blob in rdata under a stable mangled label
+// (`__layout_Array_Int`, `__layout_Pair_Int_String`, …). Phase 11.4's
+// generic body lowering emits constant-offset loads against this layout —
+// so the byte shape is part of the ABI between BuildLayoutDescriptors
+// (writer) and LowerMaxonToStd's `descriptorField` op (reader). Changing
+// any field offset requires updating both ends in lockstep.
+//
+// Byte layout (size 56 bytes, 8-byte aligned):
+//   +0   size            u64
+//   +8   alignment       u64
+//   +16  elementSize     u64    (0 for non-container types)
+//   +24  flags           u64    (bit 0 = hasHeapRefs)
+//   +32  copyFunc        u64    (zero on disk; patched by funcAbs64InRdata)
+//   +40  destroyFunc     u64    (zero on disk; patched by funcAbs64InRdata)
+//   +48  fieldOffsetsPtr u64    (rdata-rel ptr; 0 if no struct fields)
+//
+// Layout-descriptor identity is keyed by the GenericInstanceId only — a
+// type that conditionally implements `Hashable where Element: Hashable`
+// has the same physical layout regardless of the conformance, so the
+// descriptor is shared across all conformance variations of the same
+// `(baseId, args)`.
+
+export typealias LayoutDescriptorByteSize = int(0 to u64.max)
+
+let LAYOUT_DESCRIPTOR_BYTE_SIZE = 56
+let LAYOUT_FLAG_HAS_HEAP_REFS = 1
+
+let LAYOUT_OFFSET_SIZE = 0
+let LAYOUT_OFFSET_ALIGNMENT = 8
+let LAYOUT_OFFSET_ELEMENT_SIZE = 16
+let LAYOUT_OFFSET_FLAGS = 24
+export let LAYOUT_OFFSET_COPY_FUNC = 32
+export let LAYOUT_OFFSET_DESTROY_FUNC = 40
+let LAYOUT_OFFSET_FIELD_OFFSETS_PTR = 48
+
+export type LayoutDescriptor
+	export var size MachineWord
+	export var alignment MachineWord
+	export var elementSize MachineWord
+	export var hasHeapRefs bool
+	export var copyFuncName String
+	export var destroyFuncName String
+	// Rdata label of an optional `__layout_fields_<mangled>` blob carrying
+	// per-field byte offsets. Empty string when the type has no struct
+	// fields (primitives, arrays, function-shaped containers).
+	export var fieldOffsetsPtr String
+
+	export static function create(size MachineWord, alignment MachineWord, elementSize MachineWord, hasHeapRefs bool, copyFuncName String, destroyFuncName String, fieldOffsetsPtr String) returns LayoutDescriptor
+		return Self{
+			size: size,
+			alignment: alignment,
+			elementSize: elementSize,
+			hasHeapRefs: hasHeapRefs,
+			copyFuncName: copyFuncName,
+			destroyFuncName: destroyFuncName,
+			fieldOffsetsPtr: fieldOffsetsPtr
+		}
+	end 'create'
+end 'LayoutDescriptor'
+
+// Encode a LayoutDescriptor into its fixed 56-byte rdata image. The two
+// function-pointer slots (+32 copyFunc, +40 destroyFunc) and the optional
+// fieldOffsetsPtr (+48) are zero on disk; the writer patches them at link
+// time via funcAbs64InRdata / ripRelDisp32 relocations.
+export function encodeLayoutDescriptor(d LayoutDescriptor) returns ByteArray
+	var buf = ByteArray.create()
+	buf.reserve(LAYOUT_DESCRIPTOR_BYTE_SIZE)
+	writeQword(buf, value: d.size)
+	writeQword(buf, value: d.alignment)
+	writeQword(buf, value: d.elementSize)
+	var flags = 0 as MachineWord
+	if d.hasHeapRefs 'setRef'
+		flags = flags or LAYOUT_FLAG_HAS_HEAP_REFS
+	end 'setRef'
+	writeQword(buf, value: flags)
+	writeQword(buf, value: 0)
+	writeQword(buf, value: 0)
+	writeQword(buf, value: 0)
+	return buf
+end 'encodeLayoutDescriptor'
+
+// Phase 11.2 registry: per-`GenericInstanceId` mangled label, idempotent.
+// Parallel arrays mirror Project's other Phase 11 registries
+// (TypeParamRegistry, GenericInstanceRegistry, ConformanceRegistry); a
+// linear scan suffices because instance counts per project are small.
+export typealias GenericInstanceIdArray = Array with GenericInstanceId
+
+export type LayoutDescriptorRegistry
+	export var instanceIds GenericInstanceIdArray
+	export var labels StringArray
+
+	export static function create() returns LayoutDescriptorRegistry
+		return Self{instanceIds: GenericInstanceIdArray.create(), labels: StringArray.create()}
+	end 'create'
+
+	export function count() returns GenericInstanceId
+		return instanceIds.count()
+	end 'count'
+
+	export function contains(gid GenericInstanceId) returns bool
+		for i in 0 upto instanceIds.count() 'scan'
+			let existing = try instanceIds.get(i) otherwise panic("LayoutDescriptorRegistry.contains: instanceIds.get OOB at {i}")
+			if existing == gid 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'contains'
+
+	// Idempotent: a second call with the same gid returns without modifying
+	// state. Callers that want to know whether the entry was fresh should
+	// gate on `contains` first.
+	export function intern(gid GenericInstanceId, label String)
+		for i in 0 upto instanceIds.count() 'scan'
+			let existing = try instanceIds.get(i) otherwise panic("LayoutDescriptorRegistry.intern: instanceIds.get OOB at {i}")
+			if existing == gid 'hit'
+				return
+			end 'hit'
+		end 'scan'
+		instanceIds.push(gid)
+		labels.push(label)
+	end 'intern'
+
+	export function labelFor(gid GenericInstanceId) returns String
+		for i in 0 upto instanceIds.count() 'scan'
+			let existing = try instanceIds.get(i) otherwise panic("LayoutDescriptorRegistry.labelFor: instanceIds.get OOB at {i}")
+			if existing == gid 'hit'
+				return try labels.get(i) otherwise panic("LayoutDescriptorRegistry.labelFor: labels desync at {i}")
+			end 'hit'
+		end 'scan'
+		panic("LayoutDescriptorRegistry.labelFor: no entry for gid {gid}")
+	end 'labelFor'
+end 'LayoutDescriptorRegistry'

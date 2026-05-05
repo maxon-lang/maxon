@@ -35,6 +35,12 @@ export function resetCounters(project Project)
 	project.db.allMidMisses = 0
 	project.db.codeHits = 0
 	project.db.codeMisses = 0
+	project.db.midPerFuncHits = 0
+	project.db.midPerFuncMisses = 0
+	project.db.mirPerFuncHits = 0
+	project.db.mirPerFuncMisses = 0
+	project.db.codePerFuncHits = 0
+	project.db.codePerFuncMisses = 0
 end 'resetCounters'
 
 // --- Dependency tracking ---
@@ -86,6 +92,9 @@ function queryKeyString(key QueryKey) returns String
 		allModule gives "am"
 		allMid gives "ai"
 		codeResult gives "cr"
+		midForFunction(name) gives "mid:{name}"
+		mirForFunction(name) gives "mir:{name}"
+		codeForFunction(name) gives "cf:{name}"
 	end 'toStr'
 end 'queryKeyString'
 
@@ -130,8 +139,45 @@ function isDependencyValid(project Project, dep QueryKey, since Revision) return
 		allModule gives isAllModuleCacheValidDeep(project)
 		allMid gives isAllMidCacheValidDeep(project)
 		codeResult gives isCodeCacheValidDeep(project)
+		midForFunction(name) gives isMidPerFuncCacheValid(project, funcName: name)
+		mirForFunction(name) gives isMirPerFuncCacheValid(project, funcName: name)
+		codeForFunction(name) gives isCodePerFuncCacheValid(project, funcName: name)
 	end 'matchDep'
 end 'isDependencyValid'
+
+// Phase 11.5: per-function cache validity. The cache key is
+// `(funcName, contentHash)` — when the live function's contentHash matches
+// the memo's stored `keyHash`, the memo is reusable. We can't validate
+// against `since` directly because per-function caches are keyed on a
+// stable hash, not on the global revision counter; the revision check
+// still gates the upstream allMid cache that produces the function in the
+// first place.
+function isMidPerFuncCacheValid(project Project, funcName String) returns bool
+	if let memo = try project.db.midPerFunc.get(funcName) 'has'
+		if memo.verifiedAt >= project.db.currentRevision 'recent'
+			return true
+		end 'recent'
+	end 'has'
+	return false
+end 'isMidPerFuncCacheValid'
+
+function isMirPerFuncCacheValid(project Project, funcName String) returns bool
+	if let memo = try project.db.mirPerFunc.get(funcName) 'has'
+		if memo.verifiedAt >= project.db.currentRevision 'recent'
+			return true
+		end 'recent'
+	end 'has'
+	return false
+end 'isMirPerFuncCacheValid'
+
+function isCodePerFuncCacheValid(project Project, funcName String) returns bool
+	if let memo = try project.db.codePerFunc.get(funcName) 'has'
+		if memo.verifiedAt >= project.db.currentRevision 'recent'
+			return true
+		end 'recent'
+	end 'has'
+	return false
+end 'isCodePerFuncCacheValid'
 
 function isTokensCacheValidDeep(project Project, path FilePath) returns bool
 	if let memo = try project.db.tokenCache.get(path) 'has'

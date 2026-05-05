@@ -119,6 +119,12 @@ export type Arm64Backend implements TargetBackend
 		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 		let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
+		// Phase 11.2: layout-descriptor / witness-table relocations live on
+		// `globalData.pendingRdataRelocs` — they originate from Maxon-level
+		// passes, not per-function emit, so they aren't in the local
+		// `rdataRelocs` accumulator. Concat now before the offset resolve
+		// so each one's `rdataOffset` gets filled in from the same map.
+		rdataRelocs.append(globalData.pendingRdataRelocs)
 		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
 		var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes, globalData: globalData)
@@ -701,7 +707,7 @@ export type Arm64Backend implements TargetBackend
 				argIdx = argIdx + 1
 				continue
 			end 'skipArg'
-			let paramType = try paramTypes.get(argIdx) otherwise panic("lowerCallArm64: param index {argIdx} out of bounds for callee '{callee}' (got {paramTypes.count()} param types) — callee not registered in allFunctions or stdlibFunctions")
+			let paramType = try paramTypes.get(argIdx) otherwise panic("ARM64 lowerCall: paramTypes too short for callee '{callee}' at argIdx={argIdx} (paramTypes.count={paramTypes.count()})")
 			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 				let fpReg = getArm64CallConvFp(fpIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))

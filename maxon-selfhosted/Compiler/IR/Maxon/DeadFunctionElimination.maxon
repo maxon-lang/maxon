@@ -22,9 +22,20 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 		funcMap.upsert(func.name, value: func)
 	end 'buildMap'
 
-	// Worklist with Set for O(1) dedup
+	// Worklist with Set for O(1) dedup. Phase 11.2/11.3 push thunk and
+	// witness-method names into `project.livenessRoots`; those callees are
+	// referenced only as static rdata payload (funcAbs64InRdata relocs into
+	// layout descriptors and witness tables), never as `call` ops, so the
+	// op-walking algorithm can't see them. Seeding from the registry keeps
+	// them alive without a special case for static-pointer references.
 	var worklist = ["main"]
 	var seen = StringSet from ["main"]
+	for root in project.livenessRoots 'seedRoots'
+		if not seen.contains(root) 'fresh'
+			seen.insert(element: root)
+			worklist.push(root)
+		end 'fresh'
+	end 'seedRoots'
 
 	var i = 0
 	while i < worklist.count() 'worklist'

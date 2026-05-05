@@ -25,6 +25,16 @@ export union PassKind
 	resolveTypes
 	semanticCheck
 	deadFunctionElimination
+	// Phase 11.2: emit per-instantiation layout descriptors + thunks
+	// (Maxon-level; runs after DFE has narrowed the live function set
+	// but before lowering kicks in so the synthesized stub functions go
+	// through the regular Std/MIR pipeline).
+	buildLayoutDescriptors
+	// Phase 11.3: emit per-conformance witness tables (Maxon-level; runs
+	// immediately after layout descriptors so both kinds of static rdata
+	// blobs are in place before lowerMaxonToStd needs to materialize a
+	// witness label at an interface-typed value construction site).
+	buildWitnessTables
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
@@ -35,6 +45,14 @@ export union PassKind
 	cse
 	licm
 	dce
+	// Phase 11.6: analysis-based inliner. Runs after dce so its size
+	// budget reads against post-dce op counts (which is what actually
+	// gets emitted). The full canonicalize+dce loop is re-run after the
+	// inliner so the descriptor-fold cascade inside newly-inlined bodies
+	// takes effect. dceFunctions runs at the very end of the Std-level
+	// pass list to drop functions whose only call sites were inlined.
+	inliner
+	dceFunctions
 	insertRangeChecks
 	lowerABI
 	instrumentCoverage
@@ -176,9 +194,11 @@ export type PassPipeline
 	function dispatch(pass PassKind)
 		match pass 'dispatch'
 			// Phase 2: Maxon-level passes
-			resolveTypes then runTypeResolution(project, module: maxonModule, filePath: sourcePath)
+			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath)
 			semanticCheck then runSemanticChecks(project, module: maxonModule)
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
+			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
+			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
 
 			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
 			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
@@ -189,10 +209,12 @@ export type PassPipeline
 			borrowCheck then stdModule = runBorrowCheck(project, module: stdModule)
 			injectDrops then stdModule = injectDrops(stdModule)
 			mem2reg then stdModule = promoteMem2Reg(stdModule)
-			canonicalize then stdModule = canonicalize(stdModule)
+			canonicalize then stdModule = canonicalize(stdModule, project: project)
 			cse then stdModule = eliminateCommonSubexpressions(stdModule)
 			licm then stdModule = hoistLoopInvariants(stdModule)
 			dce then stdModule = eliminateDeadCode(stdModule)
+			inliner then stdModule = inlineModule(stdModule, project: project)
+			dceFunctions then stdModule = eliminateDeadStdFunctions(stdModule, project: project)
 			insertRangeChecks then stdModule = insertRangeChecks(self, module: stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
 			lowerABI then stdModule = lowerABI(stdModule, target: target)
 			instrumentCoverage then stdModule = instrumentCoverage(stdModule, project: project)
@@ -249,6 +271,76 @@ export type PassPipeline
 	end 'renderPhaseModule'
 end 'PassPipeline'
 
+// Phase 11.5: combine the existing type-resolution pass with the
+// per-function content-hash stamp. Stamping after types resolve is the
+// earliest moment a function's signature is fully concrete; the query
+// layer needs that to seed `(funcName, contentHash)` cache keys.
+// Idempotent — re-stamping later passes' shape is safe.
+function runResolveTypesAndStamp(project Project, module MaxonModule, filePath FilePath)
+	runTypeResolution(project, module: module, filePath: filePath)
+	stampFunctionContentHashes(project, module: module)
+end 'runResolveTypesAndStamp'
+
+// Phase 11.5: classification of a pass for the per-function pipeline.
+//
+// `wholeModule` passes need to see every function at once (call-graph
+// walks, name-table population). They keep running through `run()` on
+// the merged module.
+//
+// `perFunction` passes are intra-function only — none reach into another
+// function's blocks/ops. They're eligible for `runForFunction`. The
+// current implementation lists them for documentation but `runForFunction`
+// itself defers to the whole-module pipeline; the per-function passes
+// will get their own entry points as 11.6's inliner forces a real
+// per-function dispatch path. Today's spine is correctness + caching
+// first; speed lands when the inliner needs it.
+//
+// `moduleFixup` runs only after every per-function pass has finished,
+// linking per-function code chunks back into the final `.text`.
+export enum PassClassification
+	wholeModule
+	perFunction
+	moduleFixup
+end 'PassClassification'
+
+// Map a PassKind to its 11.5 classification. Verified intra-function
+// today: lowerMaxonToStd, borrowCheck, injectDrops, mem2reg, canonicalize,
+// cse, licm, dce, insertRangeChecks, lowerABI, lowerStdToMir,
+// commuteForCoalescing, scheduleInstructions. Whole-module: resolveTypes,
+// semanticCheck, deadFunctionElimination, buildLayoutDescriptors,
+// buildWitnessTables, augmentWithRuntime. instrumentCoverage is whole-
+// module today because the coverage globals are registered up-front.
+export function classifyPass(pass PassKind) returns PassClassification
+	return match pass 'classify'
+		resolveTypes gives PassClassification.wholeModule
+		semanticCheck gives PassClassification.wholeModule
+		deadFunctionElimination gives PassClassification.wholeModule
+		buildLayoutDescriptors gives PassClassification.wholeModule
+		buildWitnessTables gives PassClassification.wholeModule
+		augmentWithRuntime gives PassClassification.wholeModule
+		instrumentCoverage gives PassClassification.wholeModule
+		lowerMaxonToStd gives PassClassification.perFunction
+		borrowCheck gives PassClassification.perFunction
+		injectDrops gives PassClassification.perFunction
+		mem2reg gives PassClassification.perFunction
+		canonicalize gives PassClassification.perFunction
+		cse gives PassClassification.perFunction
+		licm gives PassClassification.perFunction
+		dce gives PassClassification.perFunction
+		// Phase 11.6: the inliner is interprocedural by design — it
+		// rewrites callers using callee bodies. dceFunctions walks the
+		// whole-module reachability graph after the inliner. Both must
+		// run as whole-module passes.
+		inliner gives PassClassification.wholeModule
+		dceFunctions gives PassClassification.wholeModule
+		insertRangeChecks gives PassClassification.perFunction
+		lowerABI gives PassClassification.perFunction
+		lowerStdToMir gives PassClassification.perFunction
+		commuteForCoalescing gives PassClassification.perFunction
+		scheduleInstructions gives PassClassification.perFunction
+	end 'classify'
+end 'classifyPass'
+
 // Returns the mid-level pipeline (phases 2-4).
 // Runs the Maxon-phase passes, the Maxon→Std lowering, and the Std-phase
 // passes, ending with a fully-optimized StdModule in pipeline.stdModule.
@@ -266,6 +358,18 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// downstream passes can then rely on lookups succeeding.
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
+	// Phase 11.2: emit layout-descriptor blobs + stub thunks for every
+	// concrete generic instantiation. Must run BEFORE DFE so the synthesized
+	// thunks and the witness-method-impl names get pushed onto
+	// `project.livenessRoots` in time for DFE to keep them alive — DFE only
+	// walks `call` ops, so anything reachable solely via static rdata
+	// pointers (funcAbs64InRdata) needs its livenessRoots entry seeded
+	// before the elimination walk.
+	passes.push(PassKind.buildLayoutDescriptors)
+	// Phase 11.3: emit witness-table blobs for every unconditional
+	// `(typeName, interfaceName)` conformance. Runs after layout
+	// descriptors and still before DFE for the same livenessRoots reason.
+	passes.push(PassKind.buildWitnessTables)
 	passes.push(PassKind.deadFunctionElimination)
 	// Phase 3: Maxon → Std
 	passes.push(PassKind.lowerMaxonToStd)
@@ -278,6 +382,17 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	passes.push(PassKind.cse)
 	passes.push(PassKind.licm)
 	passes.push(PassKind.dce)
+	// Phase 11.6: analysis-based inliner sits between dce and the range-
+	// check pass. We re-run canonicalize + dce immediately after so the
+	// descriptor-fold cascade inside newly-inlined bodies takes effect
+	// (descriptor reads against a known label fold to constants, which
+	// can then participate in constant folding / dead-code removal). The
+	// dceFunctions pass at the end drops Std functions whose every
+	// static call site got inlined.
+	passes.push(PassKind.inliner)
+	passes.push(PassKind.canonicalize)
+	passes.push(PassKind.dce)
+	passes.push(PassKind.dceFunctions)
 	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.lowerABI)
 	if project.coverageEnabled 'cov'
@@ -356,6 +471,8 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		resolveTypes gives PipelinePhase.maxon
 		semanticCheck gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
+		buildLayoutDescriptors gives PipelinePhase.maxon
+		buildWitnessTables gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
 		borrowCheck gives PipelinePhase.std
 		injectDrops gives PipelinePhase.std
@@ -364,6 +481,8 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		cse gives PipelinePhase.std
 		licm gives PipelinePhase.std
 		dce gives PipelinePhase.std
+		inliner gives PipelinePhase.std
+		dceFunctions gives PipelinePhase.std
 		insertRangeChecks gives PipelinePhase.std
 		lowerABI gives PipelinePhase.std
 		instrumentCoverage gives PipelinePhase.std
@@ -380,6 +499,8 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolve-types"
 		semanticCheck gives "semantic-check"
 		deadFunctionElimination gives "dead-function-elimination"
+		buildLayoutDescriptors gives "build-layout-descriptors"
+		buildWitnessTables gives "build-witness-tables"
 		borrowCheck gives "borrow-check"
 		injectDrops gives "inject-drops"
 		insertRangeChecks gives "insert-range-checks"
@@ -389,6 +510,8 @@ export function passKindToString(pass PassKind) returns String
 		cse gives "cse"
 		licm gives "licm"
 		dce gives "dce"
+		inliner gives "inliner"
+		dceFunctions gives "dce-functions"
 		lowerABI gives "lower-abi"
 		instrumentCoverage gives "instrument-coverage"
 		augmentWithRuntime gives "augment-with-runtime"

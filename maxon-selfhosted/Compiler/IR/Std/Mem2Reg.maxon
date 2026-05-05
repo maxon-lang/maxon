@@ -61,7 +61,7 @@ function promoteFunction(func IrFunction, module StdModule)
 		return
 	end 'noSlots'
 
-	let promotable = classifyPromotable(slotInfo, paramCount: paramCount)
+	let promotable = classifyPromotable(slotInfo, paramCount: paramCount, func: func)
 
 	// Count promotable vs skipped for debug logging. Walks the BoolArray once
 	// per function — cheap, only a handful of slots in typical code.
@@ -83,8 +83,12 @@ function promoteFunction(func IrFunction, module StdModule)
 	// run the rebuild pass when an address-taken param exists — the pass
 	// emits the `func.param` + `memref.storeSlot` pair that materializes
 	// the calling-convention register into the captured stack slot.
+	// C1.d: ditto for fat-pointer interface params — the pass needs to
+	// emit the same param+storeSlot pair so the dispatch site's two slot
+	// loads see the value/witness pair the caller passed via the ABI.
 	let hasAddressTakenParam = anyParamSlotAddressTaken(slotInfo, paramCount: paramCount)
-	if not promotable.anyPromoted and not hasAddressTakenParam 'nothingToPromote'
+	let hasFatPointerParam = anyParamSlotIsInterfaceFatPointer(func, paramCount: paramCount)
+	if not promotable.anyPromoted and not hasAddressTakenParam and not hasFatPointerParam 'nothingToPromote'
 		return
 	end 'nothingToPromote'
 
@@ -245,6 +249,13 @@ function analyzeSlotSysOp(sysOp StdSystemOp, blockId BlockId, info SlotInfo)
 		stackAddr(_, slotId) then markSlotAddressTaken(slotId, blockId: blockId, info: info)
 		syscall to memcpy then return
 		storeByte to osLockRelease then return
+		boxValue then return
+		unboxValue then return
+		loadLayoutDescriptor then return
+		loadWitnessTable then return
+		descriptorField then return
+		witnessMethod then return
+		dropTypeParam then return
 	end 'check'
 end 'analyzeSlotSysOp'
 
@@ -396,7 +407,89 @@ function anyParamSlotAddressTaken(slotInfo SlotInfo, paramCount ParamCount) retu
 	return false
 end 'anyParamSlotAddressTaken'
 
-function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
+// C1.d: any param slot that's an interface fat-pointer half. Triggers
+// the rebuild pass even when nothing else is promotable so the
+// param-ABI value can be seeded into the slot via param+storeSlot at
+// function entry.
+function anyParamSlotIsInterfaceFatPointer(func IrFunction, paramCount ParamCount) returns bool
+	var pI = 0
+	while pI < paramCount 'scan'
+		if slotIsInterfaceFatPointer(func, slotId: pI) 'fatPointer'
+			return true
+		end 'fatPointer'
+		pI = pI + 1
+	end 'scan'
+	return false
+end 'anyParamSlotIsInterfaceFatPointer'
+
+// C1.c/d: detect whether `slotId` is one half of a fat-pointer pair —
+// the value half (slotMaxonTypes[slotId] is interface) or a witness
+// companion. PARAM interface slots have their companion at slotId+1
+// (parser pre-allocated `__witness_<paramName>`); LOCAL interface slots
+// have their companion appended after the original-slot range. Both
+// kinds need to stay memory-backed so the dispatch path (C1.d) can
+// reconstruct the pair via two slot loads.
+function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
+	let totalSlots = func.slotMaxonTypes.count()
+	if totalSlots == 0 'noSlots'
+		return false
+	end 'noSlots'
+	if slotId >= totalSlots 'beyondTracked'
+		return false
+	end 'beyondTracked'
+	let slotType = try func.slotMaxonTypes.get(slotId) otherwise return false
+	let isInterface = match slotType 'check'
+		interface gives true
+		boolean to function gives false
+		unresolved gives false
+		typeParameter gives false
+		genericInstance gives false
+	end 'check'
+	if isInterface 'valueHalf'
+		return true
+	end 'valueHalf'
+	let paramCount = func.paramCount as VarSlot
+	// Param-witness slot: sits immediately after a param interface slot.
+	if slotId < paramCount and slotId > 0 'maybeParamWitness'
+		let prevType = try func.slotMaxonTypes.get(slotId - 1) otherwise MaxonType.integer
+		let prevIsInterface = match prevType 'check'
+			interface gives true
+			boolean to function gives false
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives false
+		end 'check'
+		if prevIsInterface 'isParamWitness'
+			return true
+		end 'isParamWitness'
+	end 'maybeParamWitness'
+	// Local-witness slot: count only LOCAL interface slots (not params)
+	// and check whether `slotId` lies in the trailing companion region.
+	var localInterfaceCount = 0 as VarSlot
+	for sId in 0 upto totalSlots 'count'
+		if sId < paramCount 'skipParam'
+			continue
+		end 'skipParam'
+		let st = try func.slotMaxonTypes.get(sId) otherwise continue
+		let m = match st 'm'
+			interface gives true
+			boolean to function gives false
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives false
+		end 'm'
+		if m 'inc'
+			localInterfaceCount = localInterfaceCount + 1
+		end 'inc'
+	end 'count'
+	if localInterfaceCount == 0 'none'
+		return false
+	end 'none'
+	let originalSlotCount = totalSlots - localInterfaceCount
+	return slotId >= originalSlotCount
+end 'slotIsInterfaceFatPointer'
+
+function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount, func IrFunction) returns PromotableInfo
 	var promotable = BoolArray.create()
 	var anyPromoted = false
 	var slotIdx = 0
@@ -415,6 +508,18 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns Pr
 			slotIdx = slotIdx + 1
 			continue
 		end 'pinSlot'
+		// C1.c: fat-pointer slots are 2-slot pairs. Leave both halves as
+		// memory slots — promoting them independently would split the
+		// pair across SSA values, and the dispatch path (C1.d) needs to
+		// reconstruct the pair via two slot loads. Only the value half
+		// is recorded as interface-typed in slotMaxonTypes; the witness
+		// companion sits at index `originalSlotCount + k` and is
+		// detected by sniffing the value half above it.
+		if slotIsInterfaceFatPointer(func, slotId: slotIdx) 'fatPair'
+			logTrace(LogCategory.ir, message: () gives "mem2reg: skipping slot_{slotIdx} (interface fat-pointer pair)")
+			slotIdx = slotIdx + 1
+			continue
+		end 'fatPair'
 		if slotIdx < paramCount 'isParam'
 			// Param slots are always promotable (they have an implicit
 			// definition via func.param at block entry). A param slot
@@ -812,7 +917,13 @@ function createRenameState(func IrFunction, module StdModule, slotInfo SlotInfo,
 			try paramSlotIsAddressTaken.set(pIdx, value: true) otherwise panic("invariant: paramSlotIsAddressTaken.set OOB")
 			// Don't push to defStacks — slot stays memory-backed; uses go
 			// through `memref.loadSlot` which we leave intact.
-		end 'addressTaken'
+		end 'addressTaken' else if slotIsInterfaceFatPointer(func, slotId: pIdx) 'fatPointer'
+			// C1.d: fat-pointer param slot. Stays memory-backed for the
+			// dispatch path's two slot-loads, but still needs a fresh
+			// ValueId so emitParamOps can emit `func.param + storeSlot`
+			// at function entry to seed the slot from the param ABI value.
+			try paramValueIds.set(pIdx, value: paramId) otherwise panic("invariant: paramValueIds.set OOB")
+		end 'fatPointer'
 		pIdx = pIdx + 1
 	end 'initParams'
 
@@ -1125,7 +1236,7 @@ function rewriteFunctionInPlace(func IrFunction, module StdModule, renameState R
 
 		// Emit func.param ops at the top of the entry block
 		if isFirstBlock 'entryBlock'
-			emitParamOps(module, dstBlock: block, renameState: renameState, paramCount: paramCount, paramTypes: func.paramTypes)
+			emitParamOps(module, dstBlock: block, renameState: renameState, paramCount: paramCount, paramTypes: func.paramTypes, func: func)
 			isFirstBlock = false
 		end 'entryBlock'
 
@@ -1375,7 +1486,7 @@ end 'appendEdgePhiArgs'
 // Param op emission
 // ============================================================
 
-function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray)
+function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray, func IrFunction)
 	var pI = 0
 	while pI < paramCount 'insertParams'
 		// Sentinel: paramSlotIsPromoted is grown lazily per param; absent entries default to false ("not promoted").
@@ -1394,6 +1505,12 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 		// recorded in paramValueIds, so SSA renaming and any address-
 		// taken slot-store still see the right value.
 		let hasExisting = try renameState.paramSlotHasExistingOp.get(pI) otherwise false
+		// C1.d: fat-pointer param slots (interface value + witness) sit in
+		// memory like address-taken slots — Mem2Reg's promote phase skips
+		// them so the dispatch site can reload both halves. Treat them
+		// like address-taken: emit `func.param` and a `storeSlot` to seed
+		// the slot from the param ABI value at function entry.
+		let isFatPointer = slotIsInterfaceFatPointer(func, slotId: pI)
 		if isProm and not hasExisting 'emitParam'
 			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
 			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
@@ -1405,7 +1522,14 @@ function emitParamOps(module StdModule, dstBlock IrBlock, renameState RenameStat
 				module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
 			end 'noExistingParam'
 			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(pI, valueId: paramId)))
-		end 'emitAddrTakenParam'
+		end 'emitAddrTakenParam' else if isFatPointer 'emitFatPointerParam'
+			let paramId = try renameState.paramValueIds.get(pI) otherwise panic("invariant: paramValueIds sized to paramCount but get({pI}) failed")
+			let pt = try paramTypes.get(pI) otherwise panic("unreachable: param index out of bounds")
+			if not hasExisting 'noExistingParam'
+				module.appendOp(dstBlock, op: StdOp.call(StdCallOp.param(paramId, paramIndex: pI, paramType: pt)))
+			end 'noExistingParam'
+			module.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(pI, valueId: paramId)))
+		end 'emitFatPointerParam'
 		pI = pI + 1
 	end 'insertParams'
 end 'emitParamOps'
@@ -1512,6 +1636,13 @@ function maxValueIdInSys(op StdSystemOp) returns ValueId
 		osLockInit(addrId) gives addrId
 		osLockAcquire(addrId) gives addrId
 		osLockRelease(addrId) gives addrId
+		boxValue(resultId, valueId, sizeId) gives maxOfThree(resultId, b: valueId, c: sizeId)
+		unboxValue(resultId, ptrId, sizeId) gives maxOfThree(resultId, b: ptrId, c: sizeId)
+		loadLayoutDescriptor(resultId, _) gives resultId
+		loadWitnessTable(resultId, _) gives resultId
+		descriptorField(resultId, descAddrId, _) gives maxOfTwo(resultId, b: descAddrId)
+		witnessMethod(resultId, witnessAddrId, _) gives maxOfTwo(resultId, b: witnessAddrId)
+		dropTypeParam(slotValueId, layoutValueId) gives maxOfTwo(slotValueId, b: layoutValueId)
 	end 'scan'
 end 'maxValueIdInSys'
 
@@ -1658,6 +1789,13 @@ function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osLockInit(addrId) gives StdSystemOp.osLockInit(remapValue(addrId, remap: remap))
 		osLockAcquire(addrId) gives StdSystemOp.osLockAcquire(remapValue(addrId, remap: remap))
 		osLockRelease(addrId) gives StdSystemOp.osLockRelease(remapValue(addrId, remap: remap))
+		boxValue(resultId, valueId, sizeId) gives StdSystemOp.boxValue(resultId, valueId: remapValue(valueId, remap: remap), sizeId: remapValue(sizeId, remap: remap))
+		unboxValue(resultId, ptrId, sizeId) gives StdSystemOp.unboxValue(resultId, ptrId: remapValue(ptrId, remap: remap), sizeId: remapValue(sizeId, remap: remap))
+		loadLayoutDescriptor(resultId, label) gives StdSystemOp.loadLayoutDescriptor(resultId, label: label)
+		loadWitnessTable(resultId, label) gives StdSystemOp.loadWitnessTable(resultId, label: label)
+		descriptorField(resultId, descAddrId, field) gives StdSystemOp.descriptorField(resultId, descAddrId: remapValue(descAddrId, remap: remap), field: field)
+		witnessMethod(resultId, witnessAddrId, methodIndex) gives StdSystemOp.witnessMethod(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex)
+		dropTypeParam(slotValueId, layoutValueId) gives StdSystemOp.dropTypeParam(remapValue(slotValueId, remap: remap), layoutValueId: remapValue(layoutValueId, remap: remap))
 	end 'subst'
 end 'substituteSysOp'
 

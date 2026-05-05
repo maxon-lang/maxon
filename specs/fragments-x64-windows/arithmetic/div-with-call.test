@@ -20,38 +20,19 @@ ExitCode: 15
 ---
 // CompiledIR
 module {
-  func @arithmetic.helper(rcx: i64) -> i64 {
-  entry:
-    x64.mov r9d, 2
-    x64.mov rsi, rcx
-    x64.imul rsi, r9
-    x64.mov r8, rsi
-    x64.ret
-  }
-  func @arithmetic.divCall(rcx: i64, rdx: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov r8, rdx
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv r8
-    x64.mov r12, rax
-    x64.mov rcx, r12
-    x64.call arithmetic.helper
-    x64.mov r9, r8
-    x64.add r9, r12
-    x64.mov r8, r9
-    x64.epilogue
-    x64.ret
-  }
   func @arithmetic.main() -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.mov r8d, 2
     x64.mov r9d, 10
-    x64.mov rcx, r9
-    x64.mov rdx, r8
-    x64.call arithmetic.divCall
+    x64.mov rax, r9
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r8d, 2
+    x64.mov r9, rax
+    x64.imul r9, r8
+    x64.mov r8, r9
+    x64.add r8, rax
     x64.cmp r8, 125
     x64.jbe __range_ok_5
   __range_panic_5:

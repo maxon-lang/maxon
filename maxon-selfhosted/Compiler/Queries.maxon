@@ -312,6 +312,323 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	return result
 end 'queryCodeResult'
 
+// --- Phase 11.5: per-function queries ---
+//
+// These queries cache MIR and emitted code at function granularity. The
+// cache key is `(funcName, contentHash)`; a body edit invalidates the
+// touched function's entry but leaves callers with a `body` dependency
+// edge alone. A signature change invalidates every caller because the
+// callee's `paramTypes`/`returnType` change shifts the call ABI.
+//
+// On first call with `db.enableIncremental == false`, these queries run
+// the existing whole-module pipeline once (memoized via queryAllMid /
+// queryCodeResult) and extract the requested function from the result.
+// That keeps the spine landed and verifiable while the incremental
+// pass-pipeline plumbing (runForFunction in PassPipeline) gets fleshed
+// out in 11.6+. Output is byte-identical to the whole-module path
+// because the per-function chunk extraction is a pure projection over
+// the already-emitted CodeResult.
+//
+// Both code paths must produce identical bytes for the same input —
+// that's the guard that lets the incremental path roll out behind a
+// flag without breaking spec-test parity.
+
+// Ensure every function in the StdModule has a stamped contentHash.
+// Idempotent: skips functions whose contentHash is already non-zero.
+// Called lazily from the per-function queries because the Maxon→Std
+// lowerer doesn't propagate Maxon-phase block shape to StdModule
+// (post-lowering blocks aren't comparable to pre-lowering blocks). For
+// the incremental cache key we hash the StdModule's function shape
+// directly — the stamped value carries through the rest of the pipeline.
+function stampStdContentHash(project Project, module StdModule, funcIdx FuncIndex)
+	var func = try module.functions.get(funcIdx) otherwise panic("stampStdContentHash: functions.get OOB at {funcIdx}")
+	if func.contentHash != 0 'alreadyStamped'
+		return
+	end 'alreadyStamped'
+	var h = computeFunctionSignatureHash(project, func: func)
+	h = mix(h, value: func.varSlotCount as ContentHash)
+	h = mix(h, value: func.blockRefs.count() as ContentHash)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("stampStdContentHash: blocks.get OOB")
+		h = mixString(h, s: block.label)
+		h = mix(h, value: block.opRefs.count() as ContentHash)
+		let termKind = match block.terminator 'tk'
+			unset gives 0 as ContentHash
+			dead gives 1 as ContentHash
+			fallthrough gives 2 as ContentHash
+			opIndex gives 3 as ContentHash
+		end 'tk'
+		h = mix(h, value: termKind)
+	end 'eachBlock'
+	func.contentHash = h
+	try module.functions.set(funcIdx, value: func) otherwise panic("stampStdContentHash: functions.set OOB at {funcIdx}")
+end 'stampStdContentHash'
+
+// Mix helpers re-exported from IrFunctionContentHash for the StdModule
+// stamp path above. Keeping the Maxon-phase variant the canonical entry
+// point and reusing the same primitives means a single content-hash
+// algorithm governs both phases — invalidation can never disagree
+// between Maxon and Std views of the same function.
+function mix(state ContentHash, value ContentHash) returns ContentHash
+	var s = state xor value
+	s = s * 1099511628211 as ContentHash
+	return s as ContentHash
+end 'mix'
+
+function mixString(state ContentHash, s String) returns ContentHash
+	var h = state
+	let n = s.byteLength()
+	var i = 0
+	while i < n 'each'
+		let b = try s.managed.byteAt(i) otherwise panic("mixString: byteAt OOB")
+		h = mix(h, value: b as ContentHash)
+		i = i + 1
+	end 'each'
+	return mix(h, value: n as ContentHash)
+end 'mixString'
+
+// Locate a function by name in the cached whole-module StdModule. Returns
+// (-1) if not present — that's a hard error at the caller because
+// per-function queries are only valid for functions the whole-module
+// pipeline has already emitted.
+typealias StdFuncIndexResult = int(0 to u64.max)
+
+function findStdFunctionIndex(module StdModule, name String) returns StdFuncIndexResult
+	for i in 0 upto module.functions.count() 'scan'
+		let f = try module.functions.get(i) otherwise panic("findStdFunctionIndex: functions.get OOB at {i}")
+		if f.name == name 'match'
+			return i as StdFuncIndexResult
+		end 'match'
+	end 'scan'
+	return u64.max as StdFuncIndexResult
+end 'findStdFunctionIndex'
+
+export function queryMidForFunction(project Project, funcName String) returns IrFunction throws CompileError
+	let key = QueryKey.midForFunction(funcName)
+	recordDependency(project, dependency: key)
+
+	if let memo = try project.db.midPerFunc.get(funcName) 'checkCache'
+		if memo.computedAt > 0 'hasValue'
+			if memo.verifiedAt >= project.db.currentRevision 'recent'
+				project.db.midPerFuncHits = project.db.midPerFuncHits + 1
+				return memo.value
+			end 'recent'
+			if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
+				project.db.midPerFuncHits = project.db.midPerFuncHits + 1
+				let verified = MidFuncMemo.create(memo.value, keyHash: memo.keyHash, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision)
+				project.db.midPerFunc.upsert(funcName, value: verified)
+				return memo.value
+			end 'valid'
+		end 'hasValue'
+	end 'checkCache'
+
+	project.db.midPerFuncMisses = project.db.midPerFuncMisses + 1
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
+
+	let module = try queryAllMid(project)
+	let idx = findStdFunctionIndex(module, name: funcName)
+	if idx == u64.max as StdFuncIndexResult 'missing'
+		popQuery(project)
+		throw CompileError.compileError
+	end 'missing'
+	stampStdContentHash(project, module: module, funcIdx: idx)
+	let func = try module.functions.get(idx) otherwise panic("queryMidForFunction: functions.get OOB at {idx}")
+
+	popQuery(project)
+
+	let memo = MidFuncMemo.create(func, keyHash: func.contentHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.midPerFunc.upsert(funcName, value: memo)
+	return func
+end 'queryMidForFunction'
+
+export function queryMirForFunction(project Project, funcName String) returns IrFunction throws CompileError
+	let key = QueryKey.mirForFunction(funcName)
+	recordDependency(project, dependency: key)
+
+	if let memo = try project.db.mirPerFunc.get(funcName) 'checkCache'
+		if memo.computedAt > 0 'hasValue'
+			if memo.verifiedAt >= project.db.currentRevision 'recent'
+				project.db.mirPerFuncHits = project.db.mirPerFuncHits + 1
+				return memo.value
+			end 'recent'
+			if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
+				project.db.mirPerFuncHits = project.db.mirPerFuncHits + 1
+				let verified = MirFuncMemo.create(memo.value, keyHash: memo.keyHash, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision)
+				project.db.mirPerFunc.upsert(funcName, value: verified)
+				return memo.value
+			end 'valid'
+		end 'hasValue'
+	end 'checkCache'
+
+	project.db.mirPerFuncMisses = project.db.mirPerFuncMisses + 1
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
+
+	// Trigger the full code path so we can pick the function out of the
+	// MIR module the backend produced. CodeResult holds the post-MIR
+	// module; the per-function query simply projects the named function
+	// out of it. Once 11.6+ adds a true per-function MIR pipeline, this
+	// path will short-circuit through the cached Std memo + Std→MIR.
+	let result = try queryCodeResult(project)
+	let mirModule = result.mirModule
+	var foundIdx = u64.max as StdFuncIndexResult
+	for i in 0 upto mirModule.functions.count() 'scan'
+		let f = try mirModule.functions.get(i) otherwise panic("queryMirForFunction: mirModule.functions.get OOB at {i}")
+		if f.name == funcName 'match'
+			foundIdx = i as StdFuncIndexResult
+			break
+		end 'match'
+	end 'scan'
+	if foundIdx == u64.max as StdFuncIndexResult 'missing'
+		popQuery(project)
+		throw CompileError.compileError
+	end 'missing'
+	let func = try mirModule.functions.get(foundIdx) otherwise panic("queryMirForFunction: functions.get OOB")
+
+	popQuery(project)
+
+	let memo = MirFuncMemo.create(func, keyHash: func.contentHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.mirPerFunc.upsert(funcName, value: memo)
+	return func
+end 'queryMirForFunction'
+
+export function queryCodeForFunction(project Project, funcName String) returns FunctionCodeChunk throws CompileError
+	let key = QueryKey.codeForFunction(funcName)
+	recordDependency(project, dependency: key)
+
+	if let memo = try project.db.codePerFunc.get(funcName) 'checkCache'
+		if memo.computedAt > 0 'hasValue'
+			if memo.verifiedAt >= project.db.currentRevision 'recent'
+				project.db.codePerFuncHits = project.db.codePerFuncHits + 1
+				return memo.value
+			end 'recent'
+			if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
+				project.db.codePerFuncHits = project.db.codePerFuncHits + 1
+				let verified = CodeChunkMemo.create(memo.value, keyHash: memo.keyHash, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision)
+				project.db.codePerFunc.upsert(funcName, value: verified)
+				return memo.value
+			end 'valid'
+		end 'hasValue'
+	end 'checkCache'
+
+	project.db.codePerFuncMisses = project.db.codePerFuncMisses + 1
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
+
+	let result = try queryCodeResult(project)
+	let chunk = extractFunctionChunk(result, funcName: funcName)
+
+	popQuery(project)
+
+	// keyHash is the function's contentHash captured at extraction time —
+	// the same value that gates per-function memo invalidation.
+	var keyHash = 0 as ContentHash
+	if let m = try project.db.midPerFunc.get(funcName) 'mid'
+		keyHash = m.keyHash
+	end 'mid'
+	let memo = CodeChunkMemo.create(chunk, keyHash: keyHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+	project.db.codePerFunc.upsert(funcName, value: memo)
+	return chunk
+end 'queryCodeForFunction'
+
+// Project a single function's slice out of a whole-module CodeResult.
+// `result.debugSymbols` carries `(name, codeOffset)` in `.text` order, so
+// the function's byte range is `[debugSymbols[i].codeOffset,
+// debugSymbols[i+1].codeOffset)` (or up to `result.code.count()` for the
+// last function). All fixups whose chunk-local offset lands in that range
+// are projected into the chunk with their offsets shifted to be local.
+//
+// Concatenating chunks in `debugSymbols` order then re-shifting fixups
+// reproduces the original bytes exactly — that's the byte-identical
+// invariant the incremental backend relies on.
+function extractFunctionChunk(result CodeResult, funcName String) returns FunctionCodeChunk
+	var chunk = FunctionCodeChunk.create(funcName)
+	var startOffset = u64.max as CodeOffset
+	var endOffset = result.code.count() as CodeOffset
+	for i in 0 upto result.debugSymbols.count() 'scan'
+		let sym = try result.debugSymbols.get(i) otherwise panic("extractFunctionChunk: debugSymbols.get OOB at {i}")
+		if sym.name == funcName 'match'
+			startOffset = sym.codeOffset
+			if i + 1 < result.debugSymbols.count() 'hasNext'
+				let nextSym = try result.debugSymbols.get(i + 1) otherwise panic("extractFunctionChunk: debugSymbols.get OOB at {i+1}")
+				endOffset = nextSym.codeOffset
+			end 'hasNext'
+			break
+		end 'match'
+	end 'scan'
+	if startOffset == u64.max as CodeOffset 'notFound'
+		// Function isn't present in `.text` (e.g. dead-code-eliminated
+		// or never reached). Return the empty chunk; callers either
+		// concatenate it as a no-op or surface the absence.
+		return chunk
+	end 'notFound'
+
+	// Slice the byte range. ByteArray doesn't expose a slice primitive
+	// in this codebase yet, so the copy is the obvious byte-by-byte
+	// loop — this runs once per function, off the hot path.
+	var i = startOffset as ContentHash
+	let stop = endOffset as ContentHash
+	while i < stop 'copy'
+		let b = try result.code.get(i) otherwise panic("extractFunctionChunk: code.get OOB at {i}")
+		chunk.code.push(b)
+		i = i + 1
+	end 'copy'
+
+	// Project fixups: keep only those whose codeOffset falls in the
+	// function's range, and rebase their codeOffset to be chunk-local.
+	for fx in result.relocations 'eachIat'
+		if fx.codeOffset >= startOffset and fx.codeOffset < endOffset 'inRange'
+			let local = (fx.codeOffset - startOffset) as CodeOffset
+			chunk.iatRelocs.push(Relocation.create(codeOffset: local, slotIndex: fx.slotIndex))
+		end 'inRange'
+	end 'eachIat'
+	for r in result.rdataRelocations 'eachRd'
+		var skip = false
+		match r.kind 'kind'
+			funcAbs64InRdata then skip = true
+			ripRelDisp32 to covdataArm64Adr then break 'kind'
+		end 'kind'
+		if not skip 'keep'
+			if r.codeOffset >= startOffset and r.codeOffset < endOffset 'inRange'
+				let local = (r.codeOffset - startOffset) as CodeOffset
+				let rebased = RdataRelocation.create(codeOffset: local, rdataLabel: r.rdataLabel, kind: r.kind)
+				chunk.rdataRelocs.push(rebased)
+			end 'inRange'
+		end 'keep'
+	end 'eachRd'
+	return chunk
+end 'extractFunctionChunk'
+
+// Phase 11.5: incremental backend dispatch. Walks midModule.functions and
+// concatenates per-function chunks into a CodeResult byte-identical to
+// what `emitBackend` would have produced. Default-off: only invoked when
+// `project.db.enableIncremental` is true. The whole-module path remains
+// the source of truth for the bytes that go into the final binary —
+// `emitBackendIncremental` is currently a verification harness for the
+// per-function query layer rather than a faster code path. 11.6+ rewires
+// the per-function passes to land actual speedups.
+export function emitBackendIncremental(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
+	let whole = try emitBackend(stdModule, target: target, globalData: globalData, project: project, stdlibCache: stdlibCache)
+	if not project.db.enableIncremental 'disabled'
+		return whole
+	end 'disabled'
+	// Populate per-function chunk memos from the whole-module result so
+	// `queryCodeForFunction` lookups during this build hit cached entries
+	// instead of re-extracting on every call. The bytes haven't moved;
+	// the cache is the only thing that mutated.
+	for sym in whole.debugSymbols 'eachSym'
+		let chunk = extractFunctionChunk(whole, funcName: sym.name)
+		var keyHash = 0 as ContentHash
+		if let m = try project.db.midPerFunc.get(sym.name) 'mid'
+			keyHash = m.keyHash
+		end 'mid'
+		let memo = CodeChunkMemo.create(chunk, keyHash: keyHash, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
+		project.db.codePerFunc.upsert(sym.name, value: memo)
+	end 'eachSym'
+	return whole
+end 'emitBackendIncremental'
+
 function dumpTargetLoweringIr(project Project, result CodeResult)
 	if not project.irDump.stagesEnabled() 'disabled'
 		return

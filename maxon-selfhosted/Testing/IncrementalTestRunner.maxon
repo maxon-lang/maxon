@@ -20,6 +20,35 @@ export function runIncrementalTests() returns ExitCode
 	var totalPassed = 0
 	var totalFailed = 0
 
+	// --- Scenario E (run first): Phase 11.5 per-function query layer ---
+	// Spins up its own short-lived project so the assertions are clean and
+	// independent of the longer-running A→D scenarios below. Compiles
+	// once so queryCodeResult populates the whole-module cache, then
+	// drives queryMidForFunction directly.
+	logInfo(LogCategory.testing, message: () gives "Scenario E: Per-function queries...")
+	let sourceE = "function main() returns ExitCode\n\treturn 9\nend 'main'\n"
+	try File.writeText(sourcePath, content: sourceE) otherwise 'writeErrE'
+		print("Scenario E: failed to write source\n")
+		cleanupIncrTest(sourcePath, exePath: exePath)
+		return 1
+	end 'writeErrE'
+	var projectE = createProject(sourcePath, target: detectHostTarget())
+	try compileProject(projectE) otherwise 'compErrE'
+		print("Scenario E: initial compile failed\n")
+		cleanupIncrTest(sourcePath, exePath: exePath)
+		return 1
+	end 'compErrE'
+	resetCounters(projectE)
+	let scenarioEPassed = runPerFunctionQueryScenario(projectE)
+	if scenarioEPassed 'passE'
+		print("[PASS] Scenario E: Per-function queries\n")
+		totalPassed = totalPassed + 1
+	end 'passE' else 'failE'
+		print("[FAIL] Scenario E: Per-function queries\n")
+		totalFailed = totalFailed + 1
+	end 'failE'
+	cleanupIncrTest(sourcePath, exePath: exePath)
+
 	// --- Scenario A: Fresh compilation (all misses) ---
 	logInfo(LogCategory.testing, message: () gives "Scenario A: Fresh compilation...")
 
@@ -170,6 +199,26 @@ export function runIncrementalTests() returns ExitCode
 	end 'hasFail'
 	return 0
 end 'runIncrementalTests'
+
+// Phase 11.5: exercise the per-function query layer once-then-again and
+// assert the cache counters match expectations. Returns true on success.
+// The first lookup is a miss (memo created); the second is a hit.
+function runPerFunctionQueryScenario(project Project) returns bool
+	var passed = true
+	try queryMidForFunction(project, funcName: "main") otherwise 'midErrE1'
+		print("Scenario E: queryMidForFunction failed (first call)\n")
+		return false
+	end 'midErrE1'
+	passed = assertCounter("E1 midPerFuncMisses", actual: project.db.midPerFuncMisses, expected: 1) and passed
+	passed = assertCounter("E1 midPerFuncHits", actual: project.db.midPerFuncHits, expected: 0) and passed
+	try queryMidForFunction(project, funcName: "main") otherwise 'midErrE2'
+		print("Scenario E: queryMidForFunction failed (second call)\n")
+		return false
+	end 'midErrE2'
+	passed = assertCounter("E2 midPerFuncMisses", actual: project.db.midPerFuncMisses, expected: 1) and passed
+	passed = assertCounter("E2 midPerFuncHits", actual: project.db.midPerFuncHits, expected: 1) and passed
+	return passed
+end 'runPerFunctionQueryScenario'
 
 function assertCounter(name String, actual Revision, expected Revision) returns bool
 	if actual != expected 'mismatch'

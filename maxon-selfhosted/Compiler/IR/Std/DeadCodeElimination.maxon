@@ -330,15 +330,35 @@ function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArr
 	// pass relies on `pickThenTarget` finding an edge whose target differs
 	// from the recorded elseTarget, which doesn't hold once thenTarget ==
 	// elseTarget; without this normalization we'd panic at the target
-	// phase. Keeping the then-arm args is safe because both arms forward
-	// to the same block in this rewrite.
+	// phase. But if the two arms forward *different* args to the shared
+	// successor (a value-bearing blockArg/phi receiving a different value
+	// per arm), collapsing would silently drop the else-arm's value. In
+	// that case refuse the rewrite — the original condBr stays so later
+	// passes still distinguish the arms.
 	if newThen == newElse 'collapsed'
+		if not valueIdArraysEqual(newThenArgs, b: newElseArgs) 'argMismatch'
+			return RewrittenTerminator.none
+		end 'argMismatch'
 		logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr collapsed both arms -> br block_{newThen}")
 		return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(newThen, argIds: newThenArgs)))
 	end 'collapsed'
 	logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
 	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
 end 'rewriteCondBr'
+
+function valueIdArraysEqual(a ValueIdArray, b ValueIdArray) returns bool
+	if a.count() != b.count() 'len'
+		return false
+	end 'len'
+	for i in 0 upto a.count() 'each'
+		let av = try a.get(i) otherwise panic("valueIdArraysEqual: a.get OOB at {i} (len already validated)")
+		let bv = try b.get(i) otherwise panic("valueIdArraysEqual: b.get OOB at {i} (len already validated)")
+		if av != bv 'diff'
+			return false
+		end 'diff'
+	end 'each'
+	return true
+end 'valueIdArraysEqual'
 
 // Result of inspecting a block for skip-through eligibility: either it's
 // not bypassable, or it is — in which case we know its sole successor and
@@ -511,6 +531,16 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		osLockInit(addrId) then incrementUse(useCount, valueId: addrId)
 		osLockAcquire(addrId) then incrementUse(useCount, valueId: addrId)
 		osLockRelease(addrId) then incrementUse(useCount, valueId: addrId)
+		boxValue(_, valueId, sizeId) then countTwoUses(valueId, b: sizeId, useCount: useCount)
+		unboxValue(_, ptrId, sizeId) then countTwoUses(ptrId, b: sizeId, useCount: useCount)
+		loadLayoutDescriptor then break 'count'
+		loadWitnessTable then break 'count'
+		descriptorField(_, descAddrId, _) then incrementUse(useCount, valueId: descAddrId)
+		witnessMethod(_, witnessAddrId, _) then incrementUse(useCount, valueId: witnessAddrId)
+		// dropTypeParam consumes both the slot value and the layout pointer.
+		// Counting them keeps the producers (param ops, slot loads, descriptor
+		// loads) live so DCE can't fold them out from under the drop.
+		dropTypeParam(slotValueId, layoutValueId) then countTwoUses(slotValueId, b: layoutValueId, useCount: useCount)
 	end 'count'
 end 'countSysUses'
 
@@ -554,7 +584,7 @@ function isDeadPackedOp(module StdModule, opIdx OpIndex, useCount ValueIdArray) 
 		call(op) gives isDeadFuncOp(op, useCount: useCount)
 		memory(op) gives isDeadMemRefOp(op, useCount: useCount)
 		control gives false
-		system(op) gives isDeadSysOp(op)
+		system(op) gives isDeadSysOp(op, useCount: useCount)
 	end 'outer'
 end 'isDeadPackedOp'
 
@@ -563,11 +593,24 @@ end 'isDeadPackedOp'
 // and can be removed; that in turn lets the producer it was pinning become
 // dead too. Every other system op (syscall, iatCall, free, prints, stores)
 // has observable side effects.
-function isDeadSysOp(op StdSystemOp) returns bool
+function isDeadSysOp(op StdSystemOp, useCount ValueIdArray) returns bool
 	return match op 'check'
 		drop gives true
 		syscall to printInt gives false
 		osAllocPages to osLockRelease gives false
+		boxValue gives false
+		unboxValue gives false
+		// Phase 11.4 sugar — pure value-producing ops, dead if their result
+		// has no users (mirrors arith handling).
+		loadLayoutDescriptor(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
+		loadWitnessTable(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
+		descriptorField(resultId, _, _) gives getUseCount(useCount, valueId: resultId) == 0
+		witnessMethod(resultId, _, _) gives getUseCount(useCount, valueId: resultId) == 0
+		// C1.b: `dropTypeParam` calls the descriptor's destroyFunc — that's
+		// observable side-effecting work (mm_decref, finalizer, etc.). Never
+		// dead; the existing `drop` arm above stays universally-dead because
+		// today's stdlib drops are all no-op cleanups.
+		dropTypeParam gives false
 	end 'check'
 end 'isDeadSysOp'
 

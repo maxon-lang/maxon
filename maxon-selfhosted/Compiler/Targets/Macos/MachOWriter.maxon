@@ -341,6 +341,7 @@ function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationA
 			// Coverage instrumentation is a Phase 3 item for macOS; no .covdata
 			// section is emitted yet, so covdata relocations should never appear.
 			covdataArm64Adr then panic("MachO writer: coverage not yet supported")
+			funcAbs64InRdata then break 'patchKind'
 		end 'patchKind'
 	end 'patch'
 end 'patchMachORdataRelocations'
@@ -487,8 +488,19 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// Patch rdata relocations in code (ADR/LDR-literal -> __const section)
 	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr, heapSectionVMAddr: heapSectionVMAddr)
 
+	// Phase 11.2: bake absolute VAs of layout-descriptor copy/destroy thunks
+	// into the on-disk __const image (rdata). Mach-O is dyld-linked but
+	// Maxon does NOT set MH_PIE (see flags below) so the loader honours
+	// the fixed __TEXT VM addr (0x100000000) we pin via MACHO_TEXT_VM_ADDR.
+	// A future PIE-enabled Mach-O writer would replace this with
+	// X86_64_RELOC_UNSIGNED / ARM64_RELOC_UNSIGNED entries in a __DATA
+	// __got-style table.
+	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: textSectionVMAddr, debugSymbols: codeResult.debugSymbols)
+
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
-	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
+	// MH_PIE intentionally omitted — the funcAbs64InRdata patches above
+	// bake absolute VAs that depend on the image not being slid.
+	let flags = MH_DYLDLINK or MH_TWOLEVEL
 
 	// --- Build Mach-O buffer ---
 	var macho = ByteArray.create()

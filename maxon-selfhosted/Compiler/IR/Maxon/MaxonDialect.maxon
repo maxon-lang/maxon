@@ -156,6 +156,60 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 	end 'check'
 end 'isFunctionMaxonType'
 
+// Phase 11.3: True iff `t` is a `MaxonType.interface(_)`. Interface-typed
+// values are 16-byte fat pointers (`{value, witness}`); the construction
+// side of the lowering uses this discriminator to decide whether to emit
+// fat-pointer stores at slot/return/parameter sites.
+export function interfaceTypeIsFat(t MaxonType) returns bool
+	return match t 'check'
+		interface gives true
+		boolean to function gives false
+		unresolved gives false
+		typeParameter gives false
+		genericInstance gives false
+	end 'check'
+end 'interfaceTypeIsFat'
+
+// Phase 11.3: byte width of a MaxonType viewed as a single ABI value.
+// Primitives at their hardware width (Bool=1, Byte=1, Int=8, Float=8);
+// strings, structs, enum instances and interface fat-pointers report 8
+// (pointer-shaped at this stage — the fat-pointer 16-byte width is a
+// downstream concern of the lowering, not a single-value width). Generic
+// instances substitute through the base struct's `byteSize`; unknown bases
+// fall back to 8. Used by BuildWitnessTables to pick the inline-vs-box bit
+// in the witness-table flags slot.
+export function maxonTypeWidthBytes(project Project, t MaxonType) returns MachineWord
+	return match t 'w'
+		boolean gives 1
+		integer gives 8
+		float gives 8
+		string gives 8
+		named(id) gives namedTypeWidthBytes(project, id: id)
+		function gives 8
+		unresolved gives 8
+		typeParameter gives 8
+		genericInstance(gid) gives genericInstanceWidthBytes(project, gid: gid)
+		interface gives 8
+	end 'w'
+end 'maxonTypeWidthBytes'
+
+function namedTypeWidthBytes(project Project, id TypeNameId) returns MachineWord
+	let name = project.typeNames.get(id)
+	if let st = try project.structTypes.get(name) 'isStruct'
+		return st.byteSize
+	end 'isStruct'
+	return 8
+end 'namedTypeWidthBytes'
+
+function genericInstanceWidthBytes(project Project, gid GenericInstanceId) returns MachineWord
+	let (baseId, _) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	if let st = try project.structTypes.get(baseName) 'isStruct'
+		return st.byteSize
+	end 'isStruct'
+	return 8
+end 'genericInstanceWidthBytes'
+
 // Extract the FunctionTypeId payload from a `MaxonType.function`. Panics
 // for any other arm — callers must guard with `isFunctionMaxonType` first.
 export function functionMaxonTypeId(t MaxonType) returns FunctionTypeId
@@ -264,6 +318,44 @@ export function genericInstanceToString(project Project, baseId TypeNameId, args
 	result = "{result})"
 	return result
 end 'genericInstanceToString'
+
+// Phase 11.2: visitor set used by `walkInstantiations` to dedupe reachable
+// GenericInstanceIds. Pulled out as a typealias so the recursive helper's
+// signature stays readable.
+export typealias GenericInstanceIdSet = Set with GenericInstanceId
+
+// Phase 11.2: collect every `genericInstance(gid)` reachable through `t`
+// — including transitive instances inside arg lists. Adds each id to
+// `out` (idempotent via the Set). Used by BuildLayoutDescriptors to
+// discover that walking `Array with (Pair with Int)` exposes BOTH
+// `Pair with Int` and `Array with (Pair with Int)` for separate
+// descriptor emission.
+//
+// Function and interface arms are leaves for layout purposes (the
+// existential value type carries no layout-descriptor argument), so the
+// walk does not recurse through them. Other arms (primitives, named,
+// typeParameter, unresolved) carry no instances.
+export function walkInstantiations(project Project, t MaxonType, out GenericInstanceIdSet)
+	match t 'walk'
+		genericInstance(gid) then walkInstanceArm(project, gid: gid, out: out)
+		boolean to function then return
+		unresolved then return
+		typeParameter then return
+		interface then return
+	end 'walk'
+end 'walkInstantiations'
+
+function walkInstanceArm(project Project, gid GenericInstanceId, out GenericInstanceIdSet)
+	if out.contains(gid) 'alreadyKnown'
+		return
+	end 'alreadyKnown'
+	out.insert(element: gid)
+	let (_, args) = project.genericInstances.get(gid)
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise panic("walkInstantiations: args.get OOB at {i}")
+		walkInstantiations(project, t: a, out: out)
+	end 'each'
+end 'walkInstanceArm'
 
 // Intern a function type by structural identity. A linear scan over the
 // registry suffices today — function-typed parameters are rare, and the
@@ -435,10 +527,21 @@ export typealias MaxonTypeArray = Array with MaxonType
 // when it is not a primitive. The empty string and "void" are not valid
 // MaxonTypes — callers needing to represent an optional/void return type
 // should use internMaxonReturnType instead.
+//
+// C1.d: when `name` matches a registered interface (resolved or still in
+// `unresolvedInterfaces` from earlier in the same parse), produce a
+// `MaxonType.interface(_)` arm instead of `named(_)`. This is the upstream
+// half that lets fat-pointer construction (C1.c) and witness-method dispatch
+// (C1.d) actually fire on real input — without it, every interface name
+// reaches lowering as `named` and the dispatch arm is structurally
+// unreachable.
 export function internMaxonType(project Project, name String) returns MaxonType
 	if name == "bool" 'isBool'
 		return MaxonType.boolean
 	end 'isBool'
+	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
+		return MaxonType.interface(project.interfaceRegistry.intern(name))
+	end 'isInterface'
 	return MaxonType.named(project.typeNames.intern(name))
 end 'internMaxonType'
 
@@ -1384,5 +1487,105 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 			return target
 		end 'hit'
 	end 'scan'
+	// Conditional-extension dispatch: a registered variant whose first
+	// user-param mentions a type-parameter (`Array.contains$Element`,
+	// `Array.contains$Array_Element`) accepts any concrete arg type
+	// post-substitution. The exact-suffix scan above only matches concrete
+	// encodings (`$int`, `$bool`, `$Array_int`) so a `[int].contains(20)`
+	// or `[int].contains([20])` falls through to here. Walk each variant's
+	// first user-facing param type and accept if a `typeParameter` arm
+	// appears anywhere (including inside a `genericInstance`'s type-args).
+	// We additionally compare the variant's first-arg shape category to the
+	// caller's so `contains(Element)` and `contains(Array<Element>)` route
+	// to the right monomorph: scalar args prefer the typeParameter variant,
+	// genericInstance args prefer the genericInstance variant.
+	let argShape = paramTypeShape(firstArgType)
+	var firstParamMatch = ""
+	for v in variants 'scanGeneric'
+		let sig = try project.funcSignatures.get(v) otherwise continue
+		let userParamIdx = signatureFirstUserParamIndex(sig)
+		let paramType = try sig.paramTypes.get(userParamIdx) otherwise continue
+		if not paramTypeMentionsTypeParam(project, t: paramType) 'concreteOnly'
+			continue
+		end 'concreteOnly'
+		let variantShape = paramTypeShape(paramType)
+		if variantShape == argShape 'shapeMatch'
+			return v
+		end 'shapeMatch'
+		if firstParamMatch.isEmpty() 'recordFirst'
+			firstParamMatch = v
+		end 'recordFirst'
+	end 'scanGeneric'
+	if not firstParamMatch.isEmpty() 'haveFirst'
+		return firstParamMatch
+	end 'haveFirst'
 	return bareQualifiedName
 end 'resolveOverloadedCallee'
+
+// Phase 11.0 step 8c: helper to skip the implicit `__self` slot when a
+// signature's first param is the receiver. Used by the overload-resolution
+// fallback that probes each variant's first user-facing param type. Reads
+// `paramNames.get(0)` rather than passing `hasSelf` down — the signature
+// itself already records whether `__self` is present.
+function signatureFirstUserParamIndex(sig FuncSignature) returns ParsedInt
+	let firstParam = try sig.paramNames.get(0) otherwise return 0
+	if firstParam == "__self" 'hasSelf'
+		return 1
+	end 'hasSelf'
+	return 0
+end 'signatureFirstUserParamIndex'
+
+// Phase 11.0 step 8c: True iff `t` mentions a `typeParameter` arm anywhere
+// inside its structure. Used by overload resolution to decide whether a
+// variant's first user-param is "generic-shaped" (any concrete arg matches
+// it post-substitution) versus a fully concrete signature. The
+// `genericInstance` arm is treated as generic-shaped without recursing
+// into its args because the bootstrap stdlib only registers
+// `genericInstance` paramTypes when a type-parameter is in fact threaded
+// through (e.g. `Array.contains(sequence: ElementArray)` where
+// `ElementArray = Array with Element`); a fully concrete generic instance
+// would have been caught by the exact-suffix scan before reaching here.
+function paramTypeMentionsTypeParam(project Project, t MaxonType) returns bool
+	return match t 'check'
+		typeParameter gives true
+		genericInstance(id) gives genericInstanceMentionsTypeParamWalk(project, gid: id)
+		boolean to named gives false
+		function gives false
+		interface gives false
+		unresolved gives false
+	end 'check'
+end 'paramTypeMentionsTypeParam'
+
+function genericInstanceMentionsTypeParamWalk(project Project, gid GenericInstanceId) returns bool
+	let (_, args) = project.genericInstances.get(gid)
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("genericInstanceMentionsTypeParamWalk: args.get OOB at {i}")
+		if paramTypeMentionsTypeParam(project, t: a) 'mentionsArg'
+			return true
+		end 'mentionsArg'
+	end 'eachArg'
+	return false
+end 'genericInstanceMentionsTypeParamWalk'
+
+// Coarse shape category for first-arg overload routing. Mirrors the
+// `mangleSuffixForMaxonType` arms but collapses each MaxonType to a single
+// integer the call-site walk can compare cheaply. Used to disambiguate two
+// generic-shaped overloads of the same bare name (e.g.
+// `Array.contains$Element` vs `Array.contains$Array_Element`) — the call
+// passes whichever variant's first-param shape matches the caller's first
+// argument shape; if neither matches, the first generic-shaped variant
+// wins.
+function paramTypeShape(t MaxonType) returns ParsedInt
+	return match t 'shape'
+		boolean gives 1
+		integer gives 2
+		float gives 3
+		string gives 4
+		named gives 5
+		function gives 6
+		interface gives 7
+		typeParameter gives 8
+		genericInstance gives 9
+		unresolved gives 0
+	end 'shape'
+end 'paramTypeShape'

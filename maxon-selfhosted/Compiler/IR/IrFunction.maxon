@@ -77,6 +77,32 @@ export type IrFunction
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
 
+	// Phase 11.4: trailing-param convention. A generic function carries an
+	// implicit `__layout_param` after user args (and after `__env` for a
+	// closure-lifted body). Its where-clauses, if any, contribute a single
+	// `__witness_param` after the layout slot. Final order:
+	//   (user_args..., __env?, __layout, __witness?)
+	// Both flags default to false; LowerMaxonToStd sets them as it
+	// discovers a generic body.
+	export var hasImplicitLayoutParam bool
+	export var hasImplicitWitnessParam bool
+
+	// Phase 11.5: deterministic content hash over signature + body shape,
+	// computed by computeFunctionContentHash after resolveTypes. Used as the
+	// per-function query cache key — a hit means the cached MIR/code is
+	// reusable, a miss invalidates it. Zero is the "not yet stamped"
+	// sentinel; the query layer stamps it lazily on first reach.
+	export var contentHash ContentHash
+
+	// Phase 11/C1.b: parallel array indexed by VarSlot id, recording the
+	// source-level MaxonType of every slot allocated by the parser/lowering.
+	// Populated by LowerMaxonToStd from `scope.allVars()` at function-transfer
+	// time so Std-level passes (InjectDrops in particular) can recognize a
+	// type-parameter slot and route its drop through the descriptor's
+	// destroyFunc rather than emitting a no-op `drop`. Empty for restored
+	// stdlib functions (no IR body) and Std-phase synthesized helpers.
+	export var slotMaxonTypes MaxonTypeArray
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields are left at defaults. Visibility defaults
 	// to `file` so the parser must positively widen it to `module` /
@@ -105,7 +131,11 @@ export type IrFunction
 			spillSize: 0,
 			stackSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
-			calleeSavedFps: RegIntArray.create()
+			calleeSavedFps: RegIntArray.create(),
+			hasImplicitLayoutParam: false,
+			hasImplicitWitnessParam: false,
+			contentHash: 0,
+			slotMaxonTypes: MaxonTypeArray.create()
 		}
 	end 'create'
 
@@ -136,7 +166,11 @@ export type IrFunction
 			spillSize: 0,
 			stackSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
-			calleeSavedFps: RegIntArray.create()
+			calleeSavedFps: RegIntArray.create(),
+			hasImplicitLayoutParam: false,
+			hasImplicitWitnessParam: false,
+			contentHash: 0,
+			slotMaxonTypes: MaxonTypeArray.create()
 		}
 	end 'createFromStd'
 
@@ -162,7 +196,11 @@ export type IrFunction
 			spillSize: src.spillSize,
 			stackSize: src.stackSize,
 			calleeSavedGprs: src.calleeSavedGprs,
-			calleeSavedFps: src.calleeSavedFps
+			calleeSavedFps: src.calleeSavedFps,
+			hasImplicitLayoutParam: src.hasImplicitLayoutParam,
+			hasImplicitWitnessParam: src.hasImplicitWitnessParam,
+			contentHash: src.contentHash,
+			slotMaxonTypes: src.slotMaxonTypes
 		}
 	end 'clone'
 end 'IrFunction'

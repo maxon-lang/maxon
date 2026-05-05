@@ -1,0 +1,130 @@
+// Phase 11.3: per-conformance witness tables.
+//
+// For every `(typeName, interfaceName)` conformance the project records, one
+// rdata blob `__witness_<TypeName>_<InterfaceName>` carries the resolved
+// method-impl function VAs in interface-declaration order. Phase 11.4's
+// witness-method dispatch reads this blob via constant-offset loads — so the
+// byte shape is part of the ABI between BuildWitnessTables (writer) and the
+// `witnessMethod` op (reader). Changing any field offset requires updating
+// both ends in lockstep, exactly like LayoutDescriptor.
+//
+// Byte layout (size = 24 + 8*methodCount, 8-byte aligned):
+//   +0   methodCount      u64
+//   +8   parentTablePtr   u64    (zero on disk; reserved for `extends` parent
+//                                 witness — emission deferred to a later phase
+//                                 when the rdata→rdata reloc kind exists)
+//   +16  flags            u64    (bit 0 = isFatBoxed)
+//   +24  methods[N]       u64 each (zero on disk; patched by funcAbs64InRdata)
+//
+// Witness identity is keyed by `(typeName, interfaceName)`. Only
+// unconditional conformances land here. Conditional ones (e.g. `Array
+// implements Hashable where Element: Hashable`) get emitted lazily by
+// 11.4 at the call site once the type-args are concrete.
+
+let WITNESS_HEADER_BYTE_SIZE = 24
+let WITNESS_FLAG_IS_FAT_BOXED = 1
+
+let WITNESS_OFFSET_METHOD_COUNT = 0
+export let WITNESS_OFFSET_PARENT = 8
+export let WITNESS_OFFSET_FLAGS = 16
+export let WITNESS_OFFSET_METHODS = 24
+
+export type WitnessTable
+	export var typeName String
+	export var interfaceName String
+	export var label String
+	export var methodImplNames StringArray
+	// Empty when this conformance's interface has no `extends` parent.
+	// Non-empty parent labels are reserved for the future rdata→rdata
+	// patcher; they're recorded here so 11.4 can find the parent witness
+	// when the dispatch path needs it, but `encodeWitnessTable` zero-fills
+	// the slot regardless.
+	export var parentWitnessLabel String
+	export var isFatBoxed bool
+
+	export static function create(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel String, isFatBoxed bool) returns WitnessTable
+		return Self{
+			typeName: typeName,
+			interfaceName: interfaceName,
+			label: label,
+			methodImplNames: methodImplNames,
+			parentWitnessLabel: parentWitnessLabel,
+			isFatBoxed: isFatBoxed
+		}
+	end 'create'
+end 'WitnessTable'
+
+export typealias WitnessTableArray = Array with WitnessTable
+export typealias WitnessTableId = int(0 to u64.max)
+
+// Encode a WitnessTable into its rdata image. The method slots (offset +24
+// onward) and the parent slot (+8) are zero on disk; the writer patches
+// the method slots at link time via funcAbs64InRdata. The parent slot
+// stays zero until a phase that wires extended-interface dispatch lands.
+export function encodeWitnessTable(t WitnessTable) returns ByteArray
+	let totalSize = WITNESS_HEADER_BYTE_SIZE + 8 * t.methodImplNames.count()
+	var buf = ByteArray.create()
+	buf.reserve(totalSize)
+	writeQword(buf, value: t.methodImplNames.count())
+	writeQword(buf, value: 0)
+	var flags = 0 as MachineWord
+	if t.isFatBoxed 'setFat'
+		flags = flags or WITNESS_FLAG_IS_FAT_BOXED
+	end 'setFat'
+	writeQword(buf, value: flags)
+	for _ in 0 upto t.methodImplNames.count() 'eachMethod'
+		writeQword(buf, value: 0)
+	end 'eachMethod'
+	return buf
+end 'encodeWitnessTable'
+
+// Phase 11.3 registry: per-`(typeName, interfaceName)` mangled label,
+// idempotent. Parallel-array layout mirrors LayoutDescriptorRegistry.
+export type WitnessTableRegistry
+	export var entries WitnessTableArray
+
+	export static function create() returns WitnessTableRegistry
+		return Self{entries: WitnessTableArray.create()}
+	end 'create'
+
+	export function count() returns WitnessTableId
+		return entries.count()
+	end 'count'
+
+	export function get(idx WitnessTableId) returns WitnessTable
+		return try entries.get(idx) otherwise panic("WitnessTableRegistry.get: invalid idx {idx}")
+	end 'get'
+
+	export function contains(typeName String, interfaceName String) returns bool
+		for i in 0 upto entries.count() 'scan'
+			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.contains: entries.get OOB at {i}")
+			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'contains'
+
+	// Idempotent: a second call with the same (typeName, interfaceName) returns
+	// without modifying state. Callers that want to know whether the entry was
+	// fresh should gate on `contains` first.
+	export function intern(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel String, isFatBoxed bool)
+		for i in 0 upto entries.count() 'scan'
+			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.intern: entries.get OOB at {i}")
+			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
+				return
+			end 'hit'
+		end 'scan'
+		entries.push(WitnessTable.create(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentWitnessLabel, isFatBoxed: isFatBoxed))
+	end 'intern'
+
+	export function labelFor(typeName String, interfaceName String) returns String
+		for i in 0 upto entries.count() 'scan'
+			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.labelFor: entries.get OOB at {i}")
+			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
+				return e.label
+			end 'hit'
+		end 'scan'
+		panic("WitnessTableRegistry.labelFor: no entry for ({typeName}, {interfaceName})")
+	end 'labelFor'
+end 'WitnessTableRegistry'

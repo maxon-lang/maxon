@@ -1,0 +1,471 @@
+// Phase 11.2 pass: emit a 56-byte LayoutDescriptor blob for every concrete
+// `genericInstance` MaxonType the project has interned. The descriptor is
+// the runtime contract Phase 11.4's generic-body lowering reads via
+// constant-offset loads — see `Compiler/IR/LayoutDescriptor.maxon` for the
+// byte shape and per-field invariants.
+//
+// Pass runs at the Maxon phase, after deadFunctionElimination has narrowed
+// the live function set but before lowerMaxonToStd lowers any bodies, so
+// the synthesized copy/destroy thunks land in the same pipeline stages as
+// every user function.
+//
+// Phase 11.2 alone unlocks no specs. The thunks emitted here are stubs —
+// no code path calls them yet — so their bodies do nothing useful. Phase
+// 11.4 will rewrite them as the generic body lowering grows the
+// `loadLayoutDescriptor` / `descriptorField` op family. The static rdata
+// emission, the funcAbs64InRdata reloc registration, and the livenessRoots
+// seeding ARE the contract this phase establishes — those have to be in
+// place before 11.4 can wire up call-site materialization.
+
+typealias VisitedSet = Set with GenericInstanceId
+typealias AsciiByte = byte(0 to u8.max)
+
+export function buildLayoutDescriptors(project Project, maxonModule MaxonModule, globalData GlobalDataTable)
+	let count = project.genericInstances.count()
+	if count == 0 'noWork'
+		return
+	end 'noWork'
+
+	logDebug(LogCategory.ir, message: () gives "buildLayoutDescriptors: walking {count} interned generic instances")
+
+	// Worklist seeds from every gid the parser/resolver has interned. The
+	// `walkInstantiations` helper would be redundant in steady state — the
+	// registry already enumerates every reachable instance — but we still
+	// run it so a future change that interns only the outermost wrapper
+	// (and elides its arg-list children) doesn't silently drop descriptors.
+	var visited = VisitedSet.create()
+	for gid in 0 upto count 'eachInstance'
+		walkInstantiations(project, t: MaxonType.genericInstance(gid), out: visited)
+	end 'eachInstance'
+
+	for gid in 0 upto count 'emit'
+		if not visited.contains(gid) 'unreachable'
+			continue
+		end 'unreachable'
+		emitDescriptorForInstance(project, maxonModule: maxonModule, globalData: globalData, gid: gid)
+	end 'emit'
+end 'buildLayoutDescriptors'
+
+function emitDescriptorForInstance(project Project, maxonModule MaxonModule, globalData GlobalDataTable, gid GenericInstanceId)
+	if project.layoutDescriptors.contains(gid) 'alreadyEmitted'
+		return
+	end 'alreadyEmitted'
+
+	let mangled = mangleInstance(project, gid: gid)
+	let descriptorLabel = "__layout_{mangled}"
+	let copyName = "__layout_copy_{mangled}"
+	let destroyName = "__layout_destroy_{mangled}"
+
+	let descriptor = computeLayoutDescriptor(project, gid: gid, copyName: copyName, destroyName: destroyName)
+	let bytes = encodeLayoutDescriptor(descriptor)
+
+	addNamedGlobalData(globalData, name: descriptorLabel, data: bytes)
+	project.staticRdataValues.upsert(descriptorLabel, value: bytes)
+
+	// Two funcAbs64InRdata relocs target the synthesized thunks at the
+	// fixed +32 (copy) and +40 (destroy) offsets within the descriptor.
+	// Both rdataLabel fields point at the descriptor itself so
+	// `resolveRdataRelocations` resolves their `rdataOffset` from the same
+	// rdata-offset map that backs every other rdata relocation.
+	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: copyName, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
+	pushFuncAbs64Reloc(globalData, rdataLabel: descriptorLabel, funcName: destroyName, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
+
+	synthesizeCopyThunk(project, maxonModule: maxonModule, gid: gid, name: copyName)
+	synthesizeDestroyThunk(project, maxonModule: maxonModule, gid: gid, name: destroyName)
+	project.livenessRoots.push(copyName)
+	project.livenessRoots.push(destroyName)
+
+	project.layoutDescriptors.intern(gid, label: descriptorLabel)
+end 'emitDescriptorForInstance'
+
+// Compute the concrete layout for a GenericInstance. Phase 11.2 baseline:
+// look up the base struct in `project.structTypes` and use its `byteSize`;
+// fall back to pointer-sized when the base isn't a registered struct
+// (built-ins like `__ManagedMemory`, opaque generic wrappers). Refined in
+// Phase 11.4 once `buildSubstitution` is wired into a real per-field walk.
+function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyName String, destroyName String) returns LayoutDescriptor
+	let (baseId, args) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	var size = 8 as MachineWord
+	var alignment = 8 as MachineWord
+	if let st = try project.structTypes.get(baseName) 'isStruct'
+		size = st.byteSize
+		if size < 8 'minAlign'
+			alignment = size
+		end 'minAlign'
+	end 'isStruct'
+	let elementSize = primitiveElementSize(args)
+	let hasHeapRefs = instanceHasHeapRefs(args)
+	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "")
+end 'computeLayoutDescriptor'
+
+// Recover an "element size" hint: when the instance has exactly one type
+// argument (the typical container shape — `Array with T`, `__ManagedMemory
+// with T`), report that argument's primitive width. Multi-arg or zero-arg
+// instances get 0 — matches the descriptor invariant "0 for non-container
+// types".
+function primitiveElementSize(args MaxonTypeArray) returns MachineWord
+	if args.count() != 1 'notSingleton'
+		return 0
+	end 'notSingleton'
+	let only = try args.get(0) otherwise panic("primitiveElementSize: args.get(0) failed despite count==1")
+	return primitiveWidth(only)
+end 'primitiveElementSize'
+
+// Conservative element-byte-width for a MaxonType: primitives at their
+// hardware width, everything else 8 (pointer-shaped). Phase 11.4's full
+// walk replaces this with `buildSubstitution`-driven field-by-field sizing.
+function primitiveWidth(t MaxonType) returns MachineWord
+	return match t 'w'
+		boolean gives 1
+		integer gives 8
+		float gives 8
+		string gives 8
+		named gives 8
+		function gives 8
+		unresolved gives 8
+		typeParameter gives 8
+		genericInstance gives 8
+		interface gives 8
+	end 'w'
+end 'primitiveWidth'
+
+// True iff any type argument is itself a heap-managed value (string or
+// reference-counted instance). Returns false for primitives and plain
+// named types — even though some named types ARE heap-managed, the
+// descriptor reader hasn't acquired a use for the bit yet, and Phase
+// 11.4's full walk over named-struct fields supersedes this anyway.
+function instanceHasHeapRefs(args MaxonTypeArray) returns bool
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise panic("instanceHasHeapRefs: args.get OOB at {i}")
+		if maxonTypeIsHeapManaged(t: a) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'instanceHasHeapRefs'
+
+function maxonTypeIsHeapManaged(t MaxonType) returns bool
+	return match t 'h'
+		string gives true
+		genericInstance gives true
+		interface gives true
+		boolean to float gives false
+		named gives false
+		function gives false
+		unresolved gives false
+		typeParameter gives false
+	end 'h'
+end 'maxonTypeIsHeapManaged'
+
+// Build a deterministic, valid-C-identifier mangling for a generic
+// instance. `genericInstanceIdToString` already produces a
+// human-readable spelling but the result includes spaces, parentheses,
+// and commas; this routine sanitizes those into underscores so the
+// label round-trips through every linker we target.
+function mangleInstance(project Project, gid GenericInstanceId) returns String
+	let (baseId, args) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	var result = sanitizeIdentifier(baseName)
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("mangleInstance: args.get OOB at {i}")
+		result = "{result}_{mangleType(project, t: a)}"
+	end 'eachArg'
+	return result
+end 'mangleInstance'
+
+function mangleType(project Project, t MaxonType) returns String
+	return match t 'm'
+		boolean gives "Bool"
+		integer gives "Int"
+		float gives "Float"
+		string gives "String"
+		named(id) gives sanitizeIdentifier(project.typeNames.get(id))
+		function gives "Fn"
+		unresolved gives "Unresolved"
+		typeParameter(id) gives sanitizeIdentifier(project.typeParameters.getName(id))
+		genericInstance(gid) gives mangleInstance(project, gid: gid)
+		interface(id) gives sanitizeIdentifier(project.interfaceRegistry.getName(id))
+	end 'm'
+end 'mangleType'
+
+// Replace every byte that isn't [A-Za-z0-9_] with '_'. Empty input becomes
+// "anon" so the mangled label is never zero-length. Exported so the
+// witness-table builder shares the exact same mangling rules — labels
+// generated by both passes get linked together by the writer and need to
+// agree byte-for-byte on the sanitization.
+export function sanitizeIdentifier(name String) returns String
+	if name.isEmpty() 'empty'
+		return "anon"
+	end 'empty'
+	let bytes = name.toByteArray()
+	var out = ByteArray.create()
+	out.reserve(bytes.count())
+	for i in 0 upto bytes.count() 'eachByte'
+		let b = try bytes.get(i) otherwise panic("sanitizeIdentifier: bytes.get OOB at {i}")
+		out.push(safeIdentifierByte(b))
+	end 'eachByte'
+	return String.from(out)
+end 'sanitizeIdentifier'
+
+function safeIdentifierByte(b AsciiByte) returns AsciiByte
+	let underscore = 0x5F as AsciiByte
+	if isAsciiAlphaNum(b) 'keep'
+		return b
+	end 'keep'
+	return underscore
+end 'safeIdentifierByte'
+
+function isAsciiAlphaNum(b AsciiByte) returns bool
+	let zero = 0x30 as AsciiByte
+	let nine = 0x39 as AsciiByte
+	let upperA = 0x41 as AsciiByte
+	let upperZ = 0x5A as AsciiByte
+	let lowerA = 0x61 as AsciiByte
+	let lowerZ = 0x7A as AsciiByte
+	let underscore = 0x5F as AsciiByte
+	if b >= zero and b <= nine 'digit'
+		return true
+	end 'digit'
+	if b >= upperA and b <= upperZ 'upper'
+		return true
+	end 'upper'
+	if b >= lowerA and b <= lowerZ 'lower'
+		return true
+	end 'lower'
+	return b == underscore
+end 'isAsciiAlphaNum'
+
+// Stage a `funcAbs64InRdata` reloc on globalData so a per-target writer
+// can later patch the absolute VA into the rdata slot. Used by both this
+// pass and BuildWitnessTables (layout-descriptor copy/destroy slots and
+// witness-table method slots share the same patch shape).
+export function pushFuncAbs64Reloc(globalData GlobalDataTable, rdataLabel String, funcName String, offsetInLabel ByteOffset)
+	let kind = RdataRelocKind.funcAbs64InRdata(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel)
+	globalData.pendingRdataRelocs.push(RdataRelocation.create(0, rdataLabel: rdataLabel, kind: kind))
+end 'pushFuncAbs64Reloc'
+
+// Per-thunk synthetic value name. Each thunk has its own block and its
+// own value-name namespace at the Maxon level, but salting with the
+// thunk's name keeps `--dump-stages` output readable.
+function synthName(thunkName String, suffix String) returns ByteArray
+	return "{thunkName}__{suffix}".toByteArray()
+end 'synthName'
+
+// True iff the gid's args contain any heap-ref-bearing type. Drives the
+// "single-word + incref" copy shape and the "single-word load into
+// String-typed local" destroy shape for non-struct generic instances.
+function instanceArgsHaveHeapRefs(project Project, gid GenericInstanceId) returns bool
+	let (_, args) = project.genericInstances.get(gid)
+	return instanceHasHeapRefs(args)
+end 'instanceArgsHaveHeapRefs'
+
+// Pick a representative heap-ref-bearing MaxonType from the gid's args.
+// Used when synthesizing a destroy thunk for the single-word case so the
+// loaded value's slot can be typed appropriately for C1.b's injectDrops
+// to release. When no arg is heap-bearing, returns MaxonType.integer
+// (caller will short-circuit to ret 0 instead).
+function representativeHeapType(project Project, gid GenericInstanceId) returns MaxonType
+	let (_, args) = project.genericInstances.get(gid)
+	for i in 0 upto args.count() 'eachArg'
+		let a = try args.get(i) otherwise panic("representativeHeapType: args.get OOB at {i}")
+		if maxonTypeIsHeapManaged(t: a) 'hit'
+			return a
+		end 'hit'
+	end 'eachArg'
+	return MaxonType.integer
+end 'representativeHeapType'
+
+// Boilerplate: create an IrFunction shell for a thunk, register one
+// entry block, and bind the parameter slots. Returns (func, entryBlock).
+function startThunkFunc(maxonModule MaxonModule, name String, paramCount ParamCount) returns (IrFunction, IrBlock)
+	var paramTypes = MaxonTypeArray.create()
+	for _ in 0 upto paramCount 'eachParam'
+		paramTypes.push(MaxonType.integer)
+	end 'eachParam'
+	var func = IrFunction.create(name, maxonReturnType: MaxonReturnType.void, paramCount: paramCount, maxonParamTypes: paramTypes, returnLine: 0)
+	func.namespace = ""
+	func.visibility = Visibility.global
+	let block = maxonModule.addBlock(func, label: "entry")
+	return (func, block)
+end 'startThunkFunc'
+
+// Append a `MaxonOp.call` to the runtime helper at qualifiedName and
+// register its opIdx in `project.resolvedCallees` so lowerMaxonToStd's
+// post-TypeResolution invariant (every call op has a resolved callee
+// stashed by the resolver pass) is satisfied. The runtime helpers have
+// no `funcSignatures` entry, so lowering takes the no-signature
+// `emitUnsignedCall` branch and emits a plain Std-level call against
+// the bare runtime symbol — exactly what we need.
+function emitRuntimeCall(project Project, maxonModule MaxonModule, block IrBlock, resultName ByteArray, callee String, args ByteArrayArray)
+	let opIdx = maxonModule.ops.count()
+	let calleeBytes = project.calleeNames.intern(callee)
+	var argLabels = StringArray.create()
+	for _ in 0 upto args.count() 'fillLabels'
+		argLabels.push("")
+	end 'fillLabels'
+	var argTypes = MaxonTypeArray.create()
+	var argRanges = SourceRangeArray.create()
+	for _ in 0 upto args.count() 'fillTypes'
+		argTypes.push(MaxonType.integer)
+		argRanges.push(SourceRange.none())
+	end 'fillTypes'
+	maxonModule.appendOp(block, op: MaxonOp.call(resultName, callee: calleeBytes, callContext: CallContext.qualified, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.none()))
+	try project.resolvedCallees.insert(opIdx, value: callee) otherwise ignore
+end 'emitRuntimeCall'
+
+// Emit a load+(optional incref)+store sequence for a single 8-byte word
+// at offset `offset` from src/dst. Used by both the single-word copy
+// shape and the per-field struct copy shape. `srcName`/`dstName` are
+// the names of the src/dst pointer values already bound in the block.
+// `tag` is a per-call name suffix to keep synth names unique within
+// the thunk's value namespace.
+function emitWordCopyAtOffset(project Project, maxonModule MaxonModule, block IrBlock, thunkName String, srcName ByteArray, dstName ByteArray, offset FieldOffset, fieldHasHeapRef bool, tag String)
+	var srcAt = srcName
+	var dstAt = dstName
+	if offset != 0 'needAdjust'
+		let offConst = synthName(thunkName, suffix: "off_{tag}")
+		maxonModule.appendOp(block, op: MaxonOp.literal(offConst, value: offset, valueType: MaxonType.integer, range: SourceRange.none()))
+		let srcAdjusted = synthName(thunkName, suffix: "src_{tag}")
+		maxonModule.appendOp(block, op: MaxonOp.binop(srcAdjusted, left: srcName, right: offConst, opKind: BinOpKind.add, operandType: MaxonType.integer, range: SourceRange.none()))
+		let dstAdjusted = synthName(thunkName, suffix: "dst_{tag}")
+		maxonModule.appendOp(block, op: MaxonOp.binop(dstAdjusted, left: dstName, right: offConst, opKind: BinOpKind.add, operandType: MaxonType.integer, range: SourceRange.none()))
+		srcAt = srcAdjusted
+		dstAt = dstAdjusted
+	end 'needAdjust'
+
+	let valueName = synthName(thunkName, suffix: "v_{tag}")
+	var loadArgs = ByteArrayArray.create()
+	loadArgs.push(srcAt)
+	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: valueName, callee: "__layout_word_load", args: loadArgs)
+
+	if fieldHasHeapRef 'incref'
+		let increfResult = synthName(thunkName, suffix: "incref_{tag}")
+		var increfArgs = ByteArrayArray.create()
+		increfArgs.push(valueName)
+		emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: increfResult, callee: "mm_incref", args: increfArgs)
+	end 'incref'
+
+	let storeResult = synthName(thunkName, suffix: "store_{tag}")
+	var storeArgs = ByteArrayArray.create()
+	storeArgs.push(dstAt)
+	storeArgs.push(valueName)
+	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: storeResult, callee: "__layout_word_store", args: storeArgs)
+end 'emitWordCopyAtOffset'
+
+// Read the single 8-byte word at offset and bind it as a slot of the
+// given MaxonType. Used by the destroy thunk path for heap-ref-bearing
+// fields/words: C1.b's slot-MaxonType plumbing will let injectDrops emit
+// the matching `mm_decref` at the slot's lifetime end. Today the slot
+// type carried by varDecl is discarded by lowerMaxonToStd, so the
+// runtime effect is a no-op until C1.b lands — but the *shape* is right.
+function emitWordDestroyAtOffset(project Project, maxonModule MaxonModule, block IrBlock, thunkName String, valueName ByteArray, offset FieldOffset, slotMaxonType MaxonType, slotId VarSlot, tag String)
+	var valueAt = valueName
+	if offset != 0 'needAdjust'
+		let offConst = synthName(thunkName, suffix: "doff_{tag}")
+		maxonModule.appendOp(block, op: MaxonOp.literal(offConst, value: offset, valueType: MaxonType.integer, range: SourceRange.none()))
+		let adjusted = synthName(thunkName, suffix: "dat_{tag}")
+		maxonModule.appendOp(block, op: MaxonOp.binop(adjusted, left: valueName, right: offConst, opKind: BinOpKind.add, operandType: MaxonType.integer, range: SourceRange.none()))
+		valueAt = adjusted
+	end 'needAdjust'
+
+	let loaded = synthName(thunkName, suffix: "dv_{tag}")
+	var loadArgs = ByteArrayArray.create()
+	loadArgs.push(valueAt)
+	emitRuntimeCall(project, maxonModule: maxonModule, block: block, resultName: loaded, callee: "__layout_word_load", args: loadArgs)
+
+	maxonModule.appendOp(block, op: MaxonOp.varDecl(slotId, value: loaded, slotType: slotMaxonType, range: SourceRange.none()))
+end 'emitWordDestroyAtOffset'
+
+// Synthesize the body of __layout_copy_<m>(src ptr, dst ptr) for a
+// concrete generic instance gid. Body shape is driven by the resolved
+// type of the instance:
+//
+//   - Struct-shaped (baseName ∈ project.structTypes): per-field walk;
+//     each field is a single 8-byte word (Maxon's struct fields are
+//     pointer-sized). Heap-bearing fields incref before storing into
+//     dst — the layout-routed copy is the moral equivalent of a
+//     stdlib `clone()`, so an incref restores invariants.
+//   - Heap-ref-bearing single word (any gid arg is heap-managed —
+//     covers `__ManagedMemory with String`, `Array with String`, etc.):
+//     load+incref+store the single 8-byte word.
+//   - Otherwise (primitive single word, e.g. `Array with Int`):
+//     load+store, no refcount touching.
+function synthesizeCopyThunk(project Project, maxonModule MaxonModule, gid GenericInstanceId, name String)
+	var (func, block) = startThunkFunc(maxonModule, name: name, paramCount: 2)
+
+	let srcLoad = synthName(name, suffix: "srcLoad")
+	let dstLoad = synthName(name, suffix: "dstLoad")
+	maxonModule.appendOp(block, op: MaxonOp.varLoad(srcLoad, slotId: 0, slotType: MaxonType.integer, range: SourceRange.none()))
+	maxonModule.appendOp(block, op: MaxonOp.varLoad(dstLoad, slotId: 1, slotType: MaxonType.integer, range: SourceRange.none()))
+
+	let (baseId, args) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	if let st = try project.structTypes.get(baseName) 'isStruct'
+		let subst = buildSubstitution(project, declaringTypeName: baseName, args: args)
+		for i in 0 upto st.fields.count() 'eachField'
+			let field = try st.fields.get(i) otherwise panic("synthesizeCopyThunk: fields.get OOB at {i}")
+			let concrete = substituteType(project, t: field.fieldType, subst: subst)
+			let isHeap = maxonTypeIsHeapManaged(t: concrete)
+			emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: field.offset, fieldHasHeapRef: isHeap, tag: "f{i}")
+		end 'eachField'
+	end 'isStruct' else 'singleWord'
+		let isHeap = instanceArgsHaveHeapRefs(project, gid: gid)
+		emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: 0, fieldHasHeapRef: isHeap, tag: "w0")
+	end 'singleWord'
+
+	let zeroName = synthName(name, suffix: "zero")
+	maxonModule.appendOp(block, op: MaxonOp.literal(zeroName, value: 0, valueType: MaxonType.integer, range: SourceRange.none()))
+	maxonModule.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
+	maxonModule.functions.push(func)
+end 'synthesizeCopyThunk'
+
+// Synthesize the body of __layout_destroy_<m>(value ptr). Shape:
+//
+//   - Pure-primitive instance (no heap-bearing args, non-struct base):
+//     `ret 0` — nothing to release.
+//   - Heap-ref-bearing single word: load the 8-byte word and bind it as
+//     a slot of the heap type. injectDrops then sees the slot's
+//     lifetime end at function return and emits `mm_decref` (once
+//     C1.b plumbs the slot MaxonType through Std lowering).
+//   - Struct-shaped: per-field walk; for each heap-ref-bearing field,
+//     load it into its own slot of the field's substituted type.
+//     Non-heap fields contribute nothing.
+//
+// We deliberately do NOT hand-emit `mm_decref` calls — that's
+// injectDrops' job. C1.a lands the shape; the runtime effect arrives
+// when C1.b lights up the slot-type-driven drop emission.
+function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid GenericInstanceId, name String)
+	var (func, block) = startThunkFunc(maxonModule, name: name, paramCount: 1)
+
+	let valueLoad = synthName(name, suffix: "valLoad")
+	maxonModule.appendOp(block, op: MaxonOp.varLoad(valueLoad, slotId: 0, slotType: MaxonType.integer, range: SourceRange.none()))
+
+	let (baseId, args) = project.genericInstances.get(gid)
+	let baseName = project.typeNames.get(baseId)
+	// Param slot 0 is the only user-facing slot today; field-destroy
+	// slots count up from slot 1.
+	var nextSlot = 1 as VarSlot
+	if let st = try project.structTypes.get(baseName) 'isStruct'
+		let subst = buildSubstitution(project, declaringTypeName: baseName, args: args)
+		for i in 0 upto st.fields.count() 'eachField'
+			let field = try st.fields.get(i) otherwise panic("synthesizeDestroyThunk: fields.get OOB at {i}")
+			let concrete = substituteType(project, t: field.fieldType, subst: subst)
+			if maxonTypeIsHeapManaged(t: concrete) 'isHeap'
+				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, slotMaxonType: concrete, slotId: nextSlot, tag: "f{i}")
+				nextSlot = nextSlot + 1
+			end 'isHeap'
+		end 'eachField'
+	end 'isStruct' else 'singleWord'
+		if instanceArgsHaveHeapRefs(project, gid: gid) 'hasHeap'
+			let slotType = representativeHeapType(project, gid: gid)
+			emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: 0, slotMaxonType: slotType, slotId: nextSlot, tag: "w0")
+			nextSlot = nextSlot + 1
+		end 'hasHeap'
+	end 'singleWord'
+
+	let zeroName = synthName(name, suffix: "zero")
+	maxonModule.appendOp(block, op: MaxonOp.literal(zeroName, value: 0, valueType: MaxonType.integer, range: SourceRange.none()))
+	maxonModule.setTerminator(block, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
+	maxonModule.functions.push(func)
+end 'synthesizeDestroyThunk'

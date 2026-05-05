@@ -22,37 +22,29 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @if-statements.test(rcx: i64, rdx: i64) -> i64 {
-  entry:
-    x64.test rcx, rcx
-    x64.jne maybePrefix_1.after
-  maybePrefix_1:
-    x64.cmp rdx, 1
-    x64.jne isHex_2.after
-  isHex_2:
-    x64.mov r9d, 1
-    x64.mov r8, r9
-    x64.ret
-  isHex_2.after:
-    x64.cmp rdx, 2
-    x64.jne maybePrefix_1.after
-  isBinary_4:
-    x64.mov r9d, 2
-    x64.mov r8, r9
-    x64.ret
-  maybePrefix_1.after:
-    x64.mov r9d, 42
-    x64.mov r8, r9
-    x64.ret
-  }
   func @if-statements.main() -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.xor r8d, r8d
     x64.mov r9d, 5
-    x64.mov rcx, r9
-    x64.mov rdx, r8
-    x64.call if-statements.test
+  inlined_if-statements.test_0:
+    x64.test r9, r9
+    x64.jne inlined_if-statements.test_6
+  inlined_if-statements.test_1:
+    x64.cmp r8, 1
+    x64.jne inlined_if-statements.test_3
+  inlined_if-statements.test_2:
+    x64.mov r8d, 1
+    x64.jmp inline_cont_if-statements.main_0
+  inlined_if-statements.test_3:
+    x64.cmp r8, 2
+    x64.jne inlined_if-statements.test_6
+  inlined_if-statements.test_4:
+    x64.mov r8d, 2
+    x64.jmp inline_cont_if-statements.main_0
+  inlined_if-statements.test_6:
+    x64.mov r8d, 42
+  inline_cont_if-statements.main_0:
     x64.cmp r8, 125
     x64.jbe __range_ok_2
   __range_panic_2:

@@ -51,6 +51,17 @@ export function buildDebugSymbols(labelNames StringArray, labelOffsets CodeOffse
 end 'buildDebugSymbols'
 
 // Relocation kind for code-to-rdata references.
+//
+// Phase 11.2: `funcAbs64InRdata` is the lone outlier — it patches an 8-byte
+// slot that lives **inside** rdata (a layout descriptor's copy/destroy
+// function-pointer slot) with the absolute virtual address of a `.text`
+// function, while every other arm patches a slot **inside** code with a
+// reference into rdata/symdata/data/covdata. Carries its full payload on
+// the union arm because the host RdataRelocation's `codeOffset`/`rdataLabel`
+// fields don't match (patch site is rdata-relative, target is a function
+// name, not a data label). Only emitted by BuildLayoutDescriptors and
+// BuildWitnessTables — never produced per-function, so it never round-trips
+// through StdlibCache (the codec below panics on it).
 export union RdataRelocKind
 	ripRelDisp32
 	symdataRipRelDisp32
@@ -61,15 +72,21 @@ export union RdataRelocKind
 	symdataArm64Adr
 	dataSectionArm64Adr
 	covdataArm64Adr
+	funcAbs64InRdata(funcName String, rdataLabel String, offsetInLabel ByteOffset)
 end 'RdataRelocKind'
 
 // --- Cache codec ---
-// All variants are bare, so the writer just emits the ordinal. The reader
+// Bare variants serialize as their ordinal. `funcAbs64InRdata` is excluded
+// from per-function cache I/O — it's only produced by Maxon-level passes
+// that run after the cache restore — so the codec panics on it; the reader
 // lifts the raw int through .unionCases.fromRawValue and matches over the
-// companion enum (exhaustive); adding a variant breaks the reader.
+// companion enum (exhaustive).
 
 export function writeRdataRelocKind(buf ByteArray, kind RdataRelocKind)
-	writeDword(buf, value: kind.ordinal)
+	match kind 'k'
+		funcAbs64InRdata then panic("writeRdataRelocKind: funcAbs64InRdata is rdata-internal and must not enter the per-function cache stream")
+		ripRelDisp32 to covdataArm64Adr then writeDword(buf, value: kind.ordinal)
+	end 'k'
 end 'writeRdataRelocKind'
 
 export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (RdataRelocKind, ByteOffset)
@@ -86,6 +103,7 @@ export function readRdataRelocKind(buf ByteArray, offset ByteOffset) returns (Rd
 		symdataArm64Adr then return (RdataRelocKind.symdataArm64Adr, pos)
 		dataSectionArm64Adr then return (RdataRelocKind.dataSectionArm64Adr, pos)
 		covdataArm64Adr then return (RdataRelocKind.covdataArm64Adr, pos)
+		funcAbs64InRdata then panic("readRdataRelocKind: funcAbs64InRdata never serializes into the per-function cache stream")
 	end 'tag'
 end 'readRdataRelocKind'
 
@@ -105,6 +123,88 @@ export type RdataRelocation
 end 'RdataRelocation'
 
 export typealias RdataRelocationArray = Array with RdataRelocation
+
+// Phase 11.2/11.3: walk an RdataRelocationArray and append every
+// `funcAbs64InRdata` target name to `seeds`. The DFE/livenessRoots path
+// already keeps user-defined witness/layout-thunk impls alive through the
+// Maxon stage, but the per-target stdlib linker only seeds from `call`
+// fixups by default — without this helper, a stdlib method (e.g.
+// `Range.createIterator` referenced via a witness slot) would never make
+// it into `.text` and the PE/ELF/Mach-O writer would panic at link time.
+export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationArray)
+	for reloc in relocs 'each'
+		match reloc.kind 'k'
+			ripRelDisp32 to covdataArm64Adr then break 'k'
+			funcAbs64InRdata(funcName, _, _) then seeds.push(funcName)
+		end 'k'
+	end 'each'
+end 'appendFuncAbs64Seeds'
+
+// Look up a function's code offset by name. Hard error on miss — every
+// reloc target must correspond to a `.text` symbol the backend recorded.
+export function lookupFuncCodeOffset(debugSymbols DebugSymbolArray, name String) returns CodeOffset
+	for sym in debugSymbols 'scan'
+		if sym.name == name 'hit'
+			return sym.codeOffset
+		end 'hit'
+	end 'scan'
+	panic("lookupFuncCodeOffset: no .text symbol named '{name}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
+end 'lookupFuncCodeOffset'
+
+// Patch every funcAbs64InRdata reloc by writing the absolute VA of the
+// referenced .text function into the rdata slot. Format-neutral: callers
+// pass `textAbsBase` already collapsed for their target (PE: imageBase +
+// textRva; ELF: textVAddr; Mach-O: textSectionVMAddr).
+export function patchFuncAbs64InRdata(rdata ByteArray, rdataRelocs RdataRelocationArray, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
+	for reloc in rdataRelocs 'patch'
+		match reloc.kind 'k'
+			ripRelDisp32 to covdataArm64Adr then break 'k'
+			funcAbs64InRdata(funcName, _, offsetInLabel) then patchOneFuncAbs64InRdata(rdata, descriptorOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel, funcName: funcName, textAbsBase: textAbsBase, debugSymbols: debugSymbols)
+		end 'k'
+	end 'patch'
+end 'patchFuncAbs64InRdata'
+
+function patchOneFuncAbs64InRdata(rdata ByteArray, descriptorOffset CodeOffset, offsetInLabel ByteOffset, funcName String, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
+	let funcCodeOffset = lookupFuncCodeOffset(debugSymbols, name: funcName)
+	let absVa = textAbsBase + funcCodeOffset
+	let slot = descriptorOffset + offsetInLabel
+	patchQword(rdata, offset: slot, value: absVa)
+end 'patchOneFuncAbs64InRdata'
+
+// Phase 11.5: per-function code chunk. The incremental backend emits one
+// chunk per function, then the module-level fixup pass concatenates them
+// into the final `.text` section. All offsets inside a chunk are local
+// (entryOffset is always 0 — kept as a field for clarity and future
+// flexibility). The concat pass shifts every fixup by the chunk's start
+// offset before writing the final CodeResult.
+//
+// `code` holds the raw machine bytes for one function, including the
+// prologue/epilogue. `callFixups` records intra-module call sites that
+// need patching once every chunk's start offset is known. `rdataRelocs`
+// records code → rdata references; their `codeOffset` is chunk-local and
+// gets shifted at concat time. `iatRelocs` mirrors the same convention
+// for Windows IAT entries.
+export type FunctionCodeChunk
+	export var funcName String
+	export var code ByteArray
+	export var entryOffset CodeOffset
+	export var callFixups CallFixupArray
+	export var rdataRelocs RdataRelocationArray
+	export var iatRelocs RelocationArray
+
+	export static function create(funcName String) returns FunctionCodeChunk
+		return Self{
+			funcName: funcName,
+			code: ByteArray.create(),
+			entryOffset: 0,
+			callFixups: CallFixupArray.create(),
+			rdataRelocs: RdataRelocationArray.create(),
+			iatRelocs: RelocationArray.create()
+		}
+	end 'create'
+end 'FunctionCodeChunk'
+
+export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
 
 // CodeResult bundles the emitted machine code along with the data needed
 // to finish writing an executable and the IR module(s) that produced it.

@@ -261,6 +261,7 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 			dataSectionRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: dataRva + reloc.rdataOffset - ripAtReloc)
 			covdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: covdataRva + reloc.rdataOffset - ripAtReloc)
 			arm64Adr to covdataArm64Adr then break 'kind'
+			funcAbs64InRdata then break 'kind'
 		end 'kind'
 	end 'patch'
 end 'patchRdataRelocationsX86'
@@ -275,6 +276,7 @@ function patchRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationA
 			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: symdataRva)
 			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: dataRva + reloc.rdataOffset)
 			covdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: covdataRva + reloc.rdataOffset)
+			funcAbs64InRdata then break 'patchKind'
 		end 'patchKind'
 	end 'patch'
 end 'patchRdataRelocationsArm64'
@@ -414,6 +416,18 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchRdata'
 
+	// Phase 11.2: patch the rdata-internal funcAbs64 slots (layout-descriptor
+	// copy/destroy, witness-table methods). PE ImageBase is fixed at
+	// 0x140000000 below; absolute VAs we write here assume the loader places
+	// the image there. We clear DYNAMIC_BASE / HIGH_ENTROPY_VA in
+	// DllCharacteristics so the loader pins the image at ImageBase — without
+	// a base-relocation table, ASLR would leave these abs64 slots pointing at
+	// the wrong VA and indirect calls through them DEP-fault. If a future PE
+	// update adds a base reloc table, every funcAbs64 slot will need a
+	// corresponding entry there and DYNAMIC_BASE can be re-enabled.
+	let imageBase = 0x140000000
+	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: imageBase + textRva, debugSymbols: codeResult.debugSymbols)
+
 	// IAT directory size: one qword per slot plus a null terminator entry.
 	let iatDirSize = (IAT_SLOT_COUNT + 1) * 8
 
@@ -453,11 +467,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	pe.append(b"\x00\x00\x00\x40\x01\x00\x00\x00\x00\x10\x00\x00\x00\x02\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00")
 	writeDword(pe, value: imageSize)
 	writeDword(pe, value: headersAligned)
-	// CheckSum(0), Subsystem(3=CONSOLE), DllCharacteristics(0x8160)
+	// CheckSum(0), Subsystem(3=CONSOLE), DllCharacteristics(0x8100 — NX_COMPAT
+	// + TERMINAL_SERVER_AWARE; DYNAMIC_BASE/HIGH_ENTROPY_VA cleared because
+	// rdata abs64 slots have no base-relocs to fix up under ASLR slide).
 	// SizeOfStackReserve(0x100000), SizeOfStackCommit(0x1000)
 	// SizeOfHeapReserve(0x100000), SizeOfHeapCommit(0x1000)
 	// LoaderFlags(0), NumberOfRvaAndSizes(16)
-	pe.append(b"\x00\x00\x00\x00\x03\x00\x60\x81\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
+	pe.append(b"\x00\x00\x00\x00\x03\x00\x00\x81\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
 
 	// Data directories: 0=Export(zeros), 1=Import
 	pe.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")

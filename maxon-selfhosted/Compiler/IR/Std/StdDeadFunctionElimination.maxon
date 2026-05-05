@@ -1,0 +1,109 @@
+// Phase 11.6: Std-level Dead Function Elimination.
+//
+// Mirrors the Maxon-level DFE in Compiler/IR/Maxon/DeadFunctionElimination.maxon
+// but operates over Std ops. Runs after the inliner pass at the Std level —
+// any function whose static call sites have all been inlined becomes
+// unreachable and can be dropped from the module.
+//
+// Differences from the Maxon-level pass:
+//   - Walks `StdCallOp.call` / `tryCall` / `tailCall` / `funcRef` /
+//     `indirectCall` (latter conservatively keeps indirectly-targeted
+//     functions alive because we can't see through the function pointer at
+//     this phase). At Std level call resolution is already complete; the
+//     callee names are direct strings, no CallContext qualification.
+//   - Seeds the worklist from `["main"] + project.livenessRoots` exactly
+//     like the Maxon-level pass: layout-descriptor copy/destroy thunks and
+//     witness-table method impls live behind static rdata pointers (not
+//     `call` ops) and would otherwise look unreachable.
+
+typealias StdDfeStringSet = Set with String
+
+export function eliminateDeadStdFunctions(module StdModule, project Project) returns StdModule
+	var seen = StdDfeStringSet from ["main"]
+	var worklist = ["main"]
+	for root in project.livenessRoots 'seedRoots'
+		if not seen.contains(root) 'fresh'
+			seen.insert(element: root)
+			worklist.push(root)
+		end 'fresh'
+	end 'seedRoots'
+
+	var funcMap = StdFuncByName.create()
+	for func in module.functions 'buildMap'
+		funcMap.upsert(func.name, value: func)
+	end 'buildMap'
+
+	var i = 0
+	while i < worklist.count() 'walk'
+		let name = try worklist.get(i) otherwise panic("eliminateDeadStdFunctions: worklist.get OOB at {i}")
+		if let func = try funcMap.get(name) 'found'
+			collectStdCallees(module, func: func, worklist: worklist, seen: seen)
+		end 'found'
+		i = i + 1
+	end 'walk'
+
+	var newFunctions = IrFunctionArray.create()
+	for func in module.functions 'filter'
+		if seen.contains(func.name) 'keep'
+			newFunctions.push(func)
+		end 'keep' else 'drop'
+			logTrace(LogCategory.ir, message: () gives "stddfe: dropping dead function '{func.name}'")
+		end 'drop'
+	end 'filter'
+	module.functions = newFunctions
+	return module
+end 'eliminateDeadStdFunctions'
+
+typealias StdFuncByName = Map with(String, IrFunction)
+
+function collectStdCallees(module StdModule, func IrFunction, worklist StringArray, seen StdDfeStringSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectStdCallees: blockRef {blockRef} not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			markCalleesFromStdOp(module, opIdx: opIdx, worklist: worklist, seen: seen)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			markCalleesFromStdOp(module, opIdx: block.terminatorIndex(), worklist: worklist, seen: seen)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'collectStdCallees'
+
+function markCalleesFromStdOp(module StdModule, opIdx OpIndex, worklist StringArray, seen StdDfeStringSet)
+	let op = try module.ops.get(opIdx) otherwise panic("markCalleesFromStdOp: opIdx {opIdx} not in module.ops")
+	match op 'shape'
+		call(inner) then markFromStdCallOp(inner, worklist: worklist, seen: seen)
+		arith then return
+		control then return
+		memory then return
+		// Std-level system ops never name a function via plain text — funcAddr
+		// is the only candidate, and that names a runtime helper which is
+		// already in livenessRoots when relevant.
+		system then return
+	end 'shape'
+end 'markCalleesFromStdOp'
+
+function markFromStdCallOp(op StdCallOp, worklist StringArray, seen StdDfeStringSet)
+	match op 'kind'
+		ret then return
+		call(_, callee, _) then markStdCallee(callee, worklist: worklist, seen: seen)
+		tryCall(_, callee, _, _) then markStdCallee(callee, worklist: worklist, seen: seen)
+		tailCall(callee, _) then markStdCallee(callee, worklist: worklist, seen: seen)
+		funcRef(_, funcName) then markStdCallee(funcName, worklist: worklist, seen: seen)
+		// indirectCall flows through a runtime pointer; the callee was
+		// already rooted by whatever produced the funcRef / closureCreate
+		// upstream, so this op alone needs no fresh marking.
+		indirectCall then return
+		param then return
+	end 'kind'
+end 'markFromStdCallOp'
+
+function markStdCallee(name String, worklist StringArray, seen StdDfeStringSet)
+	if name.isEmpty() 'noName'
+		return
+	end 'noName'
+	if seen.contains(name) 'already'
+		return
+	end 'already'
+	seen.insert(element: name)
+	worklist.push(name)
+end 'markStdCallee'

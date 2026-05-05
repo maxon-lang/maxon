@@ -58,6 +58,51 @@ export type CodeMemo
 	end 'create'
 end 'CodeMemo'
 
+// Phase 11.5: per-function memos for the incremental query layer.
+//
+// `keyHash` is the contentHash captured when the memo was filled. On every
+// query call, the live function's contentHash is compared against the memo's
+// `keyHash` — a mismatch invalidates the memo even if the source revision
+// hasn't moved (e.g. a synthesized helper had its body rewritten in place).
+// A zero `keyHash` means "no value cached". `computedAt` / `verifiedAt`
+// follow the same convention as the whole-module memos.
+export type MidFuncMemo
+	export var value IrFunction
+	export var keyHash ContentHash
+	export var computedAt Revision
+	export var verifiedAt Revision
+
+	export static function create(value IrFunction, keyHash ContentHash, computedAt Revision, verifiedAt Revision) returns MidFuncMemo
+		return Self{value: value, keyHash: keyHash, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
+end 'MidFuncMemo'
+
+export type MirFuncMemo
+	export var value IrFunction
+	export var keyHash ContentHash
+	export var computedAt Revision
+	export var verifiedAt Revision
+
+	export static function create(value IrFunction, keyHash ContentHash, computedAt Revision, verifiedAt Revision) returns MirFuncMemo
+		return Self{value: value, keyHash: keyHash, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
+end 'MirFuncMemo'
+
+export type CodeChunkMemo
+	export var value FunctionCodeChunk
+	export var keyHash ContentHash
+	export var computedAt Revision
+	export var verifiedAt Revision
+
+	export static function create(value FunctionCodeChunk, keyHash ContentHash, computedAt Revision, verifiedAt Revision) returns CodeChunkMemo
+		return Self{value: value, keyHash: keyHash, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
+end 'CodeChunkMemo'
+
+export typealias MidFuncCacheMap = Map with(String, MidFuncMemo)
+export typealias MirFuncCacheMap = Map with(String, MirFuncMemo)
+export typealias CodeChunkCacheMap = Map with(String, CodeChunkMemo)
+
 // Map typealiases for per-file caches.
 export typealias TokenCacheMap = Map with(FilePath, TokenMemo)
 export typealias ParseCacheMap = Map with(FilePath, ParseMemo)
@@ -75,6 +120,11 @@ end 'SourceFileEntry'
 export typealias SourceFileMap = Map with(FilePath, SourceFileEntry)
 
 // Query key enum identifies each query by type + parameters.
+//
+// Phase 11.5 adds three per-function arms: midForFunction, mirForFunction,
+// and codeForFunction. They participate in the same dependency-tracking
+// machinery as the whole-module queries (recordDependency walks the active
+// stack and records edges keyed on `queryKeyString`).
 export union QueryKey
 	sourceFile(path FilePath)
 	tokens(path FilePath)
@@ -82,6 +132,9 @@ export union QueryKey
 	allModule
 	allMid
 	codeResult
+	midForFunction(funcName String)
+	mirForFunction(funcName String)
+	codeForFunction(funcName String)
 end 'QueryKey'
 
 export typealias QueryKeyArray = Array with QueryKey
@@ -133,6 +186,26 @@ export type QueryDatabase
 	export var codeHits Revision
 	export var codeMisses Revision
 
+	// Phase 11.5: per-function caches and the incremental-mode toggle.
+	//
+	// `enableIncremental` defaults to false so batch CLI builds produce the
+	// exact same artifacts they did before this layer existed — the
+	// incremental path only runs when an LSP / `--watch` driver opts in.
+	// Whole-module emission and incremental emission must produce
+	// byte-identical output for the same input; the off-by-default flag
+	// makes the safety invariant easy to enforce at boundaries.
+	export var enableIncremental bool
+	export var midPerFunc MidFuncCacheMap
+	export var mirPerFunc MirFuncCacheMap
+	export var codePerFunc CodeChunkCacheMap
+
+	export var midPerFuncHits Revision
+	export var midPerFuncMisses Revision
+	export var mirPerFuncHits Revision
+	export var mirPerFuncMisses Revision
+	export var codePerFuncHits Revision
+	export var codePerFuncMisses Revision
+
 	export static function create(emptyMaxonMemo MaxonModuleMemo, emptyStdMemo StdModuleMemo, emptyCodeMemo CodeMemo) returns QueryDatabase
 		return Self{
 			currentRevision: 1,
@@ -150,7 +223,14 @@ export type QueryDatabase
 			parseHits: 0, parseMisses: 0,
 			allModuleHits: 0, allModuleMisses: 0,
 			allMidHits: 0, allMidMisses: 0,
-			codeHits: 0, codeMisses: 0
+			codeHits: 0, codeMisses: 0,
+			enableIncremental: false,
+			midPerFunc: MidFuncCacheMap.create(),
+			mirPerFunc: MirFuncCacheMap.create(),
+			codePerFunc: CodeChunkCacheMap.create(),
+			midPerFuncHits: 0, midPerFuncMisses: 0,
+			mirPerFuncHits: 0, mirPerFuncMisses: 0,
+			codePerFuncHits: 0, codePerFuncMisses: 0
 		}
 	end 'create'
 end 'QueryDatabase'

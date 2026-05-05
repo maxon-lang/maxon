@@ -92,6 +92,13 @@ export type Parser
 	// instead of falling through to `internMaxonType` (which would treat the
 	// name as a regular `MaxonType.named`).
 	var currentTypeParams StringArray
+	// Phase 11.7: bare-name conformance list for the enclosing `type` body's
+	// `implements` clause. Set on type-body entry, cleared on body exit.
+	// `checkUnusedParameters` consults it to suppress E3012 on parameters of
+	// methods that satisfy an interface's required signature — those parameter
+	// names are dictated by the interface and may legitimately go unread in a
+	// stub or no-op implementation.
+	var currentTypeConformances ConformanceArray
 	// Visibility tier of the type currently being parsed. Set by `parseTypeDecl`
 	// at body-entry, cleared at body-exit. Static decls and instance methods
 	// inside the body inherit this — `module type T { static var f = 0 }`
@@ -175,7 +182,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -417,6 +424,14 @@ export type Parser
 				let envName = "__env_{paramNameToken.value}"
 				_ = scope.declare(envName, varType: MaxonType.integer, mutable: true)
 			end 'expandEnv'
+			// C1.d: an interface-typed param ABI-expands to (value,
+			// witness). Reserve a hidden slot for the witness here so
+			// the next param (or local) lands at slot+2, keeping
+			// VarSlot ids contiguous with `abiParamTypes` indexing.
+			if interfaceTypeIsFat(paramMaxonType) 'expandWitness'
+				let witnessName = "__witness_{paramNameToken.value}"
+				_ = scope.declare(witnessName, varType: MaxonType.integer, mutable: true)
+			end 'expandWitness'
 
 			if cursor.current().kind == TokenKind.rightParen 'endParams'
 				break
@@ -618,11 +633,22 @@ export type Parser
 		// calling convention. Self is a named MaxonType matching the
 		// enclosing type; lowerMaxonToStd resolves it to i64 (pointer width).
 		if isInstance 'addSelfParam'
-			_ = defineVariableWithType("__self", varType: internMaxonType(project, name: typeName))
-			paramTypes.push(internMaxonType(project, name: typeName))
+			let selfMaxonType = internMaxonType(project, name: typeName)
+			_ = defineVariableWithType("__self", varType: selfMaxonType)
+			paramTypes.push(selfMaxonType)
 			paramNames.push("__self")
 			paramDefaults.push(ParamDefault.none)
 			paramCount = paramCount + 1
+			// C1.d: when the implicit `__self` is interface-typed (an extension
+			// method declared on an interface), the ABI expands to (value,
+			// witness). Reserve a hidden scope slot for the witness right after
+			// `__self` so subsequent param/local slot ids stay aligned with the
+			// expanded `abiParamTypes` indexing — without this, the first
+			// user-visible param shadows the witness slot and the body reads
+			// the witness pointer when it intends to read its first argument.
+			if interfaceTypeIsFat(selfMaxonType) 'expandSelfWitness'
+				_ = scope.declare("__witness___self", varType: MaxonType.integer, mutable: true)
+			end 'expandSelfWitness'
 		end 'addSelfParam'
 
 		try parseFunctionParameters(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults)
@@ -643,6 +669,16 @@ export type Parser
 			if isFunctionMaxonType(pt) 'addEnv'
 				abiParamTypes.push(MaxonType.integer)
 			end 'addEnv'
+			// C1.d: an interface-typed param is a fat pointer (value,
+			// witness) — append the witness slot after the value slot so
+			// the Std-level paramCount and ABI vector both grow in
+			// lockstep. The matching parser scope slot for the witness is
+			// declared in parseFunctionParameters via a synthetic
+			// `__witness_<paramName>` so the witness slot has a stable
+			// VarSlot id that lowering can resolve via interfaceWitnessSlots.
+			if interfaceTypeIsFat(pt) 'addWitnessSlot'
+				abiParamTypes.push(MaxonType.integer)
+			end 'addWitnessSlot'
 		end 'expandAbi'
 		let abiParamCount = abiParamTypes.count() as ParamCount
 
@@ -757,7 +793,7 @@ export type Parser
 			return
 		end 'aborted'
 
-		checkUnusedParameters()
+		checkUnusedParameters(methodName: nameToken.value, isMethod: isMethod)
 
 		// Functions with a declared return type must terminate on every path —
 		// report E3013 rather than silently falling through to an implicit 0.
@@ -1863,6 +1899,7 @@ export type Parser
 		// Phase 1b: capture `implements I1, I2 with X, ...` as metadata. No
 		// validation here — Phase 3 resolves and checks the conformance set.
 		let conformances = try parseImplementsClause()
+		currentTypeConformances = conformances
 
 		// Phase 11.0: capture `where T is Trait1 and Trait2, ...`. Each
 		// constraint is also recorded against `project.typeParameters` so
@@ -1994,6 +2031,7 @@ export type Parser
 		// file scope starts fresh. parseTypeRef checks for emptiness via
 		// .count() so an empty StringArray is the correct sentinel.
 		currentTypeParams = StringArray.create()
+		currentTypeConformances = ConformanceArray.create()
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
 
@@ -6526,7 +6564,15 @@ export type Parser
 	// Reporting every unused parameter would add noise that isn't in the spec.
 	// `_` is the discard convention and is skipped. Local `var`/`let` bindings
 	// are not yet tracked in self-hosted.
-	function checkUnusedParameters()
+	function checkUnusedParameters(methodName String, isMethod bool)
+		// Phase 11.7: parameters of methods that satisfy an interface's
+		// required signature are dictated by the interface — silent on those
+		// names matches the C# bootstrap and the spec
+		// (interface-method-unused-param-allowed). Free functions and
+		// type-private methods still error.
+		if isMethod and isInterfaceRequiredMethod(methodName) 'skipIface'
+			return
+		end 'skipIface'
 		for param in paramLocations 'eachParam'
 			if param.name == "_" 'isDiscard'
 				continue
@@ -6537,6 +6583,64 @@ export type Parser
 			end 'unused'
 		end 'eachParam'
 	end 'checkUnusedParameters'
+
+	// Phase 11.7: does the enclosing type's `implements` list (transitively
+	// via `interface I extends Base`) declare a method named `methodName`?
+	// Resolved interfaces sit in `project.interfaces`; in-flight ones still
+	// in `project.unresolvedInterfaces`. Both registries are consulted.
+	function isInterfaceRequiredMethod(methodName String) returns bool
+		for conf in currentTypeConformances 'eachConf'
+			if interfaceDeclaresMethod(conf.interfaceName, methodName: methodName) 'found'
+				return true
+			end 'found'
+		end 'eachConf'
+		return false
+	end 'isInterfaceRequiredMethod'
+
+	// Walk the named interface (resolved or unresolved) and any `extends`
+	// parents looking for a method matching `methodName`. The recursion
+	// terminates because interface graphs are required to be a DAG (cycle
+	// detection happens during interface resolution); a duplicate-visit
+	// guard keeps a malformed cycle from looping the parser.
+	function interfaceDeclaresMethod(interfaceName String, methodName String) returns bool
+		var visited = StringArray.create()
+		return interfaceDeclaresMethodHelper(interfaceName, methodName: methodName, visited: visited)
+	end 'interfaceDeclaresMethod'
+
+	function interfaceDeclaresMethodHelper(interfaceName String, methodName String, visited StringArray) returns bool
+		for v in visited 'cycleGuard'
+			if v == interfaceName 'seen'
+				return false
+			end 'seen'
+		end 'cycleGuard'
+		visited.push(interfaceName)
+		if let unresolved = try project.unresolvedInterfaces.get(interfaceName) 'fromUnresolved'
+			for m in unresolved.methods 'eachMethod'
+				if m.name == methodName 'match'
+					return true
+				end 'match'
+			end 'eachMethod'
+			for parent in unresolved.extendsNames 'eachParent'
+				if interfaceDeclaresMethodHelper(parent, methodName: methodName, visited: visited) 'parentMatch'
+					return true
+				end 'parentMatch'
+			end 'eachParent'
+			return false
+		end 'fromUnresolved'
+		if let resolved = try project.interfaces.get(interfaceName) 'fromResolved'
+			for m in resolved.methods 'eachMethod'
+				if m.name == methodName 'match'
+					return true
+				end 'match'
+			end 'eachMethod'
+			for parent in resolved.extendsNames 'eachParent'
+				if interfaceDeclaresMethodHelper(parent, methodName: methodName, visited: visited) 'parentMatch'
+					return true
+				end 'parentMatch'
+			end 'eachParent'
+		end 'fromResolved'
+		return false
+	end 'interfaceDeclaresMethodHelper'
 
 	// Declare a variable carrying the given source-level MaxonType. Slot
 	// width is NOT picked here — lowerMaxonToStd resolves MaxonType via the

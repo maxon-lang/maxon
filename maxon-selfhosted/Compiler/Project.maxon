@@ -359,6 +359,40 @@ export type Project
 	// every pass runs against a freshly-computed module.
 	export var irDump IrDumpOptions
 
+	// Phase 11.2: per-`GenericInstanceId` mangled label of the emitted
+	// 56-byte rdata layout descriptor. Filled by BuildLayoutDescriptors;
+	// read by Phase 11.4 lowering when materializing a descriptor at a
+	// generic call site.
+	export var layoutDescriptors LayoutDescriptorRegistry
+
+	// Phase 11.3: per-`(typeName, interfaceName)` resolved witness table
+	// (label, ordered method-impl names, fat-pointer flag, optional
+	// `extends` parent label). Filled by BuildWitnessTables; read by
+	// Phase 11.4 lowering when constructing an interface-typed value or
+	// dispatching through a witness.
+	export var witnessTables WitnessTableRegistry
+
+	// Phase 11.2 / 11.3: function names that are referenced only as static
+	// rdata payload (layout-descriptor copy/destroy thunks, witness-table
+	// methods). DeadFunctionElimination seeds its worklist from
+	// `["main"] + livenessRoots` so these statically-emitted references
+	// keep their callees alive even though no `call` op names them.
+	export var livenessRoots StringArray
+
+	// Phase 11.2: emitted rdata blob bytes keyed by mangled label. The
+	// canonicalize pass (11.6) folds `descriptorField` reads of a known
+	// label into a constant when this map carries the bytes — that's the
+	// primary mechanism by which inlined generic bodies recover
+	// monomorphization-quality codegen.
+	export var staticRdataValues StaticRdataValueMap
+
+	// Phase 11.7: deferred where-clause checks for generic typealias
+	// instantiations. Populated during typealias drain (when conformances
+	// haven't been recorded yet) and drained after `validateConformances`
+	// finishes. Each entry pins a (typealiasName, expr, source location)
+	// triple — an E3017 is emitted per failing constraint.
+	export var pendingConstraintChecks PendingConstraintCheckArray
+
 	// Stage B (closures): hand out the next unique `__closure_<N>` suffix
 	// and bump the counter. Called by the parser at every closure
 	// expression to keep lifted-function names disjoint.
@@ -410,10 +444,36 @@ export type Project
 			globalData: createGlobalDataTable(),
 			coverageEnabled: false,
 			covSites: CovSiteTable.create(),
-			irDump: IrDumpOptions.disabled()
+			irDump: IrDumpOptions.disabled(),
+			layoutDescriptors: LayoutDescriptorRegistry.create(),
+			witnessTables: WitnessTableRegistry.create(),
+			livenessRoots: StringArray.create(),
+			staticRdataValues: StaticRdataValueMap.create(),
+			pendingConstraintChecks: PendingConstraintCheckArray.create()
 		}
 	end 'create'
 end 'Project'
+
+// Phase 11.7: a single deferred where-clause check, captured during
+// typealias drain.
+export type PendingConstraintCheck
+	export var name String
+	export var expr UnresolvedTypeExpr
+	export var declLine ErrorLineNumber
+	export var declColumn ErrorColumnNumber
+	export var declFilePath FilePath
+
+	export static function create(name String, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath) returns PendingConstraintCheck
+		return Self{name: name, expr: expr, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath}
+	end 'create'
+end 'PendingConstraintCheck'
+
+export typealias PendingConstraintCheckArray = Array with PendingConstraintCheck
+
+// Phase 11.2: lookup table for emitted layout-descriptor bytes. Used by
+// the canonicalize pass to fold `descriptorField` reads into constants
+// when the descriptor's content is known at compile time.
+export typealias StaticRdataValueMap = Map with(String, ByteArray)
 
 // --- Function-type registry ---
 //
@@ -749,19 +809,36 @@ export type MethodNameIndex
 	// method-name buckets, never the bare-name space. The bucket is an
 	// Array (reference type), so an existing bucket is mutated in place —
 	// only the first record for a given bare name needs an upsert.
+	//
+	// Overload-mangled names like `Array.contains$Element` get indexed under
+	// both their full trailing segment (`contains$Element`) and the source-
+	// level method name (`contains`) so DFE's methodCall walk — which only
+	// has the source-level name in hand — can find every monomorph variant
+	// without re-running the overload mangler. Without this dual indexing,
+	// `methodCall .contains(...)` against an overloaded `Array.contains`
+	// finds zero candidates and DFE drops the bodies, leaving lowering with
+	// a call to the bare unregistered name.
 	export function record(qualifiedName String)
 		let bareName = bareMethodName(qualifiedName)
 		if bareName.isEmpty() 'noDot'
 			return
 		end 'noDot'
-		if var bucket = try byBareName.get(bareName) 'append'
+		recordUnderKey(qualifiedName, key: bareName)
+		let unsuffixed = stripFirstDollar(bareName)
+		if not unsuffixed.isEmpty() and unsuffixed != bareName 'alsoBare'
+			recordUnderKey(qualifiedName, key: unsuffixed)
+		end 'alsoBare'
+	end 'record'
+
+	function recordUnderKey(qualifiedName String, key String)
+		if var bucket = try byBareName.get(key) 'append'
 			bucket.push(qualifiedName)
 			return
 		end 'append'
 		var freshBucket = QualifiedNameArray.create()
 		freshBucket.push(qualifiedName)
-		byBareName.upsert(bareName, value: freshBucket)
-	end 'record'
+		byBareName.upsert(key, value: freshBucket)
+	end 'recordUnderKey'
 
 	// Look up the list of qualified names ending in `.{bareName}`. Returns
 	// an empty array on miss so DFE callers can iterate unconditionally.
@@ -774,6 +851,25 @@ end 'MethodNameIndex'
 // fresh String, or "" when there is no dot. Used by MethodNameIndex.record
 // to split a qualified name like "Toggle.isOn" into the bare method name
 // "isOn" so it can be inserted into the index by trailing segment.
+// Strip the first `$<suffix>` from a name, returning the prefix; empty
+// when the name has no `$`. Used to dual-index overload-mangled method
+// names so `Array.contains$Element` is reachable both via the full
+// trailing segment and via the source-level `contains`.
+function stripFirstDollar(s String) returns String
+	let bytes = s.toByteArray()
+	let dollarByte = 0x24 as byte
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise return ""
+		if b == dollarByte 'hit'
+			let head = try bytes.slice(0, endIndex: i) otherwise return ""
+			return String.from(head)
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return ""
+end 'stripFirstDollar'
+
 function bareMethodName(s String) returns String
 	let bytes = s.toByteArray()
 	let dotByte = 0x2E as byte
@@ -1613,7 +1709,10 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 		if anyStructHasInnerAlias(project, aliasName: name) 'isInnerAlias'
 			return StdType.i64
 		end 'isInnerAlias'
-		panic("resolveNamedToStdType: unknown named type '{name}' — TypeResolution should have rejected this")
+		if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
+			panic("resolveNamedToStdType: interface name '{name}' reached value-position lowering as MaxonType.named — C1.c interface fat-pointer construction was supposed to handle this; investigate the call path")
+		end 'isInterface'
+		panic("resolveNamedToStdType: unknown type '{name}' — every other path that lands MaxonType.named should have been rejected by E3011 upstream")
 	end 'notAlias'
 	return aliased
 end 'resolveNamedToStdType'

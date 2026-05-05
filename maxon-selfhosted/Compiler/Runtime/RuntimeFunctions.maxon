@@ -56,9 +56,15 @@ export type GlobalDataTable
 	// helpers were O(N) per call and drove a quadratic build cost.
 	export var nameIndex GlobalNameIndexMap
 	export var valueDedup GlobalDedupMap
+	// Phase 11.2: relocations whose patch site lives inside an rdata blob
+	// (rather than inside code), e.g. layout-descriptor copy/destroy slots.
+	// Emitted by Maxon-level passes (BuildLayoutDescriptors) directly into
+	// the project-level globalData so they survive the per-function backend
+	// emit and get concatenated into the final rdataRelocs array.
+	export var pendingRdataRelocs RdataRelocationArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create(), nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, covDataEntries: CovDataEntryArray.create(), dataSectionEntries: DataSectionEntryArray.create(), nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), pendingRdataRelocs: RdataRelocationArray.create()}
 	end 'create'
 end 'GlobalDataTable'
 
@@ -235,10 +241,20 @@ end 'buildRdataSection'
 
 // Resolve rdata relocations: fill in rdataOffset from the offset map.
 // Returns a new array with resolved offsets.
+//
+// `funcAbs64InRdata` relocs carry the rdata label inside the kind payload
+// (the patch site is rdata-relative, not code-relative); for those we look
+// up the descriptor's start offset and stash it in `rdataOffset` so the
+// per-target writers can compute `rdataOffset + offsetInLabel` to find the
+// 8-byte slot to overwrite with the function's absolute VA.
 export function resolveRdataRelocations(relocs RdataRelocationArray, map RdataOffsetMap) returns RdataRelocationArray
 	var resolved = RdataRelocationArray.create()
 	for reloc in relocs 'resolve'
-		let offset = lookupRdataOffset(map, name: reloc.rdataLabel)
+		let labelForLookup = match reloc.kind 'pickLabel'
+			funcAbs64InRdata(_, rdataLabel, _) gives rdataLabel
+			ripRelDisp32 to covdataArm64Adr gives reloc.rdataLabel
+		end 'pickLabel'
+		let offset = lookupRdataOffset(map, name: labelForLookup)
 		var copy = RdataRelocation.create(reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)
 		copy.rdataOffset = offset
 		resolved.push(copy)

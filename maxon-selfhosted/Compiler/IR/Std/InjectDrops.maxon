@@ -88,13 +88,19 @@ type DropInjectionState
 	// Maximum slot index seen
 	export var maxSlot VarSlot
 	export var hasAnySlot bool
+	// C1.b: ValueId of the implicit `__layout` param when the enclosing
+	// function carries one — `dropTypeParam` reads the descriptor through
+	// it. Sentinel `DROP_SLOT_EMPTY` (i64.max) means "no implicit layout
+	// param", which matches every non-generic function.
+	export var implicitLayoutValueId ValueId
 
 	static function create() returns DropInjectionState
 		return Self{
 			slotValues: createSlotValueMap(),
 			heapValues: createHeapValueSet(),
 			maxSlot: 0,
-			hasAnySlot: false
+			hasAnySlot: false,
+			implicitLayoutValueId: DROP_SLOT_EMPTY
 		}
 	end 'create'
 end 'DropInjectionState'
@@ -120,6 +126,13 @@ function injectDropsInFunction(func IrFunction, module StdModule)
 	var state = DropInjectionState.create()
 	scanHeapAllocations(func, module: module, state: state)
 
+	// C1.b: stash the implicit-layout ValueId once so per-store/per-return
+	// emit sites don't re-derive it. The function-level invariant is the
+	// gate for emitting `dropTypeParam` instead of plain `drop`.
+	if func.hasImplicitLayoutParam 'hasLayout'
+		state.implicitLayoutValueId = getImplicitLayoutValueId(func)
+	end 'hasLayout'
+
 	// Phase 2: Walk blocks and inject drops
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
@@ -133,15 +146,31 @@ function injectDropsInFunction(func IrFunction, module StdModule)
 		let oldOps = block.opRefs
 		block.opRefs = OpIndexList.create()
 		for packed in oldOps 'eachOp'
-			injectDropsForOp(module, opIdx: packed, dstBlock: block, state: state)
+			injectDropsForOp(module, func: func, opIdx: packed, dstBlock: block, state: state)
 		end 'eachOp'
 
 		// Process terminator: inject drops before function return
 		if block.hasTerminatorOp() 'hasTerm'
-			injectDropsBeforeTerminator(module, terminator: block.terminatorIndex(), dstBlock: block, state: state)
+			injectDropsBeforeTerminator(module, func: func, terminator: block.terminatorIndex(), dstBlock: block, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'injectDropsInFunction'
+
+// C1.b: derive the entry-block param ValueId for the implicit `__layout`
+// param. Layered after user args and the optional `__env` slot, with the
+// optional `__witness` slot sitting one further past the layout slot.
+// Hard-panics if called when `hasImplicitLayoutParam` is false — that's an
+// upstream contract violation, not a runtime condition we can recover from.
+export function getImplicitLayoutValueId(func IrFunction) returns ValueId
+	if not func.hasImplicitLayoutParam 'noLayout'
+		panic("getImplicitLayoutValueId: func '{func.name}' has no implicit layout param")
+	end 'noLayout'
+	var trailingIdx = (func.paramCount - 1) as ValueId
+	if func.hasImplicitWitnessParam 'witnessLast'
+		trailingIdx = trailingIdx - 1
+	end 'witnessLast'
+	return trailingIdx
+end 'getImplicitLayoutValueId'
 
 // ============================================================
 // Phase 1: Scan for heap allocations
@@ -192,6 +221,13 @@ function scanSysForHeapAlloc(op StdSystemOp, state DropInjectionState)
 		osLockInit then break 'scan'
 		osLockAcquire then break 'scan'
 		osLockRelease then break 'scan'
+		boxValue then break 'scan'
+		unboxValue then break 'scan'
+		loadLayoutDescriptor then break 'scan'
+		loadWitnessTable then break 'scan'
+		descriptorField then break 'scan'
+		witnessMethod then break 'scan'
+		dropTypeParam then break 'scan'
 	end 'scan'
 end 'scanSysForHeapAlloc'
 
@@ -199,13 +235,13 @@ end 'scanSysForHeapAlloc'
 // Phase 2: Per-op drop injection
 // ============================================================
 
-function injectDropsForOp(module StdModule, opIdx OpIndex, dstBlock IrBlock, state DropInjectionState)
+function injectDropsForOp(module StdModule, func IrFunction, opIdx OpIndex, dstBlock IrBlock, state DropInjectionState)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		dstBlock.opRefs.append(opIdx)
 		return
 	end 'noOp'
 	match stdOp 'dispatch'
-		memory(op) then injectDropsForMemRef(module, op: op, dstBlock: dstBlock, state: state, originalPacked: opIdx)
+		memory(op) then injectDropsForMemRef(module, func: func, op: op, dstBlock: dstBlock, state: state, originalPacked: opIdx)
 		arith then dstBlock.opRefs.append(opIdx)
 		control then dstBlock.opRefs.append(opIdx)
 		call then dstBlock.opRefs.append(opIdx)
@@ -213,21 +249,21 @@ function injectDropsForOp(module StdModule, opIdx OpIndex, dstBlock IrBlock, sta
 	end 'dispatch'
 end 'injectDropsForOp'
 
-function injectDropsForMemRef(module StdModule, op StdMemoryOp, dstBlock IrBlock, state DropInjectionState, originalPacked OpIndex)
+function injectDropsForMemRef(module StdModule, func IrFunction, op StdMemoryOp, dstBlock IrBlock, state DropInjectionState, originalPacked OpIndex)
 	match op 'check'
-		storeSlot(slotId, valueId) then injectDropBeforeStore(module, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
+		storeSlot(slotId, valueId) then injectDropBeforeStore(module, func: func, slotId: slotId, valueId: valueId, dstBlock: dstBlock, state: state, originalPacked: originalPacked)
 		loadSlot then dstBlock.opRefs.append(originalPacked)
 	end 'check'
 end 'injectDropsForMemRef'
 
 // Before storing a new value to a slot, drop the old value if one exists.
-function injectDropBeforeStore(module StdModule, slotId VarSlot, valueId ValueId, dstBlock IrBlock, state DropInjectionState, originalPacked OpIndex)
+function injectDropBeforeStore(module StdModule, func IrFunction, slotId VarSlot, valueId ValueId, dstBlock IrBlock, state DropInjectionState, originalPacked OpIndex)
 	var slotValues = state.slotValues
 	let oldValue = slotValueGet(slotValues, slotId: slotId)
 
 	if oldValue != DROP_SLOT_EMPTY 'hasOldValue'
 		// The slot already has a value — insert a drop for the old value before the new store
-		emitDrop(module, valueId: oldValue, dstBlock: dstBlock, heapValues: state.heapValues)
+		emitDrop(module, func: func, slotId: slotId, valueId: oldValue, dstBlock: dstBlock, state: state)
 		logTrace(LogCategory.ir, message: () gives "inject-drops: drop %{oldValue} before overwrite of slot_{slotId} with %{valueId}")
 	end 'hasOldValue'
 
@@ -243,7 +279,7 @@ end 'injectDropBeforeStore'
 // Terminator handling: drop all live slot values before return
 // ============================================================
 
-function injectDropsBeforeTerminator(module StdModule, terminator OpIndex, dstBlock IrBlock, state DropInjectionState)
+function injectDropsBeforeTerminator(module StdModule, func IrFunction, terminator OpIndex, dstBlock IrBlock, state DropInjectionState)
 	if not isReturnTerminator(terminator, module: module) 'notReturn'
 		return
 	end 'notReturn'
@@ -259,7 +295,7 @@ function injectDropsBeforeTerminator(module StdModule, terminator OpIndex, dstBl
 		if valueId != DROP_SLOT_EMPTY 'hasValue'
 			// Check if this value is used by the return itself — if so, don't drop it
 			if not isReturnedValue(terminator, module: module, valueId: valueId) 'notReturned'
-				emitDrop(module, valueId: valueId, dstBlock: dstBlock, heapValues: state.heapValues)
+				emitDrop(module, func: func, slotId: slotIdx, valueId: valueId, dstBlock: dstBlock, state: state)
 				logTrace(LogCategory.ir, message: () gives "inject-drops: drop %{valueId} from slot_{slotIdx} at function exit")
 			end 'notReturned'
 		end 'hasValue'
@@ -308,15 +344,45 @@ end 'isReturnedByFuncOp'
 // Drop/free emission
 // ============================================================
 
-// Emit the appropriate cleanup op: sys.free for heap-allocated values,
-// sys.drop for everything else.
-function emitDrop(module StdModule, valueId ValueId, dstBlock IrBlock, heapValues HeapValueSet)
-	if isHeapAllocated(heapValues, valueId: valueId) 'isHeap'
+// Emit the appropriate cleanup op:
+//   1. sys.free for heap-allocated values (sys.globalAddr-derived pointers).
+//   2. sys.drop_type_param for slots whose MaxonType is a type parameter
+//      (Phase 11 generic locals — destroyer routes through the implicit
+//      __layout descriptor's destroyFunc).
+//   3. sys.drop for everything else (today's stdlib no-op cleanup; DCE
+//      treats it as universally dead).
+function emitDrop(module StdModule, func IrFunction, slotId VarSlot, valueId ValueId, dstBlock IrBlock, state DropInjectionState)
+	if isHeapAllocated(state.heapValues, valueId: valueId) 'isHeap'
 		module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.free(valueId)))
-	end 'isHeap' else 'isStack'
-		module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.drop(valueId)))
-	end 'isStack'
+		return
+	end 'isHeap'
+	if slotIsTypeParameter(func, slotId: slotId) 'isTypeParam'
+		if state.implicitLayoutValueId == DROP_SLOT_EMPTY 'noLayout'
+			panic("inject-drops: slot_{slotId} of '{func.name}' is a type-parameter but the function has no implicit layout param — upstream contract violation")
+		end 'noLayout'
+		module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.dropTypeParam(valueId, layoutValueId: state.implicitLayoutValueId)))
+		return
+	end 'isTypeParam'
+	module.appendOp(dstBlock, op: StdOp.system(StdSystemOp.drop(valueId)))
 end 'emitDrop'
+
+// True when the slot's recorded MaxonType is `MaxonType.typeParameter(_)`.
+// Slots without a recorded type (slotMaxonTypes shorter than slotId+1) get
+// false — those are synthesized helpers (BuildLayoutDescriptors thunks,
+// etc.) whose drops stay no-op.
+function slotIsTypeParameter(func IrFunction, slotId VarSlot) returns bool
+	if slotId >= func.slotMaxonTypes.count() 'oob'
+		return false
+	end 'oob'
+	let slotType = try func.slotMaxonTypes.get(slotId) otherwise return false
+	return match slotType 'check'
+		typeParameter gives true
+		boolean to function gives false
+		unresolved gives false
+		genericInstance gives false
+		interface gives false
+	end 'check'
+end 'slotIsTypeParameter'
 
 // ============================================================
 // Utility helpers

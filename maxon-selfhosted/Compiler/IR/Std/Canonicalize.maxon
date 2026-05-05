@@ -28,18 +28,39 @@ function constMapGet(map ValueIdArray, valueId ValueId) returns ParsedInt
 	return try map.get(valueId) otherwise CONST_UNKNOWN
 end 'constMapGet'
 
-export function canonicalize(module StdModule) returns StdModule
+// Phase 11.6 descriptor-fold helper map. ValueId → rdata label of the
+// `loadLayoutDescriptor` op that produced it. Stored as a parallel sentinel
+// array so a missing entry reads back as "" (descriptor source unknown).
+typealias DescriptorLabelMap = Array with String
+
+function descLabelGet(map DescriptorLabelMap, valueId ValueId) returns String
+	if valueId >= map.count() 'outOfBounds'
+		return ""
+	end 'outOfBounds'
+	return try map.get(valueId) otherwise ""
+end 'descLabelGet'
+
+function descLabelSet(map DescriptorLabelMap, valueId ValueId, label String)
+	while map.count() <= valueId 'grow'
+		map.push("")
+	end 'grow'
+	try map.set(valueId, value: label) otherwise panic("invariant: descLabel map.set OOB")
+end 'descLabelSet'
+
+export function canonicalize(module StdModule, project Project) returns StdModule
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
-			// Build a per-block constant map and fold ops
+			// Per-block tracking: integer constants for arith folding, plus
+			// rdata-label provenance for `descriptorField` folding (11.6).
 			var constMap = ValueIdArray.create()
+			var descMap = DescriptorLabelMap.create()
 
 			let oldOps = block.opRefs
 			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'eachOp'
-				tryFoldPackedOp(module, opIdx: packed, constMap: constMap, dstBlock: block)
+				tryFoldPackedOp(module, project: project, opIdx: packed, constMap: constMap, descMap: descMap, dstBlock: block)
 			end 'eachOp'
 
 			// Fold a condBr terminator when its condition is a known constant.
@@ -112,7 +133,7 @@ end 'applyCondBrFold'
 // Try to fold a std op. If it is a foldable std.arith.binary with both
 // operands known constant, replace with std.arith.const. Otherwise pass
 // through unchanged. Also populates constMap for std.arith.const ops.
-function tryFoldPackedOp(module StdModule, opIdx OpIndex, constMap ValueIdArray, dstBlock IrBlock)
+function tryFoldPackedOp(module StdModule, project Project, opIdx OpIndex, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
 	let stdOp = try module.ops.get(opIdx) otherwise 'noOp'
 		dstBlock.opRefs.append(opIdx)
 		return
@@ -122,9 +143,90 @@ function tryFoldPackedOp(module StdModule, opIdx OpIndex, constMap ValueIdArray,
 		control then dstBlock.opRefs.append(opIdx)
 		call then dstBlock.opRefs.append(opIdx)
 		memory then dstBlock.opRefs.append(opIdx)
-		system then dstBlock.opRefs.append(opIdx)
+		system(s) then tryFoldSysOp(module, project: project, opIdx: opIdx, op: s, constMap: constMap, descMap: descMap, dstBlock: dstBlock)
 	end 'outer'
 end 'tryFoldPackedOp'
+
+// Phase 11.6: only two system ops are interesting for canonicalize today.
+//   loadLayoutDescriptor — record the rdata label provenance of its
+//     resultId so a downstream `descriptorField` reading from this same
+//     value can fold against the rdata bytes.
+//   descriptorField — when the descriptor source has a known label and
+//     the bytes are present in `project.staticRdataValues`, replace the
+//     load with an `arith.const(constI64)` of the field value.
+// Every other system op passes through unchanged.
+function tryFoldSysOp(module StdModule, project Project, opIdx OpIndex, op StdSystemOp, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
+	match op 'shape'
+		loadLayoutDescriptor(resultId, label) then recordDescriptorLoad(opIdx: opIdx, resultId: resultId, label: label, descMap: descMap, dstBlock: dstBlock)
+		descriptorField(resultId, descAddrId, field) then tryFoldDescriptorField(module, project: project, opIdx: opIdx, resultId: resultId, descAddrId: descAddrId, field: field, constMap: constMap, descMap: descMap, dstBlock: dstBlock)
+		syscall to printInt then dstBlock.opRefs.append(opIdx)
+		drop then dstBlock.opRefs.append(opIdx)
+		osAllocPages to osLockRelease then dstBlock.opRefs.append(opIdx)
+		boxValue then dstBlock.opRefs.append(opIdx)
+		unboxValue then dstBlock.opRefs.append(opIdx)
+		loadWitnessTable then dstBlock.opRefs.append(opIdx)
+		witnessMethod then dstBlock.opRefs.append(opIdx)
+		dropTypeParam then dstBlock.opRefs.append(opIdx)
+	end 'shape'
+end 'tryFoldSysOp'
+
+function recordDescriptorLoad(opIdx OpIndex, resultId ValueId, label String, descMap DescriptorLabelMap, dstBlock IrBlock)
+	descLabelSet(descMap, valueId: resultId, label: label)
+	dstBlock.opRefs.append(opIdx)
+end 'recordDescriptorLoad'
+
+function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex, resultId ValueId, descAddrId ValueId, field DescriptorField, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
+	let label = descLabelGet(descMap, valueId: descAddrId)
+	let foldedVal = tryReadDescriptorField(project, label: label, field: field)
+	if foldedVal == CONST_UNKNOWN 'cannotFold'
+		dstBlock.opRefs.append(opIdx)
+		return
+	end 'cannotFold'
+	constMapSet(constMap, valueId: resultId, value: foldedVal)
+	logTrace(LogCategory.ir, message: () gives "canonicalize: folded descriptorField %{resultId} = @{label}.{descriptorFieldName(field)} -> const {foldedVal}")
+	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: foldedVal))))
+end 'tryFoldDescriptorField'
+
+// Read a descriptor field from `project.staticRdataValues[label]`. Returns
+// the field value when:
+//   - `label` is non-empty (the source value really is a loadLayoutDescriptor),
+//   - the registry actually carries those bytes (the BuildLayoutDescriptors
+//     pass ran for this label and stashed the encoded blob),
+//   - and the field's on-disk slot is meaningful (size / alignment /
+//     elementSize / hasHeapRefs / fieldOffsetsPtr — copyFunc and
+//     destroyFunc are zero on disk and patched at link time, so reading
+//     them returns 0 from the bytes which would fold call sites onto a
+//     null pointer; we report CONST_UNKNOWN there instead).
+// Otherwise returns CONST_UNKNOWN so the caller leaves the op in place.
+function tryReadDescriptorField(project Project, label String, field DescriptorField) returns ParsedInt
+	if label.isEmpty() 'unknownSource'
+		return CONST_UNKNOWN
+	end 'unknownSource'
+	if not project.staticRdataValues.contains(label) 'unknownLabel'
+		return CONST_UNKNOWN
+	end 'unknownLabel'
+	let bytes = try project.staticRdataValues.get(label) otherwise panic("tryReadDescriptorField: contains passed but get failed for {label}")
+	let offset = descriptorFieldOffset(field)
+	if (offset + 8) > bytes.count() 'outOfBounds'
+		return CONST_UNKNOWN
+	end 'outOfBounds'
+	if isFunctionSlot(field) 'patchedAtLink'
+		return CONST_UNKNOWN
+	end 'patchedAtLink'
+	return readQword(bytes, offset: offset) as ParsedInt
+end 'tryReadDescriptorField'
+
+function isFunctionSlot(field DescriptorField) returns bool
+	return match field 'check'
+		size gives false
+		alignment gives false
+		elementSize gives false
+		hasHeapRefs gives false
+		copyFunc gives true
+		destroyFunc gives true
+		fieldOffsetsPtr gives false
+	end 'check'
+end 'isFunctionSlot'
 
 function tryFoldArithOp(module StdModule, op StdArithOp, constMap ValueIdArray, dstBlock IrBlock)
 	match op 'dispatch'

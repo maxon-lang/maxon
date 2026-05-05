@@ -16,22 +16,6 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @arithmetic.multiDiv(rcx: i64, rdx: i64, rax: i64, r9: i64) -> i64 {
-  entry:
-    x64.mov r8, rdx
-    x64.mov rsi, rax
-    x64.mov rax, rsi
-    x64.cqo
-    x64.idiv r9
-    x64.mov r9, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv r8
-    x64.mov rsi, rax
-    x64.add rsi, r9
-    x64.mov r8, rsi
-    x64.ret
-  }
   func @arithmetic.main() -> u8 {
   entry:
     x64.prologue stack_size=16
@@ -39,11 +23,15 @@ module {
     x64.mov r9d, 20
     x64.mov esi, 2
     x64.mov edi, 10
-    x64.mov rcx, rdi
-    x64.mov rdx, rsi
     x64.mov rax, r9
-    x64.mov r9, r8
-    x64.call arithmetic.multiDiv
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r9, rax
+    x64.mov rax, rdi
+    x64.xor edx, edx
+    x64.idiv rsi
+    x64.mov r8, rax
+    x64.add r8, r9
     x64.cmp r8, 125
     x64.jbe __range_ok_6
   __range_panic_6:

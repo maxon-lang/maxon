@@ -223,6 +223,13 @@ function recordSysLifetimes(op StdSystemOp, blockId BlockId, opIndex OpIndex, st
 		osLockInit(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
 		osLockAcquire(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
 		osLockRelease(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
+		boxValue(resultId, valueId, sizeId) then recordDefAndTwoUses(resultId, usedId1: valueId, usedId2: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		unboxValue(resultId, ptrId, sizeId) then recordDefAndTwoUses(resultId, usedId1: ptrId, usedId2: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		loadLayoutDescriptor(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		loadWitnessTable(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		descriptorField(resultId, descAddrId, _) then recordDefAndUse(resultId, usedId: descAddrId, blockId: blockId, opIndex: opIndex, state: state)
+		witnessMethod(resultId, witnessAddrId, _) then recordDefAndUse(resultId, usedId: witnessAddrId, blockId: blockId, opIndex: opIndex, state: state)
+		dropTypeParam(slotValueId, layoutValueId) then recordTwoUses(slotValueId, usedId2: layoutValueId, blockId: blockId, opIndex: opIndex, state: state)
 	end 'rec'
 end 'recordSysLifetimes'
 

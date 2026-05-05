@@ -1,0 +1,138 @@
+// Phase 11.5: deterministic content hash over IrFunction signature + body.
+//
+// Used by the per-function query cache (queryMidForFunction,
+// queryMirForFunction, queryCodeForFunction) to detect when a function's
+// observable shape has changed since it was last computed. Cache key is
+// `(funcName, contentHash)`; a hash hit means we can reuse the cached
+// MIR/code, a hash miss invalidates it.
+//
+// Properties:
+//   - Deterministic: same inputs produce the same 64-bit value across runs.
+//   - Includes signature (param count, param types, return type, throws,
+//     visibility, implicit-param flags) so caller signature edges propagate
+//     correctly.
+//   - Includes structural body shape (block count, opRefs counts, terminator
+//     kinds, varSlotCount). Enough to detect any meaningful body edit; a
+//     full byte-level op hash is left for 11.6+ when the inliner needs
+//     fine-grained invalidation.
+//   - Hashes callee names that appear in the body (signature edges only —
+//     callee bodies do not feed in here).
+//
+// Algorithm: FNV-1a-like rolling 64-bit mix. Cheap enough to recompute on
+// every queryMidForFunction call without measurable overhead.
+
+export typealias ContentHash = int(0 to u64.max)
+
+// FNV-1a 64-bit constants. Standard, well-distributed for short inputs.
+// The 64-bit offset basis (0xCBF29CE484222325 = 14695981039346656037) is
+// outside Maxon's signed int literal range, so it gets reconstructed at
+// runtime: `(0xCBF29CE4 shl 32) or 0x84222325`.
+let fnvOffsetBasisHigh = 3422053188 as ContentHash
+let fnvOffsetBasisLow = 2216829733 as ContentHash
+let fnvPrime = 1099511628211 as ContentHash
+
+function fnvOffsetBasis() returns ContentHash
+	return (fnvOffsetBasisHigh shl 32) or fnvOffsetBasisLow
+end 'fnvOffsetBasis'
+
+// Mix one 64-bit value into the running hash.
+function mix(state ContentHash, value ContentHash) returns ContentHash
+	var s = state xor value
+	s = s * fnvPrime
+	return s as ContentHash
+end 'mix'
+
+// Mix every byte of `s` into the running hash.
+function mixString(state ContentHash, s String) returns ContentHash
+	var h = state
+	let n = s.byteLength()
+	var i = 0
+	while i < n 'each'
+		let b = try s.managed.byteAt(i) otherwise panic("mixString: byteAt OOB at {i} (len={n})")
+		h = mix(h, value: b as ContentHash)
+		i = i + 1
+	end 'each'
+	// Length tag: keeps "ab"+"c" distinct from "a"+"bc".
+	return mix(h, value: n as ContentHash)
+end 'mixString'
+
+// Mix a MaxonType into the hash. Uses the mangled string form so that
+// equivalent types hash identically across compiles.
+function mixMaxonType(state ContentHash, project Project, t MaxonType) returns ContentHash
+	let suffix = mangleSuffixForMaxonType(project, t: t)
+	return mixString(state, s: suffix)
+end 'mixMaxonType'
+
+function mixMaxonReturnType(state ContentHash, project Project, ret MaxonReturnType) returns ContentHash
+	return match ret 'r'
+		void gives mix(state, value: 0 as ContentHash)
+		value(inner) gives mixMaxonType(mix(state, value: 1 as ContentHash), project: project, t: inner)
+	end 'r'
+end 'mixMaxonReturnType'
+
+// Hash the function's signature only. Callers that touched only their
+// callees' bodies (not signatures) must reuse cached MIR; this is the
+// dependency-edge primitive that lets us decide.
+export function computeFunctionSignatureHash(project Project, func IrFunction) returns ContentHash
+	var h = fnvOffsetBasis()
+	h = mixString(h, s: func.name)
+	h = mixString(h, s: func.namespace)
+	h = mix(h, value: func.visibility.ordinal as ContentHash)
+	h = mix(h, value: func.paramCount as ContentHash)
+	h = mixString(h, s: func.throwsTypeName)
+	h = mixMaxonReturnType(h, project: project, ret: func.maxonReturnType)
+	for pt in func.maxonParamTypes 'eachParam'
+		h = mixMaxonType(h, project: project, t: pt)
+	end 'eachParam'
+	if func.hasImplicitLayoutParam 'layoutOn'
+		h = mix(h, value: 1 as ContentHash)
+	end 'layoutOn' else 'layoutOff'
+		h = mix(h, value: 0 as ContentHash)
+	end 'layoutOff'
+	if func.hasImplicitWitnessParam 'witnessOn'
+		h = mix(h, value: 1 as ContentHash)
+	end 'witnessOn' else 'witnessOff'
+		h = mix(h, value: 0 as ContentHash)
+	end 'witnessOff'
+	return h
+end 'computeFunctionSignatureHash'
+
+// Hash the function's body shape (post-resolveTypes). Combined with the
+// signature hash and the signature hashes of every callee referenced from
+// the body, this gives the per-function content hash used by the query
+// cache.
+//
+// "Body shape" today: per-block opRefs count + terminator-kind ordinal +
+// per-block label string. Sufficient to detect structural edits without
+// requiring an op-byte codec; full op-level hashing can drop in later as
+// a refinement without changing the cache contract.
+export function computeFunctionContentHash(project Project, module MaxonModule, func IrFunction) returns ContentHash
+	var h = computeFunctionSignatureHash(project, func: func)
+	h = mix(h, value: func.varSlotCount as ContentHash)
+	h = mix(h, value: func.blockRefs.count() as ContentHash)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("computeFunctionContentHash: blockRef {blockRef} OOB (blocks.count={module.blocks.count()})")
+		h = mixString(h, s: block.label)
+		h = mix(h, value: block.opRefs.count() as ContentHash)
+		let termKind = match block.terminator 'tk'
+			unset gives 0 as ContentHash
+			dead gives 1 as ContentHash
+			fallthrough gives 2 as ContentHash
+			opIndex gives 3 as ContentHash
+		end 'tk'
+		h = mix(h, value: termKind)
+	end 'eachBlock'
+	return h
+end 'computeFunctionContentHash'
+
+// Walk every function in `module` and stamp its `contentHash` field. Idempotent —
+// safe to call after every Maxon-level pass that may mutate function bodies.
+// Today we call it once after resolveTypes (the first pass that guarantees a
+// fully-typed module). The query layer reads `func.contentHash` directly.
+export function stampFunctionContentHashes(project Project, module MaxonModule)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("stampFunctionContentHashes: functions.get OOB at {funcIdx}")
+		func.contentHash = computeFunctionContentHash(project, module: module, func: func)
+		try module.functions.set(funcIdx, value: func) otherwise panic("stampFunctionContentHashes: functions.set OOB at {funcIdx}")
+	end 'eachFunc'
+end 'stampFunctionContentHashes'

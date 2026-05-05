@@ -35,133 +35,70 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @Token.equals(__self_ptr: i64, other: i64) -> i1 {
+  func @Token.equals(rcx: i64, rdx: i64) -> i1 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov rax, [rbp-16]
-    x64.mov rsi, [rax+0]
-    x64.cmp rbx, rsi
-    x64.sete rax
-    x64.movzx rax, raxb
-    x64.epilogue
+    x64.mov r8, [rdx+0] (8b)
+    x64.mov r9, [rcx+0] (8b)
+    x64.cmp r9, r8
+    x64.sete r9
+    x64.mov r8, r9
     x64.ret
   }
-  func @Token.create(id: i64) -> i64 {
+  func @equatable.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @equatable.main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov rcx, 10
-    x64.call Token.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 10
-    x64.call Token.create
-    x64.mov [rbp-16], rax
-    x64.mov rcx, 20
-    x64.call Token.create
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.mov [rbp-32], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.call Token.equals
-    x64.test rax, rax
-    x64.je equatable.main.first_0.merge
-  first_0:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-32]
-    x64.add rcx, rax
-    x64.mov [rbp-32], rcx
-    x64.jmp equatable.main.first_0.merge
-  first_0.merge:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-24]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-24]
-    x64.call Token.equals
-    x64.test rax, rax
-    x64.je equatable.main.second_1.merge
-  second_1:
-    x64.mov rax, 10
-    x64.mov rcx, [rbp-32]
-    x64.add rcx, rax
-    x64.mov [rbp-32], rcx
-    x64.jmp equatable.main.second_1.merge
-  second_1.merge:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-24]
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-24]
-    x64.call Token.equals
-    x64.test rax, rax
-    x64.je equatable.main.third_2.merge
-  third_2:
-    x64.mov rax, 100
-    x64.mov rcx, [rbp-32]
-    x64.add rcx, rax
-    x64.mov [rbp-32], rcx
-    x64.jmp equatable.main.third_2.merge
-  third_2.merge:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg equatable.main.__range_panic_3
-    x64.cmp rax, rcx
-    x64.jl equatable.main.__range_panic_3
-    x64.jmp equatable.main.__range_ok_3
-  __range_panic_3:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 10
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.mov r8d, 10
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov rcx, r8
+    x64.call mrt_alloc
+    x64.mov r9d, 20
+    x64.mov [r8+0], r9 (8b)
+    x64.mov r9, [r13+0] (8b)
+    x64.mov rsi, [r12+0] (8b)
+    x64.xor edi, edi
+    x64.cmp rsi, r9
+    x64.jne first_1.after
+  first_1:
+    x64.add rdi, 1
+  first_1.after:
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rsi, [r12+0] (8b)
+    x64.cmp rsi, r9
+    x64.jne second_3.after
+  second_3:
+    x64.add rdi, 10
+  second_3.after:
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r13+0] (8b)
+    x64.cmp r8, r9
+    x64.jne __phi_trampoline_4_6
+  third_5:
+    x64.add rdi, 100
+    x64.mov r8, rdi
+  third_5.after:
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r8, [rip+__panic_msg_0]
+    x64.mov rcx, r8
     x64.call mrt_panic
-  __range_ok_3:
-    x64.mov rbx, [rbp-24]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_32
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_32
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_33
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_33
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_34
-    x64.call mm_decref
-    x64.label __nonnull_skip_34
-    x64.mov rax, [rbp-32]
+  __range_ok_0:
     x64.epilogue
     x64.ret
-  }
-  func @__destruct_Token(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Token.done
-  done:
-    x64.ret
+  __phi_trampoline_4_6:
+    x64.mov r8, rdi
+    x64.jmp third_5.after
   }
 }
 ---

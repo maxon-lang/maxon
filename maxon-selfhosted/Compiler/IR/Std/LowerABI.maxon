@@ -58,6 +58,18 @@ end 'getX86Convention'
 // windowsX64: first 4 integer params in RCX, RDX, R8, R9; rest on stack
 // sysVAmd64: first 6 integer params in RDI, RSI, RDX, RCX, R8, R9; rest on stack
 // aapcs64: first 8 integer params in X0-X7; rest on stack
+//
+// C1.c note: interface fat-pointer params occupy two consecutive integer-
+// class register slots (`{value, witness}`). At Std-IR level the lowering
+// emits the callee's two ValueIds in adjacent param positions, so the
+// existing per-index classifier here already produces the right answer —
+// each half of the pair is classified as an ordinary i64. End-to-end
+// fat-pointer parameter passing requires upstream changes (param-index
+// expansion in `LowerMaxonToStd.transferFuncs`) that C1.c defers because
+// no parser-emitted interface(_) MaxonType reaches lowering today.
+// Similarly, fat returns are deferred until a multi-register `ret` op
+// shape is wired through the dialect; today's `ret` carries a single
+// ValueId and an interface-typed return is structurally absent.
 export function classifyParam(paramIndex VarSlot, convention ABIConvention) returns ABIParamClass
 	let regLimit = match convention 'limit'
 		windowsX64 gives 4

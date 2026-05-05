@@ -122,6 +122,89 @@ function buildGenericInstanceType(project Project, baseName String, args StringA
 	return MaxonType.genericInstance(giid)
 end 'buildGenericInstanceType'
 
+// Phase 11.7: walk every deferred where-clause check and emit E3017 per
+// failing constraint. Runs after `validateConformances` has populated
+// `project.conformances`, so `typeConformsTo` returns accurate verdicts.
+export function drainPendingConstraintChecks(project Project)
+	for check in project.pendingConstraintChecks 'eachCheck'
+		validateGenericInstanceConstraints(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
+	end 'eachCheck'
+	project.pendingConstraintChecks = PendingConstraintCheckArray.create()
+end 'drainPendingConstraintChecks'
+
+function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+	match expr 'extract'
+		genericAlias(baseName, args) then validateConstraintsFor(project, baseName: baseName, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
+		boolPrim then return
+		rangedFloat then return
+		rangedInt then return
+		aliasName then return
+	end 'extract'
+end 'validateGenericInstanceConstraints'
+
+function validateConstraintsFor(project Project, baseName String, args StringArray, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+	let typeParams = lookupTypeParamsForBase(project, baseName: baseName)
+	let whereClauses = lookupWhereClausesForBase(project, baseName: baseName)
+	if whereClauses.count() == 0 'noConstraints'
+		return
+	end 'noConstraints'
+	if typeParams.count() == 0 'noParams'
+		return
+	end 'noParams'
+
+	for i in 0 upto whereClauses.count() 'eachClause'
+		let wc = try whereClauses.get(i) otherwise panic("validateConstraintsFor: whereClauses.get OOB at {i}")
+		// Find the position of `wc.paramName` within the base's typeParams,
+		// then look up the corresponding arg supplied at the call site.
+		var paramIdx = -1
+		for j in 0 upto typeParams.count() 'lookupIdx'
+			let tp = try typeParams.get(j) otherwise panic("validateConstraintsFor: typeParams.get OOB at {j}")
+			if tp == wc.paramName 'hit'
+				paramIdx = j
+				break
+			end 'hit'
+		end 'lookupIdx'
+		if paramIdx < 0 'unknownParam'
+			continue
+		end 'unknownParam'
+		if paramIdx >= args.count() 'argMissing'
+			continue
+		end 'argMissing'
+		let argName = try args.get(paramIdx) otherwise panic("validateConstraintsFor: args.get OOB at {paramIdx}")
+		let argType = internMaxonType(project, name: argName)
+		if not typeConformsTo(project, t: argType, interfaceName: wc.requiredTraitName) 'violation'
+			reportCompileError(project, code: ErrorCode.semanticConstraintViolation, message: "Type '{argName}' does not satisfy constraint '{wc.requiredTraitName}' required by type parameter '{wc.paramName}' of '{baseName}'", line: declLine, column: declColumn, filePath: declFilePath)
+		end 'violation'
+	end 'eachClause'
+end 'validateConstraintsFor'
+
+function lookupTypeParamsForBase(project Project, baseName String) returns StringArray
+	if let unresolved = try project.unresolvedStructTypes.get(baseName) 'unresolvedHit'
+		return unresolved.typeParams
+	end 'unresolvedHit'
+	// Resolved structs don't carry their typeParams directly; reconstruct
+	// the parameter-name list from the project's TypeParamRegistry.
+	return project.typeParameters.getParamNames(baseName)
+end 'lookupTypeParamsForBase'
+
+function lookupWhereClausesForBase(project Project, baseName String) returns WhereClauseArray
+	if let unresolved = try project.unresolvedStructTypes.get(baseName) 'unresolvedHit'
+		return unresolved.whereClauses
+	end 'unresolvedHit'
+	// Resolved structs lose their whereClauses array; reconstruct from the
+	// per-typeParameter constraint sidecar populated by `parseTypeDecl`.
+	var result = WhereClauseArray.create()
+	let paramNames = project.typeParameters.getParamNames(baseName)
+	for paramName in paramNames 'eachParam'
+		let pid = project.typeParameters.intern(baseName, paramName: paramName)
+		let traits = project.typeParameters.getConstraints(pid)
+		for trait in traits 'eachTrait'
+			result.push(WhereClause.createScoped(paramName, requiredTraitName: trait, declaringTypeName: baseName))
+		end 'eachTrait'
+	end 'eachParam'
+	return result
+end 'lookupWhereClausesForBase'
+
 function tryResolveAliasName(project Project, name String) returns ResolveResult
 	// If the referenced alias is already resolved, copy its StdType through
 	// and propagate the range when one is recorded. Otherwise the entry has
@@ -149,6 +232,7 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		if isGenericAliasExpr(entry.expr) 'genericFork'
 			let resolvedType = resolveGenericAliasExpr(project, expr: entry.expr, declaringTypeName: "")
 			try project.genericTypealiases.insert(name, value: resolvedType) otherwise ignore
+			project.pendingConstraintChecks.push(PendingConstraintCheck.create(name, expr: entry.expr, declLine: entry.line, declColumn: entry.column, declFilePath: entry.filePath))
 			resolvedNames.push(name)
 			continue
 		end 'genericFork'
@@ -561,42 +645,36 @@ end 'resolveAllEnumTypes'
 // already-substituted `expectedMethods`.)
 function validateConformances(project Project)
 	for (typeName, entry) in project.unresolvedStructTypes 'eachStruct'
-		validateConformancesFor(project, typeName: typeName, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
+		validateConformancesFor(project, typeName: typeName, conformances: entry.implementedInterfaces)
 	end 'eachStruct'
 	for (typeName, entry) in project.unresolvedEnums 'eachEnum'
-		validateConformancesFor(project, typeName: typeName, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
+		validateConformancesFor(project, typeName: typeName, conformances: entry.implementedInterfaces)
 	end 'eachEnum'
 end 'validateConformances'
 
 // Per-type validation helper: walks one conformance list.
-function validateConformancesFor(project Project, typeName String, conformances ConformanceArray, declFilePath FilePath)
+function validateConformancesFor(project Project, typeName String, conformances ConformanceArray)
 	for conf in conformances 'eachConf'
-		let iface = try project.unresolvedInterfaces.get(conf.interfaceName) otherwise 'tryResolved'
-			validateConformancesForResolved(project, typeName: typeName, conf: conf, declFilePath: declFilePath)
+		// Phase 11.7: per-method existence + signature check moved to
+		// SemanticCheck.reportMissingMethods (E3016). Here we only walk
+		// the interface to confirm it exists and record the conformance.
+		// Verify the interface exists (unresolved registry first, then resolved
+		// registry inside the helper). Phase 11.7: missing-method / wrong-
+		// signature emission moved to SemanticCheck.reportMissingMethods.
+		if not project.unresolvedInterfaces.contains(conf.interfaceName) 'tryResolved'
+			validateConformancesForResolved(project, typeName: typeName, conf: conf)
 			continue
 		end 'tryResolved'
-		validateConformanceMethods(project, typeName: typeName, ifaceName: conf.interfaceName, methods: iface.methods, conformanceLine: conf.line, conformanceColumn: conf.column, declFilePath: declFilePath)
 		recordConformance(project, typeName: typeName, conf: conf)
 	end 'eachConf'
 end 'validateConformancesFor'
 
-function validateConformancesForResolved(project Project, typeName String, conf Conformance, declFilePath FilePath)
-	let iface = try project.interfaces.get(conf.interfaceName) otherwise return
-	validateConformanceMethods(project, typeName: typeName, ifaceName: conf.interfaceName, methods: iface.methods, conformanceLine: conf.line, conformanceColumn: conf.column, declFilePath: declFilePath)
+function validateConformancesForResolved(project Project, typeName String, conf Conformance)
+	if not project.interfaces.contains(conf.interfaceName) 'unknown'
+		return
+	end 'unknown'
 	recordConformance(project, typeName: typeName, conf: conf)
 end 'validateConformancesForResolved'
-
-// Per-method existence check. Phase 5 minimum viable: same name lookup in
-// `project.funcReturnTypes`. Step 7 will sharpen this with a full
-// signature match (param count + types after substitution).
-function validateConformanceMethods(project Project, typeName String, ifaceName String, methods InterfaceMethodSigArray, conformanceLine ErrorLineNumber, conformanceColumn ErrorColumnNumber, declFilePath FilePath)
-	for m in methods 'eachMethod'
-		let qualified = "{typeName}.{m.name}"
-		if not project.funcReturnTypes.contains(qualified) 'missing'
-			reportCompileError(project, code: ErrorCode.semanticUnknownInterface, message: "type '{typeName}' does not satisfy interface '{ifaceName}': missing method '{m.name}'", line: conformanceLine, column: conformanceColumn, filePath: declFilePath)
-		end 'missing'
-	end 'eachMethod'
-end 'validateConformanceMethods'
 
 // Record a (typeName, interfaceName, withArgs) entry in
 // `project.conformances`. The withArgs list arrives as bare strings
@@ -634,22 +712,16 @@ end 'recordConformance'
 function processExtensions(project Project)
 	for ext in project.unresolvedExtensions 'eachExt'
 		for conf in ext.addedConformances 'eachConf'
-			let resolvedIface = try project.interfaces.get(conf.interfaceName) otherwise 'tryUnresolved'
+			if not project.interfaces.contains(conf.interfaceName) 'tryUnresolved'
 				processExtensionConformanceUnresolved(project, ext: ext, conf: conf)
 				continue
 			end 'tryUnresolved'
-			validateConformanceMethods(project, typeName: ext.targetTypeName, ifaceName: conf.interfaceName, methods: resolvedIface.methods, conformanceLine: conf.line, conformanceColumn: conf.column, declFilePath: ext.filePath)
 			recordConformance(project, typeName: ext.targetTypeName, conf: conf)
 		end 'eachConf'
 	end 'eachExt'
 end 'processExtensions'
 
 function processExtensionConformanceUnresolved(project Project, ext UnresolvedExtension, conf Conformance)
-	let iface = try project.unresolvedInterfaces.get(conf.interfaceName) otherwise 'noIface'
-		recordConformance(project, typeName: ext.targetTypeName, conf: conf)
-		return
-	end 'noIface'
-	validateConformanceMethods(project, typeName: ext.targetTypeName, ifaceName: conf.interfaceName, methods: iface.methods, conformanceLine: conf.line, conformanceColumn: conf.column, declFilePath: ext.filePath)
 	recordConformance(project, typeName: ext.targetTypeName, conf: conf)
 end 'processExtensionConformanceUnresolved'
 
@@ -686,7 +758,7 @@ end 'convertCastCategory'
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
 	let name = project.typeNames.get(id)
 	if not namedIdIsKnown(project, id: id) 'unknown'
-		panic("namedIdCastCategory: unknown named type '{name}' — caller must run reportIfUnknownType first")
+		panic("namedIdCastCategory: unknown type name '{name}' — should have been rejected by E3009/E3011 upstream")
 	end 'unknown'
 	return resolveNamedToStdType(project, name: name).rawValue.castCategory
 end 'namedIdCastCategory'
@@ -719,7 +791,7 @@ end 'maxonTypeIsKnown'
 
 function namedIdIsKnown(project Project, id TypeNameId) returns bool
 	let name = project.typeNames.get(id)
-	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.enumTypes.contains(name) or project.funcReturnTypes.contains(name) or project.genericTypealiases.contains(name) or anyStructHasInnerAlias(project, aliasName: name)
+	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.enumTypes.contains(name) or project.funcReturnTypes.contains(name) or project.genericTypealiases.contains(name) or anyStructHasInnerAlias(project, aliasName: name) or project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) or name == "String" or name == "int" or name == "float" or name == "byte" or name == "bool"
 end 'namedIdIsKnown'
 
 // Emit E3009 if `t` references an unknown named type and return true so the
@@ -1303,7 +1375,19 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 		return MaxonType.unresolved
 	end 'noStruct'
 	let bareCallee = "{structName}.{String.from(methodName)}"
-	let qualifiedCallee = resolveOverloadFromArgs(project, bareName: bareCallee, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
+	var qualifiedCallee = resolveOverloadFromArgs(project, bareName: bareCallee, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
+	// Mirror `resolveMethodCallSite`: fall back to an interface-extension
+	// method when the concrete-type qualified name has no return-type entry.
+	// Without this, `c.asSimple()` (extension on `Pointlike`, called via a
+	// concrete `Coord`) would record an unresolved producer type and the
+	// downstream `p.x` field-load would fail to find a struct context.
+	if not project.funcReturnTypes.contains(qualifiedCallee) 'noDirectReturn'
+		let bareMethodName = String.from(methodName)
+		let extensionCallee = findInterfaceExtensionCallee(project, typeName: structName, methodName: bareMethodName, argTypes: argTypes)
+		if not extensionCallee.isEmpty() 'foundExt'
+			qualifiedCallee = extensionCallee
+		end 'foundExt'
+	end 'noDirectReturn'
 	let returnType = try project.funcReturnTypes.get(qualifiedCallee) otherwise return MaxonType.unresolved
 	let raw = match returnType 'unwrap'
 		void gives MaxonType.unresolved
@@ -2686,6 +2770,11 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// `project.conformances` (today: nothing — the table is fed but not
 	// yet consumed; Step 6/7 will).
 	processExtensions(project)
+	// Phase 11.7: drain deferred where-clause checks now that
+	// `project.conformances` is populated by validateConformances and
+	// processExtensions. Runs before the struct drain so a constraint
+	// violation surfaces before lowering attempts to use the bad alias.
+	drainPendingConstraintChecks(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
 	// Top-level decls (lets and vars together) depend on enums (cases
@@ -3094,12 +3183,48 @@ function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArra
 	end 'noStruct'
 	let bareMethodName = String.from(methodName)
 	let baseQualified = "{receiverStructName}.{bareMethodName}"
-	let resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
+	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
+	// When the concrete-type qualified name has no registered signature,
+	// fall back to an extension method declared on an interface that the
+	// receiver conforms to (`Countable.count` for an `IntList implements
+	// Countable` receiver). Without this redirect the call would emit as
+	// a reference to a non-existent `IntList.count`, which the X64 backend
+	// can't capture a result for — leaving the call's resultId undefined
+	// and tripping the SSA-coloring "no coloring assignment" panic.
+	if not project.funcSignatures.contains(resolved) 'noDirectSig'
+		let extensionCallee = findInterfaceExtensionCallee(project, typeName: receiverStructName, methodName: bareMethodName, argTypes: argTypes)
+		if not extensionCallee.isEmpty() 'foundExt'
+			resolved = extensionCallee
+		end 'foundExt'
+	end 'noDirectSig'
 	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
 	let signature = try project.funcSignatures.get(resolved) otherwise return
 	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
 end 'resolveMethodCallSite'
+
+// Walk every conformance whose typeName matches the receiver and probe
+// `<InterfaceName>.<methodName>` against `funcSignatures`. Returns the
+// first registered qualified name; "" when no conforming interface
+// declares this extension method. Conformance lookup hits the same
+// registry that `typeConformsTo` uses, so transitive entries seeded by
+// `validateConformances` (`B implements A` brings A's extensions to B)
+// are visible without re-walking the interface-extends-interface chain.
+function findInterfaceExtensionCallee(project Project, typeName String, methodName String, argTypes MaxonTypeArray) returns String
+	let total = project.conformances.count()
+	for i in 0 upto total 'eachConf'
+		let (confType, ifaceName, _) = project.conformances.get(i)
+		if confType != typeName 'skipOther'
+			continue
+		end 'skipOther'
+		let candidate = "{ifaceName}.{methodName}"
+		let resolvedCandidate = resolveOverloadedCallee(project, bareQualifiedName: candidate, argTypes: argTypes, hasSelf: false)
+		if project.funcSignatures.contains(resolvedCandidate) 'hit'
+			return resolvedCandidate
+		end 'hit'
+	end 'eachConf'
+	return ""
+end 'findInterfaceExtensionCallee'
 
 // Build the substituted paramTypes vector for one call site by running
 // every signature paramType through the existing

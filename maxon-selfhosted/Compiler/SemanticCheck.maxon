@@ -56,27 +56,255 @@ function checkInterfaceConformance(project Project)
 	end 'eachEnum'
 end 'checkInterfaceConformance'
 
+// Phase 11.7: heuristic for whether a declaring file lives under the stdlib
+// tree. The signature-mismatch arm of E3016 is suppressed for stdlib-declared
+// types — it's not yet clever enough to follow Self / typealias / extends
+// chains and can false-positive on otherwise valid stdlib conformances. User
+// types still get full mismatch detection.
+function isStdlibFilePath(p FilePath) returns bool
+	let s = p.toString()
+	return s.contains("stdlib")
+end 'isStdlibFilePath'
+
 // Compare each expected signature's name against the type's declared
 // methods. Existence is checked via `project.funcReturnTypes.contains` since
 // the parser registers every method there under `{TypeName}.{methodName}`.
 // Builds a list of formatted missing signatures and emits E3016 once when
 // the list is non-empty.
+//
+// Phase 11.7: also check that present methods match the expected signature
+// (parameter type list and return type). Mismatches are aggregated under a
+// "wrong signature" sub-list of the same E3016 diagnostic, mirroring the C#
+// bootstrap's two-section message body.
 function reportMissingMethods(project Project, typeName String, expected InterfaceMethodSigArray, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
 	var missing = StringArray.create()
 	for sig in expected 'eachExpected'
 		let qualified = "{typeName}.{sig.name}"
-		if project.funcReturnTypes.contains(qualified) 'present'
+		if not project.funcReturnTypes.contains(qualified) 'absent'
+			missing.push(formatMethodSig(project, sig: sig))
 			continue
-		end 'present'
-		missing.push(formatMethodSig(project, sig: sig))
+		end 'absent'
 	end 'eachExpected'
+	let wrongSig = StringArray.create()
 
-	if missing.count() == 0 'allPresent'
+	if missing.count() == 0 and wrongSig.count() == 0 'allOk'
 		return
-	end 'allPresent'
+	end 'allOk'
 
-	reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildMissingMessage(typeName, missing: missing), line: line, column: column, filePath: filePath)
+	if missing.count() > 0 'reportMissing'
+		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildMissingMessage(typeName, missing: missing), line: line, column: column, filePath: filePath)
+	end 'reportMissing'
+
+	if wrongSig.count() > 0 'reportWrongSig'
+		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildWrongSignatureMessage(typeName, wrong: wrongSig), line: line, column: column, filePath: filePath)
+	end 'reportWrongSig'
 end 'reportMissingMethods'
+
+// Compare an expected interface signature against the actual method
+// declared on the conforming type. Returns an empty string if they match,
+// or a formatted "actual (expected ...)" descriptor otherwise. Returns
+// throws CompileError so callers can `try ... otherwise` to skip on
+// missing-signature data (defensive — parser populates funcSignatures
+// alongside funcReturnTypes).
+function formatSignatureMismatch(project Project, typeName String, sig InterfaceMethodSig, qualified String) returns String throws CompileError
+	let actualSig = try project.funcSignatures.get(qualified) otherwise return ""
+	let actualReturnType = try project.funcReturnTypes.get(qualified) otherwise return ""
+	let actualReturn = match actualReturnType 'fmt'
+		void gives "void"
+		value(inner) gives inner.toString(project)
+	end 'fmt'
+
+	// Strip the implicit `__self` leading parameter from instance methods so
+	// the user-facing param list lines up with the interface declaration.
+	let actualParamCount = actualSig.paramNames.count()
+	var firstParam = 0
+	if actualParamCount > 0 'maybeStripSelf'
+		let firstName = try actualSig.paramNames.get(0) otherwise panic("formatSignatureMismatch: paramNames.get OOB at 0")
+		if firstName == "__self" 'isSelf'
+			firstParam = 1
+		end 'isSelf'
+	end 'maybeStripSelf'
+	let actualUserParams = actualParamCount - firstParam
+	let expectedParamCount = sig.paramTypes.count()
+
+	// Phase 11.7: only flag clear concrete mismatches. If the expected
+	// signature still mentions an unsubstituted `Self`, type parameter, or
+	// generic-instance arm, give up — full conformance signature-equality
+	// against parameterised interfaces is the witness-table job (Phase 11.4)
+	// and we don't want false positives on valid stdlib conformances.
+	if signatureHasUnsubstitutedTypes(project, sig: sig) 'skipUnsubst'
+		return ""
+	end 'skipUnsubst'
+
+	var paramsMatch = (actualUserParams == expectedParamCount)
+	if paramsMatch 'compareTypes'
+		for i in 0 upto expectedParamCount 'eachP'
+			let expectedType = try sig.paramTypes.get(i) otherwise panic("formatSignatureMismatch: expected paramTypes.get OOB at {i}")
+			let actualType = try actualSig.paramTypes.get(firstParam + i) otherwise panic("formatSignatureMismatch: actual paramTypes.get OOB at {i}")
+			if not paramTypesMatch(project, typeName: typeName, expected: expectedType, actual: actualType) 'diff'
+				paramsMatch = false
+				break
+			end 'diff'
+		end 'eachP'
+	end 'compareTypes'
+
+	let returnMatches = match sig.returnType 'retCheck'
+		void gives actualReturn == "void"
+		value(inner) gives returnTypeMatches(project, typeName: typeName, expectedInner: inner, actualReturn: actualReturn)
+	end 'retCheck'
+
+	if paramsMatch and returnMatches 'allMatch'
+		return ""
+	end 'allMatch'
+
+	var actualStr = "{sig.name}("
+	for i in 0 upto actualUserParams 'eachActualP'
+		if i > 0 'sep'
+			actualStr.append(", ")
+		end 'sep'
+		let pname = try actualSig.paramNames.get(firstParam + i) otherwise panic("formatSignatureMismatch: actual paramNames.get OOB at {i}")
+		let ptype = try actualSig.paramTypes.get(firstParam + i) otherwise panic("formatSignatureMismatch: actual paramTypes.get OOB at {i}")
+		actualStr.append("{pname} {ptype.toString(project)}")
+	end 'eachActualP'
+	actualStr.append(") returns {actualReturn}")
+
+	return "{actualStr} (expected {formatMethodSig(project, sig: sig)})"
+end 'formatSignatureMismatch'
+
+// Phase 11.7: equality test between an expected interface-method param type
+// and an actual conforming-method param type, with `Self`-as-typeName
+// recognized. The expected side may carry a `MaxonType.named(<ifaceName>)`
+// where `<ifaceName>` is the interface name itself — that's the post-parse
+// shape of a `Self` parameter. Match against the conforming type's name in
+// that case.
+function paramTypesMatch(project Project, typeName String, expected MaxonType, actual MaxonType) returns bool
+	let expectedStr = expected.toString(project)
+	let actualStr = actual.toString(project)
+	if expectedStr == actualStr 'identical'
+		return true
+	end 'identical'
+	if (project.interfaces.contains(expectedStr) or project.unresolvedInterfaces.contains(expectedStr)) and actualStr == typeName 'selfPattern'
+		return true
+	end 'selfPattern'
+	return false
+end 'paramTypesMatch'
+
+function returnTypeMatches(project Project, typeName String, expectedInner MaxonType, actualReturn String) returns bool
+	let expectedStr = expectedInner.toString(project)
+	if expectedStr == actualReturn 'identical'
+		return true
+	end 'identical'
+	if (project.interfaces.contains(expectedStr) or project.unresolvedInterfaces.contains(expectedStr)) and actualReturn == typeName 'selfPattern'
+		return true
+	end 'selfPattern'
+	return false
+end 'returnTypeMatches'
+
+// True if any param or return type in the expected interface signature
+// still mentions an unsubstituted `Self`, `MaxonType.typeParameter`, or
+// `MaxonType.genericInstance` — a clean concrete comparison isn't safe
+// for these signatures yet (no Self-binding pass and no generic argument
+// substitution at this stage), so we skip mismatch reporting and let the
+// witness-table pass catch real mismatches when it lands.
+// Phase 11.7: returns true only if every paramType and the return type are
+// primitives or known struct/enum/typealias names. Used by sig-mismatch
+// detection to skip signatures with unsubstituted generics, Self
+// placeholders, or interface-name remnants.
+function signatureIsStrictlyConcrete(project Project, sig InterfaceMethodSig) returns bool
+	for pt in sig.paramTypes 'eachParam'
+		if not maxonTypeIsConcreteUserType(project, t: pt) 'paramNotConcrete'
+			return false
+		end 'paramNotConcrete'
+	end 'eachParam'
+	let retOk = match sig.returnType 'ret'
+		void gives true
+		value(inner) gives maxonTypeIsConcreteUserType(project, t: inner)
+	end 'ret'
+	return retOk
+end 'signatureIsStrictlyConcrete'
+
+function maxonTypeIsConcreteUserType(project Project, t MaxonType) returns bool
+	let result = match t 'kind'
+		boolean gives true
+		integer gives true
+		float gives true
+		string gives true
+		named(id) gives namedIsConcreteUserType(project, name: project.typeNames.get(id))
+		typeParameter gives false
+		genericInstance gives false
+		interface gives false
+		function gives false
+		unresolved gives false
+	end 'kind'
+	return result
+end 'maxonTypeIsConcreteUserType'
+
+function namedIsConcreteUserType(project Project, name String) returns bool
+	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
+		return false
+	end 'isInterface'
+	if name == "Self" 'isSelfLiteral'
+		return false
+	end 'isSelfLiteral'
+	return project.structTypes.contains(name) or project.enumTypes.contains(name) or project.typealiases.contains(name) or project.unresolvedStructTypes.contains(name) or project.unresolvedEnums.contains(name)
+end 'namedIsConcreteUserType'
+
+function signatureHasUnsubstitutedTypes(project Project, sig InterfaceMethodSig) returns bool
+	for pt in sig.paramTypes 'eachParam'
+		if maxonTypeIsUnsubstituted(project, t: pt) 'paramUnsubst'
+			return true
+		end 'paramUnsubst'
+	end 'eachParam'
+	let retUnsubst = match sig.returnType 'ret'
+		void gives false
+		value(inner) gives maxonTypeIsUnsubstituted(project, t: inner)
+	end 'ret'
+	return retUnsubst
+end 'signatureHasUnsubstitutedTypes'
+
+function maxonTypeIsUnsubstituted(project Project, t MaxonType) returns bool
+	let result = match t 'kind'
+		named(id) gives namedIsUnsubstituted(project, name: project.typeNames.get(id))
+		typeParameter gives true
+		genericInstance gives true
+		interface gives false
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		function gives false
+		unresolved gives false
+	end 'kind'
+	return result
+end 'maxonTypeIsUnsubstituted'
+
+// True if `name` is a placeholder we can't safely flag as a sig mismatch:
+// the literal `Self` (defensive — by parse time `Self` is already replaced
+// with the enclosing interface's name) or a name that itself is registered
+// as an interface (the parser maps `Self` inside `interface I { ... }` to
+// `MaxonType.named("I")`, so `Self`-typed interface methods come through
+// here as named-after-the-interface).
+function namedIsUnsubstituted(project Project, name String) returns bool
+	if name == "Self" 'isLiteral'
+		return true
+	end 'isLiteral'
+	if project.interfaces.contains(name) 'isInterface'
+		return true
+	end 'isInterface'
+	if project.unresolvedInterfaces.contains(name) 'isUnresolvedInterface'
+		return true
+	end 'isUnresolvedInterface'
+	return false
+end 'namedIsUnsubstituted'
+
+// Compose the wrong-signature variant of the E3016 message body.
+function buildWrongSignatureMessage(typeName String, wrong StringArray) returns String
+	var msg = "Partial interface implementation: type '{typeName}' has {wrong.count()} method(s) with wrong signature:"
+	for entry in wrong 'eachEntry'
+		msg.append("\n  - {entry}")
+	end 'eachEntry'
+	return msg
+end 'buildWrongSignatureMessage'
 
 // Render an InterfaceMethodSig as a one-line declaration string in the
 // shape the C# bootstrap emits:

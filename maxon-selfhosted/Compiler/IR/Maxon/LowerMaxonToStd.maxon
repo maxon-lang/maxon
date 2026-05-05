@@ -81,6 +81,221 @@ export function registerGlobalVarsForDataSection(project Project, globalData Glo
 	end 'eachVar'
 end 'registerGlobalVarsForDataSection'
 
+// C1.b: snapshot per-slot MaxonTypes by walking the function's Maxon ops.
+// The Scope's persistent VarInfoMap drops block-scoped names on popScope,
+// so iterating `scope.allVars()` would miss any slot whose declaring scope
+// has been closed. The Maxon-level varDecl op carries the source-level
+// MaxonType directly, so we walk every block once and stamp the type at
+// the slot's index. Slots without a varDecl (parameters, self-field
+// aliases) get MaxonType.integer as a benign filler — consumers
+// (InjectDrops C1.b) only key off MaxonType.typeParameter, which never
+// appears for those slots.
+function collectSlotMaxonTypes(func IrFunction, maxonModule MaxonModule) returns MaxonTypeArray
+	var result = MaxonTypeArray.create()
+	let nextSlot = func.scope.nextSlot
+	if nextSlot == 0 'noSlots'
+		return result
+	end 'noSlots'
+	for _ in 0 upto nextSlot 'fill'
+		result.push(MaxonType.integer)
+	end 'fill'
+	// C1.d: seed interface-typed parameter slots from `maxonParamTypes`
+	// so `function f(g Greeter)`'s slot 0 is recognized as a fat-pointer
+	// by `extendSlotsForInterfaceWitnesses`. Without this, parameter
+	// slots fall through to the integer filler and the witness-companion
+	// slot is never allocated — a downstream varLoad of `g` would then
+	// hit the no-companion panic. Restricted to interface arms only so
+	// no existing pass (InjectDrops keys off `typeParameter`) inherits a
+	// new behavior for non-interface params.
+	let paramSlotCount = func.maxonParamTypes.count()
+	for pIdx in 0 upto paramSlotCount 'eachParam'
+		if pIdx >= nextSlot 'beyondAllocated'
+			break
+		end 'beyondAllocated'
+		let pType = try func.maxonParamTypes.get(pIdx) otherwise continue
+		if not interfaceTypeIsFat(pType) 'notInterface'
+			continue
+		end 'notInterface'
+		try result.set(pIdx, value: pType) otherwise panic("collectSlotMaxonTypes: result.set OOB at param slot {pIdx} (nextSlot={nextSlot})")
+	end 'eachParam'
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try maxonModule.blocks.get(blockRef) otherwise panic("collectSlotMaxonTypes: blockRef {blockRef} OOB (count={maxonModule.blocks.count()})")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try maxonModule.ops.get(opIdx) otherwise continue
+			recordSlotTypeFromOp(op, slotMaxonTypes: result, nextSlot: nextSlot)
+		end 'eachOp'
+	end 'eachBlock'
+	return result
+end 'collectSlotMaxonTypes'
+
+function recordSlotTypeFromOp(op MaxonOp, slotMaxonTypes MaxonTypeArray, nextSlot VarSlot)
+	if op.name != "varDecl" 'notVarDecl'
+		return
+	end 'notVarDecl'
+	match op 'check'
+		varDecl(slotId, _, slotType, _) then recordSlotType(slotMaxonTypes, slotId: slotId, slotType: slotType, nextSlot: nextSlot)
+		default panic("recordSlotTypeFromOp: op.name == varDecl but match did not extract")
+	end 'check'
+end 'recordSlotTypeFromOp'
+
+function recordSlotType(slotMaxonTypes MaxonTypeArray, slotId VarSlot, slotType MaxonType, nextSlot VarSlot)
+	if slotId >= nextSlot 'oob'
+		return
+	end 'oob'
+	try slotMaxonTypes.set(slotId, value: slotType) otherwise panic("recordSlotType: slotMaxonTypes.set OOB despite slotId < nextSlot")
+end 'recordSlotType'
+
+// C1.c/d: walk the function's recorded slot MaxonTypes and, for every
+// interface-typed slot, ensure a witness-pointer companion slot exists.
+//
+// PARAM slots (slotId < paramCount): the parser pre-allocated a hidden
+// `__witness_<paramName>` slot at `slotId+1` so the Std-level ABI vector
+// passes (value, witness) as adjacent args. Nothing to append — just
+// rely on the existing slot.
+//
+// LOCAL slots (slotId >= paramCount): append a fresh trailing slot.
+// Bumps `func.scope.nextSlot` and pushes a `MaxonType.integer` filler.
+function extendSlotsForInterfaceWitnesses(func IrFunction)
+	let originalSlotCount = func.slotMaxonTypes.count()
+	if originalSlotCount == 0 'noSlots'
+		return
+	end 'noSlots'
+	let paramCount = func.paramCount as VarSlot
+	for slotId in 0 upto originalSlotCount 'eachSlot'
+		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
+		if not interfaceTypeIsFat(slotType) 'notInterface'
+			continue
+		end 'notInterface'
+		if slotId < paramCount 'isParam'
+			logTrace(LogCategory.ir, message: () gives "extendSlotsForInterfaceWitnesses: param slot_{slotId} interface — using pre-allocated witness slot_{slotId + 1}")
+			continue
+		end 'isParam'
+		logTrace(LogCategory.ir, message: () gives "extendSlotsForInterfaceWitnesses: local slot_{slotId} interface — appending witness companion at slot_{func.scope.nextSlot}")
+		func.slotMaxonTypes.push(MaxonType.integer)
+		func.scope.nextSlot = func.scope.nextSlot + 1
+	end 'eachSlot'
+end 'extendSlotsForInterfaceWitnesses'
+
+// C1.c/d: rebuild the per-function `interfaceWitnessSlots` side map by
+// walking `slotMaxonTypes` and pairing each interface-typed slot with
+// its witness companion. For PARAM slots the companion is the
+// immediate-next slot (parser pre-allocated `__witness_<name>`); for
+// LOCAL slots the companion is appended at the end by
+// `extendSlotsForInterfaceWitnesses`, walked here in iteration order.
+function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessSlotMap
+	var map = InterfaceWitnessSlotMap.create()
+	let totalSlots = func.slotMaxonTypes.count()
+	if totalSlots == 0 'noSlots'
+		return map
+	end 'noSlots'
+	let paramCount = func.paramCount as VarSlot
+	// Count only LOCAL interface slots — those are the ones that grew
+	// trailing companions. Param interface slots use their pre-allocated
+	// `slotId+1` and don't shift the original-slot boundary.
+	var localInterfaceCount = 0 as VarSlot
+	for slotId in 0 upto totalSlots 'count'
+		if slotId < paramCount 'skipParam'
+			continue
+		end 'skipParam'
+		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
+		if interfaceTypeIsFat(slotType) 'isInterface'
+			localInterfaceCount = localInterfaceCount + 1
+		end 'isInterface'
+	end 'count'
+	let originalSlotCount = totalSlots - localInterfaceCount
+	var nextCompanion = originalSlotCount as VarSlot
+	for slotId in 0 upto originalSlotCount 'pair'
+		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
+		if not interfaceTypeIsFat(slotType) 'notInterface'
+			continue
+		end 'notInterface'
+		if slotId < paramCount 'isParam'
+			map.upsert(slotId as VarSlot, value: (slotId + 1) as VarSlot)
+		end 'isParam' else 'isLocal'
+			map.upsert(slotId as VarSlot, value: nextCompanion)
+			nextCompanion = nextCompanion + 1
+		end 'isLocal'
+	end 'pair'
+	return map
+end 'buildInterfaceWitnessSlotMap'
+
+// C1.c: resolve the rdata witness-table label for a (concreteType,
+// interfaceName) pair. Concrete types are named, generic-instance
+// (substituted base name), or primitives (mapped to their canonical
+// extension type-name). A miss in `project.witnessTables` is a hard
+// error — it means BuildWitnessTables didn't seed the conformance,
+// which is an upstream bug. C1.e will ensure primitive conformances
+// are seeded; until then, a missing primitive witness is a graceful
+// hard panic so the build fails loudly rather than producing a
+// dangling reloc.
+// C1.d: 0-based index of `methodName` in `interfaceName`'s method list.
+// Declaration order is the witness-table layout order (BuildWitnessTables
+// emits methodImplNames in the same order it walks `iface.methods`), so
+// this index also names the slot at +24 + 8*idx in the rdata witness blob
+// that `witnessMethod` reads.
+//
+// `extends` parents are NOT walked: the conformance machinery (Phase 11.3
+// processExtensions) projects every parent method into the child's
+// witness table, so a child `BidirectionalIterator`'s witness already
+// carries the inherited `next()` slot under its child interface's index
+// — there's no separate parent-witness chase at dispatch time.
+//
+// Hard error on miss: a missing method name means upstream conformance
+// validation failed to detect it, so we surface the bug here rather than
+// emit a witness load against a stale offset.
+export function methodIndexInInterface(project Project, interfaceName String, methodName String) returns MachineWord
+	let iface = try project.interfaces.get(interfaceName) otherwise panic("methodIndexInInterface: interface '{interfaceName}' not in project.interfaces (resolveAllInterfaces drained or never seeded)")
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("methodIndexInInterface: methods.get OOB at {i}")
+		if m.name == methodName 'hit'
+			return i as MachineWord
+		end 'hit'
+	end 'scan'
+	panic("methodIndexInInterface: method '{methodName}' not found on interface '{interfaceName}'; conformance validation should have rejected this call site upstream")
+end 'methodIndexInInterface'
+
+// C1.d: lookup the declared return type of an interface method so a
+// methodCall result lands with the right MaxonType. Used by the
+// interface-dispatch lowering to stamp the result ValueId. Same lookup
+// rules as `methodIndexInInterface`; missing names are an upstream bug.
+export function interfaceMethodReturnType(project Project, interfaceName String, methodName String) returns MaxonReturnType
+	let iface = try project.interfaces.get(interfaceName) otherwise panic("interfaceMethodReturnType: interface '{interfaceName}' not in project.interfaces")
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("interfaceMethodReturnType: methods.get OOB at {i}")
+		if m.name == methodName 'hit'
+			return m.returnType
+		end 'hit'
+	end 'scan'
+	panic("interfaceMethodReturnType: method '{methodName}' not found on interface '{interfaceName}'")
+end 'interfaceMethodReturnType'
+
+export function resolveWitnessLabel(project Project, concreteType MaxonType, interfaceName String) returns String
+	let typeName = match concreteType 'pickName'
+		boolean gives "bool"
+		integer gives "int"
+		float gives "float"
+		string gives "String"
+		named(id) gives project.typeNames.get(id)
+		genericInstance(gid) gives genericInstanceIdBaseName(project, id: gid)
+		typeParameter(id) gives project.typeParameters.getName(id)
+		interface(id) gives project.interfaceRegistry.getName(id)
+		function gives ""
+		unresolved gives ""
+	end 'pickName'
+	if typeName.isEmpty() 'noName'
+		return ""
+	end 'noName'
+	if not project.witnessTables.contains(typeName, interfaceName: interfaceName) 'missing'
+		// C1.d soft-fail: parent-interface witnesses (transitive
+		// conformance via `extends`) aren't seeded by today's
+		// BuildWitnessTables, and primitive conformances are deferred to
+		// C1.e. Return empty so the caller can fall back rather than
+		// hard-crashing the build. Direct conformances always succeed.
+		return ""
+	end 'missing'
+	return project.witnessTables.labelFor(typeName, interfaceName: interfaceName)
+end 'resolveWitnessLabel'
+
 // Reserve the `__data_maxon_error` slot (8 bytes, zero-initialized) used by
 // `mrt_set_error` / `mrt_get_error_and_clear`. The slot lives in the .data
 // prelude alongside ordinary top-level vars so the two backends' existing
@@ -480,6 +695,25 @@ end 'maxonReturnTypeLowersToFloat'
 // taken bookkeeping here because the closure ABI is uniform: every
 // indirect call has exactly one env in flight at a time.
 typealias FnEnvMap = Map with(ValueId, ValueId)
+// C1.c: per-function map from an interface-typed slot id to its witness
+// companion slot id. Populated by `assignInterfaceWitnessSlots` after
+// `collectSlotMaxonTypes` allocates fresh trailing slots for each
+// interface-typed slot found in the function. Read at every interface-
+// typed varDecl/varStore site to emit the second store (witness pointer)
+// alongside the first (value or box pointer).
+typealias InterfaceWitnessSlotMap = Map with(VarSlot, VarSlot)
+// C1.d: per-function pairing of an interface-typed loaded value with its
+// witness pointer (also a ValueId). Populated by `lowerVarLoad` whenever it
+// reads a fat-pointer slot — the load emits two ops (value + witness) and
+// stashes the pair here so a downstream `methodCall` can recover the
+// witness without re-walking back to the slot. Mirrors `fnEnvVarNames`'s
+// shape for the closure ABI.
+typealias InterfaceWitnessValueIdMap = Map with(ValueId, ValueId)
+// Phase 11.4: -1 sentinel for "not found" in `findStdFunctionIndexByName`.
+// Defined at module scope because Maxon doesn't allow bare `int` returns —
+// inline `int(-1 to u64.max)` doesn't reach the parser the same way as a
+// named typealias.
+typealias StdFunctionIndex = int(-1 to u64.max)
 
 // ============================================================
 // MaxonToStdLowering type
@@ -548,6 +782,17 @@ type MaxonToStdLowering
 	// closure body" — `closureEnvLoad` would never appear in such a
 	// function so the unused-zero is fine.
 	var liftedEnvValueId ValueId
+	// Phase 11.4: per-function ValueId of the synthetic `__layout_param`
+	// trailing param. 0 means "function has no implicit layout param" — its
+	// body never references the descriptor so leaving the slot at 0 is
+	// inert. Set when the function is detected as generic at lowering entry.
+	var implicitLayoutValueId ValueId
+	// Phase 11.4: per-function ValueId of the synthetic `__witness_param`
+	// trailing param. 0 means "function has no implicit witness param".
+	// Set when the function has any where-clause constraints (the witness
+	// table for the first constraint lives in this slot — multi-constraint
+	// dispatch is a refinement deferred past the spine).
+	var implicitWitnessValueId ValueId
 	// Stage E (closures): the IrFunction currently being lowered. Set at
 	// the top of each function's body walk and read by lowerClosureCreate
 	// to look up the OUTER function's `scope` for capture-slot resolution.
@@ -555,6 +800,16 @@ type MaxonToStdLowering
 	// for "the last function pushed to stdModule" because every function
 	// is pushed upfront in `transferFuncs`.
 	var currentMaxonFunc IrFunction
+	// C1.c: per-function map from interface-typed slot id to its witness
+	// companion slot id. Populated by `assignInterfaceWitnessSlots` at
+	// transferFuncs time. Reset per function in `lower()` so the map
+	// reflects only the current function's interface slots.
+	var interfaceWitnessSlots InterfaceWitnessSlotMap
+	// C1.d: per-function map from a loaded interface-typed ValueId to the
+	// matching witness ValueId loaded from the companion slot. Populated by
+	// `lowerVarLoad` and consumed by `lowerMethodCall` for fat-pointer
+	// receiver dispatch.
+	var interfaceWitnessValueIds InterfaceWitnessValueIdMap
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -574,7 +829,11 @@ type MaxonToStdLowering
 			slotFilledScratch: BoolArray.create(),
 			fnEnvVarNames: FnEnvMap.create(),
 			liftedEnvValueId: 0,
-			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
+			implicitLayoutValueId: 0,
+			implicitWitnessValueId: 0,
+			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0),
+			interfaceWitnessSlots: InterfaceWitnessSlotMap.create(),
+			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create()
 		}
 	end 'create'
 
@@ -682,6 +941,28 @@ type MaxonToStdLowering
 		return result
 	end 'resolveArgNames'
 
+	// Variant of `resolveArgNames` that pairs a witness onto the leading
+	// receiver when the callee's `__self` slot is interface-typed. Used by
+	// the no-user-param early-returns in `slotArgsForCall` so an extension
+	// method invoked on a concrete receiver still gets the (value, witness)
+	// fat-pointer pair the callee expects at slot 0.
+	function resolveArgNamesWithReceiverWitness(signature FuncSignature, args ByteArrayArray, leadingReceiverId ValueId, hasLeadingReceiver bool, dstBlock IrBlock) returns ValueIdArray
+		var result = ValueIdArray.create()
+		if hasLeadingReceiver 'pushLead'
+			result.push(leadingReceiverId)
+			let leadingParamType = try signature.paramTypes.get(0) otherwise MaxonType.unresolved
+			if interfaceTypeIsFat(leadingParamType) 'leadingFat'
+				let leadingWitness = self.witnessForInterfaceArg(valueId: leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
+				result.push(leadingWitness)
+			end 'leadingFat'
+		end 'pushLead'
+		for i in 0 upto args.count() 'each'
+			let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
+			result.push(self.resolveName(arg))
+		end 'each'
+		return result
+	end 'resolveArgNamesWithReceiverWitness'
+
 	// --- Main driver -------------------------------------------------------
 
 	export function lower() returns StdModule
@@ -713,19 +994,56 @@ type MaxonToStdLowering
 
 		// Transfer each function directly, collapsing Maxon-phase types to Std types.
 		// blockRefs are already correct since we kept 1:1 block index alignment above.
+		// Phase 11.4: generic functions get a trailing `__layout_param`
+		// (and a `__witness_param` if their declaring type carries
+		// where-clause constraints) — appended after the user/env slots
+		// so the Std-level paramCount and paramTypes both grow in lockstep
+		// with the synthetic ValueId reservations stamped below.
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = try self.maxonModule.functions.get(i) otherwise panic("invariant: i < functions.count() but get failed")
+			let needsLayout = functionIsGenericForLowering(self.project, func: func)
+			let needsWitness = needsLayout and functionHasWhereClausesForLowering(self.project, func: func)
 			var stdParams = StdTypeArray.create()
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
 			end 'eachParam'
+			if needsLayout 'addLayout'
+				stdParams.push(StdType.i64)
+				func.paramCount = func.paramCount + 1
+				func.hasImplicitLayoutParam = true
+			end 'addLayout'
+			if needsWitness 'addWitness'
+				stdParams.push(StdType.i64)
+				func.paramCount = func.paramCount + 1
+				func.hasImplicitWitnessParam = true
+			end 'addWitness'
 			func.returnType = maxonReturnTypeToStdReturnType(self.project, ref: func.maxonReturnType)
 			func.paramTypes = stdParams
+			// C1.b: snapshot per-slot MaxonTypes from the persisted scope so
+			// downstream Std passes (InjectDrops) can recognize type-parameter
+			// slots without re-walking the parser-level Scope. Self-field
+			// aliases land at well-formed slot ids too — they have a slot
+			// number even though they never back a real frame slot — so we
+			// stamp them into the array (consumers ignore them via
+			// isSelfField on the original VarInfo if they care).
+			func.slotMaxonTypes = collectSlotMaxonTypes(func, maxonModule: self.maxonModule)
+			// C1.c: every interface-typed slot is a fat pointer
+			// `{value, witness}` — allocate a fresh trailing slot for the
+			// witness companion of each interface-typed slot. Bumps
+			// `func.scope.nextSlot` and grows `func.slotMaxonTypes` so all
+			// downstream passes see a single coherent slot count. The
+			// per-function side map is built in lower()'s per-func reset.
+			extendSlotsForInterfaceWitnesses(func)
 			self.stdModule.functions.push(func)
 		end 'transferFuncs'
 
-		// Walk each function's blocks and lower their ops.
-		for srcFunc in self.maxonModule.functions 'eachFunc'
+		// Walk each function's blocks and lower their ops. The walk reads
+		// `self.stdModule.functions` (not `maxonModule.functions`) so the
+		// Phase 11.4 synthetic-trailing-param updates done in transferFuncs
+		// (paramCount, hasImplicitLayoutParam, hasImplicitWitnessParam) are
+		// the values consumed below — `funcIdRef` must start past the
+		// synthetic slots so SSA ids don't collide with them.
+		for srcFunc in self.stdModule.functions 'eachFunc'
 			logTrace(LogCategory.ir, message: () gives "lower-maxon-to-std: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
 			// Reset per-function state. SSA value IDs restart at paramCount in
@@ -758,7 +1076,31 @@ type MaxonToStdLowering
 			// is a synthetic `__env` (closure with captures).
 			self.fnEnvVarNames = FnEnvMap.create()
 			self.liftedEnvValueId = 0
+			self.implicitLayoutValueId = 0
+			self.implicitWitnessValueId = 0
 			self.currentMaxonFunc = srcFunc
+			// C1.c: rebuild the interface-witness-slot side map for this
+			// function. Cheap walk over slotMaxonTypes; runs once per
+			// function and only pays for itself when the function actually
+			// declares interface-typed locals (rare in real flow today).
+			self.interfaceWitnessSlots = buildInterfaceWitnessSlotMap(srcFunc)
+			// C1.d: reset the (loadedValueId → witnessValueId) pairing so
+			// the previous function's bindings don't leak. Populated as
+			// each varLoad on a fat-pointer slot emits its sibling witness
+			// load.
+			self.interfaceWitnessValueIds = InterfaceWitnessValueIdMap.create()
+			// Phase 11.4: layer the synthetic trailing param ValueIds AFTER
+			// the env slot (if any) so the indirect-call helpers can still
+			// derive their env arg from the original liftedEnvValueId. The
+			// witness slot, if present, sits one further past the layout slot.
+			if srcFunc.hasImplicitLayoutParam 'stampLayout'
+				var trailingIdx = (srcFunc.paramCount - 1) as ValueId
+				if srcFunc.hasImplicitWitnessParam 'witnessLast'
+					self.implicitWitnessValueId = trailingIdx
+					trailingIdx = trailingIdx - 1
+				end 'witnessLast'
+				self.implicitLayoutValueId = trailingIdx
+			end 'stampLayout'
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
 				self.setValueType(pIdx, t: pType)
@@ -773,6 +1115,19 @@ type MaxonToStdLowering
 						self.fnEnvVarNames.upsert(pIdx, value: envParamIdx)
 					end 'inRange'
 				end 'pairEnv'
+				// C1.d: interface-typed param ABI is (value, witness). Pair
+				// the value ValueId with the next ValueId so a downstream
+				// dispatch site that references the param value directly
+				// (not through a varLoad) can recover the witness via
+				// `interfaceWitnessValueIds`. The varLoad path also seeds
+				// the loaded ValueId — both pairings coexist for the same
+				// underlying slot.
+				if interfaceTypeIsFat(pType) 'pairWitness'
+					let witnessParamIdx = pIdx + 1
+					if witnessParamIdx < srcFunc.maxonParamTypes.count() 'inRange'
+						self.interfaceWitnessValueIds.upsert(pIdx, value: witnessParamIdx)
+					end 'inRange'
+				end 'pairWitness'
 			end 'seedParams'
 			// Stage E (closures): a lifted closure's last param is the
 			// hidden `__env` pointer. Stamp it here so `closureEnvLoad`
@@ -781,9 +1136,32 @@ type MaxonToStdLowering
 			// functions whose maxonParamTypes was extended in
 			// `parseClosure` — non-closure functions reach here with an
 			// unmodified param list and `liftedEnvValueId` stays at 0.
-			if isLiftedClosureName(srcFunc.name) and srcFunc.paramCount > 0 'envParam'
-				self.liftedEnvValueId = (srcFunc.paramCount - 1) as ValueId
+			// Phase 11.4: env slot sits at the end of the user-visible
+			// `maxonParamTypes` (the layout/witness slots were appended at
+			// the Std level only — they aren't in maxonParamTypes), so
+			// `maxonParamTypes.count() - 1` still names the env slot even
+			// when layout/witness are present.
+			if isLiftedClosureName(srcFunc.name) and srcFunc.maxonParamTypes.count() > 0 'envParam'
+				self.liftedEnvValueId = (srcFunc.maxonParamTypes.count() - 1) as ValueId
 			end 'envParam'
+
+			// Phase 11.4: emit explicit `param` ops at the entry block for
+			// synthetic trailing slots (layout, then optional witness). The
+			// existing-param scan in Mem2Reg picks them up via
+			// `paramSlotHasExistingOp`, preventing duplicate emission, and
+			// the X64/ARM64 backends now have a `param` op anchoring the
+			// register-class allocation for the synthetic slot. Without
+			// this, the synthetic ValueId would be referenced (forwarded
+			// into nested calls) but never defined — which is exactly the
+			// "v1 has no coloring assignment" crash.
+			let entryRef = try srcFunc.blockRefs.get(0) otherwise -1
+			if entryRef >= 0 and srcFunc.hasImplicitLayoutParam 'emitSyntheticParams'
+				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
+				self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitLayoutValueId, paramIndex: self.implicitLayoutValueId as VarSlot, paramType: StdType.i64)))
+				if srcFunc.hasImplicitWitnessParam 'witnessParam'
+					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitWitnessValueId, paramIndex: self.implicitWitnessValueId as VarSlot, paramType: StdType.i64)))
+				end 'witnessParam'
+			end 'emitSyntheticParams'
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
@@ -808,9 +1186,9 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			stringConst(result, stringId, _) then self.lowerStringConst(result, stringId: stringId, dstBlock: dstBlock)
-			varDecl(slotId, value, _, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+			varDecl(slotId, value, slotType, _) then self.lowerVarDeclOrStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
-			varStore(slotId, value, _) then self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+			varStore(slotId, value, _) then self.lowerVarStore(slotId: slotId, value: value, dstBlock: dstBlock)
 			globalLoad(result, name, slotType, _) then self.lowerGlobalLoad(result, name: name, slotType: slotType, dstBlock: dstBlock)
 			globalStore(name, value, slotType, _) then self.lowerGlobalStore(name, value: value, slotType: slotType, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
@@ -908,6 +1286,133 @@ type MaxonToStdLowering
 		logTrace(LogCategory.parser, message: () gives "lowerStringConst: stringId={stringId} dstBlock.id={dstBlock.id}")
 	end 'lowerStringConst'
 
+	// C1.c: dispatch the varDecl op. For interface-typed slots, route
+	// through fat-pointer construction so the slot stores the value (or
+	// box pointer if width > 8) at slot N and the witness pointer at the
+	// companion slot. For all other slots, emit the plain storeSlot the
+	// previous code path emitted.
+	function lowerVarDeclOrStore(slotId VarSlot, value ByteArray, slotType MaxonType, dstBlock IrBlock)
+		if interfaceTypeIsFat(slotType) 'fat'
+			self.lowerInterfaceSlotStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
+			return
+		end 'fat'
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+	end 'lowerVarDeclOrStore'
+
+	// C1.c: dispatch the varStore op. The op itself doesn't carry a
+	// slotType — recover it from `currentMaxonFunc.slotMaxonTypes` so we
+	// can route interface-typed stores through fat-pointer construction.
+	// A miss in slotMaxonTypes (synthesized parser internals never
+	// declared via `varDecl`) falls back to the plain non-interface
+	// path, which is correct because such slots can't carry an interface
+	// type today.
+	function lowerVarStore(slotId VarSlot, value ByteArray, dstBlock IrBlock)
+		let slotType = self.lookupSlotMaxonType(slotId)
+		if interfaceTypeIsFat(slotType) 'fat'
+			self.lowerInterfaceSlotStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
+			return
+		end 'fat'
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+	end 'lowerVarStore'
+
+	function lookupSlotMaxonType(slotId VarSlot) returns MaxonType
+		if slotId >= self.currentMaxonFunc.slotMaxonTypes.count() 'oob'
+			return MaxonType.integer
+		end 'oob'
+		return try self.currentMaxonFunc.slotMaxonTypes.get(slotId) otherwise MaxonType.integer
+	end 'lookupSlotMaxonType'
+
+	// C1.c: emit a fat-pointer store for an interface-typed slot. Two
+	// stores: slot N holds the value (or box pointer for payloads
+	// larger than 8 bytes), companion slot M holds the witness-table
+	// address. The witness label is resolved through
+	// `project.witnessTables` keyed on the RHS's concrete MaxonType and
+	// the slot's interface name. When the RHS is itself interface-
+	// typed (forwarding an existing fat pointer), we propagate the
+	// existing witness rather than re-resolving — the parser-level
+	// type system enforces interface-supertype compatibility.
+	function lowerInterfaceSlotStore(slotId VarSlot, value ByteArray, slotType MaxonType, dstBlock IrBlock)
+		let interfaceName = match slotType 'iface'
+			interface(id) gives self.project.interfaceRegistry.getName(id)
+			default panic("lowerInterfaceSlotStore: slotType is not interface despite the dispatch guard")
+		end 'iface'
+		let valueId = self.resolveName(value)
+		let concreteType = self.getValueType(valueId)
+		let companionSlot = try self.interfaceWitnessSlots.get(slotId) otherwise panic("lowerInterfaceSlotStore: slot {slotId} interface-typed but no witness companion in interfaceWitnessSlots — extendSlotsForInterfaceWitnesses did not run, or buildInterfaceWitnessSlotMap is out of sync")
+		let payloadId = self.materializeInterfacePayload(valueId: valueId, concreteType: concreteType, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: payloadId)))
+		let witnessId = self.materializeInterfaceWitness(concreteType: concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(companionSlot, valueId: witnessId)))
+	end 'lowerInterfaceSlotStore'
+
+	// C1.d: produce the witness half of a fat-pointer arg passed to a
+	// function with an interface-typed parameter. When the arg's
+	// underlying value is itself interface-typed (forward of an existing
+	// fat pointer), the witness was paired in `interfaceWitnessValueIds`
+	// at varLoad time; recover it. When the arg is concrete, materialize
+	// the witness via the (concreteType, interfaceName) witness-table
+	// lookup. Same as the slot-store construction path, just routed
+	// through the call-site rather than a varDecl/varStore.
+	function witnessForInterfaceArg(valueId ValueId, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		let interfaceName = match paramType 'iface'
+			interface(id) gives self.project.interfaceRegistry.getName(id)
+			default panic("witnessForInterfaceArg: paramType is not interface despite the dispatch guard")
+		end 'iface'
+		let argType = self.getValueType(valueId)
+		if interfaceTypeIsFat(argType) 'isFatForward'
+			return try self.interfaceWitnessValueIds.get(valueId) otherwise panic("witnessForInterfaceArg: arg valueId={valueId} typed as interface but no witness paired in interfaceWitnessValueIds")
+		end 'isFatForward'
+		return self.materializeInterfaceWitness(concreteType: argType, interfaceName: interfaceName, dstBlock: dstBlock)
+	end 'witnessForInterfaceArg'
+
+	// C1.c: produce the value half of a fat pointer. For payloads that
+	// fit in 8 bytes, this is the value itself. For wider payloads, the
+	// value is materialized into a refcounted box and the box pointer
+	// becomes the slot value. Today's only callers are the slot-store
+	// path; the dispatch (C1.d) reads back through the same path.
+	function materializeInterfacePayload(valueId ValueId, concreteType MaxonType, dstBlock IrBlock) returns ValueId
+		let widthBytes = maxonTypeWidthBytes(self.project, t: concreteType)
+		if widthBytes <= 8 'fitsInline'
+			return valueId
+		end 'fitsInline'
+		let sizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: widthBytes as IntConstant))))
+		self.setValueType(sizeId, t: MaxonType.integer)
+		let boxId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.boxValue(boxId, valueId: valueId, sizeId: sizeId)))
+		self.setValueType(boxId, t: MaxonType.integer)
+		return boxId
+	end 'materializeInterfacePayload'
+
+	// C1.c: produce the witness half of a fat pointer. Resolves the
+	// witness-table label via `project.witnessTables.labelFor` and
+	// emits a `loadWitnessTable` to materialize the address. When the
+	// RHS is itself interface-typed (already a fat pointer), the
+	// witness companion slot of the source is the right value to
+	// forward — but this lowering is invoked only for construction,
+	// where the RHS is by definition concrete. Forwarding the source
+	// witness is C1.d territory.
+	function materializeInterfaceWitness(concreteType MaxonType, interfaceName String, dstBlock IrBlock) returns ValueId
+		let label = resolveWitnessLabel(self.project, concreteType: concreteType, interfaceName: interfaceName)
+		let resultId = allocValueId(self.funcIdRef)
+		if label.isEmpty() 'missing'
+			// C1.d soft-fail: no witness table for this (concrete,
+			// interface) pair (transitive parent-conformance not seeded,
+			// or primitive-extension gap deferred to C1.e). Emit a zero
+			// constant so the build completes; any actual dispatch
+			// through this witness will surface at runtime when the load
+			// dereferences null. The pre-existing monomorphization
+			// pipeline still handles direct calls correctly — this
+			// soft-fail keeps interface-arm propagation non-fatal.
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+			self.setValueType(resultId, t: MaxonType.integer)
+			return resultId
+		end 'missing'
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return resultId
+	end 'materializeInterfaceWitness'
+
 	function lowerVarLoad(result ByteArray, slotId VarSlot, slotType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(resultId, slotId: slotId)))
@@ -915,6 +1420,23 @@ type MaxonToStdLowering
 		// the value-type map so downstream consumers (fieldLoad/Store, methodCall)
 		// can resolve the receiver type.
 		self.setValueType(resultId, t: slotType)
+		// C1.d: when the slot is interface-typed (fat-pointer), the load just
+		// emitted reads only the value half. Emit a sibling load of the
+		// witness companion slot and stash the (resultId → witnessId)
+		// pairing so a downstream methodCall can dispatch through the
+		// witness without re-walking back to the slot. The witness slot is
+		// always the companion in `interfaceWitnessSlots`; a miss there
+		// means this load is reading a synthetic interface slot the
+		// witness-slot extender never widened — which would be a compiler
+		// bug, surfaced as a hard panic so we don't silently dispatch
+		// against a stale value.
+		if interfaceTypeIsFat(slotType) 'pairWitness'
+			let witnessSlot = try self.interfaceWitnessSlots.get(slotId) otherwise panic("lowerVarLoad: slot {slotId} interface-typed but no witness companion in interfaceWitnessSlots — extendSlotsForInterfaceWitnesses did not run, or buildInterfaceWitnessSlotMap is out of sync")
+			let witnessLoadId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(witnessLoadId, slotId: witnessSlot)))
+			self.setValueType(witnessLoadId, t: MaxonType.integer)
+			self.interfaceWitnessValueIds.upsert(resultId, value: witnessLoadId)
+		end 'pairWitness'
 		// Stage E (closures): if this load reads a function-typed param,
 		// emit a sibling load of the matching env-pointer slot and bind
 		// the (resultId → envLoadId) pair in `fnEnvVarNames`. The
@@ -1115,6 +1637,43 @@ type MaxonToStdLowering
 		// reaches here at parse-time but is never invoked by the
 		// bootstrap compilation itself, so the stub never runs.
 		if receiverStructName.isEmpty() 'noStruct'
+			// C1.d: when the receiver type is `MaxonType.interface(_)`, the
+			// receiver is a fat-pointer pair `(value, witnessAddr)`. Look up
+			// the witness ValueId paired with this receiver at varLoad time
+			// and emit a `witnessMethod` + `indirectCall` to dispatch. The
+			// inline-vs-box distinction (witness `flags.isFatBoxed`) is
+			// deferred — every primitive and pointer-shaped value fits in 8
+			// bytes; the >8-byte unbox path lights up only when a struct
+			// flows through an interface, which is a follow-up.
+			let isInterface = match receiverType 'isIface'
+				interface gives true
+				boolean to function gives false
+				unresolved gives false
+				typeParameter gives false
+				genericInstance gives false
+			end 'isIface'
+			if isInterface 'ifaceDispatch'
+				self.lowerInterfaceMethodCall(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock)
+				return
+			end 'ifaceDispatch'
+			// Phase 11.4: a method call on a primitive receiver (`int.hash()`,
+			// `bool.compare(...)`, …) reaches an extension declared on the
+			// primitive type. The struct-table lookup misses because primitives
+			// aren't structs; map each primitive arm to its conventional
+			// extension type-name and only route there when the qualified
+			// signature is actually registered. A registered signature means
+			// the stdlib's PrimitiveExtensions has been loaded; without it,
+			// fall through to the existing panic stub so the build still
+			// completes with a clear runtime diagnostic.
+			let primName = primitiveExtensionTypeName(receiverType)
+			if not primName.isEmpty() 'havePrim'
+				let primQualified = "{primName}.{String.from(methodName)}"
+				if let primSig = try self.project.funcSignatures.get(primQualified) 'havePrimSig'
+					let primAllArgIds = self.slotArgsForCall(primSig, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
+					self.emitCallWithArgs(result, qualifiedCallee: primQualified, argIds: primAllArgIds, dstBlock: dstBlock)
+					return
+				end 'havePrimSig'
+			end 'havePrim'
 			self.lowerInterfaceMethodCallStub(result, methodName: methodName, dstBlock: dstBlock)
 			return
 		end 'noStruct'
@@ -1147,22 +1706,145 @@ type MaxonToStdLowering
 		// receiver into slot 0 of the returned arg list — no second copy.
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
 			let plainArgs = self.resolveArgNames(args, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock)
+			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock, receiverContext: receiverType)
 			return
 		end 'noSig'
 		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock, receiverContext: receiverType)
 	end 'lowerMethodCall'
 
 	// Emit a Std-level call op with the given pre-resolved argument ids and
 	// register the result's MaxonType. Both lowerCall and lowerMethodCall
 	// share this tail-end pattern; centralizing it keeps the no-signature
 	// fallback and the full-slot path going through the same spot.
-	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock)
+	//
+	// Phase 11.4: when the callee is a generic body (its IrFunction has
+	// `hasImplicitLayoutParam` / `hasImplicitWitnessParam`), append the
+	// synthetic trailing layout-descriptor and witness-table arg ids before
+	// emitting the call. The descriptor is resolved from `receiverContext`
+	// (a `genericInstance(gid)` MaxonType produces a label via
+	// `project.layoutDescriptors.labelFor(gid)`); when the context isn't a
+	// concrete generic instance the lowering forwards the caller's own
+	// `implicitLayoutValueId` instead — that happens in generic-to-generic
+	// dispatch where the inner callee specializes on the outer's `T`.
+	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock, receiverContext MaxonType = MaxonType.unresolved)
+		var finalArgIds = argIds
+		let calleeIdx = self.findStdFunctionIndexByName(qualifiedCallee)
+		if calleeIdx >= 0 'haveCallee'
+			let calleeFunc = try self.stdModule.functions.get(calleeIdx) otherwise panic("emitCallWithArgs: stdModule.functions.get({calleeIdx}) failed")
+			if calleeFunc.hasImplicitLayoutParam 'addLayout'
+				finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+				if calleeFunc.hasImplicitWitnessParam 'addWitness'
+					finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+				end 'addWitness'
+			end 'addLayout'
+		end 'haveCallee'
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: argIds)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
 	end 'emitCallWithArgs'
+
+	// Phase 11.4: linear scan of stdModule.functions for the callee's
+	// IrFunction index. Returns -1 when the callee isn't in the local
+	// module (runtime intrinsics like `mrt_alloc`, IAT imports). Linear
+	// scan suffices today; profiling can later replace it with a name→
+	// index map.
+	function findStdFunctionIndexByName(name String) returns StdFunctionIndex
+		for i in 0 upto self.stdModule.functions.count() 'scan'
+			let f = try self.stdModule.functions.get(i) otherwise panic("findStdFunctionIndexByName: stdModule.functions.get OOB at {i}")
+			if f.name == name 'hit'
+				return i
+			end 'hit'
+		end 'scan'
+		return -1
+	end 'findStdFunctionIndexByName'
+
+	// Resolve the layout descriptor for the call site and return an
+	// updated argIds with the descriptor's address appended. If the
+	// receiver context is a `genericInstance(gid)`, look up the rdata
+	// label via `project.layoutDescriptors.labelFor(gid)` and emit a
+	// `loadLayoutDescriptor`. Otherwise (caller is itself a generic
+	// body forwarding its own `T`) forward `self.implicitLayoutValueId`
+	// — the layout slot the caller received.
+	function appendLayoutArg(argIds ValueIdArray, receiverContext MaxonType, dstBlock IrBlock) returns ValueIdArray
+		var out = argIds
+		let layoutId = self.materializeLayoutArg(receiverContext: receiverContext, dstBlock: dstBlock)
+		out.push(layoutId)
+		return out
+	end 'appendLayoutArg'
+
+	function appendWitnessArg(argIds ValueIdArray, receiverContext MaxonType, dstBlock IrBlock) returns ValueIdArray
+		var out = argIds
+		let witnessId = self.materializeWitnessArg(receiverContext: receiverContext, dstBlock: dstBlock)
+		out.push(witnessId)
+		return out
+	end 'appendWitnessArg'
+
+	function materializeLayoutArg(receiverContext MaxonType, dstBlock IrBlock) returns ValueId
+		return match receiverContext 'pick'
+			genericInstance(gid) gives self.emitLoadLayoutDescriptorForGid(gid, dstBlock: dstBlock)
+			boolean to function gives self.forwardOrPlaceholderLayout(dstBlock)
+			unresolved gives self.forwardOrPlaceholderLayout(dstBlock)
+			typeParameter gives self.forwardOrPlaceholderLayout(dstBlock)
+			interface gives self.forwardOrPlaceholderLayout(dstBlock)
+		end 'pick'
+	end 'materializeLayoutArg'
+
+	function emitLoadLayoutDescriptorForGid(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
+		if not self.project.layoutDescriptors.contains(gid) 'missing'
+			// Belt-and-braces: the buildLayoutDescriptors pass should have
+			// emitted a descriptor for every interned gid before lowering
+			// runs. If we reach here the worklist missed a transitive case;
+			// fall back to forwarding the caller's own layout slot rather
+			// than crashing — keeps the build green even when 11.4's call-
+			// site pattern is exercised on a corner case the worklist hasn't
+			// learned yet. A fix to BuildLayoutDescriptors is the right place
+			// to address the underlying gap.
+			return self.forwardOrPlaceholderLayout(dstBlock)
+		end 'missing'
+		let label = self.project.layoutDescriptors.labelFor(gid)
+		let resultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadLayoutDescriptor(resultId, label: label)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return resultId
+	end 'emitLoadLayoutDescriptorForGid'
+
+	// When no concrete genericInstance is available at the call site,
+	// forward the caller's own layout-param value if the caller has one;
+	// otherwise emit a zero literal (the synthesized stub thunks are
+	// today's only callers in this position and they don't actually use
+	// the layout — the param is present only because the ABI requires it).
+	function forwardOrPlaceholderLayout(dstBlock IrBlock) returns ValueId
+		if self.implicitLayoutValueId != 0 'forward'
+			return self.implicitLayoutValueId
+		end 'forward'
+		let zero = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zero, value: 0))))
+		self.setValueType(zero, t: MaxonType.integer)
+		return zero
+	end 'forwardOrPlaceholderLayout'
+
+	function materializeWitnessArg(receiverContext MaxonType, dstBlock IrBlock) returns ValueId
+		// Phase 11.4 spine: route via the caller's own witness slot when
+		// available; the explicit per-conformance witness lookup is wired
+		// in at the methodCall path where the receiver's struct name is in
+		// hand. The free-call path (no receiver) lands here today with
+		// `receiverContext == unresolved`, so forwarding is the right
+		// default. `receiverContext` is plumbed through so the future
+		// refinement that materializes a witness from the callee's
+		// where-clause + receiver's concrete type can be added without
+		// touching every call site again.
+		match receiverContext 'discard'
+			boolean to interface then break 'discard'
+		end 'discard'
+		if self.implicitWitnessValueId != 0 'forward'
+			return self.implicitWitnessValueId
+		end 'forward'
+		let zero = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zero, value: 0))))
+		self.setValueType(zero, t: MaxonType.integer)
+		return zero
+	end 'materializeWitnessArg'
 
 	// Convenience wrapper for the no-signature fallback in lowerCall: resolve
 	// args verbatim (no leading receiver) and emit the call.
@@ -1493,6 +2175,54 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: resultType)
 	end 'refineMmCallResultType'
 
+	// C1.d: dispatch a method call on a fat-pointer interface receiver.
+	// The receiver's value half is `receiverId` and its witness pointer
+	// was paired in `interfaceWitnessValueIds` by the corresponding
+	// varLoad. Steps:
+	//   1. Recover the witness ValueId for this receiver.
+	//   2. Look up the method's 0-based index in the interface's method
+	//      list (declaration order is the witness-table layout order).
+	//   3. Emit `witnessMethod(witnessAddr, methodIndex)` to materialize
+	//      the function pointer at `+24 + 8*idx`.
+	//   4. Emit `indirectCall(fnPtr, [receiverValue, args...])`.
+	// The result's MaxonType is stamped from the interface method's
+	// declared return type so downstream consumers (callee chains,
+	// further field/method access) can reason about it.
+	//
+	// Inline-vs-boxed: this lowering assumes the witness's flags bit 0
+	// (`isFatBoxed`) is unset — every primitive and pointer-shaped value
+	// fits in 8 bytes, which covers the practical cases. The unbox path
+	// (read flags, conditionally `unboxValue`) is a follow-up; today's
+	// specs reach interface dispatch only with inline-fitting payloads.
+	function lowerInterfaceMethodCall(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock)
+		let interfaceName = match receiverType 'iface'
+			interface(id) gives self.project.interfaceRegistry.getName(id)
+			default panic("lowerInterfaceMethodCall: receiverType is not interface despite the dispatch guard")
+		end 'iface'
+		let witnessAddrId = try self.interfaceWitnessValueIds.get(receiverId) otherwise panic("lowerInterfaceMethodCall: no witness ValueId paired with receiverId={receiverId} (interface={interfaceName}, method={String.from(methodName)}); the receiver's varLoad did not pair its witness companion")
+		let methodNameStr = String.from(methodName)
+		let methodIdx = methodIndexInInterface(self.project, interfaceName: interfaceName, methodName: methodNameStr)
+		let fnPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.witnessMethod(fnPtrId, witnessAddrId: witnessAddrId, methodIndex: methodIdx)))
+		self.setValueType(fnPtrId, t: MaxonType.integer)
+		var argIds = ValueIdArray.create()
+		argIds.push(receiverId)
+		for argName in args 'eachArg'
+			argIds.push(self.resolveName(argName))
+		end 'eachArg'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: fnPtrId, argIds: argIds)))
+		// Stamp the result's MaxonType from the interface method's declared
+		// return type so a chained `g.greet().toString()` (or arithmetic on
+		// the result) can resolve. Void returns leave the MaxonType at the
+		// default integer (the result slot is unused in that case).
+		let returnType = interfaceMethodReturnType(self.project, interfaceName: interfaceName, methodName: methodNameStr)
+		match returnType 'stamp'
+			void then break 'stamp'
+			value(inner) then self.setValueType(resultId, t: inner)
+		end 'stamp'
+	end 'lowerInterfaceMethodCall'
+
 	// Phase 11.0 Step 8.7c: stub for method calls whose receiver type
 	// didn't reduce to a concrete struct (interface-typed receivers,
 	// free type-parameters, or types the resolver couldn't pin down).
@@ -1581,11 +2311,11 @@ type MaxonToStdLowering
 	function slotArgsForCall(signature FuncSignature, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, paramStartIndex ParsedInt, opIdx OpIndex, dstBlock IrBlock, leadingReceiverId ValueId = 0, hasLeadingReceiver bool = false) returns ValueIdArray
 		let userParamCount = signature.paramNames.count() - paramStartIndex
 		if userParamCount < 0 'badArity'
-			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
+			return self.resolveArgNamesWithReceiverWitness(signature, args: args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver, dstBlock: dstBlock)
 		end 'badArity'
 		// FP1: zero-param callee — resolveArgNames handles empty/extras the same.
 		if userParamCount == 0 'noUserParams'
-			return self.resolveArgNames(args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver)
+			return self.resolveArgNamesWithReceiverWitness(signature, args: args, leadingReceiverId: leadingReceiverId, hasLeadingReceiver: hasLeadingReceiver, dstBlock: dstBlock)
 		end 'noUserParams'
 		// Pre-substituted paramTypes were stashed by `resolveAllCalls` during
 		// TypeResolution. By contract, every call op that reaches
@@ -1661,6 +2391,18 @@ type MaxonToStdLowering
 		result.reserve(totalCount)
 		if hasLeadingReceiver 'pushLead'
 			result.push(leadingReceiverId)
+			// C1.d: when the redirected callee's `__self` is interface-typed
+			// (an extension on an interface invoked via a concrete receiver),
+			// the ABI expects (value, witness) at slot 0. Materialize the
+			// witness for the receiver here — the user-param loop only pairs
+			// witnesses for slots `>= paramStartIndex`, so the leading
+			// receiver would otherwise pass through bare and the callee
+			// would read uninitialised state from its second param register.
+			let leadingParamType = try signature.paramTypes.get(0) otherwise MaxonType.unresolved
+			if interfaceTypeIsFat(leadingParamType) 'leadingFat'
+				let leadingWitness = self.witnessForInterfaceArg(valueId: leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
+				result.push(leadingWitness)
+			end 'leadingFat'
 		end 'pushLead'
 		for i in 0 upto userParamCount 'copyOut'
 			let v = try self.slotIdsScratch.get(i) otherwise panic("invariant: slotIdsScratch.get OOB at {i} (size {userParamCount})")
@@ -1670,6 +2412,17 @@ type MaxonToStdLowering
 				let envId = try self.fnEnvVarNames.get(v) otherwise 0
 				result.push(envId)
 			end 'expandEnv'
+			// C1.d: an interface-typed param's ABI is (value, witness). The
+			// value half was just pushed; pair it with the witness here so
+			// the callee receives both at adjacent param indices. Witness
+			// comes from `interfaceWitnessValueIds` when the arg is itself
+			// interface-typed (forward of an existing fat pointer); when
+			// the arg is concrete, materialize the witness via the
+			// (concreteType, interfaceName) registry lookup.
+			if interfaceTypeIsFat(paramType) 'expandWitness'
+				let witnessForArg = self.witnessForInterfaceArg(valueId: v, paramType: paramType, dstBlock: dstBlock)
+				result.push(witnessForArg)
+			end 'expandWitness'
 		end 'copyOut'
 		return result
 	end 'slotArgsForCall'
@@ -2446,6 +3199,22 @@ export function entryBlockFilePath(module MaxonModule, func IrFunction) returns 
 	return info.filePath
 end 'entryBlockFilePath'
 
+// Map a MaxonType primitive arm to the type-name that an `extension` block
+// declares its impl methods under. The stdlib's PrimitiveExtensions.maxon
+// declares extensions on the lowercase primitive names (`int`, `float`,
+// `bool`, `byte`); a method call on a primitive-typed receiver qualifies
+// through that name. Empty string for any non-primitive arm — those go
+// through the regular struct-name path.
+export function primitiveExtensionTypeName(t MaxonType) returns String
+	return match t 'p'
+		integer gives "int"
+		float gives "float"
+		boolean gives "bool"
+		string gives "String"
+		named to interface gives ""
+	end 'p'
+end 'primitiveExtensionTypeName'
+
 // Pick the diagnostic-friendly name for a MaxonType in an E3005 error.
 // When both endpoints of a mismatch live in the primitive numeric/bool
 // families, the underlying primitive name (int/float/byte/bool) reads
@@ -2509,6 +3278,63 @@ end 'implicitlyConvertible'
 // qualifier in `parseFunction`). We split on the LAST dot and probe
 // `project.structTypes`: a registered struct prefix denotes a method body;
 // anything else (including bare names like `main`) denotes a free function.
+// Phase 11.4: a function counts as "generic" if any of its declared
+// parameter types is a `MaxonType.typeParameter`, OR its receiver type
+// is a generic struct (one with type parameters declared via `uses`).
+// Matches the spine spec from the Phase-11.4 plan and is the gate that
+// triggers synthetic `__layout_param` insertion.
+function functionIsGenericForLowering(project Project, func IrFunction) returns bool
+	for i in 0 upto func.maxonParamTypes.count() 'eachParam'
+		let pType = try func.maxonParamTypes.get(i) otherwise MaxonType.integer
+		if maxonTypeMentionsTypeParam(pType) 'hit'
+			return true
+		end 'hit'
+	end 'eachParam'
+	let recvType = enclosingTypeName(project, name: func.name)
+	if recvType.isEmpty() 'noRecv'
+		return false
+	end 'noRecv'
+	let params = project.typeParameters.getParamNames(recvType)
+	return params.count() > 0
+end 'functionIsGenericForLowering'
+
+// True iff a `MaxonType` mentions `typeParameter` anywhere in its tree.
+// We only need a one-level walk for now: `genericInstance(gid)` arms
+// recursing into their args is what would unlock deeper detection, but
+// every Phase-11.4 priority spec exercises only the surface form
+// (`fn push(self, x T)` style).
+function maxonTypeMentionsTypeParam(t MaxonType) returns bool
+	return match t 'check'
+		typeParameter gives true
+		boolean to function gives false
+		unresolved gives false
+		genericInstance gives false
+		interface gives false
+	end 'check'
+end 'maxonTypeMentionsTypeParam'
+
+// Phase 11.4: where-clauses are recorded on the declaring struct type, not
+// the function. A method on `type Foo[T] uses T where T Equatable` has
+// witnesses; a method on `type Foo[T] uses T` doesn't. Today's stdlib has
+// none of the latter — every generic that needs constraints declares them
+// at the type level.
+function functionHasWhereClausesForLowering(project Project, func IrFunction) returns bool
+	let recvType = enclosingTypeName(project, name: func.name)
+	if recvType.isEmpty() 'noRecv'
+		return false
+	end 'noRecv'
+	for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
+		let d = try project.typeParameters.declaringTypeNames.get(i) otherwise ""
+		if d == recvType 'match'
+			let cs = project.typeParameters.getConstraints(i)
+			if cs.count() > 0 'hasConstraint'
+				return true
+			end 'hasConstraint'
+		end 'match'
+	end 'scan'
+	return false
+end 'functionHasWhereClausesForLowering'
+
 function enclosingTypeName(project Project, name String) returns String
 	let bytes = name.toByteArray()
 	let dotByte = 0x2E as byte

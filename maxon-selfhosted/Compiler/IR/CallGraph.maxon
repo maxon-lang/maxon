@@ -1,0 +1,271 @@
+// Phase 11.6: lightweight call-graph + Tarjan SCC.
+//
+// Built on demand by the Inliner pass. Edges are statically-resolvable
+// `func.call` ops only; `indirectCall`, `tryCall`, and tail calls don't
+// participate. We record per-callee in-degrees so the inliner can recognize
+// the universal "single static call site → always inline" pattern in O(1).
+//
+// SCC computation finds recursive cycles. Anything in a non-trivial SCC
+// (size ≥ 2) is recursive and must never be inlined; size-1 SCCs are also
+// considered recursive when the function calls itself directly. Inlining a
+// recursive callee would either loop the inliner forever or produce code
+// that grows unboundedly with each pass.
+
+export typealias CallGraphInDegreeMap = Map with(String, ParsedInt)
+export typealias CallGraphEdgeMap = Map with(String, StringArray)
+
+export type CallGraph
+	// caller → list of callee names. One entry per call op (multiplicity
+	// preserved); the inliner cares about both unique callees and total
+	// arity when seeded.
+	export var edges CallGraphEdgeMap
+	// callee → number of static call sites referencing it (sum across all
+	// callers' `edges` lists). Used by the "single call site → always
+	// inline" rule without needing a graph traversal.
+	export var inDegree CallGraphInDegreeMap
+
+	export static function create() returns CallGraph
+		return Self{
+			edges: CallGraphEdgeMap.create(),
+			inDegree: CallGraphInDegreeMap.create()
+		}
+	end 'create'
+end 'CallGraph'
+
+export typealias StringArrayArray = Array with StringArray
+export typealias CallGraphStringSet = Set with String
+
+// Build a static call graph for `module`. Only `StdCallOp.call` edges are
+// recorded — indirect / tryCall / tailCall are conservatively excluded
+// because their callee identities aren't always inlinable (tryCall has
+// throwing semantics; indirectCall has no static target; tailCall is rare
+// and the inliner would need to preserve the tail-call shape).
+export function buildCallGraph(module StdModule) returns CallGraph
+	var cg = CallGraph.create()
+	for func in module.functions 'eachFunc'
+		var callees = StringArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("buildCallGraph: blockRef {blockRef} not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				collectCalleeFromOp(module, opIdx: opIdx, calleeOut: callees)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				collectCalleeFromOp(module, opIdx: block.terminatorIndex(), calleeOut: callees)
+			end 'hasTerm'
+		end 'eachBlock'
+		cg.edges.upsert(func.name, value: callees)
+		for callee in callees 'bumpInDegree'
+			let prior = try cg.inDegree.get(callee) otherwise 0
+			cg.inDegree.upsert(callee, value: prior + 1)
+		end 'bumpInDegree'
+	end 'eachFunc'
+	return cg
+end 'buildCallGraph'
+
+// Append the static-callee name for one op to `calleeOut`, or nothing if
+// the op has no statically-resolvable callee. The set of recognized op
+// shapes mirrors the "directly inlinable" decision in `Inliner.makeDecision`
+// — call shapes the inliner can never inline (indirect / try / tail) are
+// invisible here so they don't inflate inDegree counts.
+function collectCalleeFromOp(module StdModule, opIdx OpIndex, calleeOut StringArray)
+	let stdOp = try module.ops.get(opIdx) otherwise panic("collectCalleeFromOp: opIdx {opIdx} not in module.ops")
+	match stdOp 'op'
+		call(inner) then collectFromCallOp(inner, calleeOut: calleeOut)
+		arith then return
+		control then return
+		memory then return
+		system then return
+	end 'op'
+end 'collectCalleeFromOp'
+
+function collectFromCallOp(op StdCallOp, calleeOut StringArray)
+	match op 'shape'
+		call(_, callee, _) then calleeOut.push(callee)
+		ret then return
+		tryCall then return
+		indirectCall then return
+		funcRef then return
+		tailCall then return
+		param then return
+	end 'shape'
+end 'collectFromCallOp'
+
+// Tarjan SCC mutable state. Index counter, the explicit DFS stack, and per-
+// node bookkeeping (index, lowlink, onStack flag). All three node-keyed
+// maps are name-indexed because the call graph itself is name-indexed.
+typealias TarjanIntMap = Map with(String, ParsedInt)
+typealias TarjanBoolMap = Map with(String, bool)
+
+type SccState
+	export var indexCounter ParsedInt
+	export var stack StringArray
+	export var index TarjanIntMap
+	export var lowlink TarjanIntMap
+	export var onStack TarjanBoolMap
+	export var sccs StringArrayArray
+
+	static function create() returns SccState
+		return Self{
+			indexCounter: 0,
+			stack: StringArray.create(),
+			index: TarjanIntMap.create(),
+			lowlink: TarjanIntMap.create(),
+			onStack: TarjanBoolMap.create(),
+			sccs: StringArrayArray.create()
+		}
+	end 'create'
+end 'SccState'
+
+// Tarjan's strongly-connected-components algorithm. Returns SCCs in
+// reverse topological order (callees before callers). The inliner only
+// uses size for recursion detection, so order is informational.
+//
+// Iterative (no recursion) so a deeply-nested call graph can't blow the
+// stack. The standard recursive form is much easier to read but the
+// self-hosted compiler walks itself, and recursive Tarjan on the
+// compiler's own call graph could outright SO on a debug build.
+export function computeSccs(cg CallGraph) returns StringArrayArray
+	var state = SccState.create()
+	for (funcName, _) in cg.edges 'seed'
+		let started = try state.index.get(funcName) otherwise -1
+		if started < 0 'unvisited'
+			runTarjan(cg, root: funcName, state: state)
+		end 'unvisited'
+	end 'seed'
+	return state.sccs
+end 'computeSccs'
+
+// One iterative Tarjan DFS rooted at `root`. Uses an explicit work stack
+// that pairs each node with its current callee-iteration index. When a
+// node's callees are exhausted, propagate lowlink up to its parent and pop
+// any completed SCC.
+function runTarjan(cg CallGraph, root String, state SccState)
+	var work = TarjanWorkArray.create()
+	pushTarjanFrame(state: state, work: work, node: root)
+	while work.count() > 0 'dfs'
+		let topIdx = work.count() - 1
+		let topSnapshot = try work.get(topIdx) otherwise panic("runTarjan: work.get top failed at idx {topIdx}")
+		let topNode = topSnapshot.node
+		let topNextChild = topSnapshot.nextChild
+		let callees = try cg.edges.get(topNode) otherwise StringArray.create()
+		if topNextChild >= callees.count() 'done'
+			finalizeTarjanFrame(state: state, frame: topSnapshot)
+			let topLow = try state.lowlink.get(topNode) otherwise panic("runTarjan: lowlink missing for finished node {topNode}")
+			try work.pop() otherwise panic("runTarjan: pop from non-empty work stack failed")
+			propagateLowlinkToParent(work: work, state: state, topLow: topLow)
+			continue
+		end 'done'
+		let child = try callees.get(topNextChild) otherwise panic("runTarjan: callees.get failed at {topNextChild}")
+		try work.set(topIdx, value: TarjanWork.create(node: topNode, nextChild: topNextChild + 1)) otherwise panic("runTarjan: work.set top failed")
+		let childIdx = try state.index.get(child) otherwise -1
+		if childIdx < 0 'descend'
+			pushTarjanFrame(state: state, work: work, node: child)
+			continue
+		end 'descend'
+		let childOnStack = try state.onStack.get(child) otherwise false
+		if childOnStack 'tightenSelf'
+			let curTopLow = try state.lowlink.get(topNode) otherwise panic("runTarjan: lowlink missing for {topNode}")
+			if childIdx < curTopLow 'pull'
+				state.lowlink.upsert(topNode, value: childIdx)
+			end 'pull'
+		end 'tightenSelf'
+	end 'dfs'
+end 'runTarjan'
+
+// After popping the finished frame, propagate its lowlink up to the
+// new top-of-stack parent (if any). Splitting this off keeps the main
+// DFS loop free of nested branches that the borrow checker wouldn't
+// like — `work.pop` and the subsequent `work.set(parentIdx, ...)` can't
+// share a live borrow on the same array.
+function propagateLowlinkToParent(work TarjanWorkArray, state SccState, topLow ParsedInt)
+	if work.count() == 0 'noParent'
+		return
+	end 'noParent'
+	let parentIdx = work.count() - 1
+	let parentFrame = try work.get(parentIdx) otherwise panic("propagateLowlinkToParent: work.get OOB at {parentIdx}")
+	let parentLow = try state.lowlink.get(parentFrame.node) otherwise panic("propagateLowlinkToParent: lowlink missing for {parentFrame.node}")
+	if topLow < parentLow 'tighten'
+		state.lowlink.upsert(parentFrame.node, value: topLow)
+	end 'tighten'
+end 'propagateLowlinkToParent'
+
+// Allocate a fresh DFS index for `node`, push it on the SCC stack, and
+// queue its first work-frame. Skips `node` entirely when the call graph
+// has no edges out of it (still needed: Tarjan must visit a node to
+// classify it as a singleton SCC, so we always seed the maps).
+function pushTarjanFrame(state SccState, work TarjanWorkArray, node String)
+	let idx = state.indexCounter
+	state.indexCounter = idx + 1
+	state.index.upsert(node, value: idx)
+	state.lowlink.upsert(node, value: idx)
+	state.onStack.upsert(node, value: true)
+	state.stack.push(node)
+	work.push(TarjanWork.create(node: node))
+end 'pushTarjanFrame'
+
+// Pop one SCC's worth of nodes off the stack when `frame.node` is the
+// root of an SCC (its index equals its lowlink). Singleton SCCs always
+// match this condition; multi-node SCCs match only at the top of the
+// recursion they share.
+function finalizeTarjanFrame(state SccState, frame TarjanWork)
+	let nodeIdx = try state.index.get(frame.node) otherwise panic("finalizeTarjanFrame: index missing for {frame.node}")
+	let nodeLow = try state.lowlink.get(frame.node) otherwise panic("finalizeTarjanFrame: lowlink missing for {frame.node}")
+	if nodeIdx != nodeLow 'notRoot'
+		return
+	end 'notRoot'
+	var scc = StringArray.create()
+	var keepPopping = true
+	while keepPopping and state.stack.count() > 0 'pop'
+		let last = state.stack.count() - 1
+		let popped = try state.stack.get(last) otherwise panic("finalizeTarjanFrame: stack.get OOB")
+		try state.stack.pop() otherwise panic("finalizeTarjanFrame: stack.pop on non-empty stack failed")
+		state.onStack.upsert(popped, value: false)
+		scc.push(popped)
+		if popped == frame.node 'reachedRoot'
+			keepPopping = false
+		end 'reachedRoot'
+	end 'pop'
+	state.sccs.push(scc)
+end 'finalizeTarjanFrame'
+
+type TarjanWork
+	export var node String
+	export var nextChild ParsedInt
+
+	static function create(node String, nextChild ParsedInt = 0) returns TarjanWork
+		return Self{node: node, nextChild: nextChild}
+	end 'create'
+end 'TarjanWork'
+
+typealias TarjanWorkArray = Array with TarjanWork
+
+// Collect every function name that participates in a recursion cycle:
+// either appears in an SCC of size ≥ 2, or has a self-edge in a
+// singleton SCC. The inliner consults this set to refuse inlining at
+// any recursive call site.
+export function collectRecursive(sccs StringArrayArray, cg CallGraph) returns CallGraphStringSet
+	var recursive = CallGraphStringSet.create()
+	for scc in sccs 'eachScc'
+		if scc.count() >= 2 'multiNode'
+			for name in scc 'mark'
+				recursive.insert(element: name)
+			end 'mark'
+		end 'multiNode' else 'singleton'
+			let only = try scc.get(0) otherwise panic("collectRecursive: empty SCC")
+			if hasSelfEdge(cg, name: only) 'selfLoop'
+				recursive.insert(element: only)
+			end 'selfLoop'
+		end 'singleton'
+	end 'eachScc'
+	return recursive
+end 'collectRecursive'
+
+function hasSelfEdge(cg CallGraph, name String) returns bool
+	let callees = try cg.edges.get(name) otherwise StringArray.create()
+	for callee in callees 'each'
+		if callee == name 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'hasSelfEdge'

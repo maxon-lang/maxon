@@ -40,6 +40,14 @@ export type MaxonArgs
 	export var workers WorkerCount
 	// Internal flag set by the parent to make this process run one spec's batch only.
 	export var workerSpec String
+	// Internal flag set by the parent to make this process run only the
+	// non-batchable (single) tests for a comma-separated list of specs.
+	export var workerSingles String
+	// Internal flag for fallback mode: a semicolon-separated list of
+	// `specName:testName1|testName2|...` groups. Each group's named tests are
+	// run via the per-fragment path (used when the batch rewriter rejected
+	// them mid-batch). Subprocess-isolated to contain compile-time panics.
+	export var workerFallback String
 
 	export static function parse() returns MaxonArgs throws ArgError
 		let allArgs = CommandLine.args()
@@ -56,7 +64,9 @@ export type MaxonArgs
 			verbose: false,
 			coverage: false,
 			workers: 5,
-			workerSpec: ""
+			workerSpec: "",
+			workerSingles: "",
+			workerFallback: ""
 		}
 
 		if allArgs.count() < 2 'noArgs'
@@ -129,7 +139,11 @@ export type MaxonArgs
 				args.workers = w as WorkerCount
 			end 'isWorkers' else if arg.startsWith("--worker-spec=") 'isWorkerSpec'
 				args.workerSpec = try CommandLine.optionValue(arg) otherwise ""
-			end 'isWorkerSpec' else if not arg.startsWith("--") 'isPositional'
+			end 'isWorkerSpec' else if arg.startsWith("--worker-singles=") 'isWorkerSingles'
+				args.workerSingles = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerSingles' else if arg.startsWith("--worker-fallback=") 'isWorkerFallback'
+				args.workerFallback = try CommandLine.optionValue(arg) otherwise ""
+			end 'isWorkerFallback' else if not arg.startsWith("--") 'isPositional'
 				args.path = arg
 			end 'isPositional'
 		end 'scan'

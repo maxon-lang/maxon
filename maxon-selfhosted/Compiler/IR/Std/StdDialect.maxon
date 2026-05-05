@@ -287,6 +287,45 @@ end 'StdMemoryOp'
 
 export typealias StdMemoryOpArray = Array with StdMemoryOp
 
+// Phase 11.4: descriptor-field selector for the `descriptorField` Std op.
+// Each arm corresponds to a fixed byte offset inside a 56-byte
+// LayoutDescriptor blob — see Compiler/IR/LayoutDescriptor.maxon for the
+// canonical offsets. The Std→MIR lowering reads these and emits a
+// `loadIndirect` with the right constant offset.
+export enum DescriptorField
+	size
+	alignment
+	elementSize
+	hasHeapRefs
+	copyFunc
+	destroyFunc
+	fieldOffsetsPtr
+end 'DescriptorField'
+
+export function descriptorFieldOffset(f DescriptorField) returns MachineWord
+	return match f 'off'
+		size gives 0
+		alignment gives 8
+		elementSize gives 16
+		hasHeapRefs gives 24
+		copyFunc gives 32
+		destroyFunc gives 40
+		fieldOffsetsPtr gives 48
+	end 'off'
+end 'descriptorFieldOffset'
+
+export function descriptorFieldName(f DescriptorField) returns String
+	return match f 'n'
+		size gives "size"
+		alignment gives "alignment"
+		elementSize gives "elementSize"
+		hasHeapRefs gives "hasHeapRefs"
+		copyFunc gives "copyFunc"
+		destroyFunc gives "destroyFunc"
+		fieldOffsetsPtr gives "fieldOffsetsPtr"
+	end 'n'
+end 'descriptorFieldName'
+
 // --- StdSystemOp ---
 
 export union StdSystemOp
@@ -374,6 +413,46 @@ export union StdSystemOp
 	// Release a platform lock at [addrId]. Windows: LeaveCriticalSection. Linux:
 	// recursive spinlock release (decrement count, store-release lock word to 0).
 	osLockRelease(addrId ValueId)
+	// Phase 11.3: allocate a refcounted box for an interface fat-pointer
+	// payload that exceeds 8 bytes. `valueId` is a stack/heap address of the
+	// payload, `sizeId` is its byte width as an i64 register; `resultId` is
+	// the address of the freshly-allocated box. Lowers at Std→MIR to
+	// `mrt_alloc(size) + memcpy + atomicInc` so the refcount header reads 1.
+	// Phase 11.3 emits this op only when constructing a fat-boxed interface
+	// value (the interface-construction lowering is itself deferred to
+	// 11.4); the desugaring path is in place so 11.4 can switch it on
+	// without touching this file.
+	boxValue(resultId ValueId, valueId ValueId, sizeId ValueId)
+	// Phase 11.3: load a value out of a refcounted box and decrement the
+	// refcount. `ptrId` is the box address, `sizeId` is the payload byte
+	// width; `resultId` is the loaded value (8-byte register-sized today —
+	// larger payloads stay box-resident and the caller works through the
+	// pointer). Lowers to `loadIndirect + drop` at Std→MIR; the drop arms
+	// the existing refcount machinery to free the box once its last
+	// reference dies. Phase 11.4 wires this in at unbox sites.
+	unboxValue(resultId ValueId, ptrId ValueId, sizeId ValueId)
+	// Phase 11.4: load the address of an rdata layout descriptor blob.
+	// Same desugaring as globalAddr; distinct op so canonicalize / inliner
+	// can recognize the descriptor source by shape.
+	loadLayoutDescriptor(resultId ValueId, label String)
+	// Phase 11.4: load the address of an rdata witness-table blob.
+	loadWitnessTable(resultId ValueId, label String)
+	// Phase 11.4: load a fixed-offset descriptor field. Lowers to
+	// `loadIndirect %descAddr, <const offset>` at Std→MIR.
+	descriptorField(resultId ValueId, descAddrId ValueId, field DescriptorField)
+	// Phase 11.4: load a witness method pointer at the given index.
+	// Lowers to `loadIndirect %witnessAddr, WITNESS_OFFSET_METHODS + 8*methodIndex`.
+	witnessMethod(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord)
+	// C1.b (Phase 11): descriptor-routed drop for a type-parameter-typed
+	// slot. `slotValueId` is the value last stored into the slot;
+	// `layoutValueId` is the function's implicit `__layout` param.
+	// Lowers at Std→MIR to `descriptorField(.destroyFunc) + indirectCall`,
+	// so the runtime calls whichever destroyFunc the layout descriptor
+	// for the concrete T installed (mm_decref for refcounted classes,
+	// noop for primitives). Distinct from `drop` because DCE treats
+	// `drop` as universally dead — `dropTypeParam` carries real side
+	// effects and must survive into MIR.
+	dropTypeParam(slotValueId ValueId, layoutValueId ValueId)
 end 'StdSystemOp'
 
 export typealias StdSystemOpArray = Array with StdSystemOp
@@ -524,6 +603,13 @@ export function sysOpToString(op StdSystemOp) returns String
 		osLockInit(addrId) gives "sys.os_lock_init %{addrId}"
 		osLockAcquire(addrId) gives "sys.os_lock_acquire %{addrId}"
 		osLockRelease(addrId) gives "sys.os_lock_release %{addrId}"
+		boxValue(resultId, valueId, sizeId) gives "%{resultId} = sys.box_value %{valueId}, %{sizeId}"
+		unboxValue(resultId, ptrId, sizeId) gives "%{resultId} = sys.unbox_value %{ptrId}, %{sizeId}"
+		loadLayoutDescriptor(resultId, label) gives "%{resultId} = sys.load_layout_descriptor @{label}"
+		loadWitnessTable(resultId, label) gives "%{resultId} = sys.load_witness_table @{label}"
+		descriptorField(resultId, descAddrId, field) gives "%{resultId} = sys.descriptor_field %{descAddrId}, .{descriptorFieldName(field)}"
+		witnessMethod(resultId, witnessAddrId, methodIndex) gives "%{resultId} = sys.witness_method %{witnessAddrId}, [{methodIndex}]"
+		dropTypeParam(slotValueId, layoutValueId) gives "sys.drop_type_param %{slotValueId}, layout=%{layoutValueId}"
 	end 'print'
 end 'sysOpToString'
 

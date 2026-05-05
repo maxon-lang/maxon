@@ -18,9 +18,14 @@ end 'lowerStdToMir'
 type StdToMirLowering
 	var stdModule StdModule
 	var mirModule MirModule
+	// Per-function fresh-id allocator — re-seeded at the top of every
+	// function walk in `lower()`. Used by sub-lowerings (dropTypeParam)
+	// that need to mint extra ValueIds for the descriptorField/indirectCall
+	// pair.
+	var nextValueIdRef ValueIdRef
 
 	export static function create(stdModule StdModule) returns StdToMirLowering
-		return Self{stdModule: stdModule, mirModule: MirModule.create()}
+		return Self{stdModule: stdModule, mirModule: MirModule.create(), nextValueIdRef: ValueIdRef.create(0)}
 	end 'create'
 
 	export function lower() returns MirModule
@@ -42,6 +47,12 @@ type StdToMirLowering
 		// Walk each function's blocks and lower their ops.
 		for srcFunc in self.stdModule.functions 'eachFunc'
 			logTrace(LogCategory.ir, message: () gives "lower-std-to-mir: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
+
+			// Seed the per-function id allocator so dropTypeParam (and any
+			// future helper that needs fresh ids) can mint ValueIds without
+			// colliding with the existing op definitions.
+			let maxFuncId = scanMaxValueId(srcFunc, module: self.stdModule)
+			self.nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
 				let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in stdModule.blocks")
@@ -226,8 +237,49 @@ type StdToMirLowering
 			osLockInit(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockInit(addrId))
 			osLockAcquire(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockAcquire(addrId))
 			osLockRelease(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osLockRelease(addrId))
+			// Phase 11.3: boxValue / unboxValue desugar at this boundary.
+			// The construction-side lowering that emits them lives in 11.4;
+			// 11.3 only wires the shape through so that nobody else has to
+			// add an arm later. unboxValue currently baselines a single-
+			// word load (ptrId+0). boxValue is parked: a correct lowering
+			// needs an allocator that writes a refcount header at
+			// user_ptr-8 (mm_alloc, not mrt_alloc) plus a destructor
+			// pointer; no current spec exercises >8-byte interface
+			// payloads, so we panic at lowering time until that wiring
+			// lands rather than emit a quietly-broken sequence.
+			boxValue then panic("lowerStdToMir: heap-boxed interface payloads not yet wired to mm_alloc + destructor; see runtime.std mm_alloc")
+			unboxValue(resultId, ptrId, sizeId) then self.lowerUnboxValue(resultId: resultId, ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			// Phase 11.4 sugar — lower to globalAddr / load with constant offsets.
+			loadLayoutDescriptor(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
+			loadWitnessTable(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
+			descriptorField(resultId, descAddrId, field) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: descAddrId, offset: descriptorFieldOffset(field), isFloat: false))
+			witnessMethod(resultId, witnessAddrId, methodIndex) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: witnessAddrId, offset: WITNESS_OFFSET_METHODS + 8 * methodIndex, isFloat: false))
+			// C1.b: lower a type-parameter drop into a descriptor.destroyFunc
+			// load followed by an indirect call with the slot value as the
+			// sole argument. The destroyFunc was installed into the
+			// LayoutDescriptor by C1.a's per-shape thunk synthesis.
+			dropTypeParam(slotValueId, layoutValueId) then self.lowerDropTypeParam(slotValueId: slotValueId, layoutValueId: layoutValueId, dstBlock: dstBlock)
 		end 'dispatch'
 	end 'convertStdSystemOp'
+
+	function lowerDropTypeParam(slotValueId ValueId, layoutValueId ValueId, dstBlock IrBlock)
+		let fnPtrId = allocValueId(self.nextValueIdRef)
+		self.mirModule.appendOp(dstBlock, op: MirOp.load(fnPtrId, baseId: layoutValueId, offset: descriptorFieldOffset(DescriptorField.destroyFunc), isFloat: false))
+		var argIds = ValueIdArray.create()
+		argIds.push(slotValueId)
+		// resultId 0 mirrors `convertStdFree`'s void-call shape — the
+		// destroyFunc returns nothing observable to the caller.
+		self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(0, calleeId: fnPtrId, argIds: argIds))
+	end 'lowerDropTypeParam'
+
+	// `sizeId` is reserved for 11.4: when payloads exceed 8 bytes the unbox
+	// lowering needs to memcpy that many bytes into a stack slot instead of
+	// loading 8. For now we baseline a single-word unbox; the MirOp.load
+	// reads `ptrId + 0` and stamps the result into resultId.
+	function lowerUnboxValue(resultId ValueId, ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		ignoreUnused(sizeId)
+		self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: ptrId, offset: 0, isFloat: false))
+	end 'lowerUnboxValue'
 
 	function convertStdFree(ptrId ValueId, dstBlock IrBlock)
 		var argIds = ValueIdArray.create()
@@ -235,6 +287,11 @@ type StdToMirLowering
 		self.mirModule.appendOp(dstBlock, op: MirOp.call(0, callee: b"mrt_free", argIds: argIds))
 	end 'convertStdFree'
 end 'StdToMirLowering'
+
+// Sink a ValueId into a discard-call so the unused-variable check stops
+// flagging it. Cheaper than reshaping callers around a fully-consumed param.
+function ignoreUnused(_ ValueId)
+end 'ignoreUnused'
 
 // ============================================================
 // Opcode mapping helpers

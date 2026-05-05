@@ -110,6 +110,12 @@ export type X64Backend implements TargetBackend
 		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
 		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
 		let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
+		// Phase 11.2: layout-descriptor / witness-table relocations live on
+		// `globalData.pendingRdataRelocs` — they originate from Maxon-level
+		// passes, not per-function emit, so they aren't in the local
+		// `rdataRelocs` accumulator. Concat now before the offset resolve
+		// so each one's `rdataOffset` gets filled in from the same map.
+		rdataRelocs.append(globalData.pendingRdataRelocs)
 		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
 
 		var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: MirModule.create(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
@@ -209,6 +215,16 @@ export type X64Backend implements TargetBackend
 		for fixup in callFixups 'collectSeeds'
 			seeds.push(fixup.targetName)
 		end 'collectSeeds'
+
+		// Phase 11.2/11.3: rdata-resident `funcAbs64InRdata` relocs reference
+		// __layout_copy_*/destroy thunks and witness method-impls that are
+		// reachable only through static rdata pointers — never via a `call`
+		// op. Without seeding them as link-roots here, the PE writer panics
+		// when the reloc target is missing from `.text`. The witness/layout
+		// relocs live on `globalData.pendingRdataRelocs` until the post-link
+		// merge below, so seed from both places to cover stdlib targets.
+		appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
+		appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
 
 		let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 

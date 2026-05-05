@@ -113,6 +113,16 @@ function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
 	if not args.workerSpec.isEmpty() 'isWorker'
 		return runSpecBatchWorker(args.workerSpec, filter: args.filter, target: target, verbose: args.verbose)
 	end 'isWorker'
+	// Singles worker mode: run only the non-batchable tests for the assigned
+	// specs, isolating compile-time panics from the parent runner.
+	if not args.workerSingles.isEmpty() 'isSinglesWorker'
+		return runSpecSinglesWorker(args.workerSingles, filter: args.filter, target: target, verbose: args.verbose)
+	end 'isSinglesWorker'
+	// Fallback worker mode: run a specific list of batchable tests via the
+	// per-fragment path (used after the batch rewriter rejected them mid-batch).
+	if not args.workerFallback.isEmpty() 'isFallbackWorker'
+		return runSpecFallbackWorker(args.workerFallback, filter: args.filter, target: target, verbose: args.verbose)
+	end 'isFallbackWorker'
 	logInfo(LogCategory.testing, message: () gives "Running self-hosted spec tests ({targetToString(target)})...")
 	if args.workers == 1 'isSerial'
 		return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired, verbose: args.verbose)

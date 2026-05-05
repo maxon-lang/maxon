@@ -482,6 +482,24 @@ function markNaturalLoop(header BlockId, latch BlockId, cfg CfgInfo, depth RegIn
 	end 'walkBack'
 end 'markNaturalLoop'
 
+// Convenience wrapper: compute per-block loop nesting depth for a function.
+// Returns a RegIntArray indexed by BlockId. Used by passes that only need
+// the depth map (e.g. the inliner's budget multiplier) and don't otherwise
+// touch the dominator tree.
+export function computeLoopDepth(func IrFunction, module StdModule) returns RegIntArray
+	if func.blockRefs.count() == 0 'noBlocks'
+		return RegIntArray.create()
+	end 'noBlocks'
+	let firstBlockRef = try func.blockRefs.get(0) otherwise panic("computeLoopDepth: blockRefs.count() > 0 but get(0) failed")
+	let entry = try module.blocks.get(firstBlockRef) otherwise panic("computeLoopDepth: entry blockRef {firstBlockRef} not in module")
+	let entryBlockId = entry.id
+	let numBlocks = func.nextBlockId
+	let cfg = buildCfg(func, module: module)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg)
+	let domInfo = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: rpo)
+	return computeLoopNesting(cfg, domInfo: domInfo, rpo: rpo)
+end 'computeLoopDepth'
+
 // ============================================================
 // Helper functions
 // ============================================================

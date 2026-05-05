@@ -25,7 +25,18 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // generic-aware arms to a printable name and dropped innerAliases on
 // restore, so cache hits surfaced unresolved inner-alias names like
 // `MaxonType.named("ElementMemory")` to the lowering pass.
-let CACHE_FORMAT_VERSION = 7
+// v8: persist Phase 11 conformance/interface/registry state. Without this
+// step, the user-code pipeline runs `validateConformances` /
+// `processExtensions` against an empty stdlib (cache hit drops every
+// stdlib-side `unresolvedExtensions` / `unresolvedStructTypes` entry),
+// so primitive extensions like `extension int implements Comparable` never
+// land in `project.conformances`. Persisting `interfaces`, `conformances`,
+// `typeParameters`, `interfaceRegistry`, `genericInstances`,
+// `genericTypealiases`, `layoutDescriptors`, `witnessTables`,
+// `livenessRoots`, and `staticRdataValues` makes the cached-stdlib project
+// state identical to a fresh-from-source build for every consumer 11.4's
+// lowering reads.
+let CACHE_FORMAT_VERSION = 9
 
 // ============================================================
 // Types
@@ -101,6 +112,22 @@ export type StdlibCacheData
 	// here and the loader re-publishes it after restore. Empty string means
 	// no implementing type was observed in this stdlib.
 	export var builtinArrayLiteralTypeName String
+	// Phase 11.4 (cache v8): per-registry snapshots so cached-stdlib user
+	// builds see the same `project.*` state a fresh-from-source build would.
+	// Without these the user-code pipeline can't dispatch through
+	// stdlib-declared conformances (e.g. `extension int implements Comparable`)
+	// because `processExtensions`/`validateConformances` ran during the
+	// cache-build pipeline, not during user-code resolution.
+	export var interfaces IrInterfaceMap
+	export var conformances ConformanceRegistry
+	export var typeParameters TypeParamRegistry
+	export var interfaceRegistry InterfaceTypeRegistry
+	export var genericInstances GenericInstanceRegistry
+	export var genericTypealiases GenericTypealiasMap
+	export var layoutDescriptors LayoutDescriptorRegistry
+	export var witnessTables WitnessTableRegistry
+	export var livenessRoots StringArray
+	export var staticRdataValues StaticRdataValueMap
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -114,7 +141,17 @@ export type StdlibCacheData
 			structTypes: StructTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			typeNameTable: StringArray.create(),
-			builtinArrayLiteralTypeName: ""
+			builtinArrayLiteralTypeName: "",
+			interfaces: IrInterfaceMap.create(),
+			conformances: ConformanceRegistry.create(),
+			typeParameters: TypeParamRegistry.create(),
+			interfaceRegistry: InterfaceTypeRegistry.create(),
+			genericInstances: GenericInstanceRegistry.create(),
+			genericTypealiases: GenericTypealiasMap.create(),
+			layoutDescriptors: LayoutDescriptorRegistry.create(),
+			witnessTables: WitnessTableRegistry.create(),
+			livenessRoots: StringArray.create(),
+			staticRdataValues: StaticRdataValueMap.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -345,6 +382,25 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	// registry has been drained and the conformance metadata is otherwise
 	// gone.
 	writeString(buf, s: data.builtinArrayLiteralTypeName)
+
+	// Cache v8: Phase 11 conformance + registry state. Order matters on the
+	// read side — typeParameters / interfaceRegistry / genericInstances are
+	// interned by structural identity, so writing them here in the same order
+	// the source project recorded them makes the destination's `intern` calls
+	// hand back identical ids during restore. Other registries
+	// (interfaces, conformances, genericTypealiases, layoutDescriptors,
+	// witnessTables, staticRdataValues, livenessRoots) carry their own keys
+	// and don't depend on insertion order for correctness.
+	writeTypeParamRegistry(buf, registry: data.typeParameters)
+	writeInterfaceTypeRegistry(buf, registry: data.interfaceRegistry)
+	writeGenericInstanceRegistry(project, buf: buf, registry: data.genericInstances)
+	writeInterfaceMap(project, buf: buf, m: data.interfaces)
+	writeConformanceRegistry(project, buf: buf, registry: data.conformances)
+	writeGenericTypealiasMap(project, buf: buf, m: data.genericTypealiases)
+	writeLayoutDescriptorRegistry(buf, registry: data.layoutDescriptors)
+	writeWitnessTableRegistry(buf, registry: data.witnessTables)
+	writeStringArray(buf, arr: data.livenessRoots)
+	writeStaticRdataValueMap(buf, m: data.staticRdataValues)
 
 	// Ensure parent directory (and any missing ancestors) exist
 	let parentDir = try path.parent() otherwise FilePath from ""
@@ -717,6 +773,43 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	pos = pBal
 	data.builtinArrayLiteralTypeName = builtinArrayLiteralName
 
+	// Cache v8: read Phase 11 conformance + registry state in the same order
+	// the writer emitted it. The MaxonType helpers (`readMaxonType` etc.)
+	// re-intern named/typeParameter/genericInstance/interface arms through
+	// the destination project's registries during the walk, so by the time
+	// we reach here every captured registry is in the destination project's
+	// id space — no post-translation step needed for these fields.
+	let (typeParamReg, pTpr) = readTypeParamRegistry(buf, offset: pos)
+	pos = pTpr
+	data.typeParameters = typeParamReg
+	let (ifaceReg, pIfr) = readInterfaceTypeRegistry(buf, offset: pos)
+	pos = pIfr
+	data.interfaceRegistry = ifaceReg
+	let (gInstReg, pGir) = readGenericInstanceRegistry(project, buf: buf, offset: pos)
+	pos = pGir
+	data.genericInstances = gInstReg
+	let (ifaceMap, pIm) = readInterfaceMap(project, buf: buf, offset: pos)
+	pos = pIm
+	data.interfaces = ifaceMap
+	let (confReg, pCr) = readConformanceRegistry(project, buf: buf, offset: pos)
+	pos = pCr
+	data.conformances = confReg
+	let (gtm, pGtm) = readGenericTypealiasMap(project, buf: buf, offset: pos)
+	pos = pGtm
+	data.genericTypealiases = gtm
+	let (ldr, pLdr) = readLayoutDescriptorRegistry(buf, offset: pos)
+	pos = pLdr
+	data.layoutDescriptors = ldr
+	let (wtr, pWtr) = readWitnessTableRegistry(buf, offset: pos)
+	pos = pWtr
+	data.witnessTables = wtr
+	let (lr, pLr) = readStringArray(buf, offset: pos)
+	pos = pLr
+	data.livenessRoots = lr
+	let (srv, pSrv) = readStaticRdataValueMap(buf, offset: pos)
+	pos = pSrv
+	data.staticRdataValues = srv
+
 	// Populate data.typeNameTable from the destination project's interner so
 	// `restoreStdlibMetadata`'s translation step is a no-op identity. The
 	// disk format encodes named types as strings (writeMaxonType emits
@@ -921,7 +1014,80 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 	// here so cache-hit runs in the same process (and the on-disk cache write
 	// below) see the discovered name without re-parsing stdlib.
 	data.builtinArrayLiteralTypeName = getCachedBuiltinArrayLiteralTypeName()
+
+	// Cache v8: snapshot Phase 11 conformance + registry state. These
+	// registries are populated during the cache-build pipeline's
+	// `resolveTypes` (interfaces / conformances / typeParameters /
+	// genericInstances / interfaceRegistry / genericTypealiases) and
+	// `buildLayoutDescriptors` / `buildWitnessTables` passes (layoutDescriptors
+	// / witnessTables / livenessRoots / staticRdataValues). Without
+	// persisting them here, cache-hit user builds run with empty
+	// conformance state — primitive `extension int implements Comparable`
+	// and friends never reach `project.conformances`.
+	captureRegistries(project, data: data)
 end 'captureStdlibMetadata'
+
+// Phase 11.4 (cache v8): copy each registry from the cache-build project
+// into the cache buffer. Using the project's API (intern / insert / etc.)
+// rather than struct copy preserves the parallel-array invariants — every
+// registry uses linear-scan dedup, so a value-copy snapshot is identical
+// to a fresh registry built by replaying the same intern calls.
+function captureRegistries(project Project, data StdlibCacheData)
+	for i in 0 upto project.typeParameters.count() 'eachTp'
+		let declName = project.typeParameters.getDeclaringTypeName(i)
+		let paramName = project.typeParameters.getName(i)
+		_ = data.typeParameters.intern(declName, paramName: paramName)
+		// Constraints (where-clause traits) are persisted because the
+		// Constraints / where-clause path consults them at user-code call
+		// sites. Stdlib's parser fills these during interface processing,
+		// so a cache hit must reproduce them exactly.
+		let cs = project.typeParameters.getConstraints(i)
+		for c in cs 'eachConstraint'
+			data.typeParameters.addConstraint(i, traitName: c)
+		end 'eachConstraint'
+	end 'eachTp'
+
+	for i in 0 upto project.interfaceRegistry.count() 'eachIface'
+		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
+	end 'eachIface'
+
+	for i in 0 upto project.genericInstances.count() 'eachGi'
+		let (baseId, args) = project.genericInstances.get(i)
+		_ = data.genericInstances.intern(baseId, args: args)
+	end 'eachGi'
+
+	for (name, iface) in project.interfaces 'eachInterface'
+		try data.interfaces.insert(name, value: iface) otherwise ignore
+	end 'eachInterface'
+
+	for i in 0 upto project.conformances.count() 'eachConf'
+		let (typeName, ifaceName, withArgs) = project.conformances.get(i)
+		_ = data.conformances.intern(typeName, interfaceName: ifaceName, withArgs: withArgs)
+	end 'eachConf'
+
+	for (name, t) in project.genericTypealiases 'eachGta'
+		try data.genericTypealiases.insert(name, value: t) otherwise ignore
+	end 'eachGta'
+
+	for i in 0 upto project.layoutDescriptors.count() 'eachLd'
+		let gid = try project.layoutDescriptors.instanceIds.get(i) otherwise panic("captureRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
+		let label = try project.layoutDescriptors.labels.get(i) otherwise panic("captureRegistries: layoutDescriptors.labels desync at {i}")
+		data.layoutDescriptors.intern(gid, label: label)
+	end 'eachLd'
+
+	for i in 0 upto project.witnessTables.count() 'eachWt'
+		let e = project.witnessTables.get(i)
+		data.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
+	end 'eachWt'
+
+	for r in project.livenessRoots 'eachRoot'
+		data.livenessRoots.push(r)
+	end 'eachRoot'
+
+	for (label, bytes) in project.staticRdataValues 'eachRdata'
+		try data.staticRdataValues.insert(label, value: bytes) otherwise ignore
+	end 'eachRdata'
+end 'captureRegistries'
 
 export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// Restore typealiases
@@ -957,6 +1123,18 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
 	end 'restoreSigs'
 
+	// Rebuild `overloadedNames` from the restored signature names.
+	// The overload bucket is populated by the parser when a second `function
+	// foo` registers under the same qualified name — rekeyExistingFunction
+	// re-mangles both entries to `foo$<suffix>` and pushes them onto
+	// `project.overloadedNames[foo]`. The cache persists the post-mangle
+	// signature names but not the bucket itself, so without this rebuild a
+	// user-code call site looks up `Array.contains` and finds no variants
+	// — overload resolution returns the bare name, the linker can't find
+	// a body, and codegen produces a value-less call that trips the
+	// register allocator.
+	rebuildOverloadedNames(project)
+
 	// Restore struct types. Field MaxonTypes carry the same captured-id
 	// problem as funcReturnTypes — translate every named id through the
 	// typeNameTable before insertion.
@@ -975,4 +1153,495 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// declare an implementing type (or this cache predates v6); the parser
 	// will emit a diagnostic on the first array literal in that case.
 	setCachedBuiltinArrayLiteralTypeName(data.builtinArrayLiteralTypeName)
+
+	// Cache v8: replay Phase 11 conformance + registry state. The on-disk
+	// codec re-interns named/typeParameter/genericInstance/interface arms
+	// through the destination project as it reads, so the captured
+	// registries already carry destination-id-space MaxonTypes; copying
+	// them onto `project` is a direct merge.
+	restoreRegistries(project, data: data)
 end 'restoreStdlibMetadata'
+
+// Walk every signature name now in `project.funcSignatures` and rebuild
+// `project.overloadedNames` by grouping mangled names under their bare
+// qualified prefix. A signature named `Array.contains$Element` lands on
+// `overloadedNames["Array.contains"]` alongside `Array.contains$ElementArray`.
+// Names without a `$` are not overloaded and are skipped.
+function rebuildOverloadedNames(project Project)
+	for (name, _) in project.funcSignatures 'eachSig'
+		let bare = stripFirstDollarPrefix(name)
+		if bare.isEmpty() 'noDollar'
+			continue
+		end 'noDollar'
+		var bucket = try project.overloadedNames.get(bare) otherwise QualifiedNameArray.create()
+		var alreadyPresent = false
+		for entry in bucket 'scanDup'
+			if entry == name 'dup'
+				alreadyPresent = true
+				break
+			end 'dup'
+		end 'scanDup'
+		if alreadyPresent 'skipDup'
+			continue
+		end 'skipDup'
+		bucket.push(name)
+		project.overloadedNames.upsert(bare, value: bucket)
+	end 'eachSig'
+end 'rebuildOverloadedNames'
+
+function stripFirstDollarPrefix(s String) returns String
+	let bytes = s.toByteArray()
+	let dollarByte = 0x24 as byte
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise return ""
+		if b == dollarByte 'hit'
+			let head = try bytes.slice(0, endIndex: i) otherwise return ""
+			return String.from(head)
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return ""
+end 'stripFirstDollarPrefix'
+
+// Phase 11.4 (cache v8): merge each captured registry into the destination
+// project. Order matches the writer (typeParameters → interfaceRegistry →
+// genericInstances → interfaces → conformances → genericTypealiases →
+// layoutDescriptors → witnessTables → livenessRoots → staticRdataValues).
+// Each merge is idempotent so a second restore (e.g. multiple compilation
+// units in one process) is a no-op.
+function restoreRegistries(project Project, data StdlibCacheData)
+	for i in 0 upto data.typeParameters.count() 'eachTp'
+		let declName = data.typeParameters.getDeclaringTypeName(i)
+		let paramName = data.typeParameters.getName(i)
+		_ = project.typeParameters.intern(declName, paramName: paramName)
+		let cs = data.typeParameters.getConstraints(i)
+		for c in cs 'eachConstraint'
+			project.typeParameters.addConstraint(i, traitName: c)
+		end 'eachConstraint'
+	end 'eachTp'
+
+	for i in 0 upto data.interfaceRegistry.count() 'eachIface'
+		_ = project.interfaceRegistry.intern(data.interfaceRegistry.getName(i))
+	end 'eachIface'
+
+	for i in 0 upto data.genericInstances.count() 'eachGi'
+		let (baseId, args) = data.genericInstances.get(i)
+		_ = project.genericInstances.intern(baseId, args: args)
+	end 'eachGi'
+
+	for (name, iface) in data.interfaces 'eachInterface'
+		try project.interfaces.insert(name, value: iface) otherwise ignore
+	end 'eachInterface'
+
+	for i in 0 upto data.conformances.count() 'eachConf'
+		let (typeName, ifaceName, withArgs) = data.conformances.get(i)
+		_ = project.conformances.intern(typeName, interfaceName: ifaceName, withArgs: withArgs)
+	end 'eachConf'
+
+	for (name, t) in data.genericTypealiases 'eachGta'
+		try project.genericTypealiases.insert(name, value: t) otherwise ignore
+	end 'eachGta'
+
+	for i in 0 upto data.layoutDescriptors.count() 'eachLd'
+		let gid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
+		let label = try data.layoutDescriptors.labels.get(i) otherwise panic("restoreRegistries: layoutDescriptors.labels desync at {i}")
+		project.layoutDescriptors.intern(gid, label: label)
+	end 'eachLd'
+
+	for i in 0 upto data.witnessTables.count() 'eachWt'
+		let e = data.witnessTables.get(i)
+		project.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
+	end 'eachWt'
+
+	for r in data.livenessRoots 'eachRoot'
+		project.livenessRoots.push(r)
+	end 'eachRoot'
+
+	for (label, bytes) in data.staticRdataValues 'eachRdata'
+		try project.staticRdataValues.insert(label, value: bytes) otherwise ignore
+	end 'eachRdata'
+end 'restoreRegistries'
+
+// ============================================================
+// Cache v8 codec helpers — Phase 11 registry round-trip.
+// ============================================================
+//
+// Each codec mirrors the parallel-array shape of the registry it serializes.
+// MaxonType / MaxonReturnType use the existing `writeMaxonType` /
+// `readMaxonType` helpers in MaxonDialect.maxon — those re-intern through
+// the destination project's registries during read, so callers don't need
+// a separate `translateMaxonType` step on these fields.
+
+// --- Visibility ---
+
+function writeVisibility(buf ByteArray, v Visibility)
+	writeDword(buf, value: v.rawValue)
+end 'writeVisibility'
+
+function readVisibility(buf ByteArray, offset ByteOffset) returns (Visibility, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let v = try Visibility.fromRawValue(raw) otherwise panic("corrupt cache: unknown Visibility tag {raw}")
+	return (v, offset + 4)
+end 'readVisibility'
+
+// --- FilePath ---
+
+function writeFilePath(buf ByteArray, p FilePath)
+	writeString(buf, s: p.toString())
+end 'writeFilePath'
+
+function readFilePath(buf ByteArray, offset ByteOffset) returns (FilePath, ByteOffset)
+	let (s, p) = readString(buf, offset: offset)
+	let path = try FilePath.from(s) otherwise FilePath from ""
+	return (path, p)
+end 'readFilePath'
+
+// --- StringArray ---
+
+function writeStringArray(buf ByteArray, arr StringArray)
+	writeDword(buf, value: arr.count())
+	for s in arr 'eachString'
+		writeString(buf, s: s)
+	end 'eachString'
+end 'writeStringArray'
+
+function readStringArray(buf ByteArray, offset ByteOffset) returns (StringArray, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = StringArray.create()
+	for _ in 0 upto count 'eachString'
+		let (s, p) = readString(buf, offset: pos)
+		pos = p
+		arr.push(s)
+	end 'eachString'
+	return (arr, pos)
+end 'readStringArray'
+
+function writeMaxonTypeArray(project Project, buf ByteArray, arr MaxonTypeArray)
+	writeDword(buf, value: arr.count())
+	for t in arr 'eachType'
+		writeMaxonType(project, buf: buf, t: t)
+	end 'eachType'
+end 'writeMaxonTypeArray'
+
+function readMaxonTypeArray(project Project, buf ByteArray, offset ByteOffset) returns (MaxonTypeArray, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = MaxonTypeArray.create()
+	for _ in 0 upto count 'eachType'
+		let (t, p) = readMaxonType(project, buf: buf, offset: pos)
+		pos = p
+		arr.push(t)
+	end 'eachType'
+	return (arr, pos)
+end 'readMaxonTypeArray'
+
+// --- TypeParamRegistry ---
+
+function writeTypeParamRegistry(buf ByteArray, registry TypeParamRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachEntry'
+		writeString(buf, s: registry.getDeclaringTypeName(i))
+		writeString(buf, s: registry.getName(i))
+		let cs = registry.getConstraints(i)
+		writeStringArray(buf, arr: cs)
+	end 'eachEntry'
+end 'writeTypeParamRegistry'
+
+function readTypeParamRegistry(buf ByteArray, offset ByteOffset) returns (TypeParamRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = TypeParamRegistry.create()
+	for _ in 0 upto count 'eachEntry'
+		let (declName, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (paramName, p2) = readString(buf, offset: pos)
+		pos = p2
+		let id = registry.intern(declName, paramName: paramName)
+		let (constraints, p3) = readStringArray(buf, offset: pos)
+		pos = p3
+		for c in constraints 'eachConstraint'
+			registry.addConstraint(id, traitName: c)
+		end 'eachConstraint'
+	end 'eachEntry'
+	return (registry, pos)
+end 'readTypeParamRegistry'
+
+// --- InterfaceTypeRegistry ---
+
+function writeInterfaceTypeRegistry(buf ByteArray, registry InterfaceTypeRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachName'
+		writeString(buf, s: registry.getName(i))
+	end 'eachName'
+end 'writeInterfaceTypeRegistry'
+
+function readInterfaceTypeRegistry(buf ByteArray, offset ByteOffset) returns (InterfaceTypeRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = InterfaceTypeRegistry.create()
+	for _ in 0 upto count 'eachName'
+		let (name, p) = readString(buf, offset: pos)
+		pos = p
+		_ = registry.intern(name)
+	end 'eachName'
+	return (registry, pos)
+end 'readInterfaceTypeRegistry'
+
+// --- GenericInstanceRegistry ---
+
+function writeGenericInstanceRegistry(project Project, buf ByteArray, registry GenericInstanceRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachInst'
+		let (baseId, args) = registry.get(i)
+		// Persist the base name (not the local id) so the reader re-interns
+		// through the destination project's `typeNames` and gets a meaningful
+		// id in its own id space.
+		writeString(buf, s: project.typeNames.get(baseId))
+		writeMaxonTypeArray(project, buf: buf, arr: args)
+	end 'eachInst'
+end 'writeGenericInstanceRegistry'
+
+function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (GenericInstanceRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = GenericInstanceRegistry.create()
+	for _ in 0 upto count 'eachInst'
+		let (baseName, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (args, p2) = readMaxonTypeArray(project, buf: buf, offset: pos)
+		pos = p2
+		let baseId = project.typeNames.intern(baseName)
+		_ = registry.intern(baseId, args: args)
+	end 'eachInst'
+	return (registry, pos)
+end 'readGenericInstanceRegistry'
+
+// --- IrInterface map ---
+
+function writeInterfaceMethodSig(project Project, buf ByteArray, sig InterfaceMethodSig)
+	writeString(buf, s: sig.name)
+	writeStringArray(buf, arr: sig.paramNames)
+	writeMaxonTypeArray(project, buf: buf, arr: sig.paramTypes)
+	writeMaxonReturnType(project, buf: buf, rt: sig.returnType)
+	writeString(buf, s: sig.throwsTypeName)
+	writeDword(buf, value: sig.line)
+	writeDword(buf, value: sig.column)
+end 'writeInterfaceMethodSig'
+
+function readInterfaceMethodSig(project Project, buf ByteArray, offset ByteOffset) returns (InterfaceMethodSig, ByteOffset)
+	let (name, p1) = readString(buf, offset: offset)
+	let (paramNames, p2) = readStringArray(buf, offset: p1)
+	let (paramTypes, p3) = readMaxonTypeArray(project, buf: buf, offset: p2)
+	let (returnType, p4) = readMaxonReturnType(project, buf: buf, offset: p3)
+	let (throwsTypeName, p5) = readString(buf, offset: p4)
+	let line = readDword(buf, offset: p5)
+	let column = readDword(buf, offset: p5 + 4)
+	return (InterfaceMethodSig.create(name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, line: line, column: column), p5 + 8)
+end 'readInterfaceMethodSig'
+
+function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap)
+	writeDword(buf, value: m.count())
+	for (name, iface) in m 'eachIface'
+		writeString(buf, s: name)
+		writeString(buf, s: iface.name)
+		writeStringArray(buf, arr: iface.extendsNames)
+		writeStringArray(buf, arr: iface.usesParams)
+		writeDword(buf, value: iface.methods.count())
+		for sig in iface.methods 'eachMethod'
+			writeInterfaceMethodSig(project, buf: buf, sig: sig)
+		end 'eachMethod'
+		writeVisibility(buf, v: iface.visibility)
+		writeDword(buf, value: iface.line)
+		writeDword(buf, value: iface.column)
+		writeFilePath(buf, p: iface.filePath)
+	end 'eachIface'
+end 'writeInterfaceMap'
+
+function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) returns (IrInterfaceMap, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = IrInterfaceMap.create()
+	for _ in 0 upto count 'eachIface'
+		let (key, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (ifaceName, p2) = readString(buf, offset: pos)
+		pos = p2
+		let (extendsNames, p3) = readStringArray(buf, offset: pos)
+		pos = p3
+		let (usesParams, p4) = readStringArray(buf, offset: pos)
+		pos = p4
+		let methodCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var methods = InterfaceMethodSigArray.create()
+		for _ in 0 upto methodCount 'eachMethod'
+			let (sig, p5) = readInterfaceMethodSig(project, buf: buf, offset: pos)
+			pos = p5
+			methods.push(sig)
+		end 'eachMethod'
+		let (visibility, p6) = readVisibility(buf, offset: pos)
+		pos = p6
+		let line = readDword(buf, offset: pos)
+		pos = pos + 4
+		let column = readDword(buf, offset: pos)
+		pos = pos + 4
+		let (filePath, p7) = readFilePath(buf, offset: pos)
+		pos = p7
+		let iface = IrInterface.create(ifaceName, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath)
+		try m.insert(key, value: iface) otherwise ignore
+	end 'eachIface'
+	return (m, pos)
+end 'readInterfaceMap'
+
+// --- ConformanceRegistry ---
+
+function writeConformanceRegistry(project Project, buf ByteArray, registry ConformanceRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachConf'
+		let (typeName, ifaceName, withArgs) = registry.get(i)
+		writeString(buf, s: typeName)
+		writeString(buf, s: ifaceName)
+		writeMaxonTypeArray(project, buf: buf, arr: withArgs)
+	end 'eachConf'
+end 'writeConformanceRegistry'
+
+function readConformanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (ConformanceRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = ConformanceRegistry.create()
+	for _ in 0 upto count 'eachConf'
+		let (typeName, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (ifaceName, p2) = readString(buf, offset: pos)
+		pos = p2
+		let (withArgs, p3) = readMaxonTypeArray(project, buf: buf, offset: pos)
+		pos = p3
+		_ = registry.intern(typeName, interfaceName: ifaceName, withArgs: withArgs)
+	end 'eachConf'
+	return (registry, pos)
+end 'readConformanceRegistry'
+
+// --- GenericTypealiasMap ---
+
+function writeGenericTypealiasMap(project Project, buf ByteArray, m GenericTypealiasMap)
+	writeDword(buf, value: m.count())
+	for (name, t) in m 'eachAlias'
+		writeString(buf, s: name)
+		writeMaxonType(project, buf: buf, t: t)
+	end 'eachAlias'
+end 'writeGenericTypealiasMap'
+
+function readGenericTypealiasMap(project Project, buf ByteArray, offset ByteOffset) returns (GenericTypealiasMap, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = GenericTypealiasMap.create()
+	for _ in 0 upto count 'eachAlias'
+		let (name, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (t, p2) = readMaxonType(project, buf: buf, offset: pos)
+		pos = p2
+		try m.insert(name, value: t) otherwise ignore
+	end 'eachAlias'
+	return (m, pos)
+end 'readGenericTypealiasMap'
+
+// --- LayoutDescriptorRegistry ---
+
+function writeLayoutDescriptorRegistry(buf ByteArray, registry LayoutDescriptorRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachLd'
+		let gid = try registry.instanceIds.get(i) otherwise panic("writeLayoutDescriptorRegistry: instanceIds.get OOB at {i}")
+		let label = try registry.labels.get(i) otherwise panic("writeLayoutDescriptorRegistry: labels desync at {i}")
+		writeQword(buf, value: gid)
+		writeString(buf, s: label)
+	end 'eachLd'
+end 'writeLayoutDescriptorRegistry'
+
+function readLayoutDescriptorRegistry(buf ByteArray, offset ByteOffset) returns (LayoutDescriptorRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = LayoutDescriptorRegistry.create()
+	for _ in 0 upto count 'eachLd'
+		let gid = readQword(buf, offset: pos)
+		pos = pos + 8
+		let (label, p) = readString(buf, offset: pos)
+		pos = p
+		registry.intern(gid, label: label)
+	end 'eachLd'
+	return (registry, pos)
+end 'readLayoutDescriptorRegistry'
+
+// --- WitnessTableRegistry ---
+
+function writeWitnessTableRegistry(buf ByteArray, registry WitnessTableRegistry)
+	writeDword(buf, value: registry.count())
+	for i in 0 upto registry.count() 'eachWt'
+		let e = registry.get(i)
+		writeString(buf, s: e.typeName)
+		writeString(buf, s: e.interfaceName)
+		writeString(buf, s: e.label)
+		writeStringArray(buf, arr: e.methodImplNames)
+		writeString(buf, s: e.parentWitnessLabel)
+		var fatRaw = 0 as MachineWord
+		if e.isFatBoxed 'isFat'
+			fatRaw = 1
+		end 'isFat'
+		writeDword(buf, value: fatRaw)
+	end 'eachWt'
+end 'writeWitnessTableRegistry'
+
+function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (WitnessTableRegistry, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var registry = WitnessTableRegistry.create()
+	for _ in 0 upto count 'eachWt'
+		let (typeName, p1) = readString(buf, offset: pos)
+		pos = p1
+		let (ifaceName, p2) = readString(buf, offset: pos)
+		pos = p2
+		let (label, p3) = readString(buf, offset: pos)
+		pos = p3
+		let (methodImplNames, p4) = readStringArray(buf, offset: pos)
+		pos = p4
+		let (parentLabel, p5) = readString(buf, offset: pos)
+		pos = p5
+		let isFatRaw = readDword(buf, offset: pos)
+		pos = pos + 4
+		let isFatBoxed = isFatRaw != 0
+		registry.intern(typeName, interfaceName: ifaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
+	end 'eachWt'
+	return (registry, pos)
+end 'readWitnessTableRegistry'
+
+// --- StaticRdataValueMap ---
+
+function writeStaticRdataValueMap(buf ByteArray, m StaticRdataValueMap)
+	writeDword(buf, value: m.count())
+	for (label, bytes) in m 'eachEntry'
+		writeString(buf, s: label)
+		writeDword(buf, value: bytes.count())
+		buf.append(bytes)
+	end 'eachEntry'
+end 'writeStaticRdataValueMap'
+
+function readStaticRdataValueMap(buf ByteArray, offset ByteOffset) returns (StaticRdataValueMap, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = StaticRdataValueMap.create()
+	for _ in 0 upto count 'eachEntry'
+		let (label, p1) = readString(buf, offset: pos)
+		pos = p1
+		let len = readDword(buf, offset: pos)
+		pos = pos + 4
+		var bytes = ByteArray.create()
+		bytes.reserve(len)
+		for _ in 0 upto len 'copyByte'
+			let b = try buf.get(pos) otherwise panic("readStaticRdataValueMap: buffer truncated at {pos}")
+			bytes.push(b)
+			pos = pos + 1
+		end 'copyByte'
+		try m.insert(label, value: bytes) otherwise ignore
+	end 'eachEntry'
+	return (m, pos)
+end 'readStaticRdataValueMap'

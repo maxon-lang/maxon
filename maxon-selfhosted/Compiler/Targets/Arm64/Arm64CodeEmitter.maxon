@@ -1115,6 +1115,16 @@ export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray,
 		seeds.push(fixup.targetName)
 	end 'collectAdrSeeds'
 
+	// Phase 11.2/11.3: rdata-resident `funcAbs64InRdata` relocs reference
+	// __layout_copy_*/destroy thunks and witness method-impls that are
+	// reachable only through static rdata pointers — never via a `call`
+	// op. Without seeding them as link-roots here, the PE writer panics
+	// when the reloc target is missing from `.text`. The witness/layout
+	// relocs live on `globalData.pendingRdataRelocs` until the post-link
+	// merge below, so seed from both places to cover stdlib targets.
+	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
+	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
+
 	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
 
 	// Append each needed function's code and fixups

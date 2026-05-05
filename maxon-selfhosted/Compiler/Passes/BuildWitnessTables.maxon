@@ -1,0 +1,156 @@
+// Phase 11.3 pass: emit a witness-table rdata blob for every unconditional
+// `(typeName, interfaceName)` conformance the project records. The blob is
+// the runtime contract Phase 11.4's witnessMethod op reads via
+// constant-offset loads — see `Compiler/IR/WitnessTable.maxon` for the byte
+// shape and per-field invariants.
+//
+// Pass runs at the Maxon phase, immediately after BuildLayoutDescriptors,
+// still before lowerMaxonToStd kicks in. Conditional conformances (those
+// whose `withArgs` reference unbound type-parameters) are skipped here —
+// 11.4 emits them lazily at the call site once the args are concrete.
+//
+// Phase 11.3 alone unlocks no specs. The witness blobs land in rdata with
+// their method slots zero-filled and `funcAbs64InRdata` relocs queued for
+// the link-time patcher; 11.4 wires up the dispatch sites that read them.
+
+function ignoreMaxonModule(_ MaxonModule)
+end 'ignoreMaxonModule'
+
+// `maxonModule` is accepted for pipeline-shape symmetry with
+// `buildLayoutDescriptors` (which synthesizes copy/destroy thunks into the
+// module) but is unused here — 11.3 emits no IrFunctions, only rdata blobs
+// and pending relocations.
+export function buildWitnessTables(project Project, maxonModule MaxonModule, globalData GlobalDataTable)
+	ignoreMaxonModule(maxonModule)
+	let count = project.conformances.count()
+	if count == 0 'noWork'
+		return
+	end 'noWork'
+
+	logDebug(LogCategory.ir, message: () gives "buildWitnessTables: walking {count} interned conformances")
+
+	for cid in 0 upto count 'eachConformance'
+		emitWitnessForConformance(project, globalData: globalData, cid: cid)
+	end 'eachConformance'
+end 'buildWitnessTables'
+
+function emitWitnessForConformance(project Project, globalData GlobalDataTable, cid ConformanceId)
+	let (typeName, interfaceName, withArgs) = project.conformances.get(cid)
+
+	if project.witnessTables.contains(typeName, interfaceName: interfaceName) 'alreadyEmitted'
+		return
+	end 'alreadyEmitted'
+
+	// Conditional conformances (any type-parameter still unbound) are emitted
+	// lazily by 11.4 when the call site fixes the type-arg. Detect by walking
+	// `withArgs` for `typeParameter` arms — the unconditional case has either
+	// no withArgs or a fully-concrete arg list.
+	if withArgsAreConditional(withArgs) 'conditional'
+		return
+	end 'conditional'
+
+	let iface = try project.interfaces.get(interfaceName) otherwise 'noIface'
+		// Interface couldn't be resolved (typo / missing stdlib import). The
+		// resolver already reported the error; emitting nothing avoids
+		// cascading panics from a method walk over a missing record.
+		return
+	end 'noIface'
+
+	let mangledType = sanitizeIdentifier(typeName)
+	let mangledIface = sanitizeIdentifier(interfaceName)
+	let label = "__witness_{mangledType}_{mangledIface}"
+
+	var methodImplNames = StringArray.create()
+	for m in iface.methods 'eachMethod'
+		let implName = "{typeName}.{m.name}"
+		methodImplNames.push(implName)
+		project.livenessRoots.push(implName)
+	end 'eachMethod'
+
+	let isFatBoxed = maxonTypeWidthBytes(project, t: asMaxonTypeForName(project, name: typeName)) > 8
+
+	let parentLabel = pickParentWitnessLabel(project, iface: iface, typeName: typeName)
+
+	let table = WitnessTable.create(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
+	let bytes = encodeWitnessTable(table)
+
+	addNamedGlobalData(globalData, name: label, data: bytes)
+	project.staticRdataValues.upsert(label, value: bytes)
+
+	for i in 0 upto methodImplNames.count() 'eachReloc'
+		let implName = try methodImplNames.get(i) otherwise panic("buildWitnessTables: methodImplNames.get OOB at {i}")
+		let slotOffset = WITNESS_OFFSET_METHODS + 8 * i
+		pushFuncAbs64Reloc(globalData, rdataLabel: label, funcName: implName, offsetInLabel: slotOffset)
+	end 'eachReloc'
+
+	project.witnessTables.intern(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
+end 'emitWitnessForConformance'
+
+// Pick the first `extends` parent the conforming type also implements; the
+// returned label is the witness for that parent conformance. Empty string
+// means "no recordable parent" (no extends, or the parent isn't itself
+// listed as a separate conformance for this type yet). Phase 11.3 records
+// the parent label for 11.4's lookup but does NOT emit a relocation for
+// it: the rdata→rdata 64-bit reloc kind isn't in the writers yet, and the
+// header slot stays zero on disk.
+function pickParentWitnessLabel(project Project, iface IrInterface, typeName String) returns String
+	for i in 0 upto iface.extendsNames.count() 'eachParent'
+		let parentName = try iface.extendsNames.get(i) otherwise panic("pickParentWitnessLabel: extendsNames.get OOB at {i}")
+		if not project.conformances.contains(typeName, interfaceName: parentName) 'notConformed'
+			continue
+		end 'notConformed'
+		let mangledType = sanitizeIdentifier(typeName)
+		let mangledIface = sanitizeIdentifier(parentName)
+		return "__witness_{mangledType}_{mangledIface}"
+	end 'eachParent'
+	return ""
+end 'pickParentWitnessLabel'
+
+// True iff any element of `withArgs` references an unbound type-parameter.
+// Conditional conformances (`Array implements Hashable where Element:
+// Hashable`) carry a `typeParameter` arm here; their concrete shape is only
+// known at the call site, so 11.4 emits those witnesses on demand.
+function withArgsAreConditional(withArgs MaxonTypeArray) returns bool
+	for i in 0 upto withArgs.count() 'each'
+		let a = try withArgs.get(i) otherwise panic("withArgsAreConditional: withArgs.get OOB at {i}")
+		if maxonTypeIsConditional(a) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'withArgsAreConditional'
+
+function maxonTypeIsConditional(t MaxonType) returns bool
+	return match t 'check'
+		typeParameter gives true
+		boolean to function gives false
+		unresolved gives false
+		genericInstance gives false
+		interface gives false
+	end 'check'
+end 'maxonTypeIsConditional'
+
+// Resolve a bare type name to a representative MaxonType for sizing. Falls
+// back to `MaxonType.named` for any name that isn't a primitive — that's a
+// pointer-shaped value at the ABI level and the sizing helper treats it as
+// 8 bytes.
+function asMaxonTypeForName(project Project, name String) returns MaxonType
+	if name == "Bool" or name == "bool" 'boolType'
+		return MaxonType.boolean
+	end 'boolType'
+	if name == "Byte" or name == "byte" 'byteType'
+		return MaxonType.integer
+	end 'byteType'
+	if name == "Int" or name == "int" 'intType'
+		return MaxonType.integer
+	end 'intType'
+	if name == "Float" or name == "float" 'floatType'
+		return MaxonType.float
+	end 'floatType'
+	if name == "String" or name == "string" 'stringType'
+		return MaxonType.string
+	end 'stringType'
+	let id = project.typeNames.intern(name)
+	return MaxonType.named(id)
+end 'asMaxonTypeForName'
+

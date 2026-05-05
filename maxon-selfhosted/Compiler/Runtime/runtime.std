@@ -3808,3 +3808,36 @@ func __managed_mem_create 2 i64
     std storeIndirect v11 32 v14    // parent_ptr = -1 (root)
     std ret v11
 end
+
+// __layout_word_load(ptr) -> i64
+// Reads 8 bytes from ptr. Used by Phase 11.2 layout copy/destroy thunks
+// synthesized in BuildLayoutDescriptors when the Maxon dialect — which
+// has no raw-pointer load/store ops — needs to manipulate layout-routed
+// values. 8 bytes is enough because every Phase 11 generic instance arg
+// in flight today (Array-shaped containers, struct fields, heap pointers)
+// occupies a full pointer-sized slot.
+//
+// Slot usage:
+//   slot 0 = ptr (arg)
+func __layout_word_load 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std loadIndirect v0 0
+    std ret v1
+end
+
+// __layout_word_store(ptr, v): stores 8 bytes (v) at ptr. Sibling of
+// __layout_word_load — see that helper's comment for the rationale and
+// the width discussion.
+//
+// Slot usage:
+//   slot 0 = ptr (arg)
+//   slot 1 = v   (arg)
+func __layout_word_store 2 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    std storeIndirect v0 0 v1
+    v2 = std constI64 0
+    std ret v2
+end

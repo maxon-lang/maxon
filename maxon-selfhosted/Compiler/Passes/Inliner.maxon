@@ -1,0 +1,1528 @@
+// Phase 11.6: Analysis-based static-call inliner.
+//
+// Walks every caller's `func.call` op and decides — purely from IR shape
+// (size, recursion, loop depth, arg-shape multipliers) — whether to inline
+// the callee. No annotations: the analyzer decides entirely from IR.
+// Recursion, indirect calls, and observable-frame callees are gated by code
+// analysis, not user-facing flags.
+//
+// Pipeline placement (see PassPipeline.buildMidPipeline): runs at the
+// Std level between `dce` and `insertRangeChecks`. Canonicalize + DCE
+// re-run after the inliner so the descriptor-fold + mem2reg cascade
+// inside newly-inlined bodies takes effect; `dceFunctions` then drops
+// callees whose every static call site got inlined.
+//
+// **Phase 11.6 minimum-viable shape.** The decision rule and the call-graph
+// integration are wired up, but the actual call-site splice is restricted
+// to the simplest single-block, single-return shape (most stdlib
+// accessors). Multi-block bodies, throwing callees (`tryCall`), and tail
+// calls are left for 11.7 to expand once the per-decision invariants are
+// proven by spec parity. This keeps the 459/459 baseline trivial to
+// preserve while still recovering monomorphization-quality codegen for
+// the hot accessor paths.
+//
+// Decision rule (priority order):
+//   1. Skip if `callee` participates in a recursive SCC — never inline.
+//   2. Skip if the call op is anything other than `StdCallOp.call` — try /
+//      indirect / tail are out of scope at this phase.
+//   3. Skip if the splice precondition fails (single-block + single-return).
+//   4. Always inline tiny callees (op-count ≤ TINY_OP_THRESHOLD).
+//   5. Always inline single-call-site callees (cg.inDegree[callee] == 1).
+//   6. Inline medium callees (op-count ≤ MEDIUM_OP_THRESHOLD) when budget
+//      multipliers (loop depth, concrete-descriptor arg, closure-literal
+//      arg) compose above the callee's op count.
+//   7. Otherwise skip.
+//
+// All thresholds are conservative starting points per the 11.6 plan; 11.7
+// tunes them based on benchmark output.
+
+let TINY_OP_THRESHOLD = 10
+let MEDIUM_OP_THRESHOLD = 50
+let LOOP_DEPTH_1_MULT = 3
+let LOOP_DEPTH_2_MULT = 6
+let CONCRETE_DESC_MULT = 2
+let CLOSURE_LITERAL_MULT = 2
+let MAX_FIXPOINT_ROUNDS = 5
+
+// Run the inliner over `module`. Returns the rewritten module (in place
+// today; the explicit return is kept so future copy-on-write variants
+// don't have to re-thread callers). Idempotent — additional rounds
+// without progress exit immediately.
+//
+// Phase 11.6's minimum-viable shape: the call-graph + decision-rule
+// scaffolding is wired up, but the body-splice is gated to single-block
+// single-return callees. Multi-block bodies and throwing callees are
+// left as no-ops; calling code goes through the original call site
+// unchanged.
+export function inlineModule(module StdModule, project Project) returns StdModule
+	var rounds = 0
+	var keepGoing = true
+	var totalSplices = 0
+	var totalLoopBonus = 0
+	while keepGoing and rounds < MAX_FIXPOINT_ROUNDS 'fixpoint'
+		rounds = rounds + 1
+		let cg = buildCallGraph(module)
+		let sccs = computeSccs(cg)
+		let recursive = collectRecursive(sccs, cg: cg)
+		let roundCounts = inlineOneRound(module, project: project, cg: cg, recursive: recursive)
+		totalSplices = totalSplices + roundCounts.splices
+		totalLoopBonus = totalLoopBonus + roundCounts.loopBonus
+		if roundCounts.splices == 0 'noChange'
+			keepGoing = false
+		end 'noChange'
+	end 'fixpoint'
+	logDebug(LogCategory.ir, message: () gives "inliner: spliced {totalSplices} call site(s) across {rounds} round(s); {totalLoopBonus} from loop-depth bonus")
+	return module
+end 'inlineModule'
+
+type RoundCounts
+	export var splices ParsedInt
+	export var loopBonus ParsedInt
+
+	export static function create(splices ParsedInt, loopBonus ParsedInt) returns RoundCounts
+		return Self{splices: splices, loopBonus: loopBonus}
+	end 'create'
+
+	export static function zero() returns RoundCounts
+		return Self{splices: 0, loopBonus: 0}
+	end 'zero'
+end 'RoundCounts'
+
+function inlineOneRound(module StdModule, project Project, cg CallGraph, recursive CallGraphStringSet) returns RoundCounts
+	var funcMap = StdFuncByNameForInliner.create()
+	for func in module.functions 'index'
+		funcMap.upsert(func.name, value: func)
+	end 'index'
+	var splices = 0
+	var loopBonus = 0
+	for callerIdx in 0 upto module.functions.count() 'eachCaller'
+		var caller = try module.functions.get(callerIdx) otherwise panic("inlineOneRound: functions.get OOB at {callerIdx}")
+		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, cg: cg, recursive: recursive)
+		splices = splices + counts.splices
+		loopBonus = loopBonus + counts.loopBonus
+	end 'eachCaller'
+	return RoundCounts.create(splices: splices, loopBonus: loopBonus)
+end 'inlineOneRound'
+
+typealias StdFuncByNameForInliner = Map with(String, IrFunction)
+
+function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, cg CallGraph, recursive CallGraphStringSet) returns RoundCounts
+	var splices = 0
+	var loopBonus = 0
+	// Snapshot the caller's block list — multi-block splices append fresh
+	// blocks to caller.blockRefs and the outer iteration must not observe
+	// its own additions (otherwise newly-inlined blocks get re-walked
+	// inside the same round, which is wasteful and risks visiting a
+	// continuation block before its predecessors are stable). The next
+	// fixpoint round picks up any further inlining opportunities.
+	let blockSnapshot = caller.blockRefs.clone()
+	// Loop-depth for the budget multiplier (C2.c). Computed once per caller
+	// per round: the snapshot's block ids are all < the original
+	// caller.nextBlockId, so the depth array stays valid for every call site
+	// we visit even after splices append fresh blocks. New back-edges from
+	// inlined bodies can't extend a loop containing an original caller block
+	// (the splice only adds entry/continuation edges, no edge from a callee
+	// block back to an original block). Re-runs next fixpoint round.
+	let loopDepth = computeLoopDepth(caller, module: module)
+	for blockRef in blockSnapshot 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("processOneCaller: blockRef {blockRef} not in module")
+		let blockDepth = lookupLoopDepth(loopDepth, blockId: block.id)
+		// Walk a clone of opRefs — the splice rewrites the live list as it
+		// runs (one entry removed, the callee body's entries inserted in
+		// place), and the iteration must not observe its own mutations.
+		let snapshot = block.opRefs.clone()
+		for opIdx in snapshot 'eachOp'
+			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, cg: cg, recursive: recursive, loopDepth: blockDepth)
+			if decision.inline 'wantInline'
+				if performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap) 'didInline'
+					splices = splices + 1
+					if decision.loopBonus 'wasBonus'
+						loopBonus = loopBonus + 1
+					end 'wasBonus'
+				end 'didInline'
+			end 'wantInline'
+		end 'eachOp'
+	end 'eachBlock'
+	return RoundCounts.create(splices: splices, loopBonus: loopBonus)
+end 'processOneCaller'
+
+function lookupLoopDepth(loopDepth RegIntArray, blockId BlockId) returns ParsedInt
+	let raw = try loopDepth.get(blockId) otherwise return 0
+	return raw as ParsedInt
+end 'lookupLoopDepth'
+
+type InlineDecision
+	export var inline bool
+	export var loopBonus bool
+
+	export static function skip() returns InlineDecision
+		return Self{inline: false, loopBonus: false}
+	end 'skip'
+
+	export static function accept(loopBonus bool) returns InlineDecision
+		return Self{inline: true, loopBonus: loopBonus}
+	end 'accept'
+end 'InlineDecision'
+
+// Decide whether to inline the callee at this call site. Returns skip() on
+// any of the disqualifying conditions in the priority-order list at the
+// top of this file. The `loopBonus` flag in accept() reports whether the
+// call site was inlined only because the loop-depth bonus pushed budget
+// past calleeOps — used for the inliner-debug telemetry counter.
+function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, cg CallGraph, recursive CallGraphStringSet, loopDepth ParsedInt) returns InlineDecision
+	let callShape = extractCallShape(module, opIdx: opIdx)
+	if callShape.kind != CallShapeKind.staticCall 'notInlinable'
+		return InlineDecision.skip()
+	end 'notInlinable'
+	let calleeName = callShape.callee
+	if calleeName.isEmpty() 'noCallee'
+		return InlineDecision.skip()
+	end 'noCallee'
+	if recursive.contains(calleeName) 'recursive'
+		return InlineDecision.skip()
+	end 'recursive'
+	if calleeName == caller.name 'selfCall'
+		// Defensive: SCC catches this, but a stale recursive set during
+		// early development could miss it. Belt-and-suspenders is cheap.
+		return InlineDecision.skip()
+	end 'selfCall'
+	let callee = try funcMap.get(calleeName) otherwise 'noBody'
+		// Stdlib intrinsics / runtime helpers have no IR body in this
+		// module — there's nothing to splice, so leave the call alone.
+		return InlineDecision.skip()
+	end 'noBody'
+	if not isSpliceableShape(module, callee: callee) 'unsupportedShape'
+		return InlineDecision.skip()
+	end 'unsupportedShape'
+	if calleeProducesObservableFrame(module, project: project, callee: callee) 'frameVisible'
+		// Skip callees whose stack frame must remain observable: any callee
+		// whose return goes through a typealias range check (insertRangeChecks
+		// runs after the inliner; folding it away would erase the
+		// "in callee.name" frame the panic stack trace expects), or any
+		// callee whose body invokes the runtime panic helper directly. The
+		// spec suite encodes these frames in `range-check-panic` /
+		// `panic.in-function`, so the gate is mandatory for parity.
+		return InlineDecision.skip()
+	end 'frameVisible'
+	let calleeOps = countCalleeOps(module, callee: callee)
+	if calleeOps == 0 'emptyBody'
+		return InlineDecision.skip()
+	end 'emptyBody'
+	if calleeOps <= TINY_OP_THRESHOLD 'tiny'
+		return InlineDecision.accept(loopBonus: false)
+	end 'tiny'
+	let inDegree = try cg.inDegree.get(calleeName) otherwise 0
+	if inDegree == 1 'singleCallSite'
+		return InlineDecision.accept(loopBonus: false)
+	end 'singleCallSite'
+	// Hard cap: even with every multiplier composed (×LOOP_DEPTH_2_MULT ×
+	// CONCRETE_DESC_MULT × CLOSURE_LITERAL_MULT) the budget can't exceed
+	// MEDIUM_OP_THRESHOLD × that product. Skip anything bigger up front so
+	// we don't waste time computing the budget for hopeless candidates.
+	let maxBudget = MEDIUM_OP_THRESHOLD * LOOP_DEPTH_2_MULT * CONCRETE_DESC_MULT * CLOSURE_LITERAL_MULT
+	if calleeOps > maxBudget 'tooBig'
+		return InlineDecision.skip()
+	end 'tooBig'
+	let budget = computeInliningBudget(module, project: project, callShape: callShape, loopDepth: loopDepth)
+	if calleeOps > budget 'overBudget'
+		return InlineDecision.skip()
+	end 'overBudget'
+	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, loopDepth: 0)
+	let viaBonus = calleeOps > baseBudget
+	return InlineDecision.accept(loopBonus: viaBonus)
+end 'decideInline'
+
+// Loop-depth-and-arg-shape budget. C2.c wires in the loop multiplier
+// (callSite.loopDepth from CfgAnalysis.computeLoopDepth) so call sites
+// inside hot loops get a larger budget. The three multipliers compose
+// multiplicatively: a depth-1 call site with a concrete descriptor and a
+// closure-literal arg gets ×3 × ×2 × ×2 = ×12 budget. The depth bonus is
+// capped at LOOP_DEPTH_2_MULT (depth ≥ 2 doesn't increase further) because
+// deeper nesting amplifies binary-size cost without proportional
+// hot-path-frequency gain.
+function computeInliningBudget(module StdModule, project Project, callShape CallShape, loopDepth ParsedInt) returns ParsedInt
+	var budget = MEDIUM_OP_THRESHOLD as ParsedInt
+	if loopDepth >= 2 'depthDeep'
+		budget = budget * LOOP_DEPTH_2_MULT
+	end 'depthDeep' else 'depthShallow'
+		if loopDepth == 1 'depthOne'
+			budget = budget * LOOP_DEPTH_1_MULT
+		end 'depthOne'
+	end 'depthShallow'
+	if callSiteHasConcreteDescriptorArg(module, project: project, argIds: callShape.argIds) 'concreteDesc'
+		budget = budget * CONCRETE_DESC_MULT
+	end 'concreteDesc'
+	if callSiteHasClosureLiteralArg(module, argIds: callShape.argIds) 'closureLit'
+		budget = budget * CLOSURE_LITERAL_MULT
+	end 'closureLit'
+	return budget
+end 'computeInliningBudget'
+
+// Approximate "concrete descriptor" detection: any arg whose definition
+// is a `loadLayoutDescriptor(label)` where `label` is in the project's
+// layout-descriptor registry counts. Walks the module ops; an arg
+// whose producer isn't in this module (e.g. a function param from
+// outside) returns false. Used only for budget multiplication, so a
+// false negative just means "don't apply the bonus" — never wrong.
+function callSiteHasConcreteDescriptorArg(module StdModule, project Project, argIds ValueIdArray) returns bool
+	for argId in argIds 'each'
+		if argDefinedAsConcreteDescriptor(module, project: project, argId: argId) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'callSiteHasConcreteDescriptorArg'
+
+function argDefinedAsConcreteDescriptor(module StdModule, project Project, argId ValueId) returns bool
+	let label = findLoadLayoutDescriptorLabel(module, valueId: argId)
+	if label.isEmpty() 'unknown'
+		return false
+	end 'unknown'
+	return project.staticRdataValues.contains(label)
+end 'argDefinedAsConcreteDescriptor'
+
+function findLoadLayoutDescriptorLabel(module StdModule, valueId ValueId) returns String
+	for opIdx in 0 upto module.ops.count() 'each'
+		let op = try module.ops.get(opIdx) otherwise continue
+		let label = match op 'shape'
+			arith gives ""
+			control gives ""
+			call gives ""
+			memory gives ""
+			system(s) gives matchLayoutLoad(s, valueId: valueId)
+		end 'shape'
+		if not label.isEmpty() 'hit'
+			return label
+		end 'hit'
+	end 'each'
+	return ""
+end 'findLoadLayoutDescriptorLabel'
+
+function matchLayoutLoad(op StdSystemOp, valueId ValueId) returns String
+	return match op 'shape'
+		loadLayoutDescriptor(resultId, label) gives label if resultId == valueId else ""
+		syscall to printInt gives ""
+		drop gives ""
+		osAllocPages to osLockRelease gives ""
+		boxValue gives ""
+		unboxValue gives ""
+		loadWitnessTable gives ""
+		descriptorField gives ""
+		witnessMethod gives ""
+		dropTypeParam gives ""
+	end 'shape'
+end 'matchLayoutLoad'
+
+// Closure-literal heuristic: a call site is closure-literal-shaped when
+// any arg ValueId is the resultId of a `funcRef` op. The plan calls this
+// "closure literal" because phase 10 lifts closures into named functions
+// and emits a funcRef at the call site to bind the env.
+function callSiteHasClosureLiteralArg(module StdModule, argIds ValueIdArray) returns bool
+	for argId in argIds 'each'
+		if argDefinedAsFuncRef(module, valueId: argId) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'callSiteHasClosureLiteralArg'
+
+function argDefinedAsFuncRef(module StdModule, valueId ValueId) returns bool
+	for opIdx in 0 upto module.ops.count() 'each'
+		let op = try module.ops.get(opIdx) otherwise continue
+		let isMatch = match op 'shape'
+			arith gives false
+			control gives false
+			call(c) gives matchFuncRef(c, valueId: valueId)
+			memory gives false
+			system gives false
+		end 'shape'
+		if isMatch 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'argDefinedAsFuncRef'
+
+function matchFuncRef(op StdCallOp, valueId ValueId) returns bool
+	return match op 'shape'
+		funcRef(resultId, _) gives resultId == valueId
+		ret gives false
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		tailCall gives false
+		param gives false
+	end 'shape'
+end 'matchFuncRef'
+
+// Stack-trace preservation gate. The Maxon runtime stack trace lists
+// every function frame on the way down to the panic site; inlining a
+// frame collapses it out. Two shapes spec-test for the frame's
+// presence:
+//
+//   1. Callees whose return type is a ranged typealias and whose range
+//      is narrower than the underlying ABI type. `insertRangeChecks`
+//      runs *after* the inliner, so once we splice the body the
+//      original callee disappears and its range check never gets
+//      inserted — the panic either fires from main's frame (wrong
+//      message label) or doesn't fire at all (range check missing).
+//   2. Callees whose body directly invokes `mrt_panic`. The runtime
+//      panic helper produces the stack trace by walking call frames;
+//      inlining the caller into a deeper frame loses the "in
+//      callee.name" line.
+//
+// Both are detectable from the project's existing metadata
+// (`funcReturnTypes` + `typealiasRanges` for #1; a body-walk looking
+// for `mrt_panic` calls for #2). When either fires, the inliner
+// leaves the call site untouched and the function survives DFE.
+function calleeProducesObservableFrame(module StdModule, project Project, callee IrFunction) returns bool
+	if calleeReturnHasRangeCheck(project, callee: callee) 'rangeCheck'
+		return true
+	end 'rangeCheck'
+	if calleeBodyInvokesPanic(module, callee: callee) 'panicCall'
+		return true
+	end 'panicCall'
+	return false
+end 'calleeProducesObservableFrame'
+
+function calleeReturnHasRangeCheck(project Project, callee IrFunction) returns bool
+	let returnType = try project.funcReturnTypes.get(callee.name) otherwise return false
+	let aliasName = maxonReturnTypeName(project, ref: returnType)
+	if aliasName.isEmpty() 'noAlias'
+		return false
+	end 'noAlias'
+	let range = try project.typealiasRanges.get(aliasName) otherwise return false
+	return not isFullRange(range)
+end 'calleeReturnHasRangeCheck'
+
+function calleeBodyInvokesPanic(module StdModule, callee IrFunction) returns bool
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			if opCallsPanic(module, opIdx: opIdx) 'hit'
+				return true
+			end 'hit'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			if opCallsPanic(module, opIdx: block.terminatorIndex()) 'termHit'
+				return true
+			end 'termHit'
+		end 'hasTerm'
+	end 'eachBlock'
+	return false
+end 'calleeBodyInvokesPanic'
+
+function opCallsPanic(module StdModule, opIdx OpIndex) returns bool
+	let op = try module.ops.get(opIdx) otherwise return false
+	return match op 'outer'
+		call(inner) gives callOpInvokesPanic(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'opCallsPanic'
+
+function callOpInvokesPanic(op StdCallOp) returns bool
+	return match op 'inner'
+		call(_, callee, _) gives callee == "mrt_panic"
+		ret gives false
+		tryCall(_, callee, _, _) gives callee == "mrt_panic"
+		indirectCall gives false
+		funcRef(_, funcName) gives funcName == "mrt_panic"
+		tailCall(callee, _) gives callee == "mrt_panic"
+		param gives false
+	end 'inner'
+end 'callOpInvokesPanic'
+
+// Splice precondition. Phase 11.6 accepted only single-block + single-ret
+// shapes; C2.b widens this to multi-block bodies whose every terminator is
+// either a `ret`, an unconditional `br`, or a `condBr`. Try-call /
+// indirect-call / tail-call terminators and slot ops are still rejected —
+// the existing rewrite paths don't know how to compose those across the
+// inline boundary.
+function isSpliceableShape(module StdModule, callee IrFunction) returns bool
+	if callee.blockRefs.count() == 0 'noBlocks'
+		return false
+	end 'noBlocks'
+	if callee.blockRefs.count() == 1 'singleBlock'
+		return isSingleBlockSpliceable(module, callee: callee)
+	end 'singleBlock'
+	return isMultiBlockSpliceable(module, callee: callee)
+end 'isSpliceableShape'
+
+function isSingleBlockSpliceable(module StdModule, callee IrFunction) returns bool
+	let blockRef = try callee.blockRefs.get(0) otherwise panic("isSingleBlockSpliceable: callee has 1 block but get failed")
+	let block = try module.blocks.get(blockRef) otherwise panic("isSingleBlockSpliceable: blockRef {blockRef} not in module")
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let term = try module.ops.get(block.terminatorIndex()) otherwise panic("isSingleBlockSpliceable: terminator opIdx not in module")
+	return match term 'shape'
+		call(inner) gives isStdRet(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'shape'
+end 'isSingleBlockSpliceable'
+
+// Multi-block splice precondition. Every block must:
+//   - have a real terminator op (no fallthrough/unset/dead)
+//   - terminate with `ret`, `br`, or `condBr`
+//   - contain no slot-touching memory ops in its body or terminator
+// No body op may be a `tryCall`, `indirectCall`, or `tailCall` — those
+// shapes either need exception-edge wiring or break the inliner's
+// strict-static-call assumption.
+function isMultiBlockSpliceable(module StdModule, callee IrFunction) returns bool
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("isMultiBlockSpliceable: blockRef {blockRef} not in module")
+		if not block.hasTerminatorOp() 'noTerm'
+			return false
+		end 'noTerm'
+		let term = try module.ops.get(block.terminatorIndex()) otherwise panic("isMultiBlockSpliceable: terminator opIdx not in module")
+		if not isAllowedTerminator(term) 'badTerm'
+			return false
+		end 'badTerm'
+		for bodyOpIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(bodyOpIdx) otherwise continue
+			if opTouchesSlot(op) 'slot'
+				return false
+			end 'slot'
+			if isUnsupportedBodyShape(op) 'badBody'
+				return false
+			end 'badBody'
+		end 'eachOp'
+	end 'eachBlock'
+	return true
+end 'isMultiBlockSpliceable'
+
+function isAllowedTerminator(op StdOp) returns bool
+	return match op 'outer'
+		arith gives false
+		control(c) gives isAllowedControlTerm(c)
+		call(c) gives isAllowedCallTerm(c)
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isAllowedTerminator'
+
+function isAllowedControlTerm(op StdControlOp) returns bool
+	return match op 'shape'
+		br gives true
+		condBr gives true
+	end 'shape'
+end 'isAllowedControlTerm'
+
+function isAllowedCallTerm(op StdCallOp) returns bool
+	return match op 'shape'
+		ret gives true
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'shape'
+end 'isAllowedCallTerm'
+
+// Body ops that the multi-block splice can't carry across cleanly.
+// `tryCall` would need exception-edge stitching; `indirectCall` and
+// `tailCall` either escape the inliner's static-callee model or change
+// the call's frame disposition. Plain `call`/`funcRef`/`param`/`ret` and
+// any non-call-category op are fine.
+function isUnsupportedBodyShape(op StdOp) returns bool
+	return match op 'outer'
+		arith gives false
+		control gives false
+		call(c) gives isUnsupportedCallBody(c)
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isUnsupportedBodyShape'
+
+function isUnsupportedCallBody(op StdCallOp) returns bool
+	return match op 'shape'
+		ret gives false
+		call gives false
+		tryCall gives true
+		indirectCall gives true
+		funcRef gives false
+		tailCall gives true
+		param gives false
+	end 'shape'
+end 'isUnsupportedCallBody'
+
+function isStdRet(op StdCallOp) returns bool
+	return match op 'shape'
+		ret gives true
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'shape'
+end 'isStdRet'
+
+function countCalleeOps(module StdModule, callee IrFunction) returns ParsedInt
+	var total = 0
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("countCalleeOps: blockRef {blockRef} not in module")
+		total = total + block.opRefs.count()
+		if block.hasTerminatorOp() 'hasTerm'
+			total = total + 1
+		end 'hasTerm'
+	end 'eachBlock'
+	return total
+end 'countCalleeOps'
+
+// CallShape: distilled view of a call op for the inliner. `kind` segregates
+// the only call shape the inliner cares about (a static `func.call`); the
+// rest fold into one bucket.
+enum CallShapeKind
+	staticCall
+	notInlinable
+end 'CallShapeKind'
+
+type CallShape
+	export var kind CallShapeKind
+	export var callee String
+	export var resultId ValueId
+	export var argIds ValueIdArray
+
+	export static function notInlinable() returns CallShape
+		return Self{
+			kind: CallShapeKind.notInlinable,
+			callee: "",
+			resultId: 0,
+			argIds: ValueIdArray.create()
+		}
+	end 'notInlinable'
+
+	export static function fromStaticCall(resultId ValueId, callee String, argIds ValueIdArray) returns CallShape
+		return Self{
+			kind: CallShapeKind.staticCall,
+			callee: callee,
+			resultId: resultId,
+			argIds: argIds
+		}
+	end 'fromStaticCall'
+end 'CallShape'
+
+function extractCallShape(module StdModule, opIdx OpIndex) returns CallShape
+	let op = try module.ops.get(opIdx) otherwise panic("extractCallShape: opIdx {opIdx} not in module.ops")
+	return match op 'outer'
+		call(inner) gives extractFromCallOp(inner)
+		arith gives CallShape.notInlinable()
+		control gives CallShape.notInlinable()
+		memory gives CallShape.notInlinable()
+		system gives CallShape.notInlinable()
+	end 'outer'
+end 'extractCallShape'
+
+function extractFromCallOp(op StdCallOp) returns CallShape
+	return match op 'kind'
+		call(resultId, callee, argIds) gives CallShape.fromStaticCall(resultId: resultId, callee: callee, argIds: argIds)
+		ret gives CallShape.notInlinable()
+		tryCall gives CallShape.notInlinable()
+		indirectCall gives CallShape.notInlinable()
+		funcRef gives CallShape.notInlinable()
+		tailCall gives CallShape.notInlinable()
+		param gives CallShape.notInlinable()
+	end 'kind'
+end 'extractFromCallOp'
+
+// Phase 11.6 splice. Single-block + single-return callees only — the gate
+// in `isSpliceableShape` enforces that. The body splice runs in three
+// phases:
+//
+//   1. Build a callee-ValueId → caller-ValueId remap. Param ops collapse
+//      to the call-site arg ValueIds; every other definer gets a fresh
+//      caller-local ValueId allocated past the caller's current max.
+//   2. Replace the call op in the caller's block.opRefs with the rewritten
+//      callee body (skipping `param` ops at the head and the trailing
+//      `ret`). Each rewritten op has both its define and its operand
+//      ValueIds run through the remap.
+//   3. Substitute the original call's resultId with the inlined return
+//      value (`remap[ret.retValId]`) across every op in every block of
+//      the caller. mem2reg's IDF placement only inserts blockArgs at
+//      join points, so a non-blockArg use of the call result can live
+//      anywhere reachable from the call site — we walk the whole
+//      function rather than try to recompute reach.
+//
+// Drops the caller's per-function MIR/MID/code memos so the next query
+// recomputes from the rewritten body. Returning `false` from any
+// validity gate aborts the splice with no caller mutation.
+function performInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, funcMap StdFuncByNameForInliner) returns bool
+	let callShape = extractCallShape(module, opIdx: opIdx)
+	if callShape.kind != CallShapeKind.staticCall 'notStatic'
+		return false
+	end 'notStatic'
+	let callee = try funcMap.get(callShape.callee) otherwise return false
+	if callee.blockRefs.count() == 0 'noBlocks'
+		return false
+	end 'noBlocks'
+	if callee.blockRefs.count() > 1 'multi'
+		return performMultiBlockInline(module: module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape)
+	end 'multi'
+	let calleeBlockRef = try callee.blockRefs.get(0) otherwise panic("performInline: callee.blockRefs.get(0) failed after count==1")
+	let calleeBlock = try module.blocks.get(calleeBlockRef) otherwise panic("performInline: blockRef {calleeBlockRef} not in module")
+	if not calleeBlock.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let calleeRet = try module.ops.get(calleeBlock.terminatorIndex()) otherwise panic("performInline: callee terminator opIdx not in module.ops")
+	let retValId = retValueIdOrSentinel(calleeRet)
+	if retValId == REMAP_INVALID and not stdReturnTypeIsVoid(callee.returnType) 'badRet'
+		return false
+	end 'badRet'
+	if calleeBodyTouchesSlots(module, calleeBlock: calleeBlock) 'usesSlots'
+		// Slot ops would need slot-id remapping into the caller's frame —
+		// not yet implemented. Most accessors don't touch slots after
+		// mem2reg, so this gate is rarely hit.
+		return false
+	end 'usesSlots'
+
+	// Phase 1: build the remap.
+	let calleeMaxId = scanMaxValueId(callee, module: module)
+	var nextId = scanMaxValueId(caller, module: module) + 1
+	var remap = ValueIdArray.create()
+	while remap.count() <= calleeMaxId 'init'
+		remap.push(REMAP_INVALID)
+	end 'init'
+	bindParamRemap(module: module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
+	nextId = bindBodyRemap(module: module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: nextId)
+
+	// Phase 2: replace the call op in caller's block.opRefs with the
+	// rewritten body. Find the call's position first; insert is at the
+	// same position so the splice is visually "in place".
+	let posInBlock = findOpPosition(block: block, opIdx: opIdx)
+	if posInBlock < 0 'notFound'
+		// Defensive: caller-walker found this op in this block; if the
+		// scan misses it the IR is malformed, but bail rather than panic.
+		return false
+	end 'notFound'
+	let removedIdx = try block.opRefs.remove(posInBlock) otherwise panic("performInline: remove at {posInBlock} failed")
+	if removedIdx != opIdx 'mismatch'
+		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
+	end 'mismatch'
+	emitInlinedBody(module: module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
+
+	// Phase 3: rewrite the caller's existing ops so any reference to the
+	// call's old resultId now reads the inlined return value. Void
+	// returns leave the resultId unused, so no rewrite is needed.
+	if not stdReturnTypeIsVoid(callee.returnType) 'hasReturn'
+		let inlinedRet = try remap.get(retValId) otherwise panic("performInline: retValId {retValId} not in remap")
+		if inlinedRet == REMAP_INVALID 'unmapped'
+			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
+		end 'unmapped'
+		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
+	end 'hasReturn'
+
+	invalidateCachedHash(project, callerName: caller.name)
+	logTrace(LogCategory.ir, message: () gives "inliner: spliced @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id})")
+	return true
+end 'performInline'
+
+// C2.b multi-block splice. The callee owns N blocks; we duplicate every
+// block into the caller under fresh BlockIds, split the call-site block at
+// the call op, jump into the inlined entry, and stitch every callee `ret`
+// onto a fresh continuation block that resumes the caller's post-call
+// code. When the callee returns a value the continuation block carries a
+// blockArg phi that every `ret` feeds via a `br` arglist; the caller's
+// uses of the original call result are then substituted to read the phi.
+//
+// All callee blocks are appended to the caller's blockRefs (entry block
+// stays at index 0, so post-splice ordering keeps the dominator-tree
+// invariants the rest of the pipeline assumes). BlockIds are allocated
+// from `caller.nextBlockId`; the caller's `nextBlockId` is bumped by
+// (calleeBlocks + 1) — one slot per cloned block plus the continuation.
+function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape) returns bool
+	let posInBlock = findOpPosition(block: block, opIdx: opIdx)
+	if posInBlock < 0 'notFound'
+		return false
+	end 'notFound'
+
+	// Phase 1: allocate fresh BlockIds for every callee block plus the
+	// continuation. Build callee-blockId → caller-blockId remap.
+	let calleeMaxBlockId = scanMaxCalleeBlockId(callee)
+	var blockRemap = BlockIdArray.create()
+	while blockRemap.count() <= calleeMaxBlockId 'init'
+		blockRemap.push(REMAP_INVALID)
+	end 'init'
+	for cBlockRef in callee.blockRefs 'eachCalleeBlock'
+		let cBlock = try module.blocks.get(cBlockRef) otherwise panic("performMultiBlockInline: blockRef {cBlockRef} not in module")
+		let freshId = caller.nextBlockId
+		caller.nextBlockId = caller.nextBlockId + 1
+		try blockRemap.set(cBlock.id, value: freshId) otherwise panic("performMultiBlockInline: blockRemap.set OOB at {cBlock.id}")
+	end 'eachCalleeBlock'
+	let continuationBlockId = caller.nextBlockId
+	caller.nextBlockId = caller.nextBlockId + 1
+
+	// Phase 2: build the ValueId remap. Params bind to call-site args;
+	// every other callee define gets a fresh caller-local id. If the
+	// callee returns a value, also reserve a fresh ValueId for the
+	// continuation's blockArg phi.
+	let calleeMaxId = scanMaxValueId(callee, module: module)
+	var nextId = scanMaxValueId(caller, module: module) + 1
+	var remap = ValueIdArray.create()
+	while remap.count() <= calleeMaxId 'init'
+		remap.push(REMAP_INVALID)
+	end 'init'
+	bindParamRemapMulti(module: module, callee: callee, argIds: callShape.argIds, remap: remap)
+	nextId = bindMultiBlockBodyRemap(module: module, callee: callee, remap: remap, nextId: nextId)
+	let returnsValue = not stdReturnTypeIsVoid(callee.returnType)
+	var phiValueId = REMAP_INVALID
+	if returnsValue 'phi'
+		phiValueId = nextId
+		nextId = nextId + 1
+	end 'phi'
+
+	// Phase 3: peel off the after-call tail of the caller's call-site
+	// block onto a fresh continuation block. The continuation inherits
+	// the original block's terminator and its post-call ops. The
+	// call-site block's terminator becomes a `br` to the inlined entry.
+	let entryCalleeBlockRef = try callee.blockRefs.get(0) otherwise panic("performMultiBlockInline: callee.blockRefs.get(0) failed after count>=2")
+	let entryCalleeBlock = try module.blocks.get(entryCalleeBlockRef) otherwise panic("performMultiBlockInline: entry blockRef {entryCalleeBlockRef} not in module")
+	let entryNewBlockId = try blockRemap.get(entryCalleeBlock.id) otherwise panic("performMultiBlockInline: blockRemap missing entry id {entryCalleeBlock.id}")
+
+	var continuationBlock = IrBlock.create(continuationBlockId, label: "inline_cont_{caller.name}_{block.id}")
+	splitCallerBlock(module: module, originalBlock: block, continuation: continuationBlock, callPosition: posInBlock, entryInlinedBlockId: entryNewBlockId)
+	if returnsValue 'phiArg'
+		let argType = stdReturnTypeInner(callee.returnType)
+		continuationBlock.blockArgs.push(IrBlockArg.create(phiValueId, argType: argType))
+	end 'phiArg'
+
+	// Phase 4: emit each callee block as a fresh IrBlock in the caller.
+	// Body ops are remapped through ValueId+BlockId; `ret` becomes a
+	// `br continuationBlock [retVal]`.
+	emitMultiBlockInlinedBlocks(module: module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+
+	// Phase 5: register the new blocks (inlined + continuation) on the
+	// caller. Append-only so the entry block stays at blockRefs[0].
+	registerNewBlocksOnCaller(module: module, caller: caller, callee: callee, continuationBlock: continuationBlock)
+
+	// Phase 6: substitute call result.
+	if returnsValue 'subRet'
+		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
+	end 'subRet'
+
+	invalidateCachedHash(project, callerName: caller.name)
+	logTrace(LogCategory.ir, message: () gives "inliner: spliced multi-block @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id}, +{callee.blockRefs.count()} block(s))")
+	return true
+end 'performMultiBlockInline'
+
+// Largest BlockId in the callee, used as an upper bound when sizing the
+// callee→caller block remap. `nextBlockId` is the next free id, so the
+// max in use is one less. Returns 0 for empty functions (the remap is
+// never indexed in that case anyway since the gate already rejected).
+function scanMaxCalleeBlockId(callee IrFunction) returns BlockId
+	if callee.nextBlockId == 0 'empty'
+		return 0
+	end 'empty'
+	return callee.nextBlockId - 1
+end 'scanMaxCalleeBlockId'
+
+// Walk every block of a multi-block callee and bind each `param` op's
+// resultId to its matching call-site arg. Implementation mirrors
+// `bindParamRemap` but operates over all of callee.blockRefs since lifted
+// closures may stash params in a non-entry block.
+function bindParamRemapMulti(module StdModule, callee IrFunction, argIds ValueIdArray, remap ValueIdArray)
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let pinfo = paramInfo(op)
+			if pinfo.paramIndex >= 0 and pinfo.paramIndex < argIds.count() 'hasArg'
+				let argId = try argIds.get(pinfo.paramIndex) otherwise panic("bindParamRemapMulti: argIds.get OOB at {pinfo.paramIndex}")
+				setRemap(remap, key: pinfo.resultId, value: argId)
+			end 'hasArg'
+		end 'eachOp'
+	end 'eachBlock'
+end 'bindParamRemapMulti'
+
+// Allocate fresh ValueIds for every define in every block of the callee.
+// `param` ops are skipped (they're bound to call-site args by
+// bindParamRemapMulti); `ret` ops have no resultId. Block terminators
+// (`br`/`condBr`) define no ValueIds either, so they pass through.
+function bindMultiBlockBodyRemap(module StdModule, callee IrFunction, remap ValueIdArray, nextId ValueId) returns ValueId
+	var n = nextId
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			if isParamOpStd(op) 'skipParam'
+				continue
+			end 'skipParam'
+			n = bindOpDefinesIntoRemap(op: op, remap: remap, nextId: n)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("bindMultiBlockBodyRemap: terminator opIdx not in module.ops")
+			if not isRetOpStd(term) 'notRet'
+				n = bindOpDefinesIntoRemap(op: term, remap: remap, nextId: n)
+			end 'notRet'
+		end 'hasTerm'
+	end 'eachBlock'
+	return n
+end 'bindMultiBlockBodyRemap'
+
+// Move the call-site block's tail (everything after the call op, plus its
+// original terminator) onto a fresh continuation block. The original
+// block's terminator becomes a `br` to the inlined entry.
+function splitCallerBlock(module StdModule, originalBlock IrBlock, continuation IrBlock, callPosition ParsedInt, entryInlinedBlockId BlockId)
+	// 1. Drop the call op itself from the original block.
+	_ = try originalBlock.opRefs.remove(callPosition) otherwise panic("splitCallerBlock: failed to remove call op at {callPosition}")
+	// 2. Drain remaining ops past callPosition into the continuation.
+	while originalBlock.opRefs.count() > callPosition 'drain'
+		let movedIdx = try originalBlock.opRefs.remove(callPosition) otherwise panic("splitCallerBlock: drain remove at {callPosition} failed")
+		continuation.opRefs.append(movedIdx)
+	end 'drain'
+	// 3. Continuation inherits the original block's terminator.
+	continuation.terminator = originalBlock.terminator
+	continuation.branchEdges = originalBlock.branchEdges
+	originalBlock.branchEdges = BranchEdgeArray.create()
+	// 4. Original block's terminator becomes a `br entryInlinedBlockId`.
+	let brOp = StdOp.control(StdControlOp.br(entryInlinedBlockId, argIds: ValueIdArray.create()))
+	let brIdx = module.ops.count()
+	module.ops.push(brOp)
+	originalBlock.terminator = Terminator.opIndex(brIdx)
+end 'splitCallerBlock'
+
+// Materialize each callee block as a fresh IrBlock in the caller. Body
+// ops are remapped through `valueRemap` and any branch targets through
+// `blockRemap`; `ret` terminators are rewritten into a `br
+// continuationBlockId` carrying the remapped return value (when the
+// callee returns a value). `param` ops are skipped — their resultIds
+// were already bound to the call-site args.
+function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool)
+	for cBlockRef in callee.blockRefs 'eachCalleeBlock'
+		let cBlock = try module.blocks.get(cBlockRef) otherwise panic("emitMultiBlockInlinedBlocks: blockRef {cBlockRef} not in module")
+		let newBlockId = try blockRemap.get(cBlock.id) otherwise panic("emitMultiBlockInlinedBlocks: blockRemap missing id {cBlock.id}")
+		var newBlock = IrBlock.create(newBlockId, label: "inlined_{callee.name}_{cBlock.id}")
+		// Block args: callee's own blockArgs need fresh remapped ValueIds.
+		// In practice multi-block callees that survived the gate either have
+		// no blockArgs (non-mem2reg shapes) or carry phis whose ValueIds were
+		// allocated via bindMultiBlockBodyRemap. Rewrite them through the
+		// remap so the phi's ValueId becomes the caller-local one.
+		for srcArg in cBlock.blockArgs 'eachArg'
+			let mappedId = lookupRemap(valueRemap, key: srcArg.valueId)
+			newBlock.blockArgs.push(IrBlockArg.create(mappedId, argType: srcArg.argType))
+		end 'eachArg'
+		// Body ops: remap defines+operands; rewrite control-flow targets
+		// via blockRemap.
+		for srcOpIdx in cBlock.opRefs 'eachOp'
+			let op = try module.ops.get(srcOpIdx) otherwise continue
+			if isParamOpStd(op) 'skipParam'
+				continue
+			end 'skipParam'
+			let rewritten = rewriteOpWithBlocks(op: op, valueRemap: valueRemap, blockRemap: blockRemap)
+			let newIdx = module.ops.count()
+			module.ops.push(rewritten)
+			newBlock.opRefs.append(newIdx)
+		end 'eachOp'
+		// Terminator: ret → br to continuation; br/condBr → block-remapped.
+		if cBlock.hasTerminatorOp() 'hasTerm'
+			let term = try module.ops.get(cBlock.terminatorIndex()) otherwise panic("emitMultiBlockInlinedBlocks: terminator opIdx not in module.ops")
+			let newTerm = rewriteTerminator(op: term, valueRemap: valueRemap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+			let newTermIdx = module.ops.count()
+			module.ops.push(newTerm)
+			newBlock.terminator = Terminator.opIndex(newTermIdx)
+		end 'hasTerm'
+		module.pushBlock(newBlock)
+	end 'eachCalleeBlock'
+end 'emitMultiBlockInlinedBlocks'
+
+// Append every newly-created callee block (and the continuation) to the
+// caller's blockRefs. Block storage was already pushed in
+// emitMultiBlockInlinedBlocks; this just records the indices on the
+// caller. The continuation is pushed last so it appears after all
+// inlined blocks in iteration order.
+function registerNewBlocksOnCaller(module StdModule, caller IrFunction, callee IrFunction, continuationBlock IrBlock)
+	let newBlocksStart = module.blocks.count() - callee.blockRefs.count()
+	for i in 0 upto callee.blockRefs.count() 'eachInlined'
+		caller.blockRefs.append(newBlocksStart + i)
+	end 'eachInlined'
+	let contIdx = module.blocks.count()
+	module.pushBlock(continuationBlock)
+	caller.blockRefs.append(contIdx)
+end 'registerNewBlocksOnCaller'
+
+// Rewrite a non-terminator op through both ValueId and BlockId remaps.
+// Only StdControlOp.br/condBr carry BlockId references in their bodies;
+// every other shape just falls through to the existing ValueId-only
+// rewriter so we don't duplicate the per-op match table.
+function rewriteOpWithBlocks(op StdOp, valueRemap ValueIdArray, blockRemap BlockIdArray) returns StdOp
+	return match op 'outer'
+		arith gives rewriteOp(op: op, remap: valueRemap)
+		control(c) gives StdOp.control(rewriteControlWithBlocks(c, valueRemap: valueRemap, blockRemap: blockRemap))
+		call gives rewriteOp(op: op, remap: valueRemap)
+		memory gives rewriteOp(op: op, remap: valueRemap)
+		system gives rewriteOp(op: op, remap: valueRemap)
+	end 'outer'
+end 'rewriteOpWithBlocks'
+
+function rewriteControlWithBlocks(op StdControlOp, valueRemap ValueIdArray, blockRemap BlockIdArray) returns StdControlOp
+	return match op 'c'
+		br(target, argIds) gives StdControlOp.br(lookupBlockRemap(blockRemap, key: target), argIds: rewriteValueIds(argIds, remap: valueRemap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives StdControlOp.condBr(lookupRemap(valueRemap, key: condId), thenTarget: lookupBlockRemap(blockRemap, key: thenTarget), thenArgIds: rewriteValueIds(thenArgIds, remap: valueRemap), elseTarget: lookupBlockRemap(blockRemap, key: elseTarget), elseArgIds: rewriteValueIds(elseArgIds, remap: valueRemap))
+	end 'c'
+end 'rewriteControlWithBlocks'
+
+// Rewrite a callee block's terminator. `ret` collapses into a `br` to
+// the continuation block (carrying the remapped return value when the
+// callee is non-void); `br`/`condBr` keep their shape but route through
+// the block remap. Anything else is unreachable — `isMultiBlockSpliceable`
+// rejects non-allowed terminators upstream.
+function rewriteTerminator(op StdOp, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool) returns StdOp
+	match op 'outer'
+		arith then panic("rewriteTerminator: unexpected arith terminator")
+		control(c) then return StdOp.control(rewriteControlWithBlocks(c, valueRemap: valueRemap, blockRemap: blockRemap))
+		call(c) then return rewriteCallTerminator(c, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+		memory then panic("rewriteTerminator: unexpected memory terminator")
+		system then panic("rewriteTerminator: unexpected system terminator")
+	end 'outer'
+end 'rewriteTerminator'
+
+function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool) returns StdOp
+	match op 'c'
+		ret(retValId) then return buildRetBranch(retValId: retValId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+		call then panic("rewriteCallTerminator: bare call op as terminator (multi-block gate should have rejected)")
+		tryCall then panic("rewriteCallTerminator: tryCall terminator (multi-block gate should have rejected)")
+		indirectCall then panic("rewriteCallTerminator: indirectCall terminator (multi-block gate should have rejected)")
+		funcRef then panic("rewriteCallTerminator: funcRef as terminator")
+		tailCall then panic("rewriteCallTerminator: tailCall terminator (multi-block gate should have rejected)")
+		param then panic("rewriteCallTerminator: param as terminator")
+	end 'c'
+end 'rewriteCallTerminator'
+
+function buildRetBranch(retValId ValueId, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool) returns StdOp
+	var args = ValueIdArray.create()
+	if returnsValue 'arg'
+		args.push(lookupRemap(valueRemap, key: retValId))
+	end 'arg'
+	return StdOp.control(StdControlOp.br(continuationBlockId, argIds: args))
+end 'buildRetBranch'
+
+function lookupBlockRemap(remap BlockIdArray, key BlockId) returns BlockId
+	if key >= remap.count() 'oob'
+		return key
+	end 'oob'
+	let mapped = try remap.get(key) otherwise REMAP_INVALID
+	if mapped == REMAP_INVALID 'unbound'
+		return key
+	end 'unbound'
+	return mapped
+end 'lookupBlockRemap'
+
+// Extract the inner StdType from a non-void StdReturnType. Panics when
+// called on a void return — callers gate this behind stdReturnTypeIsVoid.
+function stdReturnTypeInner(rt StdReturnType) returns StdType
+	match rt 'unwrap'
+		void then panic("stdReturnTypeInner: called on void return")
+		value(inner) then return inner
+	end 'unwrap'
+end 'stdReturnTypeInner'
+
+// Sentinel for "ValueId slot is unbound in the splice remap". Reuses the
+// same numerical value as Mem2Reg.REMAP_NONE so the same `i64.max`
+// constant lives at one binding inside this file too.
+let REMAP_INVALID = i64.max
+
+// Extract the retValId from a callee's terminator. Returns REMAP_INVALID
+// for any non-ret op shape (which signals an unsupported callee).
+function retValueIdOrSentinel(op StdOp) returns ValueId
+	return match op 'outer'
+		call(inner) gives retValueIdFromCallOp(inner)
+		arith gives REMAP_INVALID
+		control gives REMAP_INVALID
+		memory gives REMAP_INVALID
+		system gives REMAP_INVALID
+	end 'outer'
+end 'retValueIdOrSentinel'
+
+function retValueIdFromCallOp(op StdCallOp) returns ValueId
+	return match op 'inner'
+		ret(retValId) gives retValId
+		call gives REMAP_INVALID
+		tryCall gives REMAP_INVALID
+		indirectCall gives REMAP_INVALID
+		funcRef gives REMAP_INVALID
+		tailCall gives REMAP_INVALID
+		param gives REMAP_INVALID
+	end 'inner'
+end 'retValueIdFromCallOp'
+
+// Reject any callee body that touches a per-function slot. Slot ids live
+// in the callee's frame; remapping them into the caller's frame would
+// require allocating fresh slot ids from `caller.varSlotCount` and
+// rewriting `loadSlot/storeSlot/stackAddr`, which 11.6's minimum-viable
+// shape doesn't do.
+function calleeBodyTouchesSlots(module StdModule, calleeBlock IrBlock) returns bool
+	for opIdx in calleeBlock.opRefs 'each'
+		let op = try module.ops.get(opIdx) otherwise continue
+		if opTouchesSlot(op) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'calleeBodyTouchesSlots'
+
+function opTouchesSlot(op StdOp) returns bool
+	return match op 'outer'
+		arith gives false
+		control gives false
+		call gives false
+		memory gives true
+		system(s) gives sysOpTouchesSlot(s)
+	end 'outer'
+end 'opTouchesSlot'
+
+function sysOpTouchesSlot(op StdSystemOp) returns bool
+	return match op 'shape'
+		stackAddr gives true
+		syscall gives false
+		iatCall gives false
+		globalAddr gives false
+		memcpy gives false
+		storeByte gives false
+		loadByte gives false
+		osExit gives false
+		osWrite gives false
+		free gives false
+		osWriteErr gives false
+		osOpenWrite gives false
+		osWriteFd gives false
+		osClose gives false
+		osGetEnv gives false
+		loadFramePtr gives false
+		loadIndirect gives false
+		funcAddr gives false
+		storeIndirect gives false
+		printLiteral gives false
+		printInt gives false
+		drop gives false
+		osAllocPages gives false
+		osAllocPagesLarge gives false
+		osFreePages gives false
+		atomicInc gives false
+		atomicDec gives false
+		atomicXadd gives false
+		osLockInit gives false
+		osLockAcquire gives false
+		osLockRelease gives false
+		boxValue gives false
+		unboxValue gives false
+		loadLayoutDescriptor gives false
+		loadWitnessTable gives false
+		descriptorField gives false
+		witnessMethod gives false
+		dropTypeParam gives false
+	end 'shape'
+end 'sysOpTouchesSlot'
+
+// Walk the leading run of `param` ops in the callee's entry block and
+// bind each param's resultId to the corresponding call-site arg. Skips
+// non-param ops; the callee's `param` ops are guaranteed to live at the
+// head of the entry block by the lowering convention. A trailing implicit
+// layout/witness param without a matching arg keeps its REMAP_INVALID
+// sentinel and any op that names it would fail downstream — but that
+// shape doesn't survive the spliceability gate (only callees with
+// hasImplicitLayoutParam=false reach here in practice for the accessor-
+// shape targets 11.6 cares about).
+function bindParamRemap(module StdModule, calleeBlock IrBlock, argIds ValueIdArray, remap ValueIdArray)
+	for opIdx in calleeBlock.opRefs 'each'
+		let op = try module.ops.get(opIdx) otherwise continue
+		let pinfo = paramInfo(op)
+		if pinfo.paramIndex < 0 'notParam'
+			break
+		end 'notParam'
+		if pinfo.paramIndex < argIds.count() 'hasArg'
+			let argId = try argIds.get(pinfo.paramIndex) otherwise panic("bindParamRemap: argIds.get OOB at {pinfo.paramIndex}")
+			setRemap(remap, key: pinfo.resultId, value: argId)
+		end 'hasArg'
+	end 'each'
+end 'bindParamRemap'
+
+type ParamInfo
+	export var resultId ValueId
+	export var paramIndex ParsedInt
+
+	export static function param(resultId ValueId, paramIndex ParsedInt) returns ParamInfo
+		return Self{resultId: resultId, paramIndex: paramIndex}
+	end 'param'
+
+	export static function notParam() returns ParamInfo
+		return Self{resultId: 0, paramIndex: -1}
+	end 'notParam'
+end 'ParamInfo'
+
+function paramInfo(op StdOp) returns ParamInfo
+	return match op 'outer'
+		call(inner) gives paramInfoFromCall(inner)
+		arith gives ParamInfo.notParam()
+		control gives ParamInfo.notParam()
+		memory gives ParamInfo.notParam()
+		system gives ParamInfo.notParam()
+	end 'outer'
+end 'paramInfo'
+
+function paramInfoFromCall(op StdCallOp) returns ParamInfo
+	return match op 'inner'
+		param(resultId, paramIndex, _) gives ParamInfo.param(resultId: resultId, paramIndex: paramIndex as ParsedInt)
+		ret gives ParamInfo.notParam()
+		call gives ParamInfo.notParam()
+		tryCall gives ParamInfo.notParam()
+		indirectCall gives ParamInfo.notParam()
+		funcRef gives ParamInfo.notParam()
+		tailCall gives ParamInfo.notParam()
+	end 'inner'
+end 'paramInfoFromCall'
+
+// Walk every non-param non-ret op in the callee body. Allocate fresh
+// caller-local ValueIds for every define produced by these ops and bind
+// them into `remap`. Returns the next free ValueId so subsequent splice
+// activity in the same caller doesn't collide.
+function bindBodyRemap(module StdModule, calleeBlock IrBlock, calleeTermIdx OpIndex, remap ValueIdArray, nextId ValueId) returns ValueId
+	var n = nextId
+	for opIdx in calleeBlock.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise continue
+		if isParamOpStd(op) 'skipParam'
+			continue
+		end 'skipParam'
+		n = bindOpDefinesIntoRemap(op: op, remap: remap, nextId: n)
+	end 'eachOp'
+	let term = try module.ops.get(calleeTermIdx) otherwise panic("bindBodyRemap: terminator opIdx not in module.ops")
+	if not isRetOpStd(term) 'termIsRet'
+		// `isSpliceableShape` already enforces this — defensive only.
+		n = bindOpDefinesIntoRemap(op: term, remap: remap, nextId: n)
+	end 'termIsRet'
+	return n
+end 'bindBodyRemap'
+
+function isParamOpStd(op StdOp) returns bool
+	return match op 'outer'
+		call(inner) gives isParamCallOpStd(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isParamOpStd'
+
+function isParamCallOpStd(op StdCallOp) returns bool
+	return match op 'inner'
+		param gives true
+		ret gives false
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+	end 'inner'
+end 'isParamCallOpStd'
+
+function isRetOpStd(op StdOp) returns bool
+	return match op 'outer'
+		call(inner) gives isRetCallOp(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isRetOpStd'
+
+function isRetCallOp(op StdCallOp) returns bool
+	return match op 'inner'
+		ret gives true
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'inner'
+end 'isRetCallOp'
+
+function bindOpDefinesIntoRemap(op StdOp, remap ValueIdArray, nextId ValueId) returns ValueId
+	return match op 'outer'
+		arith(a) gives bindArithDefine(a, remap: remap, nextId: nextId)
+		control gives nextId
+		call(c) gives bindCallDefine(c, remap: remap, nextId: nextId)
+		memory(m) gives bindMemoryDefine(m, remap: remap, nextId: nextId)
+		system(s) gives bindSystemDefine(s, remap: remap, nextId: nextId)
+	end 'outer'
+end 'bindOpDefinesIntoRemap'
+
+function bindArithDefine(op StdArithOp, remap ValueIdArray, nextId ValueId) returns ValueId
+	return match op 'a'
+		const(c) gives bindOneDefine(remap, key: c.resultId, nextId: nextId)
+		unary(u) gives bindOneDefine(remap, key: u.resultId, nextId: nextId)
+		binary(b) gives bindOneDefine(remap, key: b.resultId, nextId: nextId)
+	end 'a'
+end 'bindArithDefine'
+
+function bindCallDefine(op StdCallOp, remap ValueIdArray, nextId ValueId) returns ValueId
+	return match op 'c'
+		ret gives nextId
+		call(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		tryCall(resultId, _, _, errorFlagId) gives bindTwoDefines(remap, keyA: resultId, keyB: errorFlagId, nextId: nextId)
+		indirectCall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		funcRef(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		tailCall gives nextId
+		param(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+	end 'c'
+end 'bindCallDefine'
+
+function bindMemoryDefine(op StdMemoryOp, remap ValueIdArray, nextId ValueId) returns ValueId
+	return match op 'm'
+		storeSlot gives nextId
+		loadSlot(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+	end 'm'
+end 'bindMemoryDefine'
+
+function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) returns ValueId
+	return match op 's'
+		syscall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		iatCall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		globalAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		memcpy gives nextId
+		stackAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		storeByte gives nextId
+		loadByte(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osExit gives nextId
+		osWrite gives nextId
+		free gives nextId
+		osWriteErr gives nextId
+		osOpenWrite(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osWriteFd gives nextId
+		osClose gives nextId
+		osGetEnv(resultId, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		loadFramePtr(resultId) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		loadIndirect(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		funcAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		storeIndirect gives nextId
+		printLiteral gives nextId
+		printInt gives nextId
+		drop gives nextId
+		osAllocPages(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osAllocPagesLarge(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFreePages gives nextId
+		atomicInc gives nextId
+		atomicDec gives nextId
+		atomicXadd(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osLockInit gives nextId
+		osLockAcquire gives nextId
+		osLockRelease gives nextId
+		boxValue(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		unboxValue(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		loadLayoutDescriptor(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		loadWitnessTable(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		descriptorField(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		witnessMethod(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		dropTypeParam gives nextId
+	end 's'
+end 'bindSystemDefine'
+
+function bindOneDefine(remap ValueIdArray, key ValueId, nextId ValueId) returns ValueId
+	setRemap(remap, key: key, value: nextId)
+	return nextId + 1
+end 'bindOneDefine'
+
+function bindTwoDefines(remap ValueIdArray, keyA ValueId, keyB ValueId, nextId ValueId) returns ValueId
+	setRemap(remap, key: keyA, value: nextId)
+	setRemap(remap, key: keyB, value: nextId + 1)
+	return nextId + 2
+end 'bindTwoDefines'
+
+function setRemap(remap ValueIdArray, key ValueId, value ValueId)
+	while remap.count() <= key 'grow'
+		remap.push(REMAP_INVALID)
+	end 'grow'
+	try remap.set(key, value: value) otherwise panic("setRemap: set OOB at {key}")
+end 'setRemap'
+
+function lookupRemap(remap ValueIdArray, key ValueId) returns ValueId
+	if key >= remap.count() 'oob'
+		// A ValueId past the callee's max simply means it wasn't a callee-
+		// local id. Pass through unchanged so any external reference (e.g.
+		// the caller's own pre-existing values reaching in) survives the
+		// post-splice substitution scan.
+		return key
+	end 'oob'
+	let mapped = try remap.get(key) otherwise REMAP_INVALID
+	if mapped == REMAP_INVALID 'unbound'
+		return key
+	end 'unbound'
+	return mapped
+end 'lookupRemap'
+
+function findOpPosition(block IrBlock, opIdx OpIndex) returns ParsedInt
+	var pos = 0
+	for entry in block.opRefs 'each'
+		if entry == opIdx 'hit'
+			return pos as ParsedInt
+		end 'hit'
+		pos = pos + 1
+	end 'each'
+	return -1
+end 'findOpPosition'
+
+// Walk the callee body, append a rewritten copy of every non-param
+// non-ret op into the caller block at `insertAt`. Each op's define and
+// operand ValueIds are run through the remap; the resulting op is pushed
+// into `module.ops` (yielding a fresh OpIndex) and inserted into the
+// caller's `block.opRefs` at the splice position. The insertion runs in
+// callee-source order, so the spliced body reads the same way as the
+// original — earlier ops dominate later ones.
+function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBlock, remap ValueIdArray, insertAt ParsedInt)
+	var pos = insertAt
+	for opIdx in calleeBlock.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise continue
+		if isParamOpStd(op) 'skipParam'
+			continue
+		end 'skipParam'
+		let rewritten = rewriteOp(op: op, remap: remap)
+		let newIdx = module.ops.count()
+		module.ops.push(rewritten)
+		try callerBlock.opRefs.insert(at: pos, value: newIdx) otherwise panic("emitInlinedBody: opRefs.insert at {pos} failed")
+		pos = pos + 1
+	end 'eachOp'
+end 'emitInlinedBody'
+
+// Rewrite an op so every ValueId reference (define or operand) is mapped
+// through `remap`. Pass-through arms run their integer fields untouched
+// — only valueId-bearing fields participate.
+function rewriteOp(op StdOp, remap ValueIdArray) returns StdOp
+	return match op 'outer'
+		arith(a) gives StdOp.arith(rewriteArith(a, remap: remap))
+		control(c) gives StdOp.control(rewriteControl(c, remap: remap))
+		call(c) gives StdOp.call(rewriteCall(c, remap: remap))
+		memory(m) gives StdOp.memory(rewriteMemory(m, remap: remap))
+		system(s) gives StdOp.system(rewriteSystem(s, remap: remap))
+	end 'outer'
+end 'rewriteOp'
+
+function rewriteArith(op StdArithOp, remap ValueIdArray) returns StdArithOp
+	return match op 'a'
+		const(c) gives StdArithOp.const(StdArithConst.create(c.opcode, resultId: lookupRemap(remap, key: c.resultId), value: c.value))
+		unary(u) gives StdArithOp.unary(StdArithUnaryOp.create(u.opcode, resultId: lookupRemap(remap, key: u.resultId), operandId: lookupRemap(remap, key: u.operandId)))
+		binary(b) gives StdArithOp.binary(StdArithBinaryOp.create(b.opcode, resultId: lookupRemap(remap, key: b.resultId), leftId: lookupRemap(remap, key: b.leftId), rightId: lookupRemap(remap, key: b.rightId)))
+	end 'a'
+end 'rewriteArith'
+
+function rewriteControl(op StdControlOp, remap ValueIdArray) returns StdControlOp
+	return match op 'c'
+		br(target, argIds) gives StdControlOp.br(target, argIds: rewriteValueIds(argIds, remap: remap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives StdControlOp.condBr(lookupRemap(remap, key: condId), thenTarget: thenTarget, thenArgIds: rewriteValueIds(thenArgIds, remap: remap), elseTarget: elseTarget, elseArgIds: rewriteValueIds(elseArgIds, remap: remap))
+	end 'c'
+end 'rewriteControl'
+
+function rewriteCall(op StdCallOp, remap ValueIdArray) returns StdCallOp
+	return match op 'c'
+		ret(retValId) gives StdCallOp.ret(lookupRemap(remap, key: retValId))
+		call(resultId, callee, argIds) gives StdCallOp.call(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap))
+		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap), errorFlagId: lookupRemap(remap, key: errorFlagId))
+		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(lookupRemap(remap, key: resultId), calleeId: lookupRemap(remap, key: calleeId), argIds: rewriteValueIds(argIds, remap: remap))
+		funcRef(resultId, funcName) gives StdCallOp.funcRef(lookupRemap(remap, key: resultId), funcName: funcName)
+		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: rewriteValueIds(argIds, remap: remap))
+		param(resultId, paramIndex, paramType) gives StdCallOp.param(lookupRemap(remap, key: resultId), paramIndex: paramIndex, paramType: paramType)
+	end 'c'
+end 'rewriteCall'
+
+function rewriteMemory(op StdMemoryOp, remap ValueIdArray) returns StdMemoryOp
+	return match op 'm'
+		storeSlot(slotId, valueId) gives StdMemoryOp.storeSlot(slotId, valueId: lookupRemap(remap, key: valueId))
+		loadSlot(resultId, slotId) gives StdMemoryOp.loadSlot(lookupRemap(remap, key: resultId), slotId: slotId)
+	end 'm'
+end 'rewriteMemory'
+
+function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
+	return match op 's'
+		syscall(resultId, number, argIds) gives StdSystemOp.syscall(lookupRemap(remap, key: resultId), number: number, argIds: rewriteValueIds(argIds, remap: remap))
+		iatCall(resultId, slotIndex, argIds) gives StdSystemOp.iatCall(lookupRemap(remap, key: resultId), slotIndex: slotIndex, argIds: rewriteValueIds(argIds, remap: remap))
+		globalAddr(resultId, name) gives StdSystemOp.globalAddr(lookupRemap(remap, key: resultId), name: name)
+		memcpy(dstId, srcId, lenId) gives StdSystemOp.memcpy(lookupRemap(remap, key: dstId), srcId: lookupRemap(remap, key: srcId), lenId: lookupRemap(remap, key: lenId))
+		stackAddr(resultId, slotId) gives StdSystemOp.stackAddr(lookupRemap(remap, key: resultId), slotId: slotId)
+		storeByte(baseId, offsetId, byteId) gives StdSystemOp.storeByte(lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId), byteId: lookupRemap(remap, key: byteId))
+		loadByte(resultId, baseId, offsetId) gives StdSystemOp.loadByte(lookupRemap(remap, key: resultId), baseId: lookupRemap(remap, key: baseId), offsetId: lookupRemap(remap, key: offsetId))
+		osExit(codeId) gives StdSystemOp.osExit(lookupRemap(remap, key: codeId))
+		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
+		free(ptrId) gives StdSystemOp.free(lookupRemap(remap, key: ptrId))
+		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives StdSystemOp.osOpenWrite(lookupRemap(remap, key: resultId), pathPtrId: lookupRemap(remap, key: pathPtrId), pathLenId: lookupRemap(remap, key: pathLenId))
+		osWriteFd(fdId, ptrId, lenId) gives StdSystemOp.osWriteFd(lookupRemap(remap, key: fdId), ptrId: lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
+		osClose(fdId) gives StdSystemOp.osClose(lookupRemap(remap, key: fdId))
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives StdSystemOp.osGetEnv(lookupRemap(remap, key: resultId), namePtrId: lookupRemap(remap, key: namePtrId), nameLenId: lookupRemap(remap, key: nameLenId), outBufPtrId: lookupRemap(remap, key: outBufPtrId), outBufLenId: lookupRemap(remap, key: outBufLenId))
+		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(lookupRemap(remap, key: resultId))
+		loadIndirect(resultId, addrId, offset, isFloat) gives StdSystemOp.loadIndirect(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), offset: offset, isFloat: isFloat)
+		funcAddr(resultId, name) gives StdSystemOp.funcAddr(lookupRemap(remap, key: resultId), name: name)
+		storeIndirect(addrId, offset, valueId, isFloat) gives StdSystemOp.storeIndirect(lookupRemap(remap, key: addrId), offset: offset, valueId: lookupRemap(remap, key: valueId), isFloat: isFloat)
+		printLiteral(stringId) gives StdSystemOp.printLiteral(stringId)
+		printInt(valueId) gives StdSystemOp.printInt(lookupRemap(remap, key: valueId))
+		drop(valueId) gives StdSystemOp.drop(lookupRemap(remap, key: valueId))
+		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
+		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
+		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
+		atomicInc(addrId) gives StdSystemOp.atomicInc(lookupRemap(remap, key: addrId))
+		atomicDec(addrId) gives StdSystemOp.atomicDec(lookupRemap(remap, key: addrId))
+		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), valId: lookupRemap(remap, key: valId))
+		osLockInit(addrId) gives StdSystemOp.osLockInit(lookupRemap(remap, key: addrId))
+		osLockAcquire(addrId) gives StdSystemOp.osLockAcquire(lookupRemap(remap, key: addrId))
+		osLockRelease(addrId) gives StdSystemOp.osLockRelease(lookupRemap(remap, key: addrId))
+		boxValue(resultId, valueId, sizeId) gives StdSystemOp.boxValue(lookupRemap(remap, key: resultId), valueId: lookupRemap(remap, key: valueId), sizeId: lookupRemap(remap, key: sizeId))
+		unboxValue(resultId, ptrId, sizeId) gives StdSystemOp.unboxValue(lookupRemap(remap, key: resultId), ptrId: lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
+		loadLayoutDescriptor(resultId, label) gives StdSystemOp.loadLayoutDescriptor(lookupRemap(remap, key: resultId), label: label)
+		loadWitnessTable(resultId, label) gives StdSystemOp.loadWitnessTable(lookupRemap(remap, key: resultId), label: label)
+		descriptorField(resultId, descAddrId, field) gives StdSystemOp.descriptorField(lookupRemap(remap, key: resultId), descAddrId: lookupRemap(remap, key: descAddrId), field: field)
+		witnessMethod(resultId, witnessAddrId, methodIndex) gives StdSystemOp.witnessMethod(lookupRemap(remap, key: resultId), witnessAddrId: lookupRemap(remap, key: witnessAddrId), methodIndex: methodIndex)
+		dropTypeParam(slotValueId, layoutValueId) gives StdSystemOp.dropTypeParam(lookupRemap(remap, key: slotValueId), layoutValueId: lookupRemap(remap, key: layoutValueId))
+	end 's'
+end 'rewriteSystem'
+
+function rewriteValueIds(ids ValueIdArray, remap ValueIdArray) returns ValueIdArray
+	var out = ValueIdArray.create()
+	for id in ids 'each'
+		out.push(lookupRemap(remap, key: id))
+	end 'each'
+	return out
+end 'rewriteValueIds'
+
+// Replace every reference to `oldId` in the caller's ops with `newId`,
+// in place via `module.ops.set`. Walks the caller's blocks plus their
+// terminator ops. Define-side fields (resultId, errorFlagId) are also
+// rewritten so any future caller-only re-emission stays consistent —
+// in practice the only meaningful substitution is operand-side, but
+// touching both keeps the rewrite symmetric with `rewriteOp` above.
+function substituteCallResultInCaller(module StdModule, caller IrFunction, oldId ValueId, newId ValueId)
+	var single = ValueIdArray.create()
+	while single.count() <= oldId 'grow'
+		single.push(REMAP_INVALID)
+	end 'grow'
+	try single.set(oldId, value: newId) otherwise panic("substituteCallResultInCaller: single.set OOB")
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("substituteCallResultInCaller: blockRef {blockRef} not in module")
+		for opPos in block.opRefs 'eachOp'
+			rewriteOpInPlace(module, opIdx: opPos, remap: single)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			rewriteOpInPlace(module, opIdx: block.terminatorIndex(), remap: single)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'substituteCallResultInCaller'
+
+function rewriteOpInPlace(module StdModule, opIdx OpIndex, remap ValueIdArray)
+	let op = try module.ops.get(opIdx) otherwise return
+	let rewritten = rewriteOp(op: op, remap: remap)
+	try module.ops.set(opIdx, value: rewritten) otherwise panic("rewriteOpInPlace: ops.set OOB at {opIdx}")
+end 'rewriteOpInPlace'
+
+// Phase 11.6 cache-invalidation entry point. When the inliner mutates a
+// caller's body, its cached MIR/code memo no longer reflects the real
+// shape. Drop the per-function entries so the next per-function query
+// recomputes from scratch. Idempotent — calling without a prior splice
+// just no-ops on already-empty slots.
+export function invalidateCachedHash(project Project, callerName String)
+	_ = project.db.midPerFunc.remove(callerName)
+	_ = project.db.mirPerFunc.remove(callerName)
+	_ = project.db.codePerFunc.remove(callerName)
+end 'invalidateCachedHash'
