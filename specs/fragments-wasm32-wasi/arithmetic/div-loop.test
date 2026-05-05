@@ -20,37 +20,33 @@ ExitCode: 113
 ---
 // CompiledIR
 module {
-  func @arithmetic.divLoop(local0: i64) -> i64 {
-  entry:
-    %17 = mir.param local0 : i64
-    %1 = mir.mov_imm 0 : i64
-    %2 = mir.mov_imm 1 : i64
-    mir.br loop_1.header(%1, %2)
-  loop_1.header:
-    %5 = mir.cmp le, %16, %17
-    mir.cond_br %5 [then: loop_1(), else: loop_1.exit()]
-  loop_1:
-    %7 = mir.mov_imm 50 : i64
-    %9 = mir.div.i64 %7, %16
-    %10 = mir.add.i64 %15, %9
-    %12 = mir.mov_imm 1 : i64
-    %13 = mir.add.i64 %16, %12
-    mir.br loop_1.header(%10, %13)
-  loop_1.exit:
-    mir.ret %15
-  }
   func @arithmetic.main() -> u8 {
   entry:
     %0 = mir.mov_imm 5 : i64
-    %1 = mir.call @arithmetic.divLoop(%0)
-    %2 = mir.mov_imm 125 : i64
-    %3 = mir.cmp ugt, %1, %2
-    mir.cond_br %3 [then: __range_panic_4(), else: __range_ok_4()]
+    mir.br inlined_arithmetic.divLoop_0()
+  inlined_arithmetic.divLoop_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.br inlined_arithmetic.divLoop_1(%2, %3)
+  inlined_arithmetic.divLoop_1:
+    %4 = mir.cmp le, %16, %0
+    mir.cond_br %4 [then: inlined_arithmetic.divLoop_2(), else: inline_cont_arithmetic.main_0(%15)]
+  inlined_arithmetic.divLoop_2:
+    %5 = mir.mov_imm 50 : i64
+    %6 = mir.div.i64 %5, %16
+    %7 = mir.add.i64 %15, %6
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.add.i64 %16, %8
+    mir.br inlined_arithmetic.divLoop_1(%7, %9)
+  inline_cont_arithmetic.main_0:
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %10, %17
+    mir.cond_br %18 [then: __range_panic_4(), else: __range_ok_4()]
   __range_panic_4:
-    %4 = mir.global_addr @__panic_msg_4
-    %5 = mir.call @mrt_panic(%4)
+    %19 = mir.global_addr @__panic_msg_4
+    %20 = mir.call @mrt_panic(%19)
   __range_ok_4:
-    mir.ret %1
+    mir.ret %10
   }
 }
 ---

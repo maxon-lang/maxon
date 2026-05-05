@@ -26,41 +26,33 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @Value.isPositive(local0: i64) -> i64 {
-  entry:
-    %7 = mir.param local0 : i64
-    %1 = mir.load %7, 0
-    %3 = mir.mov_imm 0 : i64
-    %4 = mir.cmp gt, %1, %3
-    mir.cond_br %4 [then: positive_1(), else: positive_1.after()]
-  positive_1:
-    %5 = mir.mov_imm 1 : i64
-    mir.ret %5
-  positive_1.after:
-    %6 = mir.mov_imm 0 : i64
-    mir.ret %6
-  }
-  func @Value.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
   func @method-calls.main() -> u8 {
   entry:
     %0 = mir.mov_imm 42 : i64
-    %1 = mir.call @Value.create(%0)
-    %3 = mir.call @Value.isPositive(%1)
-    %4 = mir.mov_imm 125 : i64
-    %5 = mir.cmp ugt, %3, %4
-    mir.cond_br %5 [then: __range_panic_6(), else: __range_ok_6()]
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0
+    mir.br inlined_Value.isPositive_0()
+  inlined_Value.isPositive_0:
+    %6 = mir.load %5, 0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp gt, %6, %7
+    mir.cond_br %8 [then: inlined_Value.isPositive_1(), else: inlined_Value.isPositive_2()]
+  inlined_Value.isPositive_1:
+    %9 = mir.mov_imm 1 : i64
+    mir.br inline_cont_method-calls.main_0(%9)
+  inlined_Value.isPositive_2:
+    %10 = mir.mov_imm 0 : i64
+    mir.br inline_cont_method-calls.main_0(%10)
+  inline_cont_method-calls.main_0:
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_6(), else: __range_ok_6()]
   __range_panic_6:
-    %6 = mir.global_addr @__panic_msg_6
-    %7 = mir.call @mrt_panic(%6)
+    %14 = mir.global_addr @__panic_msg_6
+    %15 = mir.call @mrt_panic(%14)
   __range_ok_6:
-    mir.ret %3
+    mir.ret %11
   }
 }
 ---

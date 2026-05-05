@@ -17,31 +17,29 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @missing-return-error.test(local0: i64) -> i64 {
-  entry:
-    %6 = mir.param local0 : i64
-    %2 = mir.mov_imm 0 : i64
-    %3 = mir.cmp gt, %6, %2
-    mir.cond_br %3 [then: check_1(), else: check_1.after()]
-  check_1:
-    %4 = mir.mov_imm 1 : i64
-    mir.ret %4
-  check_1.after:
-    %5 = mir.mov_imm 0 : i64
-    mir.ret %5
-  }
   func @missing-return-error.main() -> u8 {
   entry:
     %0 = mir.mov_imm 5 : i64
-    %1 = mir.call @missing-return-error.test(%0)
-    %2 = mir.mov_imm 125 : i64
-    %3 = mir.cmp ugt, %1, %2
-    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
+    mir.br inlined_missing-return-error.test_0()
+  inlined_missing-return-error.test_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp gt, %0, %2
+    mir.cond_br %3 [then: inlined_missing-return-error.test_1(), else: inlined_missing-return-error.test_2()]
+  inlined_missing-return-error.test_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.br inline_cont_missing-return-error.main_0(%4)
+  inlined_missing-return-error.test_2:
+    %5 = mir.mov_imm 0 : i64
+    mir.br inline_cont_missing-return-error.main_0(%5)
+  inline_cont_missing-return-error.main_0:
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %4 = mir.global_addr @__panic_msg_0
-    %5 = mir.call @mrt_panic(%4)
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
   __range_ok_0:
-    mir.ret %1
+    mir.ret %6
   }
 }
 ---

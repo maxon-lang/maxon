@@ -45,7 +45,7 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 	// lazily by 11.4 when the call site fixes the type-arg. Detect by walking
 	// `withArgs` for `typeParameter` arms — the unconditional case has either
 	// no withArgs or a fully-concrete arg list.
-	if withArgsAreConditional(withArgs) 'conditional'
+	if anyMaxonTypeIsConditional(withArgs) 'conditional'
 		return
 	end 'conditional'
 
@@ -105,30 +105,6 @@ function pickParentWitnessLabel(project Project, iface IrInterface, typeName Str
 	end 'eachParent'
 	return ""
 end 'pickParentWitnessLabel'
-
-// True iff any element of `withArgs` references an unbound type-parameter.
-// Conditional conformances (`Array implements Hashable where Element:
-// Hashable`) carry a `typeParameter` arm here; their concrete shape is only
-// known at the call site, so 11.4 emits those witnesses on demand.
-function withArgsAreConditional(withArgs MaxonTypeArray) returns bool
-	for i in 0 upto withArgs.count() 'each'
-		let a = try withArgs.get(i) otherwise panic("withArgsAreConditional: withArgs.get OOB at {i}")
-		if maxonTypeIsConditional(a) 'hit'
-			return true
-		end 'hit'
-	end 'each'
-	return false
-end 'withArgsAreConditional'
-
-function maxonTypeIsConditional(t MaxonType) returns bool
-	return match t 'check'
-		typeParameter gives true
-		boolean to function gives false
-		unresolved gives false
-		genericInstance gives false
-		interface gives false
-	end 'check'
-end 'maxonTypeIsConditional'
 
 // Resolve a bare type name to a representative MaxonType for sizing. Falls
 // back to `MaxonType.named` for any name that isn't a primitive — that's a

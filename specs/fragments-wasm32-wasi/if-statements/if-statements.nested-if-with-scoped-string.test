@@ -20,31 +20,29 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @if-statements.test(local0: i64) -> i64 {
-  entry:
-    %10 = mir.param local0 : i64
-    %2 = mir.mov_imm 0 : i64
-    %3 = mir.cmp eq, %10, %2
-    mir.cond_br %3 [then: checkInner_2(), else: outer_1.after()]
-  checkInner_2:
-    %8 = mir.mov_imm 1 : i64
-    mir.ret %8
-  outer_1.after:
-    %9 = mir.mov_imm 42 : i64
-    mir.ret %9
-  }
   func @if-statements.main() -> u8 {
   entry:
     %0 = mir.mov_imm 5 : i64
-    %1 = mir.call @if-statements.test(%0)
-    %2 = mir.mov_imm 125 : i64
-    %3 = mir.cmp ugt, %1, %2
-    mir.cond_br %3 [then: __range_panic_1(), else: __range_ok_1()]
+    mir.br inlined_if-statements.test_0()
+  inlined_if-statements.test_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp eq, %0, %2
+    mir.cond_br %3 [then: inlined_if-statements.test_2(), else: inlined_if-statements.test_4()]
+  inlined_if-statements.test_2:
+    %4 = mir.mov_imm 1 : i64
+    mir.br inline_cont_if-statements.main_0(%4)
+  inlined_if-statements.test_4:
+    %5 = mir.mov_imm 42 : i64
+    mir.br inline_cont_if-statements.main_0(%5)
+  inline_cont_if-statements.main_0:
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_1(), else: __range_ok_1()]
   __range_panic_1:
-    %4 = mir.global_addr @__panic_msg_1
-    %5 = mir.call @mrt_panic(%4)
+    %9 = mir.global_addr @__panic_msg_1
+    %10 = mir.call @mrt_panic(%9)
   __range_ok_1:
-    mir.ret %1
+    mir.ret %6
   }
 }
 ---

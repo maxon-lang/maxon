@@ -29,44 +29,29 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @Counter.increment(local0: i64) {
-  entry:
-    %7 = mir.param local0 : i64
-    %2 = mir.load %7, 0
-    %3 = mir.mov_imm 1 : i64
-    %4 = mir.add.i64 %2, %3
-    mir.store %4, %7, 0
-    mir.ret %6
-  }
-  func @Counter.get(local0: i64) -> i64 {
-  entry:
-    %3 = mir.param local0 : i64
-    %2 = mir.load %3, 0
-    mir.ret %2
-  }
-  func @Counter.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
   func @self-keyword.main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %1 = mir.call @Counter.create(%0)
-    %3 = mir.call @Counter.increment(%1)
-    %5 = mir.call @Counter.increment(%1)
-    %7 = mir.call @Counter.get(%1)
-    %8 = mir.mov_imm 125 : i64
-    %9 = mir.cmp ugt, %7, %8
-    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %0, %9, 0
+    %10 = mir.load %9, 0
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %10, %11
+    mir.store %12, %9, 0
+    %13 = mir.load %9, 0
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    mir.store %15, %9, 0
+    %16 = mir.load %9, 0
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %16, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %10 = mir.global_addr @__panic_msg_0
-    %11 = mir.call @mrt_panic(%10)
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
   __range_ok_0:
-    mir.ret %7
+    mir.ret %16
   }
 }
 ---

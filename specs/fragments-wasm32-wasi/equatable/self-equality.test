@@ -1,0 +1,56 @@
+// Test: self-equality
+
+typealias Integer = int(i64.min to i64.max)
+
+type Box implements Equatable
+	export var value Integer
+
+	function equals(other Box) returns bool
+		return value == other.value
+	end 'equals'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.create(value: 7)
+	if a.equals(a) 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Box.equals(local0: i64, local1: i64) -> i1 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %2 = mir.load %7, 0
+    %5 = mir.load %8, 0
+    %6 = mir.cmp eq, %2, %5
+    mir.ret %6
+  }
+  func @equatable.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %0, %8, 0
+    %9 = mir.load %8, 0
+    %10 = mir.load %8, 0
+    %11 = mir.cmp eq, %9, %10
+    mir.cond_br %11 [then: check_1(), else: check_1.after()]
+  check_1:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  check_1.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  }
+}
+---

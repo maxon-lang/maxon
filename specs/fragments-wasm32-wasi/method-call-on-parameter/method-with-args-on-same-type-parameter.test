@@ -28,45 +28,27 @@ ExitCode: 57
 ---
 // CompiledIR
 module {
-  func @Adder.addTo(local0: i64, local1: i64) -> i64 {
-  entry:
-    %6 = mir.param local0 : i64
-    %7 = mir.param local1 : i64
-    %2 = mir.load %6, 0
-    %5 = mir.add.i64 %2, %7
-    mir.ret %5
-  }
-  func @Adder.delegateAdd(local0: i64, local1: i64, local2: i64) -> i64 {
-  entry:
-    %7 = mir.param local1 : i64
-    %8 = mir.param local2 : i64
-    %5 = mir.call @Adder.addTo(%7, %8)
-    mir.ret %5
-  }
-  func @Adder.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
   func @method-call-on-parameter.main() -> u8 {
   entry:
     %0 = mir.mov_imm 100 : i64
-    %1 = mir.call @Adder.create(%0)
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %0, %9, 0
     %2 = mir.mov_imm 50 : i64
-    %3 = mir.call @Adder.create(%2)
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %2, %11, 0
     %6 = mir.mov_imm 7 : i64
-    %7 = mir.call @Adder.delegateAdd(%1, %3, %6)
-    %8 = mir.mov_imm 125 : i64
-    %9 = mir.cmp ugt, %7, %8
-    mir.cond_br %9 [then: __range_panic_3(), else: __range_ok_3()]
+    %12 = mir.load %11, 0
+    %13 = mir.add.i64 %12, %6
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_3(), else: __range_ok_3()]
   __range_panic_3:
-    %10 = mir.global_addr @__panic_msg_3
-    %11 = mir.call @mrt_panic(%10)
+    %16 = mir.global_addr @__panic_msg_3
+    %17 = mir.call @mrt_panic(%16)
   __range_ok_3:
-    mir.ret %7
+    mir.ret %13
   }
 }
 ---

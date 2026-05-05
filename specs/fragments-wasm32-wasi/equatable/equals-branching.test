@@ -1,0 +1,99 @@
+// Test: equals-branching
+
+typealias Integer = int(i64.min to i64.max)
+
+type Token implements Equatable
+	export var id Integer
+
+	function equals(other Token) returns bool
+		return id == other.id
+	end 'equals'
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+function main() returns ExitCode
+	let a = Token.create(id: 10)
+	let b = Token.create(id: 10)
+	let c = Token.create(id: 20)
+	var result = 0
+	if a.equals(b) 'first'
+		result = result + 1
+	end 'first'
+	if a.equals(c) 'second'
+		result = result + 10
+	end 'second'
+	if b.equals(c) 'third'
+		result = result + 100
+	end 'third'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @Token.equals(local0: i64, local1: i64) -> i1 {
+  entry:
+    %7 = mir.param local0 : i64
+    %8 = mir.param local1 : i64
+    %2 = mir.load %7, 0
+    %5 = mir.load %8, 0
+    %6 = mir.cmp eq, %2, %5
+    mir.ret %6
+  }
+  func @equatable.main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %29 = mir.mov_imm 8 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    mir.store %0, %30, 0
+    %2 = mir.mov_imm 10 : i64
+    %31 = mir.mov_imm 8 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %2, %32, 0
+    %4 = mir.mov_imm 20 : i64
+    %33 = mir.mov_imm 8 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %4, %34, 0
+    %6 = mir.mov_imm 0 : i64
+    %35 = mir.load %30, 0
+    %36 = mir.load %32, 0
+    %37 = mir.cmp eq, %35, %36
+    mir.cond_br %37 [then: first_1(), else: first_1.after(%6)]
+  first_1:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %6, %11
+    mir.br first_1.after(%12)
+  first_1.after:
+    %38 = mir.load %30, 0
+    %39 = mir.load %34, 0
+    %40 = mir.cmp eq, %38, %39
+    mir.cond_br %40 [then: second_3(), else: second_3.after(%28)]
+  second_3:
+    %17 = mir.mov_imm 10 : i64
+    %18 = mir.add.i64 %28, %17
+    mir.br second_3.after(%18)
+  second_3.after:
+    %41 = mir.load %32, 0
+    %42 = mir.load %34, 0
+    %43 = mir.cmp eq, %41, %42
+    mir.cond_br %43 [then: third_5(), else: third_5.after(%27)]
+  third_5:
+    %23 = mir.mov_imm 100 : i64
+    %24 = mir.add.i64 %27, %23
+    mir.br third_5.after(%24)
+  third_5.after:
+    %44 = mir.mov_imm 125 : i64
+    %45 = mir.cmp ugt, %26, %44
+    mir.cond_br %45 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %46 = mir.global_addr @__panic_msg_0
+    %47 = mir.call @mrt_panic(%46)
+  __range_ok_0:
+    mir.ret %26
+  }
+}
+---

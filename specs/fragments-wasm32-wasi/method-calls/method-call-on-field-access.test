@@ -35,49 +35,25 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Inner.get(local0: i64) -> i64 {
-  entry:
-    %3 = mir.param local0 : i64
-    %1 = mir.load %3, 0
-    mir.ret %1
-  }
-  func @Inner.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
-  func @Outer.getInnerValue(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.load %4, 0
-    %3 = mir.call @Inner.get(%1)
-    mir.ret %3
-  }
-  func @Outer.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
   func @method-calls.main() -> u8 {
   entry:
     %0 = mir.mov_imm 42 : i64
-    %1 = mir.call @Inner.create(%0)
-    %2 = mir.call @Outer.create(%1)
-    %4 = mir.call @Outer.getInnerValue(%2)
-    %5 = mir.mov_imm 125 : i64
-    %6 = mir.cmp ugt, %4, %5
-    mir.cond_br %6 [then: __range_panic_4(), else: __range_ok_4()]
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %0, %6, 0
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %6, %8, 0
+    %9 = mir.load %8, 0
+    %10 = mir.load %9, 0
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_4(), else: __range_ok_4()]
   __range_panic_4:
-    %7 = mir.global_addr @__panic_msg_4
-    %8 = mir.call @mrt_panic(%7)
+    %13 = mir.global_addr @__panic_msg_4
+    %14 = mir.call @mrt_panic(%13)
   __range_ok_4:
-    mir.ret %4
+    mir.ret %10
   }
 }
 ---

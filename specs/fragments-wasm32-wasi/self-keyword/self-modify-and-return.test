@@ -28,43 +28,25 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Value.double(local0: i64) {
-  entry:
-    %7 = mir.param local0 : i64
-    %2 = mir.load %7, 0
-    %3 = mir.mov_imm 2 : i64
-    %4 = mir.mul.i64 %2, %3
-    mir.store %4, %7, 0
-    mir.ret %6
-  }
-  func @Value.get(local0: i64) -> i64 {
-  entry:
-    %3 = mir.param local0 : i64
-    %2 = mir.load %3, 0
-    mir.ret %2
-  }
-  func @Value.create(local0: i64) -> i64 {
-  entry:
-    %4 = mir.param local0 : i64
-    %1 = mir.mov_imm 8 : i64
-    %2 = mir.call @mrt_alloc(%1)
-    mir.store %4, %2, 0
-    mir.ret %2
-  }
   func @self-keyword.main() -> u8 {
   entry:
     %0 = mir.mov_imm 21 : i64
-    %1 = mir.call @Value.create(%0)
-    %3 = mir.call @Value.double(%1)
-    %5 = mir.call @Value.get(%1)
-    %6 = mir.mov_imm 125 : i64
-    %7 = mir.cmp ugt, %5, %6
-    mir.cond_br %7 [then: __range_panic_4(), else: __range_ok_4()]
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %0, %7, 0
+    %8 = mir.load %7, 0
+    %9 = mir.mov_imm 2 : i64
+    %10 = mir.mul.i64 %8, %9
+    mir.store %10, %7, 0
+    %11 = mir.load %7, 0
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_4(), else: __range_ok_4()]
   __range_panic_4:
-    %8 = mir.global_addr @__panic_msg_4
-    %9 = mir.call @mrt_panic(%8)
+    %14 = mir.global_addr @__panic_msg_4
+    %15 = mir.call @mrt_panic(%14)
   __range_ok_4:
-    mir.ret %5
+    mir.ret %11
   }
 }
 ---

@@ -51,6 +51,19 @@ function emitDescriptorForInstance(project Project, maxonModule MaxonModule, glo
 		return
 	end 'alreadyEmitted'
 
+	// Conditional instances (any arg is an unbound type parameter) don't
+	// have a concrete layout — they're placeholders that 11.4 will resolve
+	// at the call site once the type-arg is fixed. Emitting a descriptor
+	// for them collides because two distinct conditional gids whose
+	// type-parameter args share a name (`__ManagedMemory<Element>` from
+	// two different `uses Element` declarations) mangle to the same
+	// `__layout_*` label. The PE/ELF/MachO writers tolerate the duplicate
+	// silently via Map upsert; the wasm linear-data layout doesn't.
+	let (_, gidArgs) = project.genericInstances.get(gid)
+	if anyMaxonTypeIsConditional(gidArgs) 'conditional'
+		return
+	end 'conditional'
+
 	let mangled = mangleInstance(project, gid: gid)
 	let descriptorLabel = "__layout_{mangled}"
 	let copyName = "__layout_copy_{mangled}"
@@ -157,6 +170,32 @@ function maxonTypeIsHeapManaged(t MaxonType) returns bool
 		typeParameter gives false
 	end 'h'
 end 'maxonTypeIsHeapManaged'
+
+// True iff any element references an unbound type-parameter. Used to
+// gate per-call-site materialization in Phase 11.4: layout descriptors
+// (for generic-instance args) and witness tables (for `withArgs` of
+// conditional conformances) must NOT be emitted statically when the
+// shape is still parametric — see `emitDescriptorForInstance` for the
+// label-collision rationale.
+export function anyMaxonTypeIsConditional(types MaxonTypeArray) returns bool
+	for i in 0 upto types.count() 'each'
+		let a = try types.get(i) otherwise panic("anyMaxonTypeIsConditional: types.get OOB at {i}")
+		if maxonTypeIsConditional(a) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'anyMaxonTypeIsConditional'
+
+export function maxonTypeIsConditional(t MaxonType) returns bool
+	return match t 'check'
+		typeParameter gives true
+		boolean to function gives false
+		unresolved gives false
+		genericInstance gives false
+		interface gives false
+	end 'check'
+end 'maxonTypeIsConditional'
 
 // Build a deterministic, valid-C-identifier mangling for a generic
 // instance. `genericInstanceIdToString` already produces a

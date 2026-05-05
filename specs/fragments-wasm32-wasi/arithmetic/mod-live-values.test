@@ -16,31 +16,21 @@ ExitCode: 7
 ---
 // CompiledIR
 module {
-  func @arithmetic.modLive(local0: i64, local1: i64, local2: i64) -> i64 {
-  entry:
-    %12 = mir.param local0 : i64
-    %13 = mir.param local1 : i64
-    %14 = mir.param local2 : i64
-    %4 = mir.mov_imm 1 : i64
-    %5 = mir.add.i64 %14, %4
-    %8 = mir.rem.i64 %12, %13
-    %11 = mir.add.i64 %8, %5
-    mir.ret %11
-  }
   func @arithmetic.main() -> u8 {
   entry:
     %0 = mir.mov_imm 10 : i64
     %1 = mir.mov_imm 3 : i64
-    %2 = mir.mov_imm 5 : i64
-    %3 = mir.call @arithmetic.modLive(%0, %1, %2)
-    %4 = mir.mov_imm 125 : i64
-    %5 = mir.cmp ugt, %3, %4
-    mir.cond_br %5 [then: __range_panic_3(), else: __range_ok_3()]
+    %5 = mir.mov_imm 6 : i64
+    %6 = mir.rem.i64 %0, %1
+    %7 = mir.add.i64 %6, %5
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_3(), else: __range_ok_3()]
   __range_panic_3:
-    %6 = mir.global_addr @__panic_msg_3
-    %7 = mir.call @mrt_panic(%6)
+    %10 = mir.global_addr @__panic_msg_3
+    %11 = mir.call @mrt_panic(%10)
   __range_ok_3:
-    mir.ret %3
+    mir.ret %7
   }
 }
 ---
