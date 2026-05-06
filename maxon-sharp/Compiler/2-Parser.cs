@@ -2747,6 +2747,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Returns the struct/enum/interface type name carried on a field's IR type,
+  /// or null when the field's type is a primitive / type-parameter / other
+  /// kind that has no nominal struct identity. Used at every site where a
+  /// MaxonFieldAccessOp is emitted so the result value carries the right
+  /// nominal name for downstream method-dispatch resolution.
+  /// </summary>
+  private static string? GetFieldStructName(IrType fieldType) => fieldType switch {
+    IrStructType st => st.Name,
+    IrEnumType et => et.Name,
+    IrInterfaceType it => it.Name,
+    _ => null
+  };
+
+  /// <summary>
   /// Maps a source-level type name (e.g., "int") to the corresponding IrType.Name (e.g., "i64").
   /// </summary>
   private static string ResolveTypeName(string sourceTypeName) {
@@ -5186,9 +5200,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var cloneTempNames = new List<string>();
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
-      string? fieldStructTypeName = null;
-      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
+      var fieldStructTypeName = GetFieldStructName(field.Type);
 
       var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(accessOp);
@@ -5253,9 +5265,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
-      string? fieldStructTypeName = null;
-      if (field.Type is IrStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is IrEnumType fut) fieldStructTypeName = fut.Name;
+      var fieldStructTypeName = GetFieldStructName(field.Type);
 
       var selfAccess = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(selfAccess);
@@ -5864,9 +5874,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // Register all fields of 'self' as directly accessible variables
         foreach (var field in structType.Fields) {
           var fieldKind = field.Type.ToValueKind();
-          string? fieldStructName = field.Type is IrStructType fst ? fst.Name
-            : field.Type is IrEnumType fut ? fut.Name
-            : null;
+          var fieldStructName = GetFieldStructName(field.Type);
           // Type parameter fields with where constraints: treat as struct with the param name
           // so method calls can be resolved through the interface during monomorphization
           if (fieldStructName == null && field.Type is IrTypeParameterType tp
@@ -6901,7 +6909,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     var fieldKind = field.Type.ToValueKind();
-    var fieldStructName = field.Type is IrStructType fst ? fst.Name : null;
+    var fieldStructName = GetFieldStructName(field.Type);
     var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
     _currentBlock!.AddOp(accessOp);
     var newStructTypeName = fieldStructName
@@ -8504,8 +8512,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
-      string? fieldStructName = field.Type is IrStructType fst ? fst.Name
-        : field.Type is IrEnumType fet ? fet.Name : null;
+      var fieldStructName = GetFieldStructName(field.Type);
 
       var refOp = new MaxonStructVarRefOp(sourceName, tupleType.Name);
       _currentBlock!.AddOp(refOp);
@@ -14555,9 +14562,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = field.Type is IrStructType fst ? fst.Name
-        : field.Type is IrEnumType fet ? fet.Name
-        : null;
+      var fieldStructName = GetFieldStructName(field.Type);
       var structVal2 = ResolveExprValue(result);
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);

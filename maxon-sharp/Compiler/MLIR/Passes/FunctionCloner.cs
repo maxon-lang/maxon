@@ -304,6 +304,16 @@ internal class FunctionCloner {
       // Variable names reference, not values — copy as-is
       case MaxonScopeEndOp se: return new MaxonScopeEndOp(se.VarsToClean, se.KeepVars);
 
+      // String / byte-string literals and interpolation
+      case MaxonStringLiteralOp strLit: { var c = new MaxonStringLiteralOp(strLit.Value, SubName(strLit.StringTypeName)); RegisterResult(strLit.Result, c.Result); return c; }
+      case MaxonByteStringLiteralOp bstrLit: { var c = new MaxonByteStringLiteralOp(bstrLit.Value, SubName(bstrLit.ArrayTypeName)); RegisterResult(bstrLit.Result, c.Result); return c; }
+      case MaxonStringInterpOp interp: {
+        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? MapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
+        var c = new MaxonStringInterpOp(newParts, SubName(interp.StringTypeName));
+        RegisterResult(interp.Result, c.Result);
+        return c;
+      }
+
       // Unary math
       case MaxonTruncOp t: { var c = new MaxonTruncOp(MapValue(t.Input)); RegisterResult(t.Result, c.Result); return c; }
       case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(MapValue(i.Input)); RegisterResult(i.Result, c.Result); return c; }

@@ -1,0 +1,187 @@
+// Test: interface-field-pass-as-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+// Holder stores an interface-typed field. main() constructs a Holder
+// over a Marker, then reads the field (h.t) and passes it to a
+// function expecting the same interface type. The construction and
+// the field-read happen in the same function so monomorphization can
+// propagate the concrete type (`Marker`) through the Holder instance
+// and rewrite the indirect dispatch in `callTag` to `Marker.tag`.
+//
+// Regression guard for two parser bugs around interface-typed fields,
+// both diagnosed via the FunctionRegAllocator interface-field
+// workaround in the self-hosted register allocator:
+//   1. Field-access op produced a MaxonStruct with empty TypeName,
+//      crashing FillDefaultArgs with NullReferenceException at the
+//      call site (Dictionary.TryGetValue, key=null).
+//   2. After fixing the empty TypeName, the call-site type-check
+//      rejected the value with E3005 "type '' does not implement
+//      interface 'Tagged'" because the value registered in the
+//      variables table for the field still carried no struct-type
+//      name, so the resolved MaxonStruct came back with an empty
+//      TypeName at the next use.
+type Holder
+	export let t Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+function main() returns ExitCode
+	let m = Marker.create(n: 42)
+	let h = Holder.create(t: m)
+	return callTag(h.t)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Marker.tag(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Marker.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 42
+    x64.call Marker.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Holder.create$Marker
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call interface-dispatch.callTag$Marker
+    x64.xor esi, esi
+    x64.mov edi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @Holder.create$Marker(t: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Holder]
+    x64.mov rdx, rax
+    x64.mov rcx, 8
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @interface-dispatch.callTag$Marker(t: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp-8]
+    x64.epilogue
+    x64.jmp Marker.tag
+  }
+  func @__destruct_Marker(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Marker.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_Holder.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

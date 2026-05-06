@@ -922,6 +922,24 @@ function makeProducer() returns Producer
 end 'makeProducer'
 ```
 
+**Interface-Typed Fields**
+
+Struct fields can declare an interface as their type. The field stores any value of a type that conforms to the interface, and methods invoked on the field dispatch to the implementing type. When the compiler can trace the concrete type stored into the field at construction, dispatch is resolved statically with no runtime overhead:
+
+```maxon
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Holder
+	export let t Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+```
+
 ### Where Clauses (Type Parameter Constraints)
 
 The `where` clause constrains type parameters to require specific interface conformance. This enables the compiler to verify method calls on type parameters and to reject concrete types that don't satisfy the constraints.

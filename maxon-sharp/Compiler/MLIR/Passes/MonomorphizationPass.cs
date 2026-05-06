@@ -121,10 +121,39 @@ public static class MonomorphizationPass {
       _aliasSourceMap = null;
     }
 
-    // Stage 2: Specialize functions with interface alias parameters per call-site arg type
+    // Propagate concrete struct type names through every function so the
+    // interface-alias specialization stage sees the right TypeName on call
+    // args that traveled through field accesses on previously-specialized
+    // call results. RewriteCallSites only invokes the propagation when it
+    // performed at least one type-alias rewrite, which can leave callers
+    // of interface-alias-only specializations un-propagated.
+    foreach (var propFunc in module.Functions) {
+      if (propFunc.IsBuiltinSynthetic) continue;
+      PropagateStructTypeNames(propFunc, module);
+    }
+
+    // Stage 2 + 2b interleaved: Stage 2 specializes functions per
+    // interface-typed param's concrete arg type. Stage 2b specializes
+    // instance methods of structs with interface-typed fields per the
+    // concrete type stored in each field at the call site.
+    //
+    // The two stages feed each other: a Stage 2 spec retypes a param,
+    // which surfaces the concrete-field type of that arg's downstream
+    // field-load → creating a Stage 2b spec. The Stage 2b clone retypes
+    // self.field accesses, surfacing concrete arg types in deeper calls
+    // → creating new Stage 2 specs. Iterate until both reach a fixed
+    // point, then stop — without this, calls like applyColoring(regTarget:
+    // self.regTarget) inside a Stage 2b-spec'd method are left targeting
+    // the unspecialized callee with an interface-typed signature.
     subSw?.Restart();
-    RunInterfaceAliasSpecialization(module);
-    if (subTimings != null) StageTimer.Record(subTimings, "ifaceAlias", subSw!.ElapsedMilliseconds);
+    bool anyFieldSpecChange = true;
+    int fieldSpecRound = 0;
+    while (anyFieldSpecChange && fieldSpecRound++ < 20) {
+      RunInterfaceAliasSpecialization(module);
+      anyFieldSpecChange = RunInterfaceFieldSpecializationRound(module);
+    }
+    RemoveUnreachableInterfaceFunctions(module);
+    if (subTimings != null) StageTimer.Record(subTimings, "ifaceAlias+Field", subSw!.ElapsedMilliseconds);
 
     // Stage 3: Rewrite interface-qualified method callees (e.g. Producer.produce)
     // to the concrete method (Widget.produce) using the self-arg's current
@@ -936,6 +965,17 @@ public static class MonomorphizationPass {
     var varTypes = new Dictionary<string, string>();
     // Map: value ID -> concrete struct type name
     var valueTypes = new Dictionary<int, string>();
+    // Map: (struct-value-id, field-name) -> concrete struct type stored in
+    // that field. Populated by inspecting constructor calls — when a callee
+    // returns a struct via `Self{field: arg}`, we propagate the call site's
+    // concrete arg type to the result struct's field. Read by field-access
+    // propagation below to recover the concrete type of an interface-typed
+    // field whose declared type is the interface itself.
+    var fieldProvenance = new Dictionary<(int StructId, string FieldName), string>();
+    // Map: variable name -> list of value IDs assigned to it. Lets a varref
+    // for `h` find the original call result it aliases, so field-provenance
+    // entries recorded for that call result transfer to the varref's id.
+    var varSourceIds = new Dictionary<string, List<int>>();
 
     // Seed from all call results across all blocks.
     // Use indexed iteration to avoid "collection modified during enumeration"
@@ -961,12 +1001,32 @@ public static class MonomorphizationPass {
         var ops = func.Body.Blocks[bi].Operations;
         for (int oi = 0; oi < ops.Count; oi++) {
           var op = ops[oi];
+          // Re-run field-provenance population on each pass so it observes
+          // call args whose TypeNames were filled in by an earlier round
+          // (e.g. h's TypeName via the call result, then h.t's TypeName
+          // via this provenance lookup).
+          if (op is MaxonCallOp opCall && opCall.Result is MaxonStruct opCallResult) {
+            int beforeCount = fieldProvenance.Count;
+            PopulateFieldProvenanceFromCall(opCall, opCallResult, module, fieldProvenance);
+            if (fieldProvenance.Count > beforeCount) changed = true;
+          }
           if (op is MaxonAssignOp assign) {
             if (valueTypes.TryGetValue(assign.Value.Id, out var concreteType)) {
               if (!varTypes.ContainsKey(assign.VarName)) {
                 varTypes[assign.VarName] = concreteType;
                 changed = true;
               }
+            }
+            // Track all source value IDs assigned to this variable so a
+            // later varref can recover field-provenance entries recorded
+            // against the source value.
+            if (!varSourceIds.TryGetValue(assign.VarName, out var idList)) {
+              idList = [];
+              varSourceIds[assign.VarName] = idList;
+            }
+            if (!idList.Contains(assign.Value.Id)) {
+              idList.Add(assign.Value.Id);
+              changed = true;
             }
           }
           if (op is MaxonStructVarRefOp varRef) {
@@ -979,26 +1039,134 @@ public static class MonomorphizationPass {
                 varRef.Result.TypeName = knownType;
                 changed = true;
               }
+              // Propagate field-provenance entries through the var alias.
+              // A varref reads back the same struct value that was assigned
+              // into the variable, so any fields whose concrete types we
+              // recorded for that source value also describe this read.
+              if (varSourceIds.TryGetValue(varRef.VarName, out var sourceIds)) {
+                foreach (var sourceId in sourceIds) {
+                  foreach (var entry in fieldProvenance.ToList()) {
+                    if (entry.Key.StructId != sourceId) continue;
+                    var aliasKey = (varRef.Result.Id, entry.Key.FieldName);
+                    if (!fieldProvenance.ContainsKey(aliasKey)) {
+                      fieldProvenance[aliasKey] = entry.Value;
+                      changed = true;
+                    }
+                  }
+                }
+              }
             }
           }
-          // Propagate through field access: if we know the struct's concrete type,
-          // look up the field's concrete type from TypeDefs
+          // Propagate through field access: prefer per-field provenance
+          // (recorded from constructor args) over the field's declared type.
+          // The declared-type fallback only fires for struct-typed fields —
+          // interface-typed fields can't be resolved from the declaration,
+          // they need the construction-site concrete type to dispatch.
           if (op is MaxonFieldAccessOp fieldAccess && fieldAccess.Result is MaxonStruct fieldResult) {
-            if (valueTypes.TryGetValue(fieldAccess.StructValue.Id, out var structType)
+            string? resolvedTypeName = null;
+            if (fieldProvenance.TryGetValue((fieldAccess.StructValue.Id, fieldAccess.FieldName), out var provType)) {
+              resolvedTypeName = provType;
+            } else if (valueTypes.TryGetValue(fieldAccess.StructValue.Id, out var structType)
                 && module?.TypeDefs.TryGetValue(structType, out var structDef) == true
                 && structDef is IrStructType structSt) {
               var field = structSt.GetField(fieldAccess.FieldName);
-              if (field?.Type is IrStructType fieldStructType
-                  && fieldResult.TypeName != fieldStructType.Name) {
-                fieldResult.TypeName = fieldStructType.Name;
-                valueTypes[fieldResult.Id] = fieldStructType.Name;
-                changed = true;
+              if (field?.Type is IrStructType fieldStructType) {
+                resolvedTypeName = fieldStructType.Name;
               }
+            }
+            if (resolvedTypeName != null && fieldResult.TypeName != resolvedTypeName) {
+              fieldResult.TypeName = resolvedTypeName;
+              valueTypes[fieldResult.Id] = resolvedTypeName;
+              changed = true;
             }
           }
         }
       }
     }
+  }
+
+  /// When a call returns a struct, walk the callee's body to find the
+  /// `Self{field: argN}` literal that produced the return value. For each
+  /// field whose value is a parameter reference, record the call site's
+  /// matching arg's concrete type as the field's stored type. This is the
+  /// only way to recover the concrete type of a value stored into an
+  /// interface-typed field — the field's declaration only carries the
+  /// interface name, not the implementing type.
+  private static void PopulateFieldProvenanceFromCall(
+      MaxonCallOp call, MaxonStruct callResult, IrModule<MaxonOp>? module,
+      Dictionary<(int, string), string> fieldProvenance) {
+    if (module == null) return;
+    var callee = module.Functions.FirstOrDefault(f => f.Name == call.Callee);
+    if (callee?.Body == null) return;
+
+    foreach (var block in callee.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonReturnOp { Value: MaxonStruct retStruct }) continue;
+
+        // Walk the callee's ops to find the StructLiteralOp that produced
+        // the returned struct (matched by value identity through assignments).
+        MaxonStructLiteralOp? literal = FindStructLiteralFor(callee, retStruct);
+        if (literal == null) continue;
+
+        for (int i = 0; i < literal.FieldValues.Count; i++) {
+          var (fieldName, fieldValue) = literal.FieldValues[i];
+          // The field's value must trace back to a parameter — find its
+          // ParamOp and use the call's matching arg's concrete TypeName.
+          int? paramIndex = ResolveParamIndex(callee, fieldValue);
+          if (paramIndex == null) continue;
+          if (paramIndex.Value >= call.Args.Count) continue;
+          if (call.Args[paramIndex.Value] is not MaxonStruct argStruct) continue;
+          if (string.IsNullOrEmpty(argStruct.TypeName)) continue;
+          fieldProvenance[(callResult.Id, fieldName)] = argStruct.TypeName;
+        }
+        return;
+      }
+    }
+  }
+
+  /// Find the MaxonStructLiteralOp in `func` whose Result equals `target`
+  /// (chasing through MaxonAssignOp / MaxonStructVarRefOp aliases). Returns
+  /// null when the returned value isn't constructed by a literal in this
+  /// function — e.g. forwarded from another call.
+  private static MaxonStructLiteralOp? FindStructLiteralFor(
+      IrFunction<MaxonOp> func, MaxonStruct target) {
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonStructLiteralOp lit && lit.Result.Id == target.Id) return lit;
+      }
+    }
+    return null;
+  }
+
+  /// Resolve `value` to a parameter index by walking back through this
+  /// function's MaxonStructParamOp / MaxonParamOp ops, following any
+  /// MaxonStructVarRefOp that aliases a parameter (the parser registers
+  /// each param as a variable, so field initializations like `Self{t: t}`
+  /// produce a varref op whose name matches the param's name). Returns
+  /// null when the value didn't originate from a parameter (e.g. it's a
+  /// literal or the result of another call).
+  private static int? ResolveParamIndex(IrFunction<MaxonOp> func, MaxonValue value) {
+    string? varNameAlias = null;
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonStructParamOp sp && sp.Result.Id == value.Id) return sp.Index;
+        if (op is MaxonParamOp p && p.Result.Id == value.Id) return p.Index;
+        if (op is MaxonStructVarRefOp vr && vr.Result.Id == value.Id) {
+          varNameAlias = vr.VarName;
+        }
+      }
+    }
+    if (varNameAlias == null) return null;
+    // Find the MaxonStructParamOp / MaxonParamOp registered under the same
+    // name (parameters are also exposed as variables of the same name in
+    // the Maxon parser).
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonStructParamOp sp2 && sp2.Name == varNameAlias) return sp2.Index;
+        if (op is MaxonParamOp p2 && p2.Name == varNameAlias) return p2.Index;
+      }
+    }
+    return null;
   }
 
   // ============================================================================
@@ -1009,6 +1177,266 @@ public static class MonomorphizationPass {
     IrFunction<MaxonOp> SourceFunc,
     string SpecializedName,
     Dictionary<string, IrType> Substitution);
+
+  /// Stage 2b: specialize instance methods of structs that have interface-
+  /// typed fields, per the concrete types stored in those fields at each
+  /// call site. Field provenance is recovered by walking constructor calls
+  /// and remembering which call arg flows into which struct field. When
+  /// `obj.method()` is called and the field provenance gives a concrete
+  /// type for one or more interface fields, clone the method with a
+  /// substitution that retypes every `field_access .field` against `self`
+  /// to the concrete type — so downstream interface-method dispatch on
+  /// the field resolves statically.
+  ///
+  /// Iterates to a fixed point: a freshly-cloned method's body contains
+  /// new instance method calls whose self-arg now has propagated field
+  /// provenance from upstream specs.
+  private static bool RunInterfaceFieldSpecializationRound(IrModule<MaxonOp> module) {
+    var typeDefs = module.TypeDefs;
+    bool anyChange = false;
+
+    // Collect per-function field provenance for every struct value, so
+    // call-site scans can look up the concrete types stored in a self
+    // arg's interface-typed fields.
+    var perFuncProvenance = new Dictionary<IrFunction<MaxonOp>, Dictionary<int, Dictionary<string, string>>>();
+    foreach (var func in module.Functions) {
+      if (func.IsBuiltinSynthetic) continue;
+      var prov = ComputeFieldProvenance(func, module);
+      if (prov.Count > 0) perFuncProvenance[func] = prov;
+    }
+    if (perFuncProvenance.Count == 0) return false;
+
+    var rewrites = new List<(IrBlock<MaxonOp> Block, int OpIndex, string NewCallee, MaxonValue Result)>();
+    var newSpecs = new Dictionary<string, (IrFunction<MaxonOp> Source, Dictionary<string, IrType> Substitution)>();
+
+    foreach (var (func, prov) in perFuncProvenance) {
+      foreach (var block in func.Body.Blocks) {
+        for (int i = 0; i < block.Operations.Count; i++) {
+          var (callee, args, result) = ExtractCallTarget(block.Operations[i]);
+          if (callee == null || args == null) continue;
+          if (args.Count == 0) continue;
+          if (args[0] is not MaxonStruct selfArg) continue;
+          if (!prov.TryGetValue(selfArg.Id, out var fieldMap)) continue;
+
+          // The callee must be an instance method whose owner type has at
+          // least one of the fields whose concrete type we know. Skip
+          // already-specialized names (containing `$` after the last dot)
+          // — these belong to a previous round of this pass and the spec
+          // body already retypes the relevant field accesses.
+          var dotIdx = callee.LastIndexOf('.');
+          if (dotIdx <= 0) continue;
+          if (callee.IndexOf('$', dotIdx) >= 0) continue;
+          var ownerName = callee[..dotIdx];
+          if (!typeDefs.TryGetValue(ownerName, out var ownerType)) continue;
+          if (ownerType is not IrStructType ownerStruct) continue;
+
+          var subMap = new Dictionary<string, IrType>();
+          var nameParts = new List<string>();
+          foreach (var (fieldName, concreteName) in fieldMap.OrderBy(kv => kv.Key, StringComparer.Ordinal)) {
+            var field = ownerStruct.GetField(fieldName);
+            if (field == null) continue;
+            string? declaredName = field.Type switch {
+              IrInterfaceType iface => iface.Name,
+              IrStructType { IsInterfaceAlias: true } st => st.Name,
+              _ => null
+            };
+            if (declaredName == null) continue;
+            if (concreteName == declaredName) continue;
+            if (!typeDefs.TryGetValue(concreteName, out var concrete)) continue;
+            if (concrete is IrInterfaceType) continue;
+            if (subMap.TryGetValue(declaredName, out var existing) && existing.Name != concreteName) continue;
+            subMap[declaredName] = concrete;
+            nameParts.Add(concreteName);
+          }
+          if (subMap.Count == 0) continue;
+
+          var specName = $"{callee}${string.Join("$", nameParts)}";
+          if (specName == callee) continue;
+          // Skip if the spec already exists in the module from an earlier round.
+          if (module.Functions.Any(f => f.Name == specName)) {
+            rewrites.Add((block, i, specName, result!));
+            continue;
+          }
+          if (!newSpecs.ContainsKey(specName)) {
+            var sourceFunc = module.Functions.FirstOrDefault(f => f.Name == callee);
+            if (sourceFunc == null) continue;
+            newSpecs[specName] = (sourceFunc, subMap);
+          }
+          rewrites.Add((block, i, specName, result!));
+        }
+      }
+    }
+
+    foreach (var (specName, (source, subMap)) in newSpecs) {
+      var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+      var cloned = CloneWithInterfaceAliasSubstitution(source, specName, typeSub);
+      module.AddFunction(cloned);
+      anyChange = true;
+    }
+
+    var funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
+    foreach (var (block, opIndex, newCallee, _) in rewrites) {
+      var op = block.Operations[opIndex];
+      if (op is MaxonTryCallOp tryCall && tryCall.Callee != newCallee) {
+        var (rk, rst) = ResolveMonomorphizedResultType(tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
+        UpdateResultTypeName(tryCall.Result, rst);
+        var newOp = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, rk, rst);
+        CopyCallMetadata(tryCall, newOp);
+        block.Operations[opIndex] = newOp;
+        anyChange = true;
+      } else if (op is MaxonCallOp call && call.Callee != newCallee) {
+        var (rk, rst) = ResolveMonomorphizedResultType(call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+        UpdateResultTypeName(call.Result, rst);
+        var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, rk, rst);
+        CopyCallMetadata(call, newOp);
+        block.Operations[opIndex] = newOp;
+        anyChange = true;
+      }
+    }
+
+    if (anyChange) {
+      module.InvalidateFunctionIndex();
+      module.InvalidateCallGraph();
+    }
+    return anyChange;
+  }
+
+  /// Inspect a single op and return its callee/args/result triple if it's
+  /// a call op, or all-null otherwise. Centralizes the MaxonCallOp /
+  /// MaxonTryCallOp branching that otherwise spreads across every scan
+  /// site in this pass.
+  private static (string? Callee, List<MaxonValue>? Args, MaxonValue? Result) ExtractCallTarget(MaxonOp op) {
+    if (op is MaxonCallOp call) return (call.Callee, call.Args, call.Result);
+    if (op is MaxonTryCallOp tryCall) return (tryCall.Callee, tryCall.Args, tryCall.Result);
+    return (null, null, null);
+  }
+
+  /// Build a per-struct-value-id field-provenance map for a function:
+  /// for each MaxonStruct value `obj`, record which fields hold what
+  /// concrete struct type, traced from constructor calls (MaxonCallOp
+  /// returning a struct whose body produces `Self{f: param}`). Aliases
+  /// through MaxonStructVarRefOp transfer entries to the alias's value
+  /// id so a later read of the same variable still finds the provenance.
+  private static Dictionary<int, Dictionary<string, string>> ComputeFieldProvenance(
+      IrFunction<MaxonOp> func, IrModule<MaxonOp> module) {
+    var result = new Dictionary<int, Dictionary<string, string>>();
+    var varSourceIds = new Dictionary<string, List<int>>();
+
+    // Seed: every call returning a struct contributes provenance from the
+    // callee's body, mapping (resultId, fieldName) → concrete type from the
+    // call's matching arg.
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonCallOp call || call.Result is not MaxonStruct callRes) continue;
+        var flat = new Dictionary<(int, string), string>();
+        PopulateFieldProvenanceFromCall(call, callRes, module, flat);
+        if (flat.Count == 0) continue;
+        if (!result.TryGetValue(callRes.Id, out var entries)) {
+          entries = [];
+          result[callRes.Id] = entries;
+        }
+        foreach (var ((id, field), concrete) in flat) {
+          if (id != callRes.Id) continue;
+          entries[field] = concrete;
+        }
+      }
+    }
+
+    // Also seed self-field provenance from observed field-access ops. When
+    // a Stage 2b spec retypes `field_access .field self` results to a
+    // concrete type, that's the only surviving record of the fact that
+    // `self.field` holds that concrete type. Recover it by scanning every
+    // MaxonStructParamOp's field-access uses and matching the field's
+    // declared type (interface) against the access result (concrete).
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonFieldAccessOp fa) continue;
+        if (fa.Result is not MaxonStruct faRes) continue;
+        if (string.IsNullOrEmpty(faRes.TypeName)) continue;
+        if (!module.TypeDefs.TryGetValue(fa.TypeName, out var ownerType)) continue;
+        if (ownerType is not IrStructType ownerStruct) continue;
+        var field = ownerStruct.GetField(fa.FieldName);
+        if (field == null) continue;
+        // Only meaningful when the declared type is interface but the
+        // access result has a concrete type — that gap is how Stage 2b
+        // marked the spec'd field as "this concrete impl is what's stored".
+        bool declaredIsInterface = field.Type is IrInterfaceType
+            || (field.Type is IrStructType { IsInterfaceAlias: true });
+        if (!declaredIsInterface) continue;
+        if (faRes.TypeName == field.Type.Name) continue;
+        if (!module.TypeDefs.TryGetValue(faRes.TypeName, out var resolved)) continue;
+        if (resolved is IrInterfaceType) continue;
+        if (!result.TryGetValue(fa.StructValue.Id, out var entries)) {
+          entries = [];
+          result[fa.StructValue.Id] = entries;
+        }
+        entries[fa.FieldName] = faRes.TypeName;
+      }
+    }
+
+    // Seed varSourceIds for params that are exposed as variables (instance
+    // method `self`, plus any explicit struct/value params). The parser
+    // declares each param as a variable of the same name without ever
+    // emitting an explicit MaxonAssignOp, so without this seeding a varref
+    // for "self" would have no path back to the struct_param's id.
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        switch (op) {
+          case MaxonStructParamOp sp:
+            if (!varSourceIds.TryGetValue(sp.Name, out var spIds)) {
+              spIds = [];
+              varSourceIds[sp.Name] = spIds;
+            }
+            if (!spIds.Contains(sp.Result.Id)) spIds.Add(sp.Result.Id);
+            break;
+          case MaxonParamOp p:
+            if (!varSourceIds.TryGetValue(p.Name, out var pIds)) {
+              pIds = [];
+              varSourceIds[p.Name] = pIds;
+            }
+            if (!pIds.Contains(p.Result.Id)) pIds.Add(p.Result.Id);
+            break;
+        }
+      }
+    }
+
+    // Propagate through MaxonAssignOp / MaxonStructVarRefOp aliases.
+    bool changed = true;
+    int iter = 0;
+    while (changed && iter++ < 20) {
+      changed = false;
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is MaxonAssignOp assign) {
+            if (!varSourceIds.TryGetValue(assign.VarName, out var idList)) {
+              idList = [];
+              varSourceIds[assign.VarName] = idList;
+            }
+            if (!idList.Contains(assign.Value.Id)) {
+              idList.Add(assign.Value.Id);
+              changed = true;
+            }
+          }
+          if (op is MaxonStructVarRefOp varRef
+              && varSourceIds.TryGetValue(varRef.VarName, out var sourceIds)) {
+            foreach (var sourceId in sourceIds) {
+              if (!result.TryGetValue(sourceId, out var entries)) continue;
+              if (!result.TryGetValue(varRef.Result.Id, out var existing)) {
+                result[varRef.Result.Id] = new Dictionary<string, string>(entries);
+                changed = true;
+                continue;
+              }
+              foreach (var (k, v) in entries) {
+                if (existing.TryAdd(k, v)) changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return result;
+  }
 
   private static void RunInterfaceAliasSpecialization(IrModule<MaxonOp> module) {
     var subTimings = StageTimer.Enabled ? new Dictionary<string, long>() : null;
@@ -1185,9 +1613,18 @@ public static class MonomorphizationPass {
       // the interface name after cloning, which blocks downstream transitive
       // specialization because iface params get skipped when the arg type is
       // itself an interface. PropagateConcreteInterfaceReturns updates those
-      // TypeNames using the callee's inferred concrete return type.
+      // TypeNames using the callee's inferred concrete return type. After
+      // that, propagate concrete struct type names across each function so
+      // field-provenance recorded for one specialization's call results
+      // surfaces concrete types on field-load arguments to deeper calls
+      // (e.g. self.regTarget reads the X64RegAllocTarget that was stored
+      // by the FunctionRegAllocator.create specialization).
       roundSw?.Restart();
       PropagateConcreteInterfaceReturns(module, funcLookup);
+      foreach (var propFunc in module.Functions) {
+        if (propFunc.IsBuiltinSynthetic) continue;
+        PropagateStructTypeNames(propFunc, module);
+      }
       if (roundSw != null) propagateMs += roundSw.ElapsedMilliseconds;
 
       // Re-discover functions with interface params
@@ -1318,48 +1755,44 @@ public static class MonomorphizationPass {
       sw.Restart();
     }
 
-    // Remove dead functions with interface-typed params that are no longer called.
-    // Iterate until stable: removing one dead function may make others unreachable.
-    //
-    // Optimization: pre-compute the small "self-candidate" set (funcs with
-    // iface params) once. Most of the module isn't a removal candidate, so
-    // there's no reason to scan every func's params every round. The
-    // referenced-names walk does still need to be a full module scan because
-    // any non-candidate could reference a candidate; the savings come from
-    // the cheap candidate-membership check during RemoveFunctionsWhere and
-    // from being able to early-exit when no candidates remain.
-    {
-      var selfCandidateSet = new HashSet<IrFunction<MaxonOp>>();
-      foreach (var func in module.Functions) {
-        for (int i = 0; i < func.ParamTypes.Count; i++) {
-          if (func.ParamTypes[i] is IrInterfaceType) { selfCandidateSet.Add(func); break; }
-        }
-      }
-      for (int removeRound = 0; removeRound < 20 && selfCandidateSet.Count > 0; removeRound++) {
-        var referencedCallees = new HashSet<string>();
-        foreach (var func in module.Functions) {
-          if (selfCandidateSet.Contains(func)) continue;
-          foreach (var block in func.Body.Blocks) {
-            foreach (var op in block.Operations) {
-              if (op is MaxonCallOp call) referencedCallees.Add(call.Callee);
-              else if (op is MaxonTryCallOp tryCall) referencedCallees.Add(tryCall.Callee);
-              else if (op is MaxonClosureCreateOp closure) referencedCallees.Add(closure.FunctionName);
-            }
-          }
-        }
-        var toRemove = new HashSet<IrFunction<MaxonOp>>();
-        foreach (var f in selfCandidateSet) {
-          if (!referencedCallees.Contains(f.Name)) toRemove.Add(f);
-        }
-        if (toRemove.Count == 0) break;
-        module.RemoveFunctionsWhere(f => toRemove.Contains(f));
-        selfCandidateSet.ExceptWith(toRemove);
+    if (subTimings != null) {
+      Console.Error.WriteLine("    iface sub:" + StageTimer.Format(subTimings));
+    }
+  }
+
+  /// Remove functions with interface-typed params whose only callers are
+  /// other interface-param candidates — i.e. functions that survive
+  /// because of a private dispatch chain that no live caller reaches.
+  /// Splitting this out of `RunInterfaceAliasSpecialization` lets the
+  /// interleaved Stage 2/2b loop create new specs across rounds without
+  /// the dead-removal yanking intermediate iface funcs that the next
+  /// round's transitive scan still needs.
+  private static void RemoveUnreachableInterfaceFunctions(IrModule<MaxonOp> module) {
+    var selfCandidateSet = new HashSet<IrFunction<MaxonOp>>();
+    foreach (var func in module.Functions) {
+      for (int i = 0; i < func.ParamTypes.Count; i++) {
+        if (func.ParamTypes[i] is IrInterfaceType) { selfCandidateSet.Add(func); break; }
       }
     }
-
-    if (subTimings != null) {
-      StageTimer.Record(subTimings, "ia.removeDead", sw!.ElapsedMilliseconds);
-      Console.Error.WriteLine("    iface sub:" + StageTimer.Format(subTimings));
+    for (int removeRound = 0; removeRound < 20 && selfCandidateSet.Count > 0; removeRound++) {
+      var referencedCallees = new HashSet<string>();
+      foreach (var func in module.Functions) {
+        if (selfCandidateSet.Contains(func)) continue;
+        foreach (var block in func.Body.Blocks) {
+          foreach (var op in block.Operations) {
+            if (op is MaxonCallOp call) referencedCallees.Add(call.Callee);
+            else if (op is MaxonTryCallOp tryCall) referencedCallees.Add(tryCall.Callee);
+            else if (op is MaxonClosureCreateOp closure) referencedCallees.Add(closure.FunctionName);
+          }
+        }
+      }
+      var toRemove = new HashSet<IrFunction<MaxonOp>>();
+      foreach (var f in selfCandidateSet) {
+        if (!referencedCallees.Contains(f.Name)) toRemove.Add(f);
+      }
+      if (toRemove.Count == 0) break;
+      module.RemoveFunctionsWhere(f => toRemove.Contains(f));
+      selfCandidateSet.ExceptWith(toRemove);
     }
   }
 

@@ -232,6 +232,11 @@ public class IrInterfaceMethodSignature(string name, List<string> paramTypeNames
 public class IrInterfaceType(string name, List<IrInterfaceMethodSignature> methods, List<string>? extendedInterfaces = null) : IrType(name, 0) {
   public List<IrInterfaceMethodSignature> Methods { get; } = methods;
   public List<string> ExtendedInterfaces { get; } = extendedInterfaces ?? [];
+  // An interface value at runtime is a heap pointer to the implementing
+  // struct's allocation. Fields of interface type therefore need decref
+  // when their owning struct is destructed, the same way struct-typed
+  // fields do.
+  public override bool IsHeapAllocated => true;
 }
 
 public class IrEnumCase(string name, int ordinal, object? rawValue = null,

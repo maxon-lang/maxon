@@ -572,3 +572,66 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: interface-field-pass-as-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+// Holder stores an interface-typed field. main() constructs a Holder
+// over a Marker, then reads the field (h.t) and passes it to a
+// function expecting the same interface type. The construction and
+// the field-read happen in the same function so monomorphization can
+// propagate the concrete type (`Marker`) through the Holder instance
+// and rewrite the indirect dispatch in `callTag` to `Marker.tag`.
+//
+// Regression guard for two parser bugs around interface-typed fields,
+// both diagnosed via the FunctionRegAllocator interface-field
+// workaround in the self-hosted register allocator:
+//   1. Field-access op produced a MaxonStruct with empty TypeName,
+//      crashing FillDefaultArgs with NullReferenceException at the
+//      call site (Dictionary.TryGetValue, key=null).
+//   2. After fixing the empty TypeName, the call-site type-check
+//      rejected the value with E3005 "type '' does not implement
+//      interface 'Tagged'" because the value registered in the
+//      variables table for the field still carried no struct-type
+//      name, so the resolved MaxonStruct came back with an empty
+//      TypeName at the next use.
+type Holder
+	export let t Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+function main() returns ExitCode
+	let m = Marker.create(n: 42)
+	let h = Holder.create(t: m)
+	return callTag(h.t)
+end 'main'
+```
+```exitcode
+42
+```
