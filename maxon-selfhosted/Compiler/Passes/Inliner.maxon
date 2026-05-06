@@ -799,8 +799,17 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	emitMultiBlockInlinedBlocks(module: module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
 
 	// Phase 5: register the new blocks (inlined + continuation) on the
-	// caller. Append-only so the entry block stays at blockRefs[0].
-	registerNewBlocksOnCaller(module: module, caller: caller, callee: callee, continuationBlock: continuationBlock)
+	// caller. Insert the spliced sub-CFG immediately AFTER the call-site
+	// block in `caller.blockRefs` — this keeps the linear block ordering
+	// matching the natural control flow (the call-site block ends with a
+	// `br` to the inlined entry; the inlined body terminates with a `br`
+	// to the continuation; the continuation falls through to whatever
+	// followed the call site). Without this, the spliced blocks land at
+	// the end of `caller.blockRefs`, forcing the call-site block to jump
+	// forward over the rest of the function to reach the inlined body and
+	// then jump back to the continuation — see the array-literal-constant
+	// CompiledIR before this change.
+	registerNewBlocksOnCaller(module: module, caller: caller, callee: callee, callSiteBlockId: block.id, continuationBlock: continuationBlock)
 
 	// Phase 6: substitute call result.
 	if returnsValue 'subRet'
@@ -932,20 +941,45 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 	end 'eachCalleeBlock'
 end 'emitMultiBlockInlinedBlocks'
 
-// Append every newly-created callee block (and the continuation) to the
-// caller's blockRefs. Block storage was already pushed in
-// emitMultiBlockInlinedBlocks; this just records the indices on the
-// caller. The continuation is pushed last so it appears after all
-// inlined blocks in iteration order.
-function registerNewBlocksOnCaller(module StdModule, caller IrFunction, callee IrFunction, continuationBlock IrBlock)
+// Insert every newly-created callee block (and the continuation) into the
+// caller's blockRefs immediately after the call-site block, preserving
+// linear flow. Block storage was already pushed by
+// `emitMultiBlockInlinedBlocks`; this records the indices in the right
+// position on the caller. The continuation lands last among the inserted
+// entries so the inlined body's `br continuation` falls through naturally.
+function registerNewBlocksOnCaller(module StdModule, caller IrFunction, callee IrFunction, callSiteBlockId BlockId, continuationBlock IrBlock)
 	let newBlocksStart = module.blocks.count() - callee.blockRefs.count()
-	for i in 0 upto callee.blockRefs.count() 'eachInlined'
-		caller.blockRefs.append(newBlocksStart + i)
-	end 'eachInlined'
 	let contIdx = module.blocks.count()
 	module.pushBlock(continuationBlock)
-	caller.blockRefs.append(contIdx)
+
+	// Find the call-site block's position in caller.blockRefs. Insertion
+	// starts at the slot immediately after it, so the spliced sub-CFG is
+	// emitted contiguously with the caller's pre-call ops.
+	var insertAt = findBlockRefPosition(module: module, caller: caller, blockId: callSiteBlockId) + 1
+
+	for i in 0 upto callee.blockRefs.count() 'eachInlined'
+		try caller.blockRefs.insert(at: insertAt, value: newBlocksStart + i) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert failed at {insertAt}")
+		insertAt = insertAt + 1
+	end 'eachInlined'
+	try caller.blockRefs.insert(at: insertAt, value: contIdx) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert (continuation) failed at {insertAt}")
 end 'registerNewBlocksOnCaller'
+
+// Locate the position of `blockId` within `caller.blockRefs`. The
+// caller-walker handed us a block that came from `caller`'s iteration
+// loop, so the block must be registered — a missing entry means the IR
+// is malformed and we panic. The flat scan is fine: caller.blockRefs is
+// at most a few dozen entries for the functions the inliner cares about.
+function findBlockRefPosition(module StdModule, caller IrFunction, blockId BlockId) returns BlockRefIndex
+	var idx = 0 as BlockRefIndex
+	for blockRef in caller.blockRefs 'each'
+		let candidate = try module.blocks.get(blockRef) otherwise panic("findBlockRefPosition: blockRef {blockRef} not in module")
+		if candidate.id == blockId 'match'
+			return idx
+		end 'match'
+		idx = idx + 1
+	end 'each'
+	panic("findBlockRefPosition: block {blockId} not registered on caller {caller.name}")
+end 'findBlockRefPosition'
 
 // Rewrite a non-terminator op through both ValueId and BlockId remaps.
 // Only StdControlOp.br/condBr carry BlockId references in their bodies;

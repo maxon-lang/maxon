@@ -36,7 +36,14 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // `livenessRoots`, and `staticRdataValues` makes the cached-stdlib project
 // state identical to a fresh-from-source build for every consumer 11.4's
 // lowering reads.
-let CACHE_FORMAT_VERSION = 9
+// v10: persist the stdlib's post-dce StdModule snapshot so the user
+// pipeline's inliner pass can splice stdlib accessor bodies (Array.get,
+// ArrayIterator.advance/current, Optional.unwrap, etc.) into user
+// callers. Without this, the inliner's `funcMap` only sees user
+// functions and every cross-module accessor call stays a `func.call`,
+// which costs two indirect calls per iteration in a tight `for n in
+// arr` loop.
+let CACHE_FORMAT_VERSION = 10
 
 // ============================================================
 // Types
@@ -135,6 +142,13 @@ export type StdlibCacheData
 	// call op — silent ABI corruption on x64, validator rejection on wasm.
 	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
 	export var staticRdataValues StaticRdataValueMap
+	// Phase 11.6 (cache v10): the stdlib's StdModule at the post-dce
+	// point of its build pipeline. The user-code pipeline merges this
+	// into its own StdModule for the inliner pass so stdlib accessor
+	// bodies are visible at user call sites; merged functions are
+	// dropped after inlining so the linker-side stdlib cache stays the
+	// sole source of stdlib machine code.
+	export var inlinerStdModule StdModule
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -159,7 +173,8 @@ export type StdlibCacheData
 			witnessTables: WitnessTableRegistry.create(),
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
-			staticRdataValues: StaticRdataValueMap.create()
+			staticRdataValues: StaticRdataValueMap.create(),
+			inlinerStdModule: StdModule.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -410,6 +425,9 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	writeStringArray(buf, arr: data.livenessRoots)
 	writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
 	writeStaticRdataValueMap(buf, m: data.staticRdataValues)
+	// Cache v10: the stdlib's post-dce StdModule snapshot for cross-
+	// module inlining at user pipeline time.
+	writeStdModule(buf, module: data.inlinerStdModule)
 
 	// Ensure parent directory (and any missing ancestors) exist
 	let parentDir = try path.parent() otherwise FilePath from ""
@@ -821,6 +839,11 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	let (srv, pSrv) = readStaticRdataValueMap(buf, offset: pos)
 	pos = pSrv
 	data.staticRdataValues = srv
+	// Cache v10: read the stdlib's post-dce StdModule for the user
+	// pipeline's inliner pass.
+	let (inlinerMod, pIm2) = readStdModule(buf, offset: pos)
+	pos = pIm2
+	data.inlinerStdModule = inlinerMod
 
 	// Populate data.typeNameTable from the destination project's interner so
 	// `restoreStdlibMetadata`'s translation step is a no-op identity. The
@@ -1798,3 +1821,1149 @@ function readStaticRdataValueMap(buf ByteArray, offset ByteOffset) returns (Stat
 	end 'eachEntry'
 	return (m, pos)
 end 'readStaticRdataValueMap'
+
+// ============================================================
+// Cache v10 codec helpers — Phase 11.6 stdlib StdModule round-trip.
+// ============================================================
+//
+// Persists the stdlib's post-dce StdModule so the user pipeline's inliner
+// pass can splice stdlib accessor bodies. Symmetric pairs: each
+// `write<TypeName>` matches the value's variants and emits ordinal +
+// payload; each `read<TypeName>` reads the ordinal, lifts via
+// `unionCases.fromRawValue`, and dispatches to a per-variant helper that
+// returns the freshly-constructed union value plus the post-read offset.
+// Match arms in this language are single-statement, so the read side
+// factors every multi-statement arm into a `read<Variant>Inner` helper.
+
+// --- Bool byte helper ---
+//
+// Single-byte encoding for bool fields. Persisting a 1-bit flag in 8
+// bytes via writeQword would cost ~6KB across a typical stdlib's worth
+// of system ops. One byte per flag keeps the codec compact.
+
+function writeBoolByte(buf ByteArray, b bool)
+	if b 'isTrue'
+		buf.push(1 as byte)
+	end 'isTrue' else 'isFalse'
+		buf.push(0 as byte)
+	end 'isFalse'
+end 'writeBoolByte'
+
+function readBoolByte(buf ByteArray, offset ByteOffset) returns (bool, ByteOffset)
+	let b = try buf.get(offset) otherwise panic("readBoolByte: buf truncated at {offset}")
+	return (b != 0, offset + 1)
+end 'readBoolByte'
+
+// --- ValueIdArray ---
+
+function writeValueIdArrayCodec(buf ByteArray, arr ValueIdArray)
+	writeDword(buf, value: arr.count())
+	for v in arr 'each'
+		writeQword(buf, value: v)
+	end 'each'
+end 'writeValueIdArrayCodec'
+
+function readValueIdArrayCodec(buf ByteArray, offset ByteOffset) returns (ValueIdArray, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = ValueIdArray.create()
+	for _ in 0 upto count 'each'
+		let v = readQword(buf, offset: pos)
+		pos = pos + 8
+		arr.push(v)
+	end 'each'
+	return (arr, pos)
+end 'readValueIdArrayCodec'
+
+// --- StdTypeArray ---
+
+function writeStdTypeArrayCodec(buf ByteArray, arr StdTypeArray)
+	writeDword(buf, value: arr.count())
+	for t in arr 'each'
+		writeStdTypeTag(buf, t: t)
+	end 'each'
+end 'writeStdTypeArrayCodec'
+
+function readStdTypeArrayCodec(buf ByteArray, offset ByteOffset) returns (StdTypeArray, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = StdTypeArray.create()
+	for _ in 0 upto count 'each'
+		let (t, p) = readStdTypeTag(buf, offset: pos)
+		pos = p
+		arr.push(t)
+	end 'each'
+	return (arr, pos)
+end 'readStdTypeArrayCodec'
+
+// --- StdArithConst / StdArithUnaryOp / StdArithBinaryOp ---
+
+function writeStdArithConst(buf ByteArray, c StdArithConst)
+	writeDword(buf, value: c.opcode.ordinal)
+	writeQword(buf, value: c.resultId)
+	writeQword(buf, value: c.value)
+end 'writeStdArithConst'
+
+function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithConst, ByteOffset)
+	let opRaw = readDword(buf, offset: offset)
+	let opcode = liftStdArithConstOpcode(opRaw)
+	let resultId = readQword(buf, offset: offset + 4)
+	let value = readQword(buf, offset: offset + 12)
+	return (StdArithConst.create(opcode: opcode, resultId: resultId, value: value as ParsedInt), offset + 20)
+end 'readStdArithConst'
+
+function liftStdArithConstOpcode(raw MachineWord) returns StdArithConstOpcode
+	let kase = try StdArithConstOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithConstOpcode {raw}")
+	return match kase 'oc'
+		constI64 gives StdArithConstOpcode.constI64
+		constF64 gives StdArithConstOpcode.constF64
+	end 'oc'
+end 'liftStdArithConstOpcode'
+
+function writeStdArithUnaryOp(buf ByteArray, u StdArithUnaryOp)
+	writeDword(buf, value: u.opcode.ordinal)
+	writeQword(buf, value: u.resultId)
+	writeQword(buf, value: u.operandId)
+end 'writeStdArithUnaryOp'
+
+function readStdArithUnaryOp(buf ByteArray, offset ByteOffset) returns (StdArithUnaryOp, ByteOffset)
+	let opRaw = readDword(buf, offset: offset)
+	let opcode = liftStdArithUnaryOpcode(opRaw)
+	let resultId = readQword(buf, offset: offset + 4)
+	let operandId = readQword(buf, offset: offset + 12)
+	return (StdArithUnaryOp.create(opcode: opcode, resultId: resultId, operandId: operandId), offset + 20)
+end 'readStdArithUnaryOp'
+
+function liftStdArithUnaryOpcode(raw MachineWord) returns StdArithUnaryOpcode
+	let kase = try StdArithUnaryOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithUnaryOpcode {raw}")
+	return match kase 'oc'
+		negI64 gives StdArithUnaryOpcode.negI64
+		bitNotI64 gives StdArithUnaryOpcode.bitNotI64
+		fpToSiI64 gives StdArithUnaryOpcode.fpToSiI64
+		siToFpF64 gives StdArithUnaryOpcode.siToFpF64
+		sqrtF64 gives StdArithUnaryOpcode.sqrtF64
+		floorF64 gives StdArithUnaryOpcode.floorF64
+		ceilF64 gives StdArithUnaryOpcode.ceilF64
+		roundF64 gives StdArithUnaryOpcode.roundF64
+		absF64 gives StdArithUnaryOpcode.absF64
+	end 'oc'
+end 'liftStdArithUnaryOpcode'
+
+function writeStdArithBinaryOp(buf ByteArray, b StdArithBinaryOp)
+	writeDword(buf, value: b.opcode.ordinal)
+	writeQword(buf, value: b.resultId)
+	writeQword(buf, value: b.leftId)
+	writeQword(buf, value: b.rightId)
+end 'writeStdArithBinaryOp'
+
+function readStdArithBinaryOp(buf ByteArray, offset ByteOffset) returns (StdArithBinaryOp, ByteOffset)
+	let opRaw = readDword(buf, offset: offset)
+	let opcode = liftStdArithBinaryOpcode(opRaw)
+	let resultId = readQword(buf, offset: offset + 4)
+	let leftId = readQword(buf, offset: offset + 12)
+	let rightId = readQword(buf, offset: offset + 20)
+	return (StdArithBinaryOp.create(opcode: opcode, resultId: resultId, leftId: leftId, rightId: rightId), offset + 28)
+end 'readStdArithBinaryOp'
+
+function liftStdArithBinaryOpcode(raw MachineWord) returns StdArithBinaryOpcode
+	let kase = try StdArithBinaryOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithBinaryOpcode {raw}")
+	return match kase 'oc'
+		addI64 gives StdArithBinaryOpcode.addI64
+		subI64 gives StdArithBinaryOpcode.subI64
+		mulI64 gives StdArithBinaryOpcode.mulI64
+		divI64 gives StdArithBinaryOpcode.divI64
+		remI64 gives StdArithBinaryOpcode.remI64
+		andI64 gives StdArithBinaryOpcode.andI64
+		orI64 gives StdArithBinaryOpcode.orI64
+		orI1 gives StdArithBinaryOpcode.orI1
+		xorI64 gives StdArithBinaryOpcode.xorI64
+		shlI64 gives StdArithBinaryOpcode.shlI64
+		shrI64 gives StdArithBinaryOpcode.shrI64
+		addF64 gives StdArithBinaryOpcode.addF64
+		subF64 gives StdArithBinaryOpcode.subF64
+		mulF64 gives StdArithBinaryOpcode.mulF64
+		divF64 gives StdArithBinaryOpcode.divF64
+		cmpI64Eq gives StdArithBinaryOpcode.cmpI64Eq
+		cmpI64Ne gives StdArithBinaryOpcode.cmpI64Ne
+		cmpI64Lt gives StdArithBinaryOpcode.cmpI64Lt
+		cmpI64Le gives StdArithBinaryOpcode.cmpI64Le
+		cmpI64Gt gives StdArithBinaryOpcode.cmpI64Gt
+		cmpI64Ge gives StdArithBinaryOpcode.cmpI64Ge
+		cmpI64Ugt gives StdArithBinaryOpcode.cmpI64Ugt
+		cmpF64Eq gives StdArithBinaryOpcode.cmpF64Eq
+		cmpF64Ne gives StdArithBinaryOpcode.cmpF64Ne
+		cmpF64Lt gives StdArithBinaryOpcode.cmpF64Lt
+		cmpF64Le gives StdArithBinaryOpcode.cmpF64Le
+		cmpF64Gt gives StdArithBinaryOpcode.cmpF64Gt
+		cmpF64Ge gives StdArithBinaryOpcode.cmpF64Ge
+	end 'oc'
+end 'liftStdArithBinaryOpcode'
+
+// --- StdArithOp ---
+
+function writeStdArithOp(buf ByteArray, op StdArithOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'arith'
+		const(c) then writeStdArithConst(buf, c: c)
+		unary(u) then writeStdArithUnaryOp(buf, u: u)
+		binary(bin) then writeStdArithBinaryOp(buf, b: bin)
+	end 'arith'
+end 'writeStdArithOp'
+
+function readStdArithOp(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdArithOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithOp tag {raw}")
+	return match kase 'arith'
+		const gives readStdArithOpConst(buf, offset: offset + 4)
+		unary gives readStdArithOpUnary(buf, offset: offset + 4)
+		binary gives readStdArithOpBinary(buf, offset: offset + 4)
+	end 'arith'
+end 'readStdArithOp'
+
+function readStdArithOpConst(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
+	let (c, p) = readStdArithConst(buf, offset: offset)
+	return (StdArithOp.const(c), p)
+end 'readStdArithOpConst'
+
+function readStdArithOpUnary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
+	let (u, p) = readStdArithUnaryOp(buf, offset: offset)
+	return (StdArithOp.unary(u), p)
+end 'readStdArithOpUnary'
+
+function readStdArithOpBinary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
+	let (binOp, p) = readStdArithBinaryOp(buf, offset: offset)
+	return (StdArithOp.binary(binOp), p)
+end 'readStdArithOpBinary'
+
+// --- StdControlOp ---
+
+function writeStdControlOp(buf ByteArray, op StdControlOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'cf'
+		br(target, argIds) then writeStdControlBr(buf, target: target, argIds: argIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) then writeStdControlCondBr(buf, condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds)
+	end 'cf'
+end 'writeStdControlOp'
+
+function writeStdControlBr(buf ByteArray, target BlockId, argIds ValueIdArray)
+	writeQword(buf, value: target)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdControlBr'
+
+function writeStdControlCondBr(buf ByteArray, condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
+	writeQword(buf, value: condId)
+	writeQword(buf, value: thenTarget)
+	writeValueIdArrayCodec(buf, arr: thenArgIds)
+	writeQword(buf, value: elseTarget)
+	writeValueIdArrayCodec(buf, arr: elseArgIds)
+end 'writeStdControlCondBr'
+
+function readStdControlOp(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdControlOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdControlOp tag {raw}")
+	return match kase 'cf'
+		br gives readStdControlOpBr(buf, offset: offset + 4)
+		condBr gives readStdControlOpCondBr(buf, offset: offset + 4)
+	end 'cf'
+end 'readStdControlOp'
+
+function readStdControlOpBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
+	let target = readQword(buf, offset: offset)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 8)
+	return (StdControlOp.br(target, argIds: argIds), p)
+end 'readStdControlOpBr'
+
+function readStdControlOpCondBr(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
+	let condId = readQword(buf, offset: offset)
+	let thenTarget = readQword(buf, offset: offset + 8)
+	let (thenArgIds, p1) = readValueIdArrayCodec(buf, offset: offset + 16)
+	let elseTarget = readQword(buf, offset: p1)
+	let (elseArgIds, p2) = readValueIdArrayCodec(buf, offset: p1 + 8)
+	return (StdControlOp.condBr(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds), p2)
+end 'readStdControlOpCondBr'
+
+// --- StdCallOp ---
+
+function writeStdCallOp(buf ByteArray, op StdCallOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'call'
+		ret(retValId) then writeQword(buf, value: retValId)
+		call(resultId, callee, argIds) then writeStdCallCall(buf, resultId: resultId, callee: callee, argIds: argIds)
+		tryCall(resultId, callee, argIds, errorFlagId) then writeStdCallTryCall(buf, resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
+		indirectCall(resultId, calleeId, argIds) then writeStdCallIndirect(buf, resultId: resultId, calleeId: calleeId, argIds: argIds)
+		funcRef(resultId, funcName) then writeStdCallFuncRef(buf, resultId: resultId, funcName: funcName)
+		tailCall(callee, argIds) then writeStdCallTail(buf, callee: callee, argIds: argIds)
+		param(resultId, paramIndex, paramType) then writeStdCallParam(buf, resultId: resultId, paramIndex: paramIndex, paramType: paramType)
+	end 'call'
+end 'writeStdCallOp'
+
+function writeStdCallCall(buf ByteArray, resultId ValueId, callee String, argIds ValueIdArray)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: callee)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdCallCall'
+
+function writeStdCallTryCall(buf ByteArray, resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: callee)
+	writeValueIdArrayCodec(buf, arr: argIds)
+	writeQword(buf, value: errorFlagId)
+end 'writeStdCallTryCall'
+
+function writeStdCallIndirect(buf ByteArray, resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: calleeId)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdCallIndirect'
+
+function writeStdCallFuncRef(buf ByteArray, resultId ValueId, funcName String)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: funcName)
+end 'writeStdCallFuncRef'
+
+function writeStdCallTail(buf ByteArray, callee String, argIds ValueIdArray)
+	writeString(buf, s: callee)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdCallTail'
+
+function writeStdCallParam(buf ByteArray, resultId ValueId, paramIndex VarSlot, paramType StdType)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: paramIndex)
+	writeStdTypeTag(buf, t: paramType)
+end 'writeStdCallParam'
+
+function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdCallOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdCallOp tag {raw}")
+	return match kase 'call'
+		ret gives readStdCallRet(buf, offset: offset + 4)
+		call gives readStdCallCall(buf, offset: offset + 4)
+		tryCall gives readStdCallTryCall(buf, offset: offset + 4)
+		indirectCall gives readStdCallIndirect(buf, offset: offset + 4)
+		funcRef gives readStdCallFuncRef(buf, offset: offset + 4)
+		tailCall gives readStdCallTail(buf, offset: offset + 4)
+		param gives readStdCallParam(buf, offset: offset + 4)
+	end 'call'
+end 'readStdCallOp'
+
+function readStdCallRet(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let retValId = readQword(buf, offset: offset)
+	return (StdCallOp.ret(retValId), offset + 8)
+end 'readStdCallRet'
+
+function readStdCallCall(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (callee, p1) = readString(buf, offset: offset + 8)
+	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
+	return (StdCallOp.call(resultId, callee: callee, argIds: argIds), p2)
+end 'readStdCallCall'
+
+function readStdCallTryCall(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (callee, p1) = readString(buf, offset: offset + 8)
+	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
+	let errorFlagId = readQword(buf, offset: p2)
+	return (StdCallOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId), p2 + 8)
+end 'readStdCallTryCall'
+
+function readStdCallIndirect(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let calleeId = readQword(buf, offset: offset + 8)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
+	return (StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds), p)
+end 'readStdCallIndirect'
+
+function readStdCallFuncRef(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (funcName, p) = readString(buf, offset: offset + 8)
+	return (StdCallOp.funcRef(resultId, funcName: funcName), p)
+end 'readStdCallFuncRef'
+
+function readStdCallTail(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let (callee, p1) = readString(buf, offset: offset)
+	let (argIds, p2) = readValueIdArrayCodec(buf, offset: p1)
+	return (StdCallOp.tailCall(callee, argIds: argIds), p2)
+end 'readStdCallTail'
+
+function readStdCallParam(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let paramIndex = readQword(buf, offset: offset + 8)
+	let (paramType, p) = readStdTypeTag(buf, offset: offset + 16)
+	return (StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType), p)
+end 'readStdCallParam'
+
+// --- StdMemoryOp ---
+
+function writeStdMemoryOp(buf ByteArray, op StdMemoryOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'mem'
+		storeSlot(slotId, valueId) then writeStdMemoryStore(buf, slotId: slotId, valueId: valueId)
+		loadSlot(resultId, slotId) then writeStdMemoryLoad(buf, resultId: resultId, slotId: slotId)
+	end 'mem'
+end 'writeStdMemoryOp'
+
+function writeStdMemoryStore(buf ByteArray, slotId VarSlot, valueId ValueId)
+	writeQword(buf, value: slotId)
+	writeQword(buf, value: valueId)
+end 'writeStdMemoryStore'
+
+function writeStdMemoryLoad(buf ByteArray, resultId ValueId, slotId VarSlot)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: slotId)
+end 'writeStdMemoryLoad'
+
+function readStdMemoryOp(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdMemoryOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdMemoryOp tag {raw}")
+	return match kase 'mem'
+		storeSlot gives readStdMemoryStore(buf, offset: offset + 4)
+		loadSlot gives readStdMemoryLoad(buf, offset: offset + 4)
+	end 'mem'
+end 'readStdMemoryOp'
+
+function readStdMemoryStore(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
+	let slotId = readQword(buf, offset: offset)
+	let valueId = readQword(buf, offset: offset + 8)
+	return (StdMemoryOp.storeSlot(slotId, valueId: valueId), offset + 16)
+end 'readStdMemoryStore'
+
+function readStdMemoryLoad(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let slotId = readQword(buf, offset: offset + 8)
+	return (StdMemoryOp.loadSlot(resultId, slotId: slotId), offset + 16)
+end 'readStdMemoryLoad'
+
+// --- StdSystemOp ---
+//
+// The largest variant set: every system op is serialized tag + payload.
+// Each variant has both a `writeStdSys<Variant>` and a
+// `readStdSys<Variant>` helper because the language requires single-
+// statement match arms.
+
+function writeStdSystemOp(buf ByteArray, op StdSystemOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'sys'
+		syscall(resultId, number, argIds) then writeStdSysSyscall(buf, resultId: resultId, number: number, argIds: argIds)
+		iatCall(resultId, slotIndex, argIds) then writeStdSysIatCall(buf, resultId: resultId, slotIndex: slotIndex, argIds: argIds)
+		globalAddr(resultId, name) then writeStdSysGlobalAddr(buf, resultId: resultId, name: name)
+		memcpy(dstId, srcId, lenId) then writeStdSysMemcpy(buf, dstId: dstId, srcId: srcId, lenId: lenId)
+		stackAddr(resultId, slotId) then writeStdSysStackAddr(buf, resultId: resultId, slotId: slotId)
+		storeByte(baseId, offsetId, byteId) then writeStdSysStoreByte(buf, baseId: baseId, offsetId: offsetId, byteId: byteId)
+		loadByte(resultId, baseId, offsetId) then writeStdSysLoadByte(buf, resultId: resultId, baseId: baseId, offsetId: offsetId)
+		osExit(codeId) then writeQword(buf, value: codeId)
+		osWrite(ptrId, lenId) then writeStdSysOsWrite(buf, ptrId: ptrId, lenId: lenId)
+		free(ptrId) then writeQword(buf, value: ptrId)
+		osWriteErr(ptrId, lenId) then writeStdSysOsWriteErr(buf, ptrId: ptrId, lenId: lenId)
+		osOpenWrite(resultId, pathPtrId, pathLenId) then writeStdSysOsOpenWrite(buf, resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) then writeStdSysOsWriteFd(buf, fdId: fdId, ptrId: ptrId, lenId: lenId)
+		osClose(fdId) then writeQword(buf, value: fdId)
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then writeStdSysOsGetEnv(buf, resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)
+		loadFramePtr(resultId) then writeQword(buf, value: resultId)
+		loadIndirect(resultId, addrId, offset, isFloat) then writeStdSysLoadIndirect(buf, resultId: resultId, addrId: addrId, offset: offset, isFloat: isFloat)
+		funcAddr(resultId, name) then writeStdSysFuncAddr(buf, resultId: resultId, name: name)
+		storeIndirect(addrId, offset, valueId, isFloat) then writeStdSysStoreIndirect(buf, addrId: addrId, offset: offset, valueId: valueId, isFloat: isFloat)
+		printLiteral(stringId) then writeQword(buf, value: stringId)
+		printInt(valueId) then writeQword(buf, value: valueId)
+		drop(valueId) then writeQword(buf, value: valueId)
+		osAllocPages(resultId, sizeId) then writeStdSysOsAllocPages(buf, resultId: resultId, sizeId: sizeId)
+		osAllocPagesLarge(resultId, sizeId) then writeStdSysOsAllocPagesLarge(buf, resultId: resultId, sizeId: sizeId)
+		osFreePages(ptrId, sizeId) then writeStdSysOsFreePages(buf, ptrId: ptrId, sizeId: sizeId)
+		atomicInc(addrId) then writeQword(buf, value: addrId)
+		atomicDec(addrId) then writeQword(buf, value: addrId)
+		atomicXadd(resultId, addrId, valId) then writeStdSysAtomicXadd(buf, resultId: resultId, addrId: addrId, valId: valId)
+		osLockInit(addrId) then writeQword(buf, value: addrId)
+		osLockAcquire(addrId) then writeQword(buf, value: addrId)
+		osLockRelease(addrId) then writeQword(buf, value: addrId)
+		boxValue(resultId, valueId, sizeId) then writeStdSysBoxValue(buf, resultId: resultId, valueId: valueId, sizeId: sizeId)
+		unboxValue(resultId, ptrId, sizeId) then writeStdSysUnboxValue(buf, resultId: resultId, ptrId: ptrId, sizeId: sizeId)
+		loadLayoutDescriptor(resultId, label) then writeStdSysLoadLayoutDescriptor(buf, resultId: resultId, label: label)
+		loadWitnessTable(resultId, label) then writeStdSysLoadWitnessTable(buf, resultId: resultId, label: label)
+		descriptorField(resultId, descAddrId, field) then writeStdSysDescriptorField(buf, resultId: resultId, descAddrId: descAddrId, field: field)
+		witnessMethod(resultId, witnessAddrId, methodIndex) then writeStdSysWitnessMethod(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex)
+		dropTypeParam(slotValueId, layoutValueId) then writeStdSysDropTypeParam(buf, slotValueId: slotValueId, layoutValueId: layoutValueId)
+	end 'sys'
+end 'writeStdSystemOp'
+
+function writeStdSysSyscall(buf ByteArray, resultId ValueId, number MachineWord, argIds ValueIdArray)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: number)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdSysSyscall'
+
+function writeStdSysIatCall(buf ByteArray, resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: slotIndex)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdSysIatCall'
+
+function writeStdSysGlobalAddr(buf ByteArray, resultId ValueId, name String)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: name)
+end 'writeStdSysGlobalAddr'
+
+function writeStdSysMemcpy(buf ByteArray, dstId ValueId, srcId ValueId, lenId ValueId)
+	writeQword(buf, value: dstId)
+	writeQword(buf, value: srcId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysMemcpy'
+
+function writeStdSysStackAddr(buf ByteArray, resultId ValueId, slotId VarSlot)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: slotId)
+end 'writeStdSysStackAddr'
+
+function writeStdSysStoreByte(buf ByteArray, baseId ValueId, offsetId ValueId, byteId ValueId)
+	writeQword(buf, value: baseId)
+	writeQword(buf, value: offsetId)
+	writeQword(buf, value: byteId)
+end 'writeStdSysStoreByte'
+
+function writeStdSysLoadByte(buf ByteArray, resultId ValueId, baseId ValueId, offsetId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: baseId)
+	writeQword(buf, value: offsetId)
+end 'writeStdSysLoadByte'
+
+function writeStdSysOsWrite(buf ByteArray, ptrId ValueId, lenId ValueId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysOsWrite'
+
+function writeStdSysOsWriteErr(buf ByteArray, ptrId ValueId, lenId ValueId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysOsWriteErr'
+
+function writeStdSysOsOpenWrite(buf ByteArray, resultId ValueId, pathPtrId ValueId, pathLenId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: pathPtrId)
+	writeQword(buf, value: pathLenId)
+end 'writeStdSysOsOpenWrite'
+
+function writeStdSysOsWriteFd(buf ByteArray, fdId ValueId, ptrId ValueId, lenId ValueId)
+	writeQword(buf, value: fdId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysOsWriteFd'
+
+function writeStdSysOsGetEnv(buf ByteArray, resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: namePtrId)
+	writeQword(buf, value: nameLenId)
+	writeQword(buf, value: outBufPtrId)
+	writeQword(buf, value: outBufLenId)
+end 'writeStdSysOsGetEnv'
+
+function writeStdSysLoadIndirect(buf ByteArray, resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: addrId)
+	writeQword(buf, value: offset)
+	writeBoolByte(buf, b: isFloat)
+end 'writeStdSysLoadIndirect'
+
+function writeStdSysFuncAddr(buf ByteArray, resultId ValueId, name String)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: name)
+end 'writeStdSysFuncAddr'
+
+function writeStdSysStoreIndirect(buf ByteArray, addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool)
+	writeQword(buf, value: addrId)
+	writeQword(buf, value: offset)
+	writeQword(buf, value: valueId)
+	writeBoolByte(buf, b: isFloat)
+end 'writeStdSysStoreIndirect'
+
+function writeStdSysOsAllocPages(buf ByteArray, resultId ValueId, sizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: sizeId)
+end 'writeStdSysOsAllocPages'
+
+function writeStdSysOsAllocPagesLarge(buf ByteArray, resultId ValueId, sizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: sizeId)
+end 'writeStdSysOsAllocPagesLarge'
+
+function writeStdSysOsFreePages(buf ByteArray, ptrId ValueId, sizeId ValueId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: sizeId)
+end 'writeStdSysOsFreePages'
+
+function writeStdSysAtomicXadd(buf ByteArray, resultId ValueId, addrId ValueId, valId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: addrId)
+	writeQword(buf, value: valId)
+end 'writeStdSysAtomicXadd'
+
+function writeStdSysBoxValue(buf ByteArray, resultId ValueId, valueId ValueId, sizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: valueId)
+	writeQword(buf, value: sizeId)
+end 'writeStdSysBoxValue'
+
+function writeStdSysUnboxValue(buf ByteArray, resultId ValueId, ptrId ValueId, sizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: sizeId)
+end 'writeStdSysUnboxValue'
+
+function writeStdSysLoadLayoutDescriptor(buf ByteArray, resultId ValueId, label String)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: label)
+end 'writeStdSysLoadLayoutDescriptor'
+
+function writeStdSysLoadWitnessTable(buf ByteArray, resultId ValueId, label String)
+	writeQword(buf, value: resultId)
+	writeString(buf, s: label)
+end 'writeStdSysLoadWitnessTable'
+
+function writeStdSysDescriptorField(buf ByteArray, resultId ValueId, descAddrId ValueId, field DescriptorField)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: descAddrId)
+	writeDword(buf, value: field.ordinal)
+end 'writeStdSysDescriptorField'
+
+function writeStdSysWitnessMethod(buf ByteArray, resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: witnessAddrId)
+	writeQword(buf, value: methodIndex)
+end 'writeStdSysWitnessMethod'
+
+function writeStdSysDropTypeParam(buf ByteArray, slotValueId ValueId, layoutValueId ValueId)
+	writeQword(buf, value: slotValueId)
+	writeQword(buf, value: layoutValueId)
+end 'writeStdSysDropTypeParam'
+
+function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdSystemOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdSystemOp tag {raw}")
+	let pos = offset + 4
+	return match kase 'sys'
+		syscall gives readStdSysSyscall(buf, offset: pos)
+		iatCall gives readStdSysIatCall(buf, offset: pos)
+		globalAddr gives readStdSysGlobalAddr(buf, offset: pos)
+		memcpy gives readStdSysMemcpy(buf, offset: pos)
+		stackAddr gives readStdSysStackAddr(buf, offset: pos)
+		storeByte gives readStdSysStoreByte(buf, offset: pos)
+		loadByte gives readStdSysLoadByte(buf, offset: pos)
+		osExit gives readStdSysOsExit(buf, offset: pos)
+		osWrite gives readStdSysOsWrite(buf, offset: pos)
+		free gives readStdSysFree(buf, offset: pos)
+		osWriteErr gives readStdSysOsWriteErr(buf, offset: pos)
+		osOpenWrite gives readStdSysOsOpenWrite(buf, offset: pos)
+		osWriteFd gives readStdSysOsWriteFd(buf, offset: pos)
+		osClose gives readStdSysOsClose(buf, offset: pos)
+		osGetEnv gives readStdSysOsGetEnv(buf, offset: pos)
+		loadFramePtr gives readStdSysLoadFramePtr(buf, offset: pos)
+		loadIndirect gives readStdSysLoadIndirect(buf, offset: pos)
+		funcAddr gives readStdSysFuncAddr(buf, offset: pos)
+		storeIndirect gives readStdSysStoreIndirect(buf, offset: pos)
+		printLiteral gives readStdSysPrintLiteral(buf, offset: pos)
+		printInt gives readStdSysPrintInt(buf, offset: pos)
+		drop gives readStdSysDrop(buf, offset: pos)
+		osAllocPages gives readStdSysOsAllocPages(buf, offset: pos)
+		osAllocPagesLarge gives readStdSysOsAllocPagesLarge(buf, offset: pos)
+		osFreePages gives readStdSysOsFreePages(buf, offset: pos)
+		atomicInc gives readStdSysAtomicInc(buf, offset: pos)
+		atomicDec gives readStdSysAtomicDec(buf, offset: pos)
+		atomicXadd gives readStdSysAtomicXadd(buf, offset: pos)
+		osLockInit gives readStdSysOsLockInit(buf, offset: pos)
+		osLockAcquire gives readStdSysOsLockAcquire(buf, offset: pos)
+		osLockRelease gives readStdSysOsLockRelease(buf, offset: pos)
+		boxValue gives readStdSysBoxValue(buf, offset: pos)
+		unboxValue gives readStdSysUnboxValue(buf, offset: pos)
+		loadLayoutDescriptor gives readStdSysLoadLayoutDescriptor(buf, offset: pos)
+		loadWitnessTable gives readStdSysLoadWitnessTable(buf, offset: pos)
+		descriptorField gives readStdSysDescriptorField(buf, offset: pos)
+		witnessMethod gives readStdSysWitnessMethod(buf, offset: pos)
+		dropTypeParam gives readStdSysDropTypeParam(buf, offset: pos)
+	end 'sys'
+end 'readStdSystemOp'
+
+function readStdSysSyscall(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let number = readQword(buf, offset: offset + 8)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
+	return (StdSystemOp.syscall(resultId, number: number, argIds: argIds), p)
+end 'readStdSysSyscall'
+
+function readStdSysIatCall(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let slotIndex = readQword(buf, offset: offset + 8)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
+	return (StdSystemOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds), p)
+end 'readStdSysIatCall'
+
+function readStdSysGlobalAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (name, p) = readString(buf, offset: offset + 8)
+	return (StdSystemOp.globalAddr(resultId, name: name), p)
+end 'readStdSysGlobalAddr'
+
+function readStdSysMemcpy(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let dstId = readQword(buf, offset: offset)
+	let srcId = readQword(buf, offset: offset + 8)
+	let lenId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.memcpy(dstId, srcId: srcId, lenId: lenId), offset + 24)
+end 'readStdSysMemcpy'
+
+function readStdSysStackAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let slotId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.stackAddr(resultId, slotId: slotId), offset + 16)
+end 'readStdSysStackAddr'
+
+function readStdSysStoreByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let baseId = readQword(buf, offset: offset)
+	let offsetId = readQword(buf, offset: offset + 8)
+	let byteId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: byteId), offset + 24)
+end 'readStdSysStoreByte'
+
+function readStdSysLoadByte(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let baseId = readQword(buf, offset: offset + 8)
+	let offsetId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId), offset + 24)
+end 'readStdSysLoadByte'
+
+function readStdSysOsExit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let codeId = readQword(buf, offset: offset)
+	return (StdSystemOp.osExit(codeId), offset + 8)
+end 'readStdSysOsExit'
+
+function readStdSysOsWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let ptrId = readQword(buf, offset: offset)
+	let lenId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osWrite(ptrId, lenId: lenId), offset + 16)
+end 'readStdSysOsWrite'
+
+function readStdSysFree(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let ptrId = readQword(buf, offset: offset)
+	return (StdSystemOp.free(ptrId), offset + 8)
+end 'readStdSysFree'
+
+function readStdSysOsWriteErr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let ptrId = readQword(buf, offset: offset)
+	let lenId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osWriteErr(ptrId, lenId: lenId), offset + 16)
+end 'readStdSysOsWriteErr'
+
+function readStdSysOsOpenWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let pathPtrId = readQword(buf, offset: offset + 8)
+	let pathLenId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId), offset + 24)
+end 'readStdSysOsOpenWrite'
+
+function readStdSysOsWriteFd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let fdId = readQword(buf, offset: offset)
+	let ptrId = readQword(buf, offset: offset + 8)
+	let lenId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osWriteFd(fdId, ptrId: ptrId, lenId: lenId), offset + 24)
+end 'readStdSysOsWriteFd'
+
+function readStdSysOsClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let fdId = readQword(buf, offset: offset)
+	return (StdSystemOp.osClose(fdId), offset + 8)
+end 'readStdSysOsClose'
+
+function readStdSysOsGetEnv(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let namePtrId = readQword(buf, offset: offset + 8)
+	let nameLenId = readQword(buf, offset: offset + 16)
+	let outBufPtrId = readQword(buf, offset: offset + 24)
+	let outBufLenId = readQword(buf, offset: offset + 32)
+	return (StdSystemOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId), offset + 40)
+end 'readStdSysOsGetEnv'
+
+function readStdSysLoadFramePtr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	return (StdSystemOp.loadFramePtr(resultId), offset + 8)
+end 'readStdSysLoadFramePtr'
+
+function readStdSysLoadIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let addrId = readQword(buf, offset: offset + 8)
+	let off = readQword(buf, offset: offset + 16)
+	let (isFloat, p) = readBoolByte(buf, offset: offset + 24)
+	return (StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: off, isFloat: isFloat), p)
+end 'readStdSysLoadIndirect'
+
+function readStdSysFuncAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (name, p) = readString(buf, offset: offset + 8)
+	return (StdSystemOp.funcAddr(resultId, name: name), p)
+end 'readStdSysFuncAddr'
+
+function readStdSysStoreIndirect(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	let off = readQword(buf, offset: offset + 8)
+	let valueId = readQword(buf, offset: offset + 16)
+	let (isFloat, p) = readBoolByte(buf, offset: offset + 24)
+	return (StdSystemOp.storeIndirect(addrId, offset: off, valueId: valueId, isFloat: isFloat), p)
+end 'readStdSysStoreIndirect'
+
+function readStdSysPrintLiteral(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let stringId = readQword(buf, offset: offset)
+	return (StdSystemOp.printLiteral(stringId), offset + 8)
+end 'readStdSysPrintLiteral'
+
+function readStdSysPrintInt(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let valueId = readQword(buf, offset: offset)
+	return (StdSystemOp.printInt(valueId), offset + 8)
+end 'readStdSysPrintInt'
+
+function readStdSysDrop(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let valueId = readQword(buf, offset: offset)
+	return (StdSystemOp.drop(valueId), offset + 8)
+end 'readStdSysDrop'
+
+function readStdSysOsAllocPages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let sizeId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osAllocPages(resultId, sizeId: sizeId), offset + 16)
+end 'readStdSysOsAllocPages'
+
+function readStdSysOsAllocPagesLarge(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let sizeId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osAllocPagesLarge(resultId, sizeId: sizeId), offset + 16)
+end 'readStdSysOsAllocPagesLarge'
+
+function readStdSysOsFreePages(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let ptrId = readQword(buf, offset: offset)
+	let sizeId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osFreePages(ptrId, sizeId: sizeId), offset + 16)
+end 'readStdSysOsFreePages'
+
+function readStdSysAtomicInc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	return (StdSystemOp.atomicInc(addrId), offset + 8)
+end 'readStdSysAtomicInc'
+
+function readStdSysAtomicDec(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	return (StdSystemOp.atomicDec(addrId), offset + 8)
+end 'readStdSysAtomicDec'
+
+function readStdSysAtomicXadd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let addrId = readQword(buf, offset: offset + 8)
+	let valId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.atomicXadd(resultId, addrId: addrId, valId: valId), offset + 24)
+end 'readStdSysAtomicXadd'
+
+function readStdSysOsLockInit(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	return (StdSystemOp.osLockInit(addrId), offset + 8)
+end 'readStdSysOsLockInit'
+
+function readStdSysOsLockAcquire(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	return (StdSystemOp.osLockAcquire(addrId), offset + 8)
+end 'readStdSysOsLockAcquire'
+
+function readStdSysOsLockRelease(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let addrId = readQword(buf, offset: offset)
+	return (StdSystemOp.osLockRelease(addrId), offset + 8)
+end 'readStdSysOsLockRelease'
+
+function readStdSysBoxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let valueId = readQword(buf, offset: offset + 8)
+	let sizeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.boxValue(resultId, valueId: valueId, sizeId: sizeId), offset + 24)
+end 'readStdSysBoxValue'
+
+function readStdSysUnboxValue(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let ptrId = readQword(buf, offset: offset + 8)
+	let sizeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.unboxValue(resultId, ptrId: ptrId, sizeId: sizeId), offset + 24)
+end 'readStdSysUnboxValue'
+
+function readStdSysLoadLayoutDescriptor(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (label, p) = readString(buf, offset: offset + 8)
+	return (StdSystemOp.loadLayoutDescriptor(resultId, label: label), p)
+end 'readStdSysLoadLayoutDescriptor'
+
+function readStdSysLoadWitnessTable(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let (label, p) = readString(buf, offset: offset + 8)
+	return (StdSystemOp.loadWitnessTable(resultId, label: label), p)
+end 'readStdSysLoadWitnessTable'
+
+function readStdSysDescriptorField(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let descAddrId = readQword(buf, offset: offset + 8)
+	let fieldRaw = readDword(buf, offset: offset + 16)
+	let field = try DescriptorField.allCases.get(fieldRaw) otherwise panic("corrupt cache: unknown DescriptorField {fieldRaw}")
+	return (StdSystemOp.descriptorField(resultId, descAddrId: descAddrId, field: field), offset + 20)
+end 'readStdSysDescriptorField'
+
+function readStdSysWitnessMethod(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let witnessAddrId = readQword(buf, offset: offset + 8)
+	let methodIndex = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.witnessMethod(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex), offset + 24)
+end 'readStdSysWitnessMethod'
+
+function readStdSysDropTypeParam(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let slotValueId = readQword(buf, offset: offset)
+	let layoutValueId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.dropTypeParam(slotValueId, layoutValueId: layoutValueId), offset + 16)
+end 'readStdSysDropTypeParam'
+
+// --- StdOp outer union ---
+
+function writeStdOp(buf ByteArray, op StdOp)
+	writeDword(buf, value: op.ordinal)
+	match op 'outer'
+		arith(inner) then writeStdArithOp(buf, op: inner)
+		control(inner) then writeStdControlOp(buf, op: inner)
+		call(inner) then writeStdCallOp(buf, op: inner)
+		memory(inner) then writeStdMemoryOp(buf, op: inner)
+		system(inner) then writeStdSystemOp(buf, op: inner)
+	end 'outer'
+end 'writeStdOp'
+
+function readStdOp(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StdOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdOp tag {raw}")
+	let pos = offset + 4
+	return match kase 'outer'
+		arith gives readStdOpArith(buf, offset: pos)
+		control gives readStdOpControl(buf, offset: pos)
+		call gives readStdOpCall(buf, offset: pos)
+		memory gives readStdOpMemory(buf, offset: pos)
+		system gives readStdOpSystem(buf, offset: pos)
+	end 'outer'
+end 'readStdOp'
+
+function readStdOpArith(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let (inner, p) = readStdArithOp(buf, offset: offset)
+	return (StdOp.arith(inner), p)
+end 'readStdOpArith'
+
+function readStdOpControl(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let (inner, p) = readStdControlOp(buf, offset: offset)
+	return (StdOp.control(inner), p)
+end 'readStdOpControl'
+
+function readStdOpCall(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let (inner, p) = readStdCallOp(buf, offset: offset)
+	return (StdOp.call(inner), p)
+end 'readStdOpCall'
+
+function readStdOpMemory(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let (inner, p) = readStdMemoryOp(buf, offset: offset)
+	return (StdOp.memory(inner), p)
+end 'readStdOpMemory'
+
+function readStdOpSystem(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
+	let (inner, p) = readStdSystemOp(buf, offset: offset)
+	return (StdOp.system(inner), p)
+end 'readStdOpSystem'
+
+// --- Terminator ---
+
+function writeIrTerminator(buf ByteArray, term Terminator)
+	writeDword(buf, value: term.ordinal)
+	match term 'term'
+		unset then break
+		dead then break
+		fallthrough then break
+		opIndex(index) then writeQword(buf, value: index)
+	end 'term'
+end 'writeIrTerminator'
+
+function readIrTerminator(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try Terminator.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown Terminator tag {raw}")
+	let pos = offset + 4
+	return match kase 'term'
+		unset gives (Terminator.unset, pos)
+		dead gives (Terminator.dead, pos)
+		fallthrough gives (Terminator.fallthrough, pos)
+		opIndex gives readIrTerminatorOpIndex(buf, offset: pos)
+	end 'term'
+end 'readIrTerminator'
+
+function readIrTerminatorOpIndex(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset)
+	let index = readQword(buf, offset: offset)
+	return (Terminator.opIndex(index), offset + 8)
+end 'readIrTerminatorOpIndex'
+
+// --- IrBlockArg ---
+
+function writeIrBlockArg(buf ByteArray, arg IrBlockArg)
+	writeQword(buf, value: arg.valueId)
+	writeStdTypeTag(buf, t: arg.argType)
+end 'writeIrBlockArg'
+
+function readIrBlockArg(buf ByteArray, offset ByteOffset) returns (IrBlockArg, ByteOffset)
+	let valueId = readQword(buf, offset: offset)
+	let (argType, p) = readStdTypeTag(buf, offset: offset + 8)
+	return (IrBlockArg.create(valueId, argType: argType), p)
+end 'readIrBlockArg'
+
+// --- IrBlock ---
+
+function writeIrBlock(buf ByteArray, block IrBlock)
+	writeQword(buf, value: block.id)
+	writeString(buf, s: block.label)
+	writeDword(buf, value: block.opRefs.count())
+	for opIdx in block.opRefs 'eachOpRef'
+		writeQword(buf, value: opIdx)
+	end 'eachOpRef'
+	writeIrTerminator(buf, term: block.terminator)
+	writeDword(buf, value: block.blockArgs.count())
+	for arg in block.blockArgs 'eachArg'
+		writeIrBlockArg(buf, arg: arg)
+	end 'eachArg'
+	// branchEdges are populated only at the Target phase by lowerMirToTarget
+	// and never at the Std phase the inliner runs against. Skipping them
+	// keeps the codec smaller; the field is initialized empty on read.
+end 'writeIrBlock'
+
+function readIrBlock(buf ByteArray, offset ByteOffset) returns (IrBlock, ByteOffset)
+	let id = readQword(buf, offset: offset)
+	var pos = offset + 8
+	let (label, p1) = readString(buf, offset: pos)
+	pos = p1
+	var block = IrBlock.create(id, label: label)
+	let opRefCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto opRefCount 'eachOpRef'
+		let opIdx = readQword(buf, offset: pos)
+		pos = pos + 8
+		block.opRefs.append(opIdx)
+	end 'eachOpRef'
+	let (term, p2) = readIrTerminator(buf, offset: pos)
+	pos = p2
+	block.terminator = term
+	let argCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto argCount 'eachArg'
+		let (arg, p3) = readIrBlockArg(buf, offset: pos)
+		pos = p3
+		block.blockArgs.push(arg)
+	end 'eachArg'
+	return (block, pos)
+end 'readIrBlock'
+
+// --- IrFunction (Std-phase shape only) ---
+//
+// The codec persists exactly the fields the inliner reads + the fields the
+// merge step relocates. Maxon-phase fields (scope, maxonReturnType,
+// maxonParamTypes, throwsTypeName) are reset to defaults on read because
+// merging into the user's StdModule for the Std-level inliner pass never
+// surfaces them. slotMaxonTypes stays empty for stdlib functions in the
+// inlinable subset (single-block accessors typically have zero slots after
+// mem2reg).
+
+function writeStdIrFunction(buf ByteArray, func IrFunction)
+	writeString(buf, s: func.name)
+	writeString(buf, s: func.namespace)
+	writeVisibility(buf, v: func.visibility)
+	writeFilePath(buf, p: func.sourceFilePath)
+	writeDword(buf, value: func.paramCount)
+	writeStdReturnType(buf, rt: func.returnType)
+	writeStdTypeArrayCodec(buf, arr: func.paramTypes)
+	writeDword(buf, value: func.blockRefs.count())
+	for br in func.blockRefs 'eachBlockRef'
+		writeQword(buf, value: br)
+	end 'eachBlockRef'
+	writeQword(buf, value: func.nextBlockId)
+	writeBoolByte(buf, b: func.hasImplicitLayoutParam)
+	writeBoolByte(buf, b: func.hasImplicitWitnessParam)
+end 'writeStdIrFunction'
+
+function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset)
+	let (name, p1) = readString(buf, offset: offset)
+	var pos = p1
+	let (namespace, p2) = readString(buf, offset: pos)
+	pos = p2
+	let (visibility, p3) = readVisibility(buf, offset: pos)
+	pos = p3
+	let (sourceFilePath, p4) = readFilePath(buf, offset: pos)
+	pos = p4
+	let paramCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	let (returnType, p5) = readStdReturnType(buf, offset: pos)
+	pos = p5
+	let (paramTypes, p6) = readStdTypeArrayCodec(buf, offset: pos)
+	pos = p6
+	var func = IrFunction.createFromStd(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	func.namespace = namespace
+	func.visibility = visibility
+	func.sourceFilePath = sourceFilePath
+	let blockRefCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto blockRefCount 'eachBlockRef'
+		let br = readQword(buf, offset: pos)
+		pos = pos + 8
+		func.blockRefs.append(br)
+	end 'eachBlockRef'
+	let nextBlockId = readQword(buf, offset: pos)
+	pos = pos + 8
+	func.nextBlockId = nextBlockId
+	let (hasLayout, p7) = readBoolByte(buf, offset: pos)
+	pos = p7
+	let (hasWitness, p8) = readBoolByte(buf, offset: pos)
+	pos = p8
+	func.hasImplicitLayoutParam = hasLayout
+	func.hasImplicitWitnessParam = hasWitness
+	return (func, pos)
+end 'readStdIrFunction'
+
+// --- StdModule ---
+
+function writeStdModule(buf ByteArray, module StdModule)
+	writeDword(buf, value: module.functions.count())
+	for f in module.functions 'eachFunc'
+		writeStdIrFunction(buf, func: f)
+	end 'eachFunc'
+	writeDword(buf, value: module.blocks.count())
+	for blk in module.blocks 'eachBlock'
+		writeIrBlock(buf, block: blk)
+	end 'eachBlock'
+	writeDword(buf, value: module.ops.count())
+	for op in module.ops 'eachOp'
+		writeStdOp(buf, op: op)
+	end 'eachOp'
+end 'writeStdModule'
+
+function readStdModule(buf ByteArray, offset ByteOffset) returns (StdModule, ByteOffset)
+	var module = StdModule.create()
+	var pos = offset
+	let funcCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto funcCount 'eachFunc'
+		let (f, p) = readStdIrFunction(buf, offset: pos)
+		pos = p
+		module.functions.push(f)
+	end 'eachFunc'
+	let blockCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto blockCount 'eachBlock'
+		let (blk, p) = readIrBlock(buf, offset: pos)
+		pos = p
+		module.blocks.push(blk)
+		// blockSourceInfo is parallel to blocks; pad with empty so the
+		// invariant `blocks.count() == blockSourceInfo.count()` holds.
+		// Coverage instrumentation reads this array and would otherwise
+		// trip on a length mismatch even though the inlined stdlib
+		// functions get dropped before instrumentCoverage runs.
+		module.blockSourceInfo.push(BlockSourceInfo.empty())
+	end 'eachBlock'
+	let opCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto opCount 'eachOp'
+		let (op, p) = readStdOp(buf, offset: pos)
+		pos = p
+		module.ops.push(op)
+	end 'eachOp'
+	return (module, pos)
+end 'readStdModule'

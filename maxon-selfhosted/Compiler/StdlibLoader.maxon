@@ -4,6 +4,20 @@ var stdlibLoaded = false
 var stdlibTypealiases = TypealiasMap.create()
 var stdlibTypealiasRanges = TypealiasRangeMap.create()
 
+// Phase 11.6 cross-module inlining: process-wide snapshot of the stdlib's
+// post-dce StdModule. Populated either by the cache-build path (from
+// `pipeline.stdModulePostDceSnapshot`) or by the cache-hit path (from the
+// disk-cache's `inlinerStdModule` field). The user pipeline's inliner pass
+// reads this via `getCachedStdlibStdModule()` and merges it into the user
+// stdModule for the duration of the inliner pass; merged functions are
+// dropped right after the splice so the linker-side stdlib cache stays the
+// sole source of stdlib machine code.
+var cachedStdlibStdModule = StdModule.create()
+
+export function getCachedStdlibStdModule() returns StdModule
+	return cachedStdlibStdModule
+end 'getCachedStdlibStdModule'
+
 // Pre-compiled stdlib cache (machine code level, per-target)
 var cachedStdlibCacheData = StdlibCacheData.create()
 var stdlibCacheValid = false
@@ -207,6 +221,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// Restore parser metadata so user code can reference stdlib types
 		restoreStdlibMetadata(project, data: cacheResult.data)
 
+		// Phase 11.6 cross-module inlining: republish the stdlib StdModule
+		// snapshot pulled from disk so the user pipeline's inliner pass can
+		// see stdlib accessor bodies.
+		cachedStdlibStdModule = cacheResult.data.inlinerStdModule
+
 		// Return empty module — stdlib is pre-compiled to machine code
 		cachedStdlibModule = MaxonModule.create()
 		stdlibLoaded = true
@@ -309,6 +328,13 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 		return
 	end 'pipelineErr'
 
+	// Phase 11.6 cross-module inlining: capture the stdlib's post-dce
+	// StdModule (PassPipeline.stdModulePostDceSnapshot is populated at the
+	// `dce` step's exit) for the user pipeline's inliner to consume.
+	// Stored both in-process (so the immediately-following user pipeline
+	// run sees it) and into the cache buffer (for next-run cache hits).
+	cachedStdlibStdModule = pipeline.stdModulePostDceSnapshot
+
 	// Inject runtime function signatures into the post-MIR module so that
 	// per-function backend lowering can resolve calls like `mrt_panic` when
 	// stdlib code issues them. Only signatures (name + paramTypes + returnType)
@@ -322,6 +348,10 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	var cacheData = StdlibCacheData.create()
 	cacheData.globalData = pipeline.globalData
 	captureStdlibMetadata(project, data: cacheData)
+	// Phase 11.6 cross-module inlining: persist the stdlib's post-dce
+	// StdModule to disk so subsequent process invocations that hit the
+	// cache can still feed the inliner with stdlib bodies.
+	cacheData.inlinerStdModule = pipeline.stdModulePostDceSnapshot
 
 	// Emit per-function bytecode (dispatched by target). augmentWithRuntime
 	// merged runtime function bodies into the pipeline's module so per-function

@@ -18,31 +18,98 @@ module {
     %0 = mir.mov_imm 0 : i64
     %1 = mir.global_addr @__data_numbers
     %2 = mir.load %1, 0
-    %3 = mir.mov_imm 0 : i64
-    %4 = mir.call @Array.createIterator(%2, %3)
+    mir.br inlined_Array.createIterator_0()
+  inlined_Array.createIterator_0:
+    %23 = mir.load %2, 0
+    mir.br inlined_ArrayIterator.create_0()
+  inlined_ArrayIterator.create_0:
+    %57 = mir.mov_imm 40 : i64
+    %58 = mir.call @mrt_alloc(%57)
+    %59 = mir.load %23, 0
+    %60 = mir.load %23, 8
+    %61 = mir.load %23, 24
+    %62 = mir.mov_imm 0 : i64
+    mir.store %59, %58, 0
+    mir.store %62, %58, 8
+    mir.store %60, %58, 16
+    mir.store %61, %58, 24
+    mir.store %23, %58, 32
+    %63 = mir.cmp eq, %60, %62
+    %64 = mir.call @mrt_set_error(%63)
+    %65 = mir.call @mrt_get_error_and_clear()
+    %66 = mir.mov_imm 0 : i64
+    %67 = mir.cmp ne, %65, %66
+    mir.cond_br %67 [then: inlined_ArrayIterator.create_1(), else: inlined_ArrayIterator.create_3()]
+  inlined_ArrayIterator.create_1:
+    %68 = mir.mov_imm 1 : i64
+    %69 = mir.call @mrt_set_error(%68)
+    %70 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_5(%70)
+  inlined_ArrayIterator.create_3:
+    %71 = mir.mov_imm 8 : i64
+    %72 = mir.call @mrt_alloc(%71)
+    mir.store %58, %72, 0
+    mir.br inline_cont_main_5(%72)
+  inline_cont_main_5:
+    %25 = mir.call @mrt_get_error_and_clear()
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.cmp ne, %25, %26
+    mir.cond_br %27 [then: inlined_Array.createIterator_1(), else: inline_cont_main_0(%73)]
+  inlined_Array.createIterator_1:
+    %28 = mir.call @mrt_set_error(%25)
+    %29 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%29)
+  inline_cont_main_0:
     %5 = mir.call @mrt_get_error_and_clear()
     %6 = mir.mov_imm 0 : i64
     %7 = mir.cmp ne, %5, %6
     mir.cond_br %7 [then: loop_0.exit(%0), else: loop_0(%0)]
-  loop_0.header:
-    %9 = mir.mov_imm 0 : i64
-    %10 = mir.call @ArrayIterator.advance(%4, %9)
+  inlined_ArrayIterator.advance_0:
+    %31 = mir.load %30, 0
+    %32 = mir.load %31, 8
+    %33 = mir.load %31, 16
+    %34 = mir.mov_imm 1 : i64
+    %35 = mir.add.i64 %32, %34
+    %36 = mir.cmp lt, %35, %33
+    %37 = mir.sub.i64 %35, %32
+    %38 = mir.mul.i64 %36, %37
+    %39 = mir.add.i64 %32, %38
+    mir.store %39, %31, 8
+    %40 = mir.mov_imm 1 : i64
+    %41 = mir.sub.i64 %40, %36
+    %42 = mir.mov_imm 1 : i64
+    %43 = mir.mul.i64 %41, %42
+    %44 = mir.call @mrt_set_error(%43)
+    %45 = mir.call @mrt_get_error_and_clear()
+    %46 = mir.mov_imm 0 : i64
+    %47 = mir.cmp ne, %45, %46
+    mir.cond_br %47 [then: inlined_ArrayIterator.advance_1(), else: inline_cont_main_2()]
+  inlined_ArrayIterator.advance_1:
+    %48 = mir.mov_imm 1 : i64
+    %49 = mir.call @mrt_set_error(%48)
+    mir.br inline_cont_main_2()
+  inline_cont_main_2:
     %11 = mir.call @mrt_get_error_and_clear()
     %12 = mir.mov_imm 0 : i64
     %13 = mir.cmp ne, %11, %12
     mir.cond_br %13 [then: loop_0.exit(%19), else: loop_0(%19)]
   loop_0:
-    %15 = mir.mov_imm 0 : i64
-    %16 = mir.call @ArrayIterator.current(%4, %15)
-    %19 = mir.add.i64 %21, %16
-    mir.br loop_0.header()
+    %50 = mir.load %30, 0
+    %51 = mir.load %50, 0
+    %52 = mir.load %50, 8
+    %53 = mir.load %50, 24
+    %54 = mir.mul.i64 %52, %53
+    %55 = mir.add.i64 %51, %54
+    %56 = mir.load %55, 0
+    %19 = mir.add.i64 %21, %56
+    mir.br inlined_ArrayIterator.advance_0()
   loop_0.exit:
-    %23 = mir.mov_imm 125 : i64
-    %24 = mir.cmp ugt, %22, %23
-    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+    %74 = mir.mov_imm 125 : i64
+    %75 = mir.cmp ugt, %22, %74
+    mir.cond_br %75 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %25 = mir.global_addr @__panic_msg_0
-    %26 = mir.call @mrt_panic(%25)
+    %76 = mir.global_addr @__panic_msg_0
+    %77 = mir.call @mrt_panic(%76)
   __range_ok_0:
     mir.ret %22
   }

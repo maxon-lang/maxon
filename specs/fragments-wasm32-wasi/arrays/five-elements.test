@@ -37,25 +37,51 @@ module {
     %24 = mir.mov_imm 5 : i64
     %25 = mir.call @__managed_mem_set_length(%7, %24)
     %26 = mir.call @mrt_get_error_and_clear()
-    %27 = mir.mov_imm 0 : i64
-    %28 = mir.call @Array.init(%7, %27)
+    %40 = mir.mov_imm 8 : i64
+    %41 = mir.call @mrt_alloc(%40)
+    %42 = mir.mov_imm 40 : i64
+    %43 = mir.call @mrt_alloc(%42)
+    %44 = mir.mov_imm 0 : i64
+    mir.store %44, %43, 0
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %43, 8
+    %46 = mir.mov_imm 0 : i64
+    mir.store %46, %43, 16
+    %47 = mir.mov_imm 8 : i64
+    mir.store %47, %43, 24
+    %48 = mir.mov_imm 0 : i64
+    mir.store %48, %43, 32
+    mir.store %43, %41, 0
+    mir.store %7, %41, 0
     %30 = mir.mov_imm 4 : i64
-    %31 = mir.mov_imm 0 : i64
-    %32 = mir.call @Array.get(%28, %30, %31)
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %49 = mir.load %41, 0
+    %50 = mir.call @__managed_mem_get(%49, %30)
+    %51 = mir.call @mrt_get_error_and_clear()
+    %52 = mir.mov_imm 0 : i64
+    %53 = mir.cmp ne, %51, %52
+    mir.cond_br %53 [then: inlined_Array.get_1(), else: inline_cont_main_0(%50)]
+  inlined_Array.get_1:
+    %54 = mir.mov_imm 1 : i64
+    %55 = mir.call @mrt_set_error(%54)
+    %56 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%56)
+  inline_cont_main_0:
     %33 = mir.call @mrt_get_error_and_clear()
     %34 = mir.mov_imm 0 : i64
     %35 = mir.cmp ne, %33, %34
-    mir.cond_br %35 [then: try_1.otherwise(), else: try_1.merge(%32)]
+    mir.cond_br %35 [then: try_1.otherwise(), else: try_1.merge(%57)]
   try_1.otherwise:
     %37 = mir.mov_imm 0 : i64
     mir.br try_1.merge(%37)
   try_1.merge:
-    %40 = mir.mov_imm 125 : i64
-    %41 = mir.cmp ugt, %39, %40
-    mir.cond_br %41 [then: __range_panic_0(), else: __range_ok_0()]
+    %58 = mir.mov_imm 125 : i64
+    %59 = mir.cmp ugt, %39, %58
+    mir.cond_br %59 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %42 = mir.global_addr @__panic_msg_0
-    %43 = mir.call @mrt_panic(%42)
+    %60 = mir.global_addr @__panic_msg_0
+    %61 = mir.call @mrt_panic(%60)
   __range_ok_0:
     mir.ret %39
   }

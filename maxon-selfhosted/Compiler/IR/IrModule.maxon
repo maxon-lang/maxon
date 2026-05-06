@@ -171,6 +171,19 @@ export type IrModule uses Op
 		end 'eachBlock'
 	end 'assertAllBlocksTerminated'
 
+	// Phase 11.6 cross-module inlining: drop every function whose name
+	// appears in `names` from `self.functions`. Used after the inliner
+	// merges the stdlib snapshot in: any stdlib function whose body got
+	// spliced has no remaining callers in the user module, but the
+	// snapshot's other (non-spliced) stdlib functions would force the
+	// backend to re-emit symbols that the linker-side stdlib cache
+	// already provides. The dropped functions' blocks/ops stay in
+	// `self.blocks` / `self.ops` as orphans because the backend walks
+	// `self.functions[].blockRefs[]`, never the global blocks array.
+	export function dropFunctionsByName(names StringArray)
+		dropMatchingFunctionsFromArray(self.functions, names: names)
+	end 'dropFunctionsByName'
+
 	// Merge all data from a source module into this module.
 	// Adjusts block indices in functions and op indices in blocks to account
 	// for the existing entries in the destination arrays. Block source info
@@ -194,6 +207,36 @@ export type IrModule uses Op
 		end 'eachFunc'
 	end 'merge'
 end 'IrModule'
+
+// Linear-search membership test used by IrModule.dropFunctionsByName.
+// Pulled into a free function so its body sits outside the generic
+// IrModule type — the C# bootstrap's lowering struggles with assigning
+// generic-element arrays to one another inside a generic type method,
+// but a flat function lowers cleanly.
+function nameInArray(name String, names StringArray) returns bool
+	for n in names 'each'
+		if n == name 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'nameInArray'
+
+// Mutate `functions` in place: keep entries whose name is NOT in `names`.
+// IrModule.dropFunctionsByName routes through this so the generic
+// IrModule type body never directly handles the IrFunctionArray
+// rebuilding logic that the C# bootstrap can't lower.
+export function dropMatchingFunctionsFromArray(functions IrFunctionArray, names StringArray)
+	var i = 0
+	while i < functions.count() 'walk'
+		let f = try functions.get(i) otherwise panic("dropMatchingFunctionsFromArray: get OOB at {i}")
+		if nameInArray(name: f.name, names: names) 'remove'
+			_ = try functions.remove(i) otherwise panic("dropMatchingFunctionsFromArray: remove OOB at {i}")
+		end 'remove' else 'advance'
+			i = i + 1
+		end 'advance'
+	end 'walk'
+end 'dropMatchingFunctionsFromArray'
 
 // Block-reachable op counter shared by IrModule.liveOpCount and
 // TargetModule.liveOpCount. Sums every block's `opRefs.count()` across

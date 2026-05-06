@@ -94,6 +94,12 @@ export type PassPipeline
 	export var stdModule StdModule
 	export var mirModule MirModule
 	export var targetModule TargetModule
+	// Phase 11.6 cross-module inlining: snapshot of `stdModule` taken at
+	// the exit of the `dce` step. The user pipeline never reads this; the
+	// stdlib pipeline run captures it after `pipeline.run()` returns so
+	// the StdlibLoader can preserve it (in-memory + disk cache) for use
+	// at the user inliner step. Empty until the dce pass dispatches.
+	export var stdModulePostDceSnapshot StdModule
 
 	// --- Configuration / cross-cutting context ---
 	export var project Project
@@ -130,6 +136,7 @@ export type PassPipeline
 			stdModule: StdModule.create(),
 			mirModule: MirModule.create(),
 			targetModule: TargetModule.create(target.cpu),
+			stdModulePostDceSnapshot: StdModule.create(),
 			project: project,
 			globalData: globalData,
 			target: target,
@@ -212,8 +219,8 @@ export type PassPipeline
 			canonicalize then stdModule = canonicalize(stdModule, project: project)
 			cse then stdModule = eliminateCommonSubexpressions(stdModule)
 			licm then stdModule = hoistLoopInvariants(stdModule)
-			dce then stdModule = eliminateDeadCode(stdModule)
-			inliner then stdModule = inlineModule(stdModule, project: project)
+			dce then stdModule = runDceAndSnapshot(self, module: stdModule)
+			inliner then stdModule = runInlinerWithStdlibSnapshot(stdModule, project: project)
 			dceFunctions then stdModule = eliminateDeadStdFunctions(stdModule, project: project)
 			insertRangeChecks then stdModule = insertRangeChecks(self, module: stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
 			lowerABI then stdModule = lowerABI(stdModule, target: target)
@@ -280,6 +287,40 @@ function runResolveTypesAndStamp(project Project, module MaxonModule, filePath F
 	runTypeResolution(project, module: module, filePath: filePath)
 	stampFunctionContentHashes(project, module: module)
 end 'runResolveTypesAndStamp'
+
+// Phase 11.6 cross-module inlining: run dce, then snapshot the resulting
+// StdModule into the pipeline so the StdlibLoader can read it after
+// `pipeline.run()` returns (stdlib pipeline) or so the user pipeline can
+// observe the same shape (unused there). The snapshot lives on the pipeline
+// rather than as a free callback to keep the dispatch one-liner intact.
+function runDceAndSnapshot(pipeline PassPipeline, module StdModule) returns StdModule
+	let result = eliminateDeadCode(module)
+	pipeline.stdModulePostDceSnapshot = result
+	return result
+end 'runDceAndSnapshot'
+
+// Phase 11.6 cross-module inlining: merge the cached stdlib StdModule
+// snapshot into the user's `stdModule` so the inliner can see stdlib
+// accessor bodies (Array.get, ArrayIterator.advance, etc.) that otherwise
+// only exist as `func.call` ops. After inlining we drop the merged stdlib
+// functions back out — the linker-side stdlib cache already supplies their
+// machine code, so leaving them in the user module would force the backend
+// to emit duplicate symbols.
+function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns StdModule
+	let stdlibSnapshot = getCachedStdlibStdModule()
+	var stdlibFuncNames = StringArray.create()
+	for f in stdlibSnapshot.functions 'collectNames'
+		stdlibFuncNames.push(f.name)
+	end 'collectNames'
+	if stdlibFuncNames.count() > 0 'haveStdlib'
+		module.merge(stdlibSnapshot)
+	end 'haveStdlib'
+	var inlined = inlineModule(module, project: project)
+	if stdlibFuncNames.count() > 0 'dropMerged'
+		inlined.dropFunctionsByName(names: stdlibFuncNames)
+	end 'dropMerged'
+	return inlined
+end 'runInlinerWithStdlibSnapshot'
 
 // Phase 11.5: classification of a pass for the per-function pipeline.
 //
