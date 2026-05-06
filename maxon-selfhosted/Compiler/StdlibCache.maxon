@@ -127,6 +127,13 @@ export type StdlibCacheData
 	export var layoutDescriptors LayoutDescriptorRegistry
 	export var witnessTables WitnessTableRegistry
 	export var livenessRoots StringArray
+	// Phase 11.4: snapshot of `Project.genericFunctionImplicitArity` so
+	// cached-stdlib user builds see which stdlib functions need synthetic
+	// layout/witness args appended at call sites. Without this, per-function
+	// lowering (where stdlib funcs aren't in the local stdModule) can't
+	// discover the callee's hasImplicitLayoutParam and emits an under-arity
+	// call op — silent ABI corruption on x64, validator rejection on wasm.
+	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
 	export var staticRdataValues StaticRdataValueMap
 
 	export static function create() returns StdlibCacheData
@@ -151,6 +158,7 @@ export type StdlibCacheData
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
 			witnessTables: WitnessTableRegistry.create(),
 			livenessRoots: StringArray.create(),
+			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create()
 		}
 	end 'create'
@@ -400,6 +408,7 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	writeLayoutDescriptorRegistry(buf, registry: data.layoutDescriptors)
 	writeWitnessTableRegistry(buf, registry: data.witnessTables)
 	writeStringArray(buf, arr: data.livenessRoots)
+	writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
 	writeStaticRdataValueMap(buf, m: data.staticRdataValues)
 
 	// Ensure parent directory (and any missing ancestors) exist
@@ -806,6 +815,9 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	let (lr, pLr) = readStringArray(buf, offset: pos)
 	pos = pLr
 	data.livenessRoots = lr
+	let (gfia, pGfia) = readGenericFunctionImplicitArityMap(buf, offset: pos)
+	pos = pGfia
+	data.genericFunctionImplicitArity = gfia
 	let (srv, pSrv) = readStaticRdataValueMap(buf, offset: pos)
 	pos = pSrv
 	data.staticRdataValues = srv
@@ -919,10 +931,20 @@ end 'mergeStdlibGlobalData'
 // Restore stdlib metadata into a project for user parsing
 // ============================================================
 
-// Translate a captured MaxonType: every `named(id)` is reinterned through the
-// destination project's typeNames using the cache's typeNameTable so the new
-// id is meaningful in the user project. Primitives pass through unchanged.
-function translateMaxonType(project Project, table StringArray, t MaxonType) returns MaxonType
+// Translate a captured MaxonType into the destination project's id space.
+// Every `named(id)` is reinterned through the destination project's typeNames
+// using `data.typeNameTable`. Generic-aware arms (`typeParameter`,
+// `genericInstance`, `interface`) recurse through the captured registries
+// (`data.typeParameters`, `data.genericInstances`, `data.interfaceRegistry`)
+// to look up the source-id's logical key (declName/paramName for
+// type parameters, baseName + arg list for generic instances, name for
+// interfaces) and re-intern that key into the destination project. This is
+// required because the in-memory `cachedStdlibCacheData` snapshot is
+// populated by `captureStdlibMetadata` (which copies source-project ids
+// directly), and the disk-cache read path uses the same `data.*` registries
+// keyed by the warmup project's id space — neither matches the per-test
+// destination project's id space.
+function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) returns MaxonType
 	// No stdlib function takes a function-typed parameter today, so the
 	// `function` arm should never fire in practice. The match below is
 	// preceded by an explicit panic guard so the round-trip stays loud
@@ -937,16 +959,11 @@ function translateMaxonType(project Project, table StringArray, t MaxonType) ret
 		float gives MaxonType.float
 		string gives MaxonType.string
 		unresolved gives MaxonType.unresolved
-		named(id) gives translateNamedTypeId(project, table: table, id: id)
+		named(id) gives translateNamedTypeId(project, table: data.typeNameTable, id: id)
 		function gives MaxonType.unresolved
-		// Cache v7: generic-aware arms are re-interned into the destination
-		// project's registries by `readMaxonType`, so by the time
-		// `translateMaxonType` sees them their ids are already meaningful.
-		// Pass through unchanged. Earlier versions could not reach this arm
-		// because the reader collapsed these arms to `named` placeholders.
-		typeParameter gives t
-		genericInstance gives t
-		interface gives t
+		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
+		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
+		interface(id) gives translateCapturedInterface(project, data: data, id: id)
 	end 'translate'
 end 'translateMaxonType'
 
@@ -955,25 +972,108 @@ function translateNamedTypeId(project Project, table StringArray, id TypeNameId)
 	return MaxonType.named(project.typeNames.intern(name))
 end 'translateNamedTypeId'
 
+// Translate a captured `typeParameter(id)`. The captured registry stores the
+// `(declaringTypeName, paramName)` pair at `id`; re-intern that pair into the
+// destination project so the result references the destination-project id
+// for the same logical type parameter.
+function translateCapturedTypeParameter(project Project, data StdlibCacheData, id TypeParamId) returns MaxonType
+	let declName = data.typeParameters.getDeclaringTypeName(id)
+	let paramName = data.typeParameters.getName(id)
+	let destId = project.typeParameters.intern(declName, paramName: paramName)
+	return MaxonType.typeParameter(destId)
+end 'translateCapturedTypeParameter'
+
+// Translate a captured `genericInstance(id)`. Wraps the shared
+// `translateCapturedGenericInstanceId` helper in `MaxonType.genericInstance`.
+function translateCapturedGenericInstance(project Project, data StdlibCacheData, id GenericInstanceId) returns MaxonType
+	return MaxonType.genericInstance(translateCapturedGenericInstanceId(project, data: data, id: id))
+end 'translateCapturedGenericInstance'
+
+// Translate a captured `interface(id)`. The captured registry is just a
+// name-keyed parallel array; re-intern the name into the destination
+// project's `interfaceRegistry`.
+function translateCapturedInterface(project Project, data StdlibCacheData, id InterfaceTypeId) returns MaxonType
+	let name = data.interfaceRegistry.getName(id)
+	let destId = project.interfaceRegistry.intern(name)
+	return MaxonType.interface(destId)
+end 'translateCapturedInterface'
+
+// Translate a captured GenericInstanceId to a destination GenericInstanceId.
+// The captured registry stores `(baseId, args)` where `baseId` indexes into
+// the captured typeNameTable and each arg is itself a captured MaxonType.
+// Re-intern the base name into the destination project's typeNames,
+// recursively translate each arg, then intern the resulting
+// `(destBaseId, destArgs)` pair into the destination project's
+// `genericInstances` registry. Shared by `translateCapturedGenericInstance`
+// (which wraps the result in MaxonType) and `LayoutDescriptorRegistry`
+// translation (which needs the bare GenericInstanceId).
+function translateCapturedGenericInstanceId(project Project, data StdlibCacheData, id GenericInstanceId) returns GenericInstanceId
+	let (sourceBaseId, sourceArgs) = data.genericInstances.get(id)
+	let baseName = try data.typeNameTable.get(sourceBaseId) otherwise panic("translateCapturedGenericInstanceId: typeNameTable.get OOB for baseId={sourceBaseId} (table count={data.typeNameTable.count()})")
+	let destBaseId = project.typeNames.intern(baseName)
+	let destArgs = translateCapturedTypeArray(project, data: data, src: sourceArgs)
+	return project.genericInstances.intern(destBaseId, args: destArgs)
+end 'translateCapturedGenericInstanceId'
+
+// Translate every captured MaxonType in `src` through `translateMaxonType`
+// into a fresh MaxonTypeArray in the destination project's id space.
+function translateCapturedTypeArray(project Project, data StdlibCacheData, src MaxonTypeArray) returns MaxonTypeArray
+	var dst = MaxonTypeArray.create()
+	for t in src 'eachT'
+		dst.push(translateMaxonType(project, data: data, t: t))
+	end 'eachT'
+	return dst
+end 'translateCapturedTypeArray'
+
 // Translate a captured MaxonReturnType: void passes through; value(inner)
 // gets its inner MaxonType reinterned via translateMaxonType.
-function translateMaxonReturnType(project Project, table StringArray, rt MaxonReturnType) returns MaxonReturnType
+function translateMaxonReturnType(project Project, data StdlibCacheData, rt MaxonReturnType) returns MaxonReturnType
 	return match rt 'translate'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(translateMaxonType(project, table: table, t: inner))
+		value(inner) gives MaxonReturnType.value(translateMaxonType(project, data: data, t: inner))
 	end 'translate'
 end 'translateMaxonReturnType'
 
-// Translate a captured StructType: every field's MaxonType has its `named` ids
-// reinterned in the destination project. Visibility / sourceFilePath round-trip
-// from the source struct so a stdlib-imported type keeps its `(global, stdlib
-// bootstrap path)` stamp into the destination project.
-function translateStructType(project Project, table StringArray, st StructType) returns StructType
+// Translate a captured InterfaceMethodSig: paramTypes and returnType carry
+// captured MaxonTypes. Other fields (name / paramNames / throwsTypeName /
+// line / column) are name- or position-keyed and pass through unchanged.
+function translateInterfaceMethodSig(project Project, data StdlibCacheData, sig InterfaceMethodSig) returns InterfaceMethodSig
+	let destParamTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
+	let destReturn = translateMaxonReturnType(project, data: data, rt: sig.returnType)
+	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, line: sig.line, column: sig.column)
+end 'translateInterfaceMethodSig'
+
+// Translate a captured IrInterface: each method sig's paramTypes / returnType
+// MaxonTypes are reinterned through the destination project. Other fields
+// (name / extendsNames / usesParams / visibility / filePath / line / column)
+// pass through unchanged because they're name- or position-keyed.
+function translateIrInterface(project Project, data StdlibCacheData, iface IrInterface) returns IrInterface
+	var destMethods = InterfaceMethodSigArray.create()
+	for m in iface.methods 'eachM'
+		destMethods.push(translateInterfaceMethodSig(project, data: data, sig: m))
+	end 'eachM'
+	return IrInterface.create(iface.name, extendsNames: iface.extendsNames, usesParams: iface.usesParams, methods: destMethods, visibility: iface.visibility, line: iface.line, column: iface.column, filePath: iface.filePath)
+end 'translateIrInterface'
+
+// Translate a captured StructType: every field's MaxonType has its captured
+// ids reinterned in the destination project. innerAliases values are also
+// translated — without this, a struct's `Array.innerAliases["ArrayIter"]`
+// would retain a captured `genericInstance` whose base id pointed into the
+// source typeNames at a slot whose value differed in the destination.
+function translateStructType(project Project, data StdlibCacheData, st StructType) returns StructType
 	var fields = StructFieldArray.create()
 	for f in st.fields 'eachField'
-		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, table: table, t: f.fieldType), offset: f.offset))
+		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset))
 	end 'eachField'
-	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: st.expectedMethods, innerAliases: st.innerAliases)
+	var translatedInner = ResolvedInnerAliasMap.create()
+	for (aliasName, aliasType) in st.innerAliases 'eachInner'
+		try translatedInner.insert(aliasName, value: translateMaxonType(project, data: data, t: aliasType)) otherwise ignore
+	end 'eachInner'
+	var translatedExpected = InterfaceMethodSigArray.create()
+	for sig in st.expectedMethods 'eachExpected'
+		translatedExpected.push(translateInterfaceMethodSig(project, data: data, sig: sig))
+	end 'eachExpected'
+	return StructType.create(st.name, fields: fields, byteSize: st.byteSize, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: translatedExpected, innerAliases: translatedInner)
 end 'translateStructType'
 
 // Capture parser metadata from a project into a StdlibCacheData.
@@ -1084,6 +1184,10 @@ function captureRegistries(project Project, data StdlibCacheData)
 		data.livenessRoots.push(r)
 	end 'eachRoot'
 
+	for (name, arity) in project.genericFunctionImplicitArity 'eachArity'
+		try data.genericFunctionImplicitArity.insert(name, value: arity) otherwise ignore
+	end 'eachArity'
+
 	for (label, bytes) in project.staticRdataValues 'eachRdata'
 		try data.staticRdataValues.insert(label, value: bytes) otherwise ignore
 	end 'eachRdata'
@@ -1107,7 +1211,7 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// interner, so translate each through the captured typeNameTable into a
 	// fresh id in the destination project before storing.
 	for (name, rt) in data.funcReturnTypes 'restoreRts'
-		let translated = translateMaxonReturnType(project, table: data.typeNameTable, rt: rt)
+		let translated = translateMaxonReturnType(project, data: data, rt: rt)
 		try project.funcReturnTypes.insert(name, value: translated) otherwise ignore
 		project.methodNameIndex.record(name)
 	end 'restoreRts'
@@ -1116,10 +1220,7 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// captured-id concern as funcReturnTypes, so each signature is rebuilt
 	// with the destination project's id space.
 	for (name, sig) in data.funcSignatures 'restoreSigs'
-		var translatedTypes = MaxonTypeArray.create()
-		for pt in sig.paramTypes 'eachParamType'
-			translatedTypes.push(translateMaxonType(project, table: data.typeNameTable, t: pt))
-		end 'eachParamType'
+		let translatedTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
 		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
 	end 'restoreSigs'
 
@@ -1139,7 +1240,7 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	// problem as funcReturnTypes — translate every named id through the
 	// typeNameTable before insertion.
 	for (name, st) in data.structTypes 'restoreStructs'
-		let translated = translateStructType(project, table: data.typeNameTable, st: st)
+		let translated = translateStructType(project, data: data, st: st)
 		try project.structTypes.insert(name, value: translated) otherwise ignore
 	end 'restoreStructs'
 
@@ -1211,13 +1312,18 @@ end 'stripFirstDollarPrefix'
 // Each merge is idempotent so a second restore (e.g. multiple compilation
 // units in one process) is a no-op.
 function restoreRegistries(project Project, data StdlibCacheData)
+	// typeParameters and interfaceRegistry are name-keyed — re-interning by
+	// `(declaringTypeName, paramName)` / `name` reproduces the source ordering
+	// in the destination project's id space iff the destination is empty when
+	// we start. (Stdlib bootstrap pre-parsed declarations may have allocated
+	// some entries; intern still returns the right id for those.)
 	for i in 0 upto data.typeParameters.count() 'eachTp'
 		let declName = data.typeParameters.getDeclaringTypeName(i)
 		let paramName = data.typeParameters.getName(i)
-		_ = project.typeParameters.intern(declName, paramName: paramName)
+		let destId = project.typeParameters.intern(declName, paramName: paramName)
 		let cs = data.typeParameters.getConstraints(i)
 		for c in cs 'eachConstraint'
-			project.typeParameters.addConstraint(i, traitName: c)
+			project.typeParameters.addConstraint(destId, traitName: c)
 		end 'eachConstraint'
 	end 'eachTp'
 
@@ -1225,28 +1331,44 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		_ = project.interfaceRegistry.intern(data.interfaceRegistry.getName(i))
 	end 'eachIface'
 
+	// genericInstances entries reference captured `(baseId, args)` where
+	// `baseId` is a captured typeNameTable index and each arg is a captured
+	// MaxonType. Re-intern each through the destination project's registries
+	// (via the shared helper) so subsequent lookups return ids whose payload
+	// is meaningful in the destination id space.
 	for i in 0 upto data.genericInstances.count() 'eachGi'
-		let (baseId, args) = data.genericInstances.get(i)
-		_ = project.genericInstances.intern(baseId, args: args)
+		_ = translateCapturedGenericInstanceId(project, data: data, id: i)
 	end 'eachGi'
 
+	// IrInterface entries store method signatures whose paramTypes / returnType
+	// carry captured ids. Rebuild each method sig with translated MaxonTypes.
 	for (name, iface) in data.interfaces 'eachInterface'
-		try project.interfaces.insert(name, value: iface) otherwise ignore
+		try project.interfaces.insert(name, value: translateIrInterface(project, data: data, iface: iface)) otherwise ignore
 	end 'eachInterface'
 
+	// Conformance withArgs are MaxonTypeArrays — translate each entry's args
+	// before interning so the destination registry's args reference
+	// destination-project ids.
 	for i in 0 upto data.conformances.count() 'eachConf'
 		let (typeName, ifaceName, withArgs) = data.conformances.get(i)
-		_ = project.conformances.intern(typeName, interfaceName: ifaceName, withArgs: withArgs)
+		let destWithArgs = translateCapturedTypeArray(project, data: data, src: withArgs)
+		_ = project.conformances.intern(typeName, interfaceName: ifaceName, withArgs: destWithArgs)
 	end 'eachConf'
 
+	// genericTypealiases values are MaxonTypes (the resolved alias target).
+	// Translate each before insertion.
 	for (name, t) in data.genericTypealiases 'eachGta'
-		try project.genericTypealiases.insert(name, value: t) otherwise ignore
+		try project.genericTypealiases.insert(name, value: translateMaxonType(project, data: data, t: t)) otherwise ignore
 	end 'eachGta'
 
+	// layoutDescriptors are keyed by GenericInstanceId. The captured `gid`
+	// references `data.genericInstances` (source id space); translate to the
+	// destination's gid by walking through the captured payload and re-interning.
 	for i in 0 upto data.layoutDescriptors.count() 'eachLd'
-		let gid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
+		let sourceGid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
 		let label = try data.layoutDescriptors.labels.get(i) otherwise panic("restoreRegistries: layoutDescriptors.labels desync at {i}")
-		project.layoutDescriptors.intern(gid, label: label)
+		let destGid = translateCapturedGenericInstanceId(project, data: data, id: sourceGid)
+		project.layoutDescriptors.intern(destGid, label: label)
 	end 'eachLd'
 
 	for i in 0 upto data.witnessTables.count() 'eachWt'
@@ -1257,6 +1379,13 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	for r in data.livenessRoots 'eachRoot'
 		project.livenessRoots.push(r)
 	end 'eachRoot'
+
+	// Phase 11.4: replay the generic-function implicit-arity map so the
+	// per-function lowering can decide synthetic-arg-append at every call
+	// site, not just for callees in the local stdModule.
+	for (name, arity) in data.genericFunctionImplicitArity 'eachArity'
+		try project.genericFunctionImplicitArity.insert(name, value: arity) otherwise ignore
+	end 'eachArity'
 
 	for (label, bytes) in data.staticRdataValues 'eachRdata'
 		try project.staticRdataValues.insert(label, value: bytes) otherwise ignore
@@ -1613,6 +1742,30 @@ function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (Wit
 	end 'eachWt'
 	return (registry, pos)
 end 'readWitnessTableRegistry'
+
+// --- GenericFunctionImplicitArityMap ---
+
+function writeGenericFunctionImplicitArityMap(buf ByteArray, m GenericFunctionImplicitArityMap)
+	writeDword(buf, value: m.count())
+	for (name, arity) in m 'eachEntry'
+		writeString(buf, s: name)
+		writeDword(buf, value: arity as MachineWord)
+	end 'eachEntry'
+end 'writeGenericFunctionImplicitArityMap'
+
+function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) returns (GenericFunctionImplicitArityMap, ByteOffset)
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = GenericFunctionImplicitArityMap.create()
+	for _ in 0 upto count 'eachEntry'
+		let (name, p1) = readString(buf, offset: pos)
+		pos = p1
+		let arity = readDword(buf, offset: pos)
+		pos = pos + 4
+		try m.insert(name, value: arity as ParsedInt) otherwise ignore
+	end 'eachEntry'
+	return (m, pos)
+end 'readGenericFunctionImplicitArityMap'
 
 // --- StaticRdataValueMap ---
 

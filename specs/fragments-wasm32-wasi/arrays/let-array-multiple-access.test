@@ -1,0 +1,73 @@
+// Test: let-array-multiple-access
+function main() returns ExitCode
+	let arr = [5, 10, 15, 20]
+	let a = try arr.get(0) otherwise 0
+	let b = try arr.get(3) otherwise 0
+	return a + b
+end 'main'
+---
+ExitCode: 25
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 15 : i64
+    %3 = mir.mov_imm 20 : i64
+    %4 = mir.mov_imm 4 : i64
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @__managed_mem_create(%4, %5)
+    %7 = mir.call @mrt_get_error_and_clear()
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @__managed_mem_set(%6, %8, %0)
+    %10 = mir.call @mrt_get_error_and_clear()
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.call @__managed_mem_set(%6, %11, %1)
+    %13 = mir.call @mrt_get_error_and_clear()
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.call @__managed_mem_set(%6, %14, %2)
+    %16 = mir.call @mrt_get_error_and_clear()
+    %17 = mir.mov_imm 3 : i64
+    %18 = mir.call @__managed_mem_set(%6, %17, %3)
+    %19 = mir.call @mrt_get_error_and_clear()
+    %20 = mir.mov_imm 4 : i64
+    %21 = mir.call @__managed_mem_set_length(%6, %20)
+    %22 = mir.call @mrt_get_error_and_clear()
+    %23 = mir.mov_imm 0 : i64
+    %24 = mir.call @Array.init(%6, %23)
+    %26 = mir.mov_imm 0 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.call @Array.get(%24, %26, %27)
+    %29 = mir.call @mrt_get_error_and_clear()
+    %30 = mir.mov_imm 0 : i64
+    %31 = mir.cmp ne, %29, %30
+    mir.cond_br %31 [then: try_1.otherwise(), else: try_1.merge(%28)]
+  try_1.otherwise:
+    %33 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%33)
+  try_1.merge:
+    %36 = mir.mov_imm 3 : i64
+    %37 = mir.mov_imm 0 : i64
+    %38 = mir.call @Array.get(%24, %36, %37)
+    %39 = mir.call @mrt_get_error_and_clear()
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.cmp ne, %39, %40
+    mir.cond_br %41 [then: try_4.otherwise(), else: try_4.merge(%38)]
+  try_4.otherwise:
+    %43 = mir.mov_imm 0 : i64
+    mir.br try_4.merge(%43)
+  try_4.merge:
+    %47 = mir.add.i64 %48, %49
+    %50 = mir.mov_imm 125 : i64
+    %51 = mir.cmp ugt, %47, %50
+    mir.cond_br %51 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %52 = mir.global_addr @__panic_msg_0
+    %53 = mir.call @mrt_panic(%52)
+  __range_ok_0:
+    mir.ret %47
+  }
+}
+---

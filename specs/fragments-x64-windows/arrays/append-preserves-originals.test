@@ -15,7 +15,7 @@ ExitCode: 7
 module {
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
     x64.mov r8d, 8
     x64.mov r9d, 2
     x64.mov rcx, r9
@@ -42,13 +42,15 @@ module {
     x64.mov rdx, r8
     x64.call __managed_mem_set_length
     x64.call mrt_get_error_and_clear
+    x64.xor r8d, r8d
+    x64.mov r13d, 8
+    x64.mov r14d, 2
     x64.mov rcx, r12
+    x64.mov rdx, r8
     x64.call Array.init
     x64.mov r12, r8
-    x64.mov r8d, 8
-    x64.mov r9d, 2
-    x64.mov rcx, r9
-    x64.mov rdx, r8
+    x64.mov rcx, r14
+    x64.mov rdx, r13
     x64.call __managed_mem_create
     x64.mov r13, r8
     x64.call mrt_get_error_and_clear
@@ -71,15 +73,21 @@ module {
     x64.mov rdx, r8
     x64.call __managed_mem_set_length
     x64.call mrt_get_error_and_clear
-    x64.mov rcx, r13
-    x64.call Array.init
-    x64.mov r13, r8
-    x64.mov rcx, r12
-    x64.mov rdx, r13
-    x64.call Array.append
     x64.xor r8d, r8d
     x64.mov rcx, r13
     x64.mov rdx, r8
+    x64.call Array.init
+    x64.mov r13, r8
+    x64.xor r8d, r8d
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.mov rax, r8
+    x64.call Array.append
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov rcx, r13
+    x64.mov rdx, r9
+    x64.mov rax, r8
     x64.call Array.get
     x64.mov r12, r8
     x64.call mrt_get_error_and_clear
@@ -89,9 +97,11 @@ module {
     x64.xor r8d, r8d
     x64.mov r12, r8
   try_1.merge:
-    x64.mov r8d, 1
+    x64.xor r8d, r8d
+    x64.mov r9d, 1
     x64.mov rcx, r13
-    x64.mov rdx, r8
+    x64.mov rdx, r9
+    x64.mov rax, r8
     x64.call Array.get
     x64.mov r13, r8
     x64.call mrt_get_error_and_clear

@@ -1015,6 +1015,15 @@ type MaxonToStdLowering
 				func.paramCount = func.paramCount + 1
 				func.hasImplicitWitnessParam = true
 			end 'addWitness'
+			// Phase 11.4: record the implicit-arity in a project-wide map so
+			// per-function pipeline runs (where the callee isn't in the local
+			// stdModule.functions) can still discover whether a callsite needs
+			// the synthetic layout/witness args appended. See the field comment
+			// in Project.maxon for the architectural rationale.
+			if needsLayout 'recordArity'
+				let arity = (2 if needsWitness else 1) as ParsedInt
+				self.project.genericFunctionImplicitArity.upsert(func.name, value: arity)
+			end 'recordArity'
 			func.returnType = maxonReturnTypeToStdReturnType(self.project, ref: func.maxonReturnType)
 			func.paramTypes = stdParams
 			// C1.b: snapshot per-slot MaxonTypes from the persisted scope so
@@ -1692,13 +1701,17 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
-		// Phase 11.0 step 8b: __ManagedMemoryCursor methods all lower to
-		// no-op placeholders today. The cursor is aliased to its parent
-		// ManagedMemory pointer (see createCursor above), and iterator-
-		// protocol semantics arrive in step 8e.
+		// Phase 11.4: __ManagedMemoryCursor methods (current/advance/index/etc.)
+		// lower inline to a sequence of loadIndirect/storeIndirect/arith ops
+		// against the 40-byte cursor heap struct allocated by createCursor.
+		// See `lowerManagedMemoryCursorBuiltin` for per-method details.
 		if receiverStructName == "__ManagedMemoryCursor" 'didLowerCursor'
 			let bareMethodName = String.from(methodName)
-			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, dstBlock: dstBlock) 'handled'
+			var cursorArgIds = ValueIdArray.create()
+			for argName in args 'eachCursorArg'
+				cursorArgIds.push(self.resolveName(argName))
+			end 'eachCursorArg'
+			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, args: cursorArgIds, dstBlock: dstBlock) 'handled'
 				return
 			end 'handled'
 		end 'didLowerCursor'
@@ -1734,16 +1747,22 @@ type MaxonToStdLowering
 	// dispatch where the inner callee specializes on the outer's `T`.
 	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock, receiverContext MaxonType = MaxonType.unresolved)
 		var finalArgIds = argIds
-		let calleeIdx = self.findStdFunctionIndexByName(qualifiedCallee)
-		if calleeIdx >= 0 'haveCallee'
-			let calleeFunc = try self.stdModule.functions.get(calleeIdx) otherwise panic("emitCallWithArgs: stdModule.functions.get({calleeIdx}) failed")
-			if calleeFunc.hasImplicitLayoutParam 'addLayout'
-				finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
-				if calleeFunc.hasImplicitWitnessParam 'addWitness'
-					finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
-				end 'addWitness'
-			end 'addLayout'
-		end 'haveCallee'
+		// Phase 11.4: discover the callee's implicit-arity from a project-wide
+		// map populated during `transferFuncs` and persisted via the stdlib
+		// cache. The earlier implementation scanned `self.stdModule.functions`
+		// for the callee's IrFunction, which fails in the per-function pipeline
+		// where stdlib functions live in the cache (not the local stdModule)
+		// — that produced under-arity calls that x64 silently ABI-corrupted on
+		// and wasm rejected at validation. The project-level lookup gives a
+		// consistent arity decision regardless of whether the callee is in the
+		// local module or behind a cache restore.
+		let implicitArity = try self.project.genericFunctionImplicitArity.get(qualifiedCallee) otherwise 0
+		if implicitArity >= 1 'addLayout'
+			finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+			if implicitArity >= 2 'addWitness'
+				finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+			end 'addWitness'
+		end 'addLayout'
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
@@ -2050,15 +2069,19 @@ type MaxonToStdLowering
 		if methodName == "toCString" 'mCString'
 			return self.lowerMmFieldLoad(result, selfId: receiverId, offset: 0, dstBlock: dstBlock)
 		end 'mCString'
-		// Phase 11.0 step 8b: createCursor returns an opaque __ManagedMemoryCursor
-		// stamped with the parent ManagedMemory pointer. There is no runtime
-		// helper today — and Phase 11's iterator-protocol lowering is deferred
-		// to step 8e — so we alias the cursor to the receiver pointer
-		// itself. Downstream `cursor.*` calls lower in lowerCursorBuiltin
-		// below; they treat the cursor as a degenerate one-position iterator.
+		// Phase 11.4: createCursor allocates a real __ManagedMemoryCursor struct
+		// and copies buffer/length/element_size from the source __ManagedMemory.
+		// Cursor layout (40 bytes):
+		//   offset  0  buffer        i64  (data pointer copied from source)
+		//   offset  8  position      i64  (current index, starts at 0)
+		//   offset 16  length        i64  (copied from source for fast access)
+		//   offset 24  element_size  i64  (copied from source)
+		//   offset 32  source_ptr    i64  (pointer back to source MM, retained)
+		// Sets the error flag to `emptySlot` (1) when the source is empty so
+		// the stdlib's `try source.createCursor() otherwise throw` machinery
+		// catches it before the empty cursor leaks into a `for in` body.
 		if methodName == "createCursor" 'mCreateCursor'
-			self.aliasName(result, toId: receiverId)
-			self.setValueType(receiverId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemoryCursor")))
+			self.lowerCreateCursor(result, sourceId: receiverId, dstBlock: dstBlock)
 			return true
 		end 'mCreateCursor'
 		if methodName == "clear" 'mClear'
@@ -2107,26 +2130,283 @@ type MaxonToStdLowering
 		return true
 	end 'lowerManagedMemBuiltin'
 
-	// Phase 11.0 step 8b: lower a `__ManagedMemoryCursor.method` call to
-	// a placeholder. The cursor is aliased to its parent __ManagedMemory
-	// pointer at createCursor time (see lowerManagedMemBuiltin above),
-	// and Phase 11's iterator-protocol witness-table dispatch hasn't
-	// shipped yet, so each cursor call lowers to a benign zero-valued
-	// constant (no runtime effect). Returns true to indicate the dispatch
-	// was handled.
-	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, dstBlock IrBlock) returns bool
-		// `current()` returns the element at the cursor's position. Today the
-		// cursor is the parent __ManagedMemory pointer (so receiverId is the
-		// MM ptr), so reading element 0 gives a representative value;
-		// that's enough for compile-time well-formedness on Array.maxon's
-		// reachable code paths (the body blocks behind for-in iterables
-		// are detached today, see lowerOp).
-		logTrace(LogCategory.parser, message: () gives "lowerManagedMemoryCursorBuiltin: method={methodName} recv={receiverId}")
+	// Phase 11.4: lower a `__ManagedMemoryCursor.method` call inline. The
+	// cursor is a real 40-byte heap struct (see `lowerCreateCursor` above);
+	// each method here reads/writes fields by offset and emits the right
+	// arithmetic for navigation + bounds checks. Throwing methods set the
+	// process-wide error flag via `mrt_set_error`; the surrounding stdlib
+	// `try raw.method() otherwise throw` catches the flag and rethrows the
+	// user-facing IterationError.
+	//
+	// Self-hosted's `__ManagedMemoryError` enum:
+	//   0 indexOutOfBounds
+	//   1 emptySlot          ← used for advance/seek/peek "exhausted"
+	//   2 sliceOutOfBounds   ← used for retreat "atStart"
+	//
+	// Stdlib's `ArrayIterator.advance()` only checks "did anything throw";
+	// it doesn't inspect the specific code, so the wrapper-side `IterationError`
+	// it rethrows looks the same to the user regardless. Choosing the codes
+	// above keeps the wire format consistent with the existing enum and
+	// stays parallel to the C# bootstrap's two-code scheme (1 = exhausted,
+	// 2 = atStart).
+	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, args ValueIdArray, dstBlock IrBlock) returns bool
+		if methodName == "current" 'mCurrent'
+			self.lowerCursorCurrent(result, cursorId: receiverId, dstBlock: dstBlock)
+			return true
+		end 'mCurrent'
+		if methodName == "index" 'mIndex'
+			self.lowerCursorIndex(result, cursorId: receiverId, dstBlock: dstBlock)
+			return true
+		end 'mIndex'
+		if methodName == "advance" 'mAdvance'
+			self.lowerCursorAdvance(result, cursorId: receiverId, dstBlock: dstBlock)
+			return true
+		end 'mAdvance'
+		if methodName == "retreat" 'mRetreat'
+			self.lowerCursorRetreat(result, cursorId: receiverId, dstBlock: dstBlock)
+			return true
+		end 'mRetreat'
+		if methodName == "seek" 'mSeek'
+			let indexId = try args.get(0) otherwise panic("lowerManagedMemoryCursorBuiltin: seek missing index arg")
+			self.lowerCursorSeek(result, cursorId: receiverId, indexId: indexId, dstBlock: dstBlock)
+			return true
+		end 'mSeek'
+		if methodName == "peek" 'mPeek'
+			let aheadId = try args.get(0) otherwise panic("lowerManagedMemoryCursorBuiltin: peek missing ahead arg")
+			self.lowerCursorPeek(result, cursorId: receiverId, aheadId: aheadId, dstBlock: dstBlock)
+			return true
+		end 'mPeek'
+		// Unknown method on the cursor — fall through with a clear diagnostic
+		// so the build stops loudly rather than silently emitting an unrelated
+		// no-op constant.
+		self.reportLowerError(ErrorCode.semanticUndefinedVariable, message: "lowerManagedMemoryCursorBuiltin: unknown method '__ManagedMemoryCursor.{methodName}'")
+		let placeholder = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: placeholder, value: 0))))
+		self.setValueType(placeholder, t: MaxonType.integer)
+		return true
+	end 'lowerManagedMemoryCursorBuiltin'
+
+	// Phase 11.4: helper ops for the cursor lowering. Each emits a fresh
+	// const op + returns the ValueId so callers compose loads / stores
+	// without re-typing the boilerplate.
+
+	// Emit `const i64 value` and return its ValueId.
+	function emitConstI64(value ParsedInt, dstBlock IrBlock) returns ValueId
+		let id = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: id, value: value))))
+		return id
+	end 'emitConstI64'
+
+	// Emit `result = loadIndirect(addrId + offset)` typed i64 and return resultId.
+	function emitLoadFieldI64(addrId ValueId, offset ParsedInt, dstBlock IrBlock) returns ValueId
+		let id = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(id, addrId: addrId, offset: offset, isFloat: false)))
+		self.setValueType(id, t: MaxonType.integer)
+		return id
+	end 'emitLoadFieldI64'
+
+	// Emit `storeIndirect(addrId + offset, valueId)` for an i64 field.
+	function emitStoreFieldI64(addrId ValueId, offset ParsedInt, valueId ValueId, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId, isFloat: false)))
+	end 'emitStoreFieldI64'
+
+	// Emit `result = leftId <op> rightId` for an i64 binary op and return resultId.
+	function emitBinaryI64(opcode StdArithBinaryOpcode, leftId ValueId, rightId ValueId, dstBlock IrBlock) returns ValueId
+		let id = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: id, leftId: leftId, rightId: rightId))))
+		self.setValueType(id, t: MaxonType.integer)
+		return id
+	end 'emitBinaryI64'
+
+	// Emit `mrt_set_error(codeValueId)` to surface a throwing-builtin error to
+	// the stdlib's `try … otherwise` machinery. The error flag is process-wide
+	// (single-threaded today); each throwing path computes the code value
+	// (`isFailure * errorCode` so the success path writes 0 = no error) and
+	// calls this helper. Centralising the call shape keeps the unused-result
+	// + arg-array boilerplate in one place.
+	function emitSetError(codeValueId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(codeValueId)
+		let unusedRet = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(unusedRet, callee: "mrt_set_error", argIds: argIds)))
+	end 'emitSetError'
+
+	// Emit `(1 - isValid) * errorCode`. When `isValid==1` (success) this is 0
+	// (= no error); when `isValid==0` (failure) it's `errorCode`. Used to
+	// gate `mrt_set_error` calls without branching on the failure flag.
+	function emitErrorCodeForFailure(isValid ValueId, errorCode ParsedInt, dstBlock IrBlock) returns ValueId
+		let one = self.emitConstI64(1, dstBlock: dstBlock)
+		let inverted = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: one, rightId: isValid, dstBlock: dstBlock)
+		let codeConst = self.emitConstI64(errorCode, dstBlock: dstBlock)
+		return self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: inverted, rightId: codeConst, dstBlock: dstBlock)
+	end 'emitErrorCodeForFailure'
+
+	// Emit a branchless select: `cond ? trueVal : falseVal`, expanded as
+	// `falseVal + cond * (trueVal - falseVal)`. Relies on `cond` being 0 or 1
+	// (which the cmp ops guarantee).
+	function emitArithmeticSelect(cond ValueId, trueVal ValueId, falseVal ValueId, dstBlock IrBlock) returns ValueId
+		let delta = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: trueVal, rightId: falseVal, dstBlock: dstBlock)
+		let scaled = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: cond, rightId: delta, dstBlock: dstBlock)
+		return self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: falseVal, rightId: scaled, dstBlock: dstBlock)
+	end 'emitArithmeticSelect'
+
+	// Emit `(target >= 0) AND (target < length)` as a 0/1 i64 — the canonical
+	// "is this index in range" check for cursor seek/peek. The two cmps each
+	// return 0 or 1, so a multiply produces the AND.
+	function emitInBoundsZeroToLength(target ValueId, length ValueId, dstBlock IrBlock) returns ValueId
+		let zero = self.emitConstI64(0, dstBlock: dstBlock)
+		let isLowerOk = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Ge, leftId: target, rightId: zero, dstBlock: dstBlock)
+		let isUpperOk = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Lt, leftId: target, rightId: length, dstBlock: dstBlock)
+		return self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: isLowerOk, rightId: isUpperOk, dstBlock: dstBlock)
+	end 'emitInBoundsZeroToLength'
+
+	// Bind `result` to a fresh `const i64 0` — the void-return placeholder for
+	// cursor methods whose Maxon return type is void.
+	function emitCursorVoidResult(result ByteArray, dstBlock IrBlock)
 		let resId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resId, value: 0))))
 		self.setValueType(resId, t: MaxonType.integer)
-		return true
-	end 'lowerManagedMemoryCursorBuiltin'
+	end 'emitCursorVoidResult'
+
+	// Phase 11.4: createCursor allocates 40 bytes for the cursor struct,
+	// copies buffer/length/element_size from the source __ManagedMemory,
+	// initializes position=0, stores source_ptr, and signals an error
+	// (`emptySlot`, code 1) when the source's length is zero so the
+	// surrounding `try source.createCursor() otherwise throw` rejects empty
+	// sources. The cursor pointer is bound as the call's result.
+	function lowerCreateCursor(result ByteArray, sourceId ValueId, dstBlock IrBlock)
+		// Allocate 40 bytes via mrt_alloc. The result is an opaque i64 ptr.
+		let sizeId = self.emitConstI64(40, dstBlock: dstBlock)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(sizeId)
+		let cursorId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(cursorId, callee: "mrt_alloc", argIds: allocArgs)))
+		self.setValueType(cursorId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemoryCursor")))
+
+		// Read source fields. __ManagedMemory layout: buffer @0, length @8,
+		// capacity @16, element_size @24, parent_ptr @32.
+		let buffer = self.emitLoadFieldI64(sourceId, offset: 0, dstBlock: dstBlock)
+		let length = self.emitLoadFieldI64(sourceId, offset: 8, dstBlock: dstBlock)
+		let elementSize = self.emitLoadFieldI64(sourceId, offset: 24, dstBlock: dstBlock)
+
+		// Stamp the cursor fields. Position starts at 0; source_ptr is the
+		// receiver pointer (kept here so a future drop pass can decref the
+		// source when the cursor goes out of scope).
+		let zero = self.emitConstI64(0, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 0, valueId: buffer, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 8, valueId: zero, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 16, valueId: length, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 24, valueId: elementSize, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 32, valueId: sourceId, dstBlock: dstBlock)
+
+		// length == 0 → set error flag to `emptySlot` (1). We compute the
+		// flag value as `(length == 0) * 1` (cmp returns 0 or 1) and write it
+		// unconditionally — mrt_set_error overwrites the flag, so writing 0
+		// on the success path is a correct no-op.
+		let isEmpty = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: length, rightId: zero, dstBlock: dstBlock)
+		self.emitSetError(isEmpty, dstBlock: dstBlock)
+	end 'lowerCreateCursor'
+
+	// Phase 11.4: cursor.current() — load element at current position.
+	// Bounds against length come from the cursor's own length field; this is
+	// the infallible read variant (the stdlib wrapper has already validated
+	// via createCursor's empty-check, and advance() updates position only on
+	// success). On a misuse (position == length), the loaded address may
+	// dereference past the buffer; today's stdlib never reaches that path,
+	// but a future revision can add an explicit bounds check + panic.
+	function lowerCursorCurrent(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
+		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
+		let elementSize = self.emitLoadFieldI64(cursorId, offset: 24, dstBlock: dstBlock)
+		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: position, rightId: elementSize, dstBlock: dstBlock)
+		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
+		// The current Phase 11.4 cursor only handles 8-byte (pointer-sized)
+		// elements — bool-bit-packing and per-elem-size dispatch are follow-ups.
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerCursorCurrent'
+
+	// Phase 11.4: cursor.index() — return the current position as i64.
+	function lowerCursorIndex(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: cursorId, offset: 8, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerCursorIndex'
+
+	// Phase 11.4: shared tail for advance/retreat/seek. Conditionally writes
+	// `newPos` into the cursor's position field (only when valid) and sets
+	// the error flag to `errorCode` on the failure branch via mrt_set_error.
+	// Mirrors the C# `EmitCursorPositionUpdate` shape: a `select` between
+	// newPos and oldPosition gates the field store; a separate `(1 - isValid)
+	// * errorCode` value drives mrt_set_error.
+	function emitCursorPositionUpdate(cursorId ValueId, newPos ValueId, isValid ValueId, oldPosition ValueId, errorCode ParsedInt, dstBlock IrBlock)
+		let selected = self.emitArithmeticSelect(isValid, trueVal: newPos, falseVal: oldPosition, dstBlock: dstBlock)
+		self.emitStoreFieldI64(cursorId, offset: 8, valueId: selected, dstBlock: dstBlock)
+		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: errorCode, dstBlock: dstBlock)
+		self.emitSetError(codeValue, dstBlock: dstBlock)
+	end 'emitCursorPositionUpdate'
+
+	// Phase 11.4: cursor.advance() — position += 1 if newPos < length, else
+	// set error code 1 (`emptySlot` / "exhausted"). Result is a 0 i64 because
+	// the call's MaxonReturnType is void but the lowering still defines a
+	// name slot.
+	function lowerCursorAdvance(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
+		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
+		let one = self.emitConstI64(1, dstBlock: dstBlock)
+		let newPos = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: position, rightId: one, dstBlock: dstBlock)
+		let isValid = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Lt, leftId: newPos, rightId: length, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock)
+		self.emitCursorVoidResult(result, dstBlock: dstBlock)
+	end 'lowerCursorAdvance'
+
+	// Phase 11.4: cursor.retreat() — position -= 1 if newPos >= 0, else
+	// set error code 2 (`sliceOutOfBounds` / "atStart").
+	function lowerCursorRetreat(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
+		let one = self.emitConstI64(1, dstBlock: dstBlock)
+		let newPos = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: position, rightId: one, dstBlock: dstBlock)
+		let zero = self.emitConstI64(0, dstBlock: dstBlock)
+		let isValid = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Ge, leftId: newPos, rightId: zero, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 2, dstBlock: dstBlock)
+		self.emitCursorVoidResult(result, dstBlock: dstBlock)
+	end 'lowerCursorRetreat'
+
+	// Phase 11.4: cursor.seek(index) — jump to absolute position. Sets error
+	// code 1 if `index < 0` or `index >= length`.
+	function lowerCursorSeek(result ByteArray, cursorId ValueId, indexId ValueId, dstBlock IrBlock)
+		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
+		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
+		let isValid = self.emitInBoundsZeroToLength(indexId, length: length, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: indexId, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock)
+		self.emitCursorVoidResult(result, dstBlock: dstBlock)
+	end 'lowerCursorSeek'
+
+	// Phase 11.4: cursor.peek(ahead) — load element at `position + ahead`
+	// without moving the cursor. Sets error code 1 when the target index is
+	// out of bounds; the load itself reads from a clamped address (the
+	// current position) on the failure path, so the value is benign noise
+	// that the caller's `try otherwise` branch discards.
+	function lowerCursorPeek(result ByteArray, cursorId ValueId, aheadId ValueId, dstBlock IrBlock)
+		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
+		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
+		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
+		let elementSize = self.emitLoadFieldI64(cursorId, offset: 24, dstBlock: dstBlock)
+		let target = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: position, rightId: aheadId, dstBlock: dstBlock)
+		let isValid = self.emitInBoundsZeroToLength(target, length: length, dstBlock: dstBlock)
+		// Clamp on the error path so the load below dereferences a known-safe
+		// address (the current position): the value is benign noise that the
+		// caller's `try otherwise` discards.
+		let safeTarget = self.emitArithmeticSelect(isValid, trueVal: target, falseVal: position, dstBlock: dstBlock)
+		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: safeTarget, rightId: elementSize, dstBlock: dstBlock)
+		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: 1, dstBlock: dstBlock)
+		self.emitSetError(codeValue, dstBlock: dstBlock)
+	end 'lowerCursorPeek'
 
 	// Inline a `loadIndirect(selfPtr, offset)` for one of the simple
 	// `__ManagedMemory.*` getters (length / capacity / elementSize /

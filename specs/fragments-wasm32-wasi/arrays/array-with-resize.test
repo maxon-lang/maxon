@@ -1,0 +1,58 @@
+// Test: array-with-resize
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+		var arr = IntArray.create()
+		arr.resize(5)
+		try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
+		return try arr.get(0) otherwise 0
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @Array.create(%0)
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.call @Array.resize(%1, %3, %4)
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 99 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @Array.set(%1, %7, %8, %9)
+    %11 = mir.call @mrt_get_error_and_clear()
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.cmp ne, %11, %12
+    mir.cond_br %13 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %15 = mir.global_addr @__panic_msg_0
+    %16 = mir.call @mrt_panic(%15)
+    %17 = mir.mov_imm 0 : i64
+    mir.ret %17
+  try_1.merge:
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.call @Array.get(%1, %20, %21)
+    %23 = mir.call @mrt_get_error_and_clear()
+    %24 = mir.mov_imm 0 : i64
+    %25 = mir.cmp ne, %23, %24
+    mir.cond_br %25 [then: try_4.otherwise(), else: try_4.merge(%22)]
+  try_4.otherwise:
+    %27 = mir.mov_imm 0 : i64
+    mir.br try_4.merge(%27)
+  try_4.merge:
+    %30 = mir.mov_imm 125 : i64
+    %31 = mir.cmp ugt, %29, %30
+    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %32 = mir.global_addr @__panic_msg_1
+    %33 = mir.call @mrt_panic(%32)
+  __range_ok_0:
+    mir.ret %29
+  }
+}
+---

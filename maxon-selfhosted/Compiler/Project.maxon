@@ -394,6 +394,25 @@ export type Project
 	// keep their callees alive even though no `call` op names them.
 	export var livenessRoots StringArray
 
+	// Phase 11.4: per-function count of synthetic trailing params (0, 1=layout,
+	// or 2=layout+witness) that the Maxon→Std lowering injects when the body
+	// is a generic. Populated during `transferFuncs` alongside
+	// `IrFunction.hasImplicitLayoutParam`/`hasImplicitWitnessParam`, persisted
+	// through the stdlib cache so cache-hit user builds see the same flag a
+	// fresh-from-source build would. Read by `emitCallWithArgs` to decide
+	// whether to append synthetic args at a call site — using a project-wide
+	// map instead of a local `stdModule.functions` scan so the per-function
+	// pipeline (where stdlib functions aren't in the local module) still gets
+	// the right arity.
+	//
+	// On x64 the prior local-scan implementation was a silent ABI bug for
+	// stdlib generics: callees like `Array.init` whose bodies don't read the
+	// implicit layout slot worked by accident; any generic body that did read
+	// it would have consumed garbage. On wasm the validator surfaced the bug
+	// as `expected i64 but nothing on stack`. The map-based lookup here is
+	// the proper architectural fix.
+	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
+
 	// Phase 11.2: emitted rdata blob bytes keyed by mangled label. The
 	// canonicalize pass (11.6) folds `descriptorField` reads of a known
 	// label into a constant when this map carries the bytes — that's the
@@ -465,11 +484,19 @@ export type Project
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
 			witnessTables: WitnessTableRegistry.create(),
 			livenessRoots: StringArray.create(),
+			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create()
 		}
 	end 'create'
 end 'Project'
+
+// Phase 11.4: count of synthetic trailing params (0/1/2) per generic function
+// name. 1 = implicit layout descriptor only; 2 = layout + witness table; 0
+// (or absent) = no implicit args. The number is exactly what
+// `emitCallWithArgs` needs to decide how many synthetic args to append at a
+// call site.
+export typealias GenericFunctionImplicitArityMap = Map with(String, ParsedInt)
 
 // Phase 11.7: a single deferred where-clause check, captured during
 // typealias drain.

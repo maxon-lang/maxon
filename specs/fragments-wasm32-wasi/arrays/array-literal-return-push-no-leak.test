@@ -1,0 +1,57 @@
+// Test: array-literal-return-push-no-leak
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function makeNumbers(a Integer, b Integer) returns IntArray
+	var arr = IntArray.create()
+	arr.push(a)
+	arr.push(b)
+	arr.push(a + b)
+	return arr
+end 'makeNumbers'
+
+function main() returns ExitCode
+	let nums = makeNumbers(10, b: 20)
+	let c = try nums.get(2) otherwise 0
+	return c
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.call @Array.create(%15)
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.call @Array.push(%16, %0, %17)
+    %19 = mir.mov_imm 0 : i64
+    %20 = mir.call @Array.push(%16, %1, %19)
+    %21 = mir.mov_imm 30 : i64
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.call @Array.push(%16, %21, %22)
+    %4 = mir.mov_imm 2 : i64
+    %5 = mir.global_addr @__layout_Array_Integer
+    %6 = mir.call @Array.get(%16, %4, %5)
+    %7 = mir.call @mrt_get_error_and_clear()
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.cmp ne, %7, %8
+    mir.cond_br %9 [then: try_1.otherwise(), else: try_1.merge(%6)]
+  try_1.otherwise:
+    %11 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%11)
+  try_1.merge:
+    %24 = mir.mov_imm 125 : i64
+    %25 = mir.cmp ugt, %14, %24
+    mir.cond_br %25 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %26 = mir.global_addr @__panic_msg_0
+    %27 = mir.call @mrt_panic(%26)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

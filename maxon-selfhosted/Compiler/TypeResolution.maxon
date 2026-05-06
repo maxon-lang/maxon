@@ -1443,9 +1443,31 @@ function normalizeNamedReceiver(project Project, id TypeNameId, enclosingType St
 end 'normalizeNamedReceiver'
 
 function tryGenericTypealias(project Project, name String, fallbackId TypeNameId) returns MaxonType
-	let resolved = try project.genericTypealiases.get(name) otherwise return MaxonType.named(fallbackId)
+	let resolved = try project.genericTypealiases.get(name) otherwise return tryAnyStructInnerAlias(project, name: name, fallbackId: fallbackId)
 	return resolved
 end 'tryGenericTypealias'
+
+// Phase 11.4: a method call whose receiver is named after an inner typealias
+// of some struct (e.g. `Array.innerAliases["ArrayIter"] = ArrayIterator with
+// Element`) needs the alias unwrapped to the underlying generic instance so
+// `maxonTypeStructName` can return the real receiver type. The lookup is
+// scoped per-struct under `normalizeNamedReceiver` when the receiver is
+// inside that struct's body; for receivers in user-scope code, the alias
+// still has to resolve, so this helper scans every struct's `innerAliases`.
+// Inner-alias names are unique across the stdlib (only `ArrayIter` declared
+// in `Array`), so the first match is the correct one — no ambiguity.
+//
+// This is what unblocks `let arr = [1,2,3]; for n in arr` in user code:
+// `arr.createIterator()` returns `ArrayIter`, and the next call
+// `iter.advance()` lives in user-scope where the per-struct fast path
+// can't help.
+function tryAnyStructInnerAlias(project Project, name String, fallbackId TypeNameId) returns MaxonType
+	for (_, st) in project.structTypes 'eachStruct'
+		let resolved = try st.innerAliases.get(name) otherwise continue
+		return resolved
+	end 'eachStruct'
+	return MaxonType.named(fallbackId)
+end 'tryAnyStructInnerAlias'
 
 // Resolve an overloaded callee at TypeResolution time. Mirrors
 // `resolveOverloadedCallee` in MaxonDialect but additionally consults the

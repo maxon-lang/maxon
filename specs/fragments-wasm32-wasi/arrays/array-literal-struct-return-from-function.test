@@ -1,0 +1,107 @@
+// Test: array-literal-struct-return-from-function
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function makePoints() returns PointArray
+	let p1 = Point.create(x: 1, y: 2)
+	let p2 = Point.create(x: 3, y: 4)
+	return [p1, p2]
+end 'makePoints'
+
+function main() returns ExitCode
+	let pts = makePoints()
+	let p0 = try pts.get(0) otherwise Point.create(x: 0, y: 0)
+	let p1 = try pts.get(1) otherwise Point.create(x: 0, y: 0)
+	return p0.x + p1.y
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %32 = mir.mov_imm 1 : i64
+    %33 = mir.mov_imm 2 : i64
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %32, %35, 0
+    mir.store %33, %35, 8
+    %36 = mir.mov_imm 3 : i64
+    %37 = mir.mov_imm 4 : i64
+    %38 = mir.mov_imm 16 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    mir.store %36, %39, 0
+    mir.store %37, %39, 8
+    %40 = mir.mov_imm 2 : i64
+    %41 = mir.mov_imm 8 : i64
+    %42 = mir.call @__managed_mem_create(%40, %41)
+    %43 = mir.call @mrt_get_error_and_clear()
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.call @__managed_mem_set(%42, %44, %35)
+    %46 = mir.call @mrt_get_error_and_clear()
+    %47 = mir.mov_imm 1 : i64
+    %48 = mir.call @__managed_mem_set(%42, %47, %39)
+    %49 = mir.call @mrt_get_error_and_clear()
+    %50 = mir.mov_imm 2 : i64
+    %51 = mir.call @__managed_mem_set_length(%42, %50)
+    %52 = mir.call @mrt_get_error_and_clear()
+    %53 = mir.mov_imm 0 : i64
+    %54 = mir.call @Array.init(%42, %53)
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Array_Point
+    %4 = mir.call @Array.get(%54, %2, %3)
+    %5 = mir.call @mrt_get_error_and_clear()
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %5, %6
+    mir.cond_br %7 [then: try_1.otherwise(), else: try_1.merge(%4)]
+  try_1.otherwise:
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %55 = mir.mov_imm 16 : i64
+    %56 = mir.call @mrt_alloc(%55)
+    mir.store %9, %56, 0
+    mir.store %10, %56, 8
+    mir.br try_1.merge(%56)
+  try_1.merge:
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.global_addr @__layout_Array_Point
+    %16 = mir.call @Array.get(%54, %14, %15)
+    %17 = mir.call @mrt_get_error_and_clear()
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %17, %18
+    mir.cond_br %19 [then: try_4.otherwise(), else: try_4.merge(%16)]
+  try_4.otherwise:
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.mov_imm 0 : i64
+    %57 = mir.mov_imm 16 : i64
+    %58 = mir.call @mrt_alloc(%57)
+    mir.store %21, %58, 0
+    mir.store %22, %58, 8
+    mir.br try_4.merge(%58)
+  try_4.merge:
+    %26 = mir.load %30, 0
+    %28 = mir.load %31, 8
+    %29 = mir.add.i64 %26, %28
+    %59 = mir.mov_imm 125 : i64
+    %60 = mir.cmp ugt, %29, %59
+    mir.cond_br %60 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %61 = mir.global_addr @__panic_msg_0
+    %62 = mir.call @mrt_panic(%61)
+  __range_ok_0:
+    mir.ret %29
+  }
+}
+---

@@ -18,8 +18,11 @@ module {
     x64.prologue stack_size=32
     x64.lea r8, [rip+__data_numbers]
     x64.mov r9, [r8+0] (8b)
+    x64.xor r8d, r8d
     x64.mov rcx, r9
+    x64.mov rdx, r8
     x64.call Array.createIterator
+    x64.mov r12, r8
     x64.call mrt_get_error_and_clear
     x64.xor r9d, r9d
     x64.test r8, r8
@@ -27,36 +30,38 @@ module {
     x64.mov r8, r9
     x64.jmp loop_0.exit
   loop_0.header:
-    x64.lea r8, [rip+__panic_msg_0]
-    x64.mov rcx, r8
-    x64.call mrt_panic
+    x64.xor r8d, r8d
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call ArrayIterator.advance
     x64.call mrt_get_error_and_clear
     x64.test r8, r8
     x64.je __phi_trampoline_2_3
     x64.mov r8, rbx
     x64.jmp loop_0.exit
   loop_0:
-    x64.lea r8, [rip+__panic_msg_1]
-    x64.mov rcx, r8
-    x64.call mrt_panic
-    x64.mov rbx, r12
-    x64.add rbx, 0
+    x64.xor r8d, r8d
+    x64.mov rcx, r12
+    x64.mov rdx, r8
+    x64.call ArrayIterator.current
+    x64.mov rbx, r13
+    x64.add rbx, r8
     x64.jmp loop_0.header
   loop_0.exit:
     x64.cmp r8, 125
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea r8, [rip+__panic_msg_2]
+    x64.lea r8, [rip+__panic_msg_0]
     x64.mov rcx, r8
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   __phi_trampoline_0_3:
-    x64.mov r12, r9
+    x64.mov r13, r9
     x64.jmp loop_0
   __phi_trampoline_2_3:
-    x64.mov r12, rbx
+    x64.mov r13, rbx
     x64.jmp loop_0
   }
 }
