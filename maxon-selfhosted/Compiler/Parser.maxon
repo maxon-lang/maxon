@@ -173,6 +173,32 @@ export type Parser
 	var closureOuterScope Scope
 	var closureCaptures CaptureInfoArray
 
+	// Lazily allocated synthetic `__module_init_<n>` function for this file.
+	// Holds the IR for materializing every top-level array-literal initializer
+	// in the source. The first `let xs = [...]` / `var xs = [...]` at module
+	// scope creates the function and its single entry block; subsequent literals
+	// emit into the same block. `moduleInitName` is empty when the function has
+	// not been allocated yet — a fresh-Parser sentinel keyed off Optional<T>'s
+	// absence is unavailable for IrFunction in the current type system, so the
+	// pair (name == "", entry block index) carries the same intent.
+	var moduleInitName String
+	// Captured at allocation time. `moduleInitFunc` is the IrFunction the
+	// parser passes to `module.addBlockAt`; `moduleInitBlock` is the entry
+	// block where every array-literal init's ops are appended. Both are valid
+	// only when `moduleInitName != ""`. The same struct identity flows back
+	// into `finalizeModuleInit` so the closing `ret` lands in the right block.
+	var moduleInitFunc IrFunction
+	var moduleInitBlock IrBlock
+	// Synthetic-name counter dedicated to `__module_init_<n>`. The shared
+	// `synthNameCounter` resets between user functions (see resetSymbolTable),
+	// so a second top-level array literal parsed after an intervening user
+	// function would otherwise re-use names from the first literal and crash
+	// the producer-type map. We snapshot/restore around each
+	// `parseTopLevelArrayLiteralDecl` call so this counter advances
+	// monotonically across every literal in the file regardless of how many
+	// user functions sit between them.
+	var moduleInitSynthCounter ParsedInt
+
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
 		// input — caller must handle by throwing ParserError.unexpectedEof so
@@ -182,7 +208,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -225,6 +251,11 @@ export type Parser
 				try cursor.advance() otherwise break
 			end 'stuck'
 		end 'parseLoop'
+
+		// Close out the synthetic `__module_init_<n>` function (if any) with
+		// a void `ret` so its entry block is properly terminated before the
+		// MaxonModule is handed off.
+		finalizeModuleInit()
 
 		return module
 	end 'parseModule'
@@ -1229,6 +1260,17 @@ export type Parser
 			return
 		end 'isMethodCall'
 
+		// `let xs = [1, 2, 3]` / `var xs = [...]` — array-literal initializer.
+		// Materialize the literal at runtime in a synthetic per-file
+		// `__module_init_<n>` function (lazily allocated on first use), and
+		// reserve a writable .data slot for the array reference. `mrt_start`
+		// invokes every `__module_init_<n>` before `main` so the slot holds
+		// the literal's pointer by the time user code reads it.
+		if valueToken.kind == TokenKind.leftBracket 'isArrayLit'
+			try parseTopLevelArrayLiteralDecl(nameToken, qualifiedName: qualifiedName, mutable: mutable, visibility: visibility)
+			return
+		end 'isArrayLit'
+
 		// Capture the initializer as a structural tree. Identifier
 		// references become `nameRef` nodes resolved later by
 		// `resolveAllTopLevelDecls`.
@@ -1262,6 +1304,115 @@ export type Parser
 		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
 		logTrace(LogCategory.parser, message: () gives "parser: const string '{qualifiedName}'")
 	end 'parseTopLevelStringDecl'
+
+	// Lazily allocate this file's synthetic `__module_init_<n>` function on
+	// first use. Subsequent top-level array-literal decls in the same file
+	// reuse the cached function and append into the same entry block.
+	//
+	// The init function is a 0-param void-returning IrFunction registered in
+	// `project.moduleInitFuncs` (file-discovery order) and stamped onto
+	// `project.livenessRoots` so DFE keeps it (and everything it transitively
+	// calls — `__ManagedMemory.create`, `T.init`, `mrt_get_error_and_clear`,
+	// etc.). `mrt_start` invokes every entry in order before calling `main`;
+	// the patch is applied during `augmentWithRuntime` after the runtime+user
+	// modules have merged.
+	function getOrCreateModuleInit() returns String
+		if moduleInitName != "" 'cached'
+			return moduleInitName
+		end 'cached'
+		let suffix = project.moduleInitFuncs.count() as ParsedInt
+		let name = "__module_init_{suffix}"
+		var func = IrFunction.create(name, maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
+		// Inits run from `mrt_start`, so they need `global` visibility — file
+		// would force visibility filtering against the runtime's empty path.
+		func.namespace = namespace
+		func.visibility = Visibility.global
+		func.sourceFilePath = filePath
+		let block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: 1)
+		module.functions.push(func)
+		project.moduleInitFuncs.push(name)
+		project.livenessRoots.push(name)
+		moduleInitName = name
+		moduleInitFunc = func
+		moduleInitBlock = block
+		return name
+	end 'getOrCreateModuleInit'
+
+	// Top-level `let xs = [1, 2, 3]` / `var xs = [1, 2, 3]`. The literal's
+	// `__ManagedMemory.create` + per-element `set` + `T.init(mm)` sequence is
+	// emitted into the file's `__module_init_<n>` entry block, and the result
+	// is stored into a writable .data slot via `globalStore`. The slot starts
+	// life as 8 zero bytes (added by `registerGlobalVarsForDataSection`); the
+	// init overwrites it with the array reference at startup time.
+	//
+	// Both `let` and `var` follow this path. The slot lives in
+	// `topLevelVars` either way, but `let`-bound names are also recorded in
+	// `project.immutableArrayLitNames` so `rewriteUnresolvedAssign` can keep
+	// firing E2013 on subsequent source-level reassignments.
+	//
+	// Lifetime note: the array's refcount lands at 1 after `T.init`, ownership
+	// transfers into the slot via `globalStore`, and there is no scope-end
+	// drop in `__module_init_<n>` — so the array silently leaks at process
+	// exit. The C# bootstrap has a separate `__maxon_global_cleanup` pass
+	// which the self-hosted compiler does not yet emit; the affected spec
+	// tests don't observe clean shutdown.
+	function parseTopLevelArrayLiteralDecl(nameToken Token, qualifiedName String, mutable bool, visibility Visibility) throws ParserError
+		_ = getOrCreateModuleInit()
+		let bracketToken = cursor.current()
+		// Swap the shared synth counter for the dedicated init counter so
+		// names minted across multiple literals stay unique within
+		// `__module_init_<n>`. parseArrayLiteralExpr (and any helpers it
+		// calls) read/write `synthNameCounter` for every emit.
+		let savedSynth = synthNameCounter
+		synthNameCounter = moduleInitSynthCounter
+		let result = try parseArrayLiteralExpr(moduleInitBlock)
+		moduleInitSynthCounter = synthNameCounter
+		synthNameCounter = savedSynth
+		let literalRange = SourceRange.between(bracketToken, last: previousToken())
+
+		// Reject duplicates the same way registerUnresolvedTopLevelDecl does.
+		if project.topLevelConstants.contains(qualifiedName) or project.topLevelVars.contains(qualifiedName) 'dupResolved'
+			reportDuplicateConstant(nameToken)
+			return
+		end 'dupResolved'
+
+		module.appendOp(moduleInitBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(result), slotType: exprType(result), range: literalRange))
+
+		// Slot type is `MaxonType.unresolved` at parse time; TypeResolution's
+		// fillUnresolvedTypes pass rewrites the globalStore op once the
+		// `T.init(mm)` call result type is known, and a follow-up walk
+		// backfills `topLevelVars[name].slotType` so subsequent `globalLoad`
+		// rewrites on user reads of `xs` carry the concrete type.
+		let info = TopLevelVarInfo.create(qualifiedName, slotType: exprType(result), initialValue: 0 as IntConstant, visibility: visibility, sourceFilePath: filePath)
+		try project.topLevelVars.insert(qualifiedName, value: info) otherwise 'dupVar'
+			reportDuplicateConstant(nameToken)
+		end 'dupVar'
+
+		if not mutable 'isLet'
+			project.immutableArrayLitNames.push(qualifiedName)
+		end 'isLet'
+
+		logTrace(LogCategory.parser, message: () gives "parser: top-level array literal '{qualifiedName}' → {moduleInitName}")
+	end 'parseTopLevelArrayLiteralDecl'
+
+	// Close out this file's synthetic `__module_init_<n>` function once the
+	// top-level parse loop terminates. A null-op when the parser never saw a
+	// top-level array literal — `moduleInitName` stays "" and there is no
+	// dangling unterminated block.
+	function finalizeModuleInit()
+		if moduleInitName == "" 'noInit'
+			return
+		end 'noInit'
+		// Void return: emit a constant-zero literal (mirrors emitImplicitReturn).
+		// Same synth-counter swap as the literal-emit path: the zero literal
+		// would otherwise collide with names already minted in this init.
+		let savedSynth = synthNameCounter
+		synthNameCounter = moduleInitSynthCounter
+		let zeroName = emitLiteral(moduleInitBlock, value: 0, valueType: MaxonType.integer)
+		moduleInitSynthCounter = synthNameCounter
+		synthNameCounter = savedSynth
+		module.setTerminator(moduleInitBlock, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
+	end 'finalizeModuleInit'
 
 	// True when the initializer is shaped like `Identifier . identifier (`,
 	// which the C# bootstrap treats as a deferred struct-factory call. The
@@ -5087,6 +5238,25 @@ export type Parser
 			let afterMember = try cursor.peek(2) otherwise Token.eof()
 			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isDotCall'
 				let memberNameBytes = memberToken.value.toByteArray()
+				// `globalVar.method(...)` where `globalVar` is a registered
+				// top-level mutable var (`var x = ...` / `let xs = [...]`):
+				// emit the global load + methodCall pair. Without this branch
+				// the catch-all qualified-static-call arm below would treat
+				// the prefix as a type name and produce an unresolvable
+				// `globalVar.method` callee at lowering. Mirrors the
+				// in-function `c.method(...)` path on a local receiver.
+				if not scope.contains(token.value) and project.topLevelVars.contains(token.value) 'isMethodOnGlobal'
+					let receiverLoadName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.unresolvedRead(receiverLoadName, name: token.value, range: SourceRange.ofToken(token)))
+					try eat(TokenKind.dot)
+					try eat(TokenKind.identifier)
+					try eat(TokenKind.leftParen)
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+					let rparenToken = previousToken()
+					let methodResultName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
+				end 'isMethodOnGlobal'
 				if scope.contains(token.value) 'isMethodOnLocal'
 					// Method call on a local-scope value receiver. The
 					// receiver may be a true local (var/let), a parameter, or

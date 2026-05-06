@@ -129,8 +129,95 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	var augmented = StdModule.create()
 	augmented.merge(filteredRuntime)
 	augmented.merge(module)
+	// After merge, mrt_start has body `[__slab_init, main, osExit, ret]`.
+	// Each per-file `__module_init_<n>` function (registered in
+	// `project.moduleInitFuncs` by the parser) materializes that file's
+	// top-level array literals into their .data slots. The runtime entry
+	// point must call them in registration order before main, otherwise
+	// user code reading the global slot sees zero. The user module never
+	// references these inits via a normal `call` op, so the patch is the
+	// only path that wires them up.
+	patchMrtStartWithModuleInits(augmented, project: project)
 	return augmented
 end 'augmentWithRuntime'
+
+// Insert `std call __module_init_<n>` ops into mrt_start's entry block,
+// just before the existing `call main` op. No-op when the project has no
+// module-init functions registered. Allocates ValueIds above the current
+// max so the inserts don't collide with existing op result ids.
+function patchMrtStartWithModuleInits(module StdModule, project Project)
+	if project.moduleInitFuncs.count() == 0 'noInits'
+		return
+	end 'noInits'
+	for func in module.functions 'findStart'
+		if func.name != "mrt_start" 'notStart'
+			continue
+		end 'notStart'
+		// mrt_start has a single block ('entry') so the first blockRef is the
+		// one we want. The runtime never branches inside mrt_start.
+		if func.blockRefs.count() == 0 'noBlocks'
+			panic("patchMrtStartWithModuleInits: mrt_start has no blocks")
+		end 'noBlocks'
+		let entryBlockRef = try func.blockRefs.get(0) otherwise panic("patchMrtStartWithModuleInits: blockRefs.get(0) OOB")
+		let entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("patchMrtStartWithModuleInits: blocks.get OOB at {entryBlockRef}")
+		insertModuleInitCalls(module, func: func, block: entryBlock, project: project)
+		return
+	end 'findStart'
+	panic("patchMrtStartWithModuleInits: mrt_start function not in module after augmentWithRuntime")
+end 'patchMrtStartWithModuleInits'
+
+// Find the position in entryBlock.opRefs of the `call main` op and insert
+// fresh `call __module_init_<n>` ops immediately before it. The list-based
+// opRefs supports insert-at-index, so the original op order around the
+// insertion is preserved. ValueIds are minted from a per-function counter
+// seeded above the current max so we never reuse an existing id.
+function insertModuleInitCalls(module StdModule, func IrFunction, block IrBlock, project Project)
+	var mainCallPos = 0 as ParsedInt
+	var foundMain = false
+	for i in 0 upto block.opRefs.count() 'each'
+		let opIdx = try block.opRefs.get(i) otherwise panic("insertModuleInitCalls: opRefs.get OOB at {i}")
+		let op = try module.ops.get(opIdx) otherwise panic("insertModuleInitCalls: ops.get OOB at {opIdx}")
+		if isCallToMain(op) 'isMain'
+			mainCallPos = i
+			foundMain = true
+			break
+		end 'isMain'
+	end 'each'
+	if not foundMain 'noMain'
+		panic("patchMrtStartWithModuleInits: could not locate `call main` in mrt_start entry block")
+	end 'noMain'
+	let valueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+	var insertAt = mainCallPos
+	for name in project.moduleInitFuncs 'eachInit'
+		let resultId = allocValueId(valueIdRef)
+		let opIdx = module.ops.count()
+		module.ops.push(StdOp.call(StdCallOp.call(resultId, callee: name, argIds: ValueIdArray.create())))
+		try block.opRefs.insert(insertAt, value: opIdx) otherwise panic("insertModuleInitCalls: opRefs.insert failed at {insertAt}")
+		insertAt = insertAt + 1
+	end 'eachInit'
+end 'insertModuleInitCalls'
+
+function isCallToMain(op StdOp) returns bool
+	return match op 'shape'
+		call(c) gives stdCallOpIsCallTo(c, name: "main")
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'shape'
+end 'isCallToMain'
+
+function stdCallOpIsCallTo(inner StdCallOp, name String) returns bool
+	return match inner 'callShape'
+		call(_, callee, _) gives callee == name
+		ret gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'callShape'
+end 'stdCallOpIsCallTo'
 
 // Filter the loaded runtime module's function list based on whether coverage
 // instrumentation is active. Blocks and ops stay put in the arrays (dropping

@@ -14,81 +14,61 @@ ExitCode: 60
 ---
 // CompiledIR
 module {
-  func @arrays.main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=96
-    x64.mov rax, qword [rip+values]
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
-    x64.xor edx, edx
-    x64.call __Array_i64.get
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je arrays.main.otherwise_default_continue_3
-  otherwise_default_error_2:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.jmp arrays.main.otherwise_default_continue_3
-  otherwise_default_continue_3:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-32], rax
-    x64.mov rcx, qword [rip+values]
-    x64.mov [rbp-40], rcx
-    x64.mov rdx, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.mov rdx, 1
-    x64.call __Array_i64.get
-    x64.xor ebx, ebx
-    x64.mov [rbp-48], rbx
-    x64.mov [rbp-56], rax
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
-    x64.je arrays.main.otherwise_default_continue_7
-  otherwise_default_error_6:
-    x64.mov rax, [rbp-48]
-    x64.mov [rbp-56], rax
-    x64.jmp arrays.main.otherwise_default_continue_7
-  otherwise_default_continue_7:
-    x64.mov rax, [rbp-56]
-    x64.mov [rbp-64], rax
-    x64.mov rcx, qword [rip+values]
-    x64.mov [rbp-72], rcx
-    x64.mov rdx, [rbp-72]
-    x64.mov rcx, [rbp-72]
-    x64.mov rdx, 2
-    x64.call __Array_i64.get
-    x64.xor ebx, ebx
-    x64.mov [rbp-80], rbx
-    x64.mov [rbp-88], rax
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
-    x64.je arrays.main.otherwise_default_continue_11
-  otherwise_default_error_10:
-    x64.mov rax, [rbp-80]
-    x64.mov [rbp-88], rax
-    x64.jmp arrays.main.otherwise_default_continue_11
-  otherwise_default_continue_11:
-    x64.mov rax, [rbp-88]
-    x64.mov rcx, [rbp-32]
-    x64.mov rdx, [rbp-64]
-    x64.add rcx, rdx
-    x64.add rcx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rcx, rsi
-    x64.jg arrays.main.__range_panic_12
-    x64.cmp rcx, rbx
-    x64.jl arrays.main.__range_panic_12
-    x64.jmp arrays.main.__range_ok_12
-  __range_panic_12:
-    x64.lea_symdata rax, [__panic_msg_31]
-    x64.mov rcx, rax
+    x64.prologue stack_size=48
+    x64.lea r8, [rip+__data_values]
+    x64.mov r9, [r8+0] (8b)
+    x64.xor r8d, r8d
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call Array.get
+    x64.mov r12, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_1.merge
+  try_1.otherwise:
+    x64.xor r8d, r8d
+    x64.mov r12, r8
+  try_1.merge:
+    x64.lea r8, [rip+__data_values]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 1
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call Array.get
+    x64.mov r13, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_4.merge
+  try_4.otherwise:
+    x64.xor r8d, r8d
+    x64.mov r13, r8
+  try_4.merge:
+    x64.lea r8, [rip+__data_values]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 2
+    x64.mov rcx, r9
+    x64.mov rdx, r8
+    x64.call Array.get
+    x64.mov r14, r8
+    x64.call mrt_get_error_and_clear
+    x64.test r8, r8
+    x64.je try_7.merge
+  try_7.otherwise:
+    x64.xor r8d, r8d
+    x64.mov r14, r8
+  try_7.merge:
+    x64.add r12, r13
+    x64.mov r8, r12
+    x64.add r8, r14
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea r8, [rip+__panic_msg_0]
+    x64.mov rcx, r8
     x64.call mrt_panic
-  __range_ok_12:
-    x64.mov rax, rcx
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

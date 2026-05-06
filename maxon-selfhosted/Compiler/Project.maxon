@@ -233,6 +233,21 @@ export type Project
 	// registry holds entries from every visibility tier.
 	export var topLevelVars TopLevelVarMap
 
+	// Per-file synthetic module-init function names, in file-discovery order.
+	// Empty when no file has a deferred (array-literal) top-level initializer.
+	// `mrt_start` calls these sequentially before `main`. Each parser instance
+	// allocates one `__module_init_<n>` function lazily on the first top-level
+	// array-literal initializer it sees.
+	export var moduleInitFuncs StringArray
+
+	// Qualified names of top-level `let xs = [...]` bindings whose array-literal
+	// init lands in `topLevelVars` (writable .data slot) rather than in
+	// `topLevelConstants`. The reassignment-rewrite path keys off this set to
+	// keep firing E2013 for source-level `xs = ...` writes — without it, the
+	// `topLevelVars` arm would silently rewrite the unresolvedAssign as a
+	// globalStore.
+	export var immutableArrayLitNames StringArray
+
 	// Struct type registry: maps type names to field layouts.
 	// Populated by the TypeResolution pass as it drains unresolvedStructTypes.
 	// Read by lowering and downstream validation; never written to directly by
@@ -424,6 +439,8 @@ export type Project
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
 			unresolvedConstExprs: UnresolvedConstExprArray.create(),
 			topLevelVars: TopLevelVarMap.create(),
+			moduleInitFuncs: StringArray.create(),
+			immutableArrayLitNames: StringArray.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),

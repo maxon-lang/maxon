@@ -1200,6 +1200,14 @@ end 'matchCaseFromConstantValue'
 function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath)
 	if let info = try project.topLevelVars.get(name) 'isTopLevelVar'
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'visible'
+			// `let xs = [...]` parks the entry in `topLevelVars` (writable
+			// data slot needed for the runtime initializer) but the source-
+			// level binding is still immutable. Surface E2013 here so the
+			// store doesn't silently rewrite as a globalStore.
+			if project.immutableArrayLitNames.contains(name) 'immutableLet'
+				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
+				return
+			end 'immutableLet'
 			try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
 			return
 		end 'visible'
@@ -2741,6 +2749,126 @@ function joinStringArray(arr StringArray, sep String) returns String
 	return result
 end 'joinStringArray'
 
+// Walk every top-level array-literal initializer's `globalStore` op and
+// patch `topLevelVars[name].slotType` from the producer of the stored
+// value — that producer is the `{arrayType}.init` call op the parser
+// emitted as the literal's final synthesizing step. Looking up the
+// callee's return type in `project.funcReturnTypes` recovers the concrete
+// slot type without requiring `fillUnresolvedTypes` to run yet.
+//
+// Idempotent on entries whose slot type is already concrete (other paths
+// through `resolveAllTopLevelDecls` infer the slot type from the const-fold
+// arena), and bails cleanly for any globalStore whose producer can't be
+// pin-pointed (e.g. a hypothetical future top-level decl that lowers
+// through a different op shape).
+function preResolveArrayLiteralSlotTypes(project Project, module MaxonModule)
+	for opIdx in 0 upto module.ops.count() 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("preResolveArrayLiteralSlotTypes: ops.get OOB")
+		if op.name != "globalStore" 'notStore'
+			continue
+		end 'notStore'
+		match op 'pickStore'
+			globalStore(name, value, _, _) then preResolveSlotFromGlobalStore(project, module: module, name: name, value: value)
+			default panic("preResolveArrayLiteralSlotTypes: globalStore match failed")
+		end 'pickStore'
+	end 'eachOp'
+end 'preResolveArrayLiteralSlotTypes'
+
+function preResolveSlotFromGlobalStore(project Project, module MaxonModule, name String, value ByteArray)
+	let info = try project.topLevelVars.get(name) otherwise return
+	if not isUnresolvedType(info.slotType) 'alreadyResolved'
+		return
+	end 'alreadyResolved'
+	// The value's producer is the `T.init(mm)` call op the parser
+	// emitted just before the globalStore. Walk every op in the module
+	// looking for a `call` whose result name matches `value`.
+	for opIdx in 0 upto module.ops.count() 'findProducer'
+		let op = try module.ops.get(opIdx) otherwise panic("preResolveSlotFromGlobalStore: ops.get OOB")
+		if op.name != "call" 'notCall'
+			continue
+		end 'notCall'
+		match op 'extractCall'
+			call(result, callee, _, _, _, _, _, _) then maybePatchFromCall(project, name: name, result: result, callee: callee, value: value)
+			default panic("preResolveSlotFromGlobalStore: call match failed")
+		end 'extractCall'
+	end 'findProducer'
+end 'preResolveSlotFromGlobalStore'
+
+function maybePatchFromCall(project Project, name String, result ByteArray, callee ByteArray, value ByteArray)
+	// Compare result-name slices: ByteArray equality matches the underlying
+	// bytes, so `result == value` is true exactly when this call produced
+	// the value the globalStore is about to store.
+	if not (result == value) 'notProducer'
+		return
+	end 'notProducer'
+	let calleeName = String.from(callee)
+	if let retType = try project.funcReturnTypes.get(calleeName) 'gotReturn'
+		match retType 'unwrap'
+			value(inner) then patchTopLevelVarSlotType(project, name: name, slotType: inner)
+			void then return
+		end 'unwrap'
+	end 'gotReturn'
+end 'maybePatchFromCall'
+
+function backfillTopLevelVarSlotTypes(project Project, module MaxonModule)
+	// Pass 1: walk every globalStore and patch the matching topLevelVars
+	// entry. After this every entry whose initializer was emitted into a
+	// `__module_init_<n>` function carries the concrete `T` from
+	// `T.init(mm)` rather than the parser's placeholder unresolved.
+	for opIdx in 0 upto module.ops.count() 'eachStore'
+		let op = try module.ops.get(opIdx) otherwise panic("backfillTopLevelVarSlotTypes: ops.get OOB at idx={opIdx}")
+		if op.name != "globalStore" 'notGlobalStore'
+			continue
+		end 'notGlobalStore'
+		match op 'pickShape'
+			globalStore(name, _, slotType, _) then patchTopLevelVarSlotType(project, name: name, slotType: slotType)
+			default panic("backfillTopLevelVarSlotTypes: op.name == globalStore but match did not extract")
+		end 'pickShape'
+	end 'eachStore'
+
+	// Pass 2: walk every globalLoad op and rewrite any whose slotType is
+	// still unresolved using the now-concrete topLevelVars entry. The
+	// `rewriteUnresolvedRead` pass that produced these globalLoads ran
+	// against the parser's pre-backfill topLevelVars snapshot, so user
+	// reads of an array-literal-initialized name carry an unresolved
+	// slotType into lowering and trip `resolveMaxonTypeToStd`'s invariant.
+	for opIdx in 0 upto module.ops.count() 'eachLoad'
+		let op = try module.ops.get(opIdx) otherwise panic("backfillTopLevelVarSlotTypes: ops.get OOB at idx={opIdx}")
+		if op.name != "globalLoad" 'notGlobalLoad'
+			continue
+		end 'notGlobalLoad'
+		match op 'pickShape'
+			globalLoad(result, name, slotType, range) then patchGlobalLoadSlotType(project, module: module, opIdx: opIdx, result: result, name: name, slotType: slotType, range: range)
+			default panic("backfillTopLevelVarSlotTypes: op.name == globalLoad but match did not extract")
+		end 'pickShape'
+	end 'eachLoad'
+end 'backfillTopLevelVarSlotTypes'
+
+function patchGlobalLoadSlotType(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, slotType MaxonType, range SourceRange)
+	if not isUnresolvedType(slotType) 'alreadyResolved'
+		return
+	end 'alreadyResolved'
+	if let info = try project.topLevelVars.get(name) 'hasEntry'
+		if isUnresolvedType(info.slotType) 'stillUnresolved'
+			return
+		end 'stillUnresolved'
+		try module.ops.set(opIdx, value: MaxonOp.globalLoad(result, name: name, slotType: info.slotType, range: range)) otherwise panic("patchGlobalLoadSlotType: ops.set OOB at idx={opIdx}")
+	end 'hasEntry'
+end 'patchGlobalLoadSlotType'
+
+function patchTopLevelVarSlotType(project Project, name String, slotType MaxonType)
+	if isUnresolvedType(slotType) 'stillUnresolved'
+		return
+	end 'stillUnresolved'
+	if let info = try project.topLevelVars.get(name) 'hasEntry'
+		if not isUnresolvedType(info.slotType) 'alreadyResolved'
+			return
+		end 'alreadyResolved'
+		let patched = TopLevelVarInfo.create(info.name, slotType: slotType, initialValue: info.initialValue, visibility: info.visibility, sourceFilePath: info.sourceFilePath)
+		project.topLevelVars.upsert(name, value: patched)
+	end 'hasEntry'
+end 'patchTopLevelVarSlotType'
+
 // --- Pass entry ---
 
 // Drains the project-wide unresolved-typealias registry, then walks the
@@ -2784,6 +2912,18 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// pending decl without ordering hazards.
 	resolveAllTopLevelDecls(project)
 
+	// Eagerly patch `topLevelVars[name].slotType` for entries the parser
+	// registered with `MaxonType.unresolved` (currently only top-level
+	// array-literal initializers). The slot type is recoverable from the
+	// `T.init(mm)` call op the parser emitted into `__module_init_<n>`:
+	// the call's qualified callee is `{arrayType}.init` and its return
+	// type lives in `project.funcReturnTypes`. Doing this BEFORE
+	// `rewriteUnresolvedOpsPerFunction` ensures user reads of `xs` get
+	// rewritten to `globalLoad` ops whose slotType is already concrete,
+	// which in turn lets `buildProducerTypes` record the correct receiver
+	// type for any subsequent `xs.method(...)` call.
+	preResolveArrayLiteralSlotTypes(project, module: module)
+
 	// Per-function rewrite so visibility lookups can use the function's
 	// declaring file as the reading context — when files are merged into
 	// one MaxonModule, `filePath` (the runTypeResolution param) only
@@ -2800,6 +2940,17 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	var slotTypesPerFunc = SlotTypeMapArray.create()
 	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 	fillUnresolvedTypes(module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
+	// Backfill `topLevelVars[name].slotType` for any entry whose slot was
+	// registered with `MaxonType.unresolved` (currently only the array-literal
+	// initializer path in the parser; other top-level vars resolve through
+	// `resolveAllTopLevelDecls`'s `inferSlotTypeFromExpr`). Walks every
+	// `globalStore` op the lowering pass would emit and reads the now-concrete
+	// slotType the previous fillUnresolvedTypes pass stamped onto the op.
+	// Without this, a subsequent `globalLoad` rewrite from user code reading
+	// the same name carries forward an unresolved type and trips the
+	// `resolveMaxonTypeToStd` invariant guard in lowering.
+	backfillTopLevelVarSlotTypes(project, module: module)
 
 	// Stage E (closures): the parser stamps lifted closure functions with
 	// MaxonReturnType.value(MaxonType.unresolved) when the body's expression

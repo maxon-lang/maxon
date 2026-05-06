@@ -1462,6 +1462,13 @@ type MaxonToStdLowering
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: isFloat)))
 		self.setIsFloat(resultId, isFloat: isFloat)
+		// Stamp the source-level slot type onto the loaded value so a
+		// subsequent `methodCall` whose receiver is this load resolves the
+		// concrete struct (vs. falling through to the interface-dispatch
+		// stub). Without this, top-level array-literal globals like
+		// `let xs = [1,2,3]` lose their `Array` type at the boundary
+		// between Maxon-level globalLoad and Std-level methodCall lowering.
+		self.setValueType(resultId, t: slotType)
 	end 'lowerGlobalLoad'
 
 	function lowerGlobalStore(name String, value ByteArray, slotType MaxonType, dstBlock IrBlock)
