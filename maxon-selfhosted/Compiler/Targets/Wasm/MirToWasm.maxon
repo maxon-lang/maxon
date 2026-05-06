@@ -192,6 +192,8 @@ function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCa
 					movImm to branch then break 'extractCallee'
 					indirectCall to loadByte then break 'extractCallee'
 					osAllocPages to osLockRelease then break 'extractCallee'
+					tryCall(_, callee, _, _) then seeds.push(callee)
+					errorReturn then break 'extractCallee'
 				end 'extractCallee'
 			end 'eachOp'
 		end 'eachBlock'
@@ -860,6 +862,9 @@ type WasmFunctionLowering
 			call to indirectCall then emitMirOp(op: op)
 			param to loadByte then emitMirOp(op: op)
 			osAllocPages to osLockRelease then emitMirOp(op: op)
+			// Phase 1 plumbing — Wasm backend has no error-ABI path. Phase 2
+			// will route these through the same emitMirOp panic stubs.
+			tryCall to errorReturn then emitMirOp(op: op)
 		end 'dispatch'
 	end 'emitMirTerminator'
 
@@ -1022,6 +1027,8 @@ type WasmFunctionLowering
 			osLockInit then nop()
 			osLockAcquire then nop()
 			osLockRelease then nop()
+			tryCall then panic("wasm: MirOp.tryCall not yet lowered (Phase 2)")
+			errorReturn then panic("wasm: MirOp.errorReturn not yet lowered (Phase 2)")
 		end 'dispatch'
 	end 'emitMirOp'
 
@@ -1670,6 +1677,8 @@ type WasmFunctionLowering
 			ret then break 'dispatch'
 			load to loadByte then break 'dispatch'
 			osAllocPages to osLockRelease then break 'dispatch'
+			tryCall(resultId, callee, _, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee)
+			errorReturn then break 'dispatch'
 		end 'dispatch'
 	end 'markFloatMirOp'
 
@@ -1857,6 +1866,8 @@ function getMirOpMaxValueId(op MirOp) returns MachineWord
 		osLockInit(addrId) gives addrId as MachineWord
 		osLockAcquire(addrId) gives addrId as MachineWord
 		osLockRelease(addrId) gives addrId as MachineWord
+		tryCall(resultId, _, _, errorFlagId) gives maxOfTwo(resultId as MachineWord, b: errorFlagId as MachineWord)
+		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId as MachineWord, b: errorFlagId as MachineWord)
 	end 'dispatch'
 end 'getMirOpMaxValueId'
 
@@ -1958,6 +1969,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 					movImm to call then break 'check'
 					ret to loadByte then break 'check'
 					osAllocPages to osLockRelease then break 'check'
+					tryCall to errorReturn then break 'check'
 				end 'check'
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
@@ -1967,6 +1979,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 					movImm to call then break 'checkTerm'
 					ret to loadByte then break 'checkTerm'
 					osAllocPages to osLockRelease then break 'checkTerm'
+					tryCall to errorReturn then break 'checkTerm'
 				end 'checkTerm'
 			end 'hasTerm'
 		end 'eachBlock'
@@ -2081,6 +2094,7 @@ function markFloatMirOpStandalone(op MirOp, floatSet BoolArray)
 		cmp to ret then break 'dispatch'
 		load to loadByte then break 'dispatch'
 		osAllocPages to osLockRelease then break 'dispatch'
+		tryCall to errorReturn then break 'dispatch'
 	end 'dispatch'
 end 'markFloatMirOpStandalone'
 

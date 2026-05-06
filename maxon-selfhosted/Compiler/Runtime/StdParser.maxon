@@ -329,6 +329,7 @@ export type StdParser
 		match callOp 'inner'
 			ret to tailCall then break 'inner'
 			param(_, _, paramType) then func.paramTypes.push(paramType)
+			errorReturn then break 'inner'
 		end 'inner'
 	end 'collectCallParamType'
 
@@ -512,6 +513,18 @@ export type StdParser
 			module.setTerminator(block, op: StdOp.call(StdCallOp.ret(retValId)))
 			return
 		end 'isRet'
+
+		// Multi-value-return error ABI terminator. `std errorReturn vRet vFlag`
+		// returns the primary value in R8/X0 and the error flag in RDX/X1.
+		// Used by throwing runtime helpers (`__managed_mem_*`) so their callers'
+		// `try ...` machinery sees the flag through the same ABI as a user-source
+		// throw site.
+		if opName == "errorReturn" 'isErrorReturn'
+			let retValId = try consumeValueRef()
+			let flagId = try consumeValueRef()
+			module.setTerminator(block, op: StdOp.call(StdCallOp.errorReturn(retValId, errorFlagId: flagId)))
+			return
+		end 'isErrorReturn'
 
 		if opName == "call" 'isCall'
 			let calleeName = try consumeName()

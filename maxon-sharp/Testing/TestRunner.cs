@@ -909,7 +909,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
   }
 
-  private const int TestTimeoutMs = 5000;
+  private const int TestTimeoutMs = 2000;
 
   private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null) {
     // Code signing and executable permissions are now handled by MachOWriter at compile time

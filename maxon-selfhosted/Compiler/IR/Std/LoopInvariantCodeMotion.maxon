@@ -227,6 +227,17 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 					try constInLoop.set(constResultId, value: true) otherwise panic("invariant: constInLoop.set OOB")
 				end 'isConst'
 			end 'hasDef'
+
+			// tryCall has a SECOND def — the errorFlagId — that must also be
+			// recorded as loop-defined. Without this, consumers of the flag
+			// (cmp + condBr after the call) appear to read a value defined
+			// outside the loop and get hoisted, breaking the loop's exit
+			// condition. Phase 6 of the multi-value-return error ABI rollout.
+			let secondDefId = licmGetPackedSecondDefId(module, opIdx: packed)
+			if secondDefId != LICM_NO_BLOCK 'hasSecondDef'
+				licmGrowBoolArray(definedInLoop, size: secondDefId + 1)
+				try definedInLoop.set(secondDefId, value: true) otherwise panic("invariant: definedInLoop.set OOB (secondDef)")
+			end 'hasSecondDef'
 		end 'eachOp'
 
 		for blockArg in block.blockArgs 'eachArg'
@@ -480,8 +491,37 @@ function licmGetFuncResultId(op StdCallOp) returns ValueId
 		funcRef(resultId, _) gives resultId
 		tailCall gives LICM_NO_BLOCK
 		param(resultId, _, _) gives resultId
+		errorReturn gives LICM_NO_BLOCK
 	end 'get'
 end 'licmGetFuncResultId'
+
+// Phase 6 of the multi-value-return error ABI: extract the SECOND def of an
+// op that produces two values (today only `StdCallOp.tryCall`). LICM uses
+// this to mark `errorFlagId` as loop-defined so the post-call cmp on the
+// flag isn't hoisted out of the loop.
+function licmGetPackedSecondDefId(module StdModule, opIdx OpIndex) returns ValueId
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
+	return match stdOp 'dispatch'
+		arith gives LICM_NO_BLOCK
+		call(op) gives licmGetFuncSecondDefId(op)
+		control gives LICM_NO_BLOCK
+		memory gives LICM_NO_BLOCK
+		system gives LICM_NO_BLOCK
+	end 'dispatch'
+end 'licmGetPackedSecondDefId'
+
+function licmGetFuncSecondDefId(op StdCallOp) returns ValueId
+	return match op 'get'
+		ret gives LICM_NO_BLOCK
+		call gives LICM_NO_BLOCK
+		tryCall(_, _, _, errorFlagId) gives errorFlagId
+		indirectCall gives LICM_NO_BLOCK
+		funcRef gives LICM_NO_BLOCK
+		tailCall gives LICM_NO_BLOCK
+		param gives LICM_NO_BLOCK
+		errorReturn gives LICM_NO_BLOCK
+	end 'get'
+end 'licmGetFuncSecondDefId'
 
 function licmGrowBoolArray(arr BoolArray, size ValueId)
 	while arr.count() < size 'grow'

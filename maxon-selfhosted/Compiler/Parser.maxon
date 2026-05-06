@@ -1312,8 +1312,8 @@ export type Parser
 	// The init function is a 0-param void-returning IrFunction registered in
 	// `project.moduleInitFuncs` (file-discovery order) and stamped onto
 	// `project.livenessRoots` so DFE keeps it (and everything it transitively
-	// calls — `__ManagedMemory.create`, `T.init`, `mrt_get_error_and_clear`,
-	// etc.). `mrt_start` invokes every entry in order before calling `main`;
+	// calls — `__ManagedMemory.create`, `T.init`, etc.). `mrt_start` invokes
+	// every entry in order before calling `main`;
 	// the patch is applied during `augmentWithRuntime` after the runtime+user
 	// modules have merged.
 	function getOrCreateModuleInit() returns String
@@ -2918,9 +2918,11 @@ export type Parser
 	end 'parsePanicStatement'
 
 	// Parse: throw EnumName.variantName
-	// Phase 4 lowering: emit MaxonOp.throw, which lowers to a call into
-	// mrt_set_error followed by a return of a default primary value. The
-	// thrown variant ordinal is recovered at lowering time by walking
+	// Lowering: emit MaxonOp.throw, which lowers to a single
+	// `StdCallOp.errorReturn` op that places the variant ordinal+1 in the
+	// secondary error register (RDX/X1) alongside a default primary value
+	// — the multi-value-return error ABI. The thrown variant ordinal is
+	// recovered at lowering time by walking
 	// project.unresolvedEnums / project.enumTypes — the parser stays
 	// agnostic of cross-declaration registries. `throw` is a block
 	// terminator: setTerminator places it as the block's tail op so the
@@ -3835,8 +3837,7 @@ export type Parser
 	// desugaring in the parser to the iterator-protocol shape:
 	//
 	//   ENTRY (current `block`):
-	//     %iter = source.createIterator()         # methodCall (throws)
-	//     %errFlag = call mrt_get_error_and_clear
+	//     (%iter, %errFlag) = source.createIterator()  # tryMethodCall
 	//     varDecl iterSlot = %iter
 	//     %cmp = errFlag != 0
 	//     cond_br cmp -> EXIT, PREAMBLE
@@ -3846,8 +3847,7 @@ export type Parser
 	//
 	//   HEADER (continue target):
 	//     %iterRef = varLoad iterSlot
-	//     %_ = %iterRef.advance()                 # methodCall (throws)
-	//     %errFlag2 = call mrt_get_error_and_clear
+	//     (%_, %errFlag2) = %iterRef.advance()    # tryMethodCall
 	//     %cmp2 = errFlag2 != 0
 	//     cond_br cmp2 -> EXIT, BODY
 	//
@@ -3907,15 +3907,10 @@ export type Parser
 		let createIterArgTypes = MaxonTypeArray.create()
 		let createIterArgRanges = SourceRangeArray.create()
 		let createIterMethodName = "createIterator".toByteArray()
-		module.appendOp(block, op: MaxonOp.methodCall(createIterResultName, receiver: sourceValue, methodName: createIterMethodName, args: createIterArgs, argLabels: createIterArgLabels, argTypes: createIterArgTypes, argRanges: createIterArgRanges, range: stmtRange))
-		// Bind the post-call error flag. mirroring parseTryExpression's
-		// non-`call` fallback path (parser.maxon:4441-4445).
+		// Emit createIterator as a throwing methodCall so lowering binds the
+		// error flag via the multi-value-return ABI (RDX/X1).
 		let createErrorFlagName = freshSynthName()
-		let getErrArgs1 = ByteArrayArray.create()
-		let getErrArgLabels1 = StringArray.create()
-		let getErrArgTypes1 = MaxonTypeArray.create()
-		let getErrArgRanges1 = SourceRangeArray.create()
-		module.appendOp(block, op: MaxonOp.call(createErrorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: getErrArgs1, argLabels: getErrArgLabels1, argTypes: getErrArgTypes1, argRanges: getErrArgRanges1, range: stmtRange))
+		module.appendOp(block, op: MaxonOp.tryMethodCall(createIterResultName, receiver: sourceValue, methodName: createIterMethodName, args: createIterArgs, argLabels: createIterArgLabels, argTypes: createIterArgTypes, argRanges: createIterArgRanges, errorBoundName: createErrorFlagName, range: stmtRange))
 		// Stash the iterator value into the iter slot.
 		module.appendOp(block, op: MaxonOp.varDecl(iterStorageSlot, value: createIterResultName, slotType: MaxonType.unresolved, range: stmtRange))
 
@@ -3948,13 +3943,10 @@ export type Parser
 		let advanceArgTypes = MaxonTypeArray.create()
 		let advanceArgRanges = SourceRangeArray.create()
 		let advanceMethodName = "advance".toByteArray()
-		module.appendOp(headerBlock, op: MaxonOp.methodCall(advanceResultName, receiver: iterRefHdrName, methodName: advanceMethodName, args: advanceArgs, argLabels: advanceArgLabels, argTypes: advanceArgTypes, argRanges: advanceArgRanges, range: stmtRange))
+		// Phase 5: emit advance as a throwing methodCall so lowering binds the
+		// error flag via the multi-value-return ABI.
 		let advanceErrorFlagName = freshSynthName()
-		let getErrArgs2 = ByteArrayArray.create()
-		let getErrArgLabels2 = StringArray.create()
-		let getErrArgTypes2 = MaxonTypeArray.create()
-		let getErrArgRanges2 = SourceRangeArray.create()
-		module.appendOp(headerBlock, op: MaxonOp.call(advanceErrorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: getErrArgs2, argLabels: getErrArgLabels2, argTypes: getErrArgTypes2, argRanges: getErrArgRanges2, range: stmtRange))
+		module.appendOp(headerBlock, op: MaxonOp.tryMethodCall(advanceResultName, receiver: iterRefHdrName, methodName: advanceMethodName, args: advanceArgs, argLabels: advanceArgLabels, argTypes: advanceArgTypes, argRanges: advanceArgRanges, errorBoundName: advanceErrorFlagName, range: stmtRange))
 		let zeroHdrName = emitLiteral(headerBlock, value: 0, valueType: MaxonType.integer)
 		let cmpHdrName = freshSynthName()
 		module.appendOp(headerBlock, op: MaxonOp.cmp(cmpHdrName, left: advanceErrorFlagName, right: zeroHdrName, predicate: CmpPredicate.ne, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: stmtRange))
@@ -4596,16 +4588,17 @@ export type Parser
 
 	// Unary: -primary | not primary | primary
 	function parseUnary(block IrBlock) returns ExprResult throws ParserError
-		// `try EXPR` (Phase 4): real error-flag propagation through the
-		// thread-local error state. Two forms:
+		// `try EXPR`: error-flag propagation via the multi-value-return error
+		// ABI (the secondary return register, RDX/X1, carries the flag). Two
+		// forms:
 		//
-		//   try EXPR                    -- propagation. If the call sets the
-		//                                  error flag, re-set it (so the
-		//                                  current function's caller sees
-		//                                  it via mrt_get_error_and_clear)
-		//                                  and return a default primary
-		//                                  value. Otherwise the expression
-		//                                  evaluates to the call's result.
+		//   try EXPR                    -- propagation. If the call set the
+		//                                  error flag, re-publish it on the
+		//                                  current function's secondary
+		//                                  return register and return a
+		//                                  default primary value. Otherwise
+		//                                  the expression evaluates to the
+		//                                  call's result.
 		//
 		//   try EXPR otherwise FALLBACK -- if the call set the error flag,
 		//                                  evaluate FALLBACK as the
@@ -4657,15 +4650,16 @@ export type Parser
 
 	// Parse a `try EXPR [otherwise FALLBACK]` expression. The inner EXPR
 	// must be a function call — enforced by rewriting its terminal `call`
-	// MaxonOp into a `tryCall`. The tryCall's `errorBoundName` slot is
-	// populated by the lowering pass (it emits a follow-up call to
-	// mrt_get_error_and_clear that binds the flag). After the call we emit
-	// a cmp+condBr on the flag:
+	// MaxonOp into a `tryCall`. The tryCall's `errorBoundName` slot binds
+	// the error flag via the multi-value-return ABI (the backend lowers
+	// tryCall to a call that picks up the flag from RDX/X1). After the
+	// call we emit a cmp+condBr on the flag:
 	//
 	//   - propagation form (no `otherwise`): the error block re-publishes
-	//     the flag via mrt_set_error(flag) and returns a default primary
-	//     value, mirroring `MaxonOp.throw`'s lowered shape so the
-	//     enclosing function's caller observes the same error.
+	//     the flag in the current function's secondary return register
+	//     and returns a default primary value, mirroring `MaxonOp.throw`'s
+	//     lowered shape so the enclosing function's caller observes the
+	//     same error.
 	//
 	//   - fallback form (`otherwise FALLBACK`): both arms write into a
 	//     parser-allocated result slot, then merge into a join block
@@ -4693,9 +4687,9 @@ export type Parser
 		// stamped into the rewritten tryCall op.
 		let errorFlagName = freshSynthName()
 
-		// Rewrite the terminal call to a tryCall, or fall back to emitting
-		// an explicit mrt_get_error_and_clear binding for non-call inner
-		// expressions (method calls, etc.).
+		// Rewrite the terminal call to a tryCall (or terminal methodCall to
+		// tryMethodCall) so the multi-value-return ABI binds the error flag
+		// at the call site.
 		var rewroteCall = false
 		var calleeThrowsTypeName = ""
 		if opCountAfter > opCountBefore 'haveLastOp'
@@ -4721,10 +4715,24 @@ export type Parser
 			end 'resolveCalleeInfo'
 		end 'haveLastOp'
 		if not rewroteCall 'noRewrite'
-			// Method calls and other non-`call` shapes: emit a follow-up
-			// call to mrt_get_error_and_clear that binds the flag manually.
-			// The lowering pass treats this as an ordinary qualified call.
-			module.appendOp(innerExitBlock, op: MaxonOp.call(errorFlagName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(tryToken)))
+			// The inner expression was a methodCall (or other postfix shape
+			// ending in one). Rewrite the preceding methodCall in place to a
+			// `tryMethodCall` so lowering emits a single `StdCallOp.tryCall`
+			// that yields BOTH the result AND the error flag through the
+			// multi-value-return ABI (RDX/X1).
+			var rewroteMethodCall = false
+			if opCountAfter > opCountBefore 'haveLastOpForMethodRewrite'
+				let lastIdx = opCountAfter - 1
+				let lastOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: ops.get OOB at last idx={lastIdx} (count={opCountAfter})")
+				rewroteMethodCall = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
+			end 'haveLastOpForMethodRewrite'
+			if not rewroteMethodCall 'noMethodRewrite'
+				// Inner expression is neither a call nor a methodCall - cannot bind
+				// the error flag without a preceding throwing op. Reaching here is
+				// a parser bug because parseTryExpression's gating already requires
+				// the inner to be a throwing form.
+				panic("parseTryExpression: inner expression has no preceding call/methodCall to rewrite (opCountBefore={opCountBefore}, opCountAfter={opCountAfter})")
+			end 'noMethodRewrite'
 		end 'noRewrite'
 
 		// cmp flag != 0 — error when nonzero, success otherwise.
@@ -4743,10 +4751,10 @@ export type Parser
 	end 'parseTryExpression'
 
 	// Propagation path: when the called function set the error flag, the
-	// current function re-publishes it (mrt_set_error(flag)) and returns
-	// a default primary value of its own return type. Success path falls
-	// through with the call's result. Returns the call's result name as
-	// the expression's value — only the success path reads it.
+	// current function re-publishes it on its own secondary return register
+	// (RDX/X1) and returns a default primary value of its own return type.
+	// Success path falls through with the call's result. Returns the call's
+	// result name as the expression's value — only the success path reads it.
 	function parseTryPropagation(innerExitBlock IrBlock, tryToken Token, condName ByteArray, errorFlagName ByteArray, callResultName ByteArray, callResultType MaxonType, baseLabel String, tryFilePath String) returns ExprResult
 		// `var` rather than `let` because addBlockAt's IrBlock is mutated
 		// in place by subsequent appendOp/setTerminator calls — the
@@ -4759,22 +4767,12 @@ export type Parser
 		// condBr: error (cond `flag != 0`) -> errorBlock, else success -> continueBlock.
 		module.setTerminator(innerExitBlock, op: MaxonOp.condBr(condName, thenTarget: errorBlockId, elseTarget: continueBlockId, range: SourceRange.ofToken(tryToken)))
 
-		// errorBlock: re-publish flag via mrt_set_error(flag). We don't have
-		// a `MaxonOp.throw` variant that takes a runtime value — `throw` is
-		// for compile-time-known variants. So emit a direct call and a ret.
-		let setErrResultName = freshSynthName()
-		var setErrArgs = ByteArrayArray.create()
-		setErrArgs.push(errorFlagName)
-		var setErrArgLabels = StringArray.create()
-		setErrArgLabels.push("")
-		var setErrArgTypes = MaxonTypeArray.create()
-		setErrArgTypes.push(MaxonType.integer)
-		var setErrArgRanges = SourceRangeArray.create()
-		setErrArgRanges.push(SourceRange.ofToken(tryToken))
-		module.appendOp(errorBlock, op: MaxonOp.call(setErrResultName, callee: project.calleeNames.intern("mrt_set_error"), callContext: CallContext.qualified, args: setErrArgs, argLabels: setErrArgLabels, argTypes: setErrArgTypes, argRanges: setErrArgRanges, range: SourceRange.ofToken(tryToken)))
-		// Return a default primary value of the function's return type.
-		let defaultName = emitDefaultReturnLiteral(errorBlock, range: SourceRange.ofToken(tryToken))
-		module.setTerminator(errorBlock, op: MaxonOp.ret(defaultName, range: SourceRange.ofToken(tryToken)))
+		// Phase 5 (multi-value-return error ABI): re-publish the runtime-bound
+		// flag through the multi-value-return ABI. `MaxonOp.rethrow` lowers to
+		// `StdCallOp.errorReturn(zero, errorFlagId: flag)` - the same shape
+		// `MaxonOp.throw` produces, except the flag value is a runtime SSA
+		// name rather than a compile-time-known variant ordinal.
+		module.setTerminator(errorBlock, op: MaxonOp.rethrow(errorFlagName, range: SourceRange.ofToken(tryToken)))
 
 		// Continue parsing in continueBlock; the expression's value is the
 		// successful call's result.
@@ -5000,9 +4998,9 @@ export type Parser
 	// When the inner expression of `try EXPR` ended in `MaxonOp.call`,
 	// rewrite it in place to `MaxonOp.tryCall` carrying the parser-allocated
 	// `errorFlagName` so the lowering pass binds the post-call error flag
-	// at the right spot. Returns true on rewrite, false when the op is some
-	// other shape (method call, postfix chain, etc.) — the caller falls
-	// back to emitting an explicit mrt_get_error_and_clear binding.
+	// (via the multi-value-return ABI) at the right spot. Returns true on
+	// rewrite, false when the op is some other shape (method call, postfix
+	// chain, etc.) — the caller falls back to `tryRewriteMethodCallToTryMethodCall`.
 	function tryRewriteCallToTryCall(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
 		if op.name != "call" 'notACall'
 			return false
@@ -5017,6 +5015,25 @@ export type Parser
 		try module.ops.set(opIdx, value: MaxonOp.tryCall(callResult, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorFlagName, range: range)) otherwise panic("rewriteCallOpToTryCall: ops.set OOB at idx={opIdx}")
 		return true
 	end 'rewriteCallOpToTryCall'
+
+	// Rewrite the terminal `methodCall` in place to a `tryMethodCall` so
+	// lowering binds the post-call error flag via the multi-value-return
+	// ABI (RDX/X1). Mirrors `tryRewriteCallToTryCall`'s relationship to
+	// `tryCall`.
+	function tryRewriteMethodCallToTryMethodCall(opIdx OpIndex, op MaxonOp, errorFlagName ByteArray, tryRange SourceRange) returns bool
+		if op.name != "methodCall" 'notAMethodCall'
+			return false
+		end 'notAMethodCall'
+		match op 'shape'
+			methodCall(methodResult, receiver, methodName, args, argLabels, argTypes, argRanges, _) then return rewriteMethodCallOpToTryMethodCall(opIdx: opIdx, methodResult: methodResult, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorFlagName: errorFlagName, range: tryRange)
+			default panic("tryRewriteMethodCallToTryMethodCall: op.name == 'methodCall' but match did not extract")
+		end 'shape'
+	end 'tryRewriteMethodCallToTryMethodCall'
+
+	function rewriteMethodCallOpToTryMethodCall(opIdx OpIndex, methodResult ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorFlagName ByteArray, range SourceRange) returns bool
+		try module.ops.set(opIdx, value: MaxonOp.tryMethodCall(methodResult, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorFlagName, range: range)) otherwise panic("rewriteMethodCallOpToTryMethodCall: ops.set OOB at idx={opIdx}")
+		return true
+	end 'rewriteMethodCallOpToTryMethodCall'
 
 	// Pull the qualified callee name out of a tryCall op. Panics on any other op
 	// shape — callers are expected to have just rewritten a call into a tryCall.
@@ -5634,10 +5651,10 @@ export type Parser
 	// the BuiltinArrayLiteral protocol into:
 	//
 	//     __mm = __ManagedMemory.create(N, elementSize: 8)
-	//     __mm.set(0, value: e0); _ = mrt_get_error_and_clear()
+	//     (_, _) = __mm.set(0, value: e0)        // tryMethodCall, flag dropped
 	//     ...
-	//     __mm.set(N-1, value: eN); _ = mrt_get_error_and_clear()
-	//     __mm.setLength(N);       _ = mrt_get_error_and_clear()
+	//     (_, _) = __mm.set(N-1, value: eN)      // tryMethodCall, flag dropped
+	//     (_, _) = __mm.setLength(N)             // tryMethodCall, flag dropped
 	//     __arr = T.init(__mm)
 	//
 	// where T is the stdlib type that opted in via `implements
@@ -5650,10 +5667,11 @@ export type Parser
 	// is exactly the literal's element count, and `__managed_mem_set` /
 	// `__managed_mem_set_length` bounds-check against capacity (see
 	// LowerMaxonToStd Step 8.8). So OOB cannot happen by construction. The
-	// `mrt_get_error_and_clear` calls drain the post-call error flag without
-	// ever observing a nonzero — equivalent to a `try ... otherwise panic`
-	// arm whose panic is statically unreachable, but emitted without the
-	// CFG-construction overhead of building condBr + panic blocks per element.
+	// throwing methodCalls are emitted as `tryMethodCall` ops whose error
+	// flag is bound to a synthetic name and immediately dropped — equivalent
+	// to a `try ... otherwise panic` arm whose panic is statically
+	// unreachable, but emitted without the CFG-construction overhead of
+	// building condBr + panic blocks per element.
 	//
 	// Empty `[]` literals still emit the create + init pair so the result is
 	// a real T value (TypeResolution lifts the result type from T.init's
@@ -5743,7 +5761,7 @@ export type Parser
 		// = elemCount, no other concurrent allocations) the only failure mode
 		// is OOM — silently swallowing it here is consistent with how the
 		// stdlib's `Array.create` already behaves.
-		emitErrorFlagDrain(block, range: literalRange)
+		emitErrorFlagDrain(range: literalRange)
 
 		// Phase 4: per-element `__mm.set(i, value: elem)`, each followed by
 		// an error-flag drain. set's bounds-check is against capacity (which
@@ -5771,7 +5789,7 @@ export type Parser
 			setArgRanges.push(elemRange)
 			setArgRanges.push(elemRange)
 			module.appendOp(block, op: MaxonOp.methodCall(setResultName, receiver: mmName, methodName: setMethodName, args: setArgs, argLabels: setLabels, argTypes: setArgTypes, argRanges: setArgRanges, range: elemRange))
-			emitErrorFlagDrain(block, range: elemRange)
+			emitErrorFlagDrain(range: elemRange)
 		end 'eachElem'
 
 		// Phase 5: `__mm.setLength(elemCount)`. Same drain rationale as
@@ -5788,7 +5806,7 @@ export type Parser
 		setLenArgRanges.push(literalRange)
 		let setLenMethodName = "setLength".toByteArray()
 		module.appendOp(block, op: MaxonOp.methodCall(setLenResultName, receiver: mmName, methodName: setLenMethodName, args: setLenArgs, argLabels: setLenLabels, argTypes: setLenArgTypes, argRanges: setLenArgRanges, range: literalRange))
-		emitErrorFlagDrain(block, range: literalRange)
+		emitErrorFlagDrain(range: literalRange)
 
 		// Phase 6: wrap via `T.init(__mm)`. The single user param is
 		// positional (label="") so the lowering's slot resolver matches by
@@ -5809,13 +5827,37 @@ export type Parser
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
 	end 'parseArrayLiteralExpr'
 
-	// Emit a `_ = mrt_get_error_and_clear()` op that drains the post-call
-	// error flag set by the previous throwing call. The result is named with
-	// a fresh synthetic and never read — its sole purpose is to clear the
-	// flag so a later real `try` doesn't see a stale signal.
-	function emitErrorFlagDrain(block IrBlock, range SourceRange)
+	// The preceding op publishes its error flag via the multi-value-return
+	// ABI (RDX/X1). Rewrite that preceding op in place to its `try*` form,
+	// binding a fresh synthetic name as the errorBoundName. Lowering writes
+	// the flag into the bound name in the same op as the call. The bound
+	// name is intentionally never read; the flag is silently swallowed
+	// because every caller of this helper has already proven its preceding
+	// call cannot fail by construction (capacity-sized __ManagedMemory.create
+	// + bounded __mm.set / setLength against that capacity).
+	function emitErrorFlagDrain(range SourceRange)
 		let drainName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(drainName, callee: project.calleeNames.intern("mrt_get_error_and_clear"), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: range))
+		let opCount = module.ops.count()
+		if opCount == 0 'noPrev'
+			panic("emitErrorFlagDrain: no preceding op to rewrite to try-form")
+		end 'noPrev'
+		let lastIdx = opCount - 1
+		let lastOp = try module.ops.get(lastIdx) otherwise panic("emitErrorFlagDrain: ops.get OOB at last idx={lastIdx}")
+		if lastOp.name == "call" 'isCall'
+			let rewrote = tryRewriteCallToTryCall(opIdx: lastIdx, op: lastOp, errorFlagName: drainName, tryRange: range)
+			if not rewrote 'failedCallRewrite'
+				panic("emitErrorFlagDrain: tryRewriteCallToTryCall returned false on lastOp.name=='call'")
+			end 'failedCallRewrite'
+			return
+		end 'isCall'
+		if lastOp.name == "methodCall" 'isMethodCall'
+			let rewrote = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: drainName, tryRange: range)
+			if not rewrote 'failedMethodRewrite'
+				panic("emitErrorFlagDrain: tryRewriteMethodCallToTryMethodCall returned false on lastOp.name=='methodCall'")
+			end 'failedMethodRewrite'
+			return
+		end 'isMethodCall'
+		panic("emitErrorFlagDrain: preceding op kind '{lastOp.name}' is neither call nor methodCall")
 	end 'emitErrorFlagDrain'
 
 	// Single-quote literal in expression position. The lexer also produces

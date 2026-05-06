@@ -542,38 +542,6 @@ func mrt_start_with_coverage 0 void
     std ret v3
 end
 
-// mrt_set_error(code): writes `code` into the thread-local error slot
-// (__data_maxon_error). Used by the throw lowering path: a throwing function
-// that wants to signal failure stores the variant ordinal here, then returns a
-// default primary value. The caller's `try EXPR` reads (and clears) the slot
-// via mrt_get_error_and_clear immediately after the call returns. Returns 0.
-//
-// Slot usage:
-//   slot 0 = code (arg)
-func mrt_set_error 1 i64
-  block entry:
-    v0 = std param 0 i64
-    v1 = std globalAddr __data_maxon_error
-    std storeIndirect v1 0 v0
-    v2 = std constI64 0
-    std ret v2
-end
-
-// mrt_get_error_and_clear(): reads the thread-local error slot and zeroes it.
-// Returns the prior error code (0 = no error in flight). Used by the tryCall
-// lowering path: the caller emits `let flag = mrt_get_error_and_clear()`
-// immediately after a throwing call returns. The clear-on-read semantics mean
-// a successful call leaves the slot at 0 for the next caller, and a propagated
-// error is observed exactly once at the catch site.
-func mrt_get_error_and_clear 0 i64
-  block entry:
-    v0 = std globalAddr __data_maxon_error
-    v1 = std loadIndirect v0 0
-    v2 = std constI64 0
-    std storeIndirect v0 0 v2
-    std ret v1
-end
-
 // =============================================================================
 // Slab allocator — bottom layer (step 6a.12 of the allocator port).
 //
@@ -610,7 +578,7 @@ end
 // offset 0 — harmless because the functions in this block are unreached, but
 // the bootstrap step that calls __slab_init from mrt_start MUST first arrange
 // for these globals to be backed by writable storage (likely via a new
-// addDataSectionEntry call, mirroring registerErrorStateForDataSection).
+// addDataSectionEntry call).
 //
 // TODO(step 6a.13+): size-class lookup tables (__slab_class_sizes,
 // __slab_objs_per_span) are not emitted here — the chunk allocator does not
@@ -2963,16 +2931,16 @@ end
 // LowerMaxonToStd) routes the throwing methods through these helpers so the
 // per-method bounds-check + control-flow logic lives in one place rather than
 // being duplicated at every call site. Each helper that wants to signal an
-// error writes `ordinal+1` (1..8) into __data_maxon_error via
-// `mrt_set_error(N)` and returns a sentinel zero; the parser-emitted
-// `try ... otherwise` machinery reads the flag back via
-// `mrt_get_error_and_clear` immediately after the call returns. The +1
+// error returns a non-zero variant ordinal (1..8) in the secondary return
+// register (RDX/X1 — the multi-value-return error ABI) alongside a sentinel
+// zero primary value; the parser-emitted `try ... otherwise` machinery picks
+// up the error flag from the secondary register at the call site. The +1
 // shift keeps 0 reserved for "no error in flight" — matching the `throw`
 // lowering convention in `LowerMaxonToStd.lowerThrow`.
 //
 // __ManagedMemoryError ordinal map (mirrors stdlib/Builtins.maxon and the
 // enum cases registered in registerManagedMemoryErrorEnum). The "wire"
-// column shows the value passed to mrt_set_error (= ordinal + 1):
+// column shows the value placed in the error register (= ordinal + 1):
 //   ordinal | name              | wire
 //   0       | indexOutOfBounds  | 1
 //   1       | emptySlot         | 2
@@ -3012,16 +2980,16 @@ func __managed_mem_set_length 2 i64
 
   block err:
     v4 = std constI64 4
-    v5 = std call mrt_set_error v4
-    v6 = std constI64 0
-    std ret v6
+    v5 = std constI64 0
+    std errorReturn v5 v4
 
   block ok:
     v7 = std loadSlot 0
     v8 = std loadSlot 1
     std storeIndirect v7 8 v8
     v9 = std constI64 0
-    std ret v9
+    v10 = std constI64 0
+    std errorReturn v9 v10
 end
 
 // __managed_mem_get(self, idx) -> value (sets error indexOutOfBounds=0,
@@ -3054,9 +3022,8 @@ func __managed_mem_get 2 i64
 
   block err:
     v9 = std constI64 1
-    v10 = std call mrt_set_error v9
-    v11 = std constI64 0
-    std ret v11
+    v10 = std constI64 0
+    std errorReturn v10 v9
 
   block ok:
     // elemSize = self[24]; buffer = self[0]; addr = buffer + idx * elemSize
@@ -3075,11 +3042,13 @@ func __managed_mem_get 2 i64
   block byte_path:
     v21 = std constI64 0
     v22 = std loadByte v18 v21
-    std ret v22
+    v100 = std constI64 0
+    std errorReturn v22 v100
 
   block word_path:
     v23 = std loadIndirect v18 0
-    std ret v23
+    v101 = std constI64 0
+    std errorReturn v23 v101
 end
 
 // __managed_mem_set(self, idx, value) -> 0 (sets error indexOutOfBounds=0,
@@ -3117,9 +3086,8 @@ func __managed_mem_set 3 i64
 
   block err:
     v9 = std constI64 1
-    v10 = std call mrt_set_error v9
-    v11 = std constI64 0
-    std ret v11
+    v10 = std constI64 0
+    std errorReturn v10 v9
 
   block ok:
     // elemSize = self[24]; buffer = self[0]; addr = buffer + idx * elemSize
@@ -3140,13 +3108,15 @@ func __managed_mem_set 3 i64
     v22 = std loadSlot 2
     std storeByte v18 v21 v22
     v23 = std constI64 0
-    std ret v23
+    v100 = std constI64 0
+    std errorReturn v23 v100
 
   block word_path:
     v24 = std loadSlot 2
     std storeIndirect v18 0 v24
     v25 = std constI64 0
-    std ret v25
+    v101 = std constI64 0
+    std errorReturn v25 v101
 end
 
 // __managed_mem_grow(self, newCap) -> 0 (sets error invalidCapacity=4,
@@ -3170,9 +3140,8 @@ func __managed_mem_grow 2 i64
 
   block err:
     v4 = std constI64 5
-    v5 = std call mrt_set_error v4
-    v6 = std constI64 0
-    std ret v6
+    v5 = std constI64 0
+    std errorReturn v5 v4
 
   block ok:
     // newSize = newCap * elemSize
@@ -3193,7 +3162,8 @@ func __managed_mem_grow 2 i64
     v17 = std loadSlot 1
     std storeIndirect v16 16 v17
     v18 = std constI64 0
-    std ret v18
+    v19 = std constI64 0
+    std errorReturn v18 v19
 end
 
 // __managed_mem_byte_at(self, i) -> byte (sets error invalidByteRange=6,
@@ -3227,16 +3197,16 @@ func __managed_mem_byte_at 2 i64
 
   block err:
     v9 = std constI64 7
-    v10 = std call mrt_set_error v9
-    v11 = std constI64 0
-    std ret v11
+    v10 = std constI64 0
+    std errorReturn v10 v9
 
   block ok:
     v12 = std loadSlot 0
     v13 = std loadIndirect v12 0
     v14 = std loadSlot 1
     v15 = std loadByte v13 v14
-    std ret v15
+    v16 = std constI64 0
+    std errorReturn v15 v16
 end
 
 // __managed_mem_set_byte(self, i, value) -> 0 (sets error invalidByteRange=6,
@@ -3270,9 +3240,8 @@ func __managed_mem_set_byte 3 i64
 
   block err:
     v10 = std constI64 7
-    v11 = std call mrt_set_error v10
-    v12 = std constI64 0
-    std ret v12
+    v11 = std constI64 0
+    std errorReturn v11 v10
 
   block ok:
     v13 = std loadSlot 0
@@ -3281,7 +3250,8 @@ func __managed_mem_set_byte 3 i64
     v16 = std loadSlot 2
     std storeByte v14 v15 v16
     v17 = std constI64 0
-    std ret v17
+    v18 = std constI64 0
+    std errorReturn v17 v18
 end
 
 // __managed_mem_remove(self, idx) -> value (sets error indexOutOfBounds=0,
@@ -3322,9 +3292,8 @@ func __managed_mem_remove 2 i64
 
   block err:
     v8 = std constI64 1
-    v9 = std call mrt_set_error v8
-    v10 = std constI64 0
-    std ret v10
+    v9 = std constI64 0
+    std errorReturn v9 v8
 
   block ok:
     v11 = std loadSlot 0
@@ -3392,7 +3361,8 @@ func __managed_mem_remove 2 i64
     v42 = std loadSlot 0
     std storeIndirect v42 8 v41
     v43 = std loadSlot 2
-    std ret v43
+    v44 = std constI64 0
+    std errorReturn v43 v44
 end
 
 // __managed_mem_shift_right(self, idx, count) -> 0 (sets error
@@ -3440,9 +3410,8 @@ func __managed_mem_shift_right 3 i64
 
   block err:
     v9 = std constI64 6
-    v10 = std call mrt_set_error v9
-    v11 = std constI64 0
-    std ret v11
+    v10 = std constI64 0
+    std errorReturn v10 v9
 
   block ok:
     v12 = std loadIndirect v0 24
@@ -3483,7 +3452,8 @@ func __managed_mem_shift_right 3 i64
 
   block loop_end:
     v31 = std constI64 0
-    std ret v31
+    v32 = std constI64 0
+    std errorReturn v31 v32
 end
 
 // __managed_mem_shift_left(self, idx, count) -> 0 (sets error
@@ -3530,9 +3500,8 @@ func __managed_mem_shift_left 3 i64
 
   block err:
     v10 = std constI64 6
-    v11 = std call mrt_set_error v10
-    v12 = std constI64 0
-    std ret v12
+    v11 = std constI64 0
+    std errorReturn v11 v10
 
   block ok:
     v13 = std loadIndirect v0 24
@@ -3568,7 +3537,8 @@ func __managed_mem_shift_left 3 i64
 
   block loop_end:
     v28 = std constI64 0
-    std ret v28
+    v29 = std constI64 0
+    std errorReturn v28 v29
 end
 
 // __managed_mem_append(self, other) -> 0 (always succeeds).
@@ -3684,9 +3654,8 @@ func __managed_mem_slice 3 i64
 
   block err:
     v8 = std constI64 3
-    v9 = std call mrt_set_error v8
-    v10 = std constI64 0
-    std ret v10
+    v9 = std constI64 0
+    std errorReturn v9 v8
 
   block alloc:
     // sliceLen = end - start
@@ -3744,7 +3713,8 @@ func __managed_mem_slice 3 i64
     std storeIndirect v31 24 v34
     v35 = std constI64 -1
     std storeIndirect v31 32 v35
-    std ret v31
+    v36 = std constI64 0
+    std errorReturn v31 v36
 end
 
 // __managed_mem_create(count, elemSize) -> newPtr.

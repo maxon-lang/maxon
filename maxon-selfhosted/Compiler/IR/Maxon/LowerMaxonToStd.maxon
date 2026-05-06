@@ -296,20 +296,6 @@ export function resolveWitnessLabel(project Project, concreteType MaxonType, int
 	return project.witnessTables.labelFor(typeName, interfaceName: interfaceName)
 end 'resolveWitnessLabel'
 
-// Reserve the `__data_maxon_error` slot (8 bytes, zero-initialized) used by
-// `mrt_set_error` / `mrt_get_error_and_clear`. The slot lives in the .data
-// prelude alongside ordinary top-level vars so the two backends' existing
-// `__data_*` relocation handling resolves it without any extra plumbing.
-// Phase 4 of the error-handling rollout uses a thread-local-ish flag here so
-// `throw` / `try` can route a non-zero variant ordinal across a function
-// boundary without changing the call ABI; Phase 4d-f will revisit the flag-
-// in-register design if the call cost ever shows up in profiles.
-export function registerErrorStateForDataSection(globalData GlobalDataTable)
-	var zeroBytes = ByteArray.create()
-	writeQword(zeroBytes, value: 0)
-	addDataSectionEntry(globalData, name: "__data_maxon_error", initialBytes: zeroBytes)
-end 'registerErrorStateForDataSection'
-
 // Build a `sizeBytes`-byte zero-filled ByteArray for the .data prelude. Used by
 // the slab/MM global registration below for fixed-size scratch arrays
 // (`__slab_mcentral_array`, `__slab_mcache_base`) and single-word state slots.
@@ -750,6 +736,11 @@ type MaxonToStdLowering
 	// branch ignores the primary value when the error flag is non-zero, so
 	// any in-range default works. Reset per function in `lower()`.
 	var currentReturnType MaxonReturnType
+	// Phase 6: tracks whether the function currently being lowered is throwing
+	// (non-empty `throwsTypeName`). Drives the `ret` → `errorReturn` rewrite in
+	// `lowerTerminator` so every exit of a throwing function writes both
+	// registers per the multi-value-return ABI.
+	var currentFuncIsThrowing bool
 	// Per-function value-type map: tracks each SSA value's Maxon-level type.
 	// Populated as ops are lowered so that consumers (fieldLoad/Store,
 	// methodCall, mixed-family binops) can resolve receiver types and pick
@@ -822,6 +813,7 @@ type MaxonToStdLowering
 			currentTypeName: "",
 			currentFilePath: "",
 			currentReturnType: MaxonReturnType.void,
+			currentFuncIsThrowing: false,
 			valueType: MaxonTypeArray.create(),
 			slotIdsScratch: ValueIdArray.create(),
 			slotFilledScratch: BoolArray.create(),
@@ -969,9 +961,6 @@ type MaxonToStdLowering
 		// heap arena. The map iteration is order-stable per project (insertion
 		// order), keeping the linker symbol layout deterministic across builds.
 		registerGlobalVarsForDataSection(self.project, globalData: self.globalData)
-		// Reserve the runtime error-state slot used by throw/try lowering
-		// (Phase 4). Lives in the .data prelude alongside user-declared globals.
-		registerErrorStateForDataSection(self.globalData)
 		// Step 6a.17: reserve the slab + MM allocator's mutable state globals so
 		// `globalAddr __slab_*` / `globalAddr __mm_*` resolve to distinct
 		// addresses. Without this every allocator-state global would alias to
@@ -1076,6 +1065,12 @@ type MaxonToStdLowering
 			// value of the correct width (i64 vs f64). Stamp it here so
 			// `lowerThrow` can read it without re-walking module.functions.
 			self.currentReturnType = srcFunc.maxonReturnType
+			// Phase 6 (multi-value-return error ABI): a throwing function's
+			// normal `ret` MUST emit `errorReturn(retVal, 0)` so the caller's
+			// tryCall captures both the primary value AND a clean (zero) flag.
+			// Stamp the throws-ness here so `lowerTerminator` picks the right
+			// terminator shape per `ret`.
+			self.currentFuncIsThrowing = not srcFunc.throwsTypeName.isEmpty()
 			// Stage E (closures): clear the function-pointer→env map so
 			// the previous function's bindings don't leak across function
 			// boundaries. The lifted-closure env ValueId is reset to 0 by
@@ -1207,7 +1202,7 @@ type MaxonToStdLowering
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 			call(result, callee, _, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
-			ret(retVal, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
+			ret(retVal, _) then self.lowerRetAsBodyOp(retVal: retVal, dstBlock: dstBlock)
 			printLiteral(stringId, _) then self.lowerPrintLiteral(stringId, dstBlock: dstBlock)
 			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
 			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
@@ -1233,7 +1228,9 @@ type MaxonToStdLowering
 			// via setTerminator. Reaching this match arm means the parser
 			// emitted it as a regular op — pure compiler bug.
 			throw then panic("lowerMaxonToStd: MaxonOp.throw seen as regular op (parser bug — should always be a terminator)")
+			rethrow then panic("lowerMaxonToStd: MaxonOp.rethrow seen as regular op (parser bug - should always be a terminator)")
 			tryCall(result, callee, _, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, opIdx: opIdx, dstBlock: dstBlock)
+			tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, _) then self.lowerTryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, opIdx: opIdx, dstBlock: dstBlock)
 			// Stage E (closures): function-pointer construction, env capture,
 			// and indirect-through-pointer dispatch. functionRef has no env
 			// (the matching `fnEnvVarNames` entry is 0 — see lowerFunctionRef);
@@ -1563,7 +1560,7 @@ type MaxonToStdLowering
 	//      into their declared positions, fill in integer-literal defaults.
 	//   3. Emit the Std call. Record the result's MaxonType so subsequent
 	//      consumers (field loads on the result, etc.) can resolve.
-	function lowerCall(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
+	function lowerCall(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let bareCallee = String.from(callee)
 		// Math primitives (sqrt/floor/ceil/round/abs/trunc) inline to a single
 		// Std unary op rather than going through call resolution — see
@@ -1590,7 +1587,7 @@ type MaxonToStdLowering
 		// than emitting a call to a body-less signature.
 		if bareCallee.startsWith("__ManagedMemory.") 'didLowerMmStatic'
 			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__ManagedMemory.")
-			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock) 'handled'
+			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
@@ -1601,7 +1598,7 @@ type MaxonToStdLowering
 		// resolver pass returned early on a shape it should have handled).
 		let qualifiedCallee = try self.project.resolvedCallees.get(opIdx) otherwise panic("lowerCall: opIdx={opIdx} (callee={bareCallee}) missing from project.resolvedCallees — invariant violated, resolveAllCalls did not visit this op")
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
-			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock)
+			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return
 		end 'noSig'
 		let isSiblingInstance = signatureFirstParamIsSelf(sigLookup)
@@ -1623,14 +1620,14 @@ type MaxonToStdLowering
 		// `unresolved` and `buildSubstitutionForInstance` short-circuits to
 		// the empty subst.
 		let finalArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStart, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
-		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 	end 'lowerCall'
 
 	// Method call on a value receiver. The receiver's struct type comes from
 	// the per-function value-type map; we then resolve `{Type.method}` and
 	// dispatch through the same slot/default fill path as a free call, with
 	// the receiver prepended as the implicit __self argument.
-	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock)
+	function lowerMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let receiverId = self.resolveName(receiver)
 		let rawReceiverType = self.getValueType(receiverId)
 		// Phase 11.0 step 8b: normalize named-typealiases (`ElementMemory`) and
@@ -1668,6 +1665,7 @@ type MaxonToStdLowering
 			end 'isIface'
 			if isInterface 'ifaceDispatch'
 				self.lowerInterfaceMethodCall(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 				return
 			end 'ifaceDispatch'
 			// Phase 11.4: a method call on a primitive receiver (`int.hash()`,
@@ -1684,11 +1682,12 @@ type MaxonToStdLowering
 				let primQualified = "{primName}.{String.from(methodName)}"
 				if let primSig = try self.project.funcSignatures.get(primQualified) 'havePrimSig'
 					let primAllArgIds = self.slotArgsForCall(primSig, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-					self.emitCallWithArgs(result, qualifiedCallee: primQualified, argIds: primAllArgIds, dstBlock: dstBlock)
+					self.emitCallWithArgs(result, qualifiedCallee: primQualified, argIds: primAllArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 					return
 				end 'havePrimSig'
 			end 'havePrim'
 			self.lowerInterfaceMethodCallStub(result, methodName: methodName, dstBlock: dstBlock)
+			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 			return
 		end 'noStruct'
 		// Step 6b.4: instance methods on `__ManagedMemory` (length, get, set, ...)
@@ -1697,7 +1696,7 @@ type MaxonToStdLowering
 		// resolved receiverId as the implicit self pointer.
 		if receiverStructName == "__ManagedMemory" 'didLowerMmMethod'
 			let bareMethodName = String.from(methodName)
-			if self.lowerManagedMemBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock) 'handled'
+			if self.lowerManagedMemBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
@@ -1711,7 +1710,7 @@ type MaxonToStdLowering
 			for argName in args 'eachCursorArg'
 				cursorArgIds.push(self.resolveName(argName))
 			end 'eachCursorArg'
-			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, args: cursorArgIds, dstBlock: dstBlock) 'handled'
+			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, args: cursorArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
 		end 'didLowerCursor'
@@ -1724,11 +1723,11 @@ type MaxonToStdLowering
 		// receiver into slot 0 of the returned arg list — no second copy.
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
 			let plainArgs = self.resolveArgNames(args, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock, receiverContext: receiverType)
+			self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: plainArgs, dstBlock: dstBlock, receiverContext: receiverType, errorBoundName: errorBoundName)
 			return
 		end 'noSig'
 		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
-		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock, receiverContext: receiverType)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: allArgIds, dstBlock: dstBlock, receiverContext: receiverType, errorBoundName: errorBoundName)
 	end 'lowerMethodCall'
 
 	// Emit a Std-level call op with the given pre-resolved argument ids and
@@ -1745,7 +1744,16 @@ type MaxonToStdLowering
 	// concrete generic instance the lowering forwards the caller's own
 	// `implicitLayoutValueId` instead — that happens in generic-to-generic
 	// dispatch where the inner callee specializes on the outer's `T`.
-	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock, receiverContext MaxonType = MaxonType.unresolved)
+	// Phase 4 of the multi-value-return error ABI rollout: when
+	// `errorBoundName` is non-empty, allocate a fresh ValueId for the
+	// parser's name and emit `StdCallOp.tryCall` with that id as the second
+	// def (the backend captures the error flag from the secondary return
+	// register, RDX/X1). An empty `errorBoundName` is the sentinel for "this
+	// is not a try-call site" and produces a regular `StdCallOp.call` with a
+	// single result def — the historic shape. Both emit modes share the same
+	// implicit-arity (layout/witness) appending and the same result-
+	// MaxonType recording.
+	function emitCallWithArgs(result ByteArray, qualifiedCallee String, argIds ValueIdArray, dstBlock IrBlock, receiverContext MaxonType = MaxonType.unresolved, errorBoundName ByteArray = ByteArray.create())
 		var finalArgIds = argIds
 		// Phase 11.4: discover the callee's implicit-arity from a project-wide
 		// map populated during `transferFuncs` and persisted via the stdlib
@@ -1764,7 +1772,13 @@ type MaxonToStdLowering
 			end 'addWitness'
 		end 'addLayout'
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
+		if not errorBoundName.isEmpty() 'tryCall'
+			let flagId = self.defineName(errorBoundName)
+			self.setValueType(flagId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: qualifiedCallee, argIds: finalArgIds, errorFlagId: flagId)))
+		end 'tryCall' else 'plainCall'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
+		end 'plainCall'
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
 	end 'emitCallWithArgs'
 
@@ -1872,9 +1886,9 @@ type MaxonToStdLowering
 
 	// Convenience wrapper for the no-signature fallback in lowerCall: resolve
 	// args verbatim (no leading receiver) and emit the call.
-	function emitUnsignedCall(result ByteArray, qualifiedCallee String, args ByteArrayArray, dstBlock IrBlock)
+	function emitUnsignedCall(result ByteArray, qualifiedCallee String, args ByteArrayArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let argIds = self.resolveArgNames(args)
-		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: argIds, dstBlock: dstBlock)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: argIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 	end 'emitUnsignedCall'
 
 	// Math primitives (sqrt, floor, ceil, round, abs, trunc) lower to
@@ -2014,9 +2028,10 @@ type MaxonToStdLowering
 	// elementSize / clear / toCString) inline as direct loadIndirect /
 	// storeIndirect ops. Throwing methods (get / set / grow / slice / ...)
 	// expand to a call into a runtime helper (`__managed_mem_*`) defined
-	// in runtime.std that performs bounds checking and writes
-	// `__data_maxon_error` on failure — the parser's `try ... otherwise`
-	// machinery picks up the flag at the call site.
+	// in runtime.std that performs bounds checking and returns a non-zero
+	// variant ordinal in the secondary error register (RDX/X1) on failure —
+	// the parser's `try ... otherwise` machinery picks up the flag at the
+	// call site.
 	//
 	// Per-method dispatch table:
 	//   length(self)                 -> loadIndirect(self, 8)
@@ -2045,7 +2060,7 @@ type MaxonToStdLowering
 	// call-emission path (which would then emit a call to a body-less
 	// signature — a bug since every method registered in
 	// `registerManagedMemoryMethods` MUST have an arm here).
-	function lowerManagedMemBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock) returns bool
+	function lowerManagedMemBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
 		let qualifiedName = "__ManagedMemory.{methodName}"
 		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
 			return false
@@ -2081,7 +2096,7 @@ type MaxonToStdLowering
 		// the stdlib's `try source.createCursor() otherwise throw` machinery
 		// catches it before the empty cursor leaks into a `for in` body.
 		if methodName == "createCursor" 'mCreateCursor'
-			self.lowerCreateCursor(result, sourceId: receiverId, dstBlock: dstBlock)
+			self.lowerCreateCursor(result, sourceId: receiverId, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mCreateCursor'
 		if methodName == "clear" 'mClear'
@@ -2098,7 +2113,20 @@ type MaxonToStdLowering
 		// --- Runtime-helper dispatch ------------------------------------
 		let helperName = managedMemHelperFor(methodName)
 		if not helperName.isEmpty() 'hasHelper'
-			let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock)
+			// Throwing helpers (e.g. `_get`, `_set`, `_grow`, `_slice`) write the
+			// error flag in RDX/X1 — emit `StdCallOp.tryCall` at try-call sites
+			// to capture both the result and the flag. Non-throwing helpers
+			// (`_append`, `_create`) don't write the flag register; when the
+			// call site is a tryCall (parser emitted a `tryMethodCall` because
+			// the method is registered as throwing in the signature, even though
+			// the runtime body never errors), bind the parser-supplied flag
+			// virtual to a const zero so downstream readers see "no error".
+			let isThrowingHelper = managedMemHelperThrows(methodName)
+			let helperBoundName = errorBoundName if isThrowingHelper else ByteArray.create()
+			let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock, errorBoundName: helperBoundName)
+			if not isThrowingHelper 'bindZeroForNonThrowing'
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+			end 'bindZeroForNonThrowing'
 			// Per-method result-type refinement. The generic helper-call path
 			// stamps integer; for methods whose declared return type is a
 			// non-integer (e.g. `create returns __ManagedMemory`,
@@ -2133,10 +2161,11 @@ type MaxonToStdLowering
 	// Phase 11.4: lower a `__ManagedMemoryCursor.method` call inline. The
 	// cursor is a real 40-byte heap struct (see `lowerCreateCursor` above);
 	// each method here reads/writes fields by offset and emits the right
-	// arithmetic for navigation + bounds checks. Throwing methods set the
-	// process-wide error flag via `mrt_set_error`; the surrounding stdlib
-	// `try raw.method() otherwise throw` catches the flag and rethrows the
-	// user-facing IterationError.
+	// arithmetic for navigation + bounds checks. Throwing methods alias the
+	// parser-supplied `errorBoundName` to the computed error-code SSA value
+	// via `emitFlagBind`; the surrounding stdlib `try raw.method() otherwise
+	// throw` reads the flag through that name and rethrows the user-facing
+	// IterationError.
 	//
 	// Self-hosted's `__ManagedMemoryError` enum:
 	//   0 indexOutOfBounds
@@ -2149,7 +2178,7 @@ type MaxonToStdLowering
 	// above keeps the wire format consistent with the existing enum and
 	// stays parallel to the C# bootstrap's two-code scheme (1 = exhausted,
 	// 2 = atStart).
-	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, args ValueIdArray, dstBlock IrBlock) returns bool
+	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, args ValueIdArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
 		if methodName == "current" 'mCurrent'
 			self.lowerCursorCurrent(result, cursorId: receiverId, dstBlock: dstBlock)
 			return true
@@ -2159,21 +2188,21 @@ type MaxonToStdLowering
 			return true
 		end 'mIndex'
 		if methodName == "advance" 'mAdvance'
-			self.lowerCursorAdvance(result, cursorId: receiverId, dstBlock: dstBlock)
+			self.lowerCursorAdvance(result, cursorId: receiverId, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mAdvance'
 		if methodName == "retreat" 'mRetreat'
-			self.lowerCursorRetreat(result, cursorId: receiverId, dstBlock: dstBlock)
+			self.lowerCursorRetreat(result, cursorId: receiverId, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mRetreat'
 		if methodName == "seek" 'mSeek'
 			let indexId = try args.get(0) otherwise panic("lowerManagedMemoryCursorBuiltin: seek missing index arg")
-			self.lowerCursorSeek(result, cursorId: receiverId, indexId: indexId, dstBlock: dstBlock)
+			self.lowerCursorSeek(result, cursorId: receiverId, indexId: indexId, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mSeek'
 		if methodName == "peek" 'mPeek'
 			let aheadId = try args.get(0) otherwise panic("lowerManagedMemoryCursorBuiltin: peek missing ahead arg")
-			self.lowerCursorPeek(result, cursorId: receiverId, aheadId: aheadId, dstBlock: dstBlock)
+			self.lowerCursorPeek(result, cursorId: receiverId, aheadId: aheadId, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return true
 		end 'mPeek'
 		// Unknown method on the cursor — fall through with a clear diagnostic
@@ -2218,22 +2247,32 @@ type MaxonToStdLowering
 		return id
 	end 'emitBinaryI64'
 
-	// Emit `mrt_set_error(codeValueId)` to surface a throwing-builtin error to
-	// the stdlib's `try … otherwise` machinery. The error flag is process-wide
-	// (single-threaded today); each throwing path computes the code value
-	// (`isFailure * errorCode` so the success path writes 0 = no error) and
-	// calls this helper. Centralising the call shape keeps the unused-result
-	// + arg-array boilerplate in one place.
-	function emitSetError(codeValueId ValueId, dstBlock IrBlock)
-		var argIds = ValueIdArray.create()
-		argIds.push(codeValueId)
-		let unusedRet = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(unusedRet, callee: "mrt_set_error", argIds: argIds)))
-	end 'emitSetError'
+	// Alias the parser-supplied error-bound name to the SSA ValueId that
+	// already holds the computed error code. Used by inline-expanded throwing
+	// builtins (`__ManagedMemory.createCursor`,
+	// `__ManagedMemoryCursor.advance / retreat / seek / peek`) to surface
+	// their failure code through the multi-value-return ABI without going
+	// through a runtime helper. No op is emitted — `aliasName` simply rewrites
+	// `nameToId` so subsequent `resolveName(errorBoundName)` returns
+	// `codeValueId`. The success path's `codeValueId` is a 0-valued cmp/select
+	// result; the failure path's `codeValueId` carries the error code.
+	//
+	// An empty `errorBoundName` is the sentinel for "this is not a try-call
+	// site" — do nothing, the caller has no observer for the flag. The multi-
+	// value-return ABI carries the flag in the secondary register (RDX/X1),
+	// so an unobserved failure simply has no effect (the caller never queries
+	// the flag).
+	function emitFlagBind(errorBoundName ByteArray, codeValueId ValueId)
+		if errorBoundName.isEmpty() 'noObserver'
+			return
+		end 'noObserver'
+		self.aliasName(errorBoundName, toId: codeValueId)
+	end 'emitFlagBind'
 
 	// Emit `(1 - isValid) * errorCode`. When `isValid==1` (success) this is 0
 	// (= no error); when `isValid==0` (failure) it's `errorCode`. Used to
-	// gate `mrt_set_error` calls without branching on the failure flag.
+	// produce the secondary-register error code without branching on the
+	// failure flag.
 	function emitErrorCodeForFailure(isValid ValueId, errorCode ParsedInt, dstBlock IrBlock) returns ValueId
 		let one = self.emitConstI64(1, dstBlock: dstBlock)
 		let inverted = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: one, rightId: isValid, dstBlock: dstBlock)
@@ -2274,7 +2313,7 @@ type MaxonToStdLowering
 	// (`emptySlot`, code 1) when the source's length is zero so the
 	// surrounding `try source.createCursor() otherwise throw` rejects empty
 	// sources. The cursor pointer is bound as the call's result.
-	function lowerCreateCursor(result ByteArray, sourceId ValueId, dstBlock IrBlock)
+	function lowerCreateCursor(result ByteArray, sourceId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		// Allocate 40 bytes via mrt_alloc. The result is an opaque i64 ptr.
 		let sizeId = self.emitConstI64(40, dstBlock: dstBlock)
 		var allocArgs = ValueIdArray.create()
@@ -2300,11 +2339,13 @@ type MaxonToStdLowering
 		self.emitStoreFieldI64(cursorId, offset: 32, valueId: sourceId, dstBlock: dstBlock)
 
 		// length == 0 → set error flag to `emptySlot` (1). We compute the
-		// flag value as `(length == 0) * 1` (cmp returns 0 or 1) and write it
-		// unconditionally — mrt_set_error overwrites the flag, so writing 0
-		// on the success path is a correct no-op.
+		// flag value as `(length == 0) * 1` (cmp returns 0 or 1) and alias
+		// the parser-supplied `errorBoundName` to that SSA value via
+		// `emitFlagBind`; the caller's `try ... otherwise` machinery resolves
+		// the bound name and tests for non-zero. Aliasing to a 0-valued cmp on
+		// the success path is correct: the caller's branch sees zero.
 		let isEmpty = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: length, rightId: zero, dstBlock: dstBlock)
-		self.emitSetError(isEmpty, dstBlock: dstBlock)
+		self.emitFlagBind(errorBoundName, codeValueId: isEmpty)
 	end 'lowerCreateCursor'
 
 	// Phase 11.4: cursor.current() — load element at current position.
@@ -2334,52 +2375,54 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 	end 'lowerCursorIndex'
 
-	// Phase 11.4: shared tail for advance/retreat/seek. Conditionally writes
-	// `newPos` into the cursor's position field (only when valid) and sets
-	// the error flag to `errorCode` on the failure branch via mrt_set_error.
-	// Mirrors the C# `EmitCursorPositionUpdate` shape: a `select` between
-	// newPos and oldPosition gates the field store; a separate `(1 - isValid)
-	// * errorCode` value drives mrt_set_error.
-	function emitCursorPositionUpdate(cursorId ValueId, newPos ValueId, isValid ValueId, oldPosition ValueId, errorCode ParsedInt, dstBlock IrBlock)
+	// Phase 11.4 / Phase 6: shared tail for advance/retreat/seek. Conditionally
+	// writes `newPos` into the cursor's position field (only when valid) and
+	// aliases the parser-supplied `errorBoundName` to a `(1 - isValid) *
+	// errorCode` SSA value (zero on success, `errorCode` on failure). The
+	// caller's `try ... otherwise throw` resolves the bound name and tests
+	// for non-zero. Mirrors the C# `EmitCursorPositionUpdate` shape: a
+	// `select` between newPos and oldPosition gates the field store; a
+	// separate `(1 - isValid) * errorCode` value drives the flag alias.
+	function emitCursorPositionUpdate(cursorId ValueId, newPos ValueId, isValid ValueId, oldPosition ValueId, errorCode ParsedInt, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let selected = self.emitArithmeticSelect(isValid, trueVal: newPos, falseVal: oldPosition, dstBlock: dstBlock)
 		self.emitStoreFieldI64(cursorId, offset: 8, valueId: selected, dstBlock: dstBlock)
 		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: errorCode, dstBlock: dstBlock)
-		self.emitSetError(codeValue, dstBlock: dstBlock)
+		self.emitFlagBind(errorBoundName, codeValueId: codeValue)
 	end 'emitCursorPositionUpdate'
 
 	// Phase 11.4: cursor.advance() — position += 1 if newPos < length, else
 	// set error code 1 (`emptySlot` / "exhausted"). Result is a 0 i64 because
 	// the call's MaxonReturnType is void but the lowering still defines a
 	// name slot.
-	function lowerCursorAdvance(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+	function lowerCursorAdvance(result ByteArray, cursorId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
 		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
 		let one = self.emitConstI64(1, dstBlock: dstBlock)
 		let newPos = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: position, rightId: one, dstBlock: dstBlock)
 		let isValid = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Lt, leftId: newPos, rightId: length, dstBlock: dstBlock)
-		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock, errorBoundName: errorBoundName)
 		self.emitCursorVoidResult(result, dstBlock: dstBlock)
 	end 'lowerCursorAdvance'
 
 	// Phase 11.4: cursor.retreat() — position -= 1 if newPos >= 0, else
 	// set error code 2 (`sliceOutOfBounds` / "atStart").
-	function lowerCursorRetreat(result ByteArray, cursorId ValueId, dstBlock IrBlock)
+	function lowerCursorRetreat(result ByteArray, cursorId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
 		let one = self.emitConstI64(1, dstBlock: dstBlock)
 		let newPos = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: position, rightId: one, dstBlock: dstBlock)
 		let zero = self.emitConstI64(0, dstBlock: dstBlock)
 		let isValid = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Ge, leftId: newPos, rightId: zero, dstBlock: dstBlock)
-		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 2, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: newPos, isValid: isValid, oldPosition: position, errorCode: 2, dstBlock: dstBlock, errorBoundName: errorBoundName)
 		self.emitCursorVoidResult(result, dstBlock: dstBlock)
 	end 'lowerCursorRetreat'
 
 	// Phase 11.4: cursor.seek(index) — jump to absolute position. Sets error
 	// code 1 if `index < 0` or `index >= length`.
-	function lowerCursorSeek(result ByteArray, cursorId ValueId, indexId ValueId, dstBlock IrBlock)
+	function lowerCursorSeek(result ByteArray, cursorId ValueId, indexId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
 		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
 		let isValid = self.emitInBoundsZeroToLength(indexId, length: length, dstBlock: dstBlock)
-		self.emitCursorPositionUpdate(cursorId, newPos: indexId, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock)
+		self.emitCursorPositionUpdate(cursorId, newPos: indexId, isValid: isValid, oldPosition: position, errorCode: 1, dstBlock: dstBlock, errorBoundName: errorBoundName)
 		self.emitCursorVoidResult(result, dstBlock: dstBlock)
 	end 'lowerCursorSeek'
 
@@ -2388,7 +2431,7 @@ type MaxonToStdLowering
 	// out of bounds; the load itself reads from a clamped address (the
 	// current position) on the failure path, so the value is benign noise
 	// that the caller's `try otherwise` branch discards.
-	function lowerCursorPeek(result ByteArray, cursorId ValueId, aheadId ValueId, dstBlock IrBlock)
+	function lowerCursorPeek(result ByteArray, cursorId ValueId, aheadId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
 		let length = self.emitLoadFieldI64(cursorId, offset: 16, dstBlock: dstBlock)
 		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
@@ -2405,7 +2448,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: 1, dstBlock: dstBlock)
-		self.emitSetError(codeValue, dstBlock: dstBlock)
+		self.emitFlagBind(errorBoundName, codeValueId: codeValue)
 	end 'lowerCursorPeek'
 
 	// Inline a `loadIndirect(selfPtr, offset)` for one of the simple
@@ -2422,12 +2465,22 @@ type MaxonToStdLowering
 	// Emit `result = call helperName(...argIds)`. Used for every throwing
 	// `__ManagedMemory.*` method whose body lives in runtime.std as
 	// `__managed_mem_*`. The helper is responsible for bounds checking
-	// and writing `__data_maxon_error` on failure; the caller's
-	// surrounding `try ... otherwise` machinery reads the flag back via
-	// `mrt_get_error_and_clear`.
-	function lowerManagedMemRuntimeCall(result ByteArray, helperName String, argIds ValueIdArray, dstBlock IrBlock) returns bool
+	// and writes the error flag in RDX/X1 via the multi-value-return ABI
+	// (Phase 6); the caller's surrounding `try ... otherwise` machinery
+	// reads the flag by name. When `errorBoundName` is empty the call site is
+	// a non-try invocation (e.g. an inline `__ManagedMemory.length` load
+	// chained through `__ManagedMemory.set` for stdlib internal use) — in
+	// that case emit a regular `call` and let any flag write be discarded by
+	// RDX clobber; the helper's signal is unobserved by the caller.
+	function lowerManagedMemRuntimeCall(result ByteArray, helperName String, argIds ValueIdArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+		if not errorBoundName.isEmpty() 'tryCall'
+			let flagId = self.defineName(errorBoundName)
+			self.setValueType(flagId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.tryCall(resultId, callee: helperName, argIds: argIds, errorFlagId: flagId)))
+		end 'tryCall' else 'plainCall'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+		end 'plainCall'
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerManagedMemRuntimeCall'
@@ -2975,19 +3028,20 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			ret(retVal, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(self.resolveName(retVal))))
+			ret(retVal, _) then self.lowerRet(retVal: retVal, dstBlock: dstBlock)
 			enumMatchArm(scrutineeName, caseName, _, rawValue, isFloat, resolved, thenTarget, elseTarget, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
 			// the error op's range.
 			error then return
-			// Phase 4: `throw E.v` — write `ordinal+1` (0 reserved for "no
-			// error in flight") into the thread-local error slot via
-			// mrt_set_error, then return a default primary value of the
-			// enclosing function's return type. Caller's `try` will read
-			// (and clear) the slot via mrt_get_error_and_clear.
+			// Phase 6: `throw E.v` lowers to a single `errorReturn(zero, flag)`
+			// terminator — the multi-value-return ABI puts the primary value
+			// in R8/X0 and the error flag (`ordinal+1`, 0 reserved for "no
+			// error") in RDX/X1. The caller's `try` reads the flag from the
+			// post-call mov.
 			throw(enumName, variantName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, dstBlock: dstBlock)
+			rethrow(flagName, _) then self.lowerRethrow(flagName: flagName, dstBlock: dstBlock)
 			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
 	end 'lowerTerminator'
@@ -3285,54 +3339,83 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
 	end 'lowerPrintIntToCall'
 
-	// Lower maxon.panic(message) to:
-	//   std.system.globalAddr(addrId, "__panic_msg_N")
-	//   std.call.call mrt_panic(addrId)
+	// Lower `ret retVal` as a block terminator. In a non-throwing function this
+	// is a plain `StdCallOp.ret(retVal)`. In a throwing function (per Phase 6
+	// of the multi-value-return error ABI), every exit must write BOTH the
+	// primary register AND the error flag — so `ret retVal` becomes
+	// `errorReturn(retVal, 0)`. The zero flag tells the caller's tryCall site
+	// "no error in flight."
+	function lowerRet(retVal ByteArray, dstBlock IrBlock)
+		self.emitRetOrErrorReturn(retVal: retVal, dstBlock: dstBlock, asTerminator: true)
+	end 'lowerRet'
+
+	// Same shape as `lowerRet` but appends as a body op. Hit only on the rare
+	// path where the parser emits a `ret` mid-block (e.g. closure-lifted bodies
+	// that were partially terminated by an outer pass). Maintains the throwing
+	// vs non-throwing distinction so the multi-value-return ABI invariant
+	// holds at every textual exit.
+	function lowerRetAsBodyOp(retVal ByteArray, dstBlock IrBlock)
+		self.emitRetOrErrorReturn(retVal: retVal, dstBlock: dstBlock, asTerminator: false)
+	end 'lowerRetAsBodyOp'
+
+	// Shared body for the two lowerRet shapes. `asTerminator` toggles between
+	// `setTerminator` (block-final) and `appendOp` (mid-block).
+	function emitRetOrErrorReturn(retVal ByteArray, dstBlock IrBlock, asTerminator bool)
+		let retValId = self.resolveName(retVal)
+		if self.currentFuncIsThrowing 'throwingExit'
+			let zeroFlagId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zeroFlagId, value: 0))))
+			self.setIsFloat(zeroFlagId, isFloat: false)
+			let errOp = StdOp.call(StdCallOp.errorReturn(retValId, errorFlagId: zeroFlagId))
+			if asTerminator 'asTerm'
+				self.stdModule.setTerminator(dstBlock, op: errOp)
+			end 'asTerm' else 'asBody'
+				self.stdModule.appendOp(dstBlock, op: errOp)
+			end 'asBody'
+			return
+		end 'throwingExit'
+		let plainOp = StdOp.call(StdCallOp.ret(retValId))
+		if asTerminator 'asTerm2'
+			self.stdModule.setTerminator(dstBlock, op: plainOp)
+		end 'asTerm2' else 'asBody2'
+			self.stdModule.appendOp(dstBlock, op: plainOp)
+		end 'asBody2'
+	end 'emitRetOrErrorReturn'
+
+	// Phase 4: lower MaxonOp.throw(enumName, variantName) to a single
+	// multi-value-return op:
+	//   const flagId  = ordinal_of(enumName, variantName) + 1
+	//   const zeroId  = <default value of enclosing return type>
+	//   errorReturn(zeroId, errorFlagId: flagId)
 	//
-	// The label name comes from `pipeline.nextPanicLabel()`, a monotonic
-	// counter shared across every pass in this pipeline run that emits a
-	// panic call (today: this pass and `insertRangeChecks`). A single
-	// counter means every panic in a compile gets a unique label without
-	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
-	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
-	// stdlib and user-code compiles stay in disjoint link-time namespaces.
-	// Phase 4: lower MaxonOp.throw(enumName, variantName) to:
-	//   const flag = ordinal_of(enumName, variantName) + 1
-	//   call mrt_set_error(flag)
-	//   ret <default value of enclosing function's return type>
-	//
-	// The +1 reserves 0 for "no error in flight" so the caller's
-	// `mrt_get_error_and_clear` can distinguish a successful call from a
-	// thrown variant. The default return value is just an in-range constant
-	// of the right family (i64 zero for ints, f64 zero for floats, none for
-	// void) — the caller's `try ... otherwise` branch ignores the primary
-	// value when the flag is non-zero, so any default works. Emitted as a
-	// terminator: the producing block ends here with a `ret`.
+	// The +1 reserves 0 for "no error in flight" so the caller's try-call
+	// can distinguish a successful call from a thrown variant. The default
+	// primary value is just an in-range constant of the right family (i64
+	// zero for ints, f64 zero for floats, unused for void — but still
+	// emitted because the multi-value ABI always writes both registers) —
+	// the caller's `try ... otherwise` branch ignores the primary value
+	// when the flag is non-zero. errorReturn is the block terminator.
 	function lowerThrow(enumName String, variantName String, dstBlock IrBlock)
 		let flag = self.lookupVariantOrdinalPlusOne(enumName: enumName, variantName: variantName)
 		// const flag
 		let flagId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: flag))))
 		self.setIsFloat(flagId, isFloat: false)
-		// call mrt_set_error(flag) — discards the i64 0 result.
-		let setErrResultId = allocValueId(self.funcIdRef)
-		var setErrArgs = ValueIdArray.create()
-		setErrArgs.push(flagId)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(setErrResultId, callee: "mrt_set_error", argIds: setErrArgs)))
-		// Terminate the block with `ret <default>` of the enclosing return type.
+		// Default primary return value of the enclosing return type.
 		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
 		let opcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
 		let zeroId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: zeroId, value: 0))))
 		self.setIsFloat(zeroId, isFloat: isFloat)
-		self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.ret(zeroId)))
+		self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.errorReturn(zeroId, errorFlagId: flagId)))
 	end 'lowerThrow'
 
 	// Resolve `EnumName.variantName` to its declaration ordinal, then add 1.
-	// `+1` keeps 0 reserved for "no error in flight" — the thread-local error
-	// slot is read-then-cleared by `mrt_get_error_and_clear`, so a successful
-	// call leaves it at 0 for the next caller. A miss (unknown enum, unknown
-	// case) reports a compile-error diagnostic and falls back to ordinal `1`
+	// `+1` keeps 0 reserved for "no error in flight" — the secondary error
+	// register (RDX/X1) carries the variant ordinal across the call boundary,
+	// and 0 means the call returned successfully. A miss (unknown enum,
+	// unknown case) reports a compile-error diagnostic and falls back to
+	// ordinal `1`
 	// so the lowering pass produces a structurally valid SSA module — the
 	// `hasErrors(project)` short-circuit before codegen prevents the bogus
 	// flag from reaching a real binary.
@@ -3357,22 +3440,90 @@ type MaxonToStdLowering
 		return 1
 	end 'lookupVariantOrdinalPlusOne'
 
-	// Phase 4: lower MaxonOp.tryCall — same shape as a normal call followed
-	// by a read-and-clear of the thread-local error slot. The flag bound to
-	// `errorBoundName` is consumed by parser-emitted ops downstream (typically
-	// a cmp + condBr that either propagates via mrt_set_error or falls
-	// through to a fallback expression).
+	// Phase 4: lower MaxonOp.tryCall — emit a single multi-value-return
+	// `StdCallOp.tryCall` op that yields BOTH the primary result (in R8/X0
+	// at the backend level) AND the error flag (in RDX/X1). The flag bound
+	// to `errorBoundName` is consumed by parser-emitted ops downstream
+	// (typically a cmp + condBr that either propagates the error or falls
+	// through to the fallback expression).
+	//
+	// We pre-allocate and bind the error-flag ValueId before delegating to
+	// `lowerCall`, then thread it through `emitCallWithArgs` so the SINGLE
+	// op produced is `StdCallOp.tryCall` (not a regular `call` followed by
+	// any helper op). The tryCall op is the source-of-truth for the multi-
+	// value-return error ABI: the backend lowers it to a call that picks up
+	// the flag from the secondary return register (RDX/X1).
 	function lowerTryCall(result ByteArray, callee ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, opIdx OpIndex, dstBlock IrBlock)
-		// Reuse the exact call lowering — same signature/default-fill path.
-		// Pass through the tryCall's opIdx so resolved-callee / paramTypes
-		// sidetable lookups pull this site's resolution, not some neighbour's.
-		self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
-		// Bind the post-call error flag to the parser-supplied name.
-		let flagId = self.defineName(errorBoundName)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(flagId, callee: "mrt_get_error_and_clear", argIds: ValueIdArray.create())))
-		self.setValueType(flagId, t: MaxonType.integer)
+		// Reuse the exact call lowering — same signature/default-fill path —
+		// but pass `errorBoundName` so the leaf emit step (a `StdCallOp.tryCall`
+		// for real callees, or `aliasName` for inline-expanded builtins) binds
+		// the flag through the right mechanism. opIdx is forwarded so resolved-
+		// callee / paramTypes sidetable lookups pull this site's resolution.
+		self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName)
 	end 'lowerTryCall'
 
+	// Phase 5 (multi-value-return error ABI): lower MaxonOp.tryMethodCall by
+	// pre-allocating the error-flag ValueId and threading it through
+	// `lowerMethodCall` so the SINGLE op produced is `StdCallOp.tryCall` -
+	// mirroring `lowerTryCall`'s relationship to `lowerCall`. The tryCall
+	// op carries the multi-value-return error ABI: the backend picks up the
+	// flag from the secondary return register (RDX/X1).
+	function lowerTryMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, opIdx OpIndex, dstBlock IrBlock)
+		// Defer binding of `errorBoundName` to the leaf emit step:
+		//   - The real-call path allocates a fresh ValueId via `defineName`
+		//     and uses it as the second def of `StdCallOp.tryCall`.
+		//   - Inline-expanded builtins (`__ManagedMemory.createCursor`,
+		//     `__ManagedMemoryCursor.advance` / `retreat` / `seek` / `peek`)
+		//     compute the error code as an ordinary SSA value and `aliasName`
+		//     the parser's name to it — no copy op emitted.
+		// This avoids the legacy `addI64 errorFlagId, codeValueId, 0` "move"
+		// stand-in, which used to survive into the final assembly as a
+		// literal `add r8, 0`.
+		self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName)
+	end 'lowerTryMethodCall'
+
+	// Phase 5 (multi-value-return error ABI): bind the parser-supplied error-
+	// bound name to a fresh const-zero SSA value. Used by `lowerMethodCall`'s
+	// early-return paths (interface stubs, primitive extensions without a
+	// registered signature) when those paths emit no `StdCallOp.tryCall` that
+	// would otherwise produce the flag. An empty `errorBoundName` is the "not
+	// a try-call site" sentinel — no-op in that case. Builtin-method early-
+	// returns synthesize a "no error" flag so downstream readers see a well-
+	// formed SSA value.
+	function bindErrorFlagToZero(errorBoundName ByteArray, dstBlock IrBlock)
+		if errorBoundName.isEmpty() 'notATryCallSite'
+			return
+		end 'notATryCallSite'
+		let zeroId = self.emitConstI64(0, dstBlock: dstBlock)
+		self.aliasName(errorBoundName, toId: zeroId)
+	end 'bindErrorFlagToZero'
+
+	// Phase 5: lower MaxonOp.rethrow(flagName) to a single multi-value-return
+	// `errorReturn` op. Same shape as lowerThrow's tail except the flag value
+	// is a runtime SSA name (resolveName) rather than a compile-time-known
+	// `ordinal+1` literal. Caller's `try` reads the flag through the multi-
+	// value-return ABI (RDX/X1) just as it does for lowerThrow / lowerTryCall.
+	function lowerRethrow(flagName ByteArray, dstBlock IrBlock)
+		let flagId = self.resolveName(flagName)
+		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
+		let opcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
+		let zeroId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: zeroId, value: 0))))
+		self.setIsFloat(zeroId, isFloat: isFloat)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.errorReturn(zeroId, errorFlagId: flagId)))
+	end 'lowerRethrow'
+
+	// Lower maxon.panic(message) to:
+	//   std.system.globalAddr(addrId, "__panic_msg_N")
+	//   std.call.call mrt_panic(addrId)
+	//
+	// The label name comes from `pipeline.nextPanicLabel()`, a monotonic
+	// counter shared across every pass in this pipeline run that emits a
+	// panic call (today: this pass and `insertRangeChecks`). A single
+	// counter means every panic in a compile gets a unique label without
+	// per-pass prefix gymnastics. The prefix (`__panic_msg_` vs
+	// `__stdlib_panic_msg_`) is still picked from `pipeline.isStdlib` so
+	// stdlib and user-code compiles stay in disjoint link-time namespaces.
 	function lowerPanicToSys(stringId StringId, dstBlock IrBlock)
 		let nameStr = self.pipeline.nextPanicLabel()
 
@@ -3648,7 +3799,8 @@ end 'enclosingTypeName'
 // builtin, or "" if the method is handled inline (length / capacity / ...)
 // or has no helper-backed lowering (makeCharFromBytes — panic stub). The
 // runtime helpers live in runtime.std and are responsible for bounds
-// checking + writing `__data_maxon_error` on failure (sentinel-zero return).
+// checking + returning a non-zero variant ordinal in the secondary error
+// register (RDX/X1) on failure (sentinel-zero primary return).
 // Phase 11.0 step 8b helpers (chaseTypealiasInQualifiedCallee, ...) live in
 // MaxonDialect.maxon so both TypeResolution and lowering apply the same
 // canonicalization to qualified callee names.
@@ -3692,6 +3844,22 @@ function managedMemHelperFor(methodName String) returns String
 	end 'mCreate'
 	return ""
 end 'managedMemHelperFor'
+
+// Multi-value-return error ABI: which `__managed_mem_*` helpers actually
+// throw (i.e. write the error flag in RDX/X1). Throwing helpers must be
+// invoked via `StdCallOp.tryCall` so the post-call mov captures the flag.
+// `append` (does its own grow, never errors) and `create` (allocator) are
+// non-throwing — calling them via plain `call` is correct because the flag
+// register is unread by the caller.
+function managedMemHelperThrows(methodName String) returns bool
+	if methodName == "append" 'mApp'
+		return false
+	end 'mApp'
+	if methodName == "create" 'mCreate'
+		return false
+	end 'mCreate'
+	return true
+end 'managedMemHelperThrows'
 
 // Strip a leading `prefix` from `s` and return the remainder, or "" when
 // the string doesn't begin with prefix. Used by static-method dispatch

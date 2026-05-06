@@ -169,7 +169,8 @@ type StdToMirLowering
 			indirectCall(resultId, calleeId, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
 			tailCall(callee, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
-			tryCall(resultId, callee, argIds, _) then self.mirModule.appendOp(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+			tryCall(resultId, callee, argIds, errorFlagId) then self.mirModule.appendOp(dstBlock, op: MirOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId))
+			errorReturn(retValId, errorFlagId) then self.mirModule.appendOp(dstBlock, op: MirOp.errorReturn(retValId, errorFlagId: errorFlagId))
 		end 'dispatch'
 	end 'convertStdCallOp'
 
@@ -178,10 +179,11 @@ type StdToMirLowering
 			ret(retValId) then self.mirModule.setTerminator(dstBlock, op: MirOp.ret(retValId))
 			call(resultId, callee, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
 			tailCall(callee, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
-			tryCall(resultId, callee, argIds, _) then self.mirModule.setTerminator(dstBlock, op: MirOp.call(resultId, callee: callee, argIds: argIds))
+			tryCall(resultId, callee, argIds, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId))
 			param(resultId, paramIndex, paramType) then self.mirModule.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
 			indirectCall(resultId, calleeId, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
+			errorReturn(retValId, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.errorReturn(retValId, errorFlagId: errorFlagId))
 		end 'dispatch'
 	end 'convertStdCallTerminator'
 

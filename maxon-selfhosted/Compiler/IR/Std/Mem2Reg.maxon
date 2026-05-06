@@ -989,6 +989,7 @@ function recordExistingParam(callOp StdCallOp, paramCount ParamCount, ids ValueI
 		funcRef then break 'kind'
 		indirectCall then break 'kind'
 		tailCall then break 'kind'
+		errorReturn then break 'kind'
 	end 'kind'
 end 'recordExistingParam'
 
@@ -1592,6 +1593,7 @@ function maxValueIdInFunc(op StdCallOp) returns ValueId
 		indirectCall(resultId, calleeId, argIds) gives maxOfThree(resultId, b: calleeId, c: maxOfArray(argIds))
 		funcRef(resultId, _) gives resultId
 		tailCall(_, argIds) gives maxOfArray(argIds)
+		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId, b: errorFlagId)
 		param(resultId, _, _) gives resultId
 	end 'scan'
 end 'maxValueIdInFunc'
@@ -1746,6 +1748,7 @@ function substituteFuncOp(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(resultId, funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: remapValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)
+		errorReturn(retValId, errorFlagId) gives StdCallOp.errorReturn(remapValue(retValId, remap: remap), errorFlagId: remapValue(errorFlagId, remap: remap))
 	end 'subst'
 end 'substituteFuncOp'
 

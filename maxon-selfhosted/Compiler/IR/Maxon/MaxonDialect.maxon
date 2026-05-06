@@ -952,20 +952,40 @@ export union MaxonOp
 	// Phase 4: throw a typed enum variant. Terminator. `enumName` is the
 	// bare error-enum name as written (e.g. "FileError"); `variantName` is
 	// the bare case name (e.g. "notFound"). LowerMaxonToStd resolves the
-	// variant ordinal via project.unresolvedEnums / project.enumTypes,
-	// stores `ordinal + 1` (0 reserved for "no error in flight") into the
-	// thread-local error slot via mrt_set_error, then emits a return with a
-	// default value of the enclosing function's primary return type. Phase
-	// 4d-f may move the error code to a register; the Maxon-level shape
-	// stays the same.
+	// variant ordinal via project.unresolvedEnums / project.enumTypes, and
+	// emits a `StdCallOp.errorReturn` that returns `ordinal + 1` (0 reserved
+	// for "no error in flight") in the secondary error register (RDX/X1)
+	// alongside a default primary value of the enclosing function's primary
+	// return type — the multi-value-return error ABI.
 	throw(enumName String, variantName String, range SourceRange)
 	// Phase 4: throwing call. Same shape as `call` plus an `errorBoundName`
 	// — the synthetic name the parser allocated to receive the post-call
-	// error flag. LowerMaxonToStd emits the underlying call as normal, then
-	// follows it with a call to mrt_get_error_and_clear() whose result is
-	// bound to `errorBoundName`. Subsequent parser-emitted ops (cmp + condBr)
-	// branch on that flag to either propagate or fall through.
+	// error flag. LowerMaxonToStd emits a single `StdCallOp.tryCall` whose
+	// SSA def for the secondary value is bound to `errorBoundName`. The
+	// backend lowers tryCall to a call that picks up the flag from the
+	// secondary return register (RDX/X1). Subsequent parser-emitted ops
+	// (cmp + condBr) branch on that flag to either propagate or fall through.
 	tryCall(result ByteArray, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
+	// Phase 5 (multi-value-return error ABI): throwing method call. Same
+	// shape as `methodCall` plus an `errorBoundName` - the synthetic name
+	// the parser allocated to receive the post-call error flag. The parser
+	// emits this for every methodCall site that immediately precedes an
+	// error-flag drain (try-expression non-call inner, for-in iterator
+	// `createIterator`/`advance`, array-literal `__mm.set`/`setLength`).
+	// LowerMaxonToStd routes through `lowerMethodCall` with a non-zero
+	// `errorFlagId` so the emitted Std op is a single `StdCallOp.tryCall`
+	// (multi-value-return) — mirroring `tryCall`'s relationship to `call`.
+	// The backend picks up the flag from the secondary return register
+	// (RDX/X1) and binds it to `errorBoundName`.
+	tryMethodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, errorBoundName ByteArray, range SourceRange)
+	// Phase 5: re-publish a runtime-bound error flag and return. Terminator.
+	// `parseTryPropagation` emits this for the propagation arm of `try EXPR`
+	// (no `otherwise`): the flag bound by the preceding tryCall /
+	// tryMethodCall must be re-raised in the current function. Lowering
+	// emits `StdCallOp.errorReturn(zeroDefault, errorFlagId: resolveName(flagName))`
+	// - same shape as `MaxonOp.throw`'s lowering except the flag value is a
+	// runtime SSA name rather than a compile-time-known variant ordinal.
+	rethrow(flagName ByteArray, range SourceRange)
 	// Stage D (closures): address-of a named function with no captured env.
 	// Emitted by parseClosure when the closure body references no outer
 	// locals. `funcName` is the qualified name of the lifted function
@@ -1067,6 +1087,8 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 		throw(enumName, variantName, _) gives "maxon.throw {enumName}.{variantName}"
 		tryCall(result, callee, callContext, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
+		tryMethodCall(result, receiver, methodName, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
+		rethrow(flagName, _) gives "maxon.rethrow %{String.from(flagName)}"
 		functionRef(result, funcName, fnTypeId, _) gives "%{String.from(result)} = maxon.function_ref @{funcName} {lb}fnType = #{fnTypeId}{rb}"
 		closureCreate(result, funcName, fnTypeId, capturedNames, _, _) gives "%{String.from(result)} = maxon.closure_create @{funcName} {lb}fnType = #{fnTypeId}{rb} captures=[{formatCaptureNames(capturedNames)}]"
 		closureEnvLoad(result, captureIndex, captureName, _, _) gives "%{String.from(result)} = maxon.closure_env_load idx={captureIndex} name={String.from(captureName)}"

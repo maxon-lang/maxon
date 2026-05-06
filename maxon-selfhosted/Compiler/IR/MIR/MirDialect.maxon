@@ -104,6 +104,15 @@ export union MirOp
 	osLockInit(addrId ValueId)
 	osLockAcquire(addrId ValueId)
 	osLockRelease(addrId ValueId)
+	// Multi-value-return error ABI. `tryCall` defines BOTH `resultId` (primary
+	// return register: R8 / X0) AND `errorFlagId` (error flag register: RDX /
+	// X1) at the same op-position. `errorReturn` USES both `retValId` and
+	// `errorFlagId` and is a terminator that emits the dual-register epilogue.
+	// Appended at the END of MirOp so existing `to`-range patterns in match
+	// expressions (e.g. `osAllocPages to osLockRelease`) keep covering the
+	// system-ops band without reshuffling.
+	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
+	errorReturn(retValId ValueId, errorFlagId ValueId)
 end 'MirOp'
 
 export typealias MirOpArray = Array with MirOp
@@ -169,6 +178,8 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		osLockInit(addrId) gives "mir.os_lock_init %{addrId}"
 		osLockAcquire(addrId) gives "mir.os_lock_acquire %{addrId}"
 		osLockRelease(addrId) gives "mir.os_lock_release %{addrId}"
+		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = mir.try_call @{callee}({formatMirArgs(argIds)})"
+		errorReturn(retValId, errorFlagId) gives "mir.error_return %{retValId}, %{errorFlagId}"
 	end 'dispatch'
 end 'mirOpToString'
 

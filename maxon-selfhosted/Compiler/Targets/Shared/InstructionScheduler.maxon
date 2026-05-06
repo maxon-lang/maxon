@@ -629,6 +629,12 @@ function extractMirDef(op MirOp) returns SchedInt
 		osLockInit gives SCHED_NONE
 		osLockAcquire gives SCHED_NONE
 		osLockRelease gives SCHED_NONE
+		// tryCall has TWO defs (resultId + errorFlagId); return the primary
+		// resultId here. Phase 2's backend lowering creates a post-call mov
+		// sequence that surfaces the second def. Scheduling-wise the primary
+		// is what subsequent ops typically read.
+		tryCall(resultId, _, _, _) gives resultId
+		errorReturn gives SCHED_NONE
 	end 'def'
 end 'extractMirDef'
 
@@ -681,6 +687,8 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osLockInit(addrId) then result.push(addrId)
 		osLockAcquire(addrId) then result.push(addrId)
 		osLockRelease(addrId) then result.push(addrId)
+		tryCall(_, _, argIds, _) then appendAll(result, from: argIds)
+		errorReturn(retValId, errorFlagId) then pushTwo(result, a: retValId, b: errorFlagId)
 	end 'uses'
 	return result
 end 'extractMirUses'
@@ -741,6 +749,8 @@ function isMirMemoryOp(op MirOp) returns bool
 		param gives false
 		stackSlotAddr to funcAddr gives false
 		loadFramePtr gives false
+		tryCall gives true
+		errorReturn gives false
 	end 'check'
 end 'isMirMemoryOp'
 
@@ -775,6 +785,8 @@ function isMirStoreOp(op MirOp) returns bool
 		loadByte gives false
 		osAllocPages gives false
 		osAllocPagesLarge gives false
+		tryCall gives false
+		errorReturn gives false
 	end 'check'
 end 'isMirStoreOp'
 
@@ -792,6 +804,7 @@ function isMirParamOpPacked(module MirModule, packed OpIndex) returns bool
 		movImm to ret gives false
 		load to loadByte gives false
 		osAllocPages to osLockRelease gives false
+		tryCall to errorReturn gives false
 	end 'checkMir'
 end 'isMirParamOpPacked'
 
@@ -824,6 +837,12 @@ function isMirCallOp(op MirOp) returns bool
 		loadFramePtr gives false
 		memcpy to loadByte gives false
 		atomicInc to atomicXadd gives false
+		// tryCall has full call-barrier semantics like `call`. errorReturn is
+		// a terminator with no body-side effect on subsequent ops in this block
+		// (control falls off the function), so it doesn't need barrier
+		// treatment from the scheduler's perspective.
+		tryCall gives true
+		errorReturn gives false
 	end 'check'
 end 'isMirCallOp'
 
@@ -887,6 +906,8 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		osLockInit gives false
 		osLockAcquire gives false
 		osLockRelease gives false
+		tryCall gives false
+		errorReturn gives false
 	end 'check'
 end 'isFlagClobberingMirOp'
 
@@ -904,6 +925,7 @@ function isMirCmpPacked(module MirModule, packed OpIndex) returns bool
 		movImm to unaryOp gives false
 		condBranch to loadByte gives false
 		osAllocPages to osLockRelease gives false
+		tryCall to errorReturn gives false
 	end 'check'
 end 'isMirCmpPacked'
 
@@ -928,6 +950,7 @@ function terminatorCondId(module MirModule, terminator Terminator) returns Sched
 		param gives SCHED_NONE
 		load to loadByte gives SCHED_NONE
 		osAllocPages to osLockRelease gives SCHED_NONE
+		tryCall to errorReturn gives SCHED_NONE
 	end 'kind'
 end 'terminatorCondId'
 

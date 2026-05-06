@@ -23,7 +23,7 @@
 // Promoting at cache-load time helps both backends:
 //   - native: runtime function bodies reach codegen with values in SSA
 //     locals instead of round-tripping through stack slots — fewer
-//     mem accesses per call into mrt_alloc / mrt_set_error / etc.
+//     mem accesses per call into mrt_alloc / mrt_strcmp / etc.
 //   - wasm: runtime callees no longer carry param-init storeSlot ops
 //     into the shared `stackBase` slot region, so they can't clobber
 //     the caller's frame slots — fixes the closure-self correctness
@@ -216,6 +216,7 @@ function stdCallOpIsCallTo(inner StdCallOp, name String) returns bool
 		funcRef gives false
 		tailCall gives false
 		param gives false
+		errorReturn gives false
 	end 'callShape'
 end 'stdCallOpIsCallTo'
 
@@ -407,6 +408,11 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		osLockInit gives 5
 		osLockAcquire gives 30
 		osLockRelease gives 5
+		// Mirror the latency budget for `call` (5) — tryCall lowers to a
+		// direct call followed by a single mov of RDX/X1 into a virtual.
+		// errorReturn is a terminator (epilogue+ret), modelled like `ret` (1).
+		tryCall gives 5
+		errorReturn gives 1
 	end 'dispatch'
 end 'getMirLatency'
 

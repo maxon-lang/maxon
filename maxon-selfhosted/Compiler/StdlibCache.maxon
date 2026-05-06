@@ -2094,6 +2094,7 @@ function writeStdCallOp(buf ByteArray, op StdCallOp)
 		funcRef(resultId, funcName) then writeStdCallFuncRef(buf, resultId: resultId, funcName: funcName)
 		tailCall(callee, argIds) then writeStdCallTail(buf, callee: callee, argIds: argIds)
 		param(resultId, paramIndex, paramType) then writeStdCallParam(buf, resultId: resultId, paramIndex: paramIndex, paramType: paramType)
+		errorReturn(retValId, errorFlagId) then writeStdCallErrorReturn(buf, retValId: retValId, errorFlagId: errorFlagId)
 	end 'call'
 end 'writeStdCallOp'
 
@@ -2132,6 +2133,11 @@ function writeStdCallParam(buf ByteArray, resultId ValueId, paramIndex VarSlot, 
 	writeStdTypeTag(buf, t: paramType)
 end 'writeStdCallParam'
 
+function writeStdCallErrorReturn(buf ByteArray, retValId ValueId, errorFlagId ValueId)
+	writeQword(buf, value: retValId)
+	writeQword(buf, value: errorFlagId)
+end 'writeStdCallErrorReturn'
+
 function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
 	let raw = readDword(buf, offset: offset)
 	let kase = try StdCallOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdCallOp tag {raw}")
@@ -2143,6 +2149,7 @@ function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, Byt
 		funcRef gives readStdCallFuncRef(buf, offset: offset + 4)
 		tailCall gives readStdCallTail(buf, offset: offset + 4)
 		param gives readStdCallParam(buf, offset: offset + 4)
+		errorReturn gives readStdCallErrorReturn(buf, offset: offset + 4)
 	end 'call'
 end 'readStdCallOp'
 
@@ -2191,6 +2198,12 @@ function readStdCallParam(buf ByteArray, offset ByteOffset) returns (StdCallOp, 
 	let (paramType, p) = readStdTypeTag(buf, offset: offset + 16)
 	return (StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType), p)
 end 'readStdCallParam'
+
+function readStdCallErrorReturn(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let retValId = readQword(buf, offset: offset)
+	let errorFlagId = readQword(buf, offset: offset + 8)
+	return (StdCallOp.errorReturn(retValId, errorFlagId: errorFlagId), offset + 16)
+end 'readStdCallErrorReturn'
 
 // --- StdMemoryOp ---
 

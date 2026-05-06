@@ -466,8 +466,14 @@ function countFuncUses(op StdCallOp, useCount ValueIdArray, isVoidFunc bool)
 		funcRef then break 'count'
 		tailCall(_, argIds) then countArrayUses(argIds, useCount: useCount)
 		param then break 'count'
+		errorReturn(retValId, errorFlagId) then countErrorReturnUses(retValId, errorFlagId: errorFlagId, useCount: useCount)
 	end 'count'
 end 'countFuncUses'
+
+function countErrorReturnUses(retValId ValueId, errorFlagId ValueId, useCount ValueIdArray)
+	incrementUse(useCount, valueId: retValId)
+	incrementUse(useCount, valueId: errorFlagId)
+end 'countErrorReturnUses'
 
 // Void functions carry an implicit `return 0` whose retValId nothing else
 // reads. Treating that as a use would keep the literal zero alive all the way
@@ -643,6 +649,8 @@ function isDeadFuncOp(op StdCallOp, useCount ValueIdArray) returns bool
 		// funcRef and param are pure value-producing ops
 		funcRef(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
 		param(resultId, _, _) gives getUseCount(useCount, valueId: resultId) == 0
+		// errorReturn is a side-effecting terminator — never dead.
+		errorReturn gives false
 	end 'check'
 end 'isDeadFuncOp'
 
@@ -685,5 +693,6 @@ function getFuncResultId(op StdCallOp) returns ValueId
 		funcRef(resultId, _) gives resultId
 		tailCall gives 0
 		param(resultId, _, _) gives resultId
+		errorReturn gives 0
 	end 'get'
 end 'getFuncResultId'

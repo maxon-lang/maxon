@@ -113,6 +113,12 @@ typealias Millis = int(i64.min to i64.max)
 typealias ProcessExitCode = int(i64.min to i64.max)
 typealias TestCount = int(0 to u64.max)
 
+// Per-test-process wall-clock budget. Test fragments hitting this limit are
+// terminated by the runtime's processWait kill-on-timeout path so a runaway
+// child (e.g. an infinite-loop fragment) can't pin the runner. Tuned for
+// fast feedback on local runs; raise if a legitimately heavy test trips it.
+let testProcessTimeoutMs = 2000
+
 var totalCompileMs = 0
 
 // Walk up from cwd looking for a specs/ directory, returning its parent.
@@ -537,7 +543,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	// in sequence and emits BEGIN/END markers around each so we can slice
 	// the binary's stdout into per-test stdout and per-test exit code.
 	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
-	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
+	let runResult = Process.captureOutput(runCommand, timeoutMs: testProcessTimeoutMs)
 
 	// First pass: check each batchable test's slice. If ANY test failed (slice
 	// missing, exit-code mismatch, or stdout mismatch), discard the batch
@@ -792,7 +798,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	// Run the compiled executable.
 	let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
-	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
+	let runResult = Process.captureOutput(runCommand, timeoutMs: testProcessTimeoutMs)
 	let runStdout = runResult.stdout
 	let runStderr = runResult.stderr
 	let runEc = runResult.exitCode as ProcessExitCode

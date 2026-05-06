@@ -352,6 +352,7 @@ function matchFuncRef(op StdCallOp, valueId ValueId) returns bool
 		indirectCall gives false
 		tailCall gives false
 		param gives false
+		errorReturn gives false
 	end 'shape'
 end 'matchFuncRef'
 
@@ -432,6 +433,7 @@ function callOpInvokesPanic(op StdCallOp) returns bool
 		funcRef(_, funcName) gives funcName == "mrt_panic"
 		tailCall(callee, _) gives callee == "mrt_panic"
 		param gives false
+		errorReturn gives false
 	end 'inner'
 end 'callOpInvokesPanic'
 
@@ -458,14 +460,30 @@ function isSingleBlockSpliceable(module StdModule, callee IrFunction) returns bo
 		return false
 	end 'noTerm'
 	let term = try module.ops.get(block.terminatorIndex()) otherwise panic("isSingleBlockSpliceable: terminator opIdx not in module")
+	// Both `ret` and `errorReturn` collapse cleanly into a binding-and-fall-
+	// through during splice; everything else needs special continuation
+	// wiring or is outright unsupported.
 	return match term 'shape'
-		call(inner) gives isStdRet(inner)
+		call(inner) gives isStdRetOrErrorReturn(inner)
 		arith gives false
 		control gives false
 		memory gives false
 		system gives false
 	end 'shape'
 end 'isSingleBlockSpliceable'
+
+function isStdRetOrErrorReturn(op StdCallOp) returns bool
+	return match op 'shape'
+		ret gives true
+		errorReturn gives true
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'shape'
+end 'isStdRetOrErrorReturn'
 
 // Multi-block splice precondition. Every block must:
 //   - have a real terminator op (no fallthrough/unset/dead)
@@ -523,14 +541,23 @@ function isAllowedCallTerm(op StdCallOp) returns bool
 		funcRef gives false
 		tailCall gives false
 		param gives false
+		// errorReturn is the throw-site terminator. The splice path treats
+		// it analogously to `ret`: the caller's tryCall has TWO defines
+		// (resultId + errorFlagId) and `errorReturn` carries TWO uses
+		// (retValId + errorFlagId), so the rewriter binds both pairs across
+		// the inline boundary.
+		errorReturn gives true
 	end 'shape'
 end 'isAllowedCallTerm'
 
 // Body ops that the multi-block splice can't carry across cleanly.
-// `tryCall` would need exception-edge stitching; `indirectCall` and
-// `tailCall` either escape the inliner's static-callee model or change
-// the call's frame disposition. Plain `call`/`funcRef`/`param`/`ret` and
-// any non-call-category op are fine.
+// `indirectCall` escapes the inliner's static-callee model; `tailCall`
+// changes the call's frame disposition. `tryCall` body ops are fine —
+// the callee's local `try foo` keeps its bound flag virtual local to the
+// callee body, and bindBodyRemap allocates fresh caller-local ValueIds
+// for both defs (resultId + errorFlagId) so the spliced op refers to no
+// stale ids. Plain `call`/`funcRef`/`param`/`ret` and any non-call-
+// category op are fine.
 function isUnsupportedBodyShape(op StdOp) returns bool
 	return match op 'outer'
 		arith gives false
@@ -545,11 +572,14 @@ function isUnsupportedCallBody(op StdCallOp) returns bool
 	return match op 'shape'
 		ret gives false
 		call gives false
-		tryCall gives true
+		tryCall gives false
 		indirectCall gives true
 		funcRef gives false
 		tailCall gives true
 		param gives false
+		// errorReturn is a terminator and never appears as a body op, but
+		// keep the arm exhaustive in case future passes mis-emit it.
+		errorReturn gives true
 	end 'shape'
 end 'isUnsupportedCallBody'
 
@@ -562,6 +592,7 @@ function isStdRet(op StdCallOp) returns bool
 		funcRef gives false
 		tailCall gives false
 		param gives false
+		errorReturn gives false
 	end 'shape'
 end 'isStdRet'
 
@@ -588,7 +619,11 @@ end 'CallShapeKind'
 type CallShape
 	export var kind CallShapeKind
 	export var callee String
+	// Primary result virtual (R8/X0 ABI register).
 	export var resultId ValueId
+	// Bound error-flag virtual for tryCall shapes. 0 for non-throwing
+	// `call` sites where no error flag is in play.
+	export var errorFlagId ValueId
 	export var argIds ValueIdArray
 
 	export static function notInlinable() returns CallShape
@@ -596,6 +631,7 @@ type CallShape
 			kind: CallShapeKind.notInlinable,
 			callee: "",
 			resultId: 0,
+			errorFlagId: 0,
 			argIds: ValueIdArray.create()
 		}
 	end 'notInlinable'
@@ -605,9 +641,20 @@ type CallShape
 			kind: CallShapeKind.staticCall,
 			callee: callee,
 			resultId: resultId,
+			errorFlagId: 0,
 			argIds: argIds
 		}
 	end 'fromStaticCall'
+
+	export static function fromTryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId) returns CallShape
+		return Self{
+			kind: CallShapeKind.staticCall,
+			callee: callee,
+			resultId: resultId,
+			errorFlagId: errorFlagId,
+			argIds: argIds
+		}
+	end 'fromTryCall'
 end 'CallShape'
 
 function extractCallShape(module StdModule, opIdx OpIndex) returns CallShape
@@ -625,11 +672,16 @@ function extractFromCallOp(op StdCallOp) returns CallShape
 	return match op 'kind'
 		call(resultId, callee, argIds) gives CallShape.fromStaticCall(resultId: resultId, callee: callee, argIds: argIds)
 		ret gives CallShape.notInlinable()
-		tryCall gives CallShape.notInlinable()
+		// tryCall sites are now inlinable: the splice rewrites the callee's
+		// `errorReturn` terminator into a binding that hands both retVal and
+		// errorFlag back to the caller (mirroring the multi-value-return ABI
+		// the lowerings just established).
+		tryCall(resultId, callee, argIds, errorFlagId) gives CallShape.fromTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
 		indirectCall gives CallShape.notInlinable()
 		funcRef gives CallShape.notInlinable()
 		tailCall gives CallShape.notInlinable()
 		param gives CallShape.notInlinable()
+		errorReturn gives CallShape.notInlinable()
 	end 'kind'
 end 'extractFromCallOp'
 
@@ -709,15 +761,44 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	emitInlinedBody(module: module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
 
 	// Phase 3: rewrite the caller's existing ops so any reference to the
-	// call's old resultId now reads the inlined return value. Void
-	// returns leave the resultId unused, so no rewrite is needed.
-	if not stdReturnTypeIsVoid(callee.returnType) 'hasReturn'
+	// call's old resultId now reads the inlined return value. Two cases:
+	//  - Plain `call` site whose callee is non-void: substitute resultId.
+	//  - `tryCall` site (always has resultId regardless of return type — the
+	//    multi-value-return ABI sets R8 to a default zero for void
+	//    throwing-callees): substitute resultId AND errorFlagId.
+	let isTryCallSite = callShape.errorFlagId != 0
+	let needsResultSub = isTryCallSite or not stdReturnTypeIsVoid(callee.returnType)
+	if needsResultSub 'hasReturn'
 		let inlinedRet = try remap.get(retValId) otherwise panic("performInline: retValId {retValId} not in remap")
 		if inlinedRet == REMAP_INVALID 'unmapped'
 			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
 		end 'unmapped'
 		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
 	end 'hasReturn'
+
+	// Phase 3b: when the call site was a tryCall, also rebind the caller's
+	// errorFlagId to the value the callee handed back via `errorReturn`.
+	// `isErrorReturnOpStd(calleeRet)` is the gate: a `ret` callee can't be
+	// inlined for a tryCall site (the ABI mismatch would drop the flag),
+	// and conversely `errorReturn` can't appear when the call site is a
+	// plain `call` (the lowerings keep these in lockstep).
+	if isTryCallSite 'tryCallSite'
+		if not isErrorReturnOpStd(calleeRet) 'wrongTerm'
+			// Defensive — the spliceability gate should already have rejected
+			// a `ret`-terminated callee for a tryCall site if the lowerings
+			// ever drift apart. Bail rather than mis-bind the flag.
+			return false
+		end 'wrongTerm'
+		let calleeErrorFlagId = errorFlagIdOrSentinel(calleeRet)
+		if calleeErrorFlagId == REMAP_INVALID 'noFlag'
+			panic("performInline: errorReturn missing errorFlagId")
+		end 'noFlag'
+		let inlinedFlag = try remap.get(calleeErrorFlagId) otherwise panic("performInline: calleeErrorFlagId {calleeErrorFlagId} not in remap")
+		if inlinedFlag == REMAP_INVALID 'unmappedFlag'
+			panic("performInline: errorFlagId {calleeErrorFlagId} not bound by callee body walk")
+		end 'unmappedFlag'
+		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.errorFlagId, newId: inlinedFlag)
+	end 'tryCallSite'
 
 	invalidateCachedHash(project, callerName: caller.name)
 	logTrace(LogCategory.ir, message: () gives "inliner: spliced @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id})")
@@ -760,9 +841,11 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	caller.nextBlockId = caller.nextBlockId + 1
 
 	// Phase 2: build the ValueId remap. Params bind to call-site args;
-	// every other callee define gets a fresh caller-local id. If the
-	// callee returns a value, also reserve a fresh ValueId for the
-	// continuation's blockArg phi.
+	// every other callee define gets a fresh caller-local id. The
+	// continuation block carries a phi for each return register the call
+	// site exposes — primary return register (when the callee is non-void
+	// or when the call site is a tryCall), and an error-flag register
+	// (when the call site is a tryCall).
 	let calleeMaxId = scanMaxValueId(callee, module: module)
 	var nextId = scanMaxValueId(caller, module: module) + 1
 	var remap = ValueIdArray.create()
@@ -771,12 +854,23 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	end 'init'
 	bindParamRemapMulti(module: module, callee: callee, argIds: callShape.argIds, remap: remap)
 	nextId = bindMultiBlockBodyRemap(module: module, callee: callee, remap: remap, nextId: nextId)
+	let isTryCallSite = callShape.errorFlagId != 0
 	let returnsValue = not stdReturnTypeIsVoid(callee.returnType)
+	// Primary return phi: needed when callee returns a value OR the call
+	// site is a tryCall (the throwing-callee ABI puts a default value in
+	// R8 even for void returns, and the caller's tryCall.resultId is a
+	// real virtual that downstream uses might reference).
+	let needsPrimaryPhi = returnsValue or isTryCallSite
 	var phiValueId = REMAP_INVALID
-	if returnsValue 'phi'
+	if needsPrimaryPhi 'phi'
 		phiValueId = nextId
 		nextId = nextId + 1
 	end 'phi'
+	var phiErrorFlagId = REMAP_INVALID
+	if isTryCallSite 'errFlagPhi'
+		phiErrorFlagId = nextId
+		nextId = nextId + 1
+	end 'errFlagPhi'
 
 	// Phase 3: peel off the after-call tail of the caller's call-site
 	// block onto a fresh continuation block. The continuation inherits
@@ -788,15 +882,23 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 
 	var continuationBlock = IrBlock.create(continuationBlockId, label: "inline_cont_{caller.name}_{block.id}")
 	splitCallerBlock(module: module, originalBlock: block, continuation: continuationBlock, callPosition: posInBlock, entryInlinedBlockId: entryNewBlockId)
-	if returnsValue 'phiArg'
-		let argType = stdReturnTypeInner(callee.returnType)
+	if needsPrimaryPhi 'phiArg'
+		// For void throwing-callees (no inner type), pick i64 as the
+		// primary register's type — the throw-lowering writes a const i64
+		// zero into R8 and the caller's tryCall.resultId is dead-uses-only.
+		let argType = stdReturnTypeInnerOrI64(callee.returnType)
 		continuationBlock.blockArgs.push(IrBlockArg.create(phiValueId, argType: argType))
 	end 'phiArg'
+	if isTryCallSite 'errFlagPhiArg'
+		// The error flag rides RDX/X1 as i64.
+		continuationBlock.blockArgs.push(IrBlockArg.create(phiErrorFlagId, argType: StdType.i64))
+	end 'errFlagPhiArg'
 
 	// Phase 4: emit each callee block as a fresh IrBlock in the caller.
 	// Body ops are remapped through ValueId+BlockId; `ret` becomes a
-	// `br continuationBlock [retVal]`.
-	emitMultiBlockInlinedBlocks(module: module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+	// `br continuationBlock [retVal]`; `errorReturn` becomes a
+	// `br continuationBlock [retVal, errorFlag]`.
+	emitMultiBlockInlinedBlocks(module: module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: needsPrimaryPhi, isTryCallSite: isTryCallSite)
 
 	// Phase 5: register the new blocks (inlined + continuation) on the
 	// caller. Insert the spliced sub-CFG immediately AFTER the call-site
@@ -812,14 +914,28 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	registerNewBlocksOnCaller(module: module, caller: caller, callee: callee, callSiteBlockId: block.id, continuationBlock: continuationBlock)
 
 	// Phase 6: substitute call result.
-	if returnsValue 'subRet'
+	if needsPrimaryPhi 'subRet'
 		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
 	end 'subRet'
+	if isTryCallSite 'subErrFlag'
+		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
+	end 'subErrFlag'
 
 	invalidateCachedHash(project, callerName: caller.name)
 	logTrace(LogCategory.ir, message: () gives "inliner: spliced multi-block @{callShape.callee} into @{caller.name} (call op #{opIdx} in block_{block.id}, +{callee.blockRefs.count()} block(s))")
 	return true
 end 'performMultiBlockInline'
+
+// Like `stdReturnTypeInner`, but returns i64 for void-returning callees
+// instead of panicking. Used when the caller wants a phi for the primary
+// return register on a void throwing callee — the slot is dead-uses-only
+// but mem2reg still needs a typed blockArg.
+function stdReturnTypeInnerOrI64(rt StdReturnType) returns StdType
+	return match rt 'unwrap'
+		void gives StdType.i64
+		value(inner) gives inner
+	end 'unwrap'
+end 'stdReturnTypeInnerOrI64'
 
 // Largest BlockId in the callee, used as an upper bound when sizing the
 // callee→caller block remap. `nextBlockId` is the next free id, so the
@@ -903,7 +1019,7 @@ end 'splitCallerBlock'
 // continuationBlockId` carrying the remapped return value (when the
 // callee returns a value). `param` ops are skipped — their resultIds
 // were already bound to the call-site args.
-function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool)
+function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool)
 	for cBlockRef in callee.blockRefs 'eachCalleeBlock'
 		let cBlock = try module.blocks.get(cBlockRef) otherwise panic("emitMultiBlockInlinedBlocks: blockRef {cBlockRef} not in module")
 		let newBlockId = try blockRemap.get(cBlock.id) otherwise panic("emitMultiBlockInlinedBlocks: blockRemap missing id {cBlock.id}")
@@ -929,10 +1045,11 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 			module.ops.push(rewritten)
 			newBlock.opRefs.append(newIdx)
 		end 'eachOp'
-		// Terminator: ret → br to continuation; br/condBr → block-remapped.
+		// Terminator: ret → br to continuation [retVal]; errorReturn →
+		// br to continuation [retVal, errorFlag]; br/condBr → block-remapped.
 		if cBlock.hasTerminatorOp() 'hasTerm'
 			let term = try module.ops.get(cBlock.terminatorIndex()) otherwise panic("emitMultiBlockInlinedBlocks: terminator opIdx not in module.ops")
-			let newTerm = rewriteTerminator(op: term, valueRemap: valueRemap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+			let newTerm = rewriteTerminator(op: term, valueRemap: valueRemap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
 			let newTermIdx = module.ops.count()
 			module.ops.push(newTerm)
 			newBlock.terminator = Terminator.opIndex(newTermIdx)
@@ -1007,17 +1124,17 @@ end 'rewriteControlWithBlocks'
 // callee is non-void); `br`/`condBr` keep their shape but route through
 // the block remap. Anything else is unreachable — `isMultiBlockSpliceable`
 // rejects non-allowed terminators upstream.
-function rewriteTerminator(op StdOp, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool) returns StdOp
+function rewriteTerminator(op StdOp, valueRemap ValueIdArray, blockRemap BlockIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool) returns StdOp
 	match op 'outer'
 		arith then panic("rewriteTerminator: unexpected arith terminator")
 		control(c) then return StdOp.control(rewriteControlWithBlocks(c, valueRemap: valueRemap, blockRemap: blockRemap))
-		call(c) then return rewriteCallTerminator(c, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+		call(c) then return rewriteCallTerminator(c, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
 		memory then panic("rewriteTerminator: unexpected memory terminator")
 		system then panic("rewriteTerminator: unexpected system terminator")
 	end 'outer'
 end 'rewriteTerminator'
 
-function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool) returns StdOp
+function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool) returns StdOp
 	match op 'c'
 		ret(retValId) then return buildRetBranch(retValId: retValId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
 		call then panic("rewriteCallTerminator: bare call op as terminator (multi-block gate should have rejected)")
@@ -1026,6 +1143,11 @@ function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuati
 		funcRef then panic("rewriteCallTerminator: funcRef as terminator")
 		tailCall then panic("rewriteCallTerminator: tailCall terminator (multi-block gate should have rejected)")
 		param then panic("rewriteCallTerminator: param as terminator")
+		// errorReturn (throw-site terminator): collapse into a `br
+		// continuation [retVal, errorFlag]`. Both args are remapped through
+		// the value remap; the continuation has matching blockArgs allocated
+		// in performMultiBlockInline.
+		errorReturn(retValId, errorFlagId) then return buildErrorReturnBranch(retValId: retValId, errorFlagId: errorFlagId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
 	end 'c'
 end 'rewriteCallTerminator'
 
@@ -1036,6 +1158,25 @@ function buildRetBranch(retValId ValueId, valueRemap ValueIdArray, continuationB
 	end 'arg'
 	return StdOp.control(StdControlOp.br(continuationBlockId, argIds: args))
 end 'buildRetBranch'
+
+// Multi-block splice: `errorReturn` branches into the continuation with two
+// args (primary return + error flag). Caller-side phi blockArgs are allocated
+// in `performMultiBlockInline`; this just packages the remapped values into
+// the right `br` shape. When the call site is a tryCall, BOTH phis are
+// present; when the call site is a plain `call` we never reach this arm
+// (the spliceability gate would've rejected the callee's terminator), but
+// we keep the `returnsValue/isTryCallSite` flags to mirror buildRetBranch
+// in case future contexts emit a non-tryCall errorReturn.
+function buildErrorReturnBranch(retValId ValueId, errorFlagId ValueId, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool) returns StdOp
+	var args = ValueIdArray.create()
+	if returnsValue 'arg'
+		args.push(lookupRemap(valueRemap, key: retValId))
+	end 'arg'
+	if isTryCallSite 'flagArg'
+		args.push(lookupRemap(valueRemap, key: errorFlagId))
+	end 'flagArg'
+	return StdOp.control(StdControlOp.br(continuationBlockId, argIds: args))
+end 'buildErrorReturnBranch'
 
 function lookupBlockRemap(remap BlockIdArray, key BlockId) returns BlockId
 	if key >= remap.count() 'oob'
@@ -1083,8 +1224,60 @@ function retValueIdFromCallOp(op StdCallOp) returns ValueId
 		funcRef gives REMAP_INVALID
 		tailCall gives REMAP_INVALID
 		param gives REMAP_INVALID
+		// errorReturn carries a retValId too — same role as `ret`'s, used
+		// when the calling context wants the primary return register.
+		errorReturn(retValId, _) gives retValId
 	end 'inner'
 end 'retValueIdFromCallOp'
+
+// Extract the errorFlagId carried by an `errorReturn` terminator. Returns
+// REMAP_INVALID for any other shape — `ret` doesn't carry an error flag,
+// nor does any non-call category op.
+function errorFlagIdOrSentinel(op StdOp) returns ValueId
+	return match op 'outer'
+		call(inner) gives errorFlagIdFromCallOp(inner)
+		arith gives REMAP_INVALID
+		control gives REMAP_INVALID
+		memory gives REMAP_INVALID
+		system gives REMAP_INVALID
+	end 'outer'
+end 'errorFlagIdOrSentinel'
+
+function errorFlagIdFromCallOp(op StdCallOp) returns ValueId
+	return match op 'inner'
+		ret gives REMAP_INVALID
+		call gives REMAP_INVALID
+		tryCall gives REMAP_INVALID
+		indirectCall gives REMAP_INVALID
+		funcRef gives REMAP_INVALID
+		tailCall gives REMAP_INVALID
+		param gives REMAP_INVALID
+		errorReturn(_, errorFlagId) gives errorFlagId
+	end 'inner'
+end 'errorFlagIdFromCallOp'
+
+function isErrorReturnOpStd(op StdOp) returns bool
+	return match op 'outer'
+		call(inner) gives isErrorReturnCallOp(inner)
+		arith gives false
+		control gives false
+		memory gives false
+		system gives false
+	end 'outer'
+end 'isErrorReturnOpStd'
+
+function isErrorReturnCallOp(op StdCallOp) returns bool
+	return match op 'inner'
+		errorReturn gives true
+		ret gives false
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		funcRef gives false
+		tailCall gives false
+		param gives false
+	end 'inner'
+end 'isErrorReturnCallOp'
 
 // Reject any callee body that touches a per-function slot. Slot ids live
 // in the callee's frame; remapping them into the caller's frame would
@@ -1209,6 +1402,7 @@ function paramInfoFromCall(op StdCallOp) returns ParamInfo
 		indirectCall gives ParamInfo.notParam()
 		funcRef gives ParamInfo.notParam()
 		tailCall gives ParamInfo.notParam()
+		errorReturn gives ParamInfo.notParam()
 	end 'inner'
 end 'paramInfoFromCall'
 
@@ -1252,6 +1446,7 @@ function isParamCallOpStd(op StdCallOp) returns bool
 		indirectCall gives false
 		funcRef gives false
 		tailCall gives false
+		errorReturn gives false
 	end 'inner'
 end 'isParamCallOpStd'
 
@@ -1274,6 +1469,10 @@ function isRetCallOp(op StdCallOp) returns bool
 		funcRef gives false
 		tailCall gives false
 		param gives false
+		// `errorReturn` is treated like `ret` for splice purposes: it sits
+		// at a block's terminator slot, defines no fresh values, and feeds
+		// the caller's tryCall result+errorFlag pair via the splice rewriter.
+		errorReturn gives true
 	end 'inner'
 end 'isRetCallOp'
 
@@ -1304,6 +1503,9 @@ function bindCallDefine(op StdCallOp, remap ValueIdArray, nextId ValueId) return
 		funcRef(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		tailCall gives nextId
 		param(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		// errorReturn defines no new values — both retValId and errorFlagId
+		// are uses, mirroring `ret`'s no-define shape.
+		errorReturn gives nextId
 	end 'c'
 end 'bindCallDefine'
 
@@ -1460,6 +1662,7 @@ function rewriteCall(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(lookupRemap(remap, key: resultId), funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: rewriteValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(lookupRemap(remap, key: resultId), paramIndex: paramIndex, paramType: paramType)
+		errorReturn(retValId, errorFlagId) gives StdCallOp.errorReturn(lookupRemap(remap, key: retValId), errorFlagId: lookupRemap(remap, key: errorFlagId))
 	end 'c'
 end 'rewriteCall'
 

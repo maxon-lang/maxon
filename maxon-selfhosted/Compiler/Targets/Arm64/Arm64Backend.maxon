@@ -236,7 +236,7 @@ export type Arm64Backend implements TargetBackend
 
 			// Lower terminator
 			if srcBlock.hasTerminatorOp() 'hasTerm'
-				lowerTerminatorArm64(srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+				lowerTerminatorArm64(srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind, allFunctions: allFunctions)
 				setLastOpAsTerminatorArm64(dstBlock)
 			end 'hasTerm'
 		end 'eachBlock'
@@ -279,12 +279,12 @@ export type Arm64Backend implements TargetBackend
 		return result
 	end 'lowerIrOpArm64'
 
-	function lowerTerminatorArm64(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
+	function lowerTerminatorArm64(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind, allFunctions IrFunctionArray)
 		let mirOp = try mirModule.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in mirModule.ops")
-		lowerMirTerminatorArm64(mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
+		lowerMirTerminatorArm64(mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind, allFunctions: allFunctions)
 	end 'lowerTerminatorArm64'
 
-	function lowerMirTerminatorArm64(op MirOp, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
+	function lowerMirTerminatorArm64(op MirOp, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind, allFunctions IrFunctionArray)
 		match op 'lower'
 			condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBrArm64(condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
 			branch(targetBlockId, _) then lowerBrWithArgsArm64(targetBlockId, dstBlock: dstBlock)
@@ -293,6 +293,10 @@ export type Arm64Backend implements TargetBackend
 			call to indirectCall then break 'lower'
 			param to loadByte then break 'lower'
 			osAllocPages to osLockRelease then break 'lower'
+			// tryCall as a terminator: lower the same way as a body op.
+			// errorReturn: dual-register epilogue (X0 + X1, or just X1 for void).
+			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCallArm64(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock, allFunctions: allFunctions)
+			errorReturn(retValId, errorFlagId) then lowerErrorReturnArm64(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType)
 		end 'lower'
 	end 'lowerMirTerminatorArm64'
 
@@ -389,6 +393,8 @@ export type Arm64Backend implements TargetBackend
 			osLockAcquire gives 2
 			osLockRelease gives 2
 			movImm to storeSlot gives 0
+			tryCall gives 0
+			errorReturn gives 0
 		end 'check'
 	end 'mirTempCountArm64'
 
@@ -399,6 +405,7 @@ export type Arm64Backend implements TargetBackend
 			movImm to cmp then break 'extract'
 			call to loadByte then break 'extract'
 			osAllocPages to osLockRelease then break 'extract'
+			tryCall to errorReturn then break 'extract'
 		end 'extract'
 	end 'stashMirEdgesArm64'
 
@@ -427,6 +434,12 @@ export type Arm64Backend implements TargetBackend
 			storeSlot(slotId, valueId) then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(slotId, src: Arm64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osAllocPages to osLockRelease then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			// Multi-value-return error ABI: tryCall mirrors call but ALSO captures
+			// X1 (the error flag) into virtual(errorFlagId), unconditionally — even
+			// void-returning throwing callees write X1. errorReturn is a terminator
+			// and is dispatched in lowerMirTerminatorArm64.
+			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCallArm64(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock, allFunctions: allFunctions)
+			errorReturn then panic("Arm64: MirOp.errorReturn must be lowered as a terminator, not a body op")
 		end 'dispatch'
 		return result
 	end 'lowerMirOpArm64'
@@ -475,9 +488,28 @@ export type Arm64Backend implements TargetBackend
 	// that uses an undefined value, which crashes the register allocator.
 	// Mirrors the X64 lowering at MirToX64Conversion.maxon:lowerReturn.
 	function lowerReturnArm64(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
+		emitArm64PrimaryReturnMove(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.epilogue)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ret)
+	end 'lowerReturnArm64'
+
+	// Error return: mirrors lowerReturnArm64 but ALWAYS writes the error flag
+	// into X1, even when the function returns void. The primary X0/D0 write is
+	// gated on a non-void return type — same as lowerReturnArm64.
+	function lowerErrorReturnArm64(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, returnType StdReturnType)
+		emitArm64PrimaryReturnMove(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+		// Error flag goes to X1 unconditionally — even void throwing functions
+		// must write it.
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x1), src: Arm64VReg.virtual(errorFlagId)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.epilogue)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ret)
+	end 'lowerErrorReturnArm64'
+
+	// Shared by `lowerReturnArm64` and `lowerErrorReturnArm64`: writes the
+	// primary return value into X0 (int) or D0 (float). No-op for void
+	// returns to avoid `mov x0, virtual(vid)` against an undefined value.
+	function emitArm64PrimaryReturnMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'voidReturn'
-			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.epilogue)
-			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ret)
 			return
 		end 'voidReturn'
 		if stdReturnTypeIsFloat(returnType) 'floatReturn'
@@ -485,9 +517,7 @@ export type Arm64Backend implements TargetBackend
 		end 'floatReturn' else 'intReturn'
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), src: Arm64VReg.virtual(retValId)))
 		end 'intReturn'
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.epilogue)
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ret)
-	end 'lowerReturnArm64'
+	end 'emitArm64PrimaryReturnMove'
 
 	// Check if the last op in the block is an add/sub/and whose dest matches condId.
 	// If so, replace it with the S-variant (adds/subs/ands) and return true.
@@ -695,10 +725,33 @@ export type Arm64Backend implements TargetBackend
 	end 'getArm64CallConvFp'
 
 	function lowerCallArm64(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock, allFunctions IrFunctionArray)
-		// Look up callee's param types to route float args to D registers
+		emitArm64DirectCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock, allFunctions: allFunctions)
+	end 'lowerCallArm64'
+
+	function emitArm64CallResultCapture(resultId ValueId, dstBlock IrBlock, resultType StdType)
+		if stdTypeIsFloat(resultType) 'floatResult'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
+		end 'floatResult' else 'intResult'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
+		end 'intResult'
+	end 'emitArm64CallResultCapture'
+
+	// tryCall: identical to lowerCallArm64 except it ALSO captures the second
+	// return register (X1, the error flag) into virtual(errorFlagId). The error
+	// flag capture is unconditional — even void-returning throwing callees write
+	// X1, so we always emit the X1 capture, while only emitting the X0/D0
+	// capture when the return type isn't void.
+	function lowerTryCallArm64(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, dstBlock IrBlock, allFunctions IrFunctionArray)
+		emitArm64DirectCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, captureErrorFlag: true, dstBlock: dstBlock, allFunctions: allFunctions)
+	end 'lowerTryCallArm64'
+
+	// Shared body for `lowerCallArm64` and `lowerTryCallArm64`. Routes args to
+	// ABI registers, emits the BL call, captures X0/D0 for non-void callees,
+	// and (when captureErrorFlag is set) captures the secondary X1 error-flag
+	// register. Mirrors emitDirectCall on x64.
+	function emitArm64DirectCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock, allFunctions IrFunctionArray)
 		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
-		// Move args to calling convention registers with separate GPR/FP counters
 		var argIdx = 0
 		var gprIdx = 0
 		var fpIdx = 0
@@ -707,7 +760,7 @@ export type Arm64Backend implements TargetBackend
 				argIdx = argIdx + 1
 				continue
 			end 'skipArg'
-			let paramType = try paramTypes.get(argIdx) otherwise panic("ARM64 lowerCall: paramTypes too short for callee '{callee}' at argIdx={argIdx} (paramTypes.count={paramTypes.count()})")
+			let paramType = try paramTypes.get(argIdx) otherwise panic("ARM64 emitArm64DirectCall: paramTypes too short for callee '{callee}' at argIdx={argIdx} (paramTypes.count={paramTypes.count()})")
 			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
 				let fpReg = getArm64CallConvFp(fpIdx)
 				appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), src: Arm64FpVReg.virtual(argId), precision: FloatPrecision.f64))
@@ -720,25 +773,18 @@ export type Arm64Backend implements TargetBackend
 			argIdx = argIdx + 1
 		end 'moveArgs'
 
-		// Emit the call
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLink(callee))
 
-		// Move return value from X0/D0 to virtual result. Void-returning callees
-		// have no result to capture.
 		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
 			void then break 'capture'
 			value(inner) then emitArm64CallResultCapture(resultId, dstBlock: dstBlock, resultType: inner)
 		end 'capture'
-	end 'lowerCallArm64'
 
-	function emitArm64CallResultCapture(resultId ValueId, dstBlock IrBlock, resultType StdType)
-		if stdTypeIsFloat(resultType) 'floatResult'
-			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), src: arm64PhysFpReg(Arm64FloatRegister.d0), precision: FloatPrecision.f64))
-		end 'floatResult' else 'intResult'
-			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
-		end 'intResult'
-	end 'emitArm64CallResultCapture'
+		if captureErrorFlag 'errFlag'
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(errorFlagId), src: arm64PhysReg(Arm64Register.x1)))
+		end 'errFlag'
+	end 'emitArm64DirectCall'
 
 	function lowerIndirectCallArm64(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock IrBlock)
 		// Move args to calling convention registers
@@ -814,6 +860,7 @@ export type Arm64Backend implements TargetBackend
 			osLockAcquire then result = nextTempSlot
 			osLockRelease then result = nextTempSlot
 			movImm to storeSlot then break 'lower'
+			tryCall to errorReturn then break 'lower'
 		end 'lower'
 		return result
 	end 'lowerMirSysOpArm64'

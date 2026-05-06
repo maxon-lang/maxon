@@ -2207,6 +2207,14 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("rt_pw_done");
     DefineLabel("rt_pw_timeout");
+    // Process didn't exit within the timeout — terminate it so we don't leak
+    // a runaway child (e.g. an infinite-loop test fragment). TerminateProcess
+    // is the only reliable kill on Windows; CloseHandle alone leaves the
+    // process running. Best-effort: ignore the return code, then return 1
+    // (timeout) so callers still see the timeout indicator.
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);            // arg1: handle
+    EmitMovRegImm(X86Register.Rdx, 1);                   // arg2: exit code = 1
+    EmitCallImportOnSystemStack("kernel32.dll", "TerminateProcess");
     EmitMovRegImm(X86Register.Rax, 1);
     EmitJmp("rt_pw_done");
     DefineLabel("rt_pw_ok");

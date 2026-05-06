@@ -273,6 +273,12 @@ export union StdCallOp
 	funcRef(resultId ValueId, funcName String)
 	tailCall(callee String, argIds ValueIdArray)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
+	// Multi-value-return error ABI terminator. Mirrors `MirOp.errorReturn`:
+	// USES both `retValId` and `errorFlagId` and emits the dual-register
+	// epilogue at the target backend. No producer in Phase 1 — the arm is
+	// plumbed through every consumer so Phase 4 can flip the lowerThrow
+	// site without breaking exhaustive matches.
+	errorReturn(retValId ValueId, errorFlagId ValueId)
 end 'StdCallOp'
 
 export typealias StdCallOpArray = Array with StdCallOp
@@ -560,6 +566,7 @@ export function funcOpToString(op StdCallOp) returns String
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"
 		tailCall(callee, argIds) gives "func.tail_call @{callee}({formatArgIds(argIds)})"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {paramType.name}"
+		errorReturn(retValId, errorFlagId) gives "func.error_return %{retValId}, %{errorFlagId}"
 	end 'print'
 end 'funcOpToString'
 

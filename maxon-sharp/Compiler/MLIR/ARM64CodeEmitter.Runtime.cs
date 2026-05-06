@@ -5532,6 +5532,19 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
 
     DefineLabel("__proc_wait_timeout");
+    // Process didn't exit within the timeout — kill it so we don't leak a
+    // runaway child (e.g. an infinite-loop test fragment). SIGKILL (9) is the
+    // only signal a process cannot ignore. Best-effort: ignore the return
+    // code, then reap the zombie via blocking waitpid before returning the
+    // timeout indicator.
+    EmitReloadArg(0); // X0 = pid
+    EmitMovRegImm(ARM64Register.X1, 9); // SIGKILL
+    EmitCallImport("kill");
+    // Reap the zombie: waitpid(pid, &status, 0)
+    EmitReloadArg(0); // X0 = pid
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 32, isAdd: true); // X1 = &status
+    EmitMovRegImm(ARM64Register.X2, 0); // blocking
+    EmitCallImport("waitpid");
     EmitMovRegImm(ARM64Register.X0, 1); // 1 = timeout
     EmitRuntimeFunctionEnd();
 
