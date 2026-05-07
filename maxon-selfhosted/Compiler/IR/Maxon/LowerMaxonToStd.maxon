@@ -388,6 +388,9 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStdout", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStderr", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.floatToBits", paramNames: mmParamNames1("value"), paramTypes: mmParamTypes1(MaxonType.float), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.ucdByteAt", paramNames: mmParamNames2("label", second: "offset"), paramTypes: mmParamTypes2(MaxonType.string, second: MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.ucdI64At", paramNames: mmParamNames2("label", second: "index"), paramTypes: mmParamTypes2(MaxonType.string, second: MaxonType.integer), returnType: intReturn)
 end 'registerBuiltinsIntrinsicSignatures'
 
 function registerBuiltinsIntrinsicSignature(project Project, qualifiedName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
@@ -712,6 +715,10 @@ typealias InterfaceWitnessValueIdMap = Map with(ValueId, ValueId)
 // inline `int(-1 to u64.max)` doesn't reach the parser the same way as a
 // named typealias.
 typealias StdFunctionIndex = int(-1 to u64.max)
+// Per-function map from a String-literal ValueId (the outer `String` struct
+// produced by `lowerStringConst`) to its parser-interned StringId. Lets
+// builtin-lowering recover the literal bytes for label-shaped arguments.
+typealias StringLiteralProvenanceMap = Map with(ValueId, StringId)
 
 // ============================================================
 // MaxonToStdLowering type
@@ -813,6 +820,12 @@ type MaxonToStdLowering
 	// `lowerVarLoad` and consumed by `lowerMethodCall` for fat-pointer
 	// receiver dispatch.
 	var interfaceWitnessValueIds InterfaceWitnessValueIdMap
+	// Maps a String-literal ValueId back to its parser-interned StringId so
+	// builtin-lowering can recover the literal bytes for arguments that the
+	// parser would not normally surface (e.g. the label argument of
+	// `__Builtins.ucdByteAt("__ucd_bmp", offset)`). Populated by
+	// `lowerStringConst`; queried by `recoverStringLiteral`.
+	var stringLiteralProvenance StringLiteralProvenanceMap
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -837,7 +850,8 @@ type MaxonToStdLowering
 			implicitWitnessValueId: 0,
 			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0),
 			interfaceWitnessSlots: InterfaceWitnessSlotMap.create(),
-			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create()
+			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create(),
+			stringLiteralProvenance: StringLiteralProvenanceMap.create()
 		}
 	end 'create'
 
@@ -1258,16 +1272,14 @@ type MaxonToStdLowering
 			closureCreate(result, funcName, _, capturedNames, _, _) then self.lowerClosureCreate(result, funcName: funcName, capturedNames: capturedNames, dstBlock: dstBlock)
 			closureEnvLoad(result, captureIndex, _, captureType, _) then self.lowerClosureEnvLoad(result, captureIndex: captureIndex, captureType: captureType, dstBlock: dstBlock)
 			indirectCall(result, callee, fnTypeId, args, _, _, _, _) then self.lowerIndirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, dstBlock: dstBlock)
-			// Phase 11.0 step 8.5: for-in over arbitrary iterables is
-			// diagnosed as a compile error in the parser
-			// (`parseForInIterable`), so reaching this point means the
-			// parser's diagnostic was suppressed or the build proceeded
-			// past errors. The op itself has no Std lowering — the
-			// iterator-protocol witness-call expansion (Phase 11.1-11.3
-			// follow-up) is still unimplemented. Emit nothing so the
-			// body block (which is detached from the CFG by the parser)
-			// is silently dropped; the parser-side diagnostic remains
-			// the user-visible signal that this loop did not compile.
+			// `forInIterable` is metadata-only. The parser at
+			// `parseForInIterable` (Parser.maxon) already builds the full
+			// createIterator/advance/current methodCall CFG into the
+			// surrounding blocks — those tryMethodCall/methodCall ops
+			// lower through the standard `lowerMethodCall` path, which
+			// resolves to direct stdlib calls when the source's struct
+			// type is concrete (e.g. `String`, `Array`). Nothing to lower
+			// here.
 			forInIterable then return
 		end 'lower'
 	end 'lowerOp'
@@ -1333,6 +1345,7 @@ type MaxonToStdLowering
 		var strArgIds = ValueIdArray.create()
 		strArgIds.push(strSizeId)
 		let resultId = self.defineName(result)
+		self.stringLiteralProvenance.upsert(resultId, value: stringId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: strArgIds)))
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
 
@@ -1387,13 +1400,14 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
 	end 'lowerCharLiteral'
 
-	// Phase 7 step 7: lower a maxon.byteStringLiteral op directly to a
-	// rdata-backed __ManagedMemory pointer. No outer wrapper struct: the
-	// result name binds to the MM pointer itself, and the user-visible
-	// `ByteArray` typealias (`Array with Byte`) shares the same runtime
-	// layout (Array struct) — currently we expose the MM directly and let
-	// alias-compatible call sites consume it. Layout matches lowerStringConst's
-	// inner MM exactly.
+	// Phase 7 step 7: lower a maxon.byteStringLiteral op to an `Array`-shaped
+	// 8-byte struct wrapping a 40-byte rdata-backed __ManagedMemory record.
+	// Mirrors lowerStringConst's two-allocation pattern (inner MM at offset 0,
+	// length at offset 8, capacity = -2 to flag rdata-backed, elementSize = 1
+	// for byte storage). The outer `Array` wrapper means `bytes.count()`,
+	// `bytes.get(i)`, etc. dispatch to Array.maxon's methods (which forward
+	// to managed.length() / managed.get(i)) instead of needing a separate
+	// __ManagedMemory.count() alias.
 	function lowerByteStringLiteral(result ByteArray, stringId StringId, dstBlock IrBlock)
 		let data = self.project.strings.get(stringId)
 		let dataBytes = data.toByteArray()
@@ -1404,21 +1418,34 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufferPtrId, name: symName)))
 		self.setValueType(bufferPtrId, t: MaxonType.integer)
 
-		// __ManagedMemory (40 bytes).
+		// Inner __ManagedMemory (40 bytes): buffer (rdata addr), length, capacity = -2,
+		// elementSize = 1, parentPtr = 0.
 		let mmSizeId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
 		self.setValueType(mmSizeId, t: MaxonType.integer)
 		var mmArgIds = ValueIdArray.create()
 		mmArgIds.push(mmSizeId)
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: mmArgIds)))
-		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+		let mmId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
+		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: bufferPtrId, isFloat: false)))
-		self.storeI64Const(addrId: resultId, offset: 8, value: dataLen, dstBlock: dstBlock)
-		self.storeI64Const(addrId: resultId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: resultId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: resultId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+
+		// Outer Array (8 bytes): managed at offset 0.
+		let arrSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: arrSizeId, value: 8))))
+		self.setValueType(arrSizeId, t: MaxonType.integer)
+		var arrArgIds = ValueIdArray.create()
+		arrArgIds.push(arrSizeId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: arrArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("Array")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
 	end 'lowerByteStringLiteral'
 
 	// Phase 7 step 5: lower a maxon.stringInterp op to a heap-allocated
@@ -2007,7 +2034,11 @@ type MaxonToStdLowering
 		// `maxonTypeStructName` returns the real struct name (`__ManagedMemory`,
 		// `Array`, ...).
 		let receiverType = normalizeReceiverInContext(self.project, t: rawReceiverType, enclosingType: self.currentTypeName)
-		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
+		// `maxonTypeStructName` throws when the receiver isn't a struct/enum.
+		// We catch the throw and recover an empty name so the existing
+		// non-struct dispatch (interface fat-pointer / primitive extension /
+		// stub) downstream can take over.
+		let receiverStructName = try maxonTypeStructName(self.project, t: receiverType) otherwise ""
 		// Receiver type didn't reduce to a concrete struct name. Three
 		// sub-cases, handled in order below:
 		//   1. Interface receiver — fat-pointer dispatch via the paired
@@ -2047,7 +2078,7 @@ type MaxonToStdLowering
 			// the stdlib's PrimitiveExtensions has been loaded; without it,
 			// fall through to the existing panic stub so the build still
 			// completes with a clear runtime diagnostic.
-			let primName = primitiveExtensionTypeName(receiverType)
+			let primName = primitiveExtensionTypeNameWithProject(self.project, t: receiverType)
 			if not primName.isEmpty() 'havePrim'
 				let primQualified = "{primName}.{String.from(methodName)}"
 				if let primSig = try self.project.funcSignatures.get(primQualified) 'havePrimSig'
@@ -2337,8 +2368,149 @@ type MaxonToStdLowering
 		if methodName == "writeStderr" 'isStderr'
 			return self.lowerBuiltinsWriteStream(result, callee: "mrt_write_stderr", args: args, dstBlock: dstBlock)
 		end 'isStderr'
+		if methodName == "floatToBits" 'isFloatToBits'
+			return self.lowerBuiltinsFloatToBits(result, args: args, dstBlock: dstBlock)
+		end 'isFloatToBits'
+		if methodName == "ucdByteAt" 'isUcdByteAt'
+			return self.lowerBuiltinsUcdByteAt(result, args: args, dstBlock: dstBlock)
+		end 'isUcdByteAt'
+		if methodName == "ucdI64At" 'isUcdI64At'
+			return self.lowerBuiltinsUcdI64At(result, args: args, dstBlock: dstBlock)
+		end 'isUcdI64At'
 		return false
 	end 'lowerBuiltinsIntrinsic'
+
+	// Phase 7 / 11.4: lower `__Builtins.floatToBits(f float) returns int` to a
+	// single `bitcastF64ToI64` Std unary op. The op carries the standard
+	// FP-to-GPR semantics — `movq xmm→gpr` on x64, `fmov gpr,d` on ARM64,
+	// `i64.reinterpret_f64` on Wasm — without going through a stack slot.
+	// Used by stdlib/PrimitiveExtensions.maxon (`float.hash` reads the bits).
+	function lowerBuiltinsFloatToBits(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.floatToBits: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let valueName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let valueId = self.resolveName(valueName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(StdArithUnaryOpcode.bitcastF64ToI64, resultId: resultId, operandId: valueId))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsFloatToBits'
+
+	// Recover the bytes of a string-literal argument by walking from the
+	// arg's SSA name back through `stringLiteralProvenance` to the StringId
+	// the parser interned. Returns `(true, bytes)` on success and
+	// `(false, "")` if the operand was not produced by `lowerStringConst`
+	// (e.g. the caller passed a runtime expression where a literal was
+	// required). Used by the UCD builtins to extract the rdata-blob label.
+	function recoverStringLiteral(argName ByteArray) returns (bool, String)
+		let valueId = self.resolveName(argName)
+		let stringId = try self.stringLiteralProvenance.get(valueId) otherwise return (false, "")
+		return (true, self.project.strings.get(stringId))
+	end 'recoverStringLiteral'
+
+	// Read a UCD blob from disk and register it in `globalData` under the
+	// caller-supplied label. Idempotent — a second call for the same label
+	// is an O(1) hit on `globalData.nameIndex`. The label is restricted to
+	// the `__ucd_*` namespace so a crafted source string can't redirect the
+	// path-join to an arbitrary file. The on-disk filename is the label
+	// minus its leading `__`, located under `<stdlib>/helpers/string/`.
+	function ensureUcdLoaded(label String) returns bool
+		if self.globalData.nameIndex.contains(label) 'alreadyLoaded'
+			return true
+		end 'alreadyLoaded'
+		if not label.startsWith("__ucd_") 'badLabel'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.ucd*: label '{label}' must begin with '__ucd_'")
+			return false
+		end 'badLabel'
+		let stdlibPath = findStdlibPath()
+		if stdlibPath.isEmpty() 'noStdlib'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.ucd*: cannot locate stdlib directory to load '{label}'")
+			return false
+		end 'noStdlib'
+		let fileName = "{stripPrefixOrEmpty(label, prefix: "__")}.bin"
+		let binPath = stdlibPath.join("helpers").join("string").join(fileName)
+		let bytes = try File.readBinary(binPath) otherwise 'readFail'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.ucd*: failed to read UCD blob '{binPath.path}'")
+			return false
+		end 'readFail'
+		addNamedGlobalData(self.globalData, name: label, data: bytes)
+		return true
+	end 'ensureUcdLoaded'
+
+	// Validate the (label, offsetOrIndex) shape shared by `__Builtins.ucdByteAt`
+	// and `__Builtins.ucdI64At`. Reports a compile-time error and returns
+	// `(false, "", 0)` on arity mismatch, non-literal label, or missing UCD
+	// blob; on success returns `(true, label, operandValueId)` where the
+	// caller emits the actual load. The error-already-reported convention
+	// matches the rest of `lowerBuiltinsIntrinsic`'s helpers.
+	function prepareUcdLoadArgs(intrinsic String, args ByteArrayArray) returns (bool, String, ValueId)
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.{intrinsic}: expected 2 args, got {args.count()}")
+			return (false, "", 0)
+		end 'badArity'
+		let labelName = try args.get(0) otherwise panic("invariant: args.count() == 2 just checked")
+		let operandName = try args.get(1) otherwise panic("invariant: args.count() == 2 just checked")
+		let (ok, label) = self.recoverStringLiteral(labelName)
+		if not ok 'notLiteral'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.{intrinsic}: first argument must be a string literal")
+			return (false, "", 0)
+		end 'notLiteral'
+		if not self.ensureUcdLoaded(label) 'loadFailed'
+			return (false, "", 0)
+		end 'loadFailed'
+		return (true, label, self.resolveName(operandName))
+	end 'prepareUcdLoadArgs'
+
+	// Emit `globalAddr(label)` and bind the result to a fresh i64-typed
+	// ValueId. Shared between the byte and i64 UCD intrinsics.
+	function emitUcdGlobalAddr(label String, dstBlock IrBlock) returns ValueId
+		let addrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: label)))
+		self.setValueType(addrId, t: MaxonType.integer)
+		return addrId
+	end 'emitUcdGlobalAddr'
+
+	// Phase 11.x: lower `__Builtins.ucdByteAt(label, offset) returns int`.
+	// The label is a string literal naming a `__ucd_*` rdata blob registered
+	// on first use by `ensureUcdLoaded`; `offset` is a byte offset into the
+	// blob. Emits a single zero-extending `loadByte` from the blob's base
+	// address — `loadByte` fuses the GEP that the C# bootstrap had to
+	// materialise as a separate `lea` + `add`.
+	function lowerBuiltinsUcdByteAt(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		let (ok, label, offsetId) = self.prepareUcdLoadArgs("ucdByteAt", args: args)
+		if not ok 'failed'
+			return true
+		end 'failed'
+		let addrId = self.emitUcdGlobalAddr(label, dstBlock: dstBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: addrId, offsetId: offsetId)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsUcdByteAt'
+
+	// Phase 11.x: lower `__Builtins.ucdI64At(label, index) returns int`.
+	// `index` is in 8-byte units; scale by 8 and add to the blob base
+	// before issuing an 8-byte `loadIndirect`. Used by the supplementary-
+	// codepoint binary search in
+	// `stdlib/helpers/string/unicodeCategory.maxon`.
+	function lowerBuiltinsUcdI64At(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		let (ok, label, indexId) = self.prepareUcdLoadArgs("ucdI64At", args: args)
+		if not ok 'failed'
+			return true
+		end 'failed'
+		let addrId = self.emitUcdGlobalAddr(label, dstBlock: dstBlock)
+		let eightId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: eightId, value: 8))))
+		self.setValueType(eightId, t: MaxonType.integer)
+		let byteOffId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: indexId, rightId: eightId, dstBlock: dstBlock)
+		let finalAddrId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: addrId, rightId: byteOffId, dstBlock: dstBlock)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: finalAddrId, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsUcdI64At'
 
 	// Common shape for `__Builtins.writeStdout` / `__Builtins.writeStderr`:
 	// arg 0 is a `__ManagedMemory` pointer; load the buffer at offset 0
@@ -3408,10 +3580,7 @@ type MaxonToStdLowering
 	// non-struct) yields (0, integer, false) so callers can emit a clean
 	// diagnostic.
 	function lookupFieldByReceiver(receiverType MaxonType, fieldName String) returns (FieldOffset, MaxonType, bool)
-		let structName = maxonTypeStructName(self.project, t: receiverType)
-		if structName.isEmpty() 'noStruct'
-			return (0 as FieldOffset, MaxonType.integer, false)
-		end 'noStruct'
+		let structName = try maxonTypeStructName(self.project, t: receiverType) otherwise return (0 as FieldOffset, MaxonType.integer, false)
 		return self.lookupFieldByStructName(structName: structName, fieldName: fieldName)
 	end 'lookupFieldByReceiver'
 
@@ -4009,6 +4178,44 @@ export function primitiveExtensionTypeName(t MaxonType) returns String
 		named to interface gives ""
 	end 'p'
 end 'primitiveExtensionTypeName'
+
+// Phase 7 / 11.4: chase named typealiases down to a primitive arm before
+// returning the extension type name. Bridges typealias-narrowed receivers
+// (`Byte` = `byte(0 to u8.max)`, `Integer` = `int(i64.min to i64.max)`) to
+// the lowercase extension names registered by stdlib/PrimitiveExtensions.
+// Returns "" when the receiver is a struct, enum, interface, or genuinely
+// non-primitive named type.
+export function primitiveExtensionTypeNameWithProject(project Project, t MaxonType) returns String
+	let direct = primitiveExtensionTypeName(t)
+	if not direct.isEmpty() 'haveDirect'
+		return direct
+	end 'haveDirect'
+	// Named arm: probe the resolved typealiases sidecar. The StdType the
+	// alias resolves to determines the extension family. Non-named arms
+	// (boolean/integer/float/string/function/typeParameter/genericInstance/
+	// interface/unresolved) were already handled by `primitiveExtensionTypeName`
+	// above or fall through to "" because they can't be the LHS of a typealias
+	// declaration that names a primitive.
+	let name = match t 'getName'
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		function to interface gives ""
+	end 'getName'
+	if name.isEmpty() 'notNamed'
+		return ""
+	end 'notNamed'
+	if not project.typealiases.contains(name) 'notTypealias'
+		return ""
+	end 'notTypealias'
+	let stdType = try project.typealiases.get(name) otherwise return ""
+	return match stdType.rawValue.castCategory 'cat'
+		int gives "int"
+		byte gives "byte"
+		float gives "float"
+		bool gives "bool"
+		string gives "String"
+	end 'cat'
+end 'primitiveExtensionTypeNameWithProject'
 
 // Pick the diagnostic-friendly name for a MaxonType in an E3005 error.
 // When both endpoints of a mismatch live in the primitive numeric/bool

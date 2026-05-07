@@ -463,16 +463,72 @@ function licmGetArithConstResultId(op StdArithOp) returns ValueId
 end 'licmGetArithConstResultId'
 
 // Extract the result ValueId from a packed op, or LICM_NO_BLOCK if the op has no result.
+//
+// `system` and `memory` ops must be enumerated here, not just call/arith — when
+// LICM omits a producer's result from `definedInLoop`, any consumer that reads
+// that ValueId is wrongly classified as loop-invariant (its operand looks
+// "outside the loop") and hoisted into the preheader, where the producer is
+// not yet defined. This produces use-before-def IR. The bug surfaced for
+// `arith.addi %globalAddr, %const`: the addi was hoisted but the globalAddr
+// stayed in the loop body, leaving the hoisted use dangling.
 function licmGetPackedResultId(module StdModule, opIdx OpIndex) returns ValueId
 	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
 		arith(op) gives licmGetArithResultId(op)
 		call(op) gives licmGetFuncResultId(op)
 		control gives LICM_NO_BLOCK
-		memory gives LICM_NO_BLOCK
-		system gives LICM_NO_BLOCK
+		memory(op) gives licmGetMemoryResultId(op)
+		system(op) gives licmGetSystemResultId(op)
 	end 'dispatch'
 end 'licmGetPackedResultId'
+
+function licmGetMemoryResultId(op StdMemoryOp) returns ValueId
+	return match op 'get'
+		storeSlot gives LICM_NO_BLOCK
+		loadSlot(resultId, _) gives resultId
+	end 'get'
+end 'licmGetMemoryResultId'
+
+function licmGetSystemResultId(op StdSystemOp) returns ValueId
+	return match op 'get'
+		syscall(resultId, _, _) gives resultId
+		iatCall(resultId, _, _) gives resultId
+		globalAddr(resultId, _) gives resultId
+		memcpy gives LICM_NO_BLOCK
+		stackAddr(resultId, _) gives resultId
+		storeByte gives LICM_NO_BLOCK
+		loadByte(resultId, _, _) gives resultId
+		osExit gives LICM_NO_BLOCK
+		osWrite gives LICM_NO_BLOCK
+		free gives LICM_NO_BLOCK
+		osWriteErr gives LICM_NO_BLOCK
+		osOpenWrite(resultId, _, _) gives resultId
+		osWriteFd gives LICM_NO_BLOCK
+		osClose gives LICM_NO_BLOCK
+		osGetEnv(resultId, _, _, _, _) gives resultId
+		loadFramePtr(resultId) gives resultId
+		loadIndirect(resultId, _, _, _) gives resultId
+		funcAddr(resultId, _) gives resultId
+		storeIndirect gives LICM_NO_BLOCK
+		drop gives LICM_NO_BLOCK
+		osAllocPages(resultId, _) gives resultId
+		osAllocPagesLarge(resultId, _) gives resultId
+		osFreePages gives LICM_NO_BLOCK
+		atomicInc gives LICM_NO_BLOCK
+		atomicDec gives LICM_NO_BLOCK
+		atomicXadd(resultId, _, _) gives resultId
+		osLockInit gives LICM_NO_BLOCK
+		osLockAcquire gives LICM_NO_BLOCK
+		osLockRelease gives LICM_NO_BLOCK
+		boxValue(resultId, _, _) gives resultId
+		unboxValue(resultId, _, _) gives resultId
+		loadLayoutDescriptor(resultId, _) gives resultId
+		loadWitnessTable(resultId, _) gives resultId
+		descriptorField(resultId, _, _) gives resultId
+		witnessMethod(resultId, _, _) gives resultId
+		dropTypeParam gives LICM_NO_BLOCK
+	end 'get'
+end 'licmGetSystemResultId'
 
 function licmGetArithResultId(op StdArithOp) returns ValueId
 	return match op 'get'

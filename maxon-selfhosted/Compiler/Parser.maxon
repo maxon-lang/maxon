@@ -991,19 +991,24 @@ export type Parser
 			_ = try parseExpression(block)
 			return
 		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
-			// Distinguish `TypeName.field = expr` (qualified-global store) from
-			// other dot expressions (method calls, field access). The
-			// qualified-store form is exactly identifier-dot-identifier-equals.
-			// Whether the qualified name actually names a global var is checked
-			// at TypeResolution; the parser emits a single `unresolvedAssign`
-			// op for the qualified-store shape and lets the post-parse pass
-			// rewrite it to `globalStore` (or surface a diagnostic when no
-			// global declaration matches). Method calls and field reads stay
-			// on the expression path below.
+			// Distinguish three identifier-dot-identifier-equals shapes:
+			//   localVar.field = expr   → fieldStore on the loaded local
+			//   TypeName.field = expr   → qualified-global store (TypeResolution
+			//                              rewrites to globalStore once
+			//                              `project.topLevelVars` is populated)
+			//   anything else with a dot → method call / field read on the
+			//                              expression path
+			// The local-var case must come first so a local `newState` shadows
+			// any global / type with the same leading name.
 			let afterDot = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
 			let afterField = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
 			if afterDot.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'maybeQualified'
-				let qualifiedName = "{cursor.current().value}.{afterDot.value}"
+				let receiverName = cursor.current().value
+				if scope.contains(receiverName) 'isLocalFieldAssign'
+					try parseLocalFieldAssignment(block)
+					return
+				end 'isLocalFieldAssign'
+				let qualifiedName = "{receiverName}.{afterDot.value}"
 				try parseGlobalAssignment(block, qualifiedName: qualifiedName)
 				return
 			end 'maybeQualified'
@@ -1056,6 +1061,30 @@ export type Parser
 
 		_ = try parseExpression(block)
 	end 'parseSelfStatement'
+
+	// Parse `localVar.fieldName = <expr>` for a `localVar` already in scope.
+	// Loads the local var, then emits a fieldStore on the loaded value.
+	// TypeResolution validates the field name against the receiver's struct
+	// type. Caller has proven identifier-dot-identifier-equals via peeks AND
+	// that the leading identifier is in `scope` (so a local shadows a same-
+	// named top-level var/type).
+	function parseLocalFieldAssignment(block IrBlock) throws ParserError
+		let nameToken = try consume()
+		try eat(TokenKind.dot)
+		let fieldToken = try consume()
+		try eat(TokenKind.equals)
+
+		let slot = lookupVariable(nameToken.value, token: nameToken)
+		let receiverName = freshSynthName()
+		let nameRange = SourceRange.ofToken(nameToken)
+		module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: MaxonType.unresolved, range: nameRange))
+
+		currentBlock = block
+		let exprResult = try parseExpression(block)
+		var emitBlock = currentBlock
+		let stmtRange = SourceRange.between(nameToken, last: previousToken())
+		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: fieldToken.value.toByteArray(), value: exprName(exprResult), range: stmtRange))
+	end 'parseLocalFieldAssignment'
 
 	// Parse `TypeName.fieldName = <expr>`. The store target is emitted as
 	// an `unresolvedAssign` op carrying the qualified name; TypeResolution
@@ -1854,13 +1883,97 @@ export type Parser
 		// registries — the latter catches duplicates that survive a stdlib
 		// pre-seed where some aliases are already in `typealiases` before the
 		// parser starts.
-		if project.typealiases.contains(nameToken.value) or project.unresolvedTypealiases.contains(nameToken.value) 'duplicate'
+		//
+		// Visibility-aware semantics:
+		//   - Two file-private aliases in *different* files don't conflict —
+		//     each is scoped to its declaring file. Mirrors the C# bootstrap's
+		//     per-file `_localTypeAliases` semantics. The global registry
+		//     keeps only the first-parsed entry; cross-file references to a
+		//     file-private alias would resolve to whichever was parsed first,
+		//     which by definition isn't a supported lookup (file-private
+		//     aliases are not visible across files).
+		//   - File-private vs. exported (any order) is a *shadowing error*.
+		//     An export must not be hidden by a same-named file-private, and
+		//     a file-private must not silently override an export.
+		//   - Two exported aliases (or any combination touching `module`/
+		//     `global` visibility) is a duplicate error.
+		//   - Same file, same name is always a duplicate error regardless of
+		//     visibility.
+		let isFilePrivate = visibility == Visibility.file
+		var existingVisibility = Visibility.global
+		var existingFilePath = filePath
+		var hasExisting = false
+		if let existing = try project.unresolvedTypealiases.get(nameToken.value) 'haveExisting'
+			hasExisting = true
+			existingVisibility = existing.visibility
+			existingFilePath = existing.filePath
+		end 'haveExisting'
+		// Same probe against the resolved-typealiases sidecar. Stdlib aliases
+		// that survived a cache restore land in `typealiases` with a
+		// (visibility, sourceFilePath) entry in `typealiasVisibilities`; the
+		// codec doesn't serialize visibility, so missing entries default to
+		// `(global, stdlib-bootstrap path)` per Project.maxon:1098.
+		var hasResolved = false
+		var resolvedVisibility = Visibility.global
+		var resolvedFilePath = try FilePath.from("stdlib-bootstrap.maxon") otherwise filePath
+		if project.typealiases.contains(nameToken.value) 'haveResolved'
+			hasResolved = true
+			if let info = try project.typealiasVisibilities.get(nameToken.value) 'haveInfo'
+				resolvedVisibility = info.visibility
+				resolvedFilePath = info.sourceFilePath
+			end 'haveInfo'
+		end 'haveResolved'
+		let resolvedIsFilePrivate = hasResolved and resolvedVisibility == Visibility.file
+		let resolvedFromOtherFile = hasResolved and not (resolvedFilePath.toString() == filePath.toString())
+		let existingIsFilePrivate = hasExisting and existingVisibility == Visibility.file
+		let existingFromOtherFile = hasExisting and not (existingFilePath.toString() == filePath.toString())
+
+		// Classify the relationship with each existing entry.
+		var collides = false
+		var shadows = false
+		if hasResolved 'checkResolved'
+			let bothFilePrivate = isFilePrivate and resolvedIsFilePrivate
+			let okBecauseFilePrivatePair = bothFilePrivate and resolvedFromOtherFile
+			if not okBecauseFilePrivatePair 'conflict'
+				// Anything else with a resolved entry is a conflict. If
+				// exactly one side is file-private and they're in
+				// different files, it's shadowing; otherwise a plain
+				// duplicate.
+				if (isFilePrivate or resolvedIsFilePrivate) and resolvedFromOtherFile and not bothFilePrivate 'shadow'
+					shadows = true
+				end 'shadow' else 'dup'
+					collides = true
+				end 'dup'
+			end 'conflict'
+		end 'checkResolved'
+		if not collides and not shadows and hasExisting 'checkUnresolved'
+			let bothFilePrivate = isFilePrivate and existingIsFilePrivate
+			let okBecauseFilePrivatePair = bothFilePrivate and existingFromOtherFile
+			if not okBecauseFilePrivatePair 'conflict'
+				if (isFilePrivate or existingIsFilePrivate) and existingFromOtherFile and not bothFilePrivate 'shadow'
+					shadows = true
+				end 'shadow' else 'dup'
+					collides = true
+				end 'dup'
+			end 'conflict'
+		end 'checkUnresolved'
+
+		if shadows 'shadowing'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "typealias '{nameToken.value}' shadows an existing typealias from another file (file-private and exported declarations of the same name are not allowed)", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			skipToNextLine()
+			return
+		end 'shadowing'
+		if collides 'duplicate'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			skipToNextLine()
 			return
 		end 'duplicate'
 
-		project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+		// First-parsed entry wins on cross-file file-private collisions; the
+		// existing entry stays canonical in the global map.
+		if not hasExisting 'firstEntry'
+			project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+		end 'firstEntry'
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
@@ -6011,10 +6124,10 @@ export type Parser
 	// emitted a single `byteStringLiteral` token whose value contains the
 	// raw (still-escaped) body bytes. We decode escapes the same way as
 	// regular string literals, intern the resulting bytes, and emit a
-	// `byteStringLiteral` op. Result type: `__ManagedMemory` — the user-
-	// visible `ByteArray` typealias (`Array with Byte`) is alias-compatible
-	// at the call sites that consume byte-string literals today (Map keys,
-	// Array methods via the receiver-type machinery).
+	// `byteStringLiteral` op. Result type: `Array` — the user-visible
+	// `ByteArray` typealias (`Array with Byte`) consumes byte-string
+	// literals via the standard struct-method dispatch, so .count(),
+	// .get(i), etc. resolve to Array's stdlib methods.
 	function parseByteStringLiteralExpr(block IrBlock) returns ExprResult throws ParserError
 		let token = try consume()
 		validateEscapes(token, kind: "byte string literal")
@@ -6023,8 +6136,8 @@ export type Parser
 		let stringId = project.strings.intern(String.from(decoded))
 		let name = freshSynthName()
 		module.appendOp(block, op: MaxonOp.byteStringLiteral(name, stringId: stringId, range: range))
-		let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
-		return ExprResult.direct(name, valueType: mmType)
+		let arrType = MaxonType.named(project.typeNames.intern("Array"))
+		return ExprResult.direct(name, valueType: arrType)
 	end 'parseByteStringLiteralExpr'
 
 	function parseSelfExpr(block IrBlock) returns ExprResult throws ParserError
@@ -7153,14 +7266,27 @@ export function maxonTypeIsRef(project Project, t MaxonType) returns bool
 	return not nameStr.isEmpty() and project.structTypes.contains(nameStr)
 end 'maxonTypeIsRef'
 
-// Return the underlying struct-type name for a named MaxonType, or "" when
-// the type is not currently registered as a struct. Exported because the
+// Thrown by `maxonTypeStructName` when the receiver type doesn't resolve to
+// a registered struct or enum (the common cases: primitives, interfaces,
+// type parameters, free `unresolved`, or a `named` arm whose name was never
+// registered). Callers handle this with `try ... otherwise` to take the
+// non-struct path (primitive-extension dispatch, fat-pointer interface
+// dispatch, skipped validation, etc.).
+export enum MaxonTypeStructNameError implements Error
+	notAStruct
+end 'MaxonTypeStructNameError'
+
+// Return the underlying struct-type name for a named MaxonType. Throws
+// `MaxonTypeStructNameError.notAStruct` when the type is not currently
+// registered as a struct or enum — callers must handle the throw with
+// `try ... otherwise` to fall through to the non-struct dispatch path
+// (primitive extension, interface witness, etc.). Exported because the
 // Maxon→Std lowering pass uses it to resolve receiver types for fieldLoad,
 // fieldStore, and methodCall ops the parser now leaves name-symbolic.
-export function maxonTypeStructName(project Project, t MaxonType) returns String
+export function maxonTypeStructName(project Project, t MaxonType) returns String throws MaxonTypeStructNameError
 	let nameStr = t.nameOrEmpty(project)
 	if nameStr.isEmpty() 'noName'
-		return ""
+		throw MaxonTypeStructNameError.notAStruct
 	end 'noName'
 	if project.structTypes.contains(nameStr) 'isStruct'
 		return nameStr
@@ -7172,7 +7298,7 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	if project.enumTypes.contains(nameStr) or project.unresolvedEnums.contains(nameStr) 'isEnum'
 		return nameStr
 	end 'isEnum'
-	return ""
+	throw MaxonTypeStructNameError.notAStruct
 end 'maxonTypeStructName'
 
 // Create a block that is not added to the function's block list.

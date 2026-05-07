@@ -24,39 +24,55 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @main() -> u8 {
+  func @Direction.isNorth(self: i64) -> i1 {
   entry:
-    x64.xor r8d, r8d
-  inlined_Direction.isNorth_0:
-    x64.xor r9d, r9d
-    x64.test r8, r8
-    x64.jne inlined_Direction.isNorth_3
-    x64.jmp inlined_Direction.isNorth_2
-  inlined_Direction.isNorth_1:
-    x64.jmp inline_cont_main_0
-  inlined_Direction.isNorth_2:
-    x64.mov r8d, 1
-    x64.jmp inlined_Direction.isNorth_1
-  inlined_Direction.isNorth_3:
-    x64.cmp r8, 1
-    x64.jne __phi_trampoline_6_4
-  inlined_Direction.isNorth_4:
-    x64.xor r8d, r8d
-    x64.jmp inlined_Direction.isNorth_1
-  inline_cont_main_0:
-    x64.test r8, r8
-    x64.je test_1.after
-  test_1:
-    x64.mov r9d, 1
-    x64.mov r8, r9
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rax
+    x64.jmp Direction.isNorth.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne Direction.isNorth.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp Direction.isNorth.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne Direction.isNorth.check_0.merge
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp Direction.isNorth.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.epilogue
     x64.ret
-  test_1.after:
-    x64.xor r9d, r9d
-    x64.mov r8, r9
+  }
+  func @enums-simple.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call Direction.isNorth
+    x64.test rax, rax
+    x64.je enums-simple.main.test_0.after
+  test_0:
+    x64.mov rax, 1
+    x64.epilogue
     x64.ret
-  __phi_trampoline_6_4:
-    x64.mov r8, r9
-    x64.jmp inlined_Direction.isNorth_1
+  test_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
   }
 }
 ---

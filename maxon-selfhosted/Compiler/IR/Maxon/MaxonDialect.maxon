@@ -539,6 +539,25 @@ export function internMaxonType(project Project, name String) returns MaxonType
 	if name == "bool" 'isBool'
 		return MaxonType.boolean
 	end 'isBool'
+	// Phase 7 / 11.4: lowercase primitive names like `int`, `float`,
+	// `byte`, `string` are used as type names by `extension int { … }`
+	// blocks. Map them to their primitive MaxonType arms so the
+	// extension's `__self` parameter lands with the correct primitive
+	// type (otherwise interpolation `"{self}"` and other type-driven
+	// dispatches would see `MaxonType.named("float")` and fall back to
+	// generic struct-receiver paths).
+	if name == "int" 'isInt'
+		return MaxonType.integer
+	end 'isInt'
+	if name == "float" 'isFloat'
+		return MaxonType.float
+	end 'isFloat'
+	if name == "byte" 'isByte'
+		return MaxonType.integer
+	end 'isByte'
+	if name == "string" 'isString'
+		return MaxonType.string
+	end 'isString'
 	if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
 		return MaxonType.interface(project.interfaceRegistry.intern(name))
 	end 'isInterface'

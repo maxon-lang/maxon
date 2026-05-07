@@ -317,10 +317,48 @@ func mrt_f64_to_string 2 i64
     std br digit_loop
 
   block after_digits:
+    // Strip trailing zeros, keeping at least 1 fractional digit so output
+    // always shows the decimal point (e.g. "3.0" not "3."). Slot 3 holds
+    // sign+intLen (the position of '.'); the 6 fractional digits start at
+    // slot3+1 and run through slot3+6. Slot 7 holds the inclusive index of
+    // the last digit, dropping while it points to a '0' and the index is
+    // still strictly greater than slot3+1.
     v68 = std loadSlot 3
-    v69 = std constI64 7
+    v69 = std constI64 6
     v70 = std addI64 v68 v69
-    std ret v70
+    std storeSlot 7 v70
+    std br strip_loop
+
+  block strip_loop:
+    v71 = std loadSlot 7
+    v72 = std loadSlot 3
+    v73 = std constI64 1
+    v74 = std addI64 v72 v73
+    v75 = std cmpI64Le v71 v74
+    std condBr v75 strip_done check_zero
+
+  block check_zero:
+    v76 = std loadSlot 1
+    v77 = std loadSlot 7
+    v78 = std loadByte v76 v77
+    v79 = std constI64 0x30
+    v80 = std cmpI64Eq v78 v79
+    std condBr v80 do_strip strip_done
+
+  block do_strip:
+    v81 = std loadSlot 7
+    v82 = std constI64 1
+    v83 = std subI64 v81 v82
+    std storeSlot 7 v83
+    std br strip_loop
+
+  block strip_done:
+    // Final length is (last kept index) + 1. slot7 is inclusive; +1 yields
+    // a count.
+    v84 = std loadSlot 7
+    v85 = std constI64 1
+    v86 = std addI64 v84 v85
+    std ret v86
 
 end
 

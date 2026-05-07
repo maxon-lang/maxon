@@ -1398,10 +1398,16 @@ end 'maxonTypeIsNamed'
 // from cascading into unresolved propagation).
 function methodCallResultType(project Project, receiverType MaxonType, methodName ByteArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, args ByteArrayArray, enclosingType String) returns MaxonType
 	let normReceiver = normalizeReceiverInContext(project, t: receiverType, enclosingType: enclosingType)
-	let structName = maxonTypeStructName(project, t: normReceiver)
-	if structName.isEmpty() 'noStruct'
+	// Phase 11.4 / Phase 7: when the receiver is a primitive
+	// (`int`/`float`/`bool`/`byte`), `maxonTypeStructName` throws and we
+	// fall back to the extension type name registered for the primitive
+	// (`int.toString`, `bool.equals`, …). Without this, `let s = 42.toString()`
+	// records `s` as `MaxonType.unresolved` and downstream cmp dispatch
+	// (`s == "42"`) never gets rewritten to `s.equals("42")`.
+	var structName = try maxonTypeStructName(project, t: normReceiver) otherwise primitiveExtensionTypeNameWithProject(project, t: normReceiver)
+	if structName.isEmpty() 'notPrimitive'
 		return MaxonType.unresolved
-	end 'noStruct'
+	end 'notPrimitive'
 	let bareCallee = "{structName}.{String.from(methodName)}"
 	var qualifiedCallee = resolveOverloadFromArgs(project, bareName: bareCallee, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
 	// Mirror `resolveMethodCallSite`: fall back to an interface-extension
@@ -1573,10 +1579,7 @@ end 'callResultType'
 // alias map (always empty for non-generic types) and the substitution's
 // own short-circuit on isEmpty.
 function fieldLoadResultType(project Project, receiverType MaxonType, fieldName ByteArray) returns MaxonType
-	let structName = maxonTypeStructName(project, t: receiverType)
-	if structName.isEmpty() 'noStruct'
-		return MaxonType.unresolved
-	end 'noStruct'
+	let structName = try maxonTypeStructName(project, t: receiverType) otherwise return MaxonType.unresolved
 	let structType = try project.structTypes.get(structName) otherwise return MaxonType.unresolved
 	let fieldIdx = try structType.fieldByName.get(String.from(fieldName)) otherwise return MaxonType.unresolved
 	let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.unresolved
@@ -1834,7 +1837,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("__ManagedMemory")))
+		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Array")))
 		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
 		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
@@ -2962,6 +2965,19 @@ end 'patchTopLevelVarSlotType'
 // module's call does real work, every later module-level call walks an
 // empty map.
 export function runTypeResolution(project Project, module MaxonModule, filePath FilePath)
+	// `resolvedCallees` and `callParamTypes` are keyed by OpIndex, which is
+	// per-module. When the cache-miss stdlib build path runs `runTypeResolution`
+	// on the stdlib MaxonModule, those maps get populated with entries keyed
+	// by stdlib op indices. The user pipeline then runs `runTypeResolution`
+	// on the (separate) user MaxonModule, but its op indices restart from 0
+	// and collide with stdlib's. Without clearing, the parser-side
+	// `try ... insert ... otherwise ignore` keeps the stale stdlib entries,
+	// so user calls resolve to whatever stdlib happened to put at that index
+	// (e.g. user's `print(...)` → `__ManagedMemory.length`). Reset both
+	// op-keyed maps at the start of every resolution run so each module
+	// starts from a clean slate.
+	project.resolvedCallees = ResolvedCalleesMap.create()
+	project.callParamTypes = CallParamTypesMap.create()
 	resolveAllTypealiases(project)
 	// Interfaces drain before structs/enums so the conformance walk in
 	// `resolveAllStructTypes` / `resolveAllEnumTypes` can look up named
@@ -3495,10 +3511,15 @@ end 'resolveCallSite'
 function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArray, methodName ByteArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String)
 	let rawReceiverType = lookupProducerType(producerTypes, name: receiver)
 	let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingTypeName)
-	let receiverStructName = maxonTypeStructName(project, t: receiverType)
-	if receiverStructName.isEmpty() 'noStruct'
+	// Phase 11.4 / Phase 7: primitive receiver (`int.toString()`,
+	// `bool.equals(...)`, …) — fall back to the extension type
+	// name (`int`, `float`, `bool`, `byte`). Mirrors the dispatch
+	// fallback in lowerMethodCall so resolvedCallees / callParamTypes
+	// get populated for every primitive-extension call site.
+	let receiverStructName = try maxonTypeStructName(project, t: receiverType) otherwise primitiveExtensionTypeNameWithProject(project, t: receiverType)
+	if receiverStructName.isEmpty() 'notPrimitive'
 		return
-	end 'noStruct'
+	end 'notPrimitive'
 	let bareMethodName = String.from(methodName)
 	let baseQualified = "{receiverStructName}.{bareMethodName}"
 	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
@@ -3719,7 +3740,7 @@ end 'validateQualifiedCallArgLabels'
 
 function validateMethodCallArgLabels(project Project, receiver ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, producerTypes ProducerTypeMap, filePath FilePath)
 	let receiverType = lookupProducerType(producerTypes, name: receiver)
-	let structName = maxonTypeStructName(project, t: receiverType)
+	let structName = try maxonTypeStructName(project, t: receiverType) otherwise ""
 	if structName.isEmpty() 'unresolvedReceiver'
 		// Receiver type didn't resolve through buildProducerTypes — common
 		// for selfFieldLoad sources (the producer-type map doesn't record
@@ -3946,10 +3967,7 @@ function validateCallArityOp(project Project, op MaxonOp, producerTypes Producer
 end 'validateCallArityOp'
 
 function checkMethodCallArity(project Project, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, argLabels StringArray, range SourceRange, filePath FilePath)
-	let structName = maxonTypeStructName(project, t: receiverType)
-	if structName.isEmpty() 'noStruct'
-		return
-	end 'noStruct'
+	let structName = try maxonTypeStructName(project, t: receiverType) otherwise return
 	let qualifiedCallee = "{structName}.{String.from(methodName)}"
 	checkCallArity(project, qualifiedCallee: qualifiedCallee, args: args, argLabels: argLabels, paramStartIndex: 1, range: range, filePath: filePath)
 end 'checkMethodCallArity'
