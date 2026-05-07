@@ -22,89 +22,44 @@ interface GenerateAsmResponse {
 type OutputMode = 'mir' | 'asm';
 
 /**
- * Compiler Explorer Panel
+ * Compiler Explorer View
  *
- * A webview panel that shows Maxon source code in an editor and the
- * generated output (MIR or x86-64 assembly) in a separate view.
- * Supports toggling between optimized and unoptimized output.
+ * A webview view that lives in the Maxon activity bar container. Shows Maxon
+ * source code in an editor and the generated output (MIR or x86-64 assembly)
+ * in a separate panel below. Supports toggling between optimized and
+ * unoptimized output.
  */
-export class CompilerExplorerPanel {
-	public static currentPanel: CompilerExplorerPanel | undefined;
-	public static readonly viewType = 'maxonCompilerExplorer';
+export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'maxon.compilerExplorerView';
 
-	private readonly _panel: vscode.WebviewPanel;
-	private readonly _extensionUri: vscode.Uri;
-	private readonly _client: LanguageClient;
-	private _disposables: vscode.Disposable[] = [];
+	private _view: vscode.WebviewView | undefined;
+	private readonly _disposables: vscode.Disposable[] = [];
 
 	private _currentSource: string = '';
 	private _optimize: boolean = false;
 	private _outputMode: OutputMode = 'mir';
 	private _debounceTimer: NodeJS.Timeout | undefined;
 
-	public static createOrShow(extensionUri: vscode.Uri, client: LanguageClient) {
-		const column = vscode.window.activeTextEditor
-			? vscode.window.activeTextEditor.viewColumn
-			: undefined;
+	constructor(
+		private readonly _extensionUri: vscode.Uri,
+		private readonly _getClient: () => LanguageClient | undefined
+	) {}
 
-		// If we already have a panel, show it
-		if (CompilerExplorerPanel.currentPanel) {
-			CompilerExplorerPanel.currentPanel._panel.reveal(column);
-			return;
-		}
+	public resolveWebviewView(
+		webviewView: vscode.WebviewView,
+		_context: vscode.WebviewViewResolveContext,
+		_token: vscode.CancellationToken
+	): void {
+		this._view = webviewView;
 
-		// Otherwise, create a new panel
-		const panel = vscode.window.createWebviewPanel(
-			CompilerExplorerPanel.viewType,
-			'Compiler Explorer',
-			column || vscode.ViewColumn.One,
-			{
-				enableScripts: true,
-				localResourceRoots: [extensionUri]
-			}
-		);
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [this._extensionUri]
+		};
 
-		CompilerExplorerPanel.currentPanel = new CompilerExplorerPanel(panel, extensionUri, client);
-	}
+		webviewView.webview.html = this._getHtmlForWebview();
 
-	private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, client: LanguageClient) {
-		this._panel = panel;
-		this._extensionUri = extensionUri;
-		this._client = client;
-
-		// Set the webview's initial html content
-		this._update();
-
-		// Focus the source editor after a short delay to ensure webview is ready
-		setTimeout(() => {
-			this._panel.webview.postMessage({ command: 'focus' });
-		}, 100);
-
-		// Re-request output when the panel becomes visible again after being hidden
-		this._panel.onDidChangeViewState(
-			(e) => {
-				if (e.webviewPanel.visible) {
-					// The webview may have been recreated; push the source and re-generate output
-					if (this._currentSource) {
-						this._panel.webview.postMessage({
-							command: 'restoreSource',
-							source: this._currentSource
-						});
-					}
-					if (this._currentSource.trim()) {
-						this._generateOutput();
-					}
-				}
-			},
-			null,
-			this._disposables
-		);
-
-		// Listen for when the panel is disposed
-		this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
-
-		// Handle messages from the webview
-		this._panel.webview.onDidReceiveMessage(
+		webviewView.webview.onDidReceiveMessage(
 			async (message) => {
 				switch (message.command) {
 					case 'sourceChanged':
@@ -127,6 +82,23 @@ export class CompilerExplorerPanel {
 			null,
 			this._disposables
 		);
+
+		webviewView.onDidChangeVisibility(() => {
+			if (webviewView.visible && this._currentSource.trim()) {
+				this._generateOutput();
+			}
+		}, null, this._disposables);
+
+		webviewView.onDidDispose(() => {
+			while (this._disposables.length) {
+				this._disposables.pop()?.dispose();
+			}
+			if (this._debounceTimer) {
+				clearTimeout(this._debounceTimer);
+				this._debounceTimer = undefined;
+			}
+			this._view = undefined;
+		});
 	}
 
 	private _debouncedGenerateOutput() {
@@ -139,11 +111,20 @@ export class CompilerExplorerPanel {
 	}
 
 	private async _generateOutput() {
+		if (!this._view) return;
+		const webview = this._view.webview;
+
 		if (!this._currentSource.trim()) {
-			this._panel.webview.postMessage({
+			webview.postMessage({ command: 'updateOutput', output: '', errors: [] });
+			return;
+		}
+
+		const client = this._getClient();
+		if (!client) {
+			webview.postMessage({
 				command: 'updateOutput',
 				output: '',
-				errors: []
+				errors: [{ message: 'Language server not started', line: 1, column: 1 }]
 			});
 			return;
 		}
@@ -151,8 +132,7 @@ export class CompilerExplorerPanel {
 		try {
 			if (this._outputMode === 'mir') {
 				log(`Generating MIR (optimize=${this._optimize})`);
-
-				const response = await this._client.sendRequest<GenerateIRResponse>(
+				const response = await client.sendRequest<GenerateIRResponse>(
 					'maxon/generateIR',
 					{
 						source: this._currentSource,
@@ -160,16 +140,14 @@ export class CompilerExplorerPanel {
 						optimize: this._optimize
 					}
 				);
-
-				this._panel.webview.postMessage({
+				webview.postMessage({
 					command: 'updateOutput',
 					output: response.ir,
 					errors: response.errors
 				});
 			} else {
 				log(`Generating Assembly (optimize=${this._optimize})`);
-
-				const response = await this._client.sendRequest<GenerateAsmResponse>(
+				const response = await client.sendRequest<GenerateAsmResponse>(
 					'maxon/generateAsm',
 					{
 						source: this._currentSource,
@@ -177,8 +155,7 @@ export class CompilerExplorerPanel {
 						optimize: this._optimize
 					}
 				);
-
-				this._panel.webview.postMessage({
+				webview.postMessage({
 					command: 'updateOutput',
 					output: response.assembly,
 					errors: response.errors
@@ -186,33 +163,12 @@ export class CompilerExplorerPanel {
 			}
 		} catch (error) {
 			log(`Error generating output: ${error}`);
-			this._panel.webview.postMessage({
+			webview.postMessage({
 				command: 'updateOutput',
 				output: '',
 				errors: [{ message: `Error: ${error}`, line: 1, column: 1 }]
 			});
 		}
-	}
-
-	public dispose() {
-		CompilerExplorerPanel.currentPanel = undefined;
-
-		if (this._debounceTimer) {
-			clearTimeout(this._debounceTimer);
-		}
-
-		this._panel.dispose();
-
-		while (this._disposables.length) {
-			const disposable = this._disposables.pop();
-			if (disposable) {
-				disposable.dispose();
-			}
-		}
-	}
-
-	private _update() {
-		this._panel.webview.html = this._getHtmlForWebview();
 	}
 
 	private _getHtmlForWebview(): string {
@@ -234,8 +190,8 @@ export class CompilerExplorerPanel {
 
 		body {
 			font-family: var(--vscode-font-family);
-			background-color: var(--vscode-editor-background);
-			color: var(--vscode-editor-foreground);
+			background-color: var(--vscode-sideBar-background);
+			color: var(--vscode-sideBar-foreground, var(--vscode-foreground));
 			height: 100vh;
 			display: flex;
 			flex-direction: column;
@@ -245,15 +201,11 @@ export class CompilerExplorerPanel {
 		.toolbar {
 			display: flex;
 			align-items: center;
-			padding: 8px 12px;
-			background-color: var(--vscode-titleBar-activeBackground);
+			padding: 6px 8px;
+			background-color: var(--vscode-sideBarSectionHeader-background);
 			border-bottom: 1px solid var(--vscode-panel-border);
-			gap: 12px;
-		}
-
-		.toolbar-title {
-			font-weight: 600;
-			font-size: 13px;
+			gap: 8px;
+			flex-wrap: wrap;
 		}
 
 		.toolbar-spacer {
@@ -267,17 +219,17 @@ export class CompilerExplorerPanel {
 		}
 
 		.toggle-label {
-			font-size: 12px;
+			font-size: 11px;
 			color: var(--vscode-descriptionForeground);
 		}
 
 		.toggle-switch {
 			position: relative;
-			width: 36px;
-			height: 18px;
+			width: 30px;
+			height: 16px;
 			background-color: var(--vscode-input-background);
 			border: 1px solid var(--vscode-input-border);
-			border-radius: 9px;
+			border-radius: 8px;
 			cursor: pointer;
 			transition: background-color 0.2s;
 		}
@@ -289,8 +241,8 @@ export class CompilerExplorerPanel {
 		.toggle-switch::after {
 			content: '';
 			position: absolute;
-			top: 2px;
-			left: 2px;
+			top: 1px;
+			left: 1px;
 			width: 12px;
 			height: 12px;
 			background-color: var(--vscode-button-foreground);
@@ -299,7 +251,7 @@ export class CompilerExplorerPanel {
 		}
 
 		.toggle-switch.active::after {
-			transform: translateX(18px);
+			transform: translateX(14px);
 		}
 
 		.main-container {
@@ -319,7 +271,7 @@ export class CompilerExplorerPanel {
 		.panel-header {
 			display: flex;
 			align-items: center;
-			padding: 6px 12px;
+			padding: 4px 8px;
 			background-color: var(--vscode-sideBarSectionHeader-background);
 			border-bottom: 1px solid var(--vscode-panel-border);
 			font-size: 11px;
@@ -340,9 +292,9 @@ export class CompilerExplorerPanel {
 			background-color: var(--vscode-editor-background);
 			color: var(--vscode-editor-foreground);
 			border: none;
-			padding: 12px;
+			padding: 8px;
 			font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
-			font-size: var(--vscode-editor-font-size, 14px);
+			font-size: var(--vscode-editor-font-size, 13px);
 			line-height: 1.5;
 			resize: none;
 			outline: none;
@@ -358,9 +310,9 @@ export class CompilerExplorerPanel {
 			height: 100%;
 			background-color: var(--vscode-editor-background);
 			color: var(--vscode-editor-foreground);
-			padding: 12px;
+			padding: 8px;
 			font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
-			font-size: var(--vscode-editor-font-size, 14px);
+			font-size: var(--vscode-editor-font-size, 13px);
 			line-height: 1.5;
 			overflow: auto;
 			white-space: pre;
@@ -374,6 +326,7 @@ export class CompilerExplorerPanel {
 			height: 4px;
 			background-color: var(--vscode-panel-border);
 			cursor: ns-resize;
+			flex-shrink: 0;
 		}
 
 		.divider:hover {
@@ -381,10 +334,10 @@ export class CompilerExplorerPanel {
 		}
 
 		.error-list {
-			padding: 8px 12px;
+			padding: 6px 8px;
 			background-color: var(--vscode-inputValidation-errorBackground);
 			border-top: 1px solid var(--vscode-inputValidation-errorBorder);
-			font-size: 12px;
+			font-size: 11px;
 			max-height: 100px;
 			overflow: auto;
 		}
@@ -398,17 +351,6 @@ export class CompilerExplorerPanel {
 			font-weight: 600;
 		}
 
-		/* MIR Syntax Highlighting */
-		.ir-keyword { color: var(--vscode-keyword-foreground, #569cd6); }
-		.ir-type { color: var(--vscode-type-foreground, #4ec9b0); }
-		.ir-function { color: var(--vscode-function-foreground, #dcdcaa); }
-		.ir-number { color: var(--vscode-number-foreground, #b5cea8); }
-		.ir-string { color: var(--vscode-string-foreground, #ce9178); }
-		.ir-comment { color: var(--vscode-comment-foreground, #6a9955); }
-		.ir-label { color: var(--vscode-variable-foreground, #9cdcfe); }
-		.ir-register { color: var(--vscode-parameter-foreground, #9cdcfe); }
-
-		/* Output mode selector */
 		.mode-selector {
 			display: flex;
 			background-color: var(--vscode-input-background);
@@ -418,8 +360,8 @@ export class CompilerExplorerPanel {
 		}
 
 		.mode-btn {
-			padding: 4px 12px;
-			font-size: 12px;
+			padding: 2px 8px;
+			font-size: 11px;
 			background: transparent;
 			border: none;
 			color: var(--vscode-foreground);
@@ -439,12 +381,11 @@ export class CompilerExplorerPanel {
 </head>
 <body>
 	<div class="toolbar">
-		<span class="toolbar-title">Maxon Compiler Explorer</span>
-		<span class="toolbar-spacer"></span>
 		<div class="mode-selector">
 			<button class="mode-btn active" id="mirBtn">MIR</button>
 			<button class="mode-btn" id="asmBtn">Assembly</button>
 		</div>
+		<span class="toolbar-spacer"></span>
 		<div class="toggle-container">
 			<span class="toggle-label">Optimized</span>
 			<div class="toggle-switch" id="optimizeToggle"></div>
@@ -495,7 +436,6 @@ end 'main'"></textarea>
 		let isOptimized = false;
 		let outputMode = 'mir';
 
-		// Restore saved state if available (webview was hidden and recreated)
 		const previousState = vscode.getState();
 		if (previousState && previousState.source) {
 			sourceEditor.value = previousState.source;
@@ -517,7 +457,6 @@ end 'main'"></textarea>
 			vscode.setState({ source: sourceEditor.value, outputMode, isOptimized });
 		}
 
-		// Handle source code changes
 		sourceEditor.addEventListener('input', () => {
 			saveState();
 			vscode.postMessage({
@@ -526,7 +465,6 @@ end 'main'"></textarea>
 			});
 		});
 
-		// Handle tab key in textarea
 		sourceEditor.addEventListener('keydown', (e) => {
 			if (e.key === 'Tab') {
 				e.preventDefault();
@@ -534,13 +472,10 @@ end 'main'"></textarea>
 				const end = sourceEditor.selectionEnd;
 				sourceEditor.value = sourceEditor.value.substring(0, start) + '\\t' + sourceEditor.value.substring(end);
 				sourceEditor.selectionStart = sourceEditor.selectionEnd = start + 1;
-
-				// Trigger input event to update IR
 				sourceEditor.dispatchEvent(new Event('input'));
 			}
 		});
 
-		// Handle optimize toggle
 		optimizeToggle.addEventListener('click', () => {
 			isOptimized = !isOptimized;
 			optimizeToggle.classList.toggle('active', isOptimized);
@@ -551,7 +486,6 @@ end 'main'"></textarea>
 			});
 		});
 
-		// Handle output mode buttons
 		mirBtn.addEventListener('click', () => {
 			if (outputMode !== 'mir') {
 				outputMode = 'mir';
@@ -580,7 +514,6 @@ end 'main'"></textarea>
 			}
 		});
 
-		// Handle divider drag for resizing panels
 		let isDragging = false;
 		let startY = 0;
 		let startSourceHeight = 0;
@@ -597,7 +530,7 @@ end 'main'"></textarea>
 			if (!isDragging) return;
 
 			const deltaY = e.clientY - startY;
-			const newSourceHeight = Math.max(100, Math.min(window.innerHeight - 150, startSourceHeight + deltaY));
+			const newSourceHeight = Math.max(60, Math.min(window.innerHeight - 120, startSourceHeight + deltaY));
 
 			sourcePanel.style.flex = 'none';
 			sourcePanel.style.height = newSourceHeight + 'px';
@@ -611,26 +544,17 @@ end 'main'"></textarea>
 			}
 		});
 
-		// Receive messages from the extension
 		window.addEventListener('message', (event) => {
 			const message = event.data;
 			switch (message.command) {
 				case 'updateOutput':
 					updateOutput(message.output, message.errors);
 					break;
-				case 'focus':
-					sourceEditor.focus();
-					break;
-				case 'restoreSource':
-					sourceEditor.value = message.source;
-					saveState();
-					break;
 			}
 		});
 
 		function updateOutput(output, errors) {
 			if (errors && errors.length > 0) {
-				// Show errors
 				errorList.style.display = 'block';
 				errorList.innerHTML = errors.map(err =>
 					\`<div class="error-item"><span class="error-location">Line \${err.line}:\${err.column}:</span> \${escapeHtml(err.message)}</div>\`
@@ -638,7 +562,6 @@ end 'main'"></textarea>
 				outputView.classList.add('has-errors');
 				outputView.textContent = '';
 			} else {
-				// Show output as plain text
 				errorList.style.display = 'none';
 				outputView.classList.remove('has-errors');
 				outputView.textContent = output || '';
@@ -651,7 +574,6 @@ end 'main'"></textarea>
 			return div.innerHTML;
 		}
 
-		// Request initial output generation if there's content
 		if (sourceEditor.value) {
 			vscode.postMessage({
 				command: 'sourceChanged',

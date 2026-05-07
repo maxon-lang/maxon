@@ -114,6 +114,14 @@ public class Project(
 
   public bool IsEmpty => IsSingleFile ? _fileContents.IsEmpty : CollectSources().Length == 0;
 
+  /// <summary>
+  /// Number of source files in this project. For single-file projects this is
+  /// 1 if the buffer is open and 0 otherwise. For multi-file projects this
+  /// walks the directory; callers that just want a tooltip should accept that
+  /// cost (typically a few ms for small projects).
+  /// </summary>
+  public int FileCount => IsSingleFile ? _fileContents.Count : CollectSources().Length;
+
   public List<CompileError> GetDiagnostics(string filePath) {
     return _diagnostics.TryGetValue(NormalizePath(filePath), out var errors) ? errors : [];
   }

@@ -46,6 +46,19 @@ public class LspServer {
         .OnInitialized((server, request, response, token) => {
           return Task.CompletedTask;
         })
+        .OnRequest<ListProjectsParams, ListProjectsResponse>("maxon/listProjects", (_, _) => {
+          var projects = _projectManager?.AllProjects ?? [];
+          var items = projects
+            .Select(p => new ProjectInfo {
+              RootPath = p.RootPath,
+              IsSingleFile = p.IsSingleFile,
+              FileCount = p.FileCount,
+            })
+            .OrderBy(p => p.IsSingleFile)
+            .ThenBy(p => p.RootPath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+          return Task.FromResult(new ListProjectsResponse { Projects = items });
+        })
     ).ConfigureAwait(false);
 
     await server.WaitForExit.ConfigureAwait(false);
@@ -1609,3 +1622,15 @@ public record CompletionInfo(
   Dictionary<string, string> VariableTypes,
   Dictionary<string, TypeAliasInfo>? TypeAliasSources = null
 );
+
+public class ListProjectsParams { }
+
+public class ListProjectsResponse {
+  public ProjectInfo[] Projects { get; set; } = [];
+}
+
+public class ProjectInfo {
+  public string RootPath { get; set; } = "";
+  public bool IsSingleFile { get; set; }
+  public int FileCount { get; set; }
+}

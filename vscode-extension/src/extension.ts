@@ -5,10 +5,11 @@ import * as vscode from 'vscode';
 import {
 	LanguageClient,
 	LanguageClientOptions,
-	ServerOptions
+	ServerOptions,
+	State
 } from 'vscode-languageclient/node';
 import { log, initLogger } from './logger';
-import { CompilerExplorerPanel } from './compilerExplorerPanel';
+import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
 import { registerTestController } from './testController';
 
 interface ExtensionState {
@@ -20,6 +21,8 @@ interface ExtensionState {
 }
 
 let state: ExtensionState | undefined;
+let statusBarItem: vscode.StatusBarItem | undefined;
+let stateSubscription: vscode.Disposable | undefined;
 
 const isWindows = os.platform() === 'win32';
 const binaryName = isWindows ? 'maxon.exe' : 'maxon';
@@ -27,6 +30,112 @@ const lspBinaryName = isWindows ? 'maxon-lsp.exe' : 'maxon-lsp';
 
 export function getClient(): LanguageClient | undefined {
 	return state?.client;
+}
+
+interface ProjectInfo {
+	rootPath: string;
+	isSingleFile: boolean;
+	fileCount: number;
+}
+
+interface ListProjectsResponse {
+	projects: ProjectInfo[];
+}
+
+let lastClientState: State = State.Stopped;
+let lastProjects: ProjectInfo[] | undefined;
+let projectRefreshTimer: NodeJS.Timeout | undefined;
+
+function buildTooltip(): vscode.MarkdownString {
+	const md = new vscode.MarkdownString(undefined, true);
+	md.isTrusted = false;
+	md.supportThemeIcons = true;
+
+	const stateLabel =
+		lastClientState === State.Running ? '$(check) Running' :
+		lastClientState === State.Starting ? '$(sync~spin) Starting…' :
+		'$(error) Stopped';
+	md.appendMarkdown(`**Maxon Language Server** — ${stateLabel}\n\n`);
+
+	if (lastClientState !== State.Running) {
+		return md;
+	}
+	if (!lastProjects) {
+		md.appendMarkdown('_Loading projects…_');
+		return md;
+	}
+	if (lastProjects.length === 0) {
+		md.appendMarkdown('_No projects loaded_');
+		return md;
+	}
+
+	md.appendMarkdown('**Loaded projects**\n\n');
+	for (const p of lastProjects) {
+		const kind = p.isSingleFile ? 'file' : 'project';
+		const fileText = p.fileCount === 1 ? '1 file' : `${p.fileCount} files`;
+		md.appendMarkdown(`- \`${p.rootPath}\` _(${kind}, ${fileText})_\n`);
+	}
+	return md;
+}
+
+function updateStatusBar() {
+	if (!statusBarItem) return;
+	switch (lastClientState) {
+		case State.Running:
+			statusBarItem.text = '$(maxon-logo)';
+			statusBarItem.backgroundColor = undefined;
+			break;
+		case State.Starting:
+			statusBarItem.text = '$(sync~spin)';
+			statusBarItem.backgroundColor = undefined;
+			break;
+		case State.Stopped:
+			statusBarItem.text = '$(maxon-logo)';
+			statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+			break;
+	}
+	statusBarItem.tooltip = buildTooltip();
+}
+
+async function refreshProjects() {
+	const client = state?.client;
+	if (!client || client.state !== State.Running) {
+		lastProjects = undefined;
+		updateStatusBar();
+		return;
+	}
+	try {
+		const response = await client.sendRequest<ListProjectsResponse>('maxon/listProjects', {});
+		lastProjects = response.projects ?? [];
+	} catch (error) {
+		log(`maxon/listProjects failed: ${error}`);
+		lastProjects = [];
+	}
+	updateStatusBar();
+}
+
+function scheduleProjectRefresh() {
+	if (projectRefreshTimer) clearTimeout(projectRefreshTimer);
+	projectRefreshTimer = setTimeout(() => refreshProjects(), 500);
+}
+
+function subscribeToClientState(client: LanguageClient) {
+	stateSubscription?.dispose();
+	lastClientState = client.state;
+	updateStatusBar();
+	if (client.state === State.Running) {
+		scheduleProjectRefresh();
+	}
+	stateSubscription = client.onDidChangeState((e) => {
+		lastClientState = e.newState;
+		if (e.newState !== State.Running) {
+			lastProjects = undefined;
+		}
+		updateStatusBar();
+		if (e.newState === State.Running) {
+			scheduleProjectRefresh();
+		}
+	});
 }
 
 function sleep(ms: number): Promise<void> {
@@ -95,6 +204,7 @@ export async function restartClient(): Promise<void> {
 		serverOptions,
 		state.clientOptions
 	);
+	subscribeToClientState(state.client);
 
 	// Start the client
 	try {
@@ -221,6 +331,24 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		clientOptions
 	};
 
+	// Status bar item showing LSP state. Hover for the loaded project list.
+	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+	statusBarItem.show();
+	ctx.subscriptions.push(statusBarItem);
+	ctx.subscriptions.push({ dispose: () => stateSubscription?.dispose() });
+	ctx.subscriptions.push({ dispose: () => { if (projectRefreshTimer) clearTimeout(projectRefreshTimer); } });
+	subscribeToClientState(client);
+
+	// Refresh the loaded-project list when the active editor changes (a new
+	// project may have been opened) or when a file is saved (project files
+	// may have been added/removed on disk). Both events are cheap to debounce.
+	ctx.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(scheduleProjectRefresh),
+		vscode.workspace.onDidSaveTextDocument(scheduleProjectRefresh),
+		vscode.workspace.onDidOpenTextDocument(scheduleProjectRefresh),
+		vscode.workspace.onDidCloseTextDocument(scheduleProjectRefresh)
+	);
+
 	// Start the client and await completion
 	try {
 		await client.start();
@@ -247,16 +375,24 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	ctx.subscriptions.push(restartCommand);
 
-	// Register compiler explorer command
+	// Register the compiler explorer webview view provider (lives in the activity bar)
+	const compilerExplorerProvider = new CompilerExplorerViewProvider(
+		ctx.extensionUri,
+		() => state?.client
+	);
+	ctx.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			CompilerExplorerViewProvider.viewType,
+			compilerExplorerProvider
+		)
+	);
+
+	// Command opens the activity bar view
 	const compilerExplorerCommand = vscode.commands.registerCommand(
 		'maxon.openCompilerExplorer',
-		() => {
+		async () => {
 			log('Opening Compiler Explorer');
-			if (!state?.client) {
-				vscode.window.showErrorMessage('Language server not started. Please wait for activation.');
-				return;
-			}
-			CompilerExplorerPanel.createOrShow(ctx.extensionUri, state.client);
+			await vscode.commands.executeCommand(`${CompilerExplorerViewProvider.viewType}.focus`);
 		}
 	);
 

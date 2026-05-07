@@ -42,6 +42,8 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
     return null;
   }
 
+  public IReadOnlyCollection<Project> AllProjects => [.. _projects.Values];
+
   /// <summary>
   /// Called when a non-.maxon path (typically a directory) is deleted. Asks
   /// any project whose files could be under that path to prune them. Does an
