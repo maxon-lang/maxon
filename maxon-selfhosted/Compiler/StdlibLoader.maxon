@@ -110,6 +110,13 @@ function collectStdlibFiles() returns FilePathArray
 	return files
 end 'collectStdlibFiles'
 
+// Cache key for the currently-discoverable stdlib: whitelist file contents,
+// the synthesized bootstrap, and runtime.std (the latter affects compiled
+// output, so the on-disk cache must invalidate when runtime.std changes).
+function currentStdlibChecksum() returns CacheChecksum
+	return computeStdlibChecksum(collectStdlibFiles(), bootstrap: stdlibBootstrapSource, runtimePath: findRuntimePath())
+end 'currentStdlibChecksum'
+
 // Parse a single stdlib source string and merge its module into `allModule`.
 // Bundled stdlib content (whitelisted files + the synthesized bootstrap) is
 // trusted: any lex/parse failure is a compiler bug rather than a user input
@@ -205,8 +212,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'firstSet'
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let stdlibFilesForChecksum = collectStdlibFiles()
-	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum, bootstrap: stdlibBootstrapSource)
+	let contentChecksum = currentStdlibChecksum()
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
@@ -446,8 +452,7 @@ function loadCacheForTarget(project Project)
 	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let stdlibFilesForChecksum = collectStdlibFiles()
-	let contentChecksum = computeStdlibChecksum(stdlibFilesForChecksum, bootstrap: stdlibBootstrapSource)
+	let contentChecksum = currentStdlibChecksum()
 
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 

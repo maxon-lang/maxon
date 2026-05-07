@@ -4672,6 +4672,12 @@ export type Parser
 		// Snapshot the op count so we can locate the inner expression's
 		// terminal `call` op after parsing. parseUnary may emit multiple
 		// ops (chained postfix/methodCall) — we look at the last one.
+		// We deliberately call parseUnary, not parseExpressionBP: the
+		// rewrite below targets the last emitted op, so the inner must end
+		// with the throwing call. A full expression parse would let binops
+		// (`try foo() + 1`) emit further ops after the call, leaving the
+		// rewrite pointing at `add` instead of `call`. Outer binops are
+		// handled by the caller's expression context after we return.
 		let opCountBefore = module.ops.count()
 		let inner = try parseUnary(block)
 		let innerName = exprName(inner)

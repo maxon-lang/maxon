@@ -1631,16 +1631,15 @@ type MaxonToStdLowering
 		// `Array`, ...).
 		let receiverType = normalizeReceiverInContext(self.project, t: rawReceiverType, enclosingType: self.currentTypeName)
 		let receiverStructName = maxonTypeStructName(self.project, t: receiverType)
-		// Phase 11.0 Step 8.7c: when the receiver's type didn't reduce to
-		// a concrete struct name (it's an interface, a free type
-		// parameter, or unresolved), interface-style dynamic dispatch
-		// would have to thread through a witness table — that's the
-		// territory of Phase 11.4 (not yet wired). For now we lower the
-		// call to a runtime-panic stub so the build completes; any code
-		// path that actually executes it terminates cleanly with a
-		// diagnostic. The stdlib (`Array.from`, `for item in source`)
-		// reaches here at parse-time but is never invoked by the
-		// bootstrap compilation itself, so the stub never runs.
+		// Receiver type didn't reduce to a concrete struct name. Three
+		// sub-cases, handled in order below:
+		//   1. Interface receiver — fat-pointer dispatch via the paired
+		//      witness ValueId (Phase 11.3, fully wired).
+		//   2. Primitive receiver with a registered extension type (e.g.
+		//      `int.hash()`) — route to the extension's qualified signature.
+		//   3. Anything else (free type parameter, unresolved type) —
+		//      fall through to `lowerInterfaceMethodCallStub`, a runtime
+		//      panic that surfaces a clear diagnostic if it ever executes.
 		if receiverStructName.isEmpty() 'noStruct'
 			// C1.d: when the receiver type is `MaxonType.interface(_)`, the
 			// receiver is a fat-pointer pair `(value, witnessAddr)`. Look up
@@ -2545,12 +2544,12 @@ type MaxonToStdLowering
 		end 'stamp'
 	end 'lowerInterfaceMethodCall'
 
-	// Phase 11.0 Step 8.7c: stub for method calls whose receiver type
-	// didn't reduce to a concrete struct (interface-typed receivers,
-	// free type-parameters, or types the resolver couldn't pin down).
-	// Witness-table dispatch arrives in Phase 11.4; until then, lower
-	// to `mrt_panic("...is unimplemented")` so the build completes and
-	// any actual runtime invocation surfaces a clear error.
+	// Stub for method calls whose receiver type didn't reduce to a
+	// concrete struct AND isn't a true interface (those go through
+	// `lowerInterfaceMethodCall` above, with real witness-table dispatch).
+	// What's left: free type parameters and types the resolver couldn't
+	// pin down. Lower to `mrt_panic` so the build completes and any
+	// actual runtime invocation surfaces a clear error.
 	function lowerInterfaceMethodCallStub(result ByteArray, methodName ByteArray, dstBlock IrBlock)
 		let panicLabel = self.pipeline.nextPanicLabel()
 		let methodNameStr = String.from(methodName)

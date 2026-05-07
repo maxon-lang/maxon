@@ -21,6 +21,12 @@ static class BuildCache {
     public Dictionary<string, long> Sources { get; init; } = [];
   }
 
+  static SourceFile[] WithStdlibSources(SourceFile[] userSources) {
+    var stdlib = Compiler.StdlibLoader.LoadStdlibModules();
+    if (stdlib.Length == 0) return userSources;
+    return Compiler.StdlibLoader.PrependStdlib(stdlib, userSources);
+  }
+
   static long GetCompilerModifiedTicks() {
     if (_compilerModifiedTicks == null) {
       var exePath = Environment.ProcessPath;
@@ -56,8 +62,9 @@ static class BuildCache {
     if (outputPath != null && manifest.OutputPath != Path.GetFullPath(outputPath)) return false;
     if (!File.Exists(manifest.OutputPath)) return false;
 
-    if (manifest.Sources.Count != sources.Length) return false;
-    foreach (var source in sources) {
+    var allSources = WithStdlibSources(sources);
+    if (manifest.Sources.Count != allSources.Length) return false;
+    foreach (var source in allSources) {
       var fullPath = Path.GetFullPath(source.Path);
       if (!manifest.Sources.TryGetValue(fullPath, out var cachedTicks)) return false;
       if (File.GetLastWriteTimeUtc(source.Path).Ticks != cachedTicks) return false;
@@ -85,7 +92,7 @@ static class BuildCache {
 
   public static void WriteCache(string projectDir, SourceFile[] sources, string outputPath, CompileTarget target, string name = "build") {
     var sourcesMap = new Dictionary<string, long>();
-    foreach (var source in sources) {
+    foreach (var source in WithStdlibSources(sources)) {
       sourcesMap[Path.GetFullPath(source.Path)] = File.GetLastWriteTimeUtc(source.Path).Ticks;
     }
 

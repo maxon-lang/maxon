@@ -193,22 +193,46 @@ end 'StdlibCacheResult'
 // Checksum
 // ============================================================
 
-// Compute a simple checksum over the supplied stdlib source files plus the
-// in-memory bootstrap source. Sums all bytes mod 2^32. Caller controls which
-// files participate (so the cache key matches the on-disk whitelist) and
-// passes the bootstrap content explicitly so the cache invalidates whenever
-// either the on-disk whitelist or the synthesized prelude changes.
-export function computeStdlibChecksum(files FilePathArray, bootstrap String) returns CacheChecksum
-	var checksum = 0
+// FNV-1a 32-bit hash over the supplied stdlib source files, the in-memory
+// bootstrap source, and the runtime.std contents. Position-mixing (each byte
+// is xor'd then multiplied by the FNV prime) so a stale cache won't survive a
+// byte swap, file reorder, or anything else the old additive sum collided on.
+// Caller controls which files participate (so the cache key matches the
+// on-disk whitelist) and passes the bootstrap + runtime path explicitly so
+// the cache invalidates whenever any of them change.
+//
+// runtimePath may be empty (no runtime found / cross-tooling); in that case
+// only stdlib files + bootstrap participate, which still matches the build
+// path's behavior of skipping signature injection when runtime is absent.
+let FNV_OFFSET_BASIS = 0x811C9DC5
+let FNV_PRIME = 0x01000193
+
+function fnvUpdate(state CacheChecksum, b MachineWord) returns CacheChecksum
+	let mixed = state xor b
+	return (mixed * FNV_PRIME) and 0xFFFFFFFF
+end 'fnvUpdate'
+
+export function computeStdlibChecksum(files FilePathArray, bootstrap String, runtimePath FilePath) returns CacheChecksum
+	var checksum = FNV_OFFSET_BASIS
 	for filePath in files 'eachFile'
 		let bytes = try File.readBinary(filePath) otherwise continue
 		for b in bytes 'eachByte'
-			checksum = (checksum + b) and 0xFFFFFFFF
+			checksum = fnvUpdate(checksum, b: b)
 		end 'eachByte'
+		// Length separator so a byte stolen from one file and prepended to the
+		// next doesn't produce the same hash as the original split.
+		checksum = fnvUpdate(checksum, b: 0)
 	end 'eachFile'
 	for bb in bootstrap.bytes() 'eachBootstrapByte'
-		checksum = (checksum + bb) and 0xFFFFFFFF
+		checksum = fnvUpdate(checksum, b: bb)
 	end 'eachBootstrapByte'
+	checksum = fnvUpdate(checksum, b: 0)
+	if not runtimePath.isEmpty() 'hasRuntime'
+		let rtBytes = try File.readBinary(runtimePath) otherwise ByteArray.create()
+		for rb in rtBytes 'eachRuntimeByte'
+			checksum = fnvUpdate(checksum, b: rb)
+		end 'eachRuntimeByte'
+	end 'hasRuntime'
 	return checksum
 end 'computeStdlibChecksum'
 
