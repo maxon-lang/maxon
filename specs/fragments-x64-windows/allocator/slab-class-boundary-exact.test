@@ -1,10 +1,10 @@
 // Test: slab-class-boundary-exact
 function main() returns ExitCode
-	let p16 = __mm_raw_alloc(16)
-	let p24 = __mm_raw_alloc(24)
-	__mm_raw_free(p24)
-	__mm_raw_free(p16)
-	let count = __mm_raw_alloc_count()
+	let p16 = __mm_alloc(16, destructor: 0, tag: 0)
+	let p24 = __mm_alloc(24, destructor: 0, tag: 0)
+	__mm_decref(p24)
+	__mm_decref(p16)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -18,18 +18,26 @@ module {
   func @allocator.main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov r8d, 16
-    x64.mov rcx, r8
-    x64.call mm_raw_alloc
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 16
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov r12, r8
-    x64.mov r8d, 24
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 24
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov rcx, r8
-    x64.call mm_raw_alloc
-    x64.mov rcx, r8
-    x64.call mm_raw_free
+    x64.call mm_decref
     x64.mov rcx, r12
-    x64.call mm_raw_free
-    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.call mm_decref
+    x64.lea r8, [rip+__mm_alloc_count]
     x64.mov r9, [r8+0] (8b)
     x64.test r9, r9
     x64.jne ok_1.after

@@ -27,24 +27,16 @@ module {
     mir.cond_br %3 [then: always_1(), else: always_1.after()]
   always_1:
     %4 = mir.mov_imm 1 : i64
-    %5 = mir.call @mrt_set_error(%4)
-    %6 = mir.mov_imm 0 : i64
-    mir.ret %6
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %5, %4
   always_1.after:
-    %9 = mir.mov_imm 125 : i64
-    %10 = mir.cmp ugt, %8, %9
-    mir.cond_br %10 [then: __range_panic_2(), else: __range_ok_2()]
-  __range_panic_2:
-    %11 = mir.global_addr @__panic_msg_2
-    %12 = mir.call @mrt_panic(%11)
-  __range_ok_2:
-    mir.ret %8
+    %7 = mir.mov_imm 0 : i64
+    mir.error_return %8, %7
   }
   func @try-otherwise-value-flow.main() -> u8 {
   entry:
     %2 = mir.mov_imm 5 : i64
-    %3 = mir.call @try-otherwise-value-flow.alwaysThrows(%2)
-    %4 = mir.call @mrt_get_error_and_clear()
+    %3, %4 = mir.try_call @try-otherwise-value-flow.alwaysThrows(%2)
     %5 = mir.mov_imm 0 : i64
     %6 = mir.cmp ne, %4, %5
     mir.cond_br %6 [then: try_1.otherwise(), else: try_1.merge(%3)]
@@ -54,11 +46,11 @@ module {
   try_1.merge:
     %12 = mir.mov_imm 125 : i64
     %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_3(), else: __range_ok_3()]
-  __range_panic_3:
-    %14 = mir.global_addr @__panic_msg_3
+    mir.cond_br %13 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %14 = mir.global_addr @__panic_msg_1
     %15 = mir.call @mrt_panic(%14)
-  __range_ok_3:
+  __range_ok_1:
     mir.ret %11
   }
 }

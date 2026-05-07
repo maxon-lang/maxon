@@ -38,19 +38,21 @@ module {
     mir.br inlined_Array.set_0()
   inlined_Array.set_0:
     %39 = mir.load %31, 0
-    %40 = mir.call @__managed_mem_set(%39, %7, %8)
-    %41 = mir.call @mrt_get_error_and_clear()
+    %40, %41 = mir.try_call @__managed_mem_set(%39, %7, %8)
     %42 = mir.mov_imm 0 : i64
     %43 = mir.cmp ne, %41, %42
-    mir.cond_br %43 [then: inlined_Array.set_1(), else: inline_cont_main_0()]
+    mir.cond_br %43 [then: inlined_Array.set_1(), else: inlined_Array.set_3()]
   inlined_Array.set_1:
     %44 = mir.mov_imm 1 : i64
-    %45 = mir.call @mrt_set_error(%44)
-    mir.br inline_cont_main_0()
+    %45 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%45, %44)
+  inlined_Array.set_3:
+    %46 = mir.mov_imm 0 : i64
+    %47 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%46, %47)
   inline_cont_main_0:
-    %11 = mir.call @mrt_get_error_and_clear()
     %12 = mir.mov_imm 0 : i64
-    %13 = mir.cmp ne, %11, %12
+    %13 = mir.cmp ne, %49, %12
     mir.cond_br %13 [then: try_1.otherwise(), else: try_1.merge()]
   try_1.otherwise:
     %15 = mir.global_addr @__panic_msg_0
@@ -61,32 +63,32 @@ module {
     %20 = mir.mov_imm 0 : i64
     mir.br inlined_Array.get_0()
   inlined_Array.get_0:
-    %46 = mir.load %31, 0
-    %47 = mir.call @__managed_mem_get(%46, %20)
-    %48 = mir.call @mrt_get_error_and_clear()
-    %49 = mir.mov_imm 0 : i64
-    %50 = mir.cmp ne, %48, %49
-    mir.cond_br %50 [then: inlined_Array.get_1(), else: inline_cont_main_3(%47)]
-  inlined_Array.get_1:
-    %51 = mir.mov_imm 1 : i64
-    %52 = mir.call @mrt_set_error(%51)
+    %50 = mir.load %31, 0
+    %51, %52 = mir.try_call @__managed_mem_get(%50, %20)
     %53 = mir.mov_imm 0 : i64
-    mir.br inline_cont_main_3(%53)
+    %54 = mir.cmp ne, %52, %53
+    mir.cond_br %54 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %55 = mir.mov_imm 1 : i64
+    %56 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%56, %55)
+  inlined_Array.get_3:
+    %57 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%51, %57)
   inline_cont_main_3:
-    %23 = mir.call @mrt_get_error_and_clear()
     %24 = mir.mov_imm 0 : i64
-    %25 = mir.cmp ne, %23, %24
-    mir.cond_br %25 [then: try_4.otherwise(), else: try_4.merge(%54)]
+    %25 = mir.cmp ne, %59, %24
+    mir.cond_br %25 [then: try_4.otherwise(), else: try_4.merge(%58)]
   try_4.otherwise:
     %27 = mir.mov_imm 0 : i64
     mir.br try_4.merge(%27)
   try_4.merge:
-    %55 = mir.mov_imm 125 : i64
-    %56 = mir.cmp ugt, %29, %55
-    mir.cond_br %56 [then: __range_panic_0(), else: __range_ok_0()]
+    %60 = mir.mov_imm 125 : i64
+    %61 = mir.cmp ugt, %29, %60
+    mir.cond_br %61 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %57 = mir.global_addr @__panic_msg_1
-    %58 = mir.call @mrt_panic(%57)
+    %62 = mir.global_addr @__panic_msg_1
+    %63 = mir.call @mrt_panic(%62)
   __range_ok_0:
     mir.ret %29
   }

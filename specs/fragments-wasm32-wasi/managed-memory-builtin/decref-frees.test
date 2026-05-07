@@ -21,13 +21,7 @@ module {
     %2 = mir.mov_imm 4 : i64
     %3 = mir.mov_imm 8 : i64
     %4 = mir.call @__managed_mem_create(%2, %3)
-    %5 = mir.call @mrt_get_error_and_clear()
-    %6 = mir.mov_imm 0 : i64
-    %7 = mir.cmp ne, %5, %6
-    mir.cond_br %7 [then: try_1.otherwise(), else: try_1.merge()]
-  try_1.otherwise:
-    %9 = mir.mov_imm 1 : i64
-    mir.ret %9
+    mir.br try_1.merge()
   try_1.merge:
     %12 = mir.call @mm_decref(%4)
     %13 = mir.global_addr @__mm_alloc_count

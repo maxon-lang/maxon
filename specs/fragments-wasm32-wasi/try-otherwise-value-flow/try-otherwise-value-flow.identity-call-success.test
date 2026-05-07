@@ -18,21 +18,14 @@ ExitCode: 7
 module {
   func @try-otherwise-value-flow.ident(local0: u8) -> u8 {
   entry:
-    %2 = mir.param local0 : u8
-    %3 = mir.mov_imm 125 : i64
-    %4 = mir.cmp ugt, %2, %3
-    mir.cond_br %4 [then: __range_panic_4(), else: __range_ok_4()]
-  __range_panic_4:
-    %5 = mir.global_addr @__panic_msg_4
-    %6 = mir.call @mrt_panic(%5)
-  __range_ok_4:
-    mir.ret %2
+    %3 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    mir.error_return %3, %2
   }
   func @try-otherwise-value-flow.main() -> u8 {
   entry:
     %2 = mir.mov_imm 7 : i64
-    %3 = mir.call @try-otherwise-value-flow.ident(%2)
-    %4 = mir.call @mrt_get_error_and_clear()
+    %3, %4 = mir.try_call @try-otherwise-value-flow.ident(%2)
     %5 = mir.mov_imm 0 : i64
     %6 = mir.cmp ne, %4, %5
     mir.cond_br %6 [then: try_1.otherwise(), else: try_1.merge(%3)]
@@ -42,11 +35,11 @@ module {
   try_1.merge:
     %12 = mir.mov_imm 125 : i64
     %13 = mir.cmp ugt, %11, %12
-    mir.cond_br %13 [then: __range_panic_5(), else: __range_ok_5()]
-  __range_panic_5:
-    %14 = mir.global_addr @__panic_msg_5
+    mir.cond_br %13 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %14 = mir.global_addr @__panic_msg_2
     %15 = mir.call @mrt_panic(%14)
-  __range_ok_5:
+  __range_ok_2:
     mir.ret %11
   }
 }

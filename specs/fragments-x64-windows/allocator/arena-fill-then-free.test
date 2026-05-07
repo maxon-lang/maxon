@@ -2,11 +2,11 @@
 function main() returns ExitCode
 	var i = 0
 	while i < 1000 'loop'
-		let p = __mm_raw_alloc(8)
-		__mm_raw_free(p)
+		let p = __mm_alloc(8, destructor: 0, tag: 0)
+		__mm_decref(p)
 		i = i + 1
 	end 'loop'
-	let count = __mm_raw_alloc_count()
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -26,15 +26,19 @@ module {
     x64.cmp rbx, 1000
     x64.jge loop_1.exit
   loop_1:
-    x64.mov r8d, 8
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 8
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov rcx, r8
-    x64.call mm_raw_alloc
-    x64.mov rcx, r8
-    x64.call mm_raw_free
+    x64.call mm_decref
     x64.add rbx, 1
     x64.jmp loop_1.header
   loop_1.exit:
-    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.lea r8, [rip+__mm_alloc_count]
     x64.mov r9, [r8+0] (8b)
     x64.test r9, r9
     x64.jne ok_4.after

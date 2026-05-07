@@ -381,13 +381,18 @@ func mrt_panic_print_frame 2 void
 
 end
 
-// mrt_alloc(size): thin wrapper around mm_raw_alloc. All allocations go
-// through the slab + MM raw path.
+// mrt_alloc(size): thin wrapper around mm_alloc with no destructor and no
+// tag. Every allocation goes through the unified tracked path: the
+// returned pointer carries a 24-byte mm header and refcount=1. Callers
+// that drop their reference must call mm_decref; callers that don't are
+// effectively leaking under __mm_alloc_count.
 func mrt_alloc 1 i64
   block entry:
     v0 = std param 0 i64
-    v1 = std call mm_raw_alloc v0
-    std ret v1
+    v1 = std constI64 0
+    v2 = std constI64 0
+    v3 = std call mm_alloc v0 v1 v2
+    std ret v3
 end
 
 // mrt_printInt(value): converts to string and prints to stdout.
@@ -2348,172 +2353,7 @@ func __slab_free 1 void
 end
 
 // =============================================================================
-// MM raw layer (step 6a.15)
-// =============================================================================
-//
-// mm_raw_alloc / mm_raw_free / mm_raw_realloc — untracked heap byte buffers
-// built directly on top of __slab_alloc / __slab_free. These are the lowest
-// level of the managed-memory stack: no refcount, no destructor pointer, no
-// type tag. Used by __ManagedMemory's `buffer` field and other places that
-// just need a flat contiguous byte buffer recoverable by pointer alone.
-//
-// Layout: every mm_raw_alloc reserves a 16-byte prefix in front of the user
-// pointer so that mm_raw_free / mm_raw_realloc can recover the size without
-// the caller passing it back in.
-//
-//   slot_base + 0   = size           (8 bytes; user-requested size)
-//   slot_base + 8   = reserved       (8 bytes; debug info in the C# bootstrap,
-//                                     unused here)
-//   slot_base + 16  = user pointer   <-- value returned to callers
-//
-// The raw block is __slab_alloc(size + 16); freeing rewinds 16 bytes to
-// recover slot_base before delegating to __slab_free.
-//
-// Globals referenced (TODO step 6a.17 — backing storage not yet registered
-// in the data prelude; globalAddr will silently resolve to offset 0 until
-// then, harmless because nothing calls these yet):
-//   __mm_raw_alloc_count   8 bytes — atomic counter, used by leak-check tests
-//
-// The C# bootstrap also wires an mmTrace path (per-alloc id counter,
-// trace ring buffer, scope strings). That entire flag is dropped in the
-// self-hosted port — these functions are the non-trace baseline only.
-
-// mm_raw_alloc(size): allocate `size` user-visible bytes, returning a pointer
-// to the start of the user region. The 16-byte prefix is invisible to the
-// caller; mm_raw_free / mm_raw_realloc recover it by subtracting 16.
-//
-// Slot usage:
-//   slot 0 = size (arg)
-//   slot 1 = slot_base (raw slab pointer)
-func mm_raw_alloc 1 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    // Atomic increment __mm_raw_alloc_count.
-    v1 = std globalAddr __mm_raw_alloc_count
-    std atomicInc v1
-
-    // raw_size = size + 16
-    v2 = std constI64 16
-    v3 = std addI64 v0 v2
-    v4 = std call __slab_alloc v3
-    std storeSlot 1 v4
-
-    // Store user-requested size at slot_base + 0.
-    std storeIndirect v4 0 v0
-
-    // Return slot_base + 16.
-    v5 = std constI64 16
-    v6 = std addI64 v4 v5
-    std ret v6
-end
-
-// mm_raw_free(ptr): release a buffer obtained from mm_raw_alloc /
-// mm_raw_realloc. Silently no-ops on NULL to match the C# bootstrap.
-//
-// Slot usage:
-//   slot 0 = ptr (arg)
-func mm_raw_free 1 void
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-
-    v1 = std constI64 0
-    v2 = std cmpI64Eq v0 v1
-    std condBr v2 null_path live_path
-
-  block null_path:
-    v3 = std constI64 0
-    std ret v3
-
-  block live_path:
-    // Atomic decrement __mm_raw_alloc_count.
-    v4 = std globalAddr __mm_raw_alloc_count
-    std atomicDec v4
-
-    // slot_base = ptr - 16
-    v5 = std loadSlot 0
-    v6 = std constI64 16
-    v7 = std subI64 v5 v6
-    v8 = std call __slab_free v7
-    v9 = std constI64 0
-    std ret v9
-end
-
-// mm_raw_realloc(ptr, new_size): grow or shrink a buffer in place by
-// allocating a fresh one, copying min(old_size, new_size) bytes, and freeing
-// the original. Returns the new user pointer. If `ptr == 0`, behaves as a
-// plain mm_raw_alloc(new_size) (matches the C# bootstrap fast path).
-//
-// Slot usage:
-//   slot 0 = old_ptr (arg)
-//   slot 1 = new_size (arg)
-//   slot 2 = old_size (read from old header)
-//   slot 3 = new_ptr
-//   slot 4 = copy_size (= min(old_size, new_size))
-func mm_raw_realloc 2 i64
-  block entry:
-    v0 = std param 0 i64
-    std storeSlot 0 v0
-    v1 = std param 1 i64
-    std storeSlot 1 v1
-
-    v2 = std constI64 0
-    v3 = std cmpI64Eq v0 v2
-    std condBr v3 null_path live_path
-
-  block null_path:
-    // ptr == 0 => behave as mm_raw_alloc(new_size).
-    v4 = std loadSlot 1
-    v5 = std call mm_raw_alloc v4
-    std ret v5
-
-  block live_path:
-    // old_size = *(old_ptr - 16)  i.e. read at slot_base + 0.
-    v6 = std loadSlot 0
-    v7 = std constI64 16
-    v8 = std subI64 v6 v7
-    v9 = std loadIndirect v8 0
-    std storeSlot 2 v9
-
-    // Allocate new buffer.
-    v10 = std loadSlot 1
-    v11 = std call mm_raw_alloc v10
-    std storeSlot 3 v11
-
-    // copy_size = min(old_size, new_size)
-    v12 = std loadSlot 2
-    v13 = std loadSlot 1
-    v14 = std cmpI64Lt v12 v13
-    std condBr v14 pick_old pick_new
-
-  block pick_old:
-    v15 = std loadSlot 2
-    std storeSlot 4 v15
-    std br do_copy
-
-  block pick_new:
-    v16 = std loadSlot 1
-    std storeSlot 4 v16
-    std br do_copy
-
-  block do_copy:
-    v17 = std loadSlot 3
-    v18 = std loadSlot 0
-    v19 = std loadSlot 4
-    std memcpy v17 v18 v19
-
-    // Free the old buffer.
-    v20 = std loadSlot 0
-    v21 = std call mm_raw_free v20
-
-    v22 = std loadSlot 3
-    std ret v22
-end
-
-// =============================================================================
-// MM tracked layer (step 6a.16)
+// MM tracked layer
 // =============================================================================
 //
 // mm_alloc / mm_free / mm_incref / mm_decref / mm_realloc — refcounted user
@@ -2536,14 +2376,15 @@ end
 // currently accepted and ignored — a future diag pass will use it to give a
 // per-type leak summary on shutdown.
 //
-// Globals referenced (TODO step 6a.17 — backing storage not yet registered):
+// Globals referenced (registered by registerSlabAndMmGlobalsForDataSection
+// in LowerMaxonToStd):
 //   __mm_alloc_count   8 bytes — atomic count of live mm_alloc allocations.
 //
-// Destructor invocation: mm_decref reads the destructor slot and would call
-// it indirectly, but StdParser does not yet expose the indirectCall op.
-// For now mm_free skips the destructor and just slab-frees the buffer.
-// TODO(6a.18+): wire indirectCall through StdParser and invoke the
-// destructor before slab_free in mm_free.
+// Destructor invocation: when mm_decref drives the refcount to zero it
+// calls mm_free, which reads the destructor pointer from [ptr - 24] and
+// invokes it via `indirectCall` (if non-null) before slab-freeing. The
+// destructor receives the user pointer and is expected to decref any
+// managed fields stored in the user region.
 
 // mm_alloc(size, destructor, tag) -> ptr: allocate a tracked refcounted
 // buffer with a 24-byte header. Refcount starts at 1. The `tag` arg is
@@ -2686,18 +2527,15 @@ func mm_decref 1 void
 end
 
 // mm_free(ptr): release a tracked allocation. Internal — usually invoked
-// by mm_decref when the refcount reaches zero. Decrements __mm_alloc_count
-// and slab-frees the underlying buffer.
-//
-// TODO(6a.18+): when StdParser exposes indirectCall, read the destructor
-// from [ptr - 24] and invoke it before the slab_free below. Currently the
-// destructor pointer is stored on alloc but never invoked, matching the
-// behaviour of mm_raw_* (which also doesn't run destructors). Callers that
-// need their destructor to run should run it manually before mm_decref.
+// by mm_decref when the refcount reaches zero. Reads the destructor from
+// [ptr - 24] and invokes it (if non-null) before slab-freeing. The
+// destructor is responsible for decreffing managed fields stored inside
+// the user region; mm_free only releases the surrounding allocation.
 //
 // Slot usage:
 //   slot 0 = ptr (arg)
 //   slot 1 = slot_base (= ptr - 24)
+//   slot 2 = destructor (read from [ptr - 24], 0 means "no destructor")
 func mm_free 1 void
   block entry:
     v0 = std param 0 i64
@@ -2712,10 +2550,30 @@ func mm_free 1 void
     std ret v3
 
   block live_path:
-    // TODO(6a.18+): once indirectCall is wired in StdParser, load the
-    // destructor from [ptr - 24] and call it indirectly with ptr in arg0.
-    // For now the destructor pointer is silently ignored.
+    // Load destructor from [ptr - 24]. Compute address explicitly because
+    // loadIndirect takes only unsigned offsets.
+    v11 = std loadSlot 0
+    v12 = std constI64 24
+    v13 = std subI64 v11 v12
+    v14 = std loadIndirect v13 0
+    std storeSlot 2 v14
 
+    // If destructor != 0, run it.
+    v15 = std loadSlot 2
+    v16 = std constI64 0
+    v17 = std cmpI64Eq v15 v16
+    std condBr v17 free_only do_destruct
+
+  block do_destruct:
+    // destructor(ptr) — reads managed fields out of the user region and
+    // decrefs them. Must run BEFORE slab_free so the user data is still
+    // intact when the destructor reads it.
+    v18 = std loadSlot 2
+    v19 = std loadSlot 0
+    v20 = std indirectCall v18 v19
+    std br free_only
+
+  block free_only:
     // Atomic decrement __mm_alloc_count.
     v4 = std globalAddr __mm_alloc_count
     std atomicDec v4
@@ -2850,8 +2708,8 @@ end
 //
 // Inspects `parent_ptr` (offset 32 in the 5-field 40-byte struct) to decide
 // what to free:
-//   parent_ptr == -1:  this is a root __ManagedMemory; free its buffer via
-//                      mm_raw_free.
+//   parent_ptr == -1:  this is a root __ManagedMemory; drop its buffer via
+//                      mm_decref.
 //   parent_ptr == -2:  this is rdata-backed; the buffer is in the static
 //                      .rdata section and must NOT be freed.
 //   parent_ptr == 0:   uninitialized (e.g. a freshly slab-allocated header
@@ -2864,10 +2722,20 @@ end
 // to that pointer — `loadIndirect self 0` returns the buffer pointer,
 // `loadIndirect self 32` returns parent_ptr, etc.
 //
+// Returns i64 (always 0) rather than void: the call site uses `indirectCall`
+// (mm_free reads the destructor pointer out of the allocation header), and
+// the wasm backend's `call_indirect` requires the static call-site type to
+// match the target function's signature exactly. Matching the IR
+// `indirectCall` op's "always defines a result value" shape on the
+// destructor side keeps the wasm signature uniform across every callable
+// destructor and avoids a per-target void-indirect-call codepath. The
+// returned 0 is silently discarded by the X64/Arm64 backends and stored
+// into a never-read SSA value by the wasm backend.
+//
 // Slot usage:
 //   slot 0 = self     (arg)
 //   slot 1 = parent   (loaded from self+32)
-func __destruct___ManagedMemory 1 void
+func __destruct___ManagedMemory 1 i64
   block entry:
     v0 = std param 0 i64
     std storeSlot 0 v0
@@ -2898,8 +2766,8 @@ func __destruct___ManagedMemory 1 void
     std condBr v11 done decref_parent
 
   block free_buffer:
-    // Buffer pointer at offset 0. Free it via mm_raw_free if non-null;
-    // mm_raw_free panics on null, so guard.
+    // Buffer pointer at offset 0. Drop our ref via mm_decref if non-null;
+    // mm_decref dereferences [ptr-8] without a null check, so guard.
     v12 = std loadSlot 0
     v13 = std loadIndirect v12 0
     v14 = std constI64 0
@@ -2909,7 +2777,7 @@ func __destruct___ManagedMemory 1 void
   block do_free_buffer:
     v16 = std loadSlot 0
     v17 = std loadIndirect v16 0
-    v18 = std call mm_raw_free v17
+    v18 = std call mm_decref v17
     std br done
 
   block decref_parent:
@@ -2952,7 +2820,7 @@ end
 //   7       | invalidAllocation | 8
 //
 // Layout (5-field, 40-byte __ManagedMemory struct):
-//   offset 0  buffer       i64 (heap pointer to mm_raw_alloc'd buffer or 0)
+//   offset 0  buffer       i64 (heap pointer to mm_alloc'd buffer or 0)
 //   offset 8  length       i64 (live element count)
 //   offset 16 capacity     i64 (allocated element slots)
 //   offset 24 element_size i64 (sizeof(Element); 1 for Byte, 8 otherwise)
@@ -3125,7 +2993,7 @@ end
 // Slot usage:
 //   slot 0 = self    (arg)
 //   slot 1 = newCap  (arg)
-//   slot 2 = newBuf  (mm_raw_realloc result)
+//   slot 2 = newBuf  (mm_realloc result)
 func __managed_mem_grow 2 i64
   block entry:
     v0 = std param 0 i64
@@ -3149,10 +3017,10 @@ func __managed_mem_grow 2 i64
     v8 = std loadIndirect v7 24
     v9 = std loadSlot 1
     v10 = std mulI64 v9 v8
-    // newBuf = mm_raw_realloc(self.buffer, newSize)
+    // newBuf = mm_realloc(self.buffer, newSize)
     v11 = std loadSlot 0
     v12 = std loadIndirect v11 0
-    v13 = std call mm_raw_realloc v12 v10
+    v13 = std call mm_realloc v12 v10
     std storeSlot 2 v13
     // self.buffer = newBuf; self.capacity = newCap
     v14 = std loadSlot 0
@@ -3611,7 +3479,7 @@ end
 // __managed_mem_slice(self, start, end) -> newPtr (sets error
 // sliceOutOfBounds=2, wire 3, on OOB).
 // Allocates a fresh root __ManagedMemory header (mm_alloc'd, with the same
-// destructor as the source) plus a fresh buffer (mm_raw_alloc'd) sized for
+// destructor as the source) plus a fresh buffer (mm_alloc'd, untagged) sized for
 // (end - start) elements. Copies the slice's bytes from the source buffer
 // into the new buffer. The new struct's parent_ptr is -1 (root) — i.e. the
 // slice owns its buffer; we don't hold a reference to the source.
@@ -3682,7 +3550,9 @@ func __managed_mem_slice 3 i64
 
   block alloc_buf:
     v21 = std loadSlot 5
-    v22 = std call mm_raw_alloc v21
+    v37 = std constI64 0
+    v38 = std constI64 0
+    v22 = std call mm_alloc v21 v37 v38
     std storeSlot 7 v22
     // memcpy(newBuf, self.buffer + start * elemSize, byteLen)
     v23 = std loadSlot 0
@@ -3719,7 +3589,7 @@ end
 
 // __managed_mem_create(count, elemSize) -> newPtr.
 // Static __ManagedMemory.create. Allocates a fresh root __ManagedMemory
-// struct (mm_alloc) plus, when count > 0, a fresh buffer (mm_raw_alloc)
+// struct (mm_alloc) plus, when count > 0, a fresh buffer (mm_alloc, untagged)
 // sized for `count` elements. Initializes:
 //   buffer       = newBuf or 0
 //   length       = 0
@@ -3755,9 +3625,11 @@ func __managed_mem_create 2 i64
     std condBr v7 init_empty alloc_buf
 
   block alloc_buf:
-    // size = count * elemSize
+    // size = count * elemSize; allocate as untagged buffer (no destructor).
     v8 = std mulI64 v0 v1
-    v9 = std call mm_raw_alloc v8
+    v15 = std constI64 0
+    v16 = std constI64 0
+    v9 = std call mm_alloc v8 v15 v16
     std storeSlot 3 v9
     std br init_struct
 

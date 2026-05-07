@@ -292,12 +292,61 @@ export type StdParser
 		// The StdParser creates param ops with explicit types but doesn't
 		// add them to the function's paramTypes array during parsing.
 		populateParamTypes(func)
+		populateThrowsTypeName(func)
 
 		// parseBlocks leaves the cursor AT `end` — that's our exit position,
 		// matching the "exit AT last-consumed" contract. The module-level
 		// for-header advances past `end` for the next iteration.
 		module.functions.push(func)
 	end 'parseFunction'
+
+	// Set func.throwsTypeName if any block terminator in the function is
+	// `errorReturn`. runtime.std doesn't have a `throws` annotation in its
+	// function header, so the only signal we have that a function follows
+	// the dual-value error ABI is the presence of `errorReturn` as a
+	// terminator. The string content is only consumed by codegen as a
+	// non-empty/empty marker, so we use "<runtime>" as a sentinel rather
+	// than tracking a specific enum.
+	function populateThrowsTypeName(func IrFunction)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			if blockTerminatorIsErrorReturnTerm(block.terminator) 'isErr'
+				func.throwsTypeName = "<runtime>"
+				return
+			end 'isErr'
+		end 'eachBlock'
+	end 'populateThrowsTypeName'
+
+	function blockTerminatorIsErrorReturnTerm(term Terminator) returns bool
+		return match term 'check'
+			unset gives false
+			dead gives false
+			fallthrough gives false
+			opIndex(idx) gives blockTerminatorIsErrorReturn(idx)
+		end 'check'
+	end 'blockTerminatorIsErrorReturnTerm'
+
+	function blockTerminatorIsErrorReturn(idx OpIndex) returns bool
+		let op = try module.ops.get(idx) otherwise return false
+		return match op 'check'
+			arith to control gives false
+			call(callOp) gives isErrorReturnCallOp(callOp)
+			memory to system gives false
+		end 'check'
+	end 'blockTerminatorIsErrorReturn'
+
+	function isErrorReturnCallOp(callOp StdCallOp) returns bool
+		return match callOp 'check'
+			ret gives false
+			call gives false
+			tryCall gives false
+			indirectCall gives false
+			funcRef gives false
+			tailCall gives false
+			param gives false
+			errorReturn gives true
+		end 'check'
+	end 'isErrorReturnCallOp'
 
 	// Populate func.paramTypes from the param ops in the entry block. Needed
 	// so downstream passes (x64 lowering, register allocation) know the ABI
@@ -541,6 +590,22 @@ export type StdParser
 			module.appendOp(block, op: StdOp.call(StdCallOp.call(resultId, callee: calleeName, argIds: argIds)))
 			return
 		end 'isCall'
+
+		if opName == "indirectCall" 'isIndirectCall'
+			// Shape: `[vN =] std indirectCall calleeValueId arg0 arg1 ...`.
+			// First operand is a value-id (the callee function pointer);
+			// remaining operands are value-ids passed as args.
+			let calleeId = try lookupValueId(try consumeName())
+			var argIds = ValueIdArray.create()
+			for argToken in cursor 'icArgLoop'
+				if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.end 'icEndArgs'
+					break
+				end 'icEndArgs'
+				argIds.push(try lookupValueId(argToken.value))
+			end 'icArgLoop'
+			module.appendOp(block, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+			return
+		end 'isIndirectCall'
 
 		if opName == "param" 'isParam'
 			let paramIndex = try consumeUnsignedInt()

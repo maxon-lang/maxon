@@ -43,7 +43,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // functions and every cross-module accessor call stays a `func.call`,
 // which costs two indirect calls per iteration in a tight `for n in
 // arr` loop.
-let CACHE_FORMAT_VERSION = 10
+let CACHE_FORMAT_VERSION = 11
 
 // ============================================================
 // Types
@@ -301,6 +301,9 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 		for pt in func.paramTypes 'eachParamType'
 			writeStdTypeTag(buf, t: pt)
 		end 'eachParamType'
+
+		// Throwing-function ABI: empty string = non-throwing.
+		writeString(buf, s: func.throwsTypeName)
 
 		// Body bytes
 		writeDword(buf, value: func.body.count())
@@ -616,6 +619,10 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 			pos = wp3
 			wFunc.paramTypes.push(pt)
 		end 'eachParamType'
+
+		let (wThrowsTypeName, wpThrows) = readString(buf, offset: pos)
+		pos = wpThrows
+		wFunc.throwsTypeName = wThrowsTypeName
 
 		// Body bytes
 		let wBodyLen = readDword(buf, offset: pos)

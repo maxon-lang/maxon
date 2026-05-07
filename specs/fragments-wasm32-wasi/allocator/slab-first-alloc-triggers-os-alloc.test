@@ -1,8 +1,8 @@
 // Test: slab-first-alloc-triggers-os-alloc
 function main() returns ExitCode
-	let p = __mm_raw_alloc(16)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -16,19 +16,21 @@ module {
   func @allocator.main() -> u8 {
   entry:
     %0 = mir.mov_imm 16 : i64
-    %1 = mir.call @mm_raw_alloc(%0)
-    %3 = mir.call @mm_raw_free(%1)
-    %4 = mir.global_addr @__mm_raw_alloc_count
-    %5 = mir.load %4, 0
-    %7 = mir.mov_imm 0 : i64
-    %8 = mir.cmp eq, %5, %7
-    mir.cond_br %8 [then: ok_1(), else: ok_1.after()]
-  ok_1:
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @mm_alloc(%0, %1, %2)
+    %5 = mir.call @mm_decref(%3)
+    %6 = mir.global_addr @__mm_alloc_count
+    %7 = mir.load %6, 0
     %9 = mir.mov_imm 0 : i64
-    mir.ret %9
+    %10 = mir.cmp eq, %7, %9
+    mir.cond_br %10 [then: ok_1(), else: ok_1.after()]
+  ok_1:
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
   ok_1.after:
-    %10 = mir.mov_imm 1 : i64
-    mir.ret %10
+    %12 = mir.mov_imm 1 : i64
+    mir.ret %12
   }
 }
 ---

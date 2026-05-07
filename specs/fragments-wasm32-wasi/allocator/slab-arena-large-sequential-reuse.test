@@ -1,12 +1,12 @@
 // Test: slab-arena-large-sequential-reuse
 function main() returns ExitCode
-	let a = __mm_raw_alloc(40000)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(40000)
-	__mm_raw_free(b)
-	let c = __mm_raw_alloc(40000)
-	__mm_raw_free(c)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let c = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(c)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -20,25 +20,31 @@ module {
   func @allocator.main() -> u8 {
   entry:
     %0 = mir.mov_imm 40000 : i64
-    %1 = mir.call @mm_raw_alloc(%0)
-    %3 = mir.call @mm_raw_free(%1)
-    %4 = mir.mov_imm 40000 : i64
-    %5 = mir.call @mm_raw_alloc(%4)
-    %7 = mir.call @mm_raw_free(%5)
-    %8 = mir.mov_imm 40000 : i64
-    %9 = mir.call @mm_raw_alloc(%8)
-    %11 = mir.call @mm_raw_free(%9)
-    %12 = mir.global_addr @__mm_raw_alloc_count
-    %13 = mir.load %12, 0
-    %15 = mir.mov_imm 0 : i64
-    %16 = mir.cmp eq, %13, %15
-    mir.cond_br %16 [then: ok_1(), else: ok_1.after()]
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @mm_alloc(%0, %1, %2)
+    %5 = mir.call @mm_decref(%3)
+    %6 = mir.mov_imm 40000 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.call @mm_alloc(%6, %7, %8)
+    %11 = mir.call @mm_decref(%9)
+    %12 = mir.mov_imm 40000 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.call @mm_alloc(%12, %13, %14)
+    %17 = mir.call @mm_decref(%15)
+    %18 = mir.global_addr @__mm_alloc_count
+    %19 = mir.load %18, 0
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.cmp eq, %19, %21
+    mir.cond_br %22 [then: ok_1(), else: ok_1.after()]
   ok_1:
-    %17 = mir.mov_imm 0 : i64
-    mir.ret %17
+    %23 = mir.mov_imm 0 : i64
+    mir.ret %23
   ok_1.after:
-    %18 = mir.mov_imm 1 : i64
-    mir.ret %18
+    %24 = mir.mov_imm 1 : i64
+    mir.ret %24
   }
 }
 ---

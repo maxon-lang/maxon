@@ -19,7 +19,7 @@ let wasiImportCount = 2
 // (runtime.std) calls osAllocPages, which lowers to `memory.grow` and returns
 // the byte offset of pages appended above the initial memory. The legacy
 // `__data_heap` bump arena that used to occupy 1024..65536 was abandoned when
-// mrt_alloc became a thin wrapper around mm_raw_alloc.
+// mrt_alloc became a thin wrapper around mm_alloc.
 //
 // iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
 // nwritten at offset 8
@@ -65,19 +65,22 @@ typealias WasmDataChunkArray = Array with WasmDataChunk
 // those lookups during emission.
 type WasmFuncSigs
 	export var returnTypes StdReturnTypeArray
+	export var throwsTypeNames StringArray
 	export var nameIndex FuncNameIndexMap
 
 	export static function create() returns WasmFuncSigs
-		return Self{returnTypes: StdReturnTypeArray.create(), nameIndex: FuncNameIndexMap.create()}
+		return Self{returnTypes: StdReturnTypeArray.create(), throwsTypeNames: StringArray.create(), nameIndex: FuncNameIndexMap.create()}
 	end 'create'
 
-	// Append `name` and its return type at the next index. Caller must also
-	// push the same name onto the parallel funcNames StringArray (used by
-	// the type/import sections that walk functions in order); this method
-	// records the index lookup.
-	export function pushFunc(name String, returnType StdReturnType)
+	// Append `name`, its return type, and its throws-type-name at the next
+	// index. Caller must also push the same name onto the parallel
+	// funcNames StringArray (used by the type/import sections that walk
+	// functions in order); this method records the index lookup. An empty
+	// `throwsTypeName` means the callee is non-throwing.
+	export function pushFunc(name String, returnType StdReturnType, throwsTypeName String = "")
 		let idx = self.returnTypes.count() as MachineWord
 		self.returnTypes.push(returnType)
+		self.throwsTypeNames.push(throwsTypeName)
 		self.nameIndex.upsert(name, value: idx)
 	end 'pushFunc'
 
@@ -86,6 +89,17 @@ type WasmFuncSigs
 	export function indexOf(name String) returns MachineWord
 		return try self.nameIndex.get(name) otherwise u64.max
 	end 'indexOf'
+
+	// O(1) check: does the named callee throw? Unknown callees (imports,
+	// not-yet-registered) are treated as non-throwing.
+	export function throws(name String) returns bool
+		let idx = self.indexOf(name)
+		if idx == u64.max 'notFound'
+			return false
+		end 'notFound'
+		let tn = try self.throwsTypeNames.get(idx) otherwise ""
+		return tn != ""
+	end 'throws'
 end 'WasmFuncSigs'
 
 // ============================================================
@@ -105,21 +119,27 @@ end 'WasmCallFixup'
 
 export typealias WasmCallFixupArray = Array with WasmCallFixup
 
-// Per-function WASM emission result for caching.
+// Per-function WASM emission result for caching. `throwsTypeName` is the
+// bare error-enum name from the source `throws E` clause, mirroring
+// IrFunction.throwsTypeName. Empty string means non-throwing. Throwing
+// functions append an extra i64 result to their wasm signature (the
+// error flag) and use `errorReturn` rather than plain `return`.
 export type WasmObjectFunction
 	export var name String
 	export var returnType StdReturnType
 	export var paramCount ParamCount
 	export var paramTypes StdTypeArray
+	export var throwsTypeName String
 	export var body ByteArray
 	export var callFixups WasmCallFixupArray
 
-	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray) returns WasmObjectFunction
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName String = "") returns WasmObjectFunction
 		return Self{
 			name: name,
 			returnType: returnType,
 			paramCount: paramCount,
 			paramTypes: paramTypes,
+			throwsTypeName: throwsTypeName,
 			body: ByteArray.create(),
 			callFixups: WasmCallFixupArray.create()
 		}
@@ -146,7 +166,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 
 	for func in module.functions 'collectNames'
 		funcNames.push(func.name)
-		funcSigs.pushFunc(func.name, returnType: func.returnType)
+		funcSigs.pushFunc(func.name, returnType: func.returnType, throwsTypeName: func.throwsTypeName)
 	end 'collectNames'
 
 	// Compute global data offsets (same layout as emitWasmModule)
@@ -164,7 +184,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	// Emit each function body with fixable call indices
 	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: true)
 	for func in module.functions 'eachFunc'
-		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes)
+		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes, throwsTypeName: func.throwsTypeName)
 
 		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups)
 		objFunc.body = body
@@ -305,14 +325,14 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// sections expect and lookup helpers see a fully populated index.
 	for func in module.functions 'collectModule'
 		funcNames.push(func.name)
-		funcSigs.pushFunc(func.name, returnType: func.returnType)
+		funcSigs.pushFunc(func.name, returnType: func.returnType, throwsTypeName: func.throwsTypeName)
 		funcCount = funcCount + 1
 	end 'collectModule'
 
 	for func in stdlibCache.wasmFunctions 'collectStdlib'
 		if neededStdlib.contains(func.name) 'isNeeded'
 			funcNames.push(func.name)
-			funcSigs.pushFunc(func.name, returnType: func.returnType)
+			funcSigs.pushFunc(func.name, returnType: func.returnType, throwsTypeName: func.throwsTypeName)
 			funcCount = funcCount + 1
 		end 'isNeeded'
 	end 'collectStdlib'
@@ -343,7 +363,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
-		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType)
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: func.throwsTypeName != "")
 		// Module-function types occupy fixed positions in the type table
 		// because the function section indexes into them positionally;
 		// we still record them in the dedup map so a downstream indirect
@@ -361,7 +381,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			continue
 		end 'skip'
 
-		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType)
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: func.throwsTypeName != "")
 		let myIdx = types.count() as MachineWord
 		types.push(typeBytes)
 		if not typeIndexMap.contains(typeBytes) 'recordDedup'
@@ -602,6 +622,10 @@ type WasmFunctionLowering
 	var func IrFunction
 	var body ByteArray
 	var isVoidReturn bool
+	// True iff the current function has a non-empty `throws` clause; the
+	// emitted wasm signature carries an extra trailing i64 result and any
+	// `errorReturn` op pushes that flag before `return`.
+	var funcThrows bool
 	var dispatchLocal MachineWord
 	var loopDepth MachineWord
 	// Accumulator for call fixups in fixedCalls mode. The caller passes one
@@ -631,6 +655,7 @@ type WasmFunctionLowering
 			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
 			body: ByteArray.create(),
 			isVoidReturn: true,
+			funcThrows: false,
 			dispatchLocal: 0 as MachineWord,
 			loopDepth: 0 as MachineWord,
 			blockIndex: BlockIndexMap.create(),
@@ -656,6 +681,7 @@ type WasmFunctionLowering
 		func = srcFunc
 		body = ByteArray.create()
 		isVoidReturn = stdReturnTypeIsVoid(srcFunc.returnType)
+		funcThrows = srcFunc.throwsTypeName != ""
 		callFixups = fixups
 
 		// Build the per-function blockId → blockRefs-index map up front.
@@ -738,10 +764,18 @@ type WasmFunctionLowering
 		// For non-void functions, push a dummy return value before `end`.
 		// All real paths should `return` before reaching here, but WASM validation
 		// requires the stack to match the return type at the `end` instruction.
+		// Throwing functions also have a trailing i64 error flag in their
+		// signature (the multi-value-return error ABI), so push a second
+		// dummy i64 in that case.
 		match srcFunc.returnType 'dummy'
 			void then break 'dummy'
 			value(inner) then emitWasmDummyReturn(returnType: inner)
 		end 'dummy'
+
+		if funcThrows 'throwsDummy'
+			body.push(opI64Const)
+			writeSleb128(body, value: 0)
+		end 'throwsDummy'
 
 		body.push(opEnd)
 		return body
@@ -862,8 +896,9 @@ type WasmFunctionLowering
 			call to indirectCall then emitMirOp(op: op)
 			param to loadByte then emitMirOp(op: op)
 			osAllocPages to osLockRelease then emitMirOp(op: op)
-			// Phase 1 plumbing — Wasm backend has no error-ABI path. Phase 2
-			// will route these through the same emitMirOp panic stubs.
+			// tryCall and errorReturn dispatch to the same emitters as the
+			// in-body op path; routing through emitMirOp keeps the
+			// pop-order / multi-value-return logic in one place.
 			tryCall to errorReturn then emitMirOp(op: op)
 		end 'dispatch'
 	end 'emitMirTerminator'
@@ -1027,8 +1062,8 @@ type WasmFunctionLowering
 			osLockInit then nop()
 			osLockAcquire then nop()
 			osLockRelease then nop()
-			tryCall then panic("wasm: MirOp.tryCall not yet lowered (Phase 2)")
-			errorReturn then panic("wasm: MirOp.errorReturn not yet lowered (Phase 2)")
+			tryCall(resultId, callee, argIds, errorFlagId) then emitTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
+			errorReturn(retValId, errorFlagId) then emitErrorReturn(retValId: retValId, errorFlagId: errorFlagId)
 		end 'dispatch'
 	end 'emitMirOp'
 
@@ -1149,7 +1184,36 @@ type WasmFunctionLowering
 	end 'emitCmp'
 
 	function emitCall(resultId ValueId, callee String, argIds ValueIdArray)
-		// Push arguments
+		emitDirectCall(callee: callee, argIds: argIds)
+		// Store result only if the callee returns a value. Plain `call` is
+		// only used for non-throwing callees, so there is no error flag to
+		// pop.
+		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as MachineWord)
+		end 'hasReturnValue'
+	end 'emitCall'
+
+	// Lower MirOp.tryCall: like emitCall, but the callee is throwing so its
+	// wasm signature appends a trailing i64 (error flag). Wasm pushes
+	// results in declared order (primary first, error flag last), so we pop
+	// the error flag first (top of stack) into errorFlagId, then the
+	// primary result (if non-void) into resultId. Throwing void callees
+	// still push the error flag.
+	function emitTryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
+		emitDirectCall(callee: callee, argIds: argIds)
+		body.push(opLocalSet)
+		writeUleb128(body, value: errorFlagId as MachineWord)
+		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as MachineWord)
+		end 'hasReturnValue'
+	end 'emitTryCall'
+
+	// Shared call-site arg push + `call` opcode emission. Used by both
+	// emitCall and emitTryCall; result-stack handling differs and is done
+	// by the caller.
+	function emitDirectCall(callee String, argIds ValueIdArray)
 		for argId in argIds 'pushArgs'
 			body.push(opLocalGet)
 			writeUleb128(body, value: argId as MachineWord)
@@ -1165,13 +1229,22 @@ type WasmFunctionLowering
 		end 'useFixed' else 'useVariable'
 			writeUleb128(body, value: funcIdx)
 		end 'useVariable'
+	end 'emitDirectCall'
 
-		// Store result only if the callee returns a value
-		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
-			body.push(opLocalSet)
-			writeUleb128(body, value: resultId as MachineWord)
-		end 'hasReturnValue'
-	end 'emitCall'
+	// Lower MirOp.errorReturn: push the primary return value (skipped for
+	// void-returning throwing functions, matching the X64/Arm64 backends),
+	// then push the error flag, then `return`. The function's wasm
+	// signature was built with a trailing i64 result, so the engine pops
+	// these in reverse order at the call site.
+	function emitErrorReturn(retValId ValueId, errorFlagId ValueId)
+		if not isVoidReturn 'hasPrimary'
+			body.push(opLocalGet)
+			writeUleb128(body, value: retValId as MachineWord)
+		end 'hasPrimary'
+		body.push(opLocalGet)
+		writeUleb128(body, value: errorFlagId as MachineWord)
+		body.push(opReturn)
+	end 'emitErrorReturn'
 
 	// Look up a callee's StdReturnType, by name. Imports and unknown
 	// callees fall back to `value(StdType.i64)` — the WASM type table
@@ -2098,8 +2171,10 @@ function markFloatMirOpStandalone(op MirOp, floatSet BoolArray)
 	end 'dispatch'
 end 'markFloatMirOpStandalone'
 
-// Build a WASM func type entry from parameter/return metadata.
-function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, returnType StdReturnType) returns ByteArray
+// Build a WASM func type entry from parameter/return metadata. Throwing
+// functions append an extra i64 result (the error flag) to encode the
+// dual-value-return error ABI in wasm's native multi-value return.
+function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, returnType StdReturnType, throws bool) returns ByteArray
 	var funcType = ByteArray.create()
 	var params = ByteArray.create()
 
@@ -2115,6 +2190,10 @@ function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, retu
 		void then break 'writeResult'
 		value(inner) then results.push(stdTypeToWasmType(inner))
 	end 'writeResult'
+
+	if throws 'errorFlagResult'
+		results.push(wasmTypeI64)
+	end 'errorFlagResult'
 
 	writeFuncType(funcType, paramTypes: params, resultTypes: results)
 	return funcType

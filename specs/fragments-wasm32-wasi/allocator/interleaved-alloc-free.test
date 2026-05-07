@@ -1,26 +1,26 @@
 // Test: interleaved-alloc-free
 function main() returns ExitCode
-	let a = __mm_raw_alloc(16)
-	let b = __mm_raw_alloc(16)
-	let c = __mm_raw_alloc(16)
-	let d = __mm_raw_alloc(16)
-	let e = __mm_raw_alloc(16)
-	__mm_raw_free(a)
-	__mm_raw_free(b)
-	__mm_raw_free(c)
-	let f = __mm_raw_alloc(16)
-	let g = __mm_raw_alloc(16)
-	let h = __mm_raw_alloc(16)
-	let i = __mm_raw_alloc(16)
-	let j = __mm_raw_alloc(16)
-	__mm_raw_free(d)
-	__mm_raw_free(e)
-	__mm_raw_free(f)
-	__mm_raw_free(g)
-	__mm_raw_free(h)
-	__mm_raw_free(i)
-	__mm_raw_free(j)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(16, destructor: 0, tag: 0)
+	let b = __mm_alloc(16, destructor: 0, tag: 0)
+	let c = __mm_alloc(16, destructor: 0, tag: 0)
+	let d = __mm_alloc(16, destructor: 0, tag: 0)
+	let e = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(a)
+	__mm_decref(b)
+	__mm_decref(c)
+	let f = __mm_alloc(16, destructor: 0, tag: 0)
+	let g = __mm_alloc(16, destructor: 0, tag: 0)
+	let h = __mm_alloc(16, destructor: 0, tag: 0)
+	let i = __mm_alloc(16, destructor: 0, tag: 0)
+	let j = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(d)
+	__mm_decref(e)
+	__mm_decref(f)
+	__mm_decref(g)
+	__mm_decref(h)
+	__mm_decref(i)
+	__mm_decref(j)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -34,46 +34,66 @@ module {
   func @allocator.main() -> u8 {
   entry:
     %0 = mir.mov_imm 16 : i64
-    %1 = mir.call @mm_raw_alloc(%0)
-    %2 = mir.mov_imm 16 : i64
-    %3 = mir.call @mm_raw_alloc(%2)
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @mm_alloc(%0, %1, %2)
     %4 = mir.mov_imm 16 : i64
-    %5 = mir.call @mm_raw_alloc(%4)
-    %6 = mir.mov_imm 16 : i64
-    %7 = mir.call @mm_raw_alloc(%6)
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @mm_alloc(%4, %5, %6)
     %8 = mir.mov_imm 16 : i64
-    %9 = mir.call @mm_raw_alloc(%8)
-    %11 = mir.call @mm_raw_free(%1)
-    %13 = mir.call @mm_raw_free(%3)
-    %15 = mir.call @mm_raw_free(%5)
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @mm_alloc(%8, %9, %10)
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.call @mm_alloc(%12, %13, %14)
     %16 = mir.mov_imm 16 : i64
-    %17 = mir.call @mm_raw_alloc(%16)
-    %18 = mir.mov_imm 16 : i64
-    %19 = mir.call @mm_raw_alloc(%18)
-    %20 = mir.mov_imm 16 : i64
-    %21 = mir.call @mm_raw_alloc(%20)
-    %22 = mir.mov_imm 16 : i64
-    %23 = mir.call @mm_raw_alloc(%22)
-    %24 = mir.mov_imm 16 : i64
-    %25 = mir.call @mm_raw_alloc(%24)
-    %27 = mir.call @mm_raw_free(%7)
-    %29 = mir.call @mm_raw_free(%9)
-    %31 = mir.call @mm_raw_free(%17)
-    %33 = mir.call @mm_raw_free(%19)
-    %35 = mir.call @mm_raw_free(%21)
-    %37 = mir.call @mm_raw_free(%23)
-    %39 = mir.call @mm_raw_free(%25)
-    %40 = mir.global_addr @__mm_raw_alloc_count
-    %41 = mir.load %40, 0
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.call @mm_alloc(%16, %17, %18)
+    %21 = mir.call @mm_decref(%3)
+    %23 = mir.call @mm_decref(%7)
+    %25 = mir.call @mm_decref(%11)
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.call @mm_alloc(%26, %27, %28)
+    %30 = mir.mov_imm 16 : i64
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.call @mm_alloc(%30, %31, %32)
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.mov_imm 0 : i64
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.call @mm_alloc(%34, %35, %36)
+    %38 = mir.mov_imm 16 : i64
+    %39 = mir.mov_imm 0 : i64
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.call @mm_alloc(%38, %39, %40)
+    %42 = mir.mov_imm 16 : i64
     %43 = mir.mov_imm 0 : i64
-    %44 = mir.cmp eq, %41, %43
-    mir.cond_br %44 [then: ok_1(), else: ok_1.after()]
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.call @mm_alloc(%42, %43, %44)
+    %47 = mir.call @mm_decref(%15)
+    %49 = mir.call @mm_decref(%19)
+    %51 = mir.call @mm_decref(%29)
+    %53 = mir.call @mm_decref(%33)
+    %55 = mir.call @mm_decref(%37)
+    %57 = mir.call @mm_decref(%41)
+    %59 = mir.call @mm_decref(%45)
+    %60 = mir.global_addr @__mm_alloc_count
+    %61 = mir.load %60, 0
+    %63 = mir.mov_imm 0 : i64
+    %64 = mir.cmp eq, %61, %63
+    mir.cond_br %64 [then: ok_1(), else: ok_1.after()]
   ok_1:
-    %45 = mir.mov_imm 0 : i64
-    mir.ret %45
+    %65 = mir.mov_imm 0 : i64
+    mir.ret %65
   ok_1.after:
-    %46 = mir.mov_imm 1 : i64
-    mir.ret %46
+    %66 = mir.mov_imm 1 : i64
+    mir.ret %66
   }
 }
 ---

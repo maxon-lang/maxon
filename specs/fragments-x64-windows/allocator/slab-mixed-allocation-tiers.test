@@ -1,12 +1,12 @@
 // Test: slab-mixed-allocation-tiers
 function main() returns ExitCode
-	let small = __mm_raw_alloc(16)
-	let medium = __mm_raw_alloc(40000)
-	let huge = __mm_raw_alloc(83886080)
-	__mm_raw_free(huge)
-	__mm_raw_free(medium)
-	__mm_raw_free(small)
-	let count = __mm_raw_alloc_count()
+	let small = __mm_alloc(16, destructor: 0, tag: 0)
+	let medium = __mm_alloc(40000, destructor: 0, tag: 0)
+	let huge = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(huge)
+	__mm_decref(medium)
+	__mm_decref(small)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -20,24 +20,36 @@ module {
   func @allocator.main() -> u8 {
   entry:
     x64.prologue stack_size=32
-    x64.mov r8d, 16
-    x64.mov rcx, r8
-    x64.call mm_raw_alloc
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 16
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov r12, r8
-    x64.mov r8d, 40000
-    x64.mov rcx, r8
-    x64.call mm_raw_alloc
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 40000
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov r13, r8
-    x64.mov r8d, 83886080
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.mov esi, 83886080
+    x64.mov rcx, rsi
+    x64.mov rdx, r9
+    x64.mov rax, r8
+    x64.call mm_alloc
     x64.mov rcx, r8
-    x64.call mm_raw_alloc
-    x64.mov rcx, r8
-    x64.call mm_raw_free
+    x64.call mm_decref
     x64.mov rcx, r13
-    x64.call mm_raw_free
+    x64.call mm_decref
     x64.mov rcx, r12
-    x64.call mm_raw_free
-    x64.lea r8, [rip+__mm_raw_alloc_count]
+    x64.call mm_decref
+    x64.lea r8, [rip+__mm_alloc_count]
     x64.mov r9, [r8+0] (8b)
     x64.test r9, r9
     x64.jne ok_1.after

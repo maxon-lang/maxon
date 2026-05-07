@@ -23,44 +23,29 @@ ExitCode: 10
 module {
   func @try-otherwise-value-flow.double(local0: u8) -> u8 {
   entry:
-    %4 = mir.param local0 : u8
+    %5 = mir.param local0 : u8
     %2 = mir.mov_imm 2 : i64
-    %3 = mir.mul.i64 %4, %2
-    %5 = mir.mov_imm 125 : i64
-    %6 = mir.cmp ugt, %3, %5
-    mir.cond_br %6 [then: __range_panic_6(), else: __range_ok_6()]
-  __range_panic_6:
-    %7 = mir.global_addr @__panic_msg_6
-    %8 = mir.call @mrt_panic(%7)
-  __range_ok_6:
-    mir.ret %3
+    %3 = mir.mul.i64 %5, %2
+    %4 = mir.mov_imm 0 : i64
+    mir.error_return %3, %4
   }
   func @try-otherwise-value-flow.wrap() -> u8 {
   entry:
     %2 = mir.mov_imm 5 : i64
-    %3 = mir.call @try-otherwise-value-flow.double(%2)
-    %4 = mir.call @mrt_get_error_and_clear()
+    %3, %4 = mir.try_call @try-otherwise-value-flow.double(%2)
     %5 = mir.mov_imm 0 : i64
     %6 = mir.cmp ne, %4, %5
     mir.cond_br %6 [then: try_1.err(), else: try_1.cont()]
   try_1.err:
-    %7 = mir.call @mrt_set_error(%4)
-    %8 = mir.mov_imm 0 : i64
-    mir.ret %8
+    %7 = mir.mov_imm 0 : i64
+    mir.error_return %7, %4
   try_1.cont:
-    %9 = mir.mov_imm 125 : i64
-    %10 = mir.cmp ugt, %3, %9
-    mir.cond_br %10 [then: __range_panic_7(), else: __range_ok_7()]
-  __range_panic_7:
-    %11 = mir.global_addr @__panic_msg_7
-    %12 = mir.call @mrt_panic(%11)
-  __range_ok_7:
-    mir.ret %3
+    %9 = mir.mov_imm 0 : i64
+    mir.error_return %3, %9
   }
   func @try-otherwise-value-flow.main() -> u8 {
   entry:
-    %0 = mir.call @try-otherwise-value-flow.wrap()
-    %1 = mir.call @mrt_get_error_and_clear()
+    %0, %1 = mir.try_call @try-otherwise-value-flow.wrap()
     %2 = mir.mov_imm 0 : i64
     %3 = mir.cmp ne, %1, %2
     mir.cond_br %3 [then: try_1.otherwise(), else: try_1.merge(%0)]
@@ -70,11 +55,11 @@ module {
   try_1.merge:
     %9 = mir.mov_imm 125 : i64
     %10 = mir.cmp ugt, %8, %9
-    mir.cond_br %10 [then: __range_panic_8(), else: __range_ok_8()]
-  __range_panic_8:
-    %11 = mir.global_addr @__panic_msg_8
+    mir.cond_br %10 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %11 = mir.global_addr @__panic_msg_3
     %12 = mir.call @mrt_panic(%11)
-  __range_ok_8:
+  __range_ok_3:
     mir.ret %8
   }
 }

@@ -352,38 +352,32 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__slab_os_direct_count", initialBytes: zeroBytesOfSize(8))
 	addDataSectionEntry(globalData, name: "__slab_os_direct_capacity", initialBytes: zeroBytesOfSize(8))
 
-	// MM-layer leak counters (steps 6a.15–6a.16). Atomic-tracked counts of
-	// live allocations; spec tests in step 6a.18+ assert these reach zero.
+	// MM-layer leak counter. Atomic-tracked count of live allocations;
+	// spec tests assert this reaches zero.
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
-	addDataSectionEntry(globalData, name: "__mm_raw_alloc_count", initialBytes: zeroBytesOfSize(8))
 end 'registerSlabAndMmGlobalsForDataSection'
 
-// Step 6a.19: register the 7 user-callable allocator intrinsics in the
-// project's function registries so plain Maxon source like
-// `__mm_raw_alloc(64)` parses, type-resolves, and arity-validates as a
-// normal function call. The actual lowering is intercepted in `lowerCall`
-// — these signature entries exist only to satisfy TypeResolution and the
-// arity checker; no function body is ever emitted under the registered
-// `stdlib.__mm_*` names. The corresponding interception in `lowerCall`
-// short-circuits before any `StdOp.call` is emitted under those names, so
-// DFE marking the registered name is harmless (the worklist lookup misses
-// in the function map and the entry is dropped).
+// Register the user-callable allocator intrinsics in the project's
+// function registries so plain Maxon source like `__mm_alloc(64, 0, 0)`
+// parses, type-resolves, and arity-validates as a normal function call.
+// The actual lowering is intercepted in `lowerCall` — these signature
+// entries exist only to satisfy TypeResolution and the arity checker; no
+// function body is ever emitted under the registered `stdlib.__mm_*`
+// names. The corresponding interception in `lowerCall` short-circuits
+// before any `StdOp.call` is emitted under those names, so DFE marking
+// the registered name is harmless (the worklist lookup misses in the
+// function map and the entry is dropped).
 //
-// All seven take and return i64 (or void). The actual runtime-side helpers
-// — `mm_raw_alloc`, `mm_raw_free`, `mm_alloc`, `mm_decref`, `mm_incref`,
-// plus the two count-reader globals — live in runtime.std and were ported
-// in steps 6a.15–6a.16. See the table in the step 6a.19 plan for the
-// arg-shape mapping.
+// All take and return i64 (or void). The actual runtime-side helpers
+// (`mm_alloc`, `mm_decref`, `mm_incref`) plus the count-reader global
+// live in runtime.std.
 export function registerMmIntrinsicSignatures(project Project)
 	let intReturn = MaxonReturnType.value(MaxonType.integer)
 	let intType = MaxonType.integer
-	registerMmIntrinsicSignature(project, bareName: "__mm_raw_alloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
-	registerMmIntrinsicSignature(project, bareName: "__mm_raw_free", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerMmIntrinsicSignature(project, bareName: "__mm_alloc", paramNames: mmParamNames3("size", second: "destructor", third: "tag"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: intReturn)
 	registerMmIntrinsicSignature(project, bareName: "__mm_decref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerMmIntrinsicSignature(project, bareName: "__mm_incref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerMmIntrinsicSignature(project, bareName: "__mm_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
-	registerMmIntrinsicSignature(project, bareName: "__mm_raw_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 end 'registerMmIntrinsicSignatures'
 
 // Helper for registerMmIntrinsicSignatures: register a single intrinsic
@@ -412,7 +406,7 @@ end 'registerMmIntrinsicSignature'
 // otherwise lower to a `StdOp.call` against an undefined symbol.
 //
 // Field layout matches the C# bootstrap exactly (Compiler/2-Parser.cs:917-928):
-//   offset 0  buffer        i64 (heap pointer to mm_raw_alloc'd buffer)
+//   offset 0  buffer        i64 (heap pointer to mm_alloc'd buffer)
 //   offset 8  length        i64 (live element count)
 //   offset 16 capacity      i64 (allocated element slots)
 //   offset 24 element_size  i64 (sizeof(Element); 1 for Byte, 8 otherwise)
@@ -1568,7 +1562,7 @@ type MaxonToStdLowering
 		if self.lowerMathIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock) 'didLowerMath'
 			return
 		end 'didLowerMath'
-		// Step 6a.19: allocator-runtime intrinsics (`__mm_raw_alloc`, etc.)
+		// Allocator-runtime intrinsics (`__mm_alloc`, etc.)
 		// expand inline to a Std-level call into the runtime function (or a
 		// load from the count globals). Their signatures are pre-registered
 		// in `registerMmIntrinsicSignatures` so TypeResolution and arity
@@ -1938,12 +1932,6 @@ type MaxonToStdLowering
 	// no body exists). Treat that fall-through as a bug: a known prefix that
 	// doesn't match here means a missing arm.
 	function lowerMmIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		if bareCallee == "__mm_raw_alloc" 'rawAlloc'
-			return self.lowerMmRuntimeCall1(result, callee: "mm_raw_alloc", args: args, dstBlock: dstBlock)
-		end 'rawAlloc'
-		if bareCallee == "__mm_raw_free" 'rawFree'
-			return self.lowerMmRuntimeCall1(result, callee: "mm_raw_free", args: args, dstBlock: dstBlock)
-		end 'rawFree'
 		if bareCallee == "__mm_alloc" 'alloc'
 			return self.lowerMmRuntimeCall3(result, callee: "mm_alloc", args: args, dstBlock: dstBlock)
 		end 'alloc'
@@ -1956,9 +1944,6 @@ type MaxonToStdLowering
 		if bareCallee == "__mm_alloc_count" 'allocCount'
 			return self.lowerMmCountRead(result, globalName: "__mm_alloc_count", args: args, dstBlock: dstBlock)
 		end 'allocCount'
-		if bareCallee == "__mm_raw_alloc_count" 'rawAllocCount'
-			return self.lowerMmCountRead(result, globalName: "__mm_raw_alloc_count", args: args, dstBlock: dstBlock)
-		end 'rawAllocCount'
 		return false
 	end 'lowerMmIntrinsic'
 
@@ -1966,7 +1951,7 @@ type MaxonToStdLowering
 	// runtime helpers return i64 (or "void" by always returning 0); we
 	// always allocate a result ValueId so subsequent reads resolve, even
 	// when the source-level call is for a void-returning helper like
-	// `mm_raw_free` whose return is discarded.
+	// `mm_decref` whose return is discarded.
 	function lowerMmRuntimeCall1(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 1 'badArity'
 			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{callee}: expected 1 arg, got {args.count()}")
@@ -2001,20 +1986,19 @@ type MaxonToStdLowering
 		return true
 	end 'lowerMmRuntimeCall3'
 
-	// Lower a count-reader intrinsic (`__mm_alloc_count` /
-	// `__mm_raw_alloc_count`) to `loadIndirect(globalAddr(__data_<name>))`.
-	// These read the same i64 slots that `mm_raw_alloc` / `mm_alloc` increment
-	// atomically — no runtime call needed. Both are zero-arg.
+	// Lower the `__mm_alloc_count` count-reader intrinsic to
+	// `loadIndirect(globalAddr(__mm_alloc_count))`. Reads the same i64 slot
+	// that `mm_alloc` increments atomically — no runtime call needed.
+	// Zero-arg.
 	function lowerMmCountRead(result ByteArray, globalName String, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 0 'badArity'
 			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "{globalName}: expected 0 args, got {args.count()}")
 			return true
 		end 'badArity'
-		// The runtime registers `__mm_alloc_count` / `__mm_raw_alloc_count`
-		// in the .data prelude under their bare names (see
-		// `registerSlabAndMmGlobalsForDataSection`); they are NOT user globals
-		// behind the `__data_` qualifier, so we go through `globalAddr` with
-		// the raw name and skip `dataSymbolName`.
+		// The runtime registers `__mm_alloc_count` in the .data prelude
+		// under its bare name (see `registerSlabAndMmGlobalsForDataSection`);
+		// it is NOT a user global behind the `__data_` qualifier, so we go
+		// through `globalAddr` with the raw name and skip `dataSymbolName`.
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: globalName)))
 		let resultId = self.defineName(result)

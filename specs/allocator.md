@@ -15,9 +15,9 @@ because the self-hosted compiler does not yet implement those higher-level featu
 They still exercise every allocator tier via the underlying primitives.
 
 NOTE: These tests currently only run under the self-hosted compiler. The C# bootstrap
-compiler does not yet expose `__mm_raw_alloc` / `__mm_alloc` / `__mm_decref` etc. as
-user-callable intrinsics. TODO: either wire them up in the C# compiler too, or split
-this spec so each compiler runs the version it supports.
+compiler does not yet expose `__mm_alloc` / `__mm_decref` etc. as user-callable
+intrinsics. TODO: either wire them up in the C# compiler too, or split this spec so
+each compiler runs the version it supports.
 
 ## Tests
 
@@ -25,9 +25,9 @@ this spec so each compiler runs the version it supports.
 The first heap allocation triggers the slab arena to be created. After alloc/free, the raw count must return to 0.
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(16)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -42,9 +42,9 @@ end 'main'
 A small allocation of 8 bytes (a single i64) routes to a small size class. The allocator must return a usable pointer.
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(8)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(8, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -59,11 +59,11 @@ end 'main'
 Two allocations of the same size, freed in between. The slab allocator reuses freed slots without requesting more OS memory. After both are freed the count is 0.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(40)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(40)
-	__mm_raw_free(b)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(40, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(40, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -78,11 +78,11 @@ end 'main'
 Two allocations of different sizes land in different size classes (8 → small class, 40 → larger class).
 ```maxon
 function main() returns ExitCode
-	let small = __mm_raw_alloc(8)
-	let large = __mm_raw_alloc(40)
-	__mm_raw_free(large)
-	__mm_raw_free(small)
-	let count = __mm_raw_alloc_count()
+	let small = __mm_alloc(8, destructor: 0, tag: 0)
+	let large = __mm_alloc(40, destructor: 0, tag: 0)
+	__mm_decref(large)
+	__mm_decref(small)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -97,9 +97,9 @@ end 'main'
 An allocation of 40000 bytes exceeds the slab threshold (32768) and routes to the arena-large bump path. The pointer must be usable and the count must return to 0 after free.
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(40000)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -114,11 +114,11 @@ end 'main'
 Class 17 (32768-byte slot) holds exactly 1 object per span. Allocating exactly at the threshold size and freeing returns the span. A second allocation reuses it.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(32000)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(32000)
-	__mm_raw_free(b)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(32000, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(32000, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -133,11 +133,11 @@ end 'main'
 Boundary exact: 16 bytes lands in one class, 24 bytes in another. Both must succeed and clean up.
 ```maxon
 function main() returns ExitCode
-	let p16 = __mm_raw_alloc(16)
-	let p24 = __mm_raw_alloc(24)
-	__mm_raw_free(p24)
-	__mm_raw_free(p16)
-	let count = __mm_raw_alloc_count()
+	let p16 = __mm_alloc(16, destructor: 0, tag: 0)
+	let p24 = __mm_alloc(24, destructor: 0, tag: 0)
+	__mm_decref(p24)
+	__mm_decref(p16)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -152,13 +152,13 @@ end 'main'
 A single program exercises all three allocation tiers: small (slab class), medium (arena-large bump path), and huge (OS-direct).
 ```maxon
 function main() returns ExitCode
-	let small = __mm_raw_alloc(16)
-	let medium = __mm_raw_alloc(40000)
-	let huge = __mm_raw_alloc(83886080)
-	__mm_raw_free(huge)
-	__mm_raw_free(medium)
-	__mm_raw_free(small)
-	let count = __mm_raw_alloc_count()
+	let small = __mm_alloc(16, destructor: 0, tag: 0)
+	let medium = __mm_alloc(40000, destructor: 0, tag: 0)
+	let huge = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(huge)
+	__mm_decref(medium)
+	__mm_decref(small)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -173,9 +173,9 @@ end 'main'
 An allocation exceeding the 64MB arena size routes to the OS-direct path (allocated directly via VirtualAlloc and freed via VirtualFree).
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(83886080)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -190,11 +190,11 @@ end 'main'
 Arena-large allocations are freeable. After a 40000-byte buffer is freed, its chunks are returned and a second allocation can reuse them.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(40000)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(40000)
-	__mm_raw_free(b)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -209,13 +209,13 @@ end 'main'
 Two arena-large buffers allocated and freed sequentially. Each is fully freed before the next is allocated.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(40000)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(40000)
-	__mm_raw_free(b)
-	let c = __mm_raw_alloc(40000)
-	__mm_raw_free(c)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let c = __mm_alloc(40000, destructor: 0, tag: 0)
+	__mm_decref(c)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -230,11 +230,11 @@ end 'main'
 Two OS-direct allocations (>64MB each) coexist and are freed independently. The dynamic tracking array handles multiple entries correctly.
 ```maxon
 function main() returns ExitCode
-	let h1 = __mm_raw_alloc(83886080)
-	let h2 = __mm_raw_alloc(83886080)
-	__mm_raw_free(h2)
-	__mm_raw_free(h1)
-	let count = __mm_raw_alloc_count()
+	let h1 = __mm_alloc(83886080, destructor: 0, tag: 0)
+	let h2 = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(h2)
+	__mm_decref(h1)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -249,11 +249,11 @@ end 'main'
 Two OS-direct allocations done sequentially. The first is fully freed (VirtualFree) before the second is allocated.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(83886080)
-	__mm_raw_free(a)
-	let b = __mm_raw_alloc(83886080)
-	__mm_raw_free(b)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(a)
+	let b = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(b)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -268,15 +268,15 @@ end 'main'
 Four concurrent OS-direct allocations exercise the sorted tracking array. Entries are freed in LIFO order, exercising removal from different positions.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(83886080)
-	let b = __mm_raw_alloc(83886080)
-	let c = __mm_raw_alloc(83886080)
-	let d = __mm_raw_alloc(83886080)
-	__mm_raw_free(d)
-	__mm_raw_free(c)
-	__mm_raw_free(b)
-	__mm_raw_free(a)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(83886080, destructor: 0, tag: 0)
+	let b = __mm_alloc(83886080, destructor: 0, tag: 0)
+	let c = __mm_alloc(83886080, destructor: 0, tag: 0)
+	let d = __mm_alloc(83886080, destructor: 0, tag: 0)
+	__mm_decref(d)
+	__mm_decref(c)
+	__mm_decref(b)
+	__mm_decref(a)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -310,11 +310,11 @@ Stress-tests the slab mcache refill cycle by alloc+free of 1000 small blocks.
 function main() returns ExitCode
 	var i = 0
 	while i < 1000 'loop'
-		let p = __mm_raw_alloc(8)
-		__mm_raw_free(p)
+		let p = __mm_alloc(8, destructor: 0, tag: 0)
+		__mm_decref(p)
 		i = i + 1
 	end 'loop'
-	let count = __mm_raw_alloc_count()
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -329,27 +329,27 @@ end 'main'
 5 allocs, free 3, 5 more allocs, free 7 — all 10 blocks freed by end.
 ```maxon
 function main() returns ExitCode
-	let a = __mm_raw_alloc(16)
-	let b = __mm_raw_alloc(16)
-	let c = __mm_raw_alloc(16)
-	let d = __mm_raw_alloc(16)
-	let e = __mm_raw_alloc(16)
-	__mm_raw_free(a)
-	__mm_raw_free(b)
-	__mm_raw_free(c)
-	let f = __mm_raw_alloc(16)
-	let g = __mm_raw_alloc(16)
-	let h = __mm_raw_alloc(16)
-	let i = __mm_raw_alloc(16)
-	let j = __mm_raw_alloc(16)
-	__mm_raw_free(d)
-	__mm_raw_free(e)
-	__mm_raw_free(f)
-	__mm_raw_free(g)
-	__mm_raw_free(h)
-	__mm_raw_free(i)
-	__mm_raw_free(j)
-	let count = __mm_raw_alloc_count()
+	let a = __mm_alloc(16, destructor: 0, tag: 0)
+	let b = __mm_alloc(16, destructor: 0, tag: 0)
+	let c = __mm_alloc(16, destructor: 0, tag: 0)
+	let d = __mm_alloc(16, destructor: 0, tag: 0)
+	let e = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(a)
+	__mm_decref(b)
+	__mm_decref(c)
+	let f = __mm_alloc(16, destructor: 0, tag: 0)
+	let g = __mm_alloc(16, destructor: 0, tag: 0)
+	let h = __mm_alloc(16, destructor: 0, tag: 0)
+	let i = __mm_alloc(16, destructor: 0, tag: 0)
+	let j = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(d)
+	__mm_decref(e)
+	__mm_decref(f)
+	__mm_decref(g)
+	__mm_decref(h)
+	__mm_decref(i)
+	__mm_decref(j)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -361,25 +361,21 @@ end 'main'
 ```
 
 <!-- test: mixed-raw-and-tracked -->
-Both raw and tracked allocations in one program; both counts must reach 0.
+Multiple allocations of different sizes in one program; the count must reach 0.
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(64)
+	let p = __mm_alloc(64, destructor: 0, tag: 0)
 	let q = __mm_alloc(64, destructor: 0, tag: 0)
-	let r = __mm_raw_alloc(128)
+	let r = __mm_alloc(128, destructor: 0, tag: 0)
 	let s = __mm_alloc(128, destructor: 0, tag: 0)
-	__mm_raw_free(p)
+	__mm_decref(p)
 	__mm_decref(q)
-	__mm_raw_free(r)
+	__mm_decref(r)
 	__mm_decref(s)
-	let raw = __mm_raw_alloc_count()
-	let tracked = __mm_alloc_count()
-	if raw != 0 'rawFail'
+	let count = __mm_alloc_count()
+	if count != 0 'fail'
 		return 1
-	end 'rawFail'
-	if tracked != 0 'trackedFail'
-		return 2
-	end 'trackedFail'
+	end 'fail'
 	return 0
 end 'main'
 ```
@@ -491,8 +487,8 @@ end 'main'
 Single raw alloc + free, no count assertion.
 ```maxon
 function main() returns ExitCode
-	let p = __mm_raw_alloc(64)
-	__mm_raw_free(p)
+	let p = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_decref(p)
 	return 0
 end 'main'
 ```
@@ -504,11 +500,11 @@ end 'main'
 Two sequential raw alloc + free pairs; count must reach 0.
 ```maxon
 function main() returns ExitCode
-	let p1 = __mm_raw_alloc(64)
-	__mm_raw_free(p1)
-	let p2 = __mm_raw_alloc(64)
-	__mm_raw_free(p2)
-	let count = __mm_raw_alloc_count()
+	let p1 = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_decref(p1)
+	let p2 = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_decref(p2)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -524,9 +520,9 @@ A 100MB allocation routed through OS-direct path; freed cleanly.
 ```maxon
 function main() returns ExitCode
 	let big = 100 * 1024 * 1024
-	let p = __mm_raw_alloc(big)
-	__mm_raw_free(p)
-	let count = __mm_raw_alloc_count()
+	let p = __mm_alloc(big, destructor: 0, tag: 0)
+	__mm_decref(p)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -542,10 +538,10 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	for i in 1 upto 100 'loop'
-		let p = __mm_raw_alloc(i * 8)
-		__mm_raw_free(p)
+		let p = __mm_alloc(i * 8, destructor: 0, tag: 0)
+		__mm_decref(p)
 	end 'loop'
-	let count = __mm_raw_alloc_count()
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
@@ -560,43 +556,43 @@ end 'main'
 Allocates+frees one block at each of 18 sizes spanning the slab/arena/OS-direct tiers. Final raw alloc count should be 0.
 ```maxon
 function main() returns ExitCode
-	let p1 = __mm_raw_alloc(8)
-	__mm_raw_free(p1)
-	let p2 = __mm_raw_alloc(16)
-	__mm_raw_free(p2)
-	let p3 = __mm_raw_alloc(24)
-	__mm_raw_free(p3)
-	let p4 = __mm_raw_alloc(32)
-	__mm_raw_free(p4)
-	let p5 = __mm_raw_alloc(48)
-	__mm_raw_free(p5)
-	let p6 = __mm_raw_alloc(64)
-	__mm_raw_free(p6)
-	let p7 = __mm_raw_alloc(96)
-	__mm_raw_free(p7)
-	let p8 = __mm_raw_alloc(128)
-	__mm_raw_free(p8)
-	let p9 = __mm_raw_alloc(192)
-	__mm_raw_free(p9)
-	let p10 = __mm_raw_alloc(256)
-	__mm_raw_free(p10)
-	let p11 = __mm_raw_alloc(384)
-	__mm_raw_free(p11)
-	let p12 = __mm_raw_alloc(512)
-	__mm_raw_free(p12)
-	let p13 = __mm_raw_alloc(1024)
-	__mm_raw_free(p13)
-	let p14 = __mm_raw_alloc(2048)
-	__mm_raw_free(p14)
-	let p15 = __mm_raw_alloc(4096)
-	__mm_raw_free(p15)
-	let p16 = __mm_raw_alloc(8192)
-	__mm_raw_free(p16)
-	let p17 = __mm_raw_alloc(16384)
-	__mm_raw_free(p17)
-	let p18 = __mm_raw_alloc(32768)
-	__mm_raw_free(p18)
-	let count = __mm_raw_alloc_count()
+	let p1 = __mm_alloc(8, destructor: 0, tag: 0)
+	__mm_decref(p1)
+	let p2 = __mm_alloc(16, destructor: 0, tag: 0)
+	__mm_decref(p2)
+	let p3 = __mm_alloc(24, destructor: 0, tag: 0)
+	__mm_decref(p3)
+	let p4 = __mm_alloc(32, destructor: 0, tag: 0)
+	__mm_decref(p4)
+	let p5 = __mm_alloc(48, destructor: 0, tag: 0)
+	__mm_decref(p5)
+	let p6 = __mm_alloc(64, destructor: 0, tag: 0)
+	__mm_decref(p6)
+	let p7 = __mm_alloc(96, destructor: 0, tag: 0)
+	__mm_decref(p7)
+	let p8 = __mm_alloc(128, destructor: 0, tag: 0)
+	__mm_decref(p8)
+	let p9 = __mm_alloc(192, destructor: 0, tag: 0)
+	__mm_decref(p9)
+	let p10 = __mm_alloc(256, destructor: 0, tag: 0)
+	__mm_decref(p10)
+	let p11 = __mm_alloc(384, destructor: 0, tag: 0)
+	__mm_decref(p11)
+	let p12 = __mm_alloc(512, destructor: 0, tag: 0)
+	__mm_decref(p12)
+	let p13 = __mm_alloc(1024, destructor: 0, tag: 0)
+	__mm_decref(p13)
+	let p14 = __mm_alloc(2048, destructor: 0, tag: 0)
+	__mm_decref(p14)
+	let p15 = __mm_alloc(4096, destructor: 0, tag: 0)
+	__mm_decref(p15)
+	let p16 = __mm_alloc(8192, destructor: 0, tag: 0)
+	__mm_decref(p16)
+	let p17 = __mm_alloc(16384, destructor: 0, tag: 0)
+	__mm_decref(p17)
+	let p18 = __mm_alloc(32768, destructor: 0, tag: 0)
+	__mm_decref(p18)
+	let count = __mm_alloc_count()
 	if count == 0 'ok'
 		return 0
 	end 'ok'
