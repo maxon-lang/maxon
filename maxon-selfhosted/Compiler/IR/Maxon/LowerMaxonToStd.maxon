@@ -33,8 +33,6 @@
 //   maxon.varLoad        -> std.memory.loadSlot
 //   maxon.condBr/br      -> std.control.condBr/br
 //   maxon.call/ret       -> std.call.call/ret
-//   maxon.printLiteral   -> std.system.globalAddr + std.arith.const + std.call.call mrt_write_stdout
-//   maxon.printInt       -> std.call.call mrt_printInt
 //   maxon.panic          -> std.system.globalAddr + std.call.call mrt_panic
 //   maxon.structAlloc    -> std.call.call mrt_alloc
 //   maxon.fieldLoad      -> std.system.loadIndirect
@@ -379,6 +377,28 @@ export function registerMmIntrinsicSignatures(project Project)
 	registerMmIntrinsicSignature(project, bareName: "__mm_incref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerMmIntrinsicSignature(project, bareName: "__mm_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 end 'registerMmIntrinsicSignatures'
+
+// Phase 7: register `__Builtins.writeStdout(managed)` and friends as
+// qualified-static signatures so TypeResolution accepts the call shape.
+// The lowering pass intercepts before the regular emission and expands
+// to the appropriate runtime helper. Mirrors the C# bootstrap's
+// `__Builtins` parser table (Compiler/2-Parser.cs:8788).
+export function registerBuiltinsIntrinsicSignatures(project Project)
+	let intReturn = MaxonReturnType.value(MaxonType.integer)
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStdout", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStderr", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+end 'registerBuiltinsIntrinsicSignatures'
+
+function registerBuiltinsIntrinsicSignature(project Project, qualifiedName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	var paramDefaults = ParamDefaultArray.create()
+	for _ in 0 upto paramNames.count() 'fillDefaults'
+		paramDefaults.push(ParamDefault.none)
+	end 'fillDefaults'
+	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
+	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
+	project.methodNameIndex.record(qualifiedName)
+end 'registerBuiltinsIntrinsicSignature'
 
 // Helper for registerMmIntrinsicSignatures: register a single intrinsic
 // under the qualified name `stdlib.{bareName}` so the second probe in
@@ -1182,6 +1202,9 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			literal(result, value, litType, _) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			stringConst(result, stringId, _) then self.lowerStringConst(result, stringId: stringId, dstBlock: dstBlock)
+			charLiteral(result, stringId, _) then self.lowerCharLiteral(result, stringId: stringId, dstBlock: dstBlock)
+			byteStringLiteral(result, stringId, _) then self.lowerByteStringLiteral(result, stringId: stringId, dstBlock: dstBlock)
+			stringInterp(result, parts, _) then self.lowerStringInterp(result, parts: parts, dstBlock: dstBlock)
 			varDecl(slotId, value, slotType, _) then self.lowerVarDeclOrStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
 			varStore(slotId, value, _) then self.lowerVarStore(slotId: slotId, value: value, dstBlock: dstBlock)
@@ -1197,8 +1220,6 @@ type MaxonToStdLowering
 			call(result, callee, _, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			ret(retVal, _) then self.lowerRetAsBodyOp(retVal: retVal, dstBlock: dstBlock)
-			printLiteral(stringId, _) then self.lowerPrintLiteral(stringId, dstBlock: dstBlock)
-			printInt(value, _) then self.lowerPrintIntToCall(self.resolveName(value), dstBlock: dstBlock)
 			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
 			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
 			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
@@ -1262,27 +1283,373 @@ type MaxonToStdLowering
 		self.setIsFloat(resultId, isFloat: isFloat)
 	end 'lowerLiteral'
 
-	// Lower a maxon.stringConst op. The op carries an interned StringId
-	// for tracking purposes — TypeResolution's consumer-specialization
-	// walk pattern-matches on `stringConst` producers to rewrite
-	// downstream `printInt`/`cmp` consumers in place. The op itself
-	// produces no Std-level value: the bootstrap doesn't materialize a
-	// runtime String object, and any consumer that would need one is
-	// expected to have been specialized by TR. Define the result name as
-	// a placeholder ValueId so any downstream Std op that still
-	// references it (a varLoad chain whose terminal consumer was
-	// rewritten to printLiteral but whose intermediates remain) can be
-	// resolved without crashing the lowering walk.
+	// Lower a maxon.stringConst op to a heap-allocated String struct
+	// backed by an rdata-resident __ManagedMemory record. Layout matches
+	// the C# bootstrap exactly:
+	//   String (16): managed@0 (ptr to MM), isAsciiFlag@8 (i64 0/1)
+	//   __ManagedMemory (40): buffer@0 (rdata addr), length@8,
+	//     capacity@16 (-2 = rdata-backed, suppresses free), elementSize@24 (1),
+	//     parentPtr@32 (0)
+	// isAscii is computed at compile time by scanning the bytes; the
+	// runtime scanIsAscii path is reserved for non-literal cases.
 	function lowerStringConst(result ByteArray, stringId StringId, dstBlock IrBlock)
+		let data = self.project.strings.get(stringId)
+		let dataBytes = data.toByteArray()
+		let dataLen = dataBytes.count()
+
+		var isAsciiFlag = 1
+		for i in 0 upto dataLen 'asciiScan'
+			let b = try dataBytes.get(i) otherwise panic("lowerStringConst: byte get OOB at {i} (n={dataLen})")
+			if b >= 0x80 'nonAscii'
+				isAsciiFlag = 0
+			end 'nonAscii'
+		end 'asciiScan'
+
+		let symName = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
+		let bufferPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufferPtrId, name: symName)))
+		self.setValueType(bufferPtrId, t: MaxonType.integer)
+
+		// Inner __ManagedMemory (40 bytes).
+		let mmSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
+		self.setValueType(mmSizeId, t: MaxonType.integer)
+		var mmArgIds = ValueIdArray.create()
+		mmArgIds.push(mmSizeId)
+		let mmId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
+		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+
+		// Outer String (16 bytes).
+		let strSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: strSizeId, value: 16))))
+		self.setValueType(strSizeId, t: MaxonType.integer)
+		var strArgIds = ValueIdArray.create()
+		strArgIds.push(strSizeId)
 		let resultId = self.defineName(result)
-		self.setValueType(resultId, t: MaxonType.string)
-		// stringId/dstBlock are referenced only via the trace string so
-		// the variable-must-be-used checker accepts this no-op. The op
-		// emits no Std code: TR's consumer-specialization walk has
-		// already rewritten every consumer (printInt/cmp/varDecl chain)
-		// into a form that uses the StringId directly.
-		logTrace(LogCategory.parser, message: () gives "lowerStringConst: stringId={stringId} dstBlock.id={dstBlock.id}")
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: strArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		self.storeI64Const(addrId: resultId, offset: 8, value: isAsciiFlag, dstBlock: dstBlock)
 	end 'lowerStringConst'
+
+	// Phase 7 step 6: lower a maxon.charLiteral op to a heap-allocated
+	// Character struct backed by an rdata-resident __ManagedMemory record.
+	// Layout mirrors lowerStringConst minus the isAsciiFlag — Character is
+	// just `managed: __ManagedMemory` at offset 0 (8 bytes total):
+	//   Character (8): managed@0 (ptr to MM)
+	//   __ManagedMemory (40): buffer@0 (rdata addr), length@8,
+	//     capacity@16 (-2 = rdata-backed, suppresses free), elementSize@24 (1),
+	//     parentPtr@32 (0)
+	function lowerCharLiteral(result ByteArray, stringId StringId, dstBlock IrBlock)
+		let data = self.project.strings.get(stringId)
+		let dataBytes = data.toByteArray()
+		let dataLen = dataBytes.count()
+
+		let symName = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
+		let bufferPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufferPtrId, name: symName)))
+		self.setValueType(bufferPtrId, t: MaxonType.integer)
+
+		// Inner __ManagedMemory (40 bytes).
+		let mmSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
+		self.setValueType(mmSizeId, t: MaxonType.integer)
+		var mmArgIds = ValueIdArray.create()
+		mmArgIds.push(mmSizeId)
+		let mmId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
+		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+
+		// Outer Character (8 bytes — only the `managed` pointer field).
+		let chSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: chSizeId, value: 8))))
+		self.setValueType(chSizeId, t: MaxonType.integer)
+		var chArgIds = ValueIdArray.create()
+		chArgIds.push(chSizeId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: chArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("Character")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+	end 'lowerCharLiteral'
+
+	// Phase 7 step 7: lower a maxon.byteStringLiteral op directly to a
+	// rdata-backed __ManagedMemory pointer. No outer wrapper struct: the
+	// result name binds to the MM pointer itself, and the user-visible
+	// `ByteArray` typealias (`Array with Byte`) shares the same runtime
+	// layout (Array struct) — currently we expose the MM directly and let
+	// alias-compatible call sites consume it. Layout matches lowerStringConst's
+	// inner MM exactly.
+	function lowerByteStringLiteral(result ByteArray, stringId StringId, dstBlock IrBlock)
+		let data = self.project.strings.get(stringId)
+		let dataBytes = data.toByteArray()
+		let dataLen = dataBytes.count()
+
+		let symName = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
+		let bufferPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufferPtrId, name: symName)))
+		self.setValueType(bufferPtrId, t: MaxonType.integer)
+
+		// __ManagedMemory (40 bytes).
+		let mmSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
+		self.setValueType(mmSizeId, t: MaxonType.integer)
+		var mmArgIds = ValueIdArray.create()
+		mmArgIds.push(mmSizeId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: mmArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.storeI64Const(addrId: resultId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(addrId: resultId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(addrId: resultId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(addrId: resultId, offset: 32, value: 0, dstBlock: dstBlock)
+	end 'lowerByteStringLiteral'
+
+	// Phase 7 step 5: lower a maxon.stringInterp op to a heap-allocated
+	// String struct whose buffer holds the concatenation of all part
+	// (buffer, length) pairs. Layout matches lowerStringConst, with two
+	// differences: the buffer is heap-allocated (capacity = totalLen, NOT
+	// the rdata sentinel -2) and isAscii defaults to 0 (conservative —
+	// matches the C# bootstrap; runtime scanIsAscii could refine later).
+	//
+	// Per-part materialization:
+	//   literal(stringId) → globalAddr(__istr_<id>) + constI64(byteCount)
+	//   expr(name, i64)   → mrt_alloc(21) + mrt_i64_to_string(value, buf)
+	//                       returning the length.
+	//   expr(name, byte)  → same as i64 (the value already widens to i64
+	//                       via the standard call ABI).
+	//   expr(name, string)    → load String.managed.buffer, .length
+	//   expr(name, character) → same shape as string (Character has the same
+	//                            inner __ManagedMemory layout as String).
+	//   expr(name, f64/bool/u64) → not implemented in self-hosted; emit a
+	//                              placeholder literal "<unsupported>" so the
+	//                              build proceeds. Stdlib does not currently
+	//                              interpolate these in expression position.
+	function lowerStringInterp(result ByteArray, parts StringInterpPartArray, dstBlock IrBlock)
+		// Empty-parts edge case: no fragments at all. Bind result to an
+		// empty stringConst-shaped allocation. (Parser shouldn't produce
+		// this, but be defensive — a single empty fragment with no
+		// interps takes the stringConst fast path in parseStringLiteral.)
+		if parts.count() == 0 'noParts'
+			let emptyId = self.project.strings.intern("")
+			self.lowerStringConst(result, stringId: emptyId, dstBlock: dstBlock)
+			return
+		end 'noParts'
+
+		// 1. Materialize per-part (bufferPtrId, lengthId) pairs.
+		var partBufIds = ValueIdArray.create()
+		var partLenIds = ValueIdArray.create()
+		for i in 0 upto parts.count() 'eachPart'
+			let part = try parts.get(i) otherwise panic("lowerStringInterp: parts.get OOB at {i}")
+			let (bufId, lenId) = self.materializeInterpPart(part, dstBlock: dstBlock)
+			partBufIds.push(bufId)
+			partLenIds.push(lenId)
+		end 'eachPart'
+
+		// 2. Sum total length: fold partLens into a running total.
+		var totalLenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: totalLenId, value: 0))))
+		self.setValueType(totalLenId, t: MaxonType.integer)
+		for i in 0 upto partLenIds.count() 'sumLens'
+			let pl = try partLenIds.get(i) otherwise panic("lowerStringInterp: partLenIds.get OOB at {i}")
+			let nextSumId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: nextSumId, leftId: totalLenId, rightId: pl))))
+			self.setValueType(nextSumId, t: MaxonType.integer)
+			totalLenId = nextSumId
+		end 'sumLens'
+
+		// 3. Allocate raw buffer (totalLen + 1 for null terminator).
+		let oneId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: oneId, value: 1))))
+		self.setValueType(oneId, t: MaxonType.integer)
+		let allocSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: allocSizeId, leftId: totalLenId, rightId: oneId))))
+		self.setValueType(allocSizeId, t: MaxonType.integer)
+		var bufAllocArgs = ValueIdArray.create()
+		bufAllocArgs.push(allocSizeId)
+		let dataBufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(dataBufId, callee: "mrt_alloc", argIds: bufAllocArgs)))
+		self.setValueType(dataBufId, t: MaxonType.integer)
+
+		// 4. Memcopy each part into the running cursor at dataBufId + offset.
+		var cursorId = dataBufId
+		for i in 0 upto partBufIds.count() 'copyParts'
+			let pb = try partBufIds.get(i) otherwise panic("lowerStringInterp: partBufIds.get OOB at {i}")
+			let pl = try partLenIds.get(i) otherwise panic("lowerStringInterp: partLenIds.get OOB at {i}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.memcpy(dstId: cursorId, srcId: pb, lenId: pl)))
+			let nextCursorId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: nextCursorId, leftId: cursorId, rightId: pl))))
+			self.setValueType(nextCursorId, t: MaxonType.integer)
+			cursorId = nextCursorId
+		end 'copyParts'
+
+		// 5. Allocate inner __ManagedMemory (40 bytes) and fill its fields.
+		let mmSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
+		self.setValueType(mmSizeId, t: MaxonType.integer)
+		var mmArgIds = ValueIdArray.create()
+		mmArgIds.push(mmSizeId)
+		let mmId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
+		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: dataBufId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 8, valueId: totalLenId, isFloat: false)))
+		// capacity = totalLen (real heap-backed; NOT the rdata -2 sentinel).
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 16, valueId: totalLenId, isFloat: false)))
+		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+
+		// 6. Allocate outer String (16 bytes); bind result name to it.
+		let strSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: strSizeId, value: 16))))
+		self.setValueType(strSizeId, t: MaxonType.integer)
+		var strArgIds = ValueIdArray.create()
+		strArgIds.push(strSizeId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: strArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		// isAsciiFlag = 0 (conservative — matches C# bootstrap).
+		self.storeI64Const(addrId: resultId, offset: 8, value: 0, dstBlock: dstBlock)
+	end 'lowerStringInterp'
+
+	// Phase 7 step 5 helper: emit per-part (buffer, length) materialization
+	// and return the produced (bufferId, lengthId) pair.
+	function materializeInterpPart(part StringInterpPart, dstBlock IrBlock) returns (ValueId, ValueId)
+		return match part 'p'
+			literal(stringId) gives self.materializeLiteralPart(stringId, dstBlock: dstBlock)
+			expr(valueName, kind) gives self.materializeExprPart(valueName, kind: kind, dstBlock: dstBlock)
+		end 'p'
+	end 'materializeInterpPart'
+
+	function materializeLiteralPart(stringId StringId, dstBlock IrBlock) returns (ValueId, ValueId)
+		let data = self.project.strings.get(stringId)
+		let dataBytes = data.toByteArray()
+		let dataLen = dataBytes.count()
+		// Empty fragment: emit a zero-length pair pointing at any non-null
+		// buffer (we use a freshly-allocated 0-length symbol via the
+		// interner — the memcpy of length 0 is a no-op on every backend).
+		// Reuse `addInternedString` so the symbol is the same as for any
+		// other empty-fragment site.
+		let symName = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufId, name: symName)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
+		self.setValueType(lenId, t: MaxonType.integer)
+		return (bufId, lenId)
+	end 'materializeLiteralPart'
+
+	function materializeExprPart(valueName ByteArray, kind InterpExprKind, dstBlock IrBlock) returns (ValueId, ValueId)
+		let valueId = self.resolveName(valueName)
+		return match kind 'k'
+			i64 gives self.materializeIntToString(valueId, dstBlock: dstBlock)
+			u64 gives self.materializeIntToString(valueId, dstBlock: dstBlock)
+			byte gives self.materializeIntToString(valueId, dstBlock: dstBlock)
+			string gives self.materializeStringStructPart(valueId, dstBlock: dstBlock)
+			character gives self.materializeStringStructPart(valueId, dstBlock: dstBlock)
+			f64 gives self.materializeFloatToString(valueId, dstBlock: dstBlock)
+			bool gives self.materializeBoolToString(valueId, dstBlock: dstBlock)
+		end 'k'
+	end 'materializeExprPart'
+
+	// Heap-allocate a 21-byte buffer, call mrt_i64_to_string(value, buf) →
+	// length, and return (buf, length). 21 bytes covers the worst-case
+	// decimal i64 encoding (-9223372036854775808 = 20 chars + sign).
+	function materializeIntToString(valueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
+		let bufSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: bufSizeId, value: 21))))
+		self.setValueType(bufSizeId, t: MaxonType.integer)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(bufSizeId)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(bufId, callee: "mrt_alloc", argIds: allocArgs)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		var convArgs = ValueIdArray.create()
+		convArgs.push(valueId)
+		convArgs.push(bufId)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(lenId, callee: "mrt_i64_to_string", argIds: convArgs)))
+		self.setValueType(lenId, t: MaxonType.integer)
+		return (bufId, lenId)
+	end 'materializeIntToString'
+
+	// Recover (buffer, length) from a heap-allocated String / Character
+	// value. Both types share the layout: outer struct's offset 0 holds a
+	// pointer to a __ManagedMemory (40 bytes) whose offset 0 is the raw
+	// byte buffer pointer and offset 8 is the i64 length.
+	function materializeStringStructPart(structValueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
+		let mmId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmId, addrId: structValueId, offset: 0, isFloat: false)))
+		self.setValueType(mmId, t: MaxonType.integer)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, isFloat: false)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, isFloat: false)))
+		self.setValueType(lenId, t: MaxonType.integer)
+		return (bufId, lenId)
+	end 'materializeStringStructPart'
+
+	// Heap-allocate a 32-byte buffer, call mrt_f64_to_string(value, buf) →
+	// length, return (buf, length). 32 bytes covers sign + ~17 integer
+	// digits + '.' + 6 fractional digits with margin.
+	function materializeFloatToString(valueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
+		let bufSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: bufSizeId, value: 32))))
+		self.setValueType(bufSizeId, t: MaxonType.integer)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(bufSizeId)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(bufId, callee: "mrt_alloc", argIds: allocArgs)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		var convArgs = ValueIdArray.create()
+		convArgs.push(valueId)
+		convArgs.push(bufId)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(lenId, callee: "mrt_f64_to_string", argIds: convArgs)))
+		self.setValueType(lenId, t: MaxonType.integer)
+		return (bufId, lenId)
+	end 'materializeFloatToString'
+
+	// Heap-allocate a 5-byte buffer, call mrt_bool_to_string(value, buf) →
+	// length (4 for "true", 5 for "false"), return (buf, length).
+	function materializeBoolToString(valueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
+		let bufSizeId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: bufSizeId, value: 5))))
+		self.setValueType(bufSizeId, t: MaxonType.integer)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(bufSizeId)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(bufId, callee: "mrt_alloc", argIds: allocArgs)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		var convArgs = ValueIdArray.create()
+		convArgs.push(valueId)
+		convArgs.push(bufId)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(lenId, callee: "mrt_bool_to_string", argIds: convArgs)))
+		self.setValueType(lenId, t: MaxonType.integer)
+		return (bufId, lenId)
+	end 'materializeBoolToString'
 
 	// C1.c: dispatch the varDecl op. For interface-typed slots, route
 	// through fat-pointer construction so the slot stores the value (or
@@ -1585,6 +1952,16 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
+		// Phase 7: `__Builtins.writeStdout(managed)` and friends — Phase 7
+		// stdlib intrinsics. Expand to a load of buffer (off 0) + length
+		// (off 8) from the MM, then a single call into `mrt_write_stdout`
+		// / `mrt_write_stderr` which talks to the OS.
+		if bareCallee.startsWith("__Builtins.") 'didLowerBuiltins'
+			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__Builtins.")
+			if self.lowerBuiltinsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerBuiltins'
 		// Resolved callee name (post typealias-chase + overload disambiguation)
 		// was stashed by `resolveAllCalls` during TypeResolution. The pass
 		// visits every `call` / `tryCall` op in the module, so a miss here
@@ -1945,6 +2322,49 @@ type MaxonToStdLowering
 		end 'allocCount'
 		return false
 	end 'lowerMmIntrinsic'
+
+	// Phase 7: lower a `__Builtins.METHOD(...)` qualified static call. Today
+	// only `writeStdout` and `writeStderr` are supported — both unwrap the
+	// MM (load buffer at off 0, length at off 8) and call into the runtime
+	// helper (`mrt_write_stdout` / `mrt_write_stderr`). Returns true when
+	// handled (caller must NOT fall through to the generic-call emission);
+	// false when the method is not recognized so the caller can surface an
+	// "unknown __Builtins.X" diagnostic via the regular path.
+	function lowerBuiltinsIntrinsic(result ByteArray, methodName String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if methodName == "writeStdout" 'isStdout'
+			return self.lowerBuiltinsWriteStream(result, callee: "mrt_write_stdout", args: args, dstBlock: dstBlock)
+		end 'isStdout'
+		if methodName == "writeStderr" 'isStderr'
+			return self.lowerBuiltinsWriteStream(result, callee: "mrt_write_stderr", args: args, dstBlock: dstBlock)
+		end 'isStderr'
+		return false
+	end 'lowerBuiltinsIntrinsic'
+
+	// Common shape for `__Builtins.writeStdout` / `__Builtins.writeStderr`:
+	// arg 0 is a `__ManagedMemory` pointer; load the buffer at offset 0
+	// and length at offset 8, then call the runtime helper with both i64
+	// values. The runtime returns the number of bytes written (i64).
+	function lowerBuiltinsWriteStream(result ByteArray, callee String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.{callee}: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let mmName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let mmId = self.resolveName(mmName)
+		let bufId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, isFloat: false)))
+		self.setValueType(bufId, t: MaxonType.integer)
+		let lenId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, isFloat: false)))
+		self.setValueType(lenId, t: MaxonType.integer)
+		var argIds = ValueIdArray.create()
+		argIds.push(bufId)
+		argIds.push(lenId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsWriteStream'
 
 	// Lower a 1-arg allocator intrinsic to `runtime_callee(arg)`. The
 	// runtime helpers return i64 (or "void" by always returning 0); we
@@ -3277,50 +3697,6 @@ type MaxonToStdLowering
 		self.setValueType(valId, t: MaxonType.integer)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valId, isFloat: false)))
 	end 'storeI64Const'
-
-	// Lower printLiteral(stringId) to:
-	//   globalAddr(addrId, "__istr_N")
-	//   constI64(lenId, len)
-	//   call(_, "mrt_write_stdout", [addrId, lenId])
-	// The StringId is resolved against `project.strings` to recover the
-	// raw bytes; the interner is the dedup key, so the rdata symbol name
-	// is derived directly from the id (`__istr_<stringId>`) via
-	// `addInternedString` rather than re-hashing the byte payload.
-	function lowerPrintLiteral(stringId StringId, dstBlock IrBlock)
-		let data = self.project.strings.get(stringId)
-		let dataBytes = data.toByteArray()
-		let dataLen = dataBytes.count()
-		if dataLen == 0 'empty'
-			return
-		end 'empty'
-
-		// Register data in global table (id-keyed dedup, no byte hash)
-		let name = addInternedString(self.globalData, stringId: stringId, data: dataBytes)
-
-		// globalAddr -> addrId
-		let addrId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: name)))
-
-		// constI64 -> lenId
-		let lenId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
-
-		// call mrt_write_stdout(addrId, lenId)
-		let callResultId = allocValueId(self.funcIdRef)
-		var argIds = ValueIdArray.create()
-		argIds.push(addrId)
-		argIds.push(lenId)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds)))
-	end 'lowerPrintLiteral'
-
-	// Lower printInt(valueId) to:
-	//   call(mrt_printInt, [valueId])
-	function lowerPrintIntToCall(valueId ValueId, dstBlock IrBlock)
-		let callResultId = allocValueId(self.funcIdRef)
-		var argIds = ValueIdArray.create()
-		argIds.push(valueId)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
-	end 'lowerPrintIntToCall'
 
 	// Lower `ret retVal` as a block terminator. In a non-throwing function this
 	// is a plain `StdCallOp.ret(retVal)`. In a throwing function (per Phase 6

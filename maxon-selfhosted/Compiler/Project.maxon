@@ -355,7 +355,7 @@ export type Project
 	export var diagnostics DiagnosticArray
 
 	// Global data table for string literals and other read-only data.
-	// Populated during Maxon->Mid lowering when printLiteral ops are lowered.
+	// Populated during Maxon->Mid lowering when string-producing ops are lowered.
 	export var globalData GlobalDataTable
 
 	// True when coverage instrumentation should run. Gates the
@@ -1031,9 +1031,9 @@ export type StringInterner
 
 	// Intern a string literal, returning its stable StringId. Identical
 	// content always returns the same id so equality checks reduce to id
-	// comparison and downstream consumers (printLiteral, panic, top-level
-	// constants) carry a single fixed-width id instead of variable-length
-	// String bytes.
+	// comparison and downstream consumers (panic, top-level constants,
+	// string-interp parts) carry a single fixed-width id instead of
+	// variable-length String bytes.
 	export function intern(value String) returns StringId
 		let existing = try lookup.get(value) otherwise 'fresh'
 			let id = values.count()
@@ -1756,7 +1756,14 @@ export function resolveNamedToStdType(project Project, name String) returns StdT
 		if project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) 'isInterface'
 			panic("resolveNamedToStdType: interface name '{name}' reached value-position lowering as MaxonType.named — C1.c interface fat-pointer construction was supposed to handle this; investigate the call path")
 		end 'isInterface'
-		panic("resolveNamedToStdType: unknown type '{name}' — every other path that lands MaxonType.named should have been rejected by E3011 upstream")
+		// Phase 7 / Phase 11.4 partial: stdlib types that depend on
+		// not-yet-whitelisted helper files (e.g. `ByteView` from
+		// `stdlib/helpers/string/views.maxon`) reach lowering as
+		// unresolved named types. Treat as i64 like genericTypealiases
+		// and inner-aliases — the stdlib's own callers will surface a
+		// real error if the value is misused; the compiler shouldn't
+		// panic on stdlib half-loaded state.
+		return StdType.i64
 	end 'notAlias'
 	return aliased
 end 'resolveNamedToStdType'

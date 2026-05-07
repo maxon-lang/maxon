@@ -519,8 +519,6 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		loadIndirect(_, addrId, _, _) then incrementUse(useCount, valueId: addrId)
 		funcAddr then break 'count'
 		storeIndirect(addrId, _, valueId, _) then countTwoUses(addrId, b: valueId, useCount: useCount)
-		printLiteral then break 'count'
-		printInt(valueId) then incrementUse(useCount, valueId: valueId)
 		// `sys.drop` is a cleanup hook, not a real consumer of its operand. If
 		// the operand has no other users, the value itself is dead — counting
 		// drop as a use would pin every let-bound primitive to live through to
@@ -602,7 +600,7 @@ end 'isDeadPackedOp'
 function isDeadSysOp(op StdSystemOp, useCount ValueIdArray) returns bool
 	return match op 'check'
 		drop gives true
-		syscall to printInt gives false
+		syscall to storeIndirect gives false
 		osAllocPages to osLockRelease gives false
 		boxValue gives false
 		unboxValue gives false

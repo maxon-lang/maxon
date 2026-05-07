@@ -43,7 +43,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // functions and every cross-module accessor call stays a `func.call`,
 // which costs two indirect calls per iteration in a tight `for n in
 // arr` loop.
-let CACHE_FORMAT_VERSION = 11
+let CACHE_FORMAT_VERSION = 13
 
 // ============================================================
 // Types
@@ -1094,7 +1094,7 @@ end 'translateMaxonReturnType'
 function translateInterfaceMethodSig(project Project, data StdlibCacheData, sig InterfaceMethodSig) returns InterfaceMethodSig
 	let destParamTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
 	let destReturn = translateMaxonReturnType(project, data: data, rt: sig.returnType)
-	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, line: sig.line, column: sig.column)
+	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, isStatic: sig.isStatic, line: sig.line, column: sig.column)
 end 'translateInterfaceMethodSig'
 
 // Translate a captured IrInterface: each method sig's paramTypes / returnType
@@ -1609,6 +1609,7 @@ function writeInterfaceMethodSig(project Project, buf ByteArray, sig InterfaceMe
 	writeMaxonTypeArray(project, buf: buf, arr: sig.paramTypes)
 	writeMaxonReturnType(project, buf: buf, rt: sig.returnType)
 	writeString(buf, s: sig.throwsTypeName)
+	writeBoolByte(buf, b: sig.isStatic)
 	writeDword(buf, value: sig.line)
 	writeDword(buf, value: sig.column)
 end 'writeInterfaceMethodSig'
@@ -1619,9 +1620,10 @@ function readInterfaceMethodSig(project Project, buf ByteArray, offset ByteOffse
 	let (paramTypes, p3) = readMaxonTypeArray(project, buf: buf, offset: p2)
 	let (returnType, p4) = readMaxonReturnType(project, buf: buf, offset: p3)
 	let (throwsTypeName, p5) = readString(buf, offset: p4)
-	let line = readDword(buf, offset: p5)
-	let column = readDword(buf, offset: p5 + 4)
-	return (InterfaceMethodSig.create(name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, line: line, column: column), p5 + 8)
+	let (isStatic, p6) = readBoolByte(buf, offset: p5)
+	let line = readDword(buf, offset: p6)
+	let column = readDword(buf, offset: p6 + 4)
+	return (InterfaceMethodSig.create(name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, isStatic: isStatic, line: line, column: column), p6 + 8)
 end 'readInterfaceMethodSig'
 
 function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap)
@@ -2306,8 +2308,6 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp)
 		loadIndirect(resultId, addrId, offset, isFloat) then writeStdSysLoadIndirect(buf, resultId: resultId, addrId: addrId, offset: offset, isFloat: isFloat)
 		funcAddr(resultId, name) then writeStdSysFuncAddr(buf, resultId: resultId, name: name)
 		storeIndirect(addrId, offset, valueId, isFloat) then writeStdSysStoreIndirect(buf, addrId: addrId, offset: offset, valueId: valueId, isFloat: isFloat)
-		printLiteral(stringId) then writeQword(buf, value: stringId)
-		printInt(valueId) then writeQword(buf, value: valueId)
 		drop(valueId) then writeQword(buf, value: valueId)
 		osAllocPages(resultId, sizeId) then writeStdSysOsAllocPages(buf, resultId: resultId, sizeId: sizeId)
 		osAllocPagesLarge(resultId, sizeId) then writeStdSysOsAllocPagesLarge(buf, resultId: resultId, sizeId: sizeId)
@@ -2501,8 +2501,6 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		loadIndirect gives readStdSysLoadIndirect(buf, offset: pos)
 		funcAddr gives readStdSysFuncAddr(buf, offset: pos)
 		storeIndirect gives readStdSysStoreIndirect(buf, offset: pos)
-		printLiteral gives readStdSysPrintLiteral(buf, offset: pos)
-		printInt gives readStdSysPrintInt(buf, offset: pos)
 		drop gives readStdSysDrop(buf, offset: pos)
 		osAllocPages gives readStdSysOsAllocPages(buf, offset: pos)
 		osAllocPagesLarge gives readStdSysOsAllocPagesLarge(buf, offset: pos)
@@ -2646,16 +2644,6 @@ function readStdSysStoreIndirect(buf ByteArray, offset ByteOffset) returns (StdS
 	let (isFloat, p) = readBoolByte(buf, offset: offset + 24)
 	return (StdSystemOp.storeIndirect(addrId, offset: off, valueId: valueId, isFloat: isFloat), p)
 end 'readStdSysStoreIndirect'
-
-function readStdSysPrintLiteral(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let stringId = readQword(buf, offset: offset)
-	return (StdSystemOp.printLiteral(stringId), offset + 8)
-end 'readStdSysPrintLiteral'
-
-function readStdSysPrintInt(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
-	let valueId = readQword(buf, offset: offset)
-	return (StdSystemOp.printInt(valueId), offset + 8)
-end 'readStdSysPrintInt'
 
 function readStdSysDrop(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let valueId = readQword(buf, offset: offset)

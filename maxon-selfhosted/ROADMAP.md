@@ -189,27 +189,31 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 
 ---
 
-## Phase 7: String Type & Interpolation (~6 specs)
+## Phase 7: String Type & Interpolation — MOSTLY DONE
 
 **Goal**: real `String` type with methods, real `print()` from stdlib. **This phase removes the temporary `print()`/`printLiteral`/`printInt` ops** still in the bootstrap.
 
-### Specs to unlock
-`string-type`, `string-interpolation`, `character-type`, `byte-string-literal`, `primitive-stringable`, `strings`.
+### Done (2026-05-07)
+- **Maxon Dialect**: added `stringInterp`, `charLiteral`, `byteStringLiteral` ops + the `StringInterpPart` union and `InterpExprKind` enum. Removed `printLiteral` and `printInt` from the union, printer rules, and every dispatch site.
+- **Std Dialect & both backend dialects/emitters**: stripped `printLiteral`/`printInt` from `StdSystemOp`, X64 + ARM64 op tables, debug-name tables, and emitter dispatch. Bumped stdlib cache version 12 → 13 to invalidate stale entries.
+- **Lowering** ([`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon)): `stringConst` materializes an rdata-backed `__ManagedMemory` (capacity = -2, elementSize = 1) wrapped in a 16-byte `String` struct (`managed: __ManagedMemory @0`, `isAsciiFlag: i64 @8`). isAsciiFlag is computed at compile time. `stringInterp` builds total length + heap allocation + per-part memcpy chain producing a String. `charLiteral` mirrors stringConst with an 8-byte `Character` outer struct (no isAsciiFlag). `byteStringLiteral` lowers to a bare `__ManagedMemory` (no outer wrapper). `__Builtins.writeStdout` is a new compiler intrinsic that loads buffer/length from MM and calls `mrt_write_stdout`.
+- **Parser**: deleted `parsePrintStatement`/`parsePrintInterpolatedString`/`emitPrintForExpr`/`emitInternedPrintLiteral`/`emitFragmentLiteral`. `parseStringLiteral` now handles interpolation in expression position (no more E2004 print-only gate). `parseCharLiteralExpr` emits `charLiteral` ops for multi-byte chars (single-byte stays as int for back-compat with byte comparisons in the bootstrap source). New `parseByteStringLiteralExpr`. New `if let X = try CALL` / `if var X = try CALL` / `if try CALL` statement form. Several parser improvements landed alongside: `static function` in interface bodies (with `isStatic` field on InterfaceMethodSig), keyword tokens accepted as parameter names (`with`, `type`, etc.), multi-param overload mangling (so `String.slice(StringIndex, StringIndex)` and `String.slice(StringIndex, GraphemeCount)` coexist), named-arg-required check deferred for qualified static calls (so `ByteMemory.create(1, 1)` is accepted post-typealias-resolution), `inFunctionParam` flag suppresses generic-instance `with` consumption inside param lists.
+- **Lexer**: removed `TokenKind.print` keyword. Added `byteStringLiteral` token form (`b"..."`). String interp markers handled per existing flow.
+- **Runtime** ([`runtime.std`](Compiler/Runtime/runtime.std)): added `mrt_f64_to_string` (sign + integer part via `mrt_i64_to_string` + 6-decimal-digit fractional, no precision heroics) and `mrt_bool_to_string` ("true"/"false"). Deleted `mrt_printInt`. Kept `mrt_write_stdout`, `mrt_i64_to_string`, etc.
+- **Stdlib bootstrap**: synthesized minimal `String` and `Character` struct declarations + `print(value String)` body in `StdlibLoader.maxon`'s bootstrap source. Whitelisting the real stdlib files (Builtins/Character/String/Print) was attempted but pulled in too many cross-file dependencies (`ByteView`, `StringIterator`, etc. in unwhitelisted helper files); the synthesized minimal types are sufficient for Phase 7's surface and stay decoupled from Phase 11's interface-dispatch progress.
+- **TypeResolution**: `stringConst`/`stringInterp` produce `MaxonType.named("String")` once String is registered. `namedIdCastCategory` special-cases `"String"` → `CastCategory.string` so call/cast diagnostics distinguish String from generic struct-pointer i64. `materializeStringConstIfNeeded` emits the IR op when stringConst flows into a binop/cmp/call arg or interp part.
 
-### Changes
+### Verified
+- Spec test parity: **500/505 passed** (same as the pre-Phase-7 baseline — no regression). The 5 remaining failures are pre-existing `string-array-literal-*` cases blocked on Array element-type inference (Array<String> not yet supported) plus one error-detection test (`error.unused-array-typealias`) that lacks a corresponding self-hosted check.
+- End-to-end Phase 7 features verified: string literals (`let s = "hello"`), `print(s)`, integer interpolation (`"x = {x}"`), float interpolation (`"y = {y}"`), bool interpolation (`"b = {b}"`), nested interpolation (`"{ "{ "inner" }" }"`).
 
-**Maxon Dialect**: add `stringLiteral`, `stringInterp`, `charLiteral`, `byteStringLiteral`. Remove `printLiteral`, `printInt`.
+### Still pending
+- Whitelist the six target spec files (`string-type`, `string-interpolation`, `character-type`, `byte-string-literal`, `primitive-stringable`, `strings`) — most fragments need Phase 11.4 interface dispatch (e.g. `for c in str` desugars to `Iterable.createIterator()` + `.advance()`/`.current()` calls that hit `mrt_panic("interface dispatch unimplemented")`). The String type infrastructure is in place; the unblock is on Phase 11.4.
+- Wrap `byteStringLiteral` results as `ByteArray.init(mm)` so spec tests can call `.count()` / `.get(i)` on `b"..."` literals (currently the result is a bare `__ManagedMemory`).
+- Whitelist `stdlib/PrimitiveExtensions.maxon` (deferred from Phase 11.C1.e) — its `toString()` bodies are `"{self}"` interpolations which now parse, so the path is unblocked.
 
-**Std Dialect & both backend dialects/emitters**: remove `printLiteral`, `printInt` and their hardcoded OS write stubs. The real `print()` will go through stdlib → String → managed memory → OS write call, reusing the `callRuntime`/`callImport` infrastructure from Phases 5–6.
-
-**Lowering**: lower string literals to rdata + managed memory wrapping; lower string interpolation to `.toString()` + concat sequences; lower `print()` as a regular function call to stdlib `print`.
-
-**Parser**: remove the hardcoded `parsePrintStatement` and `parseStringInterpolation` special cases. Parse string methods (`.count()`, `.isEmpty()`, `.contains()`, `.slice()`, `.findFirst()`), char literals `'x'`, byte string literals `b"..."`.
-
-**Note**: this is a breaking transition — every currently passing spec (`basics`, `print-function`, `variables`, etc.) must continue passing after the switchover.
-
-### Files to modify
-- All pipeline files (both backends), [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon).
+### Files modified (~65 files)
+- [`Lexer.maxon`](Compiler/Lexer.maxon), [`Parser.maxon`](Compiler/Parser.maxon), [`MaxonDialect.maxon`](Compiler/IR/Maxon/MaxonDialect.maxon), [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon), [`StdDialect.maxon`](Compiler/IR/Std/StdDialect.maxon), [`TypeResolution.maxon`](Compiler/TypeResolution.maxon), [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon), [`StdlibCache.maxon`](Compiler/StdlibCache.maxon), [`runtime.std`](Compiler/Runtime/runtime.std), all backend dialect/emitter/regalloc/prologue files, and the IR pass files (`Mem2Reg`, `CSE`, `BorrowCheck`, `DCE`, `InjectDrops`, `Canonicalize`, `LowerStdToMir`, `Inliner`, `DeadFunctionElimination`).
 
 ---
 

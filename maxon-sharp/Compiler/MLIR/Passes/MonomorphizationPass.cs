@@ -991,11 +991,9 @@ public static class MonomorphizationPass {
   /// into field `fieldName`. Computed once per callee from its body and reused
   /// for every call site — the call-site-specific work is just looking up the
   /// matching arg's TypeName, which is cheap.
-  private sealed class CalleeProvenanceCache {
+  private sealed class CalleeProvenanceCache(IrModule<MaxonOp> module) {
     private readonly Dictionary<string, List<(int ParamIndex, string FieldName)>?> _cache = [];
-    private readonly IrModule<MaxonOp> _module;
-
-    public CalleeProvenanceCache(IrModule<MaxonOp> module) { _module = module; }
+    private readonly IrModule<MaxonOp> _module = module;
 
     /// Returns the param→field shape for `calleeName`, or null when the callee
     /// doesn't exist or doesn't return a struct via a `Self{f: param}` literal.
@@ -2055,46 +2053,46 @@ public static class MonomorphizationPass {
     var prevMode = IrContext.Current.StdlibLoweringMode;
     IrContext.Current.StdlibLoweringMode = source.IsStdlib;
     try {
-    var newParamTypes = source.ParamTypes.Select(t => sub.SubstituteType(t)).ToList();
-    var newReturnType = source.ReturnType != null ? sub.SubstituteType(source.ReturnType) : null;
+      var newParamTypes = source.ParamTypes.Select(t => sub.SubstituteType(t)).ToList();
+      var newReturnType = source.ReturnType != null ? sub.SubstituteType(source.ReturnType) : null;
 
-    var newFunc = new IrFunction<MaxonOp>(
-      newName, [.. source.ParamNames], newParamTypes, newReturnType, source.ThrowsType) {
-      IsStdlib = source.IsStdlib,
-      SourceLine = source.SourceLine,
-      SourceColumn = source.SourceColumn
-    };
-
-    // Clone blocks and operations with callee substitution
-    var valueMap = new Dictionary<int, MaxonValue>();
-
-    MaxonValue MapValue(MaxonValue old) {
-      if (valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
-      var newId = IrContext.Current.NextId();
-      MaxonValue newVal = old switch {
-        MaxonInteger => new MaxonInteger(newId),
-        MaxonFloat => new MaxonFloat(newId),
-        MaxonBool => new MaxonBool(newId),
-        MaxonByte => new MaxonByte(newId),
-        MaxonShort => new MaxonShort(newId),
-        MaxonStruct s => new MaxonStruct(newId, sub.SubstituteName(s.TypeName)),
-        MaxonEnum e => new MaxonEnum(newId, e.TypeName),
-        MaxonFunctionPtr => new MaxonFunctionPtr(newId),
-        _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
+      var newFunc = new IrFunction<MaxonOp>(
+        newName, [.. source.ParamNames], newParamTypes, newReturnType, source.ThrowsType) {
+        IsStdlib = source.IsStdlib,
+        SourceLine = source.SourceLine,
+        SourceColumn = source.SourceColumn
       };
-      valueMap[old.Id] = newVal;
-      return newVal;
-    }
 
-    foreach (var block in source.Body.Blocks) {
-      var newBlock = newFunc.Body.AddBlock(block.Name);
-      foreach (var op in block.Operations) {
-        var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap);
-        newBlock.AddOp(cloned);
+      // Clone blocks and operations with callee substitution
+      var valueMap = new Dictionary<int, MaxonValue>();
+
+      MaxonValue MapValue(MaxonValue old) {
+        if (valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
+        var newId = IrContext.Current.NextId();
+        MaxonValue newVal = old switch {
+          MaxonInteger => new MaxonInteger(newId),
+          MaxonFloat => new MaxonFloat(newId),
+          MaxonBool => new MaxonBool(newId),
+          MaxonByte => new MaxonByte(newId),
+          MaxonShort => new MaxonShort(newId),
+          MaxonStruct s => new MaxonStruct(newId, sub.SubstituteName(s.TypeName)),
+          MaxonEnum e => new MaxonEnum(newId, e.TypeName),
+          MaxonFunctionPtr => new MaxonFunctionPtr(newId),
+          _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
+        };
+        valueMap[old.Id] = newVal;
+        return newVal;
       }
-    }
 
-    return newFunc;
+      foreach (var block in source.Body.Blocks) {
+        var newBlock = newFunc.Body.AddBlock(block.Name);
+        foreach (var op in block.Operations) {
+          var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap);
+          newBlock.AddOp(cloned);
+        }
+      }
+
+      return newFunc;
     } finally {
       IrContext.Current.StdlibLoweringMode = prevMode;
     }

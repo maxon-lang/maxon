@@ -161,8 +161,6 @@ export union Arm64Op
 	condBranch(condition Arm64CondCode, targetBlock BlockId) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
 	branch(targetBlock BlockId) = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
 	branchLink(target String) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 65535}
-	printLiteral(stringId StringId) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 65535}
-	printInt = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 65535}
 	ret = Arm64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 0}
 	// StdSystemOp lowering
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = Arm64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 1, implicitGprDefs: 1}
@@ -268,8 +266,6 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		condBranch(condition, targetBlock) gives "arm64.b.{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"
 		branch(targetBlock) gives "arm64.b {resolveBlockLabel(targetBlock, blocks: blocks)}"
 		branchLink(linkTarget) gives "arm64.bl {linkTarget}"
-		printLiteral(stringId) gives "arm64.print_literal #{stringId}"
-		printInt gives "arm64.print_int"
 		ret gives "arm64.ret"
 		syscall(_, number, argSlots) gives "arm64.syscall {number}({formatVarSlotArgs(argSlots)})"
 		iatCall(_, slotIndex, _) gives "arm64.call_import slot_{slotIndex}"

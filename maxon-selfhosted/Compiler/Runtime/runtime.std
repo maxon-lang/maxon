@@ -130,6 +130,200 @@ func mrt_i64_to_string 2 i64
 
 end
 
+// mrt_bool_to_string(value buffer_ptr): writes "true"/"false" to buffer.
+// Returns 4 (true) or 5 (false). Buffer must be >= 5 bytes.
+func mrt_bool_to_string 2 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Eq v0 v2
+    std condBr v3 false_case true_case
+
+  block true_case:
+    v4 = std loadSlot 1
+    v5 = std constI64 0
+    v6 = std constI64 1
+    v7 = std constI64 2
+    v8 = std constI64 3
+    v9 = std constI64 0x74
+    v10 = std constI64 0x72
+    v11 = std constI64 0x75
+    v12 = std constI64 0x65
+    std storeByte v4 v5 v9
+    std storeByte v4 v6 v10
+    std storeByte v4 v7 v11
+    std storeByte v4 v8 v12
+    v13 = std constI64 4
+    std ret v13
+
+  block false_case:
+    v14 = std loadSlot 1
+    v15 = std constI64 0
+    v16 = std constI64 1
+    v17 = std constI64 2
+    v18 = std constI64 3
+    v19 = std constI64 4
+    v20 = std constI64 0x66
+    v21 = std constI64 0x61
+    v22 = std constI64 0x6C
+    v23 = std constI64 0x73
+    v24 = std constI64 0x65
+    std storeByte v14 v15 v20
+    std storeByte v14 v16 v21
+    std storeByte v14 v17 v22
+    std storeByte v14 v18 v23
+    std storeByte v14 v19 v24
+    v25 = std constI64 5
+    std ret v25
+
+end
+
+// mrt_f64_to_string(value buffer_ptr): converts float to decimal string with 6 fractional digits.
+// Returns byte count. Buffer must be >= 32 bytes. No trailing-zero stripping
+// (output always has exactly 6 fractional digits) — sufficient for spec tests.
+//
+// Slot layout:
+//   slot 0 = |value| (f64, abs value updated after sign extraction)
+//   slot 1 = buffer_ptr (i64)
+//   slot 2 = is_negative flag (i64, 0 or 1)
+//   slot 3 = total length so far (sign + integer-part length, before '.')
+//   slot 4 = integer part (i64)
+//   slot 5 = fractional digits (i64, 0..999999)
+//   slot 6 = digit-write offset (loop counter, 5 down to 0)
+func mrt_f64_to_string 2 i64
+  block entry:
+    v0 = std param 0 f64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std constF64 0
+    v3 = std cmpF64Eq v0 v2
+    std condBr v3 zero_case check_neg
+
+  block zero_case:
+    v4 = std loadSlot 1
+    v5 = std constI64 0
+    v6 = std constI64 1
+    v7 = std constI64 2
+    v8 = std constI64 0x30
+    v9 = std constI64 0x2E
+    std storeByte v4 v5 v8
+    std storeByte v4 v6 v9
+    std storeByte v4 v7 v8
+    v10 = std constI64 3
+    std ret v10
+
+  block check_neg:
+    v11 = std constI64 0
+    std storeSlot 2 v11
+    v12 = std loadSlot 0
+    v13 = std constF64 0
+    v14 = std cmpF64Lt v12 v13
+    std condBr v14 do_neg setup_int
+
+  block do_neg:
+    v15 = std loadSlot 0
+    v16 = std constF64 0
+    v17 = std subF64 v16 v15
+    std storeSlot 0 v17
+    v18 = std constI64 1
+    std storeSlot 2 v18
+    std br setup_int
+
+  block setup_int:
+    v19 = std loadSlot 0
+    v20 = std fpToSiI64 v19
+    std storeSlot 4 v20
+    v21 = std loadSlot 2
+    v22 = std constI64 0
+    v23 = std cmpI64Gt v21 v22
+    std condBr v23 write_minus call_int
+
+  block write_minus:
+    v24 = std loadSlot 1
+    v25 = std constI64 0
+    v26 = std constI64 0x2D
+    std storeByte v24 v25 v26
+    std br call_int
+
+  block call_int:
+    v27 = std loadSlot 1
+    v28 = std loadSlot 2
+    v29 = std addI64 v27 v28
+    v30 = std loadSlot 4
+    v31 = std call mrt_i64_to_string v30 v29
+    v32 = std addI64 v28 v31
+    std storeSlot 3 v32
+    v33 = std loadSlot 1
+    v34 = std addI64 v33 v32
+    v35 = std constI64 0
+    v36 = std constI64 0x2E
+    std storeByte v34 v35 v36
+    v37 = std loadSlot 0
+    v38 = std loadSlot 4
+    v39 = std siToFpF64 v38
+    v40 = std subF64 v37 v39
+    v41 = std constF64 0x412e848000000000
+    v42 = std mulF64 v40 v41
+    v43 = std constF64 0x3fe0000000000000
+    v44 = std addF64 v42 v43
+    v45 = std fpToSiI64 v44
+    v46 = std constI64 1000000
+    v47 = std cmpI64Ge v45 v46
+    std condBr v47 clamp_frac use_frac
+
+  block clamp_frac:
+    v48 = std constI64 999999
+    std storeSlot 5 v48
+    std br digit_setup
+
+  block use_frac:
+    std storeSlot 5 v45
+    std br digit_setup
+
+  block digit_setup:
+    v49 = std constI64 5
+    std storeSlot 6 v49
+    std br digit_loop
+
+  block digit_loop:
+    v50 = std loadSlot 6
+    v51 = std constI64 0
+    v52 = std cmpI64Lt v50 v51
+    std condBr v52 after_digits write_digit
+
+  block write_digit:
+    v53 = std loadSlot 5
+    v54 = std constI64 10
+    v55 = std remI64 v53 v54
+    v56 = std divI64 v53 v54
+    std storeSlot 5 v56
+    v57 = std constI64 0x30
+    v58 = std addI64 v55 v57
+    v59 = std loadSlot 1
+    v60 = std loadSlot 3
+    v61 = std addI64 v59 v60
+    v62 = std constI64 1
+    v63 = std addI64 v61 v62
+    v64 = std loadSlot 6
+    std storeByte v63 v64 v58
+    v65 = std loadSlot 6
+    v66 = std constI64 1
+    v67 = std subI64 v65 v66
+    std storeSlot 6 v67
+    std br digit_loop
+
+  block after_digits:
+    v68 = std loadSlot 3
+    v69 = std constI64 7
+    v70 = std addI64 v68 v69
+    std ret v70
+
+end
+
 // mrt_write_cstr_stderr(ptr): scans for null terminator, then writes to stderr.
 func mrt_write_cstr_stderr 1 void
   block entry:
@@ -393,18 +587,6 @@ func mrt_alloc 1 i64
     v2 = std constI64 0
     v3 = std call mm_alloc v0 v1 v2
     std ret v3
-end
-
-// mrt_printInt(value): converts to string and prints to stdout.
-func mrt_printInt 1 void
-  block entry:
-    v0 = std param 0 i64
-    v1 = std stackAddr 1
-    v2 = std call mrt_i64_to_string v0 v1
-    v3 = std stackAddr 1
-    v4 = std call mrt_write_stdout v3 v2
-    v5 = std constI64 0
-    std ret v5
 end
 
 // mrt_cov_hit(siteId): increments __data_cov_counters[siteId].

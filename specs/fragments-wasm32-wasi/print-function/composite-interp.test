@@ -15,20 +15,56 @@ module {
   func @print-function.main() -> u8 {
   entry:
     %0 = mir.mov_imm 42 : i64
-    %1 = mir.global_addr @__istr_1
-    %2 = mir.mov_imm 9 : i64
-    %3 = mir.call @mrt_write_stdout(%1, %2)
-    %5 = mir.call @mrt_printInt(%0)
-    %6 = mir.global_addr @__istr_2
-    %7 = mir.mov_imm 16 : i64
-    %8 = mir.call @mrt_write_stdout(%6, %7)
-    %11 = mir.mov_imm 84 : i64
-    %12 = mir.call @mrt_printInt(%11)
-    %13 = mir.global_addr @__istr_0
-    %14 = mir.mov_imm 1 : i64
-    %15 = mir.call @mrt_write_stdout(%13, %14)
-    %16 = mir.mov_imm 0 : i64
-    mir.ret %16
+    %4 = mir.mov_imm 84 : i64
+    %5 = mir.global_addr @__istr_2
+    %6 = mir.mov_imm 9 : i64
+    %7 = mir.mov_imm 21 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %9 = mir.call @mrt_i64_to_string(%0, %8)
+    %10 = mir.global_addr @__istr_3
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.mov_imm 21 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    %14 = mir.call @mrt_i64_to_string(%4, %13)
+    %15 = mir.global_addr @__istr_1
+    %16 = mir.mov_imm 1 : i64
+    %18 = mir.mov_imm 9 : i64
+    %19 = mir.add.i64 %18, %9
+    %20 = mir.add.i64 %19, %11
+    %21 = mir.add.i64 %20, %14
+    %22 = mir.add.i64 %21, %16
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %22, %23
+    %25 = mir.call @mrt_alloc(%24)
+    mir.memcpy %25, %5, %6
+    %26 = mir.add.i64 %25, %6
+    mir.memcpy %26, %8, %9
+    %27 = mir.add.i64 %26, %9
+    mir.memcpy %27, %10, %11
+    %28 = mir.add.i64 %27, %11
+    mir.memcpy %28, %13, %14
+    %29 = mir.add.i64 %28, %14
+    mir.memcpy %29, %15, %16
+    %31 = mir.mov_imm 40 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %25, %32, 0
+    mir.store %22, %32, 8
+    mir.store %22, %32, 16
+    %33 = mir.mov_imm 1 : i64
+    mir.store %33, %32, 24
+    %34 = mir.mov_imm 0 : i64
+    mir.store %34, %32, 32
+    %35 = mir.mov_imm 16 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    mir.store %32, %36, 0
+    %37 = mir.mov_imm 0 : i64
+    mir.store %37, %36, 8
+    %40 = mir.load %36, 0
+    %41 = mir.load %40, 0
+    %42 = mir.load %40, 8
+    %43 = mir.call @mrt_write_stdout(%41, %42)
+    %39 = mir.mov_imm 0 : i64
+    mir.ret %39
   }
 }
 ---

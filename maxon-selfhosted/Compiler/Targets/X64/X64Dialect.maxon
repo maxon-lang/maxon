@@ -198,9 +198,6 @@ export union X64Op
 	loadF64Slot(slotIndex VarSlot) = X64OpMeta{latency: 3, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
 	movF64Rdata(rdataOffset CodeOffset) = X64OpMeta{latency: 3, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
 	ucomisd = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
-	// Print ops (I/O = memory + call)
-	printLiteral(stringId StringId) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 975}
-	printInt = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 2, implicitGprDefs: 975}
 	// Stack adjustment
 	subRspImm(value StackSize) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
 	addRspImm(value StackSize) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.passThrough, implicitGprReads: 0, implicitGprDefs: 0}
@@ -352,8 +349,6 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		loadF64Slot(slotIndex) gives "x64.movsd xmm0, [rbp-{slotOffset(slotIndex)}]"
 		movF64Rdata(rdataOffset) gives "x64.movsd xmm0, [rip+__float_{rdataOffset}]"
 		ucomisd gives "x64.ucomisd xmm0, xmm1"
-		printLiteral(stringId) gives "x64.print_literal #{stringId}"
-		printInt gives "x64.print_int"
 		subRspImm(value) gives "x64.sub rsp, {value}"
 		addRspImm(value) gives "x64.add rsp, {value}"
 		movRspOffsetReg(offset, srcReg) gives "x64.mov [rsp+{offset}], {x64VRegToString(srcReg)}"

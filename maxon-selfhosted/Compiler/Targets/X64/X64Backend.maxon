@@ -1164,57 +1164,6 @@ function emitI64ToString(code ByteArray) returns CodeOffset
 	return offset
 end 'emitI64ToString'
 
-// --- Print Operations ---
-
-// Emit printLiteral: jump over data island, then call mrt_write_stdout
-function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset CodeOffset)
-	let dataLen = data.count()
-	if dataLen == 0 'empty'
-		return
-	end 'empty'
-
-	// jmp over data island: jmp rel32
-	code.push(0xE9)
-	let jmpFixup = code.count()
-	writeDword(code, value: 0)
-
-	// Data island
-	let dataOffset = code.count()
-	code.append(data)
-
-	// Patch jump
-	let afterData = code.count()
-	patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
-
-	// lea rcx, [rip + offset_to_data]
-	code.append(b"\x48\x8d\x0d")
-	let leaEnd = code.count() + 4
-	let leaRel = dataOffset - leaEnd
-	writeDword(code, value: leaRel)
-
-	// mov rdx, dataLen
-	code.append(b"\x48\xc7\xc2")
-	writeDword(code, value: dataLen)
-
-	// call mrt_write_stdout
-	emitRelativeCall(code, targetOffset: writeStdoutOffset)
-end 'emitPrintLiteral'
-
-// Emit printInt: value assumed in RCX, convert to string then print
-function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
-	// Value already in rcx (first param). lea rdx, [rsp] (buffer ptr)
-	code.append(b"\x48\x8d\x14\x24")
-
-	// call mrt_i64_to_string (returns length in r8)
-	emitRelativeCall(code, targetOffset: i64ToStringOffset)
-
-	// mov rdx, r8 (length); lea rcx, [rsp] (buffer ptr)
-	code.append(b"\x4c\x89\xc2\x48\x8d\x0c\x24")
-
-	// call mrt_write_stdout
-	emitRelativeCall(code, targetOffset: writeStdoutOffset)
-end 'emitPrintInt'
-
 // --- OS-parameterized stubs ---
 
 // Emit mrt_start: optional shadow space, call main, then exit via OsDescriptor strategy
@@ -1898,8 +1847,6 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X64Register.rax)
 		movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
 		ucomisd then emitUcomisd(code)
-		printLiteral(stringId) then emitPrintLiteralInline(code, stringId: stringId, callFixups: callFixups)
-		printInt then emitPrintIntInline(code, callFixups: callFixups)
 		subRspImm(value) then emitSubRspImm(code, value: value)
 		addRspImm(value) then emitAddRspImm(code, value: value)
 		movRspOffsetReg(offset, srcReg) then emitMovRspOffsetReg(code, offset: offset, srcReg: resolveGpr(srcReg))
@@ -1966,32 +1913,6 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		lockXaddMemReg(valReg, addrReg) then emitLockXaddMemRegOp(code, addrReg: resolveGpr(addrReg), valReg: resolveGpr(valReg))
 	end 'emit'
 end 'emitX64Op'
-
-// --- Inline print operations (legacy path, uses callFixups) ---
-
-// printLiteral: jump over data island, then call mrt_write_stdout via callFixup
-// printLiteral: dead code today. The op never reaches the backend
-// because lowerMaxonToStd decomposes Maxon printLiteral into
-// globalAddr + constI64 + call mrt_write_stdout before the backend
-// pipeline runs. The arm is kept to keep the dialect match exhaustive.
-function emitPrintLiteralInline(code ByteArray, stringId StringId, callFixups CallFixupArray)
-	panic("X64 backend: x64.printLiteral op should not reach the emitter (stringId={stringId}); lowerMaxonToStd was supposed to decompose this. code.count()={code.count()}, callFixups.count()={callFixups.count()}")
-end 'emitPrintLiteralInline'
-
-// printInt: value in RAX, convert to string then print
-function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
-	// Value already in rcx (first param). lea rdx, [rsp] (buffer ptr)
-	code.append(b"\x48\x8d\x14\x24")
-
-	// call mrt_i64_to_string (via callFixup) — returns length in r8
-	emitCallFixup(code, callFixups: callFixups, target: "mrt_i64_to_string")
-
-	// mov rdx, r8 (length); lea rcx, [rsp] (buffer ptr)
-	code.append(b"\x4c\x89\xc2\x48\x8d\x0c\x24")
-
-	// call mrt_write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")
-end 'emitPrintIntInline'
 
 // --- StdSystemOp emission (x86-64) ---
 

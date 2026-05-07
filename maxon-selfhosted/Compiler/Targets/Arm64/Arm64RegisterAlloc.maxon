@@ -612,7 +612,7 @@ export function isArm64RetTerminator(module TargetModule, packed OpIndex) return
 	var result = false
 	match a64Op 'checkRet'
 		ret then result = true
-		prologue to printInt then break 'checkRet'
+		prologue to branchLink then break 'checkRet'
 		syscall to atomicXaddMem then break 'checkRet'
 	end 'checkRet'
 	return result
@@ -626,7 +626,7 @@ function isArm64OpPanicCall(op Arm64Op) returns bool
 	match op 'check'
 		branchLink(target) then return target == "mrt_panic"
 		prologue to branch then break 'check'
-		printLiteral to atomicXaddMem then break 'check'
+		ret to atomicXaddMem then break 'check'
 	end 'check'
 	return false
 end 'isArm64OpPanicCall'

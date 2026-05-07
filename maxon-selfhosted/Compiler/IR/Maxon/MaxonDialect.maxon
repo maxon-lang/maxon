@@ -793,6 +793,36 @@ export union MaxonErrorKind
 	other = "other"
 end 'MaxonErrorKind'
 
+// Phase 7 step 5: classification of an interpolation expression part used by
+// `MaxonOp.stringInterp`. Discriminates how lowering should produce the
+// (buffer, length) pair for a given expression value:
+//   - i64/byte → call `mrt_i64_to_string` into a stack/heap buffer.
+//   - f64/bool → reserved (no runtime helper yet in self-hosted runtime.std);
+//     parser today rejects these with a diagnostic until the helpers ship.
+//   - string  → load `String.managed.buffer` and `String.managed.length`.
+//   - character → load `Character.managed.buffer` and `length` (same shape
+//     as `string`, but the outer struct has only the `managed` field).
+export union InterpExprKind
+	i64
+	u64
+	f64
+	bool
+	byte
+	string
+	character
+end 'InterpExprKind'
+
+// Phase 7 step 5: one part of an interpolated string. Either a raw literal
+// fragment (interned StringId; lowered to a globalAddr+constI64 length pair)
+// or an expression value whose .toString() materialization is performed at
+// lowering time per `kind`.
+export union StringInterpPart
+	literal(stringId StringId)
+	expr(valueName ByteArray, kind InterpExprKind)
+end 'StringInterpPart'
+
+export typealias StringInterpPartArray = Array with StringInterpPart
+
 // --- MaxonOp union ---
 // Every typed op carries a source-level MaxonType. Width selection and
 // int-vs-float dispatch happen in lowerMaxonToStd.
@@ -816,10 +846,35 @@ export union MaxonOp
 	// String literal materialization. Carries an interned StringId into
 	// `project.strings`. Produced by TypeResolution when an
 	// `unresolvedRead` resolves to a string-typed top-level constant.
-	// Consumers downstream (printInt → printLiteral rewrite, cmp folding,
-	// varDecl with string-typed initializer) read the StringId back from
-	// the producer-type map. Result has type MaxonType.string.
+	// Consumers downstream (cmp folding, varDecl with string-typed
+	// initializer) read the StringId back from the producer-type map.
+	// Result has type MaxonType.string.
 	stringConst(result ByteArray, stringId StringId, range SourceRange)
+	// Phase 7 step 6: multi-byte character literal materialization. Emitted
+	// by `parseCharLiteralExpr` only when the decoded char literal exceeds
+	// one byte; the single-byte fast path stays as an integer literal so
+	// existing byte-comparison sites (`if b == 'a'` in the lexer) keep
+	// compiling. The bytes are interned via `project.strings`. Lowering
+	// allocates a fresh Character struct (8 bytes: managed@0 ptr to MM) over
+	// an rdata-resident __ManagedMemory record. Result type is
+	// MaxonType.named("Character").
+	charLiteral(result ByteArray, stringId StringId, range SourceRange)
+	// Phase 7 step 7: byte-string literal `b"..."` materialization. The
+	// bytes are interned via `project.strings`. Lowering produces an
+	// rdata-backed __ManagedMemory pointer (capacity = -2, elementSize = 1,
+	// parentPtr = 0) — no outer wrapper struct. Result type is
+	// MaxonType.named("__ManagedMemory") which TypeResolution treats as
+	// alias-compatible with the user-visible `ByteArray` typealias.
+	byteStringLiteral(result ByteArray, stringId StringId, range SourceRange)
+	// Phase 7 step 5: interpolated-string materialization in expression
+	// position. `parts` is a parallel sequence of literal fragments and
+	// expression operands, in left-to-right source order. Lowering allocates
+	// a fresh String + __ManagedMemory + buffer triple, materializes each
+	// part's (buffer, length) pair (per-part runtime call for numeric
+	// expressions; rdata addr + length for literals; double-load for string
+	// expressions), memcopies them into the final buffer, and binds `result`
+	// to the outer String pointer. Result has type MaxonType.string.
+	stringInterp(result ByteArray, parts StringInterpPartArray, range SourceRange)
 	// Variables
 	varDecl(slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange)
 	varLoad(result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange)
@@ -875,15 +930,6 @@ export union MaxonOp
 	// parser-inferred per-arg metadata as `call` (see above).
 	methodCall(result ByteArray, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, range SourceRange)
 	ret(retVal ByteArray, range SourceRange)
-	// I/O (bootstrap, lowered to runtime calls in lowerMaxonToStd).
-	// `printLiteral` carries a StringId into `project.strings`; lowering
-	// recovers the bytes via `project.strings.get(stringId)` when emitting
-	// the runtime `globalAddr + length + mrt_write_stdout` tuple. The
-	// interner guarantees identical literals dedupe to a single id, so
-	// repeated `print("hello")` calls share one rdata entry without a
-	// separate dedup step at lowering.
-	printLiteral(stringId StringId, range SourceRange)
-	printInt(value ByteArray, range SourceRange)
 	// Range check panic (emitted by parser, lowered to std.system.globalAddr +
 	// std.call in lowerMaxonToStd). The panic-message label (`__panic_msg_N`)
 	// used by the Std dialect is assigned at lowering time from a lowering-
@@ -1058,6 +1104,9 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 	return match op 'print'
 		literal(result, value, valueType, _) gives "%{String.from(result)} = maxon.literal {lb}value = {value} : {valueType.toString(project)}{rb}"
 		stringConst(result, stringId, _) gives "%{String.from(result)} = maxon.string_const \"{project.strings.get(stringId)}\" #{stringId}"
+		charLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.char_literal \"{project.strings.get(stringId)}\" #{stringId}"
+		byteStringLiteral(result, stringId, _) gives "%{String.from(result)} = maxon.byte_string_literal \"{project.strings.get(stringId)}\" #{stringId}"
+		stringInterp(result, parts, _) gives "%{String.from(result)} = maxon.string_interp [{formatStringInterpParts(project, parts: parts)}]"
 		varDecl(slotId, value, slotType, _) gives "maxon.var_decl slot_{slotId}, %{String.from(value)} : {slotType.toString(project)}"
 		varLoad(result, slotId, slotType, _) gives "%{String.from(result)} = maxon.var_load slot_{slotId} : {slotType.toString(project)}"
 		varStore(slotId, value, _) gives "maxon.var_store slot_{slotId}, %{String.from(value)}"
@@ -1073,8 +1122,6 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		call(result, callee, callContext, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		methodCall(result, receiver, methodName, args, argLabels, _, _, _) gives "%{String.from(result)} = maxon.method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)})"
 		ret(retVal, _) gives "maxon.return %{String.from(retVal)}"
-		printLiteral(stringId, _) gives "maxon.print_literal \"{project.strings.get(stringId)}\" #{stringId}"
-		printInt(value, _) gives "maxon.print_int %{String.from(value)}"
 		panic(stringId, _) gives "maxon.panic \"{project.strings.get(stringId)}\" #{stringId}"
 		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
 		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
@@ -1120,6 +1167,36 @@ function refEqMnemonic(negate bool) returns String
 	end 'neg'
 	return "ref_eq"
 end 'refEqMnemonic'
+
+// Phase 7 step 5: cold-path printer for `MaxonOp.stringInterp` parts.
+// Renders each part as either `"...lit..." #id` for literals or
+// `%name : kind` for expression parts.
+export function formatStringInterpParts(project Project, parts StringInterpPartArray) returns String
+	var out = ""
+	for i in 0 upto parts.count() 'each'
+		let part = try parts.get(i) otherwise panic("formatStringInterpParts: parts.get OOB at {i}")
+		if i > 0 'comma'
+			out = "{out}, "
+		end 'comma'
+		match part 'k'
+			literal(stringId) then out = "{out}\"{project.strings.get(stringId)}\" #{stringId}"
+			expr(valueName, kind) then out = "{out}%{String.from(valueName)} : {interpExprKindName(kind)}"
+		end 'k'
+	end 'each'
+	return out
+end 'formatStringInterpParts'
+
+function interpExprKindName(kind InterpExprKind) returns String
+	return match kind 'n'
+		i64 gives "i64"
+		u64 gives "u64"
+		f64 gives "f64"
+		bool gives "bool"
+		byte gives "byte"
+		string gives "string"
+		character gives "character"
+	end 'n'
+end 'interpExprKindName'
 
 export function formatArgIds(argIds ValueIdArray) returns String
 	var result = ""
@@ -1453,11 +1530,16 @@ function mangleTokenForMaxonType(project Project, t MaxonType) returns String
 	end 'token'
 end 'mangleTokenForMaxonType'
 
-// Compute the mangle suffix for a function's first non-self parameter type.
+// Compute the mangle suffix for a function's non-self parameter types.
 // `paramTypes` is the parser-collected user-facing param list (instance
 // methods carry __self at index 0). Zero-arg methods (and instance methods
 // with only __self) get `$` as their suffix — there is no value-type to
 // disambiguate on, so a bare-name collision is a real duplicate.
+//
+// To allow overloads that share a first-param type but differ in later
+// params (e.g. `String.slice(StringIndex, StringIndex)` vs
+// `String.slice(StringIndex, GraphemeCount)`), the suffix concatenates
+// every non-self param's per-type suffix.
 export function mangleSuffixForFirstParam(project Project, paramTypes MaxonTypeArray, hasSelf bool) returns String
 	var startIdx = 0
 	if hasSelf 'skipSelf'
@@ -1466,8 +1548,12 @@ export function mangleSuffixForFirstParam(project Project, paramTypes MaxonTypeA
 	if startIdx >= paramTypes.count() 'noParam'
 		return "$"
 	end 'noParam'
-	let firstType = try paramTypes.get(startIdx) otherwise panic("mangleSuffixForFirstParam: paramTypes.get OOB at {startIdx}")
-	return mangleSuffixForMaxonType(project, t: firstType)
+	var suffix = ""
+	for i in startIdx upto paramTypes.count() 'eachParam'
+		let pt = try paramTypes.get(i) otherwise panic("mangleSuffixForFirstParam: paramTypes.get OOB at {i}")
+		suffix = "{suffix}{mangleSuffixForMaxonType(project, t: pt)}"
+	end 'eachParam'
+	return suffix
 end 'mangleSuffixForFirstParam'
 
 // Resolve a call's qualified callee against the overload registry. When the
@@ -1502,7 +1588,14 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 		return bareQualifiedName
 	end 'noArg'
 	let firstArgType = try argTypes.get(startIdx) otherwise return bareQualifiedName
-	let argSuffix = mangleSuffixForMaxonType(project, t: firstArgType)
+	// Build the full-arg suffix (every non-self arg's per-type suffix
+	// concatenated), matching the registration mangling at parseFunction's
+	// tryRegisterOverload site.
+	var argSuffix = ""
+	for i in startIdx upto argTypes.count() 'eachArg'
+		let at = try argTypes.get(i) otherwise return bareQualifiedName
+		argSuffix = "{argSuffix}{mangleSuffixForMaxonType(project, t: at)}"
+	end 'eachArg'
 	let target = "{bareQualifiedName}{argSuffix}"
 	for v in variants 'scan'
 		if v == target 'hit'

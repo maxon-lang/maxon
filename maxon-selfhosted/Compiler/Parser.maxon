@@ -164,6 +164,14 @@ export type Parser
 	// crashing with "Undefined variable" against the lifted function's
 	// fresh scope. parseClosure saves/restores both this and `closureCaptures`.
 	var inClosure bool
+	// Suppress parseTypeRef's `with` consumption when inside a function
+	// parameter list. The C# bootstrap does not parse generic-instance
+	// inline (`Base with Args`) outside typealias-RHS / conformance
+	// contexts, so a parameter named `with` (e.g. `replace(old String, with String)`
+	// in stdlib's String.maxon) doesn't get gobbled as a generic-instance
+	// arg of the previous param's type. Saved/restored across nested
+	// function declarations.
+	var inFunctionParam bool
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
@@ -208,7 +216,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -366,8 +374,10 @@ export type Parser
 		// single arg) and intern through the genericInstance registry. The
 		// `Base` half of `Base with X` always resolves through the regular
 		// type-name interner — generic-instance rewriting only kicks in once
-		// `with` is observed.
-		if at(TokenKind.with) 'isGenericInstance'
+		// `with` is observed. Inside a function param list, `with` after a
+		// type name is the next param's name (matching C# behavior — generic
+		// instances only land in typealias RHS / conformance contexts).
+		if at(TokenKind.with) and not inFunctionParam 'isGenericInstance'
 			try eat(TokenKind.with)
 			var args = MaxonTypeArray.create()
 			if accept(TokenKind.leftParen) 'parenList'
@@ -413,9 +423,19 @@ export type Parser
 			return
 		end 'noParams'
 
+		let savedInFunctionParam = inFunctionParam
+		inFunctionParam = true
+		try parseFunctionParametersInner(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults) otherwise(e) 'restoreOnErr'
+			inFunctionParam = savedInFunctionParam
+			throw e
+		end 'restoreOnErr'
+		inFunctionParam = savedInFunctionParam
+	end 'parseFunctionParameters'
+
+	function parseFunctionParametersInner(paramCount ParsedInt, paramTypes MaxonTypeArray, paramNames StringArray, paramDefaults ParamDefaultArray) throws ParserError
 		while true 'paramLoop'
 			let paramNameToken = try consumeExpecting("identifier")
-			if paramNameToken.kind != TokenKind.identifier 'badName'
+			if not tokenIsIdentifierLike(paramNameToken) 'badName'
 				reportTokenMismatch(paramNameToken, expectedDisplay: "identifier")
 				synchronize()
 				return
@@ -468,7 +488,7 @@ export type Parser
 				break
 			end 'endParams'
 		end 'paramLoop'
-	end 'parseFunctionParameters'
+	end 'parseFunctionParametersInner'
 
 	// Parse an optional `= <literal>` default value for a parameter. Only
 	// integer literals (optionally prefixed with `-`) are supported — the C#
@@ -900,10 +920,7 @@ export type Parser
 			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
 				try parseVarDecl(block)
 				block = currentBlock
-			end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
-				try parsePrintStatement(block)
-				block = currentBlock
-			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
+			end 'isVarDecl' else if stmtToken.kind == TokenKind.panic 'isPanic'
 				try parsePanicStatement(block)
 				lastWasReturn = true
 			end 'isPanic' else if stmtToken.kind == TokenKind.throw 'isThrow'
@@ -2467,13 +2484,39 @@ export type Parser
 				break
 			end 'isEnd'
 
-			if memberToken.kind == TokenKind.function 'isMethod'
+			// Visibility modifiers on interface members are accepted and
+			// ignored — interface methods are public requirements regardless.
+			if memberToken.kind == TokenKind.export 'isExport'
+				try eat(TokenKind.export)
+				try skipNewlines()
+				continue
+			end 'isExport'
+
+			// Skip nested typealias declarations inside interfaces (e.g.
+			// `typealias ElementArray = Array with Element`). They contribute
+			// to associated-type resolution rather than method requirements.
+			if memberToken.kind == TokenKind.typealias 'isAlias'
+				skipToNextLine()
+				try skipNewlines()
+				continue
+			end 'isAlias'
+
+			// `static function` is allowed before the method name to mark
+			// factory-style interface requirements (e.g. BuiltinStringLiteral.init).
+			var isStaticMethod = false
+			if memberToken.kind == TokenKind.static 'isStatic'
+				try eat(TokenKind.static)
+				isStaticMethod = true
+			end 'isStatic'
+
+			let methodToken = cursor.current()
+			if methodToken.kind == TokenKind.function 'isMethod'
 				try eat(TokenKind.function)
-				let sig = try parseInterfaceMethodSig()
+				let sig = try parseInterfaceMethodSig(isStatic: isStaticMethod)
 				methods.push(sig)
 				try skipNewlines()
 			end 'isMethod' else 'unknown'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in interface body: '{tokenValueToString(memberToken.value)}' (expected 'function' or 'end')", line: memberToken.line, column: memberToken.column, filePath: filePath)
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in interface body: '{tokenValueToString(methodToken.value)}' (expected 'function' or 'end')", line: methodToken.line, column: methodToken.column, filePath: filePath)
 				skipToNextLine()
 				try skipNewlines()
 			end 'unknown'
@@ -2502,7 +2545,7 @@ export type Parser
 	// absent) so Phase 3 can resolve it once `unresolvedInterfaces` drains.
 	// entry: cursor AT the method-name identifier (caller ate `function`).
 	// exit:  cursor on the first token AFTER the signature (the trailing newline).
-	function parseInterfaceMethodSig() returns InterfaceMethodSig throws ParserError
+	function parseInterfaceMethodSig(isStatic bool) returns InterfaceMethodSig throws ParserError
 		let nameToken = try consumeExpecting("identifier")
 		checkReservedDeclName(nameToken)
 
@@ -2510,16 +2553,20 @@ export type Parser
 
 		var paramNames = StringArray.create()
 		var paramTypes = MaxonTypeArray.create()
+		// Suppress generic-instance consumption inside the param list — see
+		// parseFunctionParameters for rationale.
+		let savedInFunctionParam = inFunctionParam
+		inFunctionParam = true
 
 		// Commas are skipped at the lexer, so parameter pairs land as a flat
 		// run of `name Type name Type ...` between the parens. Stop when the
 		// next token is the closing `)`.
 		while not at(TokenKind.rightParen) 'paramLoop'
 			let paramNameToken = try consumeExpecting("identifier")
-			if paramNameToken.kind != TokenKind.identifier 'badName'
+			if not tokenIsIdentifierLike(paramNameToken) 'badName'
 				reportTokenMismatch(paramNameToken, expectedDisplay: "identifier")
 				synchronize()
-				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 			end 'badName'
 			checkReservedDeclName(paramNameToken)
 			// Function-typed interface params must work too. Return-type
@@ -2527,13 +2574,14 @@ export type Parser
 			// don't exercise function-typed interface return positions.
 			let paramType = try parseTypeRef()
 			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramType) 'recovered'
-				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", line: nameToken.line, column: nameToken.column)
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 			end 'recovered'
 			paramNames.push(paramNameToken.value)
 			paramTypes.push(paramType)
 		end 'paramLoop'
 
 		try expect(TokenKind.rightParen)
+		inFunctionParam = savedInFunctionParam
 
 		var returnType_ = MaxonReturnType.void
 		if accept(TokenKind.returns) 'hasReturn'
@@ -2543,7 +2591,7 @@ export type Parser
 
 		let throwsName = try parseThrowsClause()
 
-		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType_, throwsTypeName: throwsName, line: nameToken.line, column: nameToken.column)
+		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType_, throwsTypeName: throwsName, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 	end 'parseInterfaceMethodSig'
 
 	// Phase 11.0 step 4: real parser for `extension TargetType ... end`.
@@ -2943,6 +2991,14 @@ export type Parser
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let ifToken = try consume()
 
+		// `if let X = try CALL`, `if var X = try CALL`, and `if try CALL`:
+		// dispatch to the binding/error form. Parses the try, branches on
+		// the error flag, and threads the success-side binding into the
+		// then-block scope.
+		if at(TokenKind.let) or at(TokenKind.var) or at(TokenKind.try) 'isIfTry'
+			return try parseIfTryStatement(func, block: block, ifToken: ifToken)
+		end 'isIfTry'
+
 		// Seed currentBlock so a bool short-circuit in the condition appends to
 		// the right place; recover the post-condition block afterwards because
 		// short-circuit may have advanced control flow to a merge block.
@@ -3009,6 +3065,130 @@ export type Parser
 		module.setTerminator(condBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
 		return afterBlock
 	end 'parseIfStatement'
+
+	// Parse `if let X = try CALL 'lab' ... end 'lab'` and friends. Three forms:
+	//   `if let X = try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
+	//   `if var X = try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
+	//   `if try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
+	// On try-success, the bound name (let/var form) is the call result and the
+	// then-block runs. On try-error, the else block runs (or the if is skipped
+	// when no else is present). The error flag is the condition.
+	// entry: cursor AT `let`, `var`, or `try` (caller has already eaten `if`).
+	function parseIfTryStatement(func IrFunction, block IrBlock, ifToken Token) returns IrBlock throws ParserError
+		var bindingName = ""
+		var bindingMutable = false
+		if at(TokenKind.let) or at(TokenKind.var) 'isBinding'
+			bindingMutable = at(TokenKind.var)
+			_ = try consume()
+			let nameTok = try consumeExpecting("identifier")
+			if not tokenIsIdentifierLike(nameTok) 'badName'
+				reportTokenMismatch(nameTok, expectedDisplay: "identifier")
+				synchronize()
+				return block
+			end 'badName'
+			checkReservedDeclName(nameTok)
+			bindingName = nameTok.value
+			try expect(TokenKind.equals)
+		end 'isBinding'
+
+		// Now parse the `try CALL` part. We re-use parseTryExpression's
+		// internal mechanics by inlining the rewrite-call path: parse the
+		// inner call, rewrite to tryCall/tryMethodCall, and produce the
+		// error-flag name + result name.
+		let tryToken = try consumeExpecting("try")
+		if tryToken.kind != TokenKind.try 'noTry'
+			reportTokenMismatch(tryToken, expectedDisplay: "'try'")
+			synchronize()
+			return block
+		end 'noTry'
+
+		currentBlock = block
+		let opCountBefore = module.ops.count()
+		let inner = try parseUnary(block)
+		let innerName = exprName(inner)
+		var callReturnType = exprType(inner)
+		var condBlock = currentBlock
+		let opCountAfter = module.ops.count()
+
+		let errorFlagName = freshSynthName()
+		var rewrote = false
+		if opCountAfter > opCountBefore 'haveLast'
+			let lastIdx = opCountAfter - 1
+			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: ops.get OOB")
+			rewrote = tryRewriteCallToTryCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
+			if not rewrote 'tryMethod'
+				rewrote = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
+			end 'tryMethod'
+			if rewrote 'resolveType'
+				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: re-read OOB")
+				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp)
+				if isUnresolvedMaxonType(callReturnType) 'doResolve'
+					callReturnType = resolveQualifiedCalleeReturnType(qualifiedCallee: qualifiedCallee)
+				end 'doResolve'
+			end 'resolveType'
+		end 'haveLast'
+		if not rewrote 'noRewrite'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'if let/var/try' requires a throwing call expression after 'try'", line: tryToken.line, column: tryToken.column, filePath: filePath)
+			synchronize()
+			return block
+		end 'noRewrite'
+
+		// cmp flag != 0 → error path; flag == 0 → success path.
+		let zeroName = emitLiteral(condBlock, value: 0, valueType: MaxonType.integer)
+		let condName = freshSynthName()
+		module.appendOp(condBlock, op: MaxonOp.cmp(condName, left: errorFlagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+
+		// `if` requires a block label.
+		if not at(TokenKind.charLiteral) 'noLabel'
+			reportTokenMismatch(cursor.current(), expectedDisplay: "characterliteral")
+			synchronize()
+			return condBlock
+		end 'noLabel'
+		let userLabel = try parseOptionalBlockLabel("if")
+
+		let ifFilePath = filePath.toString()
+		var thenBlock = module.addBlockAt(func, label: userLabel, filePath: ifFilePath, firstLine: ifToken.line)
+		let thenBlockId = thenBlock.id
+		let baseLabel = "{userLabel}_{thenBlockId}"
+		thenBlock.label = baseLabel
+
+		// In the then-block, declare the binding (if any) and seed it with
+		// the call result so user body code can reference it. Mutability
+		// follows the let/var form.
+		if not bindingName.isEmpty() 'declareBinding'
+			let bindingSlot = scope.declare(bindingName, varType: callReturnType, mutable: bindingMutable)
+			module.appendOp(thenBlock, op: MaxonOp.varDecl(bindingSlot, value: innerName, slotType: callReturnType, range: SourceRange.ofToken(tryToken)))
+		end 'declareBinding'
+
+		let thenExit = try parseScopedStatements(func, block: thenBlock)
+
+		try skipEndAndLabel()
+		_ = skipOptionalNewlines()
+
+		if at(TokenKind.else) 'hasElse'
+			let elseToken = try consume()
+			var elseLabel = "{baseLabel}.else"
+			if at(TokenKind.charLiteral) 'hasElseLabel'
+				let elseLabelToken = try consume()
+				elseLabel = "{elseLabelToken.value}_{func.nextBlockId}"
+				try expectNewlineAfterLabel()
+			end 'hasElseLabel' else 'noElseLabel'
+				try skipNewlines()
+			end 'noElseLabel'
+
+			var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
+			let elseBlockId = elseBlock.id
+			let elseExit = try parseScopedStatements(func, block: elseBlock)
+			try skipEndAndLabel()
+			return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+		end 'hasElse'
+
+		// No else clause.
+		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: cursor.current().line)
+		branchIfNeeded(thenExit, target: afterBlock.id)
+		module.setTerminator(condBlock, op: MaxonOp.condBr(condName, thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
+		return afterBlock
+	end 'parseIfTryStatement'
 
 	// --- While statement ---
 
@@ -4136,10 +4316,11 @@ export type Parser
 			end 'dupConst3'
 			let lastExprTokenStr = previousToken()
 			let stmtRangeStr = SourceRange.between(kwToken, last: lastExprTokenStr)
-			let slotStr = defineVariableWithType(nameToken.value, varType: MaxonType.string)
+			let stringTypeName = MaxonType.named(project.typeNames.intern("String"))
+			let slotStr = defineVariableWithType(nameToken.value, varType: stringTypeName)
 			let stringName = freshSynthName()
 			module.appendOp(emitBlock, op: MaxonOp.stringConst(stringName, stringId: stringId, range: stmtRangeStr))
-			module.appendOp(emitBlock, op: MaxonOp.varDecl(slotStr, value: stringName, slotType: MaxonType.string, range: stmtRangeStr))
+			module.appendOp(emitBlock, op: MaxonOp.varDecl(slotStr, value: stringName, slotType: stringTypeName, range: stmtRangeStr))
 			return
 		end 'registerStringConst'
 
@@ -4147,90 +4328,6 @@ export type Parser
 		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
 		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
 	end 'parseVarDecl'
-
-	// --- Print statement ---
-
-	// entry: cursor AT `print`.
-	// exit:  cursor AT `)`.
-	//
-	// The lexer splits double-quoted strings into a stream of
-	//   stringLiteral (fragment) [stringInterpStart <expr tokens> stringInterpEnd stringLiteral (fragment)]*
-	// with nested interpolated strings inlined into the same flat token stream.
-	// Fragments become printLiteral ops (with escape decoding); each bracketed
-	// expression is dispatched by `parsePrintInterpolatedString` — string-typed
-	// nested interpolations recurse, other expressions parse as normal and emit
-	// the print op matching their result kind.
-	function parsePrintStatement(block IrBlock) throws ParserError
-		try eat(TokenKind.print)  // caller has already dispatched on 'print'
-		try expect(TokenKind.leftParen)
-		try parsePrintInterpolatedString(block)
-		try expect(TokenKind.rightParen)
-	end 'parsePrintStatement'
-
-	// entry: cursor AT the leading stringLiteral fragment of an
-	//        interpolated (or non-interpolated) double-quoted string.
-	// exit:  cursor on the token AFTER the final stringLiteral fragment.
-	function parsePrintInterpolatedString(block IrBlock) throws ParserError
-		let strToken = try consume()
-		if strToken.kind != TokenKind.stringLiteral 'badStr'
-			reportTokenMismatch(strToken, expectedDisplay: tokenKindDisplay(TokenKind.stringLiteral))
-			synchronize()
-			return
-		end 'badStr'
-		try emitFragmentLiteral(block, fragment: strToken.value)
-		while at(TokenKind.stringInterpStart) 'interp'
-			try eat(TokenKind.stringInterpStart)
-			// A nested interpolated string in expression position appears as
-			// `stringLiteral` followed by `stringInterpStart`. Recurse
-			// rather than handing it to parseExpression, which would route it
-			// through parseStringLiteral's E2004 gate.
-			var recursed = false
-			if at(TokenKind.stringLiteral) and atOffset(TokenKind.stringInterpStart, offset: 1) 'doRecurse'
-				try parsePrintInterpolatedString(block)
-				recursed = true
-			end 'doRecurse'
-			if not recursed 'plainExpr'
-				currentBlock = block
-				let exprResult = try parseExpression(block)
-				try emitPrintForExpr(block, exprResult: exprResult)
-			end 'plainExpr'
-			try expect(TokenKind.stringInterpEnd)
-			// On a malformed interpolation, parser recovery may have moved
-			// cursor past the closing `"` and onto the next statement —
-			// the lexer's stringInterpEnd-then-stringLiteral
-			// invariant only holds on well-formed input. Bail here rather
-			// than panic; a diagnostic was already reported by the inner
-			// expression parser.
-			if not at(TokenKind.stringLiteral) 'recoveredFromInterp'
-				return
-			end 'recoveredFromInterp'
-			let nextFrag = try consume()
-			try emitFragmentLiteral(block, fragment: nextFrag.value)
-		end 'interp'
-	end 'parsePrintInterpolatedString'
-
-	// printInt converts an i64 to a string at runtime, so it's wrong for a
-	// compile-time string constant (the synthetic name has no IR backing).
-	// Route stringConst results through emitFragmentLiteral so escapes decode
-	// the same way they would in a literal fragment.
-	function emitPrintForExpr(block IrBlock, exprResult ExprResult) throws ParserError
-		if exprIsStringConst(exprResult) 'isStringConst'
-			emitInternedPrintLiteral(block, stringId: exprStringConstId(exprResult))
-			return
-		end 'isStringConst'
-		module.appendOp(block, op: MaxonOp.printInt(exprName(exprResult), range: SourceRange.none()))
-	end 'emitPrintForExpr'
-
-	// Emit a printLiteral op for an already-interned StringId. Skips the
-	// op entirely for empty content so the IR reflects only the non-empty
-	// runs (matches the behavior of the legacy `emitFragmentLiteral` path).
-	function emitInternedPrintLiteral(block IrBlock, stringId StringId)
-		let content = project.strings.get(stringId)
-		if content.isEmpty() 'empty'
-			return
-		end 'empty'
-		module.appendOp(block, op: MaxonOp.printLiteral(stringId, range: SourceRange.none()))
-	end 'emitInternedPrintLiteral'
 
 	// Decode escape sequences in a raw string fragment and return the
 	// decoded bytes. Used at parse time to canonicalize string literals
@@ -4281,23 +4378,6 @@ export type Parser
 			panic("{callerName}: expected stringLiteral fragment after stringInterpEnd, got {token.kind.name}")
 		end 'noFrag'
 	end 'assertFragmentAfterInterpEnd'
-
-	// Decode escape sequences (`\n`, `\t`, `\\`, `\"`) in a string fragment and
-	// emit a printLiteral op. Empty fragments produce no op — the lexer emits a
-	// zero-width stringLiteral whenever an interpolation butts up against
-	// the opening `"` or closing `"`, and we want the IR to reflect only the
-	// non-empty literal runs.
-	function emitFragmentLiteral(block IrBlock, fragment String) throws ParserError
-		if fragment.isEmpty() 'empty'
-			return
-		end 'empty'
-		let decoded = decodeStringEscapes(fragment)
-		if decoded.isEmpty() 'allDecodedAway'
-			return
-		end 'allDecodedAway'
-		let stringId = project.strings.intern(String.from(decoded))
-		module.appendOp(block, op: MaxonOp.printLiteral(stringId, range: SourceRange.none()))
-	end 'emitFragmentLiteral'
 
 	// --- Expression Parsing ---
 
@@ -4536,7 +4616,12 @@ export type Parser
 		currentBlock = rhsBlock
 		let rhsResult = try parseExpressionBP(rhsBlock, minBP: rhsMinBP)
 		var rhsExitBlock = currentBlock
-		if not maxonTypeIsBool(exprType(rhsResult)) 'rhsTypeMismatch'
+		// The rhs type can be MaxonType.unresolved if the rhs is a field-load,
+		// methodCall, or other deferred-type producer. Skip the parse-time
+		// bool check in that case — TypeResolution re-validates `and`/`or`
+		// once producer types are resolved (via validateBinopTypes or the
+		// equivalent post-parse pass).
+		if not maxonTypeIsBool(exprType(rhsResult)) and not isUnresolvedMaxonType(exprType(rhsResult)) 'rhsTypeMismatch'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{opName}' requires both operands to be the same type (both bool or both int)", line: opLine, column: opToken.column, filePath: filePath)
 		end 'rhsTypeMismatch'
 
@@ -5309,11 +5394,17 @@ export type Parser
 					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
 				end 'isMethodOnLocal'
 				// Qualified static call: Type.method(...) — lowering resolves verbatim.
+				// Defer the named-arg-required check (E3005) to TypeResolution
+				// because at parse time we cannot tell a builtin like
+				// `__ManagedMemory.create(...)` (or its typealias `ByteMemory.create(...)`)
+				// from a user-defined `Widget.create(...)` without resolving
+				// the qualifier. `validateCallArgLabels` re-applies the rule
+				// with type-awareness.
 				let calleeName = "{token.value}.{memberToken.value}"
 				try eat(TokenKind.dot)
 				try eat(TokenKind.identifier)
 				try eat(TokenKind.leftParen)
-				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
 				return emitCallAndResult(block, calleeName: calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
 			end 'isDotCall'
@@ -5481,10 +5572,17 @@ export type Parser
 				let argFirstToken = cursor.current()
 				let argResult = try parseExpression(block)
 				let argLastToken = previousToken()
-				args.push(exprName(argResult))
+				let argRange = SourceRange.between(argFirstToken, last: argLastToken)
+				// Phase 7: a bare stringConst arg (`f("hello")`) carries
+				// the legacy `MaxonType.string` primitive tag in its ExprResult,
+				// which doesn't match a callee's `String`-typed parameter
+				// (`MaxonType.named("String")`). Materialize the stringConst
+				// to a real IR op + retag with the named String type.
+				let materializedArg = materializeStringConstIfNeeded(block, expr: argResult, range: argRange)
+				args.push(exprName(materializedArg))
 				labels.push(labelStr)
-				argTypes.push(exprType(argResult))
-				argRanges.push(SourceRange.between(argFirstToken, last: argLastToken))
+				argTypes.push(exprType(materializedArg))
+				argRanges.push(argRange)
 				argIndex = argIndex + 1
 				if at(TokenKind.rightParen) 'endArgs'
 					break
@@ -5529,7 +5627,7 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input, expected expression", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
 			throw ParserError.unexpectedEof
 		end 'eof'
-		let isNamed = maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon
+		let isNamed = tokenIsIdentifierLike(maybeLabel) and afterLabel.kind == TokenKind.colon
 		if requireNamed and not isNamed 'notNamed'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: maybeLabel.line, column: maybeLabel.column, filePath: filePath)
 		end 'notNamed'
@@ -5596,11 +5694,21 @@ export type Parser
 	function parsePrimaryMatch(block IrBlock) returns ExprResult throws ParserError
 		// Each leaf consumes its first token itself (stream-style) and exits
 		// past its last-consumed token.
-		match cursor.current().kind 'primary'
+		// Keyword tokens whose source spelling is identifier-like (e.g. `with`
+		// used as a local var name in stdlib's String.replace) need to route
+		// through the identifier path when they appear in expression position
+		// AND the local scope binds them. Without the scope check this would
+		// cripple every other expression-context use of these keywords.
+		let cur = cursor.current()
+		if cur.kind != TokenKind.identifier and tokenIsIdentifierLike(cur) and scope.contains(cur.value) 'isKeywordVar'
+			return try parseIdentifierExpr(block)
+		end 'isKeywordVar'
+		match cur.kind 'primary'
 			intLiteral then return try parseIntLiteral(block)
 			floatLiteral then return try parseFloatLiteral(block)
 			identifier then return try parseIdentifierExpr(block)
-			stringLiteral then return try parseStringLiteral()
+			stringLiteral then return try parseStringLiteral(block)
+			byteStringLiteral then return try parseByteStringLiteralExpr(block)
 			charLiteral then return try parseCharLiteralExpr(block)
 			true then return try parseBoolLiteral(block, value: 1)
 			false then return try parseBoolLiteral(block, value: 0)
@@ -5878,18 +5986,46 @@ export type Parser
 		let token = try consume()
 		validateEscapes(token, kind: "character literal")
 		let decoded = decodeStringEscapes(token.value)
+		let range = SourceRange.ofToken(token)
 		if decoded.count() == 1 'singleByte'
+			// Single-byte (ASCII) fast path. Stays as an integer literal so
+			// the lexer/parser's many `b == 'a'` style byte comparisons keep
+			// compiling without coercions. Multi-byte chars take the
+			// charLiteral path (real Character struct).
 			let byteVal = try decoded.get(0) otherwise panic("parseCharLiteralExpr: count==1 but get(0) failed")
-			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
+			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: range)
 			return ExprResult.direct(name, valueType: MaxonType.integer)
 		end 'singleByte'
-		// Multi-byte char literal (Unicode/EGC) — needs real Character/String.
-		// Emit a literal of zero so the surrounding parse continues, but
-		// report the diagnostic so the user sees why it didn't compile.
-		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Multi-byte character literal not yet supported in self-hosted (single-byte ASCII only)", line: token.line, column: token.column, filePath: filePath)
-		let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.ofToken(token))
-		return ExprResult.direct(zeroName, valueType: MaxonType.integer)
+		// Phase 7 step 6: multi-byte character literal — intern the decoded
+		// UTF-8 bytes and emit a charLiteral op. Lowering will materialize a
+		// Character struct (8 bytes: managed@0 ptr to MM) backed by
+		// rdata-resident __ManagedMemory.
+		let stringId = project.strings.intern(String.from(decoded))
+		let name = freshSynthName()
+		module.appendOp(block, op: MaxonOp.charLiteral(name, stringId: stringId, range: range))
+		let charType = MaxonType.named(project.typeNames.intern("Character"))
+		return ExprResult.direct(name, valueType: charType)
 	end 'parseCharLiteralExpr'
+
+	// Phase 7 step 7: parse a byte-string literal `b"..."`. The lexer has
+	// emitted a single `byteStringLiteral` token whose value contains the
+	// raw (still-escaped) body bytes. We decode escapes the same way as
+	// regular string literals, intern the resulting bytes, and emit a
+	// `byteStringLiteral` op. Result type: `__ManagedMemory` — the user-
+	// visible `ByteArray` typealias (`Array with Byte`) is alias-compatible
+	// at the call sites that consume byte-string literals today (Map keys,
+	// Array methods via the receiver-type machinery).
+	function parseByteStringLiteralExpr(block IrBlock) returns ExprResult throws ParserError
+		let token = try consume()
+		validateEscapes(token, kind: "byte string literal")
+		let decoded = decodeStringEscapes(token.value)
+		let range = SourceRange.ofToken(token)
+		let stringId = project.strings.intern(String.from(decoded))
+		let name = freshSynthName()
+		module.appendOp(block, op: MaxonOp.byteStringLiteral(name, stringId: stringId, range: range))
+		let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+		return ExprResult.direct(name, valueType: mmType)
+	end 'parseByteStringLiteralExpr'
 
 	function parseSelfExpr(block IrBlock) returns ExprResult throws ParserError
 		let selfToken = try consume()
@@ -5977,30 +6113,104 @@ export type Parser
 		return ExprResult.direct(name, valueType: MaxonType.float)
 	end 'parseFloatLiteral'
 
-	// Interpolated strings in expression position aren't representable as
-	// stringConst — we report an error and return a dummy value so parsing
-	// continues.
-	function parseStringLiteral() returns ExprResult throws ParserError
-		// Returns `ExprResult.stringConst(name, stringId)` carrying the
-		// interned StringId of the decoded literal bytes. The parser does
-		// not emit a backing IR op here; callers that consume the
-		// stringConst at parse time (the `==` compile-time fold and the
-		// `let LOCAL = "literal"` constant registration) read the
-		// StringId directly off the ExprResult.
-		let token = try consume()
-		if cursor.current().kind == TokenKind.stringInterpStart 'hasInterp'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "string interpolation is only supported inside print()", line: token.line, column: token.column, filePath: filePath)
-			// Consume the rest of the composite string so we exit past the
-			// last fragment.
-			try skipInterpolatedRemainder()
-			let dummy = freshSynthName()
-			return ExprResult.stringConst(dummy, stringId: project.strings.intern(""))
-		end 'hasInterp'
-		validateEscapes(token, kind: "string interpolation")
-		let name = freshSynthName()
-		let decoded = decodeStringEscapes(token.value)
-		return ExprResult.stringConst(name, stringId: project.strings.intern(String.from(decoded)))
+	// Phase 7 step 5: parse a (possibly interpolated) double-quoted string
+	// literal in expression position. Lexer token shape:
+	//   stringLiteral(frag0) [stringInterpStart <expr> stringInterpEnd stringLiteral(fragN)]*
+	//
+	// No interp markers → emit `ExprResult.stringConst(name, stringId)` so the
+	// existing parser-time fold paths (compile-time `==`, `let LOCAL = "lit"`
+	// constant registration) continue to work — they read the StringId
+	// directly off the ExprResult and assume no backing IR op exists.
+	//
+	// One or more interp markers → build a `StringInterpPartArray` and emit a
+	// `MaxonOp.stringInterp(name, parts, range)`. Each fragment becomes a
+	// `literal(stringId)`; each interpolated subexpression becomes an
+	// `expr(name, kind)` with `kind` classified by `inferInterpKind`.
+	function parseStringLiteral(block IrBlock) returns ExprResult throws ParserError
+		let leadToken = try consume()
+		validateEscapes(leadToken, kind: "string interpolation")
+		let leadDecoded = decodeStringEscapes(leadToken.value)
+		let leadStringId = project.strings.intern(String.from(leadDecoded))
+		// Fast path: no interp markers — preserve stringConst ExprResult shape.
+		if cursor.current().kind != TokenKind.stringInterpStart 'noInterp'
+			let name = freshSynthName()
+			return ExprResult.stringConst(name, stringId: leadStringId)
+		end 'noInterp'
+		var parts = StringInterpPartArray.create()
+		parts.push(StringInterpPart.literal(leadStringId))
+		while at(TokenKind.stringInterpStart) 'interpLoop'
+			try eat(TokenKind.stringInterpStart)
+			currentBlock = block
+			let interpStartTok = previousToken()
+			let exprResult = try parseExpression(block)
+			// Inner expressions that came back as `stringConst` (e.g. a nested
+			// `"..."` literal with no interp markers of its own) carry a
+			// parser-internal synth name that has no backing op. Force the op
+			// to be emitted now so the outer `stringInterp` op's expr-part
+			// reference resolves during lowering. Without this, deeply-nested
+			// interp like `"{ "inner" }"` errors with E3013 'unresolved value
+			// name'.
+			let materializedExpr = materializeStringConstIfNeeded(block, expr: exprResult, range: SourceRange.ofToken(interpStartTok))
+			let exprNameSlice = exprName(materializedExpr)
+			let kind = inferInterpKind(exprType(materializedExpr))
+			parts.push(StringInterpPart.expr(exprNameSlice, kind: kind))
+			try expect(TokenKind.stringInterpEnd)
+			if not at(TokenKind.stringLiteral) 'recoveredFromInterp'
+				// Parser recovery may have left us past the closing quote on
+				// malformed input; bail with what we have so far rather than
+				// asserting the lexer's frag-after-end invariant.
+				break
+			end 'recoveredFromInterp'
+			let fragToken = try consume()
+			validateEscapes(fragToken, kind: "string interpolation")
+			let fragDecoded = decodeStringEscapes(fragToken.value)
+			let fragStringId = project.strings.intern(String.from(fragDecoded))
+			parts.push(StringInterpPart.literal(fragStringId))
+		end 'interpLoop'
+		let lastTok = previousToken()
+		let interpRange = SourceRange.between(leadToken, last: lastTok)
+		let resultName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
+		return ExprResult.direct(resultName, valueType: MaxonType.named(project.typeNames.intern("String")))
 	end 'parseStringLiteral'
+
+	// Phase 7 step 5: classify the parser-inferred MaxonType of an
+	// interpolated subexpression so lowering knows which runtime helper
+	// (or struct-field load) to emit. Returns `i64` as the conservative
+	// default for unresolved / unknown types — TypeResolution may refine
+	// this later, but for now the i64 path is the safest fall-through
+	// because every numeric literal in stdlib resolves to it.
+	function inferInterpKind(t MaxonType) returns InterpExprKind
+		return match t 'k'
+			boolean gives InterpExprKind.bool
+			integer gives InterpExprKind.i64
+			float gives InterpExprKind.f64
+			string gives InterpExprKind.string
+			named(id) gives interpKindForNamed(project.typeNames.get(id))
+			function to unresolved gives InterpExprKind.i64
+			typeParameter to interface gives InterpExprKind.i64
+		end 'k'
+	end 'inferInterpKind'
+
+	function interpKindForNamed(name String) returns InterpExprKind
+		if name == "String" 'isString'
+			return InterpExprKind.string
+		end 'isString'
+		if name == "Character" 'isChar'
+			return InterpExprKind.character
+		end 'isChar'
+		if name == "byte" or name == "Byte" 'isByte'
+			return InterpExprKind.byte
+		end 'isByte'
+		if name == "bool" 'isBool'
+			return InterpExprKind.bool
+		end 'isBool'
+		// Default: treat as i64 (named ints widen through the same
+		// runtime helper). f32/f64 are routed via inferInterpKind on
+		// `MaxonType.float` already; this fall-through only fires for
+		// unresolved named types where i64 is the conservative default.
+		return InterpExprKind.i64
+	end 'interpKindForNamed'
 
 	// Materialize a parser-internal stringConst into a real IR op when its
 	// `name` is about to be referenced by an op operand (e.g. it survives
@@ -6016,7 +6226,10 @@ export type Parser
 		let stringId = exprStringConstId(expr)
 		let name = exprName(expr)
 		module.appendOp(block, op: MaxonOp.stringConst(name, stringId: stringId, range: range))
-		return ExprResult.direct(name, valueType: MaxonType.string)
+		// Phase 7: a materialized stringConst is a real `String` struct value;
+		// TypeResolution refines the named type once stdlib registers `String`.
+		// Falls back to the legacy `MaxonType.string` primitive tag pre-Phase-7.
+		return ExprResult.direct(name, valueType: MaxonType.named(project.typeNames.intern("String")))
 	end 'materializeStringConstIfNeeded'
 
 	// Validate \xNN and \uNNNN escape sequences in `token.value`. Reports
@@ -7008,6 +7221,28 @@ function tokenKindDisplay(kind TokenKind) returns String
 	return "'{display}'"
 end 'tokenKindDisplay'
 
+// True if `token` is usable as an identifier-like name. Mirrors the C#
+// bootstrap's `IsIdentifierLikeToken` (Parser.cs:19016): plain identifiers
+// always qualify, plus any keyword whose source spelling starts with a
+// letter or underscore (i.e. lexes as if it were an identifier and was
+// only reclassified by `classifyIdentifier`). Used at param-name sites
+// where stdlib code legitimately picks names like `with`, `type`, `enum`,
+// or `return` — every keyword whose value-string is alphabetic.
+function tokenIsIdentifierLike(token Token) returns bool
+	if token.kind == TokenKind.identifier 'isIdent'
+		return true
+	end 'isIdent'
+	let bytes = token.value.toByteArray()
+	if bytes.count() == 0 'empty'
+		return false
+	end 'empty'
+	let first = try bytes.get(0) otherwise return false
+	let isLower = first >= 'a' and first <= 'z'
+	let isUpper = first >= 'A' and first <= 'Z'
+	let isUnderscore = first == '_'
+	return isLower or isUpper or isUnderscore
+end 'tokenIsIdentifierLike'
+
 // Qualify a function name with namespace: "ns.name".
 // Returns the raw name if namespace is empty. Exported because the Maxon→Std
 // lowering pass also walks the funcReturnTypes registry to resolve the
@@ -7106,9 +7341,9 @@ export union ExprResult
 	// Computed value — already emitted as an op
 	direct(name ByteArray, valueType MaxonType)
 	// Compile-time string constant — carries the interned StringId so
-	// downstream consumers (printLiteral emission, top-level constant
-	// registration, string-equality folding) reference the literal by its
-	// stable project-wide id rather than re-allocating its bytes.
+	// downstream consumers (top-level constant registration, string-equality
+	// folding) reference the literal by its stable project-wide id rather
+	// than re-allocating its bytes.
 	stringConst(name ByteArray, stringId StringId)
 end 'ExprResult'
 

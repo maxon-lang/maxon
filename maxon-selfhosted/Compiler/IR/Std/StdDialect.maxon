@@ -379,12 +379,6 @@ export union StdSystemOp
 	// Store 8 bytes from valueId into [addrId + offset]. `isFloat` mirrors
 	// `loadIndirect` — chooses the GP vs XMM store at the X64 backend.
 	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool)
-	// Runtime I/O: print a string literal (lowered to std.system.globalAddr + std.call mrt_write_stdout in lowerMaxonToStd).
-	// Carries the StringId from `project.strings` — backends recover the
-	// raw bytes from the interner when emitting the rdata + globalAddr.
-	printLiteral(stringId StringId)
-	// Runtime I/O: print an integer value (lowered to std.call mrt_printInt)
-	printInt(valueId ValueId)
 	// Drop ownership of a heap pointer. Injected by injectDrops; lowered to std.system.free.
 	drop(valueId ValueId)
 	// Allocate `size` bytes of OS pages, page-aligned and zero-filled. Lowered to
@@ -598,8 +592,6 @@ export function sysOpToString(op StdSystemOp) returns String
 		loadIndirect(resultId, addrId, offset, isFloat) gives stdLoadIndirectToString(resultId, addrId: addrId, offset: offset, isFloat: isFloat)
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
 		storeIndirect(addrId, offset, valueId, isFloat) gives stdStoreIndirectToString(addrId, offset: offset, valueId: valueId, isFloat: isFloat)
-		printLiteral(stringId) gives "sys.print_literal #{stringId}"
-		printInt(valueId) gives "sys.print_int %{valueId}"
 		drop(valueId) gives "sys.drop %{valueId}"
 		osAllocPages(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages %{sizeId}"
 		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages_large %{sizeId}"

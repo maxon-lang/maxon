@@ -301,7 +301,7 @@ end 'findLoadLayoutDescriptorLabel'
 function matchLayoutLoad(op StdSystemOp, valueId ValueId) returns String
 	return match op 'shape'
 		loadLayoutDescriptor(resultId, label) gives label if resultId == valueId else ""
-		syscall to printInt gives ""
+		syscall to storeIndirect gives ""
 		drop gives ""
 		osAllocPages to osLockRelease gives ""
 		boxValue gives ""
@@ -1325,8 +1325,6 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		loadIndirect gives false
 		funcAddr gives false
 		storeIndirect gives false
-		printLiteral gives false
-		printInt gives false
 		drop gives false
 		osAllocPages gives false
 		osAllocPagesLarge gives false
@@ -1537,8 +1535,6 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		loadIndirect(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		funcAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		storeIndirect gives nextId
-		printLiteral gives nextId
-		printInt gives nextId
 		drop gives nextId
 		osAllocPages(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osAllocPagesLarge(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -1694,8 +1690,6 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		loadIndirect(resultId, addrId, offset, isFloat) gives StdSystemOp.loadIndirect(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), offset: offset, isFloat: isFloat)
 		funcAddr(resultId, name) gives StdSystemOp.funcAddr(lookupRemap(remap, key: resultId), name: name)
 		storeIndirect(addrId, offset, valueId, isFloat) gives StdSystemOp.storeIndirect(lookupRemap(remap, key: addrId), offset: offset, valueId: lookupRemap(remap, key: valueId), isFloat: isFloat)
-		printLiteral(stringId) gives StdSystemOp.printLiteral(stringId)
-		printInt(valueId) gives StdSystemOp.printInt(lookupRemap(remap, key: valueId))
 		drop(valueId) gives StdSystemOp.drop(lookupRemap(remap, key: valueId))
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))

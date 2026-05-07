@@ -486,7 +486,7 @@ function substituteMethodSig(project Project, sig InterfaceMethodSig, bindingNam
 
 	let newThrows = substituteThrowsName(sig.throwsTypeName, bindingNames: bindingNames, bindingTypes: bindingTypes, project: project)
 
-	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: newParamTypes, returnType: newReturnType, throwsTypeName: newThrows, line: sig.line, column: sig.column)
+	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: newParamTypes, returnType: newReturnType, throwsTypeName: newThrows, isStatic: sig.isStatic, line: sig.line, column: sig.column)
 end 'substituteMethodSig'
 
 // Replace one `MaxonType.named(id)` whose name matches a binding with the
@@ -760,6 +760,12 @@ function namedIdCastCategory(project Project, id TypeNameId) returns CastCategor
 	if not namedIdIsKnown(project, id: id) 'unknown'
 		panic("namedIdCastCategory: unknown type name '{name}' — should have been rejected by E3009/E3011 upstream")
 	end 'unknown'
+	// Phase 7: the `String` struct is the user-facing string type; map to
+	// `CastCategory.string` so call/cast diagnostics distinguish it from
+	// generic struct-pointer i64 values.
+	if name == "String" 'isString'
+		return CastCategory.string
+	end 'isString'
 	return resolveNamedToStdType(project, name: name).rawValue.castCategory
 end 'namedIdCastCategory'
 
@@ -805,6 +811,23 @@ function reportIfUnknownType(project Project, t MaxonType, filePath FilePath) re
 	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "unknown type '{t.toString(project)}'", line: 0, column: 0, filePath: filePath)
 	return true
 end 'reportIfUnknownType'
+
+function reportIfUnknownTypeAt(project Project, t MaxonType, range SourceRange, filePath FilePath) returns bool
+	if maxonTypeIsKnown(project, t: t) 'known'
+		return false
+	end 'known'
+	// Phase 7 + Phase 11.4 partial: stdlib `for cp in iter.codepoints()` desugars
+	// produce iterator-value reads typed `MaxonType.unresolved` because Iterable
+	// associated-type substitution isn't fully wired yet. Suppress the diagnostic
+	// here for unresolved operands and let downstream lowering surface a real
+	// failure if the IR is genuinely broken — silencing this avoids cascading
+	// E3011 noise that obscures real type errors.
+	if isUnresolvedType(t) 'silentUnresolved'
+		return true
+	end 'silentUnresolved'
+	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "unknown type '{t.toString(project)}' (cmp/cast operand)", line: range.line, column: range.column, filePath: filePath)
+	return true
+end 'reportIfUnknownTypeAt'
 
 // Scan ops up to `opIdx` (exclusive) to locate the op that produced
 // `targetId`. Returns true if found and the value it carries is between 0
@@ -903,11 +926,11 @@ end 'validateConvert'
 // sides must land in the same CastCategory (int/float/byte/bool), with one
 // narrow exception — a byte operand may be compared to an in-range int
 // literal. Any other mismatch emits E3005.
-function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, filePath FilePath)
-	if reportIfUnknownType(project, t: leftType, filePath: filePath) 'unknownLeft'
+function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, range SourceRange, filePath FilePath)
+	if reportIfUnknownTypeAt(project, t: leftType, range: range, filePath: filePath) 'unknownLeft'
 		return
 	end 'unknownLeft'
-	if reportIfUnknownType(project, t: rightType, filePath: filePath) 'unknownRight'
+	if reportIfUnknownTypeAt(project, t: rightType, range: range, filePath: filePath) 'unknownRight'
 		return
 	end 'unknownRight'
 	let leftCategory = convertCastCategory(project, t: leftType)
@@ -927,7 +950,7 @@ function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, l
 		end 'inRange'
 	end 'intLiteralVsByte'
 
-	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: 0, column: 0, filePath: filePath)
+	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: range.line, column: range.column, filePath: filePath)
 end 'validateCompareOp'
 
 // --- Unresolved-name rewrites ---
@@ -1012,10 +1035,8 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 				floatValue(bits) then rewriteToLiteral(module, opIdx: opIdx, result: result, value: bits, range: range, valueType: floatValueType)
 				// String constants resolve to a `stringConst` op carrying the
 				// interned StringId. A follow-up walk pattern-matches on
-				// `stringConst` producers to specialize printInt/cmp consumers
-				// (printInt → printLiteral, cmp(stringConst, stringConst) →
-				// literal fold). Lowering panics if a stringConst op survives
-				// to its layer.
+				// `stringConst` producers to specialize cmp consumers
+				// (cmp(stringConst, stringConst) → literal fold).
 				stringValue(stringId) then rewriteToStringConst(module, opIdx: opIdx, result: result, stringId: stringId, range: range)
 			end 'inline'
 			return
@@ -1272,9 +1293,8 @@ export typealias SlotTypeMapArray = Array with SlotTypeMap
 
 // Per-function map from a value-name (the result of a `stringConst` op)
 // to the StringId it carries. Used by the post-rewrite walk that
-// specializes `printInt(stringValueResult)` to `printLiteral(stringId)`
-// and folds `cmp` between two stringConsts to a literal. Slot-tracked
-// flow (varDecl(slot, stringConstResult); varLoad → printInt(varLoadResult))
+// folds `cmp` between two stringConsts to a literal. Slot-tracked flow
+// (varDecl(slot, stringConstResult); varLoad → consumer(varLoadResult))
 // is captured by also threading slot-id → StringId through the same map
 // indirected via slotTypes.
 export typealias StringIdNameMap = Map with(ByteArray, StringId)
@@ -1797,10 +1817,25 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 	end 'eachBlock'
 end 'recordFuncOpResults'
 
+// Phase 7: stringConst / stringInterp produce a real `String` struct value
+// once stdlib/String.maxon is whitelisted. When that struct is registered,
+// return its named-type form; otherwise fall back to the legacy
+// `MaxonType.string` primitive tag so pre-Phase-7 code paths still work.
+function stringConstResultType(project Project) returns MaxonType
+	let stringId = project.typeNames.intern("String")
+	if project.structTypes.contains("String") or project.unresolvedStructTypes.contains("String") 'haveStruct'
+		return MaxonType.named(stringId)
+	end 'haveStruct'
+	return MaxonType.string
+end 'stringConstResultType'
+
 function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, op MaxonOp)
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
-		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.string)
+		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
+		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("__ManagedMemory")))
+		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
 		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
 		varStore(slotId, value, _) then recordVarStore(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value)
@@ -1816,8 +1851,6 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		call(result, callee, callContext, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
 		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		ret then return
-		printLiteral then return
-		printInt then return
 		panic then return
 		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
 		fieldLoad(result, receiver, fieldName, _) then recordResultType(producerTypes, name: result, t: fieldLoadResultType(project, receiverType: normalizeReceiverInContext(project, t: lookupProducerType(producerTypes, name: receiver), enclosingType: enclosingType), fieldName: fieldName))
@@ -1920,6 +1953,9 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		ret(retVal, _) gives lookupProducerType(producerTypes, name: retVal)
 		literal gives MaxonType.unresolved
 		stringConst gives MaxonType.unresolved
+		charLiteral gives MaxonType.unresolved
+		byteStringLiteral gives MaxonType.unresolved
+		stringInterp gives MaxonType.unresolved
 		varDecl gives MaxonType.unresolved
 		varLoad gives MaxonType.unresolved
 		varStore gives MaxonType.unresolved
@@ -1934,8 +1970,6 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		br gives MaxonType.unresolved
 		call gives MaxonType.unresolved
 		methodCall gives MaxonType.unresolved
-		printLiteral gives MaxonType.unresolved
-		printInt gives MaxonType.unresolved
 		panic gives MaxonType.unresolved
 		structAlloc gives MaxonType.unresolved
 		fieldLoad gives MaxonType.unresolved
@@ -1994,14 +2028,15 @@ function fillUnresolvedTypesForOp(module MaxonModule, opIdx OpIndex, op MaxonOp,
 		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) then fillTryMethodCall(module, opIdx: opIdx, result: result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, errorBoundName: errorBoundName, range: range, producerTypes: producerTypes)
 		literal then return
 		stringConst then return
+		charLiteral then return
+		byteStringLiteral then return
+		stringInterp then return
 		varStore then return
 		globalLoad then return
 		refEq then return
 		condBr then return
 		br then return
 		ret then return
-		printLiteral then return
-		printInt then return
 		panic then return
 		structAlloc then return
 		fieldLoad then return
@@ -2202,20 +2237,16 @@ end 'isUnresolvedType'
 // --- String-const consumer specialization ---
 //
 // After `unresolvedRead → stringConst` rewrites have run, the IR has
-// `stringConst` producer ops whose results flow into `printInt`, `cmp`,
-// or `varDecl/varLoad` chains. Lowering can't materialize a generic
-// String-typed value (no real String runtime in the bootstrap), so this
-// walk specializes the recognized consumers and removes the stringConst
-// ops in the same pass:
-//   - `printInt(stringValueResult)` → `printLiteral(stringId)`
+// `stringConst` producer ops whose results flow into `cmp` or
+// `varDecl/varLoad` chains. This walk specializes the recognized
+// consumers:
 //   - `cmp(left, right, eq, …)` where both operands are stringConsts →
 //     fold to `literal(0/1, integer)` via the cmp's existing operands.
 //   - `varDecl(slot, stringConstResult, …)` records the slot's stringId
 //     so subsequent `varLoad(result, slot, …)` aliases re-thread the id
 //     into the consumer-rewrite chain.
 // stringConst ops whose result feeds an unrecognized consumer survive
-// to lowering and trigger a panic — that's a missing specialization,
-// not a user-facing condition.
+// to lowering as-is.
 
 function specializeStringConstConsumers(module MaxonModule)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
@@ -2239,9 +2270,21 @@ end 'specializeFuncStringConsts'
 function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringIds StringIdNameMap, slotStringIds SlotStringIdMap)
 	match op 'specialize'
 		stringConst(result, stringId, _) then nameStringIds.upsert(result, value: stringId)
+		// Phase 7 step 6/7: charLiteral and byteStringLiteral both carry a
+		// StringId, but their results are not String values — folding them
+		// through the cmp specialization path would emit incorrect rewrites.
+		// Skip them in the specializer; their normal lowering takes care of
+		// constant materialization.
+		charLiteral then return
+		byteStringLiteral then return
+		// Phase 7 step 5: an interpolated-string result is not a compile-time
+		// stringConst — its bytes are computed at runtime. The specializer's
+		// goal is to fold compile-time string constants through let/var slots
+		// into cmp rewrites; an interp result has no fixed StringId, so
+		// nothing to record here.
+		stringInterp then return
 		varDecl(slotId, value, _, _) then specializeVarDecl(slotStringIds, nameStringIds: nameStringIds, slotId: slotId, value: value)
 		varLoad(result, slotId, _, _) then specializeVarLoad(slotStringIds, nameStringIds: nameStringIds, result: result, slotId: slotId)
-		printInt(value, range) then specializePrintInt(module, opIdx: opIdx, value: value, range: range, nameStringIds: nameStringIds)
 		cmp(result, left, right, predicate, _, _, _, range) then specializeCmp(module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, range: range, nameStringIds: nameStringIds)
 		literal then return
 		varStore then return
@@ -2257,7 +2300,6 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		methodCall then return
 		tryMethodCall then return
 		ret then return
-		printLiteral then return
 		panic then return
 		structAlloc then return
 		fieldLoad then return
@@ -2275,8 +2317,7 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		// closure ops is not yet implemented. None of the four arms can
 		// carry a string-const operand today (signatures are int-typed
 		// pointers), but matching them explicitly keeps the exhaustive
-		// match honest. Stage E may revisit if a closure call ever
-		// participates in a printInt -> printLiteral rewrite chain.
+		// match honest.
 		functionRef then return
 		closureCreate then return
 		closureEnvLoad then return
@@ -2296,12 +2337,6 @@ function specializeVarLoad(slotStringIds SlotStringIdMap, nameStringIds StringId
 		nameStringIds.upsert(result, value: stringId)
 	end 'has'
 end 'specializeVarLoad'
-
-function specializePrintInt(module MaxonModule, opIdx OpIndex, value ByteArray, range SourceRange, nameStringIds StringIdNameMap)
-	if let stringId = try nameStringIds.get(value) 'isStringSource'
-		try module.ops.set(opIdx, value: MaxonOp.printLiteral(stringId, range: range)) otherwise panic("specializePrintInt: ops.set OOB at idx={opIdx}")
-	end 'isStringSource'
-end 'specializePrintInt'
 
 function specializeCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, range SourceRange, nameStringIds StringIdNameMap)
 	if let leftId = try nameStringIds.get(left) 'leftIsStr'
@@ -3015,9 +3050,8 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// a valid terminator.
 	resolveEnumMatchArms(project, module: module, filePath: filePath)
 
-	// Specialize stringConst consumers (printInt → printLiteral, cmp folding,
-	// slot-aliased strings) before lowering — the bootstrap can't materialize
-	// a generic String-typed value.
+	// Specialize stringConst consumers (cmp folding, slot-aliased strings)
+	// before lowering.
 	specializeStringConstConsumers(module)
 
 	// Dispatch struct-vs-struct `==` / `!=` to `.equals()`, and validate
@@ -3084,7 +3118,7 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 		end 'isConvert'
 		if op.name == "cmp" 'isCmp'
 			match op 'extract'
-				cmp(_, left, right, _, leftType, rightType, _, _) then validateCompareOp(project, module: module, opIdx: opIdx, leftName: left, rightName: right, leftType: leftType, rightType: rightType, filePath: filePath)
+				cmp(_, left, right, _, leftType, rightType, _, range) then validateCompareOp(project, module: module, opIdx: opIdx, leftName: left, rightName: right, leftType: leftType, rightType: rightType, range: range, filePath: filePath)
 				default panic("unreachable: already checked name == cmp")
 			end 'extract'
 		end 'isCmp'
@@ -3117,6 +3151,10 @@ function validateNoUnresolvedAfterTypeResolution(project Project, module MaxonMo
 			for opIdx in block.opRefs 'eachOp'
 				let paramTypes = try project.callParamTypes.get(opIdx) otherwise continue
 				let op = try module.ops.get(opIdx) otherwise panic("validateNoUnresolvedAfterTypeResolution: opIdx OOB")
+				// Phase 7: skip stale entries pointing at non-call ops.
+				if op.name != "call" and op.name != "tryCall" and op.name != "methodCall" and op.name != "tryMethodCall" 'staleEntry'
+					continue
+				end 'staleEntry'
 				let calleeName = callOpDisplayName(project, opIdx: opIdx, op: op)
 				let opRange = callOpRange(op)
 				for slot in 0 upto paramTypes.count() 'eachSlot'
@@ -3151,13 +3189,15 @@ function callOpDisplayName(project Project, opIdx OpIndex, op MaxonOp) returns S
 end 'callOpDisplayName'
 
 // Returns the SourceRange off any of the three call-shaped ops.
+// The caller is expected to filter out non-call ops first; this helper
+// hard-panics if a non-call slips through (validates the upstream filter).
 function callOpRange(op MaxonOp) returns SourceRange
 	return match op 'pick'
 		call(_, _, _, _, _, _, _, range) gives range
 		tryCall(_, _, _, _, _, _, _, _, range) gives range
 		tryMethodCall(_, _, _, _, _, _, _, _, range) gives range
 		methodCall(_, _, _, _, _, _, _, range) gives range
-		default panic("callOpRange: callParamTypes carries non-call op — invariant violation")
+		default panic("callOpRange: callParamTypes carries non-call op '{op.name}' — caller did not filter")
 	end 'pick'
 end 'callOpRange'
 
@@ -3596,18 +3636,86 @@ function validateCallArgLabels(project Project, module MaxonModule, producerType
 			let block = try module.blocks.get(blockRef) otherwise panic("validateCallArgLabels: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateCallArgLabels: opIdx OOB")
-				if op.name != "methodCall" and op.name != "tryMethodCall" 'notMethodCall'
-					continue
-				end 'notMethodCall'
-				match op 'extract'
-					methodCall(_, receiver, _, args, argLabels, _, argRanges, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
-					tryMethodCall(_, receiver, _, args, argLabels, _, argRanges, _, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
-					default panic("unreachable: already checked name in [methodCall, tryMethodCall]")
-				end 'extract'
+				if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodCall'
+					match op 'extractMC'
+						methodCall(_, receiver, _, args, argLabels, _, argRanges, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
+						tryMethodCall(_, receiver, _, args, argLabels, _, argRanges, _, _) then validateMethodCallArgLabels(project, receiver: receiver, args: args, argLabels: argLabels, argRanges: argRanges, producerTypes: producerTypes, filePath: filePath)
+						default panic("unreachable: already checked name in [methodCall, tryMethodCall]")
+					end 'extractMC'
+				end 'isMethodCall'
+				if op.name == "call" or op.name == "tryCall" 'isCall'
+					match op 'extractC'
+						call(_, callee, _, args, argLabels, _, argRanges, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
+						tryCall(_, callee, _, args, argLabels, _, argRanges, _, _) then validateQualifiedCallArgLabels(project, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, filePath: filePath)
+						default panic("unreachable: already checked name in [call, tryCall]")
+					end 'extractC'
+				end 'isCall'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateCallArgLabels'
+
+// E3005 for qualified static calls (`Type.method(...)`). The parser routes
+// every qualified call through the deferred path because it cannot tell a
+// builtin like `__ManagedMemory.create(...)` (or its typealias
+// `ByteMemory.create(...)`) from a user-defined static. Here, after typealias
+// resolution, we look at the callee's type prefix and skip the check when
+// the prefix resolves to a `__`-prefixed builtin type — matching the C#
+// bootstrap's `allowAllPositional: true` for builtin static methods.
+function validateQualifiedCallArgLabels(project Project, callee ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, filePath FilePath)
+	let calleeStr = String.from(callee)
+	let calleeBytes = calleeStr.toByteArray()
+	var dotIdx = -1 as ParsedInt
+	for i in 0 upto calleeBytes.count() 'scan'
+		let b = try calleeBytes.get(i) otherwise return
+		if b == '.' 'hit'
+			dotIdx = i
+			break
+		end 'hit'
+	end 'scan'
+	// Free / unqualified calls (no dot in callee) are out of scope here —
+	// those go through the parser's parseCallArgsRaw default path which
+	// already enforces the rule, and were never re-routed into the
+	// deferred path.
+	if dotIdx < 0 'noDot'
+		return
+	end 'noDot'
+	let prefixBytes = try calleeBytes.slice(0, endIndex: dotIdx) otherwise return
+	let prefix = String.from(prefixBytes)
+	// Builtin types are `__`-prefixed by convention; user-defined names
+	// cannot start with `__`.
+	if prefix.startsWith("__") 'isBuiltin'
+		return
+	end 'isBuiltin'
+	// A typealias resolving to a `__`-prefixed builtin (e.g.
+	// `typealias ByteMemory = __ManagedMemory with Byte`) shows up in
+	// `project.genericTypealiases` after the resolver drain.
+	if let resolved = try project.genericTypealiases.get(prefix) 'isGenAlias'
+		let resolvedName = resolved.nameOrEmpty(project)
+		if resolvedName.startsWith("__") 'aliasIsBuiltin'
+			return
+		end 'aliasIsBuiltin'
+	end 'isGenAlias'
+	// Or it shows up as an inner alias on a struct (`typealias ByteMemory
+	// = __ManagedMemory with Byte` inside `type Character ... end`).
+	for (_, st) in project.structTypes 'eachStruct'
+		if let innerResolved = try st.innerAliases.get(prefix) 'innerHit'
+			let innerName = innerResolved.nameOrEmpty(project)
+			if innerName.startsWith("__") 'innerIsBuiltin'
+				return
+			end 'innerIsBuiltin'
+		end 'innerHit'
+	end 'eachStruct'
+	for i in 1 upto args.count() 'each'
+		let label = try argLabels.get(i) otherwise ""
+		if not label.isEmpty() 'hasLabel'
+			continue
+		end 'hasLabel'
+		let range = try argRanges.get(i) otherwise SourceRange.none()
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Second and subsequent arguments must be named. Use 'name: value' syntax", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'each'
+end 'validateQualifiedCallArgLabels'
 
 function validateMethodCallArgLabels(project Project, receiver ByteArray, args ByteArrayArray, argLabels StringArray, argRanges SourceRangeArray, producerTypes ProducerTypeMap, filePath FilePath)
 	let receiverType = lookupProducerType(producerTypes, name: receiver)

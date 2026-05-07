@@ -185,6 +185,7 @@ export enum TokenKind
 	floatLiteral = "float literal"
 	charLiteral = "character literal"
 	stringLiteral = "string literal"
+	byteStringLiteral = "byte string literal"
 	// Delimiters for pre-lexed interpolation expressions. A double-quoted
 	// string containing `{...}` interpolations emits as:
 	//   stringLiteral("fragment0") stringInterpStart <expr tokens> stringInterpEnd
@@ -221,8 +222,6 @@ export enum TokenKind
 	colon = ":"
 	newline = "newline"
 	eof = "end of file"
-	// Temporary for bootstrapping
-	print = "print"
 end 'TokenKind'
 
 export type Token
@@ -710,6 +709,46 @@ type Lexer
 		throw CursorError.exhausted
 	end 'scanDoubleQuoteString'
 
+	// Phase 7 step 7: byte-string literal body scanner. Caller has consumed
+	// the opening `b` and `"`. Scans bytes until the closing `"`, treating
+	// `\` as a one-byte escape skip (decoded by the parser) and explicitly
+	// rejecting `{` interpolation markers — byte strings are byte-exact.
+	function scanByteStringLiteralBody(startLine LineNumber, startCol ColumnNumber) throws CursorError
+		let strStart = cursor.index()
+		while cursor.index() < len 'bstrBody'
+			let bc = cursor.current()
+			if bc == Ascii.dquote 'endBstr'
+				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				if not tryAdvance() 'closeEof'
+					try finishAtEof()
+				end 'closeEof'
+				return
+			end 'endBstr'
+			if bc == Ascii.lf 'newlineInBstr'
+				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
+				hasPendingError = true
+				pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+				throw CursorError.exhausted
+			end 'newlineInBstr'
+			if bc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'bstrBody'
+		emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
+		hasPendingError = true
+		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+		throw CursorError.exhausted
+	end 'scanByteStringLiteralBody'
+
 	// Drive the main DFA over an interpolation body `{...}`. Cursor enters AT
 	// the first byte after `{`; returns with cursor AT the matching `}`. Tracks
 	// nested braces so struct literals inside an interpolation don't terminate
@@ -929,6 +968,29 @@ type Lexer
 	// Cursor points to the first alpha/underscore (not yet consumed by this scanner).
 	function scanIdentifier(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		let startPos = cursor.index()
+		// Phase 7 step 7: byte-string literal prefix. A bare `b` immediately
+		// followed by `"` (no intervening alphanumeric) opens a byte-string
+		// literal. Use peek(1) to look one byte ahead without committing —
+		// peek throws past EOF, so guard via `otherwise 0` (0 cannot match
+		// dquote, so the fall-through naturally drops back to identifier
+		// scanning at the source's last byte).
+		if cursor.current() == Ascii.lowerB 'maybeByteStr'
+			let nextByte = try cursor.peek(1) otherwise 0
+			if nextByte == Ascii.dquote 'isByteStr'
+				// Consume the `b` and the opening `"`, then scan the body
+				// exactly like a non-interpolating double-quoted string —
+				// byte-strings explicitly disallow `{...}` interpolation, so
+				// we can't reuse scanDoubleQuoteString as-is.
+				if not tryAdvance() 'bEof'
+					try finishAtEof()
+				end 'bEof'
+				if not tryAdvance() 'qEof'
+					try finishAtEof()
+				end 'qEof'
+				try scanByteStringLiteralBody(startLine: startLine, startCol: startCol)
+				return
+			end 'isByteStr'
+		end 'maybeByteStr'
 		while cursor.index() < len 'identBody'
 			let ic = cursor.current()
 			if not isAlphaNum(ic) 'endIdent'
@@ -1154,8 +1216,7 @@ var keywordMap = [
 	"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
 	"byte": KeywordInfo.create(TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false),
 	"array": KeywordInfo.create(TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
-	"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
-	"print": KeywordInfo.create(TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false)
+	"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false)
 ]
 
 function classifyIdentifier(name String) returns TokenKind
