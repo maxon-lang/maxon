@@ -127,8 +127,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
 	let codeResult = try queryCodeResult(project)
 
 	let ext = executableExtension(project.target)
-	let buildName = parseBuildName(project.rootPath)
-	let outputPath = try resolveBuildOutputPath(project, buildName: buildName, ext: ext)
+	let outputPath = try resolveBuildOutputPath(project, ext: ext)
 
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 
@@ -140,8 +139,8 @@ export function compileProject(project Project) returns FilePath throws CompileE
 end 'compileProject'
 
 // Resolves the output path: uses build name if available, otherwise falls back to first source file.
-function resolveBuildOutputPath(project Project, buildName String, ext String) returns FilePath throws CompileError
-	if not buildName.isEmpty() 'hasBuildName'
+function resolveBuildOutputPath(project Project, ext String) returns FilePath throws CompileError
+	if let buildName = try parseBuildName(project.rootPath) 'hasBuildName'
 		return project.rootPath.join("{buildName}{ext}")
 	end 'hasBuildName'
 	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("resolveBuildOutputPath: sourcePaths empty — loadSourceFiles should have thrown")
@@ -149,20 +148,26 @@ function resolveBuildOutputPath(project Project, buildName String, ext String) r
 end 'resolveBuildOutputPath'
 
 // Parses build.maxon in the project root to extract the build name.
-// Returns empty string if no build.maxon or no build("...") call found.
-function parseBuildName(projectRoot FilePath) returns String
+// Throws `BuildNameError.notFound` if no build.maxon or no build("...") call
+// is present — callers use `if let` to take the named-build path and fall
+// through to deriving the output name from the first source file.
+function parseBuildName(projectRoot FilePath) returns String throws BuildNameError
 	let buildPath = projectRoot.join("build.maxon")
-	let content = try File.readText(buildPath) otherwise return ""
+	let content = try File.readText(buildPath) otherwise throw BuildNameError.notFound
 	let marker = "build(\""
-	var nameStart = try content.findFirst(marker) otherwise return ""
+	var nameStart = try content.findFirst(marker) otherwise throw BuildNameError.notFound
 	// Skip past 'build("' (7 chars) to get to the name
 	for _ in 0 upto 7 'skipMarker'
-		nameStart = try content.indexAfter(nameStart) otherwise return ""
+		nameStart = try content.indexAfter(nameStart) otherwise throw BuildNameError.notFound
 	end 'skipMarker'
 	let rest = content.slice(nameStart, endIndex: content.endIndex())
-	let nameEnd = try rest.findFirst("\"") otherwise return ""
+	let nameEnd = try rest.findFirst("\"") otherwise throw BuildNameError.notFound
 	return rest.slice(rest.startIndex(), endIndex: nameEnd)
 end 'parseBuildName'
+
+enum BuildNameError implements Error
+	notFound
+end 'BuildNameError'
 
 // --- Source file loading ---
 

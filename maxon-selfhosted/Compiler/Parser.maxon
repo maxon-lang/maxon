@@ -521,16 +521,17 @@ export type Parser
 		return ParamDefault.intLiteral(value)
 	end 'parseOptionalParamDefault'
 
-	// Parse an optional `throws ErrorType` clause. Returns the bare error-enum
-	// name when present, or the empty string when the clause is absent.
-	// Phase 1c records this name on `IrFunction.throwsTypeName`; Phase 4 will
-	// consume it for error-flag ABI lowering.
-	function parseThrowsClause() returns String throws ParserError
+	// Parse an optional `throws ErrorType` clause. Returns
+	// `ThrowsClause.throwing(name)` when the clause is present and
+	// `ThrowsClause.none` when absent. Phase 1c records this on
+	// `IrFunction.throwsTypeName`; Phase 4 consumes it for error-flag ABI
+	// lowering.
+	function parseThrowsClause() returns ThrowsClause throws ParserError
 		if not accept(TokenKind.throws) 'noThrows'
-			return ""
+			return ThrowsClause.none
 		end 'noThrows'
 		let nameToken = try consumeExpecting("error type name")
-		return nameToken.value
+		return ThrowsClause.throwing(nameToken.value)
 	end 'parseThrowsClause'
 
 	// Phase 11.0: parse an optional `where T is Trait1 [and Trait2]* [, T2 is
@@ -733,12 +734,12 @@ export type Parser
 		end 'expandAbi'
 		let abiParamCount = abiParamTypes.count() as ParamCount
 
-		let returnType_ = try parseOptionalReturnType()
-		// Capture the void-ness up front so we can release the `returnType_`
+		let returnType = try parseOptionalReturnType()
+		// Capture the void-ness up front so we can release the `returnType`
 		// borrow before calling into parseStatements (which mutates self.cursor).
-		let returnIsVoid = maxonReturnTypeIsVoid(returnType_)
+		let returnIsVoid = maxonReturnTypeIsVoid(returnType)
 
-		let throwsTypeName_ = try parseThrowsClause()
+		let throwsTypeName = try parseThrowsClause()
 
 		// Phase 11.0: optional function-level `where T is Trait` clause. We
 		// parse and discard for now — function-level constraint enforcement
@@ -754,7 +755,7 @@ export type Parser
 		// instead of throwing through to queryParseOps' generic EOF fallback.
 		_ = skipOptionalNewlines()
 
-		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType_, paramCount: abiParamCount, maxonParamTypes: abiParamTypes, returnLine: 0, throwsTypeName: throwsTypeName_)
+		var func = IrFunction.create(qualifiedName, maxonReturnType: returnType, paramCount: abiParamCount, maxonParamTypes: abiParamTypes, returnLine: 0, throwsTypeName: throwsTypeName)
 		// Carry the source-file namespace forward so LowerMaxonToStd can
 		// resolve `CallContext.free` callees against `{namespace}.callee`
 		// even when the function's own name is bare (e.g. main entrypoint).
@@ -779,8 +780,8 @@ export type Parser
 		// Same suffixes still report E2001 — that's a real duplicate.
 		var funcIsDuplicate = false
 		var registrationName = qualifiedName
-		try project.funcReturnTypes.insert(qualifiedName, value: returnType_) otherwise 'dupFunc'
-			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, hasSelf: isInstance, returnType: returnType_)
+		try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise 'dupFunc'
+			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, hasSelf: isInstance, returnType: returnType)
 			if resolution.isOverload 'isOverload'
 				registrationName = resolution.mangledName
 			end 'isOverload' else 'realDup'
@@ -808,7 +809,7 @@ export type Parser
 			project.methodNameIndex.record(registrationName)
 			try project.funcVisibilities.insert(registrationName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
 			// Register the throws-clause type name (empty string = non-throwing).
-			try project.funcThrowsTypes.insert(registrationName, value: throwsTypeName_) otherwise ignore
+			try project.funcThrowsTypes.insert(registrationName, value: throwsTypeName) otherwise ignore
 		end 'registerSignature'
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 		// Seed the parser's current-function/block tracker — expression-level
@@ -1874,10 +1875,7 @@ export type Parser
 
 		try expect(TokenKind.equals)
 
-		let (expr, ok) = try parseTypealiasRhs(nameToken)
-		if not ok 'rhsBad'
-			return
-		end 'rhsBad'
+		let expr = try parseTypealiasRhs(nameToken) otherwise return
 
 		// Duplicate detection runs against both unresolved and resolved
 		// registries — the latter catches duplicates that survive a stdlib
@@ -1978,13 +1976,14 @@ export type Parser
 	end 'parseTopLevelTypealias'
 
 	// Phase 11.0 step 2: shared RHS parser used by both top-level and
-	// inner-body typealias declarations. Returns the captured expression and
-	// a success flag — when `false` the caller should bail out (the helper
-	// has already emitted a diagnostic and called `skipToNextLine`). The
-	// token cursor is positioned just past the RHS on success and somewhere
-	// on the next line on failure. `nameToken` is used only for diagnostic
-	// anchoring — the helper does not consume the alias name itself.
-	function parseTypealiasRhs(nameToken Token) returns (UnresolvedTypeExpr, bool) throws ParserError
+	// inner-body typealias declarations. Returns the captured expression
+	// on success. Throws `ParserError.unhandledToken` after emitting a
+	// diagnostic and calling `skipToNextLine` — callers `try ... otherwise`
+	// to bail out of the enclosing typealias declaration. The token cursor
+	// is positioned just past the RHS on success and somewhere on the next
+	// line on failure. `nameToken` is used only for diagnostic anchoring —
+	// the helper does not consume the alias name itself.
+	function parseTypealiasRhs(nameToken Token) returns UnresolvedTypeExpr throws ParserError
 		let baseToken = cursor.current()
 
 		// `expr` is the captured RHS; `sawValidBase` tracks whether we saw
@@ -2015,7 +2014,7 @@ export type Parser
 				end 'byteEx'
 				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: filePath)
 				skipToNextLine()
-				return (expr, false)
+				throw ParserError.unhandledToken
 			end 'noParen'
 
 			try eat(TokenKind.leftParen)
@@ -2060,7 +2059,7 @@ export type Parser
 						if not isTypeNameToken(argToken) 'badArg'
 							reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': expected type-name argument in 'with(...)', got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
 							skipToNextLine()
-							return (expr, false)
+							throw ParserError.unhandledToken
 						end 'badArg'
 						_ = try consume()
 						argNames.push(argToken.value)
@@ -2071,7 +2070,7 @@ export type Parser
 					if not isTypeNameToken(argToken) 'badSingle'
 						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '{targetToken.value} with' requires a type-name argument, got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
 						skipToNextLine()
-						return (expr, false)
+						throw ParserError.unhandledToken
 					end 'badSingle'
 					_ = try consume()
 					argNames.push(argToken.value)
@@ -2097,10 +2096,10 @@ export type Parser
 		if not sawValidBase 'unsupported'
 			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' RHS must be 'bool', a ranged primitive (int(...)/float(...)/byte(...)), or another type name; got '{tokenValueToString(baseToken.value)}'", line: baseToken.line, column: baseToken.column, filePath: filePath)
 			skipToNextLine()
-			return (expr, false)
+			throw ParserError.unhandledToken
 		end 'unsupported'
 
-		return (expr, true)
+		return expr
 	end 'parseTypealiasRhs'
 
 	// Phase 11.0 step 2: parse a `typealias Name = ...` declaration that
@@ -2115,10 +2114,7 @@ export type Parser
 
 		try expect(TokenKind.equals)
 
-		let (expr, ok) = try parseTypealiasRhs(nameToken)
-		if not ok 'rhsBad'
-			return
-		end 'rhsBad'
+		let expr = try parseTypealiasRhs(nameToken) otherwise return
 
 		// Duplicate detection within the same type body. The map key is the
 		// bare alias name — collisions across types are fine (alias names
@@ -2679,7 +2675,7 @@ export type Parser
 			if not tokenIsIdentifierLike(paramNameToken) 'badName'
 				reportTokenMismatch(paramNameToken, expectedDisplay: "identifier")
 				synchronize()
-				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", isStatic: isStatic, line: nameToken.line, column: nameToken.column)
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: ThrowsClause.none, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 			end 'badName'
 			checkReservedDeclName(paramNameToken)
 			// Function-typed interface params must work too. Return-type
@@ -2687,7 +2683,7 @@ export type Parser
 			// don't exercise function-typed interface return positions.
 			let paramType = try parseTypeRef()
 			if at(TokenKind.rightParen) and isUnresolvedMaxonType(paramType) 'recovered'
-				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: "", isStatic: isStatic, line: nameToken.line, column: nameToken.column)
+				return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: MaxonReturnType.void, throwsTypeName: ThrowsClause.none, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 			end 'recovered'
 			paramNames.push(paramNameToken.value)
 			paramTypes.push(paramType)
@@ -2696,15 +2692,15 @@ export type Parser
 		try expect(TokenKind.rightParen)
 		inFunctionParam = savedInFunctionParam
 
-		var returnType_ = MaxonReturnType.void
+		var returnType = MaxonReturnType.void
 		if accept(TokenKind.returns) 'hasReturn'
 			let typeToken = try consumeExpecting("type name")
-			returnType_ = MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
+			returnType = MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
 		end 'hasReturn'
 
 		let throwsName = try parseThrowsClause()
 
-		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType_, throwsTypeName: throwsName, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
+		return InterfaceMethodSig.create(nameToken.value, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsName, isStatic: isStatic, line: nameToken.line, column: nameToken.column)
 	end 'parseInterfaceMethodSig'
 
 	// Phase 11.0 step 4: real parser for `extension TargetType ... end`.
@@ -4895,7 +4891,7 @@ export type Parser
 		// tryMethodCall) so the multi-value-return ABI binds the error flag
 		// at the call site.
 		var rewroteCall = false
-		var calleeThrowsTypeName = ""
+		var calleeThrowsTypeName = ThrowsClause.none
 		if opCountAfter > opCountBefore 'haveLastOp'
 			let lastIdx = opCountAfter - 1
 			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: ops.get OOB at last idx={lastIdx} (count={opCountAfter})")
@@ -4915,7 +4911,7 @@ export type Parser
 				if isUnresolvedMaxonType(callReturnType) 'resolveCallType'
 					callReturnType = resolveQualifiedCalleeReturnType(qualifiedCallee: qualifiedCallee)
 				end 'resolveCallType'
-				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ""
+				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
 			end 'resolveCalleeInfo'
 		end 'haveLastOp'
 		if not rewroteCall 'noRewrite'
@@ -4992,7 +4988,7 @@ export type Parser
 	//
 	// Multi-statement `otherwise BLOCK` and `(e) BLOCK` binding forms are
 	// out of scope here — they're handled by a future phase.
-	function parseTryFallback(innerExitBlock IrBlock, tryToken Token, condName ByteArray, callResultName ByteArray, callResultType MaxonType, baseLabel String, tryFilePath String, isStatementContext bool, errorFlagName ByteArray, calleeThrowsTypeName String) returns ExprResult throws ParserError
+	function parseTryFallback(innerExitBlock IrBlock, tryToken Token, condName ByteArray, callResultName ByteArray, callResultType MaxonType, baseLabel String, tryFilePath String, isStatementContext bool, errorFlagName ByteArray, calleeThrowsTypeName ThrowsClause) returns ExprResult throws ParserError
 		try eat(TokenKind.otherwise)
 		// Result slot. Type is `unresolved` until the success arm stores —
 		// TypeResolution propagates the concrete type from there.
@@ -5061,7 +5057,7 @@ export type Parser
 	// helper either populates it with a fallback expression's varStore
 	// (and reports the value's type) or installs a terminator that seals
 	// the block from the caller's merge wiring.
-	function parseTryFallbackDispatch(fallbackBlock IrBlock, dispatchToken Token, resultSlot VarSlot, callResultType MaxonType, tryToken Token, isStatementContext bool, errorFlagName ByteArray, calleeThrowsTypeName String) returns TryFallbackOutcome throws ParserError
+	function parseTryFallbackDispatch(fallbackBlock IrBlock, dispatchToken Token, resultSlot VarSlot, callResultType MaxonType, tryToken Token, isStatementContext bool, errorFlagName ByteArray, calleeThrowsTypeName ThrowsClause) returns TryFallbackOutcome throws ParserError
 		if dispatchToken.kind == TokenKind.return 'isReturn'
 			try parseReturnStatement(fallbackBlock)
 			return TryFallbackOutcome.terminator(fallbackBlock)
@@ -5117,8 +5113,9 @@ export type Parser
 			module.appendOp(fallbackBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
 			// Determine the binding type: named enum type if known, else integer.
 			var bindingType = MaxonType.integer
-			if calleeThrowsTypeName != "" 'hasThrowsType'
-				bindingType = internMaxonType(project, name: calleeThrowsTypeName)
+			match calleeThrowsTypeName 'hasThrowsType'
+				none then break 'hasThrowsType'
+				throwing(throwsName) then bindingType = internMaxonType(project, name: throwsName)
 			end 'hasThrowsType'
 			// Declare the binding in a new scope so it's visible throughout the handler body.
 			scope.pushScope()
@@ -5846,7 +5843,7 @@ export type Parser
 	// the walk finds nothing — but `restoreStdlibMetadata` republishes the
 	// previously-discovered name into the static cache before user code is
 	// parsed, so the static path covers cache-hit runs too.
-	function discoverBuiltinArrayLiteralType() returns String
+	function discoverBuiltinArrayLiteralType() returns String throws BuiltinArrayLiteralError
 		let cached = getCachedBuiltinArrayLiteralTypeName()
 		if not cached.isEmpty() 'haveCached'
 			return cached
@@ -5866,11 +5863,12 @@ export type Parser
 			end 'confLoop'
 		end 'scan'
 		if ambiguous 'ambig'
-			return ""
+			throw BuiltinArrayLiteralError.unresolved
 		end 'ambig'
-		if not foundName.isEmpty() 'cacheIt'
-			setCachedBuiltinArrayLiteralTypeName(foundName)
-		end 'cacheIt'
+		if foundName.isEmpty() 'noneFound'
+			throw BuiltinArrayLiteralError.unresolved
+		end 'noneFound'
+		setCachedBuiltinArrayLiteralTypeName(foundName)
 		return foundName
 	end 'discoverBuiltinArrayLiteralType'
 
@@ -5950,10 +5948,9 @@ export type Parser
 		let literalRange = SourceRange.between(bracketToken, last: previousToken())
 
 		// Phase 2: discover the stdlib type implementing BuiltinArrayLiteral.
-		// Empty / ambiguous returns trip a parser-time diagnostic and we fall
-		// back to a dummy ExprResult so downstream parsing stays well-formed.
-		let arrayTypeName = discoverBuiltinArrayLiteralType()
-		if arrayTypeName.isEmpty() 'noArrayType'
+		// Throws on missing or ambiguous → trip a parser-time diagnostic and
+		// fall back to a dummy ExprResult so downstream parsing stays well-formed.
+		let arrayTypeName = try discoverBuiltinArrayLiteralType() otherwise 'noArrayType'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "array literal: no stdlib type implements BuiltinArrayLiteral (or multiple do)", line: bracketToken.line, column: bracketToken.column, filePath: filePath)
 			let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: literalRange)
 			return ExprResult.direct(zeroName, valueType: MaxonType.unresolved)
@@ -7275,6 +7272,10 @@ end 'maxonTypeIsRef'
 export enum MaxonTypeStructNameError implements Error
 	notAStruct
 end 'MaxonTypeStructNameError'
+
+enum BuiltinArrayLiteralError implements Error
+	unresolved
+end 'BuiltinArrayLiteralError'
 
 // Return the underlying struct-type name for a named MaxonType. Throws
 // `MaxonTypeStructNameError.notAStruct` when the type is not currently

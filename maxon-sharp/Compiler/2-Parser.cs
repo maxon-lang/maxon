@@ -10011,6 +10011,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       "Self" => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrInterfaceType => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrStructType => MaxonValueKind.Struct,
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrEnumType => MaxonValueKind.Enum,
       { } n when IsAssociatedTypeName(n) => MaxonValueKind.TypeParameter,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       { } n => throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
@@ -10020,7 +10021,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       resultStructTypeName = userTypeName;
     } else if (ifaceMethod.ReturnTypeName != null
         && _typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName, out var retType)
-        && retType is IrInterfaceType or IrStructType) {
+        && retType is IrInterfaceType or IrStructType or IrEnumType) {
       // Return type is the declared type (interface or struct). For interface
       // returns, the concrete implementing type only becomes knowable once the
       // caller is monomorphized — pre-monomorphization the best we can do is

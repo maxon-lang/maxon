@@ -233,6 +233,58 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 - **505 / 510 fragments passing on x64-windows** (44 specs whitelisted + `primitive-stringable` makes 45). All 5 `primitive-stringable` fragments (int/float/bool/byte `.toString`) green. Bootstrap parity 2736/2736 holds.
 - **`byte-string-literal`**: 5 / 8 fragments pass with the Array wrap. Remaining 3 (`map-key`, `top-level-map`, `top-level-map-struct`) use map literals `[b"...": value, ...]` — Phase 13 (Map type) territory. Spec stays commented with a note.
 
+### Sentinel-removal sweep (2026-05-08 follow-up)
+
+Cross-cutting refactor that removes empty-string sentinels (`""` for "absent")
+from the self-hosted pipeline and replaces them with sum types and `throws`-
+based recovery. Driven by the observation that `""`-as-absent shadowed real
+"empty value" cases in cache I/O and made the parser/lowering call chains
+ambiguous about whether a returned string was meaningful or a miss flag.
+
+- **Sum-typed return values** for the previously-string-sentinel APIs:
+  `ThrowsClause` (none / throwing(name)) replaces `IrFunction.throwsTypeName String` and `InterfaceMethodSig.throwsTypeName String`;
+  `ParentWitnessLabel` (none / present(name)) replaces `WitnessTable.parentWitnessLabel String`;
+  `BuiltinArrayLiteralName` (none / found(name)) replaces `StdlibCacheData.builtinArrayLiteralTypeName String`;
+  `CallConvSlot` (gpr(ord) / spilled) replaces `RegAllocTarget.getCallConvGprOrd`'s `-1` sentinel for "spill to stack".
+- **Throwing helpers** for the rest: `parseBuildName`, `chaseTypealiasNameToStruct`,
+  `baseNameOfMaxonType`, `bareMethodName`, `stripFirstDollar`, `descLabelGet`,
+  `lookupCount` (CoverageReport), `resolveWitnessLabel`, `enclosingTypeName(For{Callee,})`,
+  `enclosingTypeNameForCallee`, `enumNameFromMaxonType`, `entryBlockFilePath`,
+  `findInterfaceExtensionCallee`, `findLoadLayoutDescriptorLabel`, `findOpPosition`,
+  `mathIntrinsicTarget`, `managedMemHelperFor`, `primitiveExtensionTypeName{,WithProject}`,
+  `recoverStringLiteral`, `prepareUcdLoadArgs`, `lookupFieldBy{Receiver,StructName}`,
+  and the parser's `parseTypealiasRhs` / `discoverBuiltinArrayLiteralType` /
+  `resolveLabelToSlot`. Each helper throws a small named error enum so callers
+  use `try ... otherwise` (or `if let ... else`) to take the matched-value path
+  and route diagnostics on the throw.
+- **Cache codec recovery boundary**: a new `CacheCorruption` union (`absent` /
+  `invalidEncoding`) plus `writeOptionalString` / `readOptionalString` (1-byte
+  0/1 tag + optional length-prefixed payload) handle the sum-typed cache
+  fields. `writeString` / `readString` now reject length-0 payloads — a
+  writer that needs to encode an empty value must route through
+  `writeOptionalString`. Every `writeStdlibCache` / `readStdlibCache` call
+  chain is now `throws CacheCorruption`-aware end-to-end; the top-level
+  driver catches the throw, logs an `info` diagnostic identifying the
+  cache as corrupt, and falls back to the cold path. **Cache version
+  bumped 14 → 15** to invalidate stale on-disk caches whose
+  `ThrowsClause` / `ParentWitnessLabel` / `BuiltinArrayLiteralName` slots
+  use the old length-prefixed-string encoding.
+- **SemanticCheck dead-code removal**: dropped the Phase-11.7 wrong-signature
+  aggregator (~220 lines: `formatSignatureMismatch`, `paramTypesMatch`,
+  `returnTypeMatches`, `signatureIsStrictlyConcrete`, `maxonTypeIsConcreteUserType`,
+  `signatureHasUnsubstitutedTypes`, `maxonTypeIsUnsubstituted`, `namedIsUnsubstituted`,
+  `buildWrongSignatureMessage`) — never reached in any spec and was the
+  single largest concentration of `""`-sentinel returns in the file.
+- **C# bootstrap parity touch**: `2-Parser.cs` learns to classify
+  enum-typed interface returns as `MaxonValueKind.Struct` so interface-method
+  return-type inference handles enum returns alongside struct/interface
+  returns (parser was already doing the right thing for the struct case).
+
+**Spec results unchanged**: 505/510 on both x64-windows and wasm32-wasi
+(5 expected failures in `arrays/string-array-literal-*` per the existing
+Phase-11/Phase-7 array-element-type-inference deferral). 2736/2736 on the
+C# bootstrap.
+
 ### Still pending (deferred by feature dependency)
 - **`string-type`, `string-interpolation`, `character-type`** (the remaining four Phase-7 specs): need the real `stdlib/String.maxon` and `stdlib/Character.maxon` whitelisted, which requires the helper cascade (`stdlib/helpers/string/{utf8, utf16, unicodeCategory, grapheme, hash, views}.maxon`) and `stdlib/CharacterSet.maxon`. The parser bug that previously blocked this (E2004 "Undefined variable" on `localVar.field = expr` patterns in `helpers/string/grapheme.maxon`) was fixed: `parseIdentifierStatement` now distinguishes `localVar.field = expr` (loads the local + emits `fieldStore`) from `TypeName.field = expr` (qualified-global store) by checking `scope.contains(...)` first. `helpers/string/{utf8, utf16, hash, unicodeCategory}.maxon` are now whitelistable. `unicodeCategory.maxon` was unblocked by implementing `__Builtins.ucdByteAt` / `__Builtins.ucdI64At` in the self-hosted lowering pass: the helpers `recoverStringLiteral` (via a new `valueId → StringId` provenance map populated from `lowerStringConst`) and `ensureUcdLoaded` lazily read `stdlib/helpers/string/ucd_bmp.bin` (65 KiB) and `ucd_supp.bin` (6.4 KiB) and register them through `addNamedGlobalData`; `globalAddr + loadByte` (BMP path) and `globalAddr + mul + add + loadIndirect` (supplementary path) emit the actual loads. The fix also surfaced and resolved a pre-existing LICM bug — `licmGetPackedResultId` was returning `LICM_NO_BLOCK` for every `system` / `memory` op, so consumers of `globalAddr` (the new UCD GEP `addi`) were wrongly classified as loop-invariant and hoisted past their producers, leaving use-before-def IR in the preheader. `grapheme.maxon` and `views.maxon` (which depends on a `BuiltinByteLiteral` interface) remain deferred to the C1.e/C1.f follow-up.
 - **`strings` spec**: doesn't exist as a `specs/fragments-x64-windows/strings/` directory. Drop this bullet from the Phase 7 target list.
@@ -499,10 +551,6 @@ The 11.5 query layer (`queryMidForFunction` / `queryMirForFunction` / `queryCode
 - **C2.d.3** — per-function backend emission + chunk concat + regalloc/prologue split.
 
 The backend split (C2.d.3) is genuinely a multi-day effort.
-
-### Known latent bug
-
-`Compiler/IR/Std/DeadCodeElimination.maxon::rewriteCondBr` (~lines 320–341): when collapsing both arms of a `condBr` through empty ret-blocks that forward to the same continuation with **different** argLists, the second bypass silently drops the second arm's argList. C2.b's `isMultiBlockSpliceable` gates around this; the proper fix is one block of code in DCE.
 
 ### Files to modify (summary)
 

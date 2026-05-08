@@ -84,15 +84,19 @@ export type FileHits
 		try self.lines.set(existingIdx, value: LineHit.create(line, count: existing.count + count)) otherwise panic("invariant: FileHits.lines.set OOB at {existingIdx}")
 	end 'recordHit'
 
-	// O(1) hit-count lookup. Returns -1 when the line isn't instrumented
-	// — the renderer distinguishes "not in aggregator" (plain) from
-	// "count == 0" (miss) to match genhtml.
-	export function lookupCount(line LineNumber) returns HitCount
-		let idx = try self.lineIndex.get(line) otherwise return -1 as HitCount
-		let hit = try self.lines.get(idx) otherwise return -1 as HitCount
+	// O(1) hit-count lookup. Throws `NotInstrumented.notInstrumented` when
+	// the line isn't in the aggregator — the renderer distinguishes that
+	// "plain" state from a real `count == 0` miss to match genhtml.
+	export function lookupCount(line LineNumber) returns HitCount throws NotInstrumented
+		let idx = try self.lineIndex.get(line) otherwise throw NotInstrumented.notInstrumented
+		let hit = try self.lines.get(idx) otherwise throw NotInstrumented.notInstrumented
 		return hit.count
 	end 'lookupCount'
 end 'FileHits'
+
+export enum NotInstrumented implements Error
+	notInstrumented
+end 'NotInstrumented'
 
 // The suite-wide accumulator: one FileHits per source file.
 export typealias FileHitsMap = Map with(String, FileHits)
@@ -377,11 +381,13 @@ function renderFilePage(filePath String, hits FileHits) returns String
 		let lineNum = (idx + 1) as LineNumber
 		let rawLine = try lines.get(idx) otherwise panic("renderFilePage: line index out of range")
 		let escapedLine = htmlEscape(rawLine)
-		let count = hits.lookupCount(lineNum)
-		let (rowClass, countText) = classifyLine(count)
-		buf.append("<tr class=\"{rowClass}\" id=\"L{lineNum}\">")
+		var cls = LineRenderClass.plain()
+		if let count = try hits.lookupCount(lineNum) 'instrumented'
+			cls = classifyLineCount(count)
+		end 'instrumented'
+		buf.append("<tr class=\"{cls.cssClass}\" id=\"L{lineNum}\">")
 		buf.append("<td class=\"lineno\"><a href=\"#L{lineNum}\" style=\"color:inherit\">{lineNum}</a></td>")
-		buf.append("<td class=\"count\">{countText}</td>")
+		buf.append("<td class=\"count\">{cls.countText}</td>")
 		buf.append("<td class=\"src\">{escapedLine}</td></tr>\n")
 	end 'line'
 
@@ -389,17 +395,32 @@ function renderFilePage(filePath String, hits FileHits) returns String
 	return buf
 end 'renderFilePage'
 
-// Map a line's hit count to (CSS class, count column text). -1 means the
-// line isn't in the aggregator at all — neither hit nor miss, just source.
-function classifyLine(count HitCount) returns (String, String)
-	if count < 0 'plain'
-		return ("plain", "")
+// CSS class + count column text for a single rendered line. The renderer
+// distinguishes `plain` (line not instrumented at all — no count rendered),
+// `miss` (instrumented but never executed), `hit` (a real count).
+type LineRenderClass
+	export var cssClass String
+	export var countText String
+
+	export static function plain() returns LineRenderClass
+		return Self{cssClass: "plain", countText: ""}
 	end 'plain'
-	if count == 0 'miss'
-		return ("miss", "0")
+
+	export static function miss() returns LineRenderClass
+		return Self{cssClass: "miss", countText: "0"}
 	end 'miss'
-	return ("hit", "{count}")
-end 'classifyLine'
+
+	export static function hit(count HitCount) returns LineRenderClass
+		return Self{cssClass: "hit", countText: "{count}"}
+	end 'hit'
+end 'LineRenderClass'
+
+function classifyLineCount(count HitCount) returns LineRenderClass
+	if count == 0 'miss'
+		return LineRenderClass.miss()
+	end 'miss'
+	return LineRenderClass.hit(count)
+end 'classifyLineCount'
 
 // Read a source file best-effort. We parse the string path through
 // FilePath so platform separators are normalized; if parsing or reading

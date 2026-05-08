@@ -304,14 +304,14 @@ export type StdParser
 	// `errorReturn`. runtime.std doesn't have a `throws` annotation in its
 	// function header, so the only signal we have that a function follows
 	// the dual-value error ABI is the presence of `errorReturn` as a
-	// terminator. The string content is only consumed by codegen as a
-	// non-empty/empty marker, so we use "<runtime>" as a sentinel rather
-	// than tracking a specific enum.
+	// terminator. The throws clause is only consumed by codegen as a
+	// presence/absence marker, so we use `ThrowsClause.throwing("<runtime>")`
+	// as a sentinel rather than tracking a specific enum.
 	function populateThrowsTypeName(func IrFunction)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 			if blockTerminatorIsErrorReturnTerm(block.terminator) 'isErr'
-				func.throwsTypeName = "<runtime>"
+				func.throwsTypeName = ThrowsClause.throwing("<runtime>")
 				return
 			end 'isErr'
 		end 'eachBlock'

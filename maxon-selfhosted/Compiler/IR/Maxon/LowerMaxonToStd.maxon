@@ -267,7 +267,11 @@ export function interfaceMethodReturnType(project Project, interfaceName String,
 	panic("interfaceMethodReturnType: method '{methodName}' not found on interface '{interfaceName}'")
 end 'interfaceMethodReturnType'
 
-export function resolveWitnessLabel(project Project, concreteType MaxonType, interfaceName String) returns String
+// C1.d soft-fail: parent-interface witnesses (transitive conformance via
+// `extends`) aren't seeded by today's BuildWitnessTables, and primitive
+// conformances are deferred to C1.e. Throws so the caller can fall back
+// rather than hard-crashing the build. Direct conformances always succeed.
+export function resolveWitnessLabel(project Project, concreteType MaxonType, interfaceName String) returns String throws WitnessLabelError
 	let typeName = match concreteType 'pickName'
 		boolean gives "bool"
 		integer gives "int"
@@ -281,18 +285,17 @@ export function resolveWitnessLabel(project Project, concreteType MaxonType, int
 		unresolved gives ""
 	end 'pickName'
 	if typeName.isEmpty() 'noName'
-		return ""
+		throw WitnessLabelError.notResolved
 	end 'noName'
 	if not project.witnessTables.contains(typeName, interfaceName: interfaceName) 'missing'
-		// C1.d soft-fail: parent-interface witnesses (transitive
-		// conformance via `extends`) aren't seeded by today's
-		// BuildWitnessTables, and primitive conformances are deferred to
-		// C1.e. Return empty so the caller can fall back rather than
-		// hard-crashing the build. Direct conformances always succeed.
-		return ""
+		throw WitnessLabelError.notResolved
 	end 'missing'
 	return project.witnessTables.labelFor(typeName, interfaceName: interfaceName)
 end 'resolveWitnessLabel'
+
+export enum WitnessLabelError implements Error
+	notResolved
+end 'WitnessLabelError'
 
 // Build a `sizeBytes`-byte zero-filled ByteArray for the .data prelude. Used by
 // the slab/MM global registration below for fixed-size scratch arrays
@@ -710,15 +713,59 @@ typealias InterfaceWitnessSlotMap = Map with(VarSlot, VarSlot)
 // witness without re-walking back to the slot. Mirrors `fnEnvVarNames`'s
 // shape for the closure ABI.
 typealias InterfaceWitnessValueIdMap = Map with(ValueId, ValueId)
-// Phase 11.4: -1 sentinel for "not found" in `findStdFunctionIndexByName`.
-// Defined at module scope because Maxon doesn't allow bare `int` returns —
-// inline `int(-1 to u64.max)` doesn't reach the parser the same way as a
-// named typealias.
-typealias StdFunctionIndex = int(-1 to u64.max)
 // Per-function map from a String-literal ValueId (the outer `String` struct
 // produced by `lowerStringConst`) to its parser-interned StringId. Lets
 // builtin-lowering recover the literal bytes for label-shaped arguments.
 typealias StringLiteralProvenanceMap = Map with(ValueId, StringId)
+
+// Thrown by `resolveLabelToSlot` when a `name:` label doesn't bind to a
+// user-visible parameter slot — covers both the unknown-label case and the
+// resolves-to-hidden-prefix case (e.g. `__self`). Callers `if let` to take
+// the matched-slot path and emit E3xxx + skip the bad arg on the throw.
+enum LabelSlotError implements Error
+	notFound
+end 'LabelSlotError'
+
+// Outcome of a struct-field lookup by name. The lookup helpers throw this
+// when the receiver isn't a registered struct or the struct has no field
+// of that name; callers report E3xxx and bail.
+type FieldHit
+	export var offset FieldOffset
+	export var fieldType MaxonType
+
+	export static function create(offset FieldOffset, fieldType MaxonType) returns FieldHit
+		return Self{offset: offset, fieldType: fieldType}
+	end 'create'
+end 'FieldHit'
+
+enum FieldLookupError implements Error
+	notFound
+end 'FieldLookupError'
+
+// Validated `__Builtins.ucd*` intrinsic args: a literal label naming a UCD
+// blob and the ValueId of the caller-evaluated operand. Throws covers arity
+// mismatch, non-literal label, and missing-blob — each of which has already
+// been reported as a compile-time error before the throw.
+type UcdReady
+	export var label String
+	export var operand ValueId
+
+	export static function create(label String, operand ValueId) returns UcdReady
+		return Self{label: label, operand: operand}
+	end 'create'
+end 'UcdReady'
+
+enum UcdLoadError implements Error
+	failed
+end 'UcdLoadError'
+
+// Thrown by `recoverStringLiteral` when the SSA name passed in didn't come
+// from a parser-emitted string-literal `stringConst` op (the operand was a
+// runtime expression where a compile-time literal was required).
+enum NotAStringLiteral implements Error
+	notLiteral
+end 'NotAStringLiteral'
+
 
 // ============================================================
 // MaxonToStdLowering type
@@ -1083,11 +1130,11 @@ type MaxonToStdLowering
 			self.nameToId = NameToValueIdMap.create()
 			self.funcIdRef = ValueIdRef.create(srcFunc.paramCount)
 			self.currentNamespace = srcFunc.namespace
-			self.currentTypeName = enclosingTypeName(self.project, name: srcFunc.name)
+			self.currentTypeName = try enclosingTypeName(self.project, name: srcFunc.name) otherwise ""
 			// Recover the file path from the entry block's source info so
 			// E3005 (and any future call-site diagnostic) anchors on the
 			// caller's source file rather than the lowering pass placeholder.
-			self.currentFilePath = entryBlockFilePath(self.maxonModule, func: srcFunc)
+			self.currentFilePath = try entryBlockFilePath(self.maxonModule, func: srcFunc) otherwise ""
 			// Phase 4: throw lowering needs to know the function's return
 			// type family so it can synthesize a default primary return
 			// value of the correct width (i64 vs f64). Stamp it here so
@@ -1098,7 +1145,10 @@ type MaxonToStdLowering
 			// tryCall captures both the primary value AND a clean (zero) flag.
 			// Stamp the throws-ness here so `lowerTerminator` picks the right
 			// terminator shape per `ret`.
-			self.currentFuncIsThrowing = not srcFunc.throwsTypeName.isEmpty()
+			self.currentFuncIsThrowing = match srcFunc.throwsTypeName 'isThrow'
+				none gives false
+				throwing gives true
+			end 'isThrow'
 			// Stage E (closures): clear the function-pointer→env map so
 			// the previous function's bindings don't leak across function
 			// boundaries. The lifted-closure env ValueId is reset to 0 by
@@ -1785,22 +1835,21 @@ type MaxonToStdLowering
 	// where the RHS is by definition concrete. Forwarding the source
 	// witness is C1.d territory.
 	function materializeInterfaceWitness(concreteType MaxonType, interfaceName String, dstBlock IrBlock) returns ValueId
-		let label = resolveWitnessLabel(self.project, concreteType: concreteType, interfaceName: interfaceName)
 		let resultId = allocValueId(self.funcIdRef)
-		if label.isEmpty() 'missing'
-			// C1.d soft-fail: no witness table for this (concrete,
-			// interface) pair (transitive parent-conformance not seeded,
-			// or primitive-extension gap deferred to C1.e). Emit a zero
-			// constant so the build completes; any actual dispatch
-			// through this witness will surface at runtime when the load
-			// dereferences null. The pre-existing monomorphization
-			// pipeline still handles direct calls correctly — this
-			// soft-fail keeps interface-arm propagation non-fatal.
-			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		if let label = try resolveWitnessLabel(self.project, concreteType: concreteType, interfaceName: interfaceName) 'haveLabel'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
 			self.setValueType(resultId, t: MaxonType.integer)
 			return resultId
-		end 'missing'
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
+		end 'haveLabel'
+		// C1.d soft-fail: no witness table for this (concrete, interface)
+		// pair (transitive parent-conformance not seeded, or primitive-
+		// extension gap deferred to C1.e). Emit a zero constant so the
+		// build completes; any actual dispatch through this witness will
+		// surface at runtime when the load dereferences null. The pre-
+		// existing monomorphization pipeline still handles direct calls
+		// correctly — this soft-fail keeps interface-arm propagation
+		// non-fatal.
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return resultId
 	end 'materializeInterfaceWitness'
@@ -1974,7 +2023,7 @@ type MaxonToStdLowering
 		// driven emission so we expand to the runtime helper sequence rather
 		// than emitting a call to a body-less signature.
 		if bareCallee.startsWith("__ManagedMemory.") 'didLowerMmStatic'
-			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__ManagedMemory.")
+			let methodName = try stripPrefix(bareCallee, prefix: "__ManagedMemory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
 			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
@@ -1984,7 +2033,7 @@ type MaxonToStdLowering
 		// (off 8) from the MM, then a single call into `mrt_write_stdout`
 		// / `mrt_write_stderr` which talks to the OS.
 		if bareCallee.startsWith("__Builtins.") 'didLowerBuiltins'
-			let methodName = stripPrefixOrEmpty(bareCallee, prefix: "__Builtins.")
+			let methodName = try stripPrefix(bareCallee, prefix: "__Builtins.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
 			if self.lowerBuiltinsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
 				return
 			end 'handled'
@@ -2078,8 +2127,7 @@ type MaxonToStdLowering
 			// the stdlib's PrimitiveExtensions has been loaded; without it,
 			// fall through to the existing panic stub so the build still
 			// completes with a clear runtime diagnostic.
-			let primName = primitiveExtensionTypeNameWithProject(self.project, t: receiverType)
-			if not primName.isEmpty() 'havePrim'
+			if let primName = try primitiveExtensionTypeNameWithProject(self.project, t: receiverType) 'havePrim'
 				let primQualified = "{primName}.{String.from(methodName)}"
 				if let primSig = try self.project.funcSignatures.get(primQualified) 'havePrimSig'
 					let primAllArgIds = self.slotArgsForCall(primSig, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: true)
@@ -2182,21 +2230,6 @@ type MaxonToStdLowering
 		end 'plainCall'
 		self.recordCallResultType(resultId, callee: qualifiedCallee)
 	end 'emitCallWithArgs'
-
-	// Phase 11.4: linear scan of stdModule.functions for the callee's
-	// IrFunction index. Returns -1 when the callee isn't in the local
-	// module (runtime intrinsics like `mrt_alloc`, IAT imports). Linear
-	// scan suffices today; profiling can later replace it with a name→
-	// index map.
-	function findStdFunctionIndexByName(name String) returns StdFunctionIndex
-		for i in 0 upto self.stdModule.functions.count() 'scan'
-			let f = try self.stdModule.functions.get(i) otherwise panic("findStdFunctionIndexByName: stdModule.functions.get OOB at {i}")
-			if f.name == name 'hit'
-				return i
-			end 'hit'
-		end 'scan'
-		return -1
-	end 'findStdFunctionIndexByName'
 
 	// Resolve the layout descriptor for the call site and return an
 	// updated argIds with the descriptor's address appended. If the
@@ -2303,10 +2336,7 @@ type MaxonToStdLowering
 	// trip that loses precision for ints outside f64's mantissa range).
 	// Returns true if the call was lowered as an intrinsic.
 	function lowerMathIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		let (opcode, resultType, isMath) = mathIntrinsicTarget(bare: bareCallee)
-		if not isMath 'notMath'
-			return false
-		end 'notMath'
+		let hit = try mathIntrinsicTarget(bare: bareCallee) otherwise return false
 		// Math intrinsics take exactly one arg. If the arity is wrong, fall
 		// through to normal call resolution which will surface the error.
 		if args.count() != 1 'badArity'
@@ -2322,8 +2352,8 @@ type MaxonToStdLowering
 		// All math intrinsics expect f64 input. Promote int operands.
 		let promotedId = self.promoteToFloat(operandId, dstBlock: dstBlock)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(opcode, resultId: resultId, operandId: promotedId))))
-		self.setValueType(resultId, t: resultType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(hit.opcode, resultId: resultId, operandId: promotedId))))
+		self.setValueType(resultId, t: hit.resultType)
 		return true
 	end 'lowerMathIntrinsic'
 
@@ -2400,14 +2430,15 @@ type MaxonToStdLowering
 
 	// Recover the bytes of a string-literal argument by walking from the
 	// arg's SSA name back through `stringLiteralProvenance` to the StringId
-	// the parser interned. Returns `(true, bytes)` on success and
-	// `(false, "")` if the operand was not produced by `lowerStringConst`
-	// (e.g. the caller passed a runtime expression where a literal was
-	// required). Used by the UCD builtins to extract the rdata-blob label.
-	function recoverStringLiteral(argName ByteArray) returns (bool, String)
+	// the parser interned. Returns the literal bytes on success and throws
+	// `NotAStringLiteral.notLiteral` if the operand was not produced by
+	// `lowerStringConst` (e.g. the caller passed a runtime expression where
+	// a literal was required). Used by the UCD builtins to extract the
+	// rdata-blob label.
+	function recoverStringLiteral(argName ByteArray) returns String throws NotAStringLiteral
 		let valueId = self.resolveName(argName)
-		let stringId = try self.stringLiteralProvenance.get(valueId) otherwise return (false, "")
-		return (true, self.project.strings.get(stringId))
+		let stringId = try self.stringLiteralProvenance.get(valueId) otherwise throw NotAStringLiteral.notLiteral
+		return self.project.strings.get(stringId)
 	end 'recoverStringLiteral'
 
 	// Read a UCD blob from disk and register it in `globalData` under the
@@ -2429,7 +2460,8 @@ type MaxonToStdLowering
 			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.ucd*: cannot locate stdlib directory to load '{label}'")
 			return false
 		end 'noStdlib'
-		let fileName = "{stripPrefixOrEmpty(label, prefix: "__")}.bin"
+		let strippedLabel = try stripPrefix(label, prefix: "__") otherwise panic("invariant: ensureUcdLoaded requires __ucd_ prefix but stripPrefix __ threw on '{label}'")
+		let fileName = "{strippedLabel}.bin"
 		let binPath = stdlibPath.join("helpers").join("string").join(fileName)
 		let bytes = try File.readBinary(binPath) otherwise 'readFail'
 			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.ucd*: failed to read UCD blob '{binPath.path}'")
@@ -2440,27 +2472,26 @@ type MaxonToStdLowering
 	end 'ensureUcdLoaded'
 
 	// Validate the (label, offsetOrIndex) shape shared by `__Builtins.ucdByteAt`
-	// and `__Builtins.ucdI64At`. Reports a compile-time error and returns
-	// `(false, "", 0)` on arity mismatch, non-literal label, or missing UCD
-	// blob; on success returns `(true, label, operandValueId)` where the
-	// caller emits the actual load. The error-already-reported convention
-	// matches the rest of `lowerBuiltinsIntrinsic`'s helpers.
-	function prepareUcdLoadArgs(intrinsic String, args ByteArrayArray) returns (bool, String, ValueId)
+	// and `__Builtins.ucdI64At`. Throws `UcdLoadError.failed` after reporting
+	// a compile-time error for arity mismatch, non-literal label, or missing
+	// UCD blob; on success returns `UcdReady{label, operand}` and the caller
+	// emits the actual load. The error-already-reported convention matches
+	// the rest of `lowerBuiltinsIntrinsic`'s helpers.
+	function prepareUcdLoadArgs(intrinsic String, args ByteArrayArray) returns UcdReady throws UcdLoadError
 		if args.count() != 2 'badArity'
 			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.{intrinsic}: expected 2 args, got {args.count()}")
-			return (false, "", 0)
+			throw UcdLoadError.failed
 		end 'badArity'
 		let labelName = try args.get(0) otherwise panic("invariant: args.count() == 2 just checked")
 		let operandName = try args.get(1) otherwise panic("invariant: args.count() == 2 just checked")
-		let (ok, label) = self.recoverStringLiteral(labelName)
-		if not ok 'notLiteral'
+		let label = try self.recoverStringLiteral(labelName) otherwise 'notLiteral'
 			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Builtins.{intrinsic}: first argument must be a string literal")
-			return (false, "", 0)
+			throw UcdLoadError.failed
 		end 'notLiteral'
 		if not self.ensureUcdLoaded(label) 'loadFailed'
-			return (false, "", 0)
+			throw UcdLoadError.failed
 		end 'loadFailed'
-		return (true, label, self.resolveName(operandName))
+		return UcdReady.create(label, operand: self.resolveName(operandName))
 	end 'prepareUcdLoadArgs'
 
 	// Emit `globalAddr(label)` and bind the result to a fresh i64-typed
@@ -2479,13 +2510,10 @@ type MaxonToStdLowering
 	// address — `loadByte` fuses the GEP that the C# bootstrap had to
 	// materialise as a separate `lea` + `add`.
 	function lowerBuiltinsUcdByteAt(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		let (ok, label, offsetId) = self.prepareUcdLoadArgs("ucdByteAt", args: args)
-		if not ok 'failed'
-			return true
-		end 'failed'
-		let addrId = self.emitUcdGlobalAddr(label, dstBlock: dstBlock)
+		let ready = try self.prepareUcdLoadArgs("ucdByteAt", args: args) otherwise return true
+		let addrId = self.emitUcdGlobalAddr(ready.label, dstBlock: dstBlock)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: addrId, offsetId: offsetId)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: addrId, offsetId: ready.operand)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerBuiltinsUcdByteAt'
@@ -2496,15 +2524,12 @@ type MaxonToStdLowering
 	// codepoint binary search in
 	// `stdlib/helpers/string/unicodeCategory.maxon`.
 	function lowerBuiltinsUcdI64At(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
-		let (ok, label, indexId) = self.prepareUcdLoadArgs("ucdI64At", args: args)
-		if not ok 'failed'
-			return true
-		end 'failed'
-		let addrId = self.emitUcdGlobalAddr(label, dstBlock: dstBlock)
+		let ready = try self.prepareUcdLoadArgs("ucdI64At", args: args) otherwise return true
+		let addrId = self.emitUcdGlobalAddr(ready.label, dstBlock: dstBlock)
 		let eightId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: eightId, value: 8))))
 		self.setValueType(eightId, t: MaxonType.integer)
-		let byteOffId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: indexId, rightId: eightId, dstBlock: dstBlock)
+		let byteOffId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: ready.operand, rightId: eightId, dstBlock: dstBlock)
 		let finalAddrId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: addrId, rightId: byteOffId, dstBlock: dstBlock)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: finalAddrId, offset: 0, isFloat: false)))
@@ -2686,8 +2711,7 @@ type MaxonToStdLowering
 		end 'mClear'
 
 		// --- Runtime-helper dispatch ------------------------------------
-		let helperName = managedMemHelperFor(methodName)
-		if not helperName.isEmpty() 'hasHelper'
+		if let helperName = try managedMemHelperFor(methodName) 'hasHelper'
 			// Throwing helpers (e.g. `_get`, `_set`, `_grow`, `_slice`) write the
 			// error flag in RDX/X1 — emit `StdCallOp.tryCall` at try-call sites
 			// to capture both the result and the flag. Non-throwing helpers
@@ -3250,12 +3274,12 @@ type MaxonToStdLowering
 			let argRange = try argRanges.get(i) otherwise SourceRange.none()
 			var slot = i
 			if not label.isEmpty() 'hasLabel'
-				let resolved = self.resolveLabelToSlot(signature, label: label, paramStartIndex: paramStartIndex)
-				if resolved < 0 'unknown'
+				if let resolvedSlot = try self.resolveLabelToSlot(signature, label: label, paramStartIndex: paramStartIndex) 'foundSlot'
+					slot = resolvedSlot
+				end 'foundSlot' else 'unknownLabel'
 					reportSemanticError(self.project, code: ErrorCode.semanticUndefinedVariable, message: "unknown parameter name: '{label}'")
 					continue
-				end 'unknown'
-				slot = resolved
+				end 'unknownLabel'
 			end 'hasLabel'
 			if slot >= userParamCount 'overflow'
 				continue
@@ -3461,15 +3485,14 @@ type MaxonToStdLowering
 	end 'emitByteTruncate'
 
 	// Resolve a `name:` label to its slot index in the user-facing portion of
-	// the signature via the precomputed nameToIndex map. Returns -1 when
-	// unknown (or when the label resolves to a hidden prefix slot like
-	// `__self`) so callers can skip the bad arg without halting the rest of
-	// the slotting work.
-	function resolveLabelToSlot(signature FuncSignature, label String, paramStartIndex ParsedInt) returns ParsedInt
-		// nameToIndex is sparse; -1 is the documented sentinel for unknown labels (caller surfaces E3xxx).
-		let absIdx = try signature.nameToIndex.get(label) otherwise return -1
+	// the signature via the precomputed nameToIndex map. Throws
+	// `LabelSlotError.notFound` for both the unknown-label case and the
+	// resolves-to-a-hidden-prefix-slot case (e.g. `__self`); the caller emits
+	// E3xxx and skips the bad arg.
+	function resolveLabelToSlot(signature FuncSignature, label String, paramStartIndex ParsedInt) returns ParsedInt throws LabelSlotError
+		let absIdx = try signature.nameToIndex.get(label) otherwise throw LabelSlotError.notFound
 		if absIdx < paramStartIndex 'beforeUserSpace'
-			return -1
+			throw LabelSlotError.notFound
 		end 'beforeUserSpace'
 		return absIdx - paramStartIndex
 	end 'resolveLabelToSlot'
@@ -3494,28 +3517,26 @@ type MaxonToStdLowering
 		let receiverType = self.getValueType(receiverId)
 		let resultId = self.defineName(result)
 		let fieldNameStr = String.from(fieldName)
-		let (offset, fieldType, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
-		if not found 'notFound'
+		let hit = try self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: offset, isFloat: isFloat)))
-		self.setValueType(resultId, t: fieldType)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: hit.offset, isFloat: isFloat)))
+		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerFieldLoad'
 
 	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
-		let (offset, fieldType, found) = self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr)
-		if not found 'notFound'
+		let hit = try self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			return
 		end 'notFound'
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: self.resolveName(value), isFloat: isFloat)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerFieldStore'
 
 	// selfFieldLoad/selfFieldStore: synthesize a fieldLoad/Store against the
@@ -3531,16 +3552,15 @@ type MaxonToStdLowering
 			return
 		end 'notInType'
 		let fieldNameStr = String.from(fieldName)
-		let (offset, fieldType, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
-		if not found 'notFound'
+		let hit = try self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset, isFloat: isFloat)))
-		self.setValueType(resultId, t: fieldType)
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: hit.offset, isFloat: isFloat)))
+		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerSelfFieldLoad'
 
 	function lowerSelfFieldStore(fieldName ByteArray, value ByteArray, dstBlock IrBlock)
@@ -3549,14 +3569,13 @@ type MaxonToStdLowering
 			return
 		end 'notInType'
 		let fieldNameStr = String.from(fieldName)
-		let (offset, fieldType, found) = self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr)
-		if not found 'notFound'
+		let hit = try self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: offset, valueId: self.resolveName(value), isFloat: isFloat)))
+		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: hit.offset, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerSelfFieldStore'
 
 	// Materialize the __self parameter into a fresh SSA ValueId via a slot
@@ -3574,23 +3593,21 @@ type MaxonToStdLowering
 		return selfId
 	end 'loadSelfPointer'
 
-	// Resolve (receiver-MaxonType, fieldName) → (offset, fieldType, found) by
-	// walking the project's struct-type registry. A receiver whose type is
-	// not a registered struct (or whose named() id resolves to something
-	// non-struct) yields (0, integer, false) so callers can emit a clean
-	// diagnostic.
-	function lookupFieldByReceiver(receiverType MaxonType, fieldName String) returns (FieldOffset, MaxonType, bool)
-		let structName = try maxonTypeStructName(self.project, t: receiverType) otherwise return (0 as FieldOffset, MaxonType.integer, false)
-		return self.lookupFieldByStructName(structName: structName, fieldName: fieldName)
+	// Resolve (receiver-MaxonType, fieldName) by walking the project's
+	// struct-type registry. Throws `FieldLookupError.notFound` when the
+	// receiver isn't a registered struct (or its named-id resolves to
+	// something non-struct), or when the struct has no such field; callers
+	// catch the throw and emit a clean diagnostic.
+	function lookupFieldByReceiver(receiverType MaxonType, fieldName String) returns FieldHit throws FieldLookupError
+		let structName = try maxonTypeStructName(self.project, t: receiverType) otherwise throw FieldLookupError.notFound
+		return try self.lookupFieldByStructName(structName: structName, fieldName: fieldName)
 	end 'lookupFieldByReceiver'
 
-	function lookupFieldByStructName(structName String, fieldName String) returns (FieldOffset, MaxonType, bool)
-		// structTypes / fieldByName are sparse; the third tuple element (false) is the documented "not found" flag.
-		// Callers check the bool and report an E-code on miss.
-		let structType = try self.project.structTypes.get(structName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
-		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return (0 as FieldOffset, MaxonType.integer, false)
+	function lookupFieldByStructName(structName String, fieldName String) returns FieldHit throws FieldLookupError
+		let structType = try self.project.structTypes.get(structName) otherwise throw FieldLookupError.notFound
+		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise throw FieldLookupError.notFound
 		let field = try structType.fields.get(fieldIdx) otherwise panic("StructType.fieldByName references missing field index {fieldIdx} on '{structName}' (count={structType.fields.count()})")
-		return (field.offset, field.fieldType, true)
+		return FieldHit.create(field.offset, fieldType: field.fieldType)
 	end 'lookupFieldByStructName'
 
 	// The parser only ever produces condBr/br/ret/enumMatchArm as block
@@ -3826,12 +3843,11 @@ type MaxonToStdLowering
 			// `var managed ElementMemory` (where `ElementMemory` is the
 			// inner alias `__ManagedMemory with Element`) resolves to
 			// the underlying `__ManagedMemory` builtin.
-			let directBase = baseNameOfMaxonType(self.project, t: field.fieldType)
+			let directBase = try baseNameOfMaxonType(self.project, t: field.fieldType) otherwise continue
 			var fieldBaseName = ""
 			fieldBaseName = directBase
 			if directBase != "__ManagedMemory" 'tryChase'
-				let chased = chaseTypealiasNameToStruct(self.project, name: directBase, enclosingType: structType.name)
-				if not chased.isEmpty() 'didChase'
+				if let chased = try chaseTypealiasNameToStruct(self.project, name: directBase, enclosingType: structType.name) 'didChase'
 					fieldBaseName = chased
 				end 'didChase'
 			end 'tryChase'
@@ -4104,36 +4120,54 @@ type MaxonToStdLowering
 	end 'lowerConvert'
 end 'MaxonToStdLowering'
 
+export type MathIntrinsicHit
+	export var opcode StdArithUnaryOpcode
+	export var resultType MaxonType
+
+	export static function create(opcode StdArithUnaryOpcode, resultType MaxonType) returns MathIntrinsicHit
+		return Self{opcode: opcode, resultType: resultType}
+	end 'create'
+end 'MathIntrinsicHit'
+
+export enum MathIntrinsicError implements Error
+	notIntrinsic
+end 'MathIntrinsicError'
+
 // Maps a bare math-primitive name to the Std unary opcode that implements it
-// and the MaxonType of its result. Returns isMath=false for non-intrinsic
-// names so the caller can fall through to normal call resolution.
-// The opcode chain is single-instruction on every native backend (SQRTSD /
-// ROUNDSD / FSQRT / FRINT* / FABS), so emitting the StdArithUnaryOp directly
-// rather than calling a runtime wrapper avoids an unnecessary call/ret round
-// trip for what amounts to a one-instruction operation.
-// Used by both TypeResolution (to set the call's result MaxonType) and
-// LowerMaxonToStd (to emit the inline op).
-export function mathIntrinsicTarget(bare String) returns (StdArithUnaryOpcode, MaxonType, bool)
+// and the MaxonType of its result. Throws `MathIntrinsicError.notIntrinsic`
+// for non-intrinsic names so the caller can `try ... otherwise` to fall
+// through to normal call resolution. The opcode chain is single-instruction
+// on every native backend (SQRTSD / ROUNDSD / FSQRT / FRINT* / FABS), so
+// emitting the StdArithUnaryOp directly rather than calling a runtime
+// wrapper avoids an unnecessary call/ret round trip for what amounts to a
+// one-instruction operation. Used by both TypeResolution (to set the call's
+// result MaxonType) and LowerMaxonToStd (to emit the inline op).
+export function mathIntrinsicTarget(bare String) returns MathIntrinsicHit throws MathIntrinsicError
 	if bare == "sqrt" 'isSqrt'
-		return (StdArithUnaryOpcode.sqrtF64, MaxonType.float, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.sqrtF64, resultType: MaxonType.float)
 	end 'isSqrt'
 	if bare == "floor" 'isFloor'
-		return (StdArithUnaryOpcode.floorF64, MaxonType.float, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.floorF64, resultType: MaxonType.float)
 	end 'isFloor'
 	if bare == "ceil" 'isCeil'
-		return (StdArithUnaryOpcode.ceilF64, MaxonType.float, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.ceilF64, resultType: MaxonType.float)
 	end 'isCeil'
 	if bare == "round" 'isRound'
-		return (StdArithUnaryOpcode.roundF64, MaxonType.float, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.roundF64, resultType: MaxonType.float)
 	end 'isRound'
 	if bare == "abs" 'isAbs'
-		return (StdArithUnaryOpcode.absF64, MaxonType.float, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.absF64, resultType: MaxonType.float)
 	end 'isAbs'
 	if bare == "trunc" 'isTrunc'
-		return (StdArithUnaryOpcode.fpToSiI64, MaxonType.integer, true)
+		return MathIntrinsicHit.create(StdArithUnaryOpcode.fpToSiI64, resultType: MaxonType.integer)
 	end 'isTrunc'
-	return (StdArithUnaryOpcode.sqrtF64, MaxonType.unresolved, false)
+	throw MathIntrinsicError.notIntrinsic
 end 'mathIntrinsicTarget'
+
+export function isMathIntrinsic(bare String) returns bool
+	try mathIntrinsicTarget(bare: bare) otherwise return false
+	return true
+end 'isMathIntrinsic'
 
 // True when `signature`'s first formal parameter is the implicit `__self`
 // — i.e. the callee is an instance method. Lifted out of the per-call
@@ -4148,14 +4182,16 @@ export function signatureFirstParamIsSelf(signature FuncSignature) returns bool
 end 'signatureFirstParamIsSelf'
 
 // Recover the source file path of `func` by reading its entry block's
-// BlockSourceInfo entry. Returns an empty string when the entry block was
-// created outside the parser (no path attached). Used by lowering's call-
-// site type checker to anchor diagnostics on the user's source file, and
-// by TypeResolution's per-function unresolvedRead/Assign rewriter to
-// anchor visibility lookups against the reading function's file.
-export function entryBlockFilePath(module MaxonModule, func IrFunction) returns String
+// BlockSourceInfo entry. Throws `EntryBlockFilePathError.detached` when the
+// entry block was created outside the parser (no path attached) — callers
+// use `if let` to take the path-anchored diagnostic path and fall through
+// to a placeholder otherwise. Used by lowering's call-site type checker to
+// anchor diagnostics on the user's source file, and by TypeResolution's
+// per-function unresolvedRead/Assign rewriter to anchor visibility lookups
+// against the reading function's file.
+export function entryBlockFilePath(module MaxonModule, func IrFunction) returns String throws EntryBlockFilePathError
 	if func.blockRefs.count() == 0 'noBlocks'
-		return ""
+		throw EntryBlockFilePathError.detached
 	end 'noBlocks'
 	let entryRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
 	// blockSourceInfo is pushed in lock-step with module.blocks, so any blockRef into module.blocks is also valid here.
@@ -4163,19 +4199,24 @@ export function entryBlockFilePath(module MaxonModule, func IrFunction) returns 
 	return info.filePath
 end 'entryBlockFilePath'
 
+export enum EntryBlockFilePathError implements Error
+	detached
+end 'EntryBlockFilePathError'
+
 // Map a MaxonType primitive arm to the type-name that an `extension` block
 // declares its impl methods under. The stdlib's PrimitiveExtensions.maxon
 // declares extensions on the lowercase primitive names (`int`, `float`,
 // `bool`, `byte`); a method call on a primitive-typed receiver qualifies
-// through that name. Empty string for any non-primitive arm — those go
-// through the regular struct-name path.
-export function primitiveExtensionTypeName(t MaxonType) returns String
+// through that name. Throws `NotPrimitiveExtension.notPrimitive` for any
+// non-primitive arm — callers use `if let` to take the primitive-extension
+// dispatch path and fall through to the regular struct-name path otherwise.
+export function primitiveExtensionTypeName(t MaxonType) returns String throws NotPrimitiveExtension
 	return match t 'p'
 		integer gives "int"
 		float gives "float"
 		boolean gives "bool"
 		string gives "String"
-		named to interface gives ""
+		default throws NotPrimitiveExtension.notPrimitive
 	end 'p'
 end 'primitiveExtensionTypeName'
 
@@ -4183,31 +4224,26 @@ end 'primitiveExtensionTypeName'
 // returning the extension type name. Bridges typealias-narrowed receivers
 // (`Byte` = `byte(0 to u8.max)`, `Integer` = `int(i64.min to i64.max)`) to
 // the lowercase extension names registered by stdlib/PrimitiveExtensions.
-// Returns "" when the receiver is a struct, enum, interface, or genuinely
-// non-primitive named type.
-export function primitiveExtensionTypeNameWithProject(project Project, t MaxonType) returns String
-	let direct = primitiveExtensionTypeName(t)
-	if not direct.isEmpty() 'haveDirect'
+// Throws `NotPrimitiveExtension.notPrimitive` when the receiver is a
+// struct, enum, interface, or genuinely non-primitive named type.
+export function primitiveExtensionTypeNameWithProject(project Project, t MaxonType) returns String throws NotPrimitiveExtension
+	if let direct = try primitiveExtensionTypeName(t) 'haveDirect'
 		return direct
 	end 'haveDirect'
 	// Named arm: probe the resolved typealiases sidecar. The StdType the
 	// alias resolves to determines the extension family. Non-named arms
 	// (boolean/integer/float/string/function/typeParameter/genericInstance/
-	// interface/unresolved) were already handled by `primitiveExtensionTypeName`
-	// above or fall through to "" because they can't be the LHS of a typealias
-	// declaration that names a primitive.
+	// interface/unresolved) were already rejected by `primitiveExtensionTypeName`
+	// above; they can't be the LHS of a typealias declaration that names a
+	// primitive.
 	let name = match t 'getName'
 		named(id) gives project.typeNames.get(id)
-		boolean to string gives ""
-		function to interface gives ""
+		default throws NotPrimitiveExtension.notPrimitive
 	end 'getName'
-	if name.isEmpty() 'notNamed'
-		return ""
-	end 'notNamed'
 	if not project.typealiases.contains(name) 'notTypealias'
-		return ""
+		throw NotPrimitiveExtension.notPrimitive
 	end 'notTypealias'
-	let stdType = try project.typealiases.get(name) otherwise return ""
+	let stdType = try project.typealiases.get(name) otherwise throw NotPrimitiveExtension.notPrimitive
 	return match stdType.rawValue.castCategory 'cat'
 		int gives "int"
 		byte gives "byte"
@@ -4216,6 +4252,10 @@ export function primitiveExtensionTypeNameWithProject(project Project, t MaxonTy
 		string gives "String"
 	end 'cat'
 end 'primitiveExtensionTypeNameWithProject'
+
+export enum NotPrimitiveExtension implements Error
+	notPrimitive
+end 'NotPrimitiveExtension'
 
 // Pick the diagnostic-friendly name for a MaxonType in an E3005 error.
 // When both endpoints of a mismatch live in the primitive numeric/bool
@@ -4292,12 +4332,11 @@ function functionIsGenericForLowering(project Project, func IrFunction) returns 
 			return true
 		end 'hit'
 	end 'eachParam'
-	let recvType = enclosingTypeName(project, name: func.name)
-	if recvType.isEmpty() 'noRecv'
-		return false
-	end 'noRecv'
-	let params = project.typeParameters.getParamNames(recvType)
-	return params.count() > 0
+	if let recvType = try enclosingTypeName(project, name: func.name) 'haveRecv'
+		let params = project.typeParameters.getParamNames(recvType)
+		return params.count() > 0
+	end 'haveRecv'
+	return false
 end 'functionIsGenericForLowering'
 
 // True iff a `MaxonType` mentions `typeParameter` anywhere in its tree.
@@ -4321,23 +4360,21 @@ end 'maxonTypeMentionsTypeParam'
 // none of the latter — every generic that needs constraints declares them
 // at the type level.
 function functionHasWhereClausesForLowering(project Project, func IrFunction) returns bool
-	let recvType = enclosingTypeName(project, name: func.name)
-	if recvType.isEmpty() 'noRecv'
-		return false
-	end 'noRecv'
-	for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
-		let d = try project.typeParameters.declaringTypeNames.get(i) otherwise ""
-		if d == recvType 'match'
-			let cs = project.typeParameters.getConstraints(i)
-			if cs.count() > 0 'hasConstraint'
-				return true
-			end 'hasConstraint'
-		end 'match'
-	end 'scan'
+	if let recvType = try enclosingTypeName(project, name: func.name) 'haveRecv'
+		for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
+			let d = try project.typeParameters.declaringTypeNames.get(i) otherwise ""
+			if d == recvType 'match'
+				let cs = project.typeParameters.getConstraints(i)
+				if cs.count() > 0 'hasConstraint'
+					return true
+				end 'hasConstraint'
+			end 'match'
+		end 'scan'
+	end 'haveRecv'
 	return false
 end 'functionHasWhereClausesForLowering'
 
-function enclosingTypeName(project Project, name String) returns String
+function enclosingTypeName(project Project, name String) returns String throws EnclosingTypeError
 	let bytes = name.toByteArray()
 	let dotByte = 0x2E as byte
 	var lastDot = -1
@@ -4351,27 +4388,28 @@ function enclosingTypeName(project Project, name String) returns String
 		i = i - 1
 	end 'scan'
 	if lastDot < 0 'noDot'
-		return ""
+		throw EnclosingTypeError.notAMethod
 	end 'noDot'
 	let prefixBytes = try bytes.slice(0, endIndex: lastDot) otherwise panic("invariant: 0 <= lastDot <= bytes.count() but slice failed")
 	let prefix = String.from(prefixBytes)
-	if project.structTypes.contains(prefix) 'isType'
-		return prefix
-	end 'isType'
-	return ""
+	if not project.structTypes.contains(prefix) 'notRegistered'
+		throw EnclosingTypeError.notAMethod
+	end 'notRegistered'
+	return prefix
 end 'enclosingTypeName'
 
 // Return the runtime helper-function name for a `__ManagedMemory.METHOD`
-// builtin, or "" if the method is handled inline (length / capacity / ...)
-// or has no helper-backed lowering (makeCharFromBytes — panic stub). The
-// runtime helpers live in runtime.std and are responsible for bounds
-// checking + returning a non-zero variant ordinal in the secondary error
-// register (RDX/X1) on failure (sentinel-zero primary return).
+// builtin. Throws `ManagedMemHelperError.noHelper` when the method is
+// handled inline (length / capacity / ...) or has no helper-backed lowering
+// (makeCharFromBytes — panic stub). The runtime helpers live in runtime.std
+// and are responsible for bounds checking + returning a non-zero variant
+// ordinal in the secondary error register (RDX/X1) on failure (sentinel-zero
+// primary return).
 // Phase 11.0 step 8b helpers (chaseTypealiasInQualifiedCallee, ...) live in
 // MaxonDialect.maxon so both TypeResolution and lowering apply the same
 // canonicalization to qualified callee names.
 
-function managedMemHelperFor(methodName String) returns String
+function managedMemHelperFor(methodName String) returns String throws ManagedMemHelperError
 	if methodName == "setLength" 'mSetLen'
 		return "__managed_mem_set_length"
 	end 'mSetLen'
@@ -4408,8 +4446,12 @@ function managedMemHelperFor(methodName String) returns String
 	if methodName == "create" 'mCreate'
 		return "__managed_mem_create"
 	end 'mCreate'
-	return ""
+	throw ManagedMemHelperError.noHelper
 end 'managedMemHelperFor'
+
+enum ManagedMemHelperError implements Error
+	noHelper
+end 'ManagedMemHelperError'
 
 // Multi-value-return error ABI: which `__managed_mem_*` helpers actually
 // throw (i.e. write the error flag in RDX/X1). Throwing helpers must be
@@ -4427,18 +4469,23 @@ function managedMemHelperThrows(methodName String) returns bool
 	return true
 end 'managedMemHelperThrows'
 
-// Strip a leading `prefix` from `s` and return the remainder, or "" when
-// the string doesn't begin with prefix. Used by static-method dispatch
-// (`__ManagedMemory.create(...)`) to recover the bare method name.
-function stripPrefixOrEmpty(s String, prefix String) returns String
+// Strip a leading `prefix` from `s` and return the remainder. Throws
+// `StripPrefixError.noMatch` when the string doesn't begin with prefix.
+// Used by static-method dispatch (`__ManagedMemory.create(...)`) to
+// recover the bare method name.
+function stripPrefix(s String, prefix String) returns String throws StripPrefixError
 	if not s.startsWith(prefix) 'noMatch'
-		return ""
+		throw StripPrefixError.noMatch
 	end 'noMatch'
 	let bytes = s.toByteArray()
 	let prefixLen = prefix.byteLength()
 	let suffixBytes = try bytes.slice(prefixLen, endIndex: bytes.count()) otherwise panic("invariant: startsWith(prefix) but slice(prefixLen, end) failed")
 	return String.from(suffixBytes)
-end 'stripPrefixOrEmpty'
+end 'stripPrefix'
+
+enum StripPrefixError implements Error
+	noMatch
+end 'StripPrefixError'
 
 // --- NameToValueIdMap ------------------------------------------------------
 //

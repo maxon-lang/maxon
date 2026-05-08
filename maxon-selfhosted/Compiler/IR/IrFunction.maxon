@@ -5,6 +5,18 @@
 // spillSize, and callee-saved registers are zero/empty-initialized and filled
 // in by the appropriate pass.
 
+// Sum-typed encoding of an optional `throws E` clause on a function or
+// interface-method signature. `none` means non-throwing; `throwing(name)`
+// carries the bare error-enum name. Replaces an earlier `String` field where
+// `""` was the sentinel for "no clause" — the union makes the absent state
+// structurally distinct from a present-but-empty name.
+export union ThrowsClause
+	none
+	throwing(name String)
+end 'ThrowsClause'
+
+export typealias ThrowsClauseArray = Array with ThrowsClause
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	export var name String
@@ -41,11 +53,12 @@ export type IrFunction
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType MaxonReturnType
 	export var maxonParamTypes MaxonTypeArray
-	// Bare error-enum name from the function's `throws E` clause, or empty
-	// string for non-throwing functions. Recorded by the parser at decl time;
-	// Phase 4 of the interfaces plan will read this to drive error-flag ABI
-	// lowering. Stdlib-restored and synthesized helpers default to empty.
-	export var throwsTypeName String
+	// `throws E` clause from the function declaration. `ThrowsClause.none`
+	// for non-throwing functions; `ThrowsClause.throwing(name)` carries the
+	// bare error-enum name. Recorded by the parser at decl time; Phase 4 of
+	// the interfaces plan reads this to drive error-flag ABI lowering.
+	// Stdlib-restored and synthesized helpers default to `ThrowsClause.none`.
+	export var throwsTypeName ThrowsClause
 	// Persistent symbol table for this function. The parser hands this off
 	// when parsing completes. Today it carries the flat declare/lookup state
 	// at end-of-parse; future iterations will grow a nested tree keyed on
@@ -109,7 +122,7 @@ export type IrFunction
 	// `global` — synthesized functions that never go through the parser
 	// stay file-private to their (empty) source path, which keeps stray
 	// helpers from being callable cross-file by accident.
-	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber, throwsTypeName String = "") returns IrFunction
+	export static function create(name String, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -144,7 +157,7 @@ export type IrFunction
 	// constructors are used by stdlib-cache restore and by passes that
 	// synthesize helper functions; both want the function callable from
 	// anywhere, so visibility defaults to `global`.
-	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName String = "") returns IrFunction
+	export static function createFromStd(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",

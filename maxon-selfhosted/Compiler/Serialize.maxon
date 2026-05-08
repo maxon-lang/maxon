@@ -11,29 +11,84 @@
 // panicCorruptCache branch is reachable only when raw bytes name a variant
 // that no longer exists (e.g. across a cache-version skew).
 
-export function writeString(buf ByteArray, s String)
+// Step 8: a length-0 prefix in the on-disk stream means the writer either
+// fed `writeString` an empty value (a writer bug — empty cache field values
+// must route through `writeOptionalString` instead) or the cache file is
+// corrupt. Both surface as `CacheCorruption.invalidEncoding`; the cache
+// driver catches the throw, logs it, and falls back to the cold path.
+export function writeString(buf ByteArray, s String) throws CacheCorruption
 	let bytes = s.toByteArray()
+	if bytes.count() == 0 'mandatoryAbsent'
+		throw CacheCorruption.invalidEncoding
+	end 'mandatoryAbsent'
 	writeDword(buf, value: bytes.count())
 	buf.append(bytes)
 end 'writeString'
 
-export function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset)
+export function readString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset) throws CacheCorruption
 	let len = readDword(buf, offset: offset)
+	if len == 0 'mandatoryAbsent'
+		throw CacheCorruption.invalidEncoding
+	end 'mandatoryAbsent'
 	var pos = offset + 4
-
-	if len == 0 'empty'
-		return ("", pos)
-	end 'empty'
-
 	let endPos = pos + len
 	var bytes = ByteArray.create()
 	bytes.reserve(len)
 
 	while pos < endPos 'copy'
-		let b = try buf.get(pos) otherwise panic("readString: pos < endPos just succeeded but buf.get({pos}) failed (buf.count={buf.count()}, endPos={endPos})")
+		let b = try buf.get(pos) otherwise throw CacheCorruption.invalidEncoding
 		bytes.push(b)
 		pos = pos + 1
 	end 'copy'
 
 	return (String.from(bytes), endPos)
 end 'readString'
+
+// Errors raised by the cache reader/writer when reading a tagged
+// optional-string field. The two variants intentionally have different
+// meanings so call sites can distinguish a *legitimately absent* value
+// (`absent`, tag == 0) from a *corrupt* on-disk encoding (`invalidEncoding`,
+// any other unexpected tag, or a truncated payload). Cache corruption is a
+// real-world failure mode (interrupted write, format skew across compiler
+// versions, partial copy of a stale cache), not a programmer bug. Callers
+// catch the throw, log a diagnostic, and either return an invalid
+// `StdlibCacheResult` (read path) or skip persisting the cache (write
+// path). The build itself still completes via the cold path.
+//
+// Maxon's `throws` clause accepts a single type, so both variants live in
+// one union here rather than as separate enum types — match arms still
+// pull them apart by name at the call site.
+export union CacheCorruption implements Error
+	absent
+	invalidEncoding
+end 'CacheCorruption'
+
+// Tag-prefixed encoding for an `Option<String>`-shaped on-disk value:
+//   - tag = 0 means absent (no length prefix follows).
+//   - tag = 1 means present, followed by a normal `writeString` (length + bytes).
+// Used by sum-typed cache fields (ThrowsClause, ParentWitnessLabel,
+// BuiltinArrayLiteralName, …) so a length-0 string never doubles as an
+// "absent" marker.
+export function writeOptionalString(buf ByteArray, present bool, value String) throws CacheCorruption
+	if not present 'absent'
+		buf.push(0 as byte)
+		return
+	end 'absent'
+	buf.push(1 as byte)
+	try writeString(buf, s: value)
+end 'writeOptionalString'
+
+// Companion to `writeOptionalString`. Reads the 1-byte tag, then either
+// throws `CacheCorruption.absent` for tag=0, returns the string for tag=1,
+// or throws `CacheCorruption.invalidEncoding` for any other tag (including
+// OOB offsets and truncated payloads).
+export function readOptionalString(buf ByteArray, offset ByteOffset) returns (String, ByteOffset) throws CacheCorruption
+	let tag = try buf.get(offset) otherwise throw CacheCorruption.invalidEncoding
+	if tag == 0 'absent'
+		throw CacheCorruption.absent
+	end 'absent'
+	if tag != 1 'corruptTag'
+		throw CacheCorruption.invalidEncoding
+	end 'corruptTag'
+	return try readString(buf, offset: offset + 1)
+end 'readOptionalString'

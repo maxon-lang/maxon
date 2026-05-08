@@ -530,23 +530,34 @@ function substituteNamedId(project Project, id TypeNameId, bindingNames StringAr
 	return MaxonType.named(id)
 end 'substituteNamedId'
 
-// `throwsTypeName` is a bare string (the parser stored it that way). When
-// the name matches a parameter binding, we resolve through the binding's
-// concrete type and re-stringify; otherwise pass through unchanged. The
-// empty string (non-throwing methods) bypasses the lookup loop because
-// no binding name is ever empty.
-function substituteThrowsName(throwsTypeName String, bindingNames StringArray, bindingTypes MaxonTypeArray, project Project) returns String
-	if throwsTypeName.isEmpty() 'noThrow'
-		return ""
+// When the name carried by a `ThrowsClause.throwing(name)` matches a
+// parameter binding, resolve through the binding's concrete type and rebuild
+// the `throwing` arm with the substituted name. Non-throwing methods
+// (`ThrowsClause.none`) pass through unchanged. If the substituted type has
+// no name, fall back to the original clause to avoid synthesising a
+// `throwing("")` sentinel.
+function substituteThrowsName(throwsTypeName ThrowsClause, bindingNames StringArray, bindingTypes MaxonTypeArray, project Project) returns ThrowsClause
+	let name = match throwsTypeName 'unwrap'
+		none gives ""
+		throwing(n) gives n
+	end 'unwrap'
+	if name.isEmpty() 'noThrow'
+		return ThrowsClause.none
 	end 'noThrow'
 	for i in 0 upto bindingNames.count() 'lookup'
 		let bn = try bindingNames.get(i) otherwise panic("substituteThrowsName: bindingNames.get OOB at {i}")
-		if bn == throwsTypeName 'hit'
+		if bn == name 'hit'
 			let bt = try bindingTypes.get(i) otherwise panic("substituteThrowsName: bindingTypes.get OOB at {i}")
-			return bt.nameOrEmpty(project)
+			let substituted = bt.nameOrEmpty(project)
+			if substituted.isEmpty() 'unnamed'
+				// Anonymous binding type — fall back to the unsubstituted clause
+				// rather than introducing a `throwing("")` sentinel.
+				return throwsTypeName
+			end 'unnamed'
+			return ThrowsClause.throwing(substituted)
 		end 'hit'
 	end 'lookup'
-	return throwsTypeName
+	return ThrowsClause.throwing(name)
 end 'substituteThrowsName'
 
 // --- Struct type resolution ---
@@ -974,7 +985,7 @@ end 'validateCompareOp'
 function rewriteUnresolvedOpsPerFunction(project Project, module MaxonModule, fallbackFilePath FilePath)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("invariant: funcIdx < count but get failed")
-		let funcFilePathStr = entryBlockFilePath(module, func: func)
+		let funcFilePathStr = try entryBlockFilePath(module, func: func) otherwise ""
 		let funcFilePath = filePathFromString(funcFilePathStr, fallback: fallbackFilePath)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -1159,8 +1170,7 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 	if alreadyResolved 'skip'
 		return
 	end 'skip'
-	let enumName = enumNameFromMaxonType(project, t: scrutineeType)
-	if enumName.isEmpty() 'noEnum'
+	let enumName = try enumNameFromMaxonType(project, t: scrutineeType) otherwise 'noEnum'
 		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "match scrutinee must be an enum-typed value (got non-enum type)", line: range.line, column: range.column, filePath: filePath)
 		try module.ops.set(opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
@@ -1176,23 +1186,28 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 end 'resolveOneEnumMatchArm'
 
 // Walk the (possibly chained) typealias from a MaxonType.named back to its
-// originating enum name, or "" when the named type isn't an enum.
-function enumNameFromMaxonType(project Project, t MaxonType) returns String
+// originating enum name. Throws `NotEnumError.notEnum` when the named type
+// isn't a registered enum (or when the type is a primitive / function /
+// generic / interface arm); callers use `try ... otherwise` to fall through
+// to the non-enum dispatch path.
+function enumNameFromMaxonType(project Project, t MaxonType) returns String throws NotEnumError
 	return match t 'unwrap'
-		named(id) gives enumNameFromTypeNameId(project, id: id)
-		boolean to string gives ""
-		function to unresolved gives ""
-		typeParameter to interface gives ""
+		named(id) gives try enumNameFromTypeNameId(project, id: id)
+		default throws NotEnumError.notEnum
 	end 'unwrap'
 end 'enumNameFromMaxonType'
 
-function enumNameFromTypeNameId(project Project, id TypeNameId) returns String
+function enumNameFromTypeNameId(project Project, id TypeNameId) returns String throws NotEnumError
 	let name = project.typeNames.get(id)
 	if project.enumTypes.contains(name) 'isEnum'
 		return name
 	end 'isEnum'
-	return ""
+	throw NotEnumError.notEnum
 end 'enumNameFromTypeNameId'
+
+enum NotEnumError implements Error
+	notEnum
+end 'NotEnumError'
 
 // Outcome of looking up a `topLevelConstants` entry that resolved an
 // `EnumName.case` qualified name. Bundles the raw bit pattern with the
@@ -1404,10 +1419,13 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// (`int.toString`, `bool.equals`, …). Without this, `let s = 42.toString()`
 	// records `s` as `MaxonType.unresolved` and downstream cmp dispatch
 	// (`s == "42"`) never gets rewritten to `s.equals("42")`.
-	var structName = try maxonTypeStructName(project, t: normReceiver) otherwise primitiveExtensionTypeNameWithProject(project, t: normReceiver)
-	if structName.isEmpty() 'notPrimitive'
-		return MaxonType.unresolved
-	end 'notPrimitive'
+	var structName = ""
+	if let direct = try maxonTypeStructName(project, t: normReceiver) 'haveStruct'
+		structName = direct
+	end 'haveStruct'
+	if structName.isEmpty() 'tryPrimitive'
+		structName = try primitiveExtensionTypeNameWithProject(project, t: normReceiver) otherwise return MaxonType.unresolved
+	end 'tryPrimitive'
 	let bareCallee = "{structName}.{String.from(methodName)}"
 	var qualifiedCallee = resolveOverloadFromArgs(project, bareName: bareCallee, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
 	// Mirror `resolveMethodCallSite`: fall back to an interface-extension
@@ -1417,8 +1435,7 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// downstream `p.x` field-load would fail to find a struct context.
 	if not project.funcReturnTypes.contains(qualifiedCallee) 'noDirectReturn'
 		let bareMethodName = String.from(methodName)
-		let extensionCallee = findInterfaceExtensionCallee(project, typeName: structName, methodName: bareMethodName, argTypes: argTypes)
-		if not extensionCallee.isEmpty() 'foundExt'
+		if let extensionCallee = try findInterfaceExtensionCallee(project, typeName: structName, methodName: bareMethodName, argTypes: argTypes) 'foundExt'
 			qualifiedCallee = extensionCallee
 		end 'foundExt'
 	end 'noDirectReturn'
@@ -1550,9 +1567,8 @@ function callResultType(project Project, callee ByteArray, callContext CallConte
 	let bareCallee = String.from(callee)
 	// Math primitives are inlined to a Std unary op by lowering — they have
 	// no entry in funcReturnTypes, so look up their result type directly.
-	let (_, intrinsicResultType, isMath) = mathIntrinsicTarget(bare: bareCallee)
-	if isMath 'isMath'
-		return intrinsicResultType
+	if let hit = try mathIntrinsicTarget(bare: bareCallee) 'isMath'
+		return hit.resultType
 	end 'isMath'
 	let qualifiedRaw = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
 	let qualified = resolveOverloadFromArgs(project, bareName: qualifiedRaw, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
@@ -1749,38 +1765,40 @@ end 'lookupInnerAliasOrPassThrough'
 // no generic args (non-generic struct), and the inner-alias map is empty —
 // the cheap-path for non-generic call sites pays only one map lookup.
 export function resolveCalleeParamTypeInContext(project Project, paramType MaxonType, calleeQualifiedName String, receiverType MaxonType) returns MaxonType
-	let enclosingType = enclosingTypeNameForCallee(project, callee: calleeQualifiedName)
-	if enclosingType.isEmpty() 'noEnclosing'
-		return paramType
-	end 'noEnclosing'
-	let structType = try project.structTypes.get(enclosingType) otherwise return paramType
-	let aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: structType.innerAliases)
-	let subst = buildSubstitutionForInstance(project, t: receiverType)
-	if subst.isEmpty() 'noSubst'
-		return aliasResolved
-	end 'noSubst'
-	return substituteType(project, t: aliasResolved, subst: subst)
+	if let enclosingType = try enclosingTypeNameForCallee(project, callee: calleeQualifiedName) 'haveEnclosing'
+		let structType = try project.structTypes.get(enclosingType) otherwise return paramType
+		let aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: structType.innerAliases)
+		let subst = buildSubstitutionForInstance(project, t: receiverType)
+		if subst.isEmpty() 'noSubst'
+			return aliasResolved
+		end 'noSubst'
+		return substituteType(project, t: aliasResolved, subst: subst)
+	end 'haveEnclosing'
+	return paramType
 end 'resolveCalleeParamTypeInContext'
 
-// Split `Type.method` into `Type` (or empty for free callees / non-struct
-// namespaces). Method bodies are registered as `TypeName.methodName`
-// (`Array.push`, `__ManagedMemory.length`, ...). Free functions either lack
-// a `.` (`main`) or qualify under a namespace that isn't a struct
-// (`stdlib.foo`); both cases return the empty string so downstream
-// inner-alias / self-receiver lookups skip cleanly.
-export function enclosingTypeNameForCallee(project Project, callee String) returns String
+// Split `Type.method` into `Type`. Method bodies are registered as
+// `TypeName.methodName` (`Array.push`, `__ManagedMemory.length`, ...).
+// Throws `EnclosingTypeError.notAMethod` when the callee is a free function
+// (no dot) or the prefix isn't a registered struct (e.g. namespace-qualified
+// `stdlib.foo`); callers use `if let` to take the method-on-struct path.
+export function enclosingTypeNameForCallee(project Project, callee String) returns String throws EnclosingTypeError
 	let bytes = callee.toByteArray()
 	let count = bytes.count()
 	let dotIdx = lastIndexOfDotByte(bytes)
 	if dotIdx >= count 'noDot'
-		return ""
+		throw EnclosingTypeError.notAMethod
 	end 'noDot'
 	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
 	if not project.structTypes.contains(head) 'notStruct'
-		return ""
+		throw EnclosingTypeError.notAMethod
 	end 'notStruct'
 	return head
 end 'enclosingTypeNameForCallee'
+
+export enum EnclosingTypeError implements Error
+	notAMethod
+end 'EnclosingTypeError'
 
 // First-pass: walk ops per-function and record the result type of every
 // value-producing op. Names of types that depend on receiver types
@@ -1805,7 +1823,7 @@ function buildProducerTypes(project Project, module MaxonModule, producerTypesPe
 end 'buildProducerTypes'
 
 function recordFuncOpResults(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
-	let enclosingType = enclosingTypeNameForCallee(project, callee: func.name)
+	let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
@@ -2531,17 +2549,17 @@ end 'validateRefEqOperands'
 function validateSelfFields(project Project, module MaxonModule, filePath FilePath)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateSelfFields: funcIdx OOB")
-		let typeName = enclosingTypeName(func.name)
-		if typeName.isEmpty() 'notMethod'
-			continue
-		end 'notMethod'
-		let structType = try project.structTypes.get(typeName) otherwise continue
-		validateFuncSelfFields(project, module: module, func: func, typeName: typeName, structType: structType, filePath: filePath)
+		if let typeName = try enclosingTypeName(func.name) 'isMethod'
+			let structType = try project.structTypes.get(typeName) otherwise continue
+			validateFuncSelfFields(project, module: module, func: func, typeName: typeName, structType: structType, filePath: filePath)
+		end 'isMethod'
 	end 'eachFunc'
 end 'validateSelfFields'
 
-function enclosingTypeName(funcName String) returns String
-	let dotIdx = try funcName.findLast(".") otherwise return ""
+// Throws when the function name has no `.` (free function rather than a
+// method). Caller uses `if let` to take the method-on-struct path.
+function enclosingTypeName(funcName String) returns String throws EnclosingTypeError
+	let dotIdx = try funcName.findLast(".") otherwise throw EnclosingTypeError.notAMethod
 	return funcName.slice(funcName.startIndex(), endIndex: dotIdx)
 end 'enclosingTypeName'
 
@@ -3282,8 +3300,7 @@ function checkCallVisibility(project Project, callee ByteArray, callContext Call
 	let bareCallee = String.from(callee)
 	// Math intrinsics are inlined and have no funcReturnTypes entry; they
 	// are always reachable so visibility doesn't apply.
-	let (_, _, isMath) = mathIntrinsicTarget(bare: bareCallee)
-	if isMath 'mathIntrinsic'
+	if isMathIntrinsic(bareCallee) 'mathIntrinsic'
 		return
 	end 'mathIntrinsic'
 	if isQualifiedCallContext(callContext) 'isQualified'
@@ -3428,7 +3445,7 @@ function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFu
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("resolveAllCalls: funcIdx < count but get failed")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveAllCalls: producerTypesPerFunc.get({funcIdx}) failed")
-		let enclosingType = enclosingTypeNameForCallee(project, callee: func.name)
+		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCalls: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
@@ -3516,10 +3533,13 @@ function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArra
 	// name (`int`, `float`, `bool`, `byte`). Mirrors the dispatch
 	// fallback in lowerMethodCall so resolvedCallees / callParamTypes
 	// get populated for every primitive-extension call site.
-	let receiverStructName = try maxonTypeStructName(project, t: receiverType) otherwise primitiveExtensionTypeNameWithProject(project, t: receiverType)
-	if receiverStructName.isEmpty() 'notPrimitive'
-		return
-	end 'notPrimitive'
+	var receiverStructName = ""
+	if let direct = try maxonTypeStructName(project, t: receiverType) 'haveStruct'
+		receiverStructName = direct
+	end 'haveStruct'
+	if receiverStructName.isEmpty() 'tryPrimitive'
+		receiverStructName = try primitiveExtensionTypeNameWithProject(project, t: receiverType) otherwise return
+	end 'tryPrimitive'
 	let bareMethodName = String.from(methodName)
 	let baseQualified = "{receiverStructName}.{bareMethodName}"
 	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
@@ -3531,8 +3551,7 @@ function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArra
 	// can't capture a result for — leaving the call's resultId undefined
 	// and tripping the SSA-coloring "no coloring assignment" panic.
 	if not project.funcSignatures.contains(resolved) 'noDirectSig'
-		let extensionCallee = findInterfaceExtensionCallee(project, typeName: receiverStructName, methodName: bareMethodName, argTypes: argTypes)
-		if not extensionCallee.isEmpty() 'foundExt'
+		if let extensionCallee = try findInterfaceExtensionCallee(project, typeName: receiverStructName, methodName: bareMethodName, argTypes: argTypes) 'foundExt'
 			resolved = extensionCallee
 		end 'foundExt'
 	end 'noDirectSig'
@@ -3544,12 +3563,13 @@ end 'resolveMethodCallSite'
 
 // Walk every conformance whose typeName matches the receiver and probe
 // `<InterfaceName>.<methodName>` against `funcSignatures`. Returns the
-// first registered qualified name; "" when no conforming interface
-// declares this extension method. Conformance lookup hits the same
-// registry that `typeConformsTo` uses, so transitive entries seeded by
-// `validateConformances` (`B implements A` brings A's extensions to B)
-// are visible without re-walking the interface-extends-interface chain.
-function findInterfaceExtensionCallee(project Project, typeName String, methodName String, argTypes MaxonTypeArray) returns String
+// first registered qualified name; throws `InterfaceExtensionLookupError.notFound`
+// when no conforming interface declares this extension method. Conformance
+// lookup hits the same registry that `typeConformsTo` uses, so transitive
+// entries seeded by `validateConformances` (`B implements A` brings A's
+// extensions to B) are visible without re-walking the
+// interface-extends-interface chain.
+function findInterfaceExtensionCallee(project Project, typeName String, methodName String, argTypes MaxonTypeArray) returns String throws InterfaceExtensionLookupError
 	let total = project.conformances.count()
 	for i in 0 upto total 'eachConf'
 		let (confType, ifaceName, _) = project.conformances.get(i)
@@ -3562,8 +3582,12 @@ function findInterfaceExtensionCallee(project Project, typeName String, methodNa
 			return resolvedCandidate
 		end 'hit'
 	end 'eachConf'
-	return ""
+	throw InterfaceExtensionLookupError.notFound
 end 'findInterfaceExtensionCallee'
+
+enum InterfaceExtensionLookupError implements Error
+	notFound
+end 'InterfaceExtensionLookupError'
 
 // Build the substituted paramTypes vector for one call site by running
 // every signature paramType through the existing

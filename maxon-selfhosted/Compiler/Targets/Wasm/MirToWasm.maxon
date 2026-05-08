@@ -65,19 +65,19 @@ typealias WasmDataChunkArray = Array with WasmDataChunk
 // those lookups during emission.
 type WasmFuncSigs
 	export var returnTypes StdReturnTypeArray
-	export var throwsTypeNames StringArray
+	export var throwsTypeNames ThrowsClauseArray
 	export var nameIndex FuncNameIndexMap
 
 	export static function create() returns WasmFuncSigs
-		return Self{returnTypes: StdReturnTypeArray.create(), throwsTypeNames: StringArray.create(), nameIndex: FuncNameIndexMap.create()}
+		return Self{returnTypes: StdReturnTypeArray.create(), throwsTypeNames: ThrowsClauseArray.create(), nameIndex: FuncNameIndexMap.create()}
 	end 'create'
 
-	// Append `name`, its return type, and its throws-type-name at the next
+	// Append `name`, its return type, and its throws clause at the next
 	// index. Caller must also push the same name onto the parallel
 	// funcNames StringArray (used by the type/import sections that walk
-	// functions in order); this method records the index lookup. An empty
-	// `throwsTypeName` means the callee is non-throwing.
-	export function pushFunc(name String, returnType StdReturnType, throwsTypeName String = "")
+	// functions in order); this method records the index lookup.
+	// `ThrowsClause.none` means the callee is non-throwing.
+	export function pushFunc(name String, returnType StdReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
 		let idx = self.returnTypes.count() as MachineWord
 		self.returnTypes.push(returnType)
 		self.throwsTypeNames.push(throwsTypeName)
@@ -97,8 +97,11 @@ type WasmFuncSigs
 		if idx == u64.max 'notFound'
 			return false
 		end 'notFound'
-		let tn = try self.throwsTypeNames.get(idx) otherwise ""
-		return tn != ""
+		let tn = try self.throwsTypeNames.get(idx) otherwise ThrowsClause.none
+		return match tn 'kind'
+			none gives false
+			throwing gives true
+		end 'kind'
 	end 'throws'
 end 'WasmFuncSigs'
 
@@ -119,21 +122,21 @@ end 'WasmCallFixup'
 
 export typealias WasmCallFixupArray = Array with WasmCallFixup
 
-// Per-function WASM emission result for caching. `throwsTypeName` is the
-// bare error-enum name from the source `throws E` clause, mirroring
-// IrFunction.throwsTypeName. Empty string means non-throwing. Throwing
-// functions append an extra i64 result to their wasm signature (the
-// error flag) and use `errorReturn` rather than plain `return`.
+// Per-function WASM emission result for caching. `throwsTypeName` mirrors
+// IrFunction.throwsTypeName as a `ThrowsClause`: `none` means non-throwing,
+// `throwing(name)` carries the bare error-enum name. Throwing functions
+// append an extra i64 result to their wasm signature (the error flag) and
+// use `errorReturn` rather than plain `return`.
 export type WasmObjectFunction
 	export var name String
 	export var returnType StdReturnType
 	export var paramCount ParamCount
 	export var paramTypes StdTypeArray
-	export var throwsTypeName String
+	export var throwsTypeName ThrowsClause
 	export var body ByteArray
 	export var callFixups WasmCallFixupArray
 
-	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName String = "") returns WasmObjectFunction
+	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none) returns WasmObjectFunction
 		return Self{
 			name: name,
 			returnType: returnType,
@@ -363,7 +366,11 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
-		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: func.throwsTypeName != "")
+		let funcThrows = match func.throwsTypeName 'kind'
+			none gives false
+			throwing gives true
+		end 'kind'
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: funcThrows)
 		// Module-function types occupy fixed positions in the type table
 		// because the function section indexes into them positionally;
 		// we still record them in the dedup map so a downstream indirect
@@ -381,7 +388,11 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			continue
 		end 'skip'
 
-		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: func.throwsTypeName != "")
+		let funcThrows = match func.throwsTypeName 'kind'
+			none gives false
+			throwing gives true
+		end 'kind'
+		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: funcThrows)
 		let myIdx = types.count() as MachineWord
 		types.push(typeBytes)
 		if not typeIndexMap.contains(typeBytes) 'recordDedup'
@@ -681,7 +692,10 @@ type WasmFunctionLowering
 		func = srcFunc
 		body = ByteArray.create()
 		isVoidReturn = stdReturnTypeIsVoid(srcFunc.returnType)
-		funcThrows = srcFunc.throwsTypeName != ""
+		funcThrows = match srcFunc.throwsTypeName 'kind'
+			none gives false
+			throwing gives true
+		end 'kind'
 		callFixups = fixups
 
 		// Build the per-function blockId → blockRefs-index map up front.

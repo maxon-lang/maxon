@@ -87,13 +87,14 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 end 'emitWitnessForConformance'
 
 // Pick the first `extends` parent the conforming type also implements; the
-// returned label is the witness for that parent conformance. Empty string
-// means "no recordable parent" (no extends, or the parent isn't itself
-// listed as a separate conformance for this type yet). Phase 11.3 records
-// the parent label for 11.4's lookup but does NOT emit a relocation for
-// it: the rdata→rdata 64-bit reloc kind isn't in the writers yet, and the
-// header slot stays zero on disk.
-function pickParentWitnessLabel(project Project, iface IrInterface, typeName String) returns String
+// returned `ParentWitnessLabel.present(label)` carries the witness label
+// for that parent conformance. `ParentWitnessLabel.none` means "no
+// recordable parent" (no extends, or the parent isn't itself listed as a
+// separate conformance for this type yet). Phase 11.3 records the parent
+// label for 11.4's lookup but does NOT emit a relocation for it: the
+// rdata→rdata 64-bit reloc kind isn't in the writers yet, and the header
+// slot stays zero on disk.
+function pickParentWitnessLabel(project Project, iface IrInterface, typeName String) returns ParentWitnessLabel
 	for i in 0 upto iface.extendsNames.count() 'eachParent'
 		let parentName = try iface.extendsNames.get(i) otherwise panic("pickParentWitnessLabel: extendsNames.get OOB at {i}")
 		if not project.conformances.contains(typeName, interfaceName: parentName) 'notConformed'
@@ -101,9 +102,9 @@ function pickParentWitnessLabel(project Project, iface IrInterface, typeName Str
 		end 'notConformed'
 		let mangledType = sanitizeIdentifier(typeName)
 		let mangledIface = sanitizeIdentifier(parentName)
-		return "__witness_{mangledType}_{mangledIface}"
+		return ParentWitnessLabel.present("__witness_{mangledType}_{mangledIface}")
 	end 'eachParent'
-	return ""
+	return ParentWitnessLabel.none
 end 'pickParentWitnessLabel'
 
 // Resolve a bare type name to a representative MaxonType for sizing. Falls

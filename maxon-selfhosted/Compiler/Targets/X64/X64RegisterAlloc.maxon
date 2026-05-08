@@ -2043,10 +2043,12 @@ export type X64RegAllocTarget implements RegAllocTarget
 		return x64Op.rawValue.implicitGprReads
 	end 'getImplicitGprReads'
 
-	function getCallConvGprOrd(index RegInt) returns RegInt
+	function getCallConvGprOrd(index RegInt) returns CallConvSlot
 		let regs = [1, 2, 0, 9, 6, 7, 3]
-		// Sentinel: -1 means "index past the calling-convention register list"; caller handles overflow-to-stack.
-		return try regs.get(index) otherwise -1
+		if let ord = try regs.get(index) 'inRange'
+			return CallConvSlot.gpr(ord)
+		end 'inRange'
+		return CallConvSlot.spilled
 	end 'getCallConvGprOrd'
 
 	// --- Liveness helpers ---

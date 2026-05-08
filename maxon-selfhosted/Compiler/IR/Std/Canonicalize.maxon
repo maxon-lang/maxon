@@ -29,15 +29,24 @@ function constMapGet(map ValueIdArray, valueId ValueId) returns ParsedInt
 end 'constMapGet'
 
 // Phase 11.6 descriptor-fold helper map. ValueId → rdata label of the
-// `loadLayoutDescriptor` op that produced it. Stored as a parallel sentinel
-// array so a missing entry reads back as "" (descriptor source unknown).
+// `loadLayoutDescriptor` op that produced it. Stored as a parallel array;
+// slots for ValueIds we haven't seen carry the empty string as a "no entry"
+// marker, and `descLabelGet` throws to communicate that to callers.
 typealias DescriptorLabelMap = Array with String
 
-function descLabelGet(map DescriptorLabelMap, valueId ValueId) returns String
+enum DescLabelError implements Error
+	notRecorded
+end 'DescLabelError'
+
+function descLabelGet(map DescriptorLabelMap, valueId ValueId) returns String throws DescLabelError
 	if valueId >= map.count() 'outOfBounds'
-		return ""
+		throw DescLabelError.notRecorded
 	end 'outOfBounds'
-	return try map.get(valueId) otherwise ""
+	let label = try map.get(valueId) otherwise throw DescLabelError.notRecorded
+	if label.isEmpty() 'noEntry'
+		throw DescLabelError.notRecorded
+	end 'noEntry'
+	return label
 end 'descLabelGet'
 
 function descLabelSet(map DescriptorLabelMap, valueId ValueId, label String)
@@ -176,7 +185,10 @@ function recordDescriptorLoad(opIdx OpIndex, resultId ValueId, label String, des
 end 'recordDescriptorLoad'
 
 function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex, resultId ValueId, descAddrId ValueId, field DescriptorField, constMap ValueIdArray, descMap DescriptorLabelMap, dstBlock IrBlock)
-	let label = descLabelGet(descMap, valueId: descAddrId)
+	let label = try descLabelGet(descMap, valueId: descAddrId) otherwise 'unknownSource'
+		dstBlock.opRefs.append(opIdx)
+		return
+	end 'unknownSource'
 	let foldedVal = tryReadDescriptorField(project, label: label, field: field)
 	if foldedVal == CONST_UNKNOWN 'cannotFold'
 		dstBlock.opRefs.append(opIdx)

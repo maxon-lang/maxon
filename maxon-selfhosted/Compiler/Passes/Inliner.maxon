@@ -274,43 +274,39 @@ function callSiteHasConcreteDescriptorArg(module StdModule, project Project, arg
 end 'callSiteHasConcreteDescriptorArg'
 
 function argDefinedAsConcreteDescriptor(module StdModule, project Project, argId ValueId) returns bool
-	let label = findLoadLayoutDescriptorLabel(module, valueId: argId)
-	if label.isEmpty() 'unknown'
-		return false
-	end 'unknown'
-	return project.staticRdataValues.contains(label)
+	if let label = try findLoadLayoutDescriptorLabel(module, valueId: argId) 'haveLabel'
+		return project.staticRdataValues.contains(label)
+	end 'haveLabel'
+	return false
 end 'argDefinedAsConcreteDescriptor'
 
-function findLoadLayoutDescriptorLabel(module StdModule, valueId ValueId) returns String
+function findLoadLayoutDescriptorLabel(module StdModule, valueId ValueId) returns String throws DescriptorLabelError
 	for opIdx in 0 upto module.ops.count() 'each'
 		let op = try module.ops.get(opIdx) otherwise continue
-		let label = match op 'shape'
-			arith gives ""
-			control gives ""
-			call gives ""
-			memory gives ""
-			system(s) gives matchLayoutLoad(s, valueId: valueId)
-		end 'shape'
-		if not label.isEmpty() 'hit'
+		if let label = try matchLayoutLoad(op, valueId: valueId) 'hit'
 			return label
 		end 'hit'
 	end 'each'
-	return ""
+	throw DescriptorLabelError.notFound
 end 'findLoadLayoutDescriptorLabel'
 
-function matchLayoutLoad(op StdSystemOp, valueId ValueId) returns String
-	return match op 'shape'
-		loadLayoutDescriptor(resultId, label) gives label if resultId == valueId else ""
-		syscall to storeIndirect gives ""
-		drop gives ""
-		osAllocPages to osLockRelease gives ""
-		boxValue gives ""
-		unboxValue gives ""
-		loadWitnessTable gives ""
-		descriptorField gives ""
-		witnessMethod gives ""
-		dropTypeParam gives ""
+enum DescriptorLabelError implements Error
+	notFound
+end 'DescriptorLabelError'
+
+function matchLayoutLoad(op StdOp, valueId ValueId) returns String throws DescriptorLabelError
+	let sys = match op 'outer'
+		system(s) gives s
+		default throws DescriptorLabelError.notFound
+	end 'outer'
+	let (resultId, label) = match sys 'shape'
+		loadLayoutDescriptor(rid, l) gives (rid, l)
+		default throws DescriptorLabelError.notFound
 	end 'shape'
+	if resultId != valueId 'mismatch'
+		throw DescriptorLabelError.notFound
+	end 'mismatch'
+	return label
 end 'matchLayoutLoad'
 
 // Closure-literal heuristic: a call site is closure-literal-shaped when
@@ -748,12 +744,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	// Phase 2: replace the call op in caller's block.opRefs with the
 	// rewritten body. Find the call's position first; insert is at the
 	// same position so the splice is visually "in place".
-	let posInBlock = findOpPosition(block: block, opIdx: opIdx)
-	if posInBlock < 0 'notFound'
-		// Defensive: caller-walker found this op in this block; if the
-		// scan misses it the IR is malformed, but bail rather than panic.
-		return false
-	end 'notFound'
+	let posInBlock = try findOpPosition(block: block, opIdx: opIdx) otherwise return false
 	let removedIdx = try block.opRefs.remove(posInBlock) otherwise panic("performInline: remove at {posInBlock} failed")
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
@@ -819,10 +810,7 @@ end 'performInline'
 // from `caller.nextBlockId`; the caller's `nextBlockId` is bumped by
 // (calleeBlocks + 1) — one slot per cloned block plus the continuation.
 function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape) returns bool
-	let posInBlock = findOpPosition(block: block, opIdx: opIdx)
-	if posInBlock < 0 'notFound'
-		return false
-	end 'notFound'
+	let posInBlock = try findOpPosition(block: block, opIdx: opIdx) otherwise return false
 
 	// Phase 1: allocate fresh BlockIds for every callee block plus the
 	// continuation. Build callee-blockId → caller-blockId remap.
@@ -1588,7 +1576,12 @@ function lookupRemap(remap ValueIdArray, key ValueId) returns ValueId
 	return mapped
 end 'lookupRemap'
 
-function findOpPosition(block IrBlock, opIdx OpIndex) returns ParsedInt
+// Find the position of `opIdx` in `block.opRefs`. Throws
+// `OpPositionError.notFound` when the op isn't in the block — this is a
+// real recoverable signal because earlier transformations (a previous
+// inliner round, dead-code elimination, etc.) can have emptied the block
+// after the caller-walker recorded the (block, opIdx) pair.
+function findOpPosition(block IrBlock, opIdx OpIndex) returns ParsedInt throws OpPositionError
 	var pos = 0
 	for entry in block.opRefs 'each'
 		if entry == opIdx 'hit'
@@ -1596,8 +1589,12 @@ function findOpPosition(block IrBlock, opIdx OpIndex) returns ParsedInt
 		end 'hit'
 		pos = pos + 1
 	end 'each'
-	return -1
+	throw OpPositionError.notFound
 end 'findOpPosition'
+
+enum OpPositionError implements Error
+	notFound
+end 'OpPositionError'
 
 // Walk the callee body, append a rewritten copy of every non-param
 // non-ret op into the caller block at `insertAt`. Each op's define and

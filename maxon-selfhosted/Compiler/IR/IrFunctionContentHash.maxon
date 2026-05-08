@@ -79,7 +79,13 @@ export function computeFunctionSignatureHash(project Project, func IrFunction) r
 	h = mixString(h, s: func.namespace)
 	h = mix(h, value: func.visibility.ordinal as ContentHash)
 	h = mix(h, value: func.paramCount as ContentHash)
-	h = mixString(h, s: func.throwsTypeName)
+	// `throwsTypeName` is now sum-typed: prefix with a 0/1 tag so `none` and
+	// `throwing("")` (which shouldn't legitimately occur) hash differently
+	// from `throwing("X")`. Mirrors the pattern used by `mixMaxonReturnType`.
+	h = match func.throwsTypeName 'hash'
+		none gives mix(h, value: 0 as ContentHash)
+		throwing(n) gives mixString(mix(h, value: 1 as ContentHash), s: n)
+	end 'hash'
 	h = mixMaxonReturnType(h, project: project, ret: func.maxonReturnType)
 	for pt in func.maxonParamTypes 'eachParam'
 		h = mixMaxonType(h, project: project, t: pt)

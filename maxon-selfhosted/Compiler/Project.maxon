@@ -863,14 +863,12 @@ export type MethodNameIndex
 	// finds zero candidates and DFE drops the bodies, leaving lowering with
 	// a call to the bare unregistered name.
 	export function record(qualifiedName String)
-		let bareName = bareMethodName(qualifiedName)
-		if bareName.isEmpty() 'noDot'
-			return
-		end 'noDot'
+		let bareName = try bareMethodName(qualifiedName) otherwise return
 		recordUnderKey(qualifiedName, key: bareName)
-		let unsuffixed = stripFirstDollar(bareName)
-		if not unsuffixed.isEmpty() and unsuffixed != bareName 'alsoBare'
-			recordUnderKey(qualifiedName, key: unsuffixed)
+		if let unsuffixed = try stripFirstDollar(bareName) 'alsoBare'
+			if unsuffixed != bareName 'distinct'
+				recordUnderKey(qualifiedName, key: unsuffixed)
+			end 'distinct'
 		end 'alsoBare'
 	end 'record'
 
@@ -891,36 +889,48 @@ export type MethodNameIndex
 	end 'get'
 end 'MethodNameIndex'
 
-// Return the trailing segment of `s` (the bytes after the last '.') as a
-// fresh String, or "" when there is no dot. Used by MethodNameIndex.record
-// to split a qualified name like "Toggle.isOn" into the bare method name
-// "isOn" so it can be inserted into the index by trailing segment.
-// Strip the first `$<suffix>` from a name, returning the prefix; empty
-// when the name has no `$`. Used to dual-index overload-mangled method
-// names so `Array.contains$Element` is reachable both via the full
-// trailing segment and via the source-level `contains`.
-function stripFirstDollar(s String) returns String
+// Shared error type for the small string-splitting helpers below
+// (`stripFirstDollar`, `bareMethodName`, and `StdlibCache`'s
+// `stripFirstDollarPrefix`). Each helper throws this when the requested
+// separator (`$` or `.`) isn't found, so callers use `try ... otherwise`
+// to skip names that lack the split point rather than checking for an
+// empty-string sentinel.
+export enum NameSplitError implements Error
+	noSeparator
+end 'NameSplitError'
+
+// Strip the first `$<suffix>` from a name, returning the prefix. Throws
+// `NameSplitError.noSeparator` when the name has no `$`. Used to dual-index
+// overload-mangled method names so `Array.contains$Element` is reachable both
+// via the full trailing segment and via the source-level `contains`.
+
+function stripFirstDollar(s String) returns String throws NameSplitError
 	let bytes = s.toByteArray()
 	let dollarByte = 0x24 as byte
 	var i = 0
 	while i < bytes.count() 'scan'
-		let b = try bytes.get(i) otherwise return ""
+		let b = try bytes.get(i) otherwise panic("invariant: i < bytes.count() but get failed at {i}")
 		if b == dollarByte 'hit'
-			let head = try bytes.slice(0, endIndex: i) otherwise return ""
+			let head = try bytes.slice(0, endIndex: i) otherwise panic("invariant: 0 <= i < bytes.count() but slice failed")
 			return String.from(head)
 		end 'hit'
 		i = i + 1
 	end 'scan'
-	return ""
+	throw NameSplitError.noSeparator
 end 'stripFirstDollar'
 
-function bareMethodName(s String) returns String
+// Return the trailing segment of `s` (the bytes after the last '.') as a
+// fresh String. Throws `NameSplitError.noSeparator` when there is no dot.
+// Used by MethodNameIndex.record to split a qualified name like
+// "Toggle.isOn" into the bare method name "isOn" so it can be inserted into
+// the index by trailing segment.
+function bareMethodName(s String) returns String throws NameSplitError
 	let bytes = s.toByteArray()
 	let dotByte = 0x2E as byte
 	var lastDot = -1
 	var i = bytes.count() - 1
 	while i >= 0 'scan'
-		let b = try bytes.get(i) otherwise return ""
+		let b = try bytes.get(i) otherwise panic("invariant: i in [0, bytes.count()) but get failed at {i}")
 		if b == dotByte 'hit'
 			lastDot = i
 			break
@@ -928,9 +938,9 @@ function bareMethodName(s String) returns String
 		i = i - 1
 	end 'scan'
 	if lastDot < 0 'noDot'
-		return ""
+		throw NameSplitError.noSeparator
 	end 'noDot'
-	let tailBytes = try bytes.slice(lastDot + 1, endIndex: bytes.count()) otherwise return ""
+	let tailBytes = try bytes.slice(lastDot + 1, endIndex: bytes.count()) otherwise panic("invariant: lastDot < bytes.count() but slice failed")
 	return String.from(tailBytes)
 end 'bareMethodName'
 
@@ -1132,7 +1142,7 @@ export typealias FuncVisibilityMap = Map with(String, FuncVisibilityInfo)
 // can look up bounds in typealiasRanges.
 export typealias FuncReturnTypeMap = Map with(String, MaxonReturnType)
 
-export typealias FuncThrowsTypeMap = Map with(String, String)
+export typealias FuncThrowsTypeMap = Map with(String, ThrowsClause)
 
 // Per-parameter default value. None = no default (argument is mandatory);
 // intLiteral(v) = literal integer default used when the call site omits the
@@ -1472,26 +1482,26 @@ export typealias ConstantMap = Map with(String, TopLevelConstant)
 // `exported` and originates at the stdlib bootstrap path; readStdlibCache
 // stamps those values in.
 
-export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue)
+export function writeConstantValue(project Project, buf ByteArray, cv ConstantValue) throws CacheCorruption
 	writeDword(buf, value: cv.ordinal)
 	match cv 'payload'
-		stringValue(stringId) then writeString(buf, s: project.strings.get(stringId))
+		stringValue(stringId) then try writeString(buf, s: project.strings.get(stringId))
 		intValue(value) then writeQword(buf, value: value)
 		floatValue(bits) then writeQword(buf, value: bits)
 	end 'payload'
 end 'writeConstantValue'
 
-function readConstantValueString(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
-	let (strVal, nextPos) = readString(buf, offset: offset)
+function readConstantValueString(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset) throws CacheCorruption
+	let (strVal, nextPos) = try readString(buf, offset: offset)
 	return (ConstantValue.stringValue(project.strings.intern(strVal)), nextPos)
 end 'readConstantValueString'
 
-export function readConstantValue(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset)
+export function readConstantValue(project Project, buf ByteArray, offset ByteOffset) returns (ConstantValue, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
 	let pos = offset + 4
 	let kase = try ConstantValue.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ConstantValue tag {raw}")
 	match kase 'tag'
-		stringValue then return readConstantValueString(project, buf: buf, offset: pos)
+		stringValue then return try readConstantValueString(project, buf: buf, offset: pos)
 		intValue then return (ConstantValue.intValue(readQword(buf, offset: pos)), pos + 8)
 		floatValue then return (ConstantValue.floatValue(readQword(buf, offset: pos)), pos + 8)
 	end 'tag'

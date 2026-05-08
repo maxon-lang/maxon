@@ -11,6 +11,11 @@ export union RegClass
 	fp
 end 'RegClass'
 
+export union CallConvSlot
+	gpr(ord RegInt)
+	spilled
+end 'CallConvSlot'
+
 export type Interval
 	export var blockId BlockId
 	export var startPos RegInt
@@ -609,10 +614,10 @@ function targetGetParamRegMask(regTarget RegAllocTarget, paramCount ParamCount, 
 	while pi < paramCount 'eachParam'
 		let pt = try paramTypes.get(pi) otherwise panic("unreachable: param index out of bounds")
 		if not stdTypeIsFloat(pt) 'isGpr'
-			let ord = regTarget.getCallConvGprOrd(gprIdx)
-			if ord >= 0 'valid'
-				mask = mask or (1 shl ord)
-			end 'valid'
+			match regTarget.getCallConvGprOrd(gprIdx) 'slot'
+				gpr(ord) then mask = mask or (1 shl ord)
+				spilled then break 'slot'
+			end 'slot'
 			gprIdx = gprIdx + 1
 		end 'isGpr'
 		pi = pi + 1

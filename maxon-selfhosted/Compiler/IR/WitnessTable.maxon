@@ -29,20 +29,32 @@ export let WITNESS_OFFSET_PARENT = 8
 export let WITNESS_OFFSET_FLAGS = 16
 export let WITNESS_OFFSET_METHODS = 24
 
+// Phase-11.3 parent-witness slot. `none` means the conformance's interface
+// either has no `extends` parent or the parent isn't itself listed as a
+// separate conformance for this type yet (no recordable label). `present(n)`
+// records the mangled witness label of the recorded parent conformance —
+// reserved for the future rdata→rdata patcher; `encodeWitnessTable` still
+// zero-fills the on-disk slot regardless.
+export union ParentWitnessLabel
+	none
+	present(name String)
+end 'ParentWitnessLabel'
+
 export type WitnessTable
 	export var typeName String
 	export var interfaceName String
 	export var label String
 	export var methodImplNames StringArray
-	// Empty when this conformance's interface has no `extends` parent.
-	// Non-empty parent labels are reserved for the future rdata→rdata
-	// patcher; they're recorded here so 11.4 can find the parent witness
-	// when the dispatch path needs it, but `encodeWitnessTable` zero-fills
-	// the slot regardless.
-	export var parentWitnessLabel String
+	// `ParentWitnessLabel.none` when this conformance's interface has no
+	// `extends` parent (or the parent isn't itself a recorded conformance
+	// yet). A `present(name)` payload is reserved for the future
+	// rdata→rdata patcher; they're recorded here so 11.4 can find the
+	// parent witness when the dispatch path needs it, but
+	// `encodeWitnessTable` zero-fills the slot regardless.
+	export var parentWitnessLabel ParentWitnessLabel
 	export var isFatBoxed bool
 
-	export static function create(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel String, isFatBoxed bool) returns WitnessTable
+	export static function create(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel ParentWitnessLabel, isFatBoxed bool) returns WitnessTable
 		return Self{
 			typeName: typeName,
 			interfaceName: interfaceName,
@@ -108,7 +120,7 @@ export type WitnessTableRegistry
 	// Idempotent: a second call with the same (typeName, interfaceName) returns
 	// without modifying state. Callers that want to know whether the entry was
 	// fresh should gate on `contains` first.
-	export function intern(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel String, isFatBoxed bool)
+	export function intern(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel ParentWitnessLabel, isFatBoxed bool)
 		for i in 0 upto entries.count() 'scan'
 			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.intern: entries.get OOB at {i}")
 			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
