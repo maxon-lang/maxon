@@ -1117,7 +1117,31 @@ export type TypealiasVisibilityInfo
 	end 'create'
 end 'TypealiasVisibilityInfo'
 
-export typealias TypealiasVisibilityMap = Map with(String, TypealiasVisibilityInfo)
+export typealias TypealiasVisibilityInfoArray = Array with TypealiasVisibilityInfo
+
+// One alias name → array of (visibility, sourceFilePath) entries. The
+// same name may legally be declared file-private in multiple files, so
+// the map holds an entry per declaring file. Lookups iterate the array.
+export typealias TypealiasVisibilityMap = Map with(String, TypealiasVisibilityInfoArray)
+
+// Append a new (visibility, sourceFilePath) entry for `name`. Idempotent:
+// exact duplicate `(visibility, sourceFilePath)` pairs are coalesced so
+// repeated drains and cache-restore-then-parse sequences stay stable.
+export function appendTypealiasVisibility(project Project, name String, info TypealiasVisibilityInfo)
+	var fresh = TypealiasVisibilityInfoArray.create()
+	if let existing = try project.typealiasVisibilities.get(name) 'haveExisting'
+		for entry in existing 'eachEntry'
+			let sameVis = entry.visibility.ordinal == info.visibility.ordinal
+			let samePath = entry.sourceFilePath.toString() == info.sourceFilePath.toString()
+			if sameVis and samePath 'dup'
+				return
+			end 'dup'
+			fresh.push(entry)
+		end 'eachEntry'
+	end 'haveExisting'
+	fresh.push(info)
+	project.typealiasVisibilities.upsert(name, value: fresh)
+end 'appendTypealiasVisibility'
 
 // Sidecar visibility info for a function. Mirrors the data on
 // `IrFunction.visibility` / `IrFunction.sourceFilePath` but is keyed by

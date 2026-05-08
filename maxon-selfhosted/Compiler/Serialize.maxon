@@ -30,17 +30,9 @@ export function readString(buf ByteArray, offset ByteOffset) returns (String, By
 	if len == 0 'mandatoryAbsent'
 		throw CacheCorruption.invalidEncoding
 	end 'mandatoryAbsent'
-	var pos = offset + 4
-	let endPos = pos + len
-	var bytes = ByteArray.create()
-	bytes.reserve(len)
-
-	while pos < endPos 'copy'
-		let b = try buf.get(pos) otherwise throw CacheCorruption.invalidEncoding
-		bytes.push(b)
-		pos = pos + 1
-	end 'copy'
-
+	let start = offset + 4
+	let endPos = start + len
+	let bytes = try buf.slice(start, endIndex: endPos) otherwise throw CacheCorruption.invalidEncoding
 	return (String.from(bytes), endPos)
 end 'readString'
 

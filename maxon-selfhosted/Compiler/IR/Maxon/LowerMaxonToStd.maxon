@@ -2044,6 +2044,25 @@ type MaxonToStdLowering
 		// is a compiler bug (op introduced after TypeResolution, or the
 		// resolver pass returned early on a shape it should have handled).
 		let qualifiedCallee = try self.project.resolvedCallees.get(opIdx) otherwise panic("lowerCall: opIdx={opIdx} (callee={bareCallee}) missing from project.resolvedCallees — invariant violated, resolveAllCalls did not visit this op")
+		// Re-run the prefix interceptors against the resolved (post-typealias)
+		// qualified name. `ByteMemory.create(...)` (where `ByteMemory` is a
+		// stdlib typealias for `__ManagedMemory with Byte`) survives past the
+		// raw-callee intercepts above as `ByteMemory.create` but resolves to
+		// `__ManagedMemory.create` here. Without re-routing, the call would
+		// emit a body-less `call __ManagedMemory.create` op that the backend
+		// can't sign-look-up.
+		if qualifiedCallee.startsWith("__ManagedMemory.") 'reRouteMm'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "__ManagedMemory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerManagedMemBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'reRouteMm'
+		if qualifiedCallee.startsWith("__Builtins.") 'reRouteBuiltins'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "__Builtins.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerBuiltinsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'reRouteBuiltins'
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
 			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return
@@ -2954,18 +2973,42 @@ type MaxonToStdLowering
 	// success). On a misuse (position == length), the loaded address may
 	// dereference past the buffer; today's stdlib never reaches that path,
 	// but a future revision can add an explicit bounds check + panic.
+	//
+	// Element-size-aware: emits a byte path (loadByte, zero-extending to i64)
+	// when elementSize == 1 and an 8-byte path otherwise. Without the byte
+	// path, `cursor.current()` over a `Byte` array reads 8 bytes including
+	// 7 bytes of adjacent buffer state, which leaks past the buffer end and
+	// trips the lexer's charClassTable when the high bytes form a sentinel
+	// value (e.g. -61 from 0xC3 sign extension on a multibyte source byte).
 	function lowerCursorCurrent(result ByteArray, cursorId ValueId, dstBlock IrBlock)
 		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
 		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
 		let elementSize = self.emitLoadFieldI64(cursorId, offset: 24, dstBlock: dstBlock)
 		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: position, rightId: elementSize, dstBlock: dstBlock)
 		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
-		// The current Phase 11.4 cursor only handles 8-byte (pointer-sized)
-		// elements — bool-bit-packing and per-elem-size dispatch are follow-ups.
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, isFloat: false)))
-		self.setValueType(resultId, t: MaxonType.integer)
+		self.emitElementSizedLoad(resultId, addrId: address, elementSizeId: elementSize, dstBlock: dstBlock)
 	end 'lowerCursorCurrent'
+
+	// Emit a load whose width depends on `elementSizeId`. For elementSize==1
+	// emit a `loadByte` (zero-extending to i64). For any other size emit a
+	// full i64 `loadIndirect`. Both paths run; a select picks the right
+	// result at runtime since Std-IR doesn't yet expose a runtime-sized
+	// load primitive.
+	function emitElementSizedLoad(resultId ValueId, addrId ValueId, elementSizeId ValueId, dstBlock IrBlock)
+		let zeroOffset = self.emitConstI64(0, dstBlock: dstBlock)
+		let byteResult = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(byteResult, baseId: addrId, offsetId: zeroOffset)))
+		self.setValueType(byteResult, t: MaxonType.integer)
+		let wordResult = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(wordResult, addrId: addrId, offset: 0, isFloat: false)))
+		self.setValueType(wordResult, t: MaxonType.integer)
+		let oneConst = self.emitConstI64(1, dstBlock: dstBlock)
+		let isByte = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: elementSizeId, rightId: oneConst, dstBlock: dstBlock)
+		let selected = self.emitArithmeticSelect(isByte, trueVal: byteResult, falseVal: wordResult, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: resultId, leftId: selected, rightId: zeroOffset))))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'emitElementSizedLoad'
 
 	// Phase 11.4: cursor.index() — return the current position as i64.
 	function lowerCursorIndex(result ByteArray, cursorId ValueId, dstBlock IrBlock)

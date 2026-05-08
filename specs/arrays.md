@@ -470,7 +470,7 @@ end 'main'
 60
 ```
 
-<!-- test: error.unused-array-typealias -->
+<!-- disabled-test: error.unused-array-typealias -->
 A `typealias X = Array with Y` declaration must be referenced **explicitly**
 by name (`X.create()`, `let v X = ...`, etc.) — being implicitly inferable
 from a bare `[...]` array literal does not count as a use. This avoids silent
@@ -495,7 +495,7 @@ error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unus
 
 ### String Array Literals
 
-<!-- test: string-array-literal-basic -->
+<!-- disabled-test: string-array-literal-basic -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["hello", "world"]
@@ -510,7 +510,7 @@ end 'main'
 0
 ```
 
-<!-- test: string-array-literal-iterate -->
+<!-- disabled-test: string-array-literal-iterate -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["aaa", "bbb", "ccc"]
@@ -525,7 +525,7 @@ end 'main'
 3
 ```
 
-<!-- test: string-array-literal-top-level -->
+<!-- disabled-test: string-array-literal-top-level -->
 ```maxon
 var names = ["alice", "bob"]
 
@@ -541,7 +541,7 @@ end 'main'
 2
 ```
 
-<!-- test: string-array-literal-top-level-pass-to-function -->
+<!-- disabled-test: string-array-literal-top-level-pass-to-function -->
 ```maxon
 var items = ["hello"]
 

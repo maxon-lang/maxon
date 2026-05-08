@@ -46,7 +46,29 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v14: added StdArithUnaryOpcode.bitcastF64ToI64 (the codec must learn its
 // lifted/encoded raw value) plus byteStringLiteral now wraps in an Array
 // struct (changes the lowered shape of `b"..."`).
-let CACHE_FORMAT_VERSION = 14
+// v15: whitelisted stdlib/helpers/string/grapheme.maxon (Phase 7 finish, Step 2).
+// v16: whitelisted stdlib/helpers/string/views.maxon (Phase 7 finish, Step 3).
+// v17: persist per-typealias visibility + sourceFilePath sidecar so file-
+// private stdlib aliases don't round-trip as if globally exported.
+// v18: whitelisted stdlib/CharacterSet.maxon, stdlib/Character.maxon, and
+// stdlib/String.maxon (Phase 7 finish, Step 4). Synthesized stand-in for
+// `String`/`Character`/`Codepoint` were dropped from the bootstrap source.
+// v19: fix data.genericInstances / data.typeParameters / data.interfaceRegistry
+// id-space drift on cache restore. `readMaxonType` interns nested generic
+// instances directly into `project.genericInstances`, so any cached
+// `genericInstance(id)` references the project registry — but
+// `readGenericInstanceRegistry` was building a separate `data.genericInstances`
+// with its own (different) ordering. `translateCapturedGenericInstanceId`
+// then did `data.genericInstances.get(id)` and got a wrong payload, causing
+// e.g. `Array.innerAliases["ArrayIter"]` to resolve to `__ManagedMemory with
+// Element` post-restore. Fix: at the end of `decodeStdlibCache`, replace
+// `data.genericInstances` / `data.typeParameters` / `data.interfaceRegistry`
+// with fresh registries mirrored verbatim from `project.*`, so translation
+// becomes an identity round-trip.
+// v20: typealias visibility sidecar now uses the shared writeVisibility
+// codec (4-byte dword) instead of an ad-hoc 1-byte tag, matching every
+// other Visibility-typed field.
+let CACHE_FORMAT_VERSION = 20
 
 // ============================================================
 // Types
@@ -115,6 +137,13 @@ export type StdlibCacheData
 	export var globalData GlobalDataTable
 	// Parser metadata
 	export var typealiases TypealiasMap
+	// Cache v17: per-typealias visibility + sourceFilePath sidecar. Each
+	// alias name maps to an array of entries — one per declaring file —
+	// so file-private declarations from multiple stdlib files all survive
+	// a cache round-trip. Without this, file-private aliases collapse to
+	// `(global, stdlib-bootstrap path)` on restore and trip the parser's
+	// E2001 shadowing check.
+	export var typealiasVisibilities TypealiasVisibilityMap
 	export var typealiasRanges TypealiasRangeMap
 	export var funcReturnTypes FuncReturnTypeMap
 	export var funcSignatures FuncSignatureMap
@@ -172,6 +201,7 @@ export type StdlibCacheData
 			wasmFunctions: WasmObjectFunctionArray.create(),
 			globalData: createGlobalDataTable(),
 			typealiases: TypealiasMap.create(),
+			typealiasVisibilities: TypealiasVisibilityMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
@@ -479,6 +509,18 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		writeStdTypeTag(buf, t: baseType)
 	end 'eachAlias'
 
+	// Cache v17: typealias visibility sidecar — name → array of (visibility,
+	// sourceFilePath) entries. One entry per declaring file.
+	writeDword(buf, value: data.typealiasVisibilities.count())
+	for (name, infos) in data.typealiasVisibilities 'eachAliasVis'
+		try writeString(buf, s: name)
+		writeDword(buf, value: infos.count())
+		for info in infos 'eachInfo'
+			writeVisibility(buf, v: info.visibility)
+			try writeString(buf, s: info.sourceFilePath.toString())
+		end 'eachInfo'
+	end 'eachAliasVis'
+
 	// Typealias ranges
 	writeDword(buf, value: data.typealiasRanges.count())
 	for (name, range) in data.typealiasRanges 'eachRange'
@@ -603,6 +645,20 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 	return result
 end 'readStdlibCache'
 
+// Slice `len` bytes out of `buf` starting at `offset`, append them to
+// `dst`, and return the new offset. Replaces the per-byte loop pattern
+// `for _ in 0 upto len 'copy' { dst.push(try buf.get(pos)); pos += 1 }`.
+// Panics on OOB — caller must have validated `offset + len <= buf.count()`
+// either explicitly or by reading the length prefix from a well-formed
+// buffer (the caller's invariant is the same one that justifies the
+// per-byte panic in the loop form).
+function copyBytesInto(dst ByteArray, buf ByteArray, offset ByteOffset, len ByteOffset) returns ByteOffset
+	let endIndex = offset + len
+	let chunk = try buf.slice(offset, endIndex: endIndex) otherwise panic("copyBytesInto: slice OOB (offset={offset}, len={len}, buf.count={buf.count()})")
+	dst.append(chunk)
+	return endIndex
+end 'copyBytesInto'
+
 function decodeStdlibCache(project Project, buf ByteArray, target Target, expectedChecksum CacheChecksum) returns StdlibCacheResult throws CacheCorruption
 	let invalid = StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
@@ -691,11 +747,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		pos = pos + 4
 
 		func.code.reserve(codeLen)
-		for _ in 0 upto codeLen 'copyCode'
-			let b = try buf.get(pos) otherwise panic("loadCache copyCode: cache buffer truncated (pos={pos}, buf.count={buf.count()}, codeLen={codeLen})")
-			func.code.push(b)
-			pos = pos + 1
-		end 'copyCode'
+		pos = copyBytesInto(func.code, buf: buf, offset: pos, len: codeLen)
 
 		// Call fixups
 		let fixupCount = readDword(buf, offset: pos)
@@ -782,11 +834,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		let wBodyLen = readDword(buf, offset: pos)
 		pos = pos + 4
 		wFunc.body.reserve(wBodyLen)
-		for _ in 0 upto wBodyLen 'copyBody'
-			let b = try buf.get(pos) otherwise panic("loadCache copyBody: cache buffer truncated (pos={pos}, buf.count={buf.count()}, wBodyLen={wBodyLen})")
-			wFunc.body.push(b)
-			pos = pos + 1
-		end 'copyBody'
+		pos = copyBytesInto(wFunc.body, buf: buf, offset: pos, len: wBodyLen)
 
 		// WASM call fixups
 		let wFixupCount = readDword(buf, offset: pos)
@@ -814,11 +862,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 
 		var bytes = ByteArray.create()
 		bytes.reserve(dataLen)
-		for _ in 0 upto dataLen 'copyData'
-			let b = try buf.get(pos) otherwise panic("loadCache copyData: cache buffer truncated (pos={pos}, buf.count={buf.count()}, dataLen={dataLen})")
-			bytes.push(b)
-			pos = pos + 1
-		end 'copyData'
+		pos = copyBytesInto(bytes, buf: buf, offset: pos, len: dataLen)
 
 		addNamedGlobalData(data.globalData, name: name, data: bytes)
 	end 'eachGlobal'
@@ -834,6 +878,26 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		pos = p7
 		try data.typealiases.insert(name, value: stdType) otherwise ignore
 	end 'eachAlias'
+
+	// Cache v17: typealias visibility sidecar.
+	let aliasVisCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto aliasVisCount 'eachAliasVis'
+		let (name, pVisName) = try readString(buf, offset: pos)
+		pos = pVisName
+		let entryCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var infos = TypealiasVisibilityInfoArray.create()
+		for _ in 0 upto entryCount 'eachVisEntry'
+			let (visibility, pVis) = try readVisibility(buf, offset: pos)
+			pos = pVis
+			let (pathStr, pVisPath) = try readString(buf, offset: pos)
+			pos = pVisPath
+			let path = try FilePath.from(pathStr) otherwise try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("readStdlibCache: stdlib-bootstrap.maxon FilePath.from rejected")
+			infos.push(TypealiasVisibilityInfo.create(visibility, sourceFilePath: path))
+		end 'eachVisEntry'
+		try data.typealiasVisibilities.insert(name, value: infos) otherwise ignore
+	end 'eachAliasVis'
 
 	// Typealias ranges
 	let rangeCount = readDword(buf, offset: pos)
@@ -1021,6 +1085,39 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		data.typeNameTable.push(name)
 	end 'mirrorTable'
 
+	// Cache v19: same identity-mirror trick for the generic-instance,
+	// type-parameter, and interface registries. `readMaxonType` interns
+	// nested generic instances directly into `project.genericInstances`
+	// (not `data.genericInstances`), so any cached `genericInstance(id)`
+	// references the project registry — but `readGenericInstanceRegistry`
+	// built a separate `data.genericInstances` with its own (different)
+	// ordering because outer interns happen *after* recursive arg reads.
+	// `translateCapturedGenericInstanceId` would then look up the project-
+	// space id in data.genericInstances and get the wrong payload, causing
+	// e.g. `Array.innerAliases["ArrayIter"]` to resolve to `__ManagedMemory
+	// with Element` post-restore. Replace data registries wholesale with
+	// fresh registries mirrored verbatim from project.* so translation is
+	// an identity round-trip.
+	data.genericInstances = GenericInstanceRegistry.create()
+	for i in 0 upto project.genericInstances.count() 'mirrorGenericInstances'
+		let (baseId, args) = project.genericInstances.get(i)
+		_ = data.genericInstances.intern(baseId, args: args)
+	end 'mirrorGenericInstances'
+	data.typeParameters = TypeParamRegistry.create()
+	for i in 0 upto project.typeParameters.count() 'mirrorTypeParams'
+		let declName = project.typeParameters.getDeclaringTypeName(i)
+		let paramName = project.typeParameters.getName(i)
+		let destId = data.typeParameters.intern(declName, paramName: paramName)
+		let cs = project.typeParameters.getConstraints(i)
+		for c in cs 'eachConstraint'
+			data.typeParameters.addConstraint(destId, traitName: c)
+		end 'eachConstraint'
+	end 'mirrorTypeParams'
+	data.interfaceRegistry = InterfaceTypeRegistry.create()
+	for i in 0 upto project.interfaceRegistry.count() 'mirrorInterfaces'
+		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
+	end 'mirrorInterfaces'
+
 	return StdlibCacheResult.create(data, valid: true)
 end 'decodeStdlibCache'
 
@@ -1147,7 +1244,7 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		function gives MaxonType.unresolved
 		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
 		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
-		interface(id) gives translateCapturedInterface(project, data: data, id: id)
+		interface (id) gives translateCapturedInterface(project, data: data, id: id)
 	end 'translate'
 end 'translateMaxonType'
 
@@ -1273,6 +1370,18 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.typealiases.insert(name, value: baseType) otherwise ignore
 	end 'copyAliases'
 
+	// Cache v17: snapshot the typealias visibility sidecar. Each name maps
+	// to an array of (visibility, sourceFilePath) entries; deep-copy each
+	// array so subsequent mutations to project.typealiasVisibilities don't
+	// alias into data.
+	for (name, infos) in project.typealiasVisibilities 'copyAliasVis'
+		var copied = TypealiasVisibilityInfoArray.create()
+		for info in infos 'eachInfo'
+			copied.push(info)
+		end 'eachInfo'
+		try data.typealiasVisibilities.insert(name, value: copied) otherwise ignore
+	end 'copyAliasVis'
+
 	for (name, range) in project.typealiasRanges 'copyRanges'
 		try data.typealiasRanges.insert(name, value: range) otherwise ignore
 	end 'copyRanges'
@@ -1390,6 +1499,15 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	for (name, baseType) in data.typealiases 'restoreAliases'
 		try project.typealiases.insert(name, value: baseType) otherwise ignore
 	end 'restoreAliases'
+
+	// Cache v17: restore typealias visibility sidecar so the parser's
+	// shadowing check sees correct (visibility, sourceFilePath) for every
+	// stdlib alias. Each name's array carries one entry per declaring file.
+	for (name, infos) in data.typealiasVisibilities 'restoreAliasVis'
+		for info in infos 'eachInfo'
+			appendTypealiasVisibility(project, name: name, info: info)
+		end 'eachInfo'
+	end 'restoreAliasVis'
 
 	// Restore typealias ranges
 	for (name, range) in data.typealiasRanges 'restoreRanges'
@@ -1602,9 +1720,9 @@ function writeVisibility(buf ByteArray, v Visibility)
 	writeDword(buf, value: v.rawValue)
 end 'writeVisibility'
 
-function readVisibility(buf ByteArray, offset ByteOffset) returns (Visibility, ByteOffset)
+function readVisibility(buf ByteArray, offset ByteOffset) returns (Visibility, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let v = try Visibility.fromRawValue(raw) otherwise panic("corrupt cache: unknown Visibility tag {raw}")
+	let v = try Visibility.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return (v, offset + 4)
 end 'readVisibility'
 
@@ -1805,7 +1923,7 @@ function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) ret
 			pos = p5
 			methods.push(sig)
 		end 'eachMethod'
-		let (visibility, p6) = readVisibility(buf, offset: pos)
+		let (visibility, p6) = try readVisibility(buf, offset: pos)
 		pos = p6
 		let line = readDword(buf, offset: pos)
 		pos = pos + 4
@@ -1985,11 +2103,7 @@ function readStaticRdataValueMap(buf ByteArray, offset ByteOffset) returns (Stat
 		pos = pos + 4
 		var bytes = ByteArray.create()
 		bytes.reserve(len)
-		for _ in 0 upto len 'copyByte'
-			let b = try buf.get(pos) otherwise panic("readStaticRdataValueMap: buffer truncated at {pos}")
-			bytes.push(b)
-			pos = pos + 1
-		end 'copyByte'
+		pos = copyBytesInto(bytes, buf: buf, offset: pos, len: len)
 		try m.insert(label, value: bytes) otherwise ignore
 	end 'eachEntry'
 	return (m, pos)
@@ -2077,16 +2191,16 @@ function writeStdArithConst(buf ByteArray, c StdArithConst)
 	writeQword(buf, value: c.value)
 end 'writeStdArithConst'
 
-function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithConst, ByteOffset)
+function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithConst, ByteOffset) throws CacheCorruption
 	let opRaw = readDword(buf, offset: offset)
-	let opcode = liftStdArithConstOpcode(opRaw)
+	let opcode = try liftStdArithConstOpcode(opRaw)
 	let resultId = readQword(buf, offset: offset + 4)
 	let value = readQword(buf, offset: offset + 12)
 	return (StdArithConst.create(opcode: opcode, resultId: resultId, value: value as ParsedInt), offset + 20)
 end 'readStdArithConst'
 
-function liftStdArithConstOpcode(raw MachineWord) returns StdArithConstOpcode
-	let kase = try StdArithConstOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithConstOpcode {raw}")
+function liftStdArithConstOpcode(raw MachineWord) returns StdArithConstOpcode throws CacheCorruption
+	let kase = try StdArithConstOpcode.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'oc'
 		constI64 gives StdArithConstOpcode.constI64
 		constF64 gives StdArithConstOpcode.constF64
@@ -2099,16 +2213,16 @@ function writeStdArithUnaryOp(buf ByteArray, u StdArithUnaryOp)
 	writeQword(buf, value: u.operandId)
 end 'writeStdArithUnaryOp'
 
-function readStdArithUnaryOp(buf ByteArray, offset ByteOffset) returns (StdArithUnaryOp, ByteOffset)
+function readStdArithUnaryOp(buf ByteArray, offset ByteOffset) returns (StdArithUnaryOp, ByteOffset) throws CacheCorruption
 	let opRaw = readDword(buf, offset: offset)
-	let opcode = liftStdArithUnaryOpcode(opRaw)
+	let opcode = try liftStdArithUnaryOpcode(opRaw)
 	let resultId = readQword(buf, offset: offset + 4)
 	let operandId = readQword(buf, offset: offset + 12)
 	return (StdArithUnaryOp.create(opcode: opcode, resultId: resultId, operandId: operandId), offset + 20)
 end 'readStdArithUnaryOp'
 
-function liftStdArithUnaryOpcode(raw MachineWord) returns StdArithUnaryOpcode
-	let kase = try StdArithUnaryOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithUnaryOpcode {raw}")
+function liftStdArithUnaryOpcode(raw MachineWord) returns StdArithUnaryOpcode throws CacheCorruption
+	let kase = try StdArithUnaryOpcode.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'oc'
 		negI64 gives StdArithUnaryOpcode.negI64
 		bitNotI64 gives StdArithUnaryOpcode.bitNotI64
@@ -2130,17 +2244,17 @@ function writeStdArithBinaryOp(buf ByteArray, b StdArithBinaryOp)
 	writeQword(buf, value: b.rightId)
 end 'writeStdArithBinaryOp'
 
-function readStdArithBinaryOp(buf ByteArray, offset ByteOffset) returns (StdArithBinaryOp, ByteOffset)
+function readStdArithBinaryOp(buf ByteArray, offset ByteOffset) returns (StdArithBinaryOp, ByteOffset) throws CacheCorruption
 	let opRaw = readDword(buf, offset: offset)
-	let opcode = liftStdArithBinaryOpcode(opRaw)
+	let opcode = try liftStdArithBinaryOpcode(opRaw)
 	let resultId = readQword(buf, offset: offset + 4)
 	let leftId = readQword(buf, offset: offset + 12)
 	let rightId = readQword(buf, offset: offset + 20)
 	return (StdArithBinaryOp.create(opcode: opcode, resultId: resultId, leftId: leftId, rightId: rightId), offset + 28)
 end 'readStdArithBinaryOp'
 
-function liftStdArithBinaryOpcode(raw MachineWord) returns StdArithBinaryOpcode
-	let kase = try StdArithBinaryOpcode.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithBinaryOpcode {raw}")
+function liftStdArithBinaryOpcode(raw MachineWord) returns StdArithBinaryOpcode throws CacheCorruption
+	let kase = try StdArithBinaryOpcode.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'oc'
 		addI64 gives StdArithBinaryOpcode.addI64
 		subI64 gives StdArithBinaryOpcode.subI64
@@ -2184,28 +2298,28 @@ function writeStdArithOp(buf ByteArray, op StdArithOp)
 	end 'arith'
 end 'writeStdArithOp'
 
-function readStdArithOp(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
+function readStdArithOp(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdArithOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdArithOp tag {raw}")
+	let kase = try StdArithOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'arith'
-		const gives readStdArithOpConst(buf, offset: offset + 4)
-		unary gives readStdArithOpUnary(buf, offset: offset + 4)
-		binary gives readStdArithOpBinary(buf, offset: offset + 4)
+		const gives try readStdArithOpConst(buf, offset: offset + 4)
+		unary gives try readStdArithOpUnary(buf, offset: offset + 4)
+		binary gives try readStdArithOpBinary(buf, offset: offset + 4)
 	end 'arith'
 end 'readStdArithOp'
 
-function readStdArithOpConst(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
-	let (c, p) = readStdArithConst(buf, offset: offset)
+function readStdArithOpConst(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset) throws CacheCorruption
+	let (c, p) = try readStdArithConst(buf, offset: offset)
 	return (StdArithOp.const(c), p)
 end 'readStdArithOpConst'
 
-function readStdArithOpUnary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
-	let (u, p) = readStdArithUnaryOp(buf, offset: offset)
+function readStdArithOpUnary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset) throws CacheCorruption
+	let (u, p) = try readStdArithUnaryOp(buf, offset: offset)
 	return (StdArithOp.unary(u), p)
 end 'readStdArithOpUnary'
 
-function readStdArithOpBinary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset)
-	let (binOp, p) = readStdArithBinaryOp(buf, offset: offset)
+function readStdArithOpBinary(buf ByteArray, offset ByteOffset) returns (StdArithOp, ByteOffset) throws CacheCorruption
+	let (binOp, p) = try readStdArithBinaryOp(buf, offset: offset)
 	return (StdArithOp.binary(binOp), p)
 end 'readStdArithOpBinary'
 
@@ -2232,9 +2346,9 @@ function writeStdControlCondBr(buf ByteArray, condId ValueId, thenTarget BlockId
 	writeValueIdArrayCodec(buf, arr: elseArgIds)
 end 'writeStdControlCondBr'
 
-function readStdControlOp(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset)
+function readStdControlOp(buf ByteArray, offset ByteOffset) returns (StdControlOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdControlOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdControlOp tag {raw}")
+	let kase = try StdControlOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'cf'
 		br gives readStdControlOpBr(buf, offset: offset + 4)
 		condBr gives readStdControlOpCondBr(buf, offset: offset + 4)
@@ -2314,7 +2428,7 @@ end 'writeStdCallErrorReturn'
 
 function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdCallOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdCallOp tag {raw}")
+	let kase = try StdCallOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'call'
 		ret gives readStdCallRet(buf, offset: offset + 4)
 		call gives try readStdCallCall(buf, offset: offset + 4)
@@ -2399,9 +2513,9 @@ function writeStdMemoryLoad(buf ByteArray, resultId ValueId, slotId VarSlot)
 	writeQword(buf, value: slotId)
 end 'writeStdMemoryLoad'
 
-function readStdMemoryOp(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset)
+function readStdMemoryOp(buf ByteArray, offset ByteOffset) returns (StdMemoryOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdMemoryOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdMemoryOp tag {raw}")
+	let kase = try StdMemoryOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	return match kase 'mem'
 		storeSlot gives readStdMemoryStore(buf, offset: offset + 4)
 		loadSlot gives readStdMemoryLoad(buf, offset: offset + 4)
@@ -2620,7 +2734,7 @@ end 'writeStdSysDropTypeParam'
 
 function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdSystemOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdSystemOp tag {raw}")
+	let kase = try StdSystemOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'sys'
 		syscall gives readStdSysSyscall(buf, offset: pos)
@@ -2656,7 +2770,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		unboxValue gives readStdSysUnboxValue(buf, offset: pos)
 		loadLayoutDescriptor gives try readStdSysLoadLayoutDescriptor(buf, offset: pos)
 		loadWitnessTable gives try readStdSysLoadWitnessTable(buf, offset: pos)
-		descriptorField gives readStdSysDescriptorField(buf, offset: pos)
+		descriptorField gives try readStdSysDescriptorField(buf, offset: pos)
 		witnessMethod gives readStdSysWitnessMethod(buf, offset: pos)
 		dropTypeParam gives readStdSysDropTypeParam(buf, offset: pos)
 	end 'sys'
@@ -2867,11 +2981,11 @@ function readStdSysLoadWitnessTable(buf ByteArray, offset ByteOffset) returns (S
 	return (StdSystemOp.loadWitnessTable(resultId, label: label), p)
 end 'readStdSysLoadWitnessTable'
 
-function readStdSysDescriptorField(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+function readStdSysDescriptorField(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
 	let resultId = readQword(buf, offset: offset)
 	let descAddrId = readQword(buf, offset: offset + 8)
 	let fieldRaw = readDword(buf, offset: offset + 16)
-	let field = try DescriptorField.allCases.get(fieldRaw) otherwise panic("corrupt cache: unknown DescriptorField {fieldRaw}")
+	let field = try DescriptorField.allCases.get(fieldRaw) otherwise throw CacheCorruption.invalidEncoding
 	return (StdSystemOp.descriptorField(resultId, descAddrId: descAddrId, field: field), offset + 20)
 end 'readStdSysDescriptorField'
 
@@ -2903,24 +3017,24 @@ end 'writeStdOp'
 
 function readStdOp(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try StdOp.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StdOp tag {raw}")
+	let kase = try StdOp.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'outer'
-		arith gives readStdOpArith(buf, offset: pos)
-		control gives readStdOpControl(buf, offset: pos)
+		arith gives try readStdOpArith(buf, offset: pos)
+		control gives try readStdOpControl(buf, offset: pos)
 		call gives try readStdOpCall(buf, offset: pos)
-		memory gives readStdOpMemory(buf, offset: pos)
+		memory gives try readStdOpMemory(buf, offset: pos)
 		system gives try readStdOpSystem(buf, offset: pos)
 	end 'outer'
 end 'readStdOp'
 
-function readStdOpArith(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
-	let (inner, p) = readStdArithOp(buf, offset: offset)
+function readStdOpArith(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset) throws CacheCorruption
+	let (inner, p) = try readStdArithOp(buf, offset: offset)
 	return (StdOp.arith(inner), p)
 end 'readStdOpArith'
 
-function readStdOpControl(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
-	let (inner, p) = readStdControlOp(buf, offset: offset)
+function readStdOpControl(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset) throws CacheCorruption
+	let (inner, p) = try readStdControlOp(buf, offset: offset)
 	return (StdOp.control(inner), p)
 end 'readStdOpControl'
 
@@ -2929,8 +3043,8 @@ function readStdOpCall(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOff
 	return (StdOp.call(inner), p)
 end 'readStdOpCall'
 
-function readStdOpMemory(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset)
-	let (inner, p) = readStdMemoryOp(buf, offset: offset)
+function readStdOpMemory(buf ByteArray, offset ByteOffset) returns (StdOp, ByteOffset) throws CacheCorruption
+	let (inner, p) = try readStdMemoryOp(buf, offset: offset)
 	return (StdOp.memory(inner), p)
 end 'readStdOpMemory'
 
@@ -2951,14 +3065,14 @@ function writeIrTerminator(buf ByteArray, term Terminator)
 	end 'term'
 end 'writeIrTerminator'
 
-function readIrTerminator(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset)
+function readIrTerminator(buf ByteArray, offset ByteOffset) returns (Terminator, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
-	let kase = try Terminator.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown Terminator tag {raw}")
+	let kase = try Terminator.unionCases.fromRawValue(raw) otherwise throw CacheCorruption.invalidEncoding
 	let pos = offset + 4
 	return match kase 'term'
-		unset gives (Terminator.unset, pos)
-		dead gives (Terminator.dead, pos)
-		fallthrough gives (Terminator.fallthrough, pos)
+		unset gives(Terminator.unset, pos)
+		dead gives(Terminator.dead, pos)
+		fallthrough gives(Terminator.fallthrough, pos)
 		opIndex gives readIrTerminatorOpIndex(buf, offset: pos)
 	end 'term'
 end 'readIrTerminator'
@@ -3013,7 +3127,7 @@ function readIrBlock(buf ByteArray, offset ByteOffset) returns (IrBlock, ByteOff
 		pos = pos + 8
 		block.opRefs.append(opIdx)
 	end 'eachOpRef'
-	let (term, p2) = readIrTerminator(buf, offset: pos)
+	let (term, p2) = try readIrTerminator(buf, offset: pos)
 	pos = p2
 	block.terminator = term
 	let argCount = readDword(buf, offset: pos)
@@ -3058,7 +3172,7 @@ function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction
 	var pos = p1
 	let (namespace, p2) = try readString(buf, offset: pos)
 	pos = p2
-	let (visibility, p3) = readVisibility(buf, offset: pos)
+	let (visibility, p3) = try readVisibility(buf, offset: pos)
 	pos = p3
 	let (sourceFilePath, p4) = try readFilePath(buf, offset: pos)
 	pos = p4

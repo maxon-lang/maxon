@@ -3166,8 +3166,17 @@ func __managed_mem_set 3 i64
     // valid: push reserves capacity for len+1, writes the new element at
     // slot `len` (which is < capacity but == length), then bumps length.
     // Matches C# bootstrap semantics in `LowerManagedMemSet`.
+    //
+    // For rdata-backed buffers capacity == -2, so any non-negative idx
+    // fails this check. Treat capacity < 0 as "needs COW first" and
+    // re-bounds-check against the post-COW capacity (= length).
     v5 = std loadSlot 0
     v6 = std loadIndirect v5 16
+    v200 = std constI64 0
+    v201 = std cmpI64Lt v6 v200
+    std condBr v201 cow capCheck
+
+  block capCheck:
     v7 = std loadSlot 1
     v8 = std cmpI64Lt v7 v6
     std condBr v8 ok err
@@ -3176,6 +3185,18 @@ func __managed_mem_set 3 i64
     v9 = std constI64 1
     v10 = std constI64 0
     std errorReturn v10 v9
+
+  block cow:
+    v202 = std loadSlot 0
+    v203 = std call __managed_mem_cow_check v202
+    // Re-load capacity (now == length). idx < capacity is the same as
+    // idx < length; rdata-backed buffers don't have spare capacity for
+    // out-of-length writes.
+    v204 = std loadSlot 0
+    v205 = std loadIndirect v204 16
+    v206 = std loadSlot 1
+    v207 = std cmpI64Lt v206 v205
+    std condBr v207 ok err
 
   block ok:
     // elemSize = self[24]; buffer = self[0]; addr = buffer + idx * elemSize
@@ -3207,8 +3228,89 @@ func __managed_mem_set 3 i64
     std errorReturn v25 v101
 end
 
+// __managed_mem_cow_check(self) -> 0 (no error path)
+// Buffer-level Copy-On-Write. If the receiver's capacity is >= 0 the
+// buffer is already mm_alloc-owned and writable — no-op. If capacity < 0
+// (rdata = -2 or slice = -1) the buffer is shared / read-only; allocate a
+// fresh mm_alloc buffer of length*elemSize bytes, memcpy the old bytes
+// in, store the fresh buffer back into self, and update capacity to
+// length so subsequent capacity bounds checks work normally.
+//
+// Slot usage:
+//   slot 0 = self      (arg)
+//   slot 1 = capacity  (cached)
+//   slot 2 = length
+//   slot 3 = elemSize
+//   slot 4 = byteLen   (length * elemSize)
+//   slot 5 = newBuf
+//   slot 6 = oldBuf
+func __managed_mem_cow_check 1 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+
+    // If capacity >= 0, buffer is owned — return.
+    v1 = std loadIndirect v0 16
+    std storeSlot 1 v1
+    v2 = std constI64 0
+    v3 = std cmpI64Lt v1 v2
+    std condBr v3 doCopy noCopy
+
+  block noCopy:
+    v100 = std constI64 0
+    std ret v100
+
+  block doCopy:
+    // length, elemSize, byteLen
+    v4 = std loadIndirect v0 8
+    std storeSlot 2 v4
+    v5 = std loadIndirect v0 24
+    std storeSlot 3 v5
+    v6 = std mulI64 v4 v5
+    std storeSlot 4 v6
+
+    // mm_alloc(byteLen, destructor=0, tag=0) — destructor isn't needed
+    // because the buffer is a raw byte allocation (no nested heap refs).
+    // For empty buffers (byteLen == 0) mm_alloc clamps to size 1.
+    v7 = std loadSlot 4
+    v8 = std constI64 0
+    v9 = std constI64 0
+    v10 = std call mm_alloc v7 v8 v9
+    std storeSlot 5 v10
+
+    // Save oldBuf BEFORE we mutate self.buffer.
+    v11 = std loadIndirect v0 0
+    std storeSlot 6 v11
+
+    // memcpy(newBuf, oldBuf, byteLen) — std memcpy handles byteLen==0
+    // safely (ABI requires it to be a no-op on zero count).
+    v12 = std loadSlot 5
+    v13 = std loadSlot 6
+    v14 = std loadSlot 4
+    std memcpy v12 v13 v14
+
+    // self.buffer = newBuf
+    v15 = std loadSlot 5
+    std storeIndirect v0 0 v15
+    // self.capacity = length (we allocated exactly length slots; subsequent
+    // grow() calls will realloc as needed)
+    v16 = std loadSlot 2
+    std storeIndirect v0 16 v16
+    // Old rdata/slice buffer is intentionally NOT freed: rdata lives in
+    // the binary's read-only section; slice buffers are owned by their
+    // parent struct (whose refcount tracks lifetime).
+
+    v17 = std constI64 0
+    std ret v17
+end
+
 // __managed_mem_grow(self, newCap) -> 0 (sets error invalidCapacity=4,
 // wire 5, on newCap < capacity)
+//
+// COW-aware: if the receiver's capacity is < 0 (rdata-backed = -2 or
+// slice-backed = -1), call __managed_mem_cow_check to materialize a
+// private writable buffer first; that promotes capacity to length, after
+// which the standard "newCap < capacity" check and mm_realloc path apply.
 //
 // Slot usage:
 //   slot 0 = self    (arg)
@@ -3221,7 +3323,12 @@ func __managed_mem_grow 2 i64
     v1 = std param 1 i64
     std storeSlot 1 v1
 
-    // if newCap < capacity -> err
+    // Promote any rdata/slice buffer to a private heap buffer. No-op
+    // when capacity >= 0.
+    v100 = std loadSlot 0
+    v101 = std call __managed_mem_cow_check v100
+
+    // if newCap < capacity -> err (now meaningful on the post-COW capacity)
     v2 = std loadIndirect v0 16
     v3 = std cmpI64Lt v1 v2
     std condBr v3 err ok
@@ -3324,12 +3431,20 @@ func __managed_mem_set_byte 3 i64
     v7 = std mulI64 v5 v6
     v8 = std loadSlot 1
     v9 = std cmpI64Lt v8 v7
-    std condBr v9 ok err
+    std condBr v9 cow err
 
   block err:
     v10 = std constI64 7
     v11 = std constI64 0
     std errorReturn v11 v10
+
+  block cow:
+    // Buffer-level COW: if self is rdata- or slice-backed, allocate a
+    // private copy and switch self.buffer over before writing. No-op when
+    // capacity >= 0.
+    v100 = std loadSlot 0
+    v101 = std call __managed_mem_cow_check v100
+    std br ok
 
   block ok:
     v13 = std loadSlot 0

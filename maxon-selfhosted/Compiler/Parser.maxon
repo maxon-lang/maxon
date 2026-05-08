@@ -1307,6 +1307,24 @@ export type Parser
 			return
 		end 'isMethodCall'
 
+		// `NAME = TypeName{field: ..., ...}` — deferred struct-literal
+		// initializer. The self-hosted compiler doesn't yet evaluate struct
+		// literals at compile time; we recognize the shape and skip past
+		// the matching `}`, registering a placeholder so the binding exists
+		// for name resolution. The static `let`s in `stdlib/CharacterSet`
+		// (e.g. `static let cachedWhitespaces = CharacterSet{...}`) hit
+		// this path. The unresolved value is harmless as long as nothing
+		// reachable from `main` reads it; DCE drops unreferenced static
+		// lets along with their owning type's unused methods.
+		if isStructLiteralInitializer(valueToken) 'isStructLit'
+			try skipPastStructLiteralInitializer()
+			skipToNextLine()
+			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
+			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise ignore
+			logTrace(LogCategory.parser, message: () gives "parser: deferred struct-literal decl '{qualifiedName}' (no init emitted)")
+			return
+		end 'isStructLit'
+
 		// `let xs = [1, 2, 3]` / `var xs = [...]` — array-literal initializer.
 		// Materialize the literal at runtime in a synthetic per-file
 		// `__module_init_<n>` function (lazily allocated on first use), and
@@ -1475,6 +1493,40 @@ export type Parser
 		let parenTok = try cursor.peek(3) otherwise Token.eof()
 		return dotTok.kind == TokenKind.dot and memberTok.kind == TokenKind.identifier and parenTok.kind == TokenKind.leftParen
 	end 'isRuntimeInitInitializer'
+
+	// `let NAME = TypeName{field: ..., ...}` — deferred struct-literal
+	// initializer. The self-hosted compiler doesn't yet evaluate struct
+	// literals at compile time; we recognize the shape (`Identifier {`)
+	// and skip past the matching closing brace.
+	function isStructLiteralInitializer(valueToken Token) returns bool
+		if valueToken.kind != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		let braceTok = try cursor.peek(1) otherwise Token.eof()
+		return braceTok.kind == TokenKind.leftBrace
+	end 'isStructLiteralInitializer'
+
+	// Skip past the entire `TypeName{...}` initializer — including any
+	// nested braces inside the field initializers. Stops just past the
+	// matching `}`. The cursor is left at the next token (typically the
+	// trailing newline).
+	function skipPastStructLiteralInitializer() throws ParserError
+		try cursor.advance() otherwise return  // past TypeName
+		try eat(TokenKind.leftBrace)
+		var depth = 1
+		while depth > 0 'scan'
+			let t = cursor.current()
+			if t.kind == TokenKind.eof 'eof'
+				return
+			end 'eof'
+			if t.kind == TokenKind.leftBrace 'open'
+				depth = depth + 1
+			end 'open' else if t.kind == TokenKind.rightBrace 'close'
+				depth = depth - 1
+			end 'close'
+			try cursor.advance() otherwise return
+		end 'scan'
+	end 'skipPastStructLiteralInitializer'
 
 	// Append a node to the project-wide expression arena and return its
 	// arena id. Callers use the returned id when building parent nodes
@@ -1907,43 +1959,43 @@ export type Parser
 			existingFilePath = existing.filePath
 		end 'haveExisting'
 		// Same probe against the resolved-typealiases sidecar. Stdlib aliases
-		// that survived a cache restore land in `typealiases` with a
-		// (visibility, sourceFilePath) entry in `typealiasVisibilities`; the
-		// codec doesn't serialize visibility, so missing entries default to
-		// `(global, stdlib-bootstrap path)` per Project.maxon:1098.
-		var hasResolved = false
-		var resolvedVisibility = Visibility.global
-		var resolvedFilePath = try FilePath.from("stdlib-bootstrap.maxon") otherwise filePath
-		if project.typealiases.contains(nameToken.value) 'haveResolved'
-			hasResolved = true
-			if let info = try project.typealiasVisibilities.get(nameToken.value) 'haveInfo'
-				resolvedVisibility = info.visibility
-				resolvedFilePath = info.sourceFilePath
-			end 'haveInfo'
-		end 'haveResolved'
-		let resolvedIsFilePrivate = hasResolved and resolvedVisibility == Visibility.file
-		let resolvedFromOtherFile = hasResolved and not (resolvedFilePath.toString() == filePath.toString())
+		// that survived a cache restore land in `typealiases` with one or
+		// more (visibility, sourceFilePath) entries in `typealiasVisibilities`
+		// (one per declaring file — the same name may be declared file-
+		// private in multiple stdlib files). Iterate every entry and report
+		// the first conflict; missing entries default to `(global, stdlib-
+		// bootstrap path)` per Project.maxon.
 		let existingIsFilePrivate = hasExisting and existingVisibility == Visibility.file
 		let existingFromOtherFile = hasExisting and not (existingFilePath.toString() == filePath.toString())
+		let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise filePath
 
 		// Classify the relationship with each existing entry.
 		var collides = false
 		var shadows = false
-		if hasResolved 'checkResolved'
-			let bothFilePrivate = isFilePrivate and resolvedIsFilePrivate
-			let okBecauseFilePrivatePair = bothFilePrivate and resolvedFromOtherFile
-			if not okBecauseFilePrivatePair 'conflict'
-				// Anything else with a resolved entry is a conflict. If
-				// exactly one side is file-private and they're in
-				// different files, it's shadowing; otherwise a plain
-				// duplicate.
-				if (isFilePrivate or resolvedIsFilePrivate) and resolvedFromOtherFile and not bothFilePrivate 'shadow'
-					shadows = true
-				end 'shadow' else 'dup'
-					collides = true
-				end 'dup'
-			end 'conflict'
-		end 'checkResolved'
+		if project.typealiases.contains(nameToken.value) 'haveResolved'
+			var infos = TypealiasVisibilityInfoArray.create()
+			if let storedInfos = try project.typealiasVisibilities.get(nameToken.value) 'haveInfos'
+				for info in storedInfos 'eachInfo'
+					infos.push(info)
+				end 'eachInfo'
+			end 'haveInfos'
+			if infos.count() == 0 'noSidecar'
+				infos.push(TypealiasVisibilityInfo.create(Visibility.global, sourceFilePath: bootstrapPath))
+			end 'noSidecar'
+			for info in infos 'classifyEach'
+				let resolvedIsFilePrivate = info.visibility == Visibility.file
+				let resolvedFromOtherFile = not (info.sourceFilePath.toString() == filePath.toString())
+				let bothFilePrivate = isFilePrivate and resolvedIsFilePrivate
+				let okBecauseFilePrivatePair = bothFilePrivate and resolvedFromOtherFile
+				if not okBecauseFilePrivatePair 'conflict'
+					if (isFilePrivate or resolvedIsFilePrivate) and resolvedFromOtherFile and not bothFilePrivate 'shadow'
+						shadows = true
+					end 'shadow' else 'dup'
+						collides = true
+					end 'dup'
+				end 'conflict'
+			end 'classifyEach'
+		end 'haveResolved'
 		if not collides and not shadows and hasExisting 'checkUnresolved'
 			let bothFilePrivate = isFilePrivate and existingIsFilePrivate
 			let okBecauseFilePrivatePair = bothFilePrivate and existingFromOtherFile
@@ -4369,6 +4421,13 @@ export type Parser
 		// have moved it off `block` to a merge block.
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
+		// String literals come back as `ExprResult.stringConst(name, id)`
+		// without a producer op (the deferred-materialization shape; see
+		// `parseStringLiteral`). For an assignment, this statement IS the
+		// consumer — emit the producer now so `varStore`'s value name has a
+		// definition. Same idempotent helper that `varDecl` and the
+		// interp-arg path use.
+		let materializedResult = materializeStringConstIfNeeded(emitBlock, expr: exprResult, range: stmtRange)
 		// A bare identifier on the LHS may name a top-level `var`. Locals
 		// shadow globals, so we check the scope first; only if no local
 		// binding exists do we defer to TypeResolution. The parser emits a
@@ -4376,16 +4435,16 @@ export type Parser
 		// rewrites it to `globalStore` once `project.topLevelVars` is fully
 		// populated, or surfaces a diagnostic if nothing matches.
 		if not scope.contains(nameToken.value) 'maybeGlobalWrite'
-			module.appendOp(emitBlock, op: MaxonOp.unresolvedAssign(nameToken.value, value: exprName(exprResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.unresolvedAssign(nameToken.value, value: exprName(materializedResult), range: stmtRange))
 			return
 		end 'maybeGlobalWrite'
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
 			// Implicit self-load and field-store share the statement's range —
 			// the user wrote `field = value`, not a separate self-load op.
-			emitSelfFieldStore(emitBlock, fieldName: nameToken.value, valueName: exprName(exprResult), range: stmtRange)
+			emitSelfFieldStore(emitBlock, fieldName: nameToken.value, valueName: exprName(materializedResult), range: stmtRange)
 		end 'selfFieldWrite' else 'localWrite'
-			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(exprResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(materializedResult), range: stmtRange))
 		end 'localWrite'
 	end 'parseVarAssignment'
 
@@ -4410,32 +4469,27 @@ export type Parser
 		// Emit the varDecl into the block control flow landed on — bool
 		// short-circuit may have moved it off `block` to a merge block.
 		var emitBlock = currentBlock
+		let lastExprToken = previousToken()
+		let stmtRange = SourceRange.between(kwToken, last: lastExprToken)
 
-		// `let LOCAL = "literal"` registers LOCAL as a top-level string
-		// constant AND emits a `stringConst` op so subsequent reads of
-		// LOCAL (which go through scope → varLoad) can be specialized
-		// downstream by the consumer-rewrite walk in TypeResolution.
-		// Without the op, the slot would be undefined and varLoads of it
-		// would read garbage.
-		if isLet and exprIsStringConst(exprResult) 'registerStringConst'
+		// `let LOCAL = "literal"` additionally registers LOCAL as a
+		// file-scope top-level constant — the only let-vs-var difference.
+		// `var` bindings are mutable so they skip the const-table entry.
+		// Both shapes share the producer-emission path below.
+		if isLet and exprIsStringConst(exprResult) 'registerLetConst'
 			let stringId = exprStringConstId(exprResult)
 			let localStrEntry = TopLevelConstant.create(ConstantValue.stringValue(stringId), visibility: Visibility.file, sourceFilePath: filePath)
 			try project.topLevelConstants.insert(nameToken.value, value: localStrEntry) otherwise 'dupConst3'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
-			let lastExprTokenStr = previousToken()
-			let stmtRangeStr = SourceRange.between(kwToken, last: lastExprTokenStr)
-			let stringTypeName = MaxonType.named(project.typeNames.intern("String"))
-			let slotStr = defineVariableWithType(nameToken.value, varType: stringTypeName)
-			let stringName = freshSynthName()
-			module.appendOp(emitBlock, op: MaxonOp.stringConst(stringName, stringId: stringId, range: stmtRangeStr))
-			module.appendOp(emitBlock, op: MaxonOp.varDecl(slotStr, value: stringName, slotType: stringTypeName, range: stmtRangeStr))
-			return
-		end 'registerStringConst'
+		end 'registerLetConst'
 
-		let lastExprToken = previousToken()
-		let slot = defineVariableWithType(nameToken.value, varType: exprType(exprResult))
-		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(exprResult), slotType: exprType(exprResult), range: SourceRange.between(kwToken, last: lastExprToken)))
+		// Materialize any deferred string literal so the producer op exists
+		// before we reference its name in the varDecl below. No-op when the
+		// initializer isn't a string literal.
+		let materializedResult = materializeStringConstIfNeeded(emitBlock, expr: exprResult, range: stmtRange)
+		let slot = defineVariableWithType(nameToken.value, varType: exprType(materializedResult))
+		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(materializedResult), slotType: exprType(materializedResult), range: stmtRange))
 	end 'parseVarDecl'
 
 	// Decode escape sequences in a raw string fragment and return the
@@ -5236,15 +5290,20 @@ export type Parser
 		return true
 	end 'rewriteMethodCallOpToTryMethodCall'
 
-	// Pull the qualified callee name out of a tryCall op. Panics on any other op
-	// shape — callers are expected to have just rewritten a call into a tryCall.
+	// Pull the qualified callee name out of a tryCall or tryMethodCall op.
+	// Callers may have rewritten either a `call` (→ `tryCall`) or a
+	// `methodCall` (→ `tryMethodCall`) so we accept both shapes. For
+	// `tryCall` we apply the parser's qualifier rules (namespace, current
+	// file). For `tryMethodCall` the receiver-qualified callee isn't known
+	// until TypeResolution populates `project.resolvedCallees`, so at parse
+	// time we return the bare method name — sufficient for the parser's
+	// return-type refinement, which only needs to detect void-returning
+	// callees.
 	function qualifiedCalleeFromTryCall(op MaxonOp) returns String
-		if op.name != "tryCall" 'notTryCall'
-			panic("qualifiedCalleeFromTryCall: expected tryCall op, got '{op.name}'")
-		end 'notTryCall'
 		return match op 'extract'
 			tryCall(_, callee, callContext, _, _, _, _, _, _) gives qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: namespace, readerFilePath: filePath)
-			default panic("qualifiedCalleeFromTryCall: tryCall match failed")
+			tryMethodCall(_, _, methodName, _, _, _, _, _, _) gives String.from(methodName)
+			default panic("qualifiedCalleeFromTryCall: expected tryCall or tryMethodCall op, got '{op.name}'")
 		end 'extract'
 	end 'qualifiedCalleeFromTryCall'
 
@@ -7299,6 +7358,23 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	if project.enumTypes.contains(nameStr) or project.unresolvedEnums.contains(nameStr) 'isEnum'
 		return nameStr
 	end 'isEnum'
+	// Generic typealias: `typealias ByteArray = Array with Byte` resolves
+	// to `MaxonType.genericInstance(Array<Byte>)` in `genericTypealiases`.
+	// Receivers typed via the alias name (e.g. parameter `bytes ByteArray`)
+	// arrive here as `MaxonType.named("ByteArray")`; chase through the alias
+	// to recover the underlying struct name (`Array`) so field/method
+	// lookups against the alias work the same as against the base type.
+	if let aliased = try project.genericTypealiases.get(nameStr) 'haveAlias'
+		let aliasedName = aliased.nameOrEmpty(project)
+		if not aliasedName.isEmpty() 'haveAliasName'
+			if project.structTypes.contains(aliasedName) 'aliasIsStruct'
+				return aliasedName
+			end 'aliasIsStruct'
+			if project.enumTypes.contains(aliasedName) or project.unresolvedEnums.contains(aliasedName) 'aliasIsEnum'
+				return aliasedName
+			end 'aliasIsEnum'
+		end 'haveAliasName'
+	end 'haveAlias'
 	throw MaxonTypeStructNameError.notAStruct
 end 'maxonTypeStructName'
 

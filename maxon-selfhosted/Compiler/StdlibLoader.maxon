@@ -2,6 +2,13 @@ var cachedStdlibModule = MaxonModule.create()
 var stdlibParsedModule = MaxonModule.create()
 var stdlibLoaded = false
 var stdlibTypealiases = TypealiasMap.create()
+// Cache v17 in-process companion to `stdlibTypealiases`. The disk cache now
+// persists per-typealias visibility + sourceFilePath; we mirror that snapshot
+// here so the in-process fast path (same compiler reusing cached stdlib for
+// a second project) restores the same sidecar information. Without this,
+// file-private stdlib aliases collapse to `(global, stdlib-bootstrap path)`
+// on the second project and trip the parser's E2001 shadowing check.
+var stdlibTypealiasVisibilities = TypealiasVisibilityMap.create()
 var stdlibTypealiasRanges = TypealiasRangeMap.create()
 
 // Phase 11.6 cross-module inlining: process-wide snapshot of the stdlib's
@@ -58,10 +65,15 @@ let stdlibWhitelist = [
 	"stdlib/Range.maxon",
 	"stdlib/Array.maxon",
 	"stdlib/PrimitiveExtensions.maxon",
+	"stdlib/CharacterSet.maxon",
+	"stdlib/Character.maxon",
+	"stdlib/String.maxon",
 	"stdlib/helpers/string/utf8.maxon",
 	"stdlib/helpers/string/utf16.maxon",
 	"stdlib/helpers/string/hash.maxon",
 	"stdlib/helpers/string/unicodeCategory.maxon",
+	"stdlib/helpers/string/grapheme.maxon",
+	"stdlib/helpers/string/views.maxon",
 ]
 
 // A synthesized stdlib prelude. The real `stdlib/Process.maxon` declares
@@ -80,7 +92,7 @@ let stdlibWhitelist = [
 // itself — that file uses extensions and `Array with Element` machinery the
 // self-hosted compiler doesn't yet support. We omit the extension blocks
 // (those bring in `Array with Element` machinery that's not yet supported).
-let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport typealias Codepoint = int(0 to 1114111)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\nexport type String implements BuiltinStringLiteral\n\texport var managed __ManagedMemory\n\texport var isAsciiFlag bool\n\texport function equals(other String) returns bool\n\t\tlet lenA = managed.length()\n\t\tlet lenB = other.managed.length()\n\t\tif lenA != lenB 'lenDiff'\n\t\t\treturn false\n\t\tend 'lenDiff'\n\t\tfor i in 0 upto lenA 'cmp'\n\t\t\tlet ab = try managed.byteAt(i) otherwise return false\n\t\t\tlet bb = try other.managed.byteAt(i) otherwise return false\n\t\t\tif ab != bb 'diff'\n\t\t\t\treturn false\n\t\t\tend 'diff'\n\t\tend 'cmp'\n\t\treturn true\n\tend 'equals'\nend 'String'\nexport type Character implements BuiltinCharLiteral\n\texport var managed __ManagedMemory\nend 'Character'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\n"
+let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\n"
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
 
 export function findStdlibPath() returns FilePath
@@ -188,6 +200,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 			for (name, baseType) in stdlibTypealiases 'restoreAliases'
 				try project.typealiases.insert(name, value: baseType) otherwise ignore
 			end 'restoreAliases'
+			for (name, infos) in stdlibTypealiasVisibilities 'restoreAliasVis'
+				for info in infos 'eachInfo'
+					appendTypealiasVisibility(project, name: name, info: info)
+				end 'eachInfo'
+			end 'restoreAliasVis'
 			for (name, range) in stdlibTypealiasRanges 'restoreRanges'
 				try project.typealiasRanges.insert(name, value: range) otherwise ignore
 			end 'restoreRanges'
@@ -278,6 +295,13 @@ export function getStdlibModule(project Project) returns MaxonModule
 	for (name, baseType) in project.typealiases 'cacheAliases'
 		stdlibTypealiases.upsert(name, value: baseType)
 	end 'cacheAliases'
+	for (name, infos) in project.typealiasVisibilities 'cacheAliasVis'
+		var copied = TypealiasVisibilityInfoArray.create()
+		for info in infos 'eachInfo'
+			copied.push(info)
+		end 'eachInfo'
+		stdlibTypealiasVisibilities.upsert(name, value: copied)
+	end 'cacheAliasVis'
 	for (name, range) in project.typealiasRanges 'cacheRanges'
 		stdlibTypealiasRanges.upsert(name, value: range)
 	end 'cacheRanges'
