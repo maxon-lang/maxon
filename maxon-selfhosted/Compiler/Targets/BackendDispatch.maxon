@@ -49,19 +49,11 @@ export function loadRuntimeModule() returns StdModule
 	return cachedRuntimeModule
 end 'loadRuntimeModule'
 
-// True when `name` is a function defined in `runtime.std`. The stdlib-cache
-// build path uses this to filter runtime stubs out of the cached function
-// list — those bodies are emitted by the user-code pipeline's
-// `augmentWithRuntime`, so leaving them in the cache produces duplicate
-// symbols (one real body + one zero-sized stub) at link time, which then
-// confuses call-target resolution because two labels share the same name.
-//
-// Pre-step-6a.17 the simple `name.startsWith("mrt_")` prefix test caught
-// every runtime function. Step 6a.17 added the `__slab_*` and `mm_*`
-// allocator runtime, which don't carry the `mrt_` prefix; querying the
-// runtime module's function list directly stays correct as new runtime
-// helpers land without each one having to remember to update a hand-written
-// prefix check.
+// True when `name` is a function defined in `runtime.std`. Used to identify
+// runtime-defined names cheaply against the parsed runtime module. The
+// native stdlib cache now bakes most runtime bodies into the cache — the
+// linker pulls them in by name when user code references them. The wasm
+// cache still strips runtime bodies (the user pipeline supplies them).
 export function isRuntimeFunctionName(name String) returns bool
 	let runtimeModule = loadRuntimeModule()
 	for func in runtimeModule.functions 'check'
@@ -71,6 +63,31 @@ export function isRuntimeFunctionName(name String) returns bool
 	end 'check'
 	return false
 end 'isRuntimeFunctionName'
+
+// True for the entry-point variants. These two are emitted fresh per user
+// compile because each project's `__module_init_*` calls are patched into
+// `mrt_start`'s entry block (`patchMrtStartWithModuleInits`) — caching a
+// pre-patched body would bind it to whichever project's inits ran during
+// the cache build.
+export function isStartFunctionName(name String) returns bool
+	return name == "mrt_start" or name == "mrt_start_with_coverage"
+end 'isStartFunctionName'
+
+// True for runtime functions that must be emitted fresh per user compile
+// rather than served from the stdlib cache. Two categories qualify:
+//   1. Entry-point variants — see isStartFunctionName.
+//   2. Coverage helpers (mrt_cov_hit, mrt_cov_dump). Their bodies reference
+//      the `__data_cov_*` globals, which `augmentWithRuntime` registers
+//      only when `project.coverageEnabled` is true. The stdlib cache is
+//      built with coverage off, so caching these bodies would bake in
+//      unresolved global references that wouldn't relocate against the
+//      coverage-on user compile's globalData layout.
+// The remaining ~46 runtime functions (mrt_panic, mrt_write_*, __slab_*,
+// mm_*, __managed_mem_*, __layout_word_*, __destruct___ManagedMemory) are
+// project-independent and live in the cache.
+export function isPerCompileRuntimeName(name String) returns bool
+	return isStartFunctionName(name) or name == "mrt_cov_hit" or name == "mrt_cov_dump"
+end 'isPerCompileRuntimeName'
 
 export function findRuntimePath() returns FilePath
 	var dir = Directory.currentPath()
@@ -127,7 +144,22 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 		registerCoverageGlobals(project.globalData, numSites: project.covSites.nextId)
 	end 'reserveGlobals'
 	var augmented = StdModule.create()
-	augmented.merge(filteredRuntime)
+	// On native targets, when the stdlib cache is valid it already holds
+	// the runtime ObjectFunctions, so the user pipeline only needs the
+	// per-compile bodies (entry point + coverage helpers) merged in for
+	// real lowering — every other runtime call resolves to a cached body
+	// at link time. Trimming here means the user pipeline's lowerStdToMir,
+	// MIR passes, target lowering, and regalloc don't pay for ~46 runtime
+	// functions on every compile. The wasm cache build doesn't include
+	// runtime bodies (call_indirect's inline type-section index would need
+	// a fixup mechanism to be portable across cache and link), so on wasm
+	// we always merge the full filtered runtime.
+	let cacheHasRuntimeBodies = isStdlibCacheValid() and project.target.cpu != CpuArch.wasm32
+	if cacheHasRuntimeBodies 'trimToPerCompile'
+		augmented.merge(buildUserSideRuntime(filteredRuntime))
+	end 'trimToPerCompile' else 'mergeFullRuntime'
+		augmented.merge(filteredRuntime)
+	end 'mergeFullRuntime'
 	augmented.merge(module)
 	// After merge, mrt_start has body `[__slab_init, main, osExit, ret]`.
 	// Each per-file `__module_init_<n>` function (registered in
@@ -140,6 +172,61 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	patchMrtStartWithModuleInits(augmented, project: project)
 	return augmented
 end 'augmentWithRuntime'
+
+// Splits the runtime module along the per-compile boundary. The cache-side
+// caller wants the project-independent functions baked into the stdlib
+// cache (mrt_panic, mrt_write_*, __slab_*, mm_*, __managed_mem_*,
+// __layout_word_*, __destruct___ManagedMemory). The user-side caller wants
+// only the per-compile names (entry-point + coverage helpers — see
+// `isPerCompileRuntimeName`) so the user pipeline lowers them with the
+// project's coverage globals and `__module_init_*` patches in scope.
+//
+// Sharing block/op arrays with `source` is safe because every consumer
+// runs the result through `IrModule.merge`, which clones blocks and
+// rebases op indices into its destination module.
+//
+// Including signature-only stubs on the user side would add zero-blockRefs
+// functions to the user pipeline's targetModule.functions — the per-
+// function backend loop records each function's start label at the current
+// code offset, so a stub at zero bytes claims a label slot the linker
+// subsequently has to retarget, leaving stale entries in the symbol table.
+// That's why the user-side filter accepts ONLY the per-compile names rather
+// than mirroring the cache-side filter and dropping them.
+export function buildCacheSideRuntime(source StdModule) returns StdModule
+	return splitRuntimeBySide(source, keepPerCompile: false)
+end 'buildCacheSideRuntime'
+
+function buildUserSideRuntime(source StdModule) returns StdModule
+	return splitRuntimeBySide(source, keepPerCompile: true)
+end 'buildUserSideRuntime'
+
+function splitRuntimeBySide(source StdModule, keepPerCompile bool) returns StdModule
+	var trimmed = cloneRuntimeShellSharingBodies(source)
+	for func in source.functions 'eachFunc'
+		if isPerCompileRuntimeName(func.name) == keepPerCompile 'keep'
+			trimmed.functions.push(func)
+		end 'keep'
+	end 'eachFunc'
+	return trimmed
+end 'splitRuntimeBySide'
+
+// Build an empty-functions StdModule whose `ops`, `blocks`, and
+// `blockSourceInfo` arrays share entries with the source. Callers fill in
+// `functions` themselves with whichever subset they need, then the result
+// is consumed by `IrModule.merge`, which clones blocks and rebases op
+// indices into its destination — making the shared-reference approach
+// safe even if the destination later mutates ops or blocks.
+function cloneRuntimeShellSharingBodies(source StdModule) returns StdModule
+	var shell = StdModule.create()
+	shell.ops.append(source.ops)
+	for i in 0 upto source.blocks.count() 'copyBlocks'
+		let block = try source.blocks.get(i) otherwise panic("cloneRuntimeShellSharingBodies: blocks.get out of bounds")
+		shell.blocks.push(block)
+		let info = try source.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
+		shell.blockSourceInfo.push(info)
+	end 'copyBlocks'
+	return shell
+end 'cloneRuntimeShellSharingBodies'
 
 // Insert `std call __module_init_<n>` ops into mrt_start's entry block,
 // just before the existing `call main` op. No-op when the project has no
@@ -231,16 +318,7 @@ end 'stdCallOpIsCallTo'
 // the filtered list even though `mrt_start_with_coverage` appears last in
 // runtime.std.
 function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) returns StdModule
-	var filtered = StdModule.create()
-	filtered.ops.append(module.ops)
-	for i in 0 upto module.blocks.count() 'copyBlocks'
-		let block = try module.blocks.get(i) otherwise panic("filterRuntimeForCoverage: blocks.get out of bounds")
-		filtered.blocks.push(block)
-		// Keep blockSourceInfo lock-step with blocks so the merge that consumes
-		// this filtered module doesn't see a misaligned parallel array.
-		let info = try module.blockSourceInfo.get(i) otherwise BlockSourceInfo.empty()
-		filtered.blockSourceInfo.push(info)
-	end 'copyBlocks'
+	var filtered = cloneRuntimeShellSharingBodies(module)
 	// First pass: when coverage is on, emit the renamed coverage-start as the
 	// very first function so it wins the entry-point slot. Skip over it in the
 	// main pass below so it isn't pushed twice. u64.max is the sentinel meaning
@@ -253,7 +331,12 @@ function filterRuntimeForCoverage(module StdModule, coverageEnabled bool) return
 				// Clone before renaming — `module` is the shared cached runtime
 				// module and struct .get returns a reference. Mutating `func.name`
 				// directly would bleed the rename back into subsequent calls.
-				var renamed = func.clone()
+				// `cloneWithBlockRefs` carries the body's blockRefs across so
+				// the renamed function lowers like a real entry point — bare
+				// `clone` would drop them and the backend would emit a zero-
+				// byte symbol at offset 0, hiding `mrt_start` behind whichever
+				// runtime function got emitted next.
+				var renamed = IrFunction.cloneWithBlockRefs(func)
 				renamed.name = "mrt_start"
 				filtered.functions.push(renamed)
 				coverageStartIdx = funcIdx

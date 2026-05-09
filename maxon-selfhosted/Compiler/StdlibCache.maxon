@@ -68,7 +68,18 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v20: typealias visibility sidecar now uses the shared writeVisibility
 // codec (4-byte dword) instead of an ad-hoc 1-byte tag, matching every
 // other Visibility-typed field.
-let CACHE_FORMAT_VERSION = 20
+// v21: runtime function bodies (mrt_panic, mrt_write_*, __slab_*, mm_*,
+// __managed_mem_*, __layout_word_*, __destruct___ManagedMemory) are now
+// pre-compiled into the cache as ObjectFunctions alongside stdlib bodies.
+// The user-side augmentWithRuntime supplies signature-only stubs for these
+// names and merges only the entry-point variant (mrt_start /
+// mrt_start_with_coverage) as a real body so patchMrtStartWithModuleInits
+// can wire per-project __module_init_* calls. Linker reachability
+// (computeNeededStdlibFunctions) inherits per-function inclusion for
+// runtime callees automatically — they're keyed by name like every other
+// ObjectFunction. Old caches are incompatible because they exclude
+// runtime bodies; the version bump forces a rebuild.
+let CACHE_FORMAT_VERSION = 21
 
 // ============================================================
 // Types

@@ -21,4 +21,9 @@ maxon-selfhosted\.maxon\maxon-selfhosted.exe spec-test
 if errorlevel 1 exit /b 1
 
 echo.
+echo === Running Self-Hosted WASM Spec Tests ===
+maxon-selfhosted\.maxon\maxon-selfhosted.exe spec-test --target=wasm32-wasi
+if errorlevel 1 exit /b 1
+
+echo.
 echo === All steps completed successfully ===

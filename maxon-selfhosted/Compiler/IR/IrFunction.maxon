@@ -187,6 +187,13 @@ export type IrFunction
 		}
 	end 'createFromStd'
 
+	// Copies signature, type info, and a fresh-empty `blockRefs`. Callers
+	// that need the source's block references must copy them explicitly —
+	// the empty-list contract is what every existing site relies on
+	// (`IrModule.cloneFunc` rebases blockRefs by an offset before pushing,
+	// `MirToX64Conversion` and `Arm64Backend` repopulate from freshly
+	// created destination blocks). See `cloneWithBlockRefs` for callers
+	// that want the source's block references preserved verbatim.
 	export static function clone(src IrFunction) returns IrFunction
 		return Self{
 			name: src.name,
@@ -216,6 +223,21 @@ export type IrFunction
 			slotMaxonTypes: src.slotMaxonTypes
 		}
 	end 'clone'
+
+	// Copies signature, type info, and the source's `blockRefs` verbatim.
+	// Used by `filterRuntimeForCoverage` to clone `mrt_start_with_coverage`
+	// (rename it to `mrt_start`) without losing the blockRefs that point
+	// at its body. `clone()` alone would produce a body-less function
+	// whose backend emit lands as a zero-byte symbol at the entry-point
+	// slot, hiding the real entry behind whatever runtime function got
+	// emitted next.
+	export static function cloneWithBlockRefs(src IrFunction) returns IrFunction
+		var copy = IrFunction.clone(src)
+		for blockRef in src.blockRefs 'eachBlock'
+			copy.blockRefs.append(blockRef)
+		end 'eachBlock'
+		return copy
+	end 'cloneWithBlockRefs'
 end 'IrFunction'
 
 export typealias IrFunctionArray = Array with IrFunction

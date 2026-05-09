@@ -362,10 +362,57 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// Skip insertRangeChecks — it emits mrt_panic calls that require runtime
 	// functions, but stdlib functions take validated inputs from their callers.
 	pipeline.addPass(PassKind.lowerABI)
-	pipeline.addPass(PassKind.lowerStdToMir)
 
-	// WASM stops here; native targets continue through phase 7
+	// Run Phase 4 passes first; runtime bodies (already-Std, post-mem2reg
+	// from loadRuntimeModule) get spliced in next so they ride through
+	// lowerStdToMir + backend phases the same way stdlib bodies do.
+	try pipeline.run() otherwise 'midErr'
+		logInfo(LogCategory.compiler, message: () gives "Stdlib cache build failed during mid pipeline")
+		return
+	end 'midErr'
+
+	// Detach the post-dce snapshot before merging runtime bodies. The
+	// snapshot and `pipeline.stdModule` share array references — mutating
+	// one mutates the other — and the user-pipeline inliner reads the
+	// snapshot as its source of stdlib bodies. If runtime bodies leak into
+	// the snapshot, the inliner inlines runtime helpers (mm_alloc, the
+	// __slab_* family) into user `main`, both bloating user code and
+	// breaking the linker's expectation that runtime callees resolve
+	// through the cached ObjectFunctions by name.
+	var detachedSnapshot = StdModule.create()
+	detachedSnapshot.merge(pipeline.stdModulePostDceSnapshot)
+	pipeline.stdModulePostDceSnapshot = detachedSnapshot
+
 	let isWasm = project.target.cpu == CpuArch.wasm32
+
+	// Splice runtime bodies into the stdlib StdModule on native targets.
+	// The cache then emits ObjectFunctions for the ~46 project-independent
+	// runtime functions (mrt_panic, mrt_write_*, __slab_*, mm_*,
+	// __managed_mem_*, __layout_word_*, __destruct_*) — the linker pulls
+	// them in by name when user code references them. The per-compile
+	// names (entry-point variants and coverage helpers) stay out because
+	// `patchMrtStartWithModuleInits` and the coverage globals are project-
+	// specific and applied freshly per user compile.
+	//
+	// WASM emission stays on the old "runtime emitted by user pipeline"
+	// path because the wasm `call_indirect` instruction encodes a type-
+	// section index inline in the body bytes — caching wasm runtime bodies
+	// would require a fixup mechanism similar to `callFixups` for those
+	// type indices, plus walking stdlib/runtime indirect-call types in
+	// `emitWasmModule`'s type-section build. The win on wasm is also
+	// smaller because wasm doesn't go through commuteForCoalescing /
+	// scheduleInstructions / lowerMirToTarget / allocateRegisters.
+	if not isWasm 'spliceRuntime'
+		let runtimeForCache = buildCacheSideRuntime(loadRuntimeModule())
+		pipeline.stdModule.merge(runtimeForCache)
+	end 'spliceRuntime'
+
+	// Continue through Phase 5+: lowerStdToMir converts the merged module
+	// (stdlib functions + runtime bodies on native, stdlib only on wasm)
+	// to MIR. Reset the pass list and re-run on the same pipeline so the
+	// stdModule, mirModule, and project state stay coherent.
+	pipeline.passes = PassKindArray.create()
+	pipeline.addPass(PassKind.lowerStdToMir)
 
 	if not isWasm 'nativePasses'
 		pipeline.addPass(PassKind.commuteForCoalescing)
@@ -377,49 +424,39 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 		return
 	end 'pipelineErr'
 
+	// On wasm, restore the old `injectRuntimeSignatures` post-MIR fixup so
+	// stdlib calls into runtime resolve at backend lowering time. The
+	// per-target filter below strips runtime stubs back out before cache
+	// write, mirroring the pre-change wasm behavior.
+	if isWasm 'injectWasmRuntimeSigs'
+		injectRuntimeSignatures(pipeline.mirModule)
+	end 'injectWasmRuntimeSigs'
+
 	// Phase 11.6 cross-module inlining: capture the stdlib's post-dce
 	// StdModule (PassPipeline.stdModulePostDceSnapshot is populated at the
 	// `dce` step's exit) for the user pipeline's inliner to consume.
 	// Stored both in-process (so the immediately-following user pipeline
 	// run sees it) and into the cache buffer (for next-run cache hits).
+	// Captured pre-runtime-merge so the inliner doesn't see runtime bodies
+	// it would never inline anyway (panic-helper gate, splice-shape limits).
 	cachedStdlibStdModule = pipeline.stdModulePostDceSnapshot
-
-	// Inject runtime function signatures into the post-MIR module so that
-	// per-function backend lowering can resolve calls like `mrt_panic` when
-	// stdlib code issues them. Only signatures (name + paramTypes + returnType)
-	// land here — no blocks/ops — so the backend emits empty stubs for them
-	// that the `mrt_*` filter below drops before writing the cache. The
-	// runtime's real bodies are emitted by the user-code pipeline into the
-	// final executable, keeping the stdlib cache free of duplicate `mrt_*`.
-	injectRuntimeSignatures(pipeline.mirModule)
 
 	// Build cache data
 	var cacheData = StdlibCacheData.create()
 	cacheData.globalData = pipeline.globalData
 	captureStdlibMetadata(project, data: cacheData)
-	// Phase 11.6 cross-module inlining: persist the stdlib's post-dce
-	// StdModule to disk so subsequent process invocations that hit the
-	// cache can still feed the inliner with stdlib bodies.
 	cacheData.inlinerStdModule = pipeline.stdModulePostDceSnapshot
 
-	// Emit per-function bytecode (dispatched by target). augmentWithRuntime
-	// merged runtime function bodies into the pipeline's module so per-function
-	// lowering could resolve runtime callees (mrt_*, __slab_*, mm_*). We strip
-	// those entries back out of the cache: the user-code pipeline's
-	// augmentWithRuntime is the source of truth for runtime bodies in the
-	// final binary.
-	//
-	// Without the filter, the user-code pipeline emits real bodies for
-	// mrt_write_stdout etc. AND the cache also emits empty stubs for the same
-	// names, then funcSigs.upsert resolves the name to the (later-registered)
-	// empty-stub index — main calls the stub instead of the real body, so all
-	// output silently disappears (wasmtime trace shows proc_exit but no fd_write).
-	//
-	// Step 6a.17 generalised the predicate from a `mrt_` prefix check to a
-	// lookup against the runtime module's function list so the slab/MM
-	// allocator runtime (`__slab_*`, `mm_*`) gets stripped too — without that,
-	// every runtime call in stdlib code resolves to a zero-sized stub at the
-	// end of .text instead of the real body.
+	// Emit per-function bytecode (dispatched by target).
+	// Native: the merged stdModule contains runtime bodies (excluding
+	// per-compile names — entry-point variants and coverage helpers); they
+	// lower into ObjectFunctions identically to stdlib bodies, and the
+	// linker pulls them by name when user code references them. The
+	// per-compile filter strips empties for those names defensively.
+	// Wasm: runtime bodies are NOT in the pipeline (signatures only via
+	// `injectRuntimeSignatures`); the user pipeline supplies them. Strip
+	// every runtime function from the cache so the empty stubs the wasm
+	// emitter produces for runtime signatures don't shadow real bodies.
 	if isWasm 'emitWasm'
 		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter((func) gives not isRuntimeFunctionName(func.name))
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
@@ -430,7 +467,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
-		cacheData.functions = emittedFunctions.filter((func) gives not isRuntimeFunctionName(func.name))
+		cacheData.functions = emittedFunctions.filter((func) gives not isPerCompileRuntimeName(func.name))
 		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
 	end 'emitNative'
 
@@ -451,23 +488,21 @@ end 'buildStdlibNativeWith'
 // pipeline's MirModule. Backend param-type lookups (lookupFuncParamTypes)
 // walk IrFunctionArray looking for a name match, so once these entries
 // exist, calls from stdlib code into `mrt_*` resolve correctly during
-// per-function x64/arm64 lowering.
+// per-function wasm lowering. Used only on the wasm cache build path —
+// native targets splice the full runtime bodies into the StdModule before
+// lowerStdToMir, so they don't need this post-MIR signature fixup.
 //
-// Note we don't copy blockRefs or any ops — only the header — so the
-// backend emits an empty stub that the `mrt_*` filter (in
-// buildAndWriteStdlibCache) drops before the cache is written.
+// We don't copy blockRefs or any ops — only the header — so the backend
+// emits an empty stub that the per-target filter strips before the cache
+// is written. The wasm path's filter strips every runtime body (matching
+// the pre-change behavior where the user pipeline supplied them).
 function injectRuntimeSignatures(mirModule MirModule)
 	let runtimePath = findRuntimePath()
 	if runtimePath.isEmpty() 'noRuntime'
 		return
 	end 'noRuntime'
-	// Route through loadRuntimeModule's process-wide cache so runtime.std is
-	// lexed+parsed at most once per process, not once per stdlib build.
 	let runtime = loadRuntimeModule()
 	for rtFunc in runtime.functions 'eachRt'
-		// Deduplicate: skip runtime functions that already have a signature
-		// in the module (defensive — ordinarily the stdlib doesn't redefine
-		// `mrt_*`).
 		var alreadyPresent = false
 		for existing in mirModule.functions 'checkExisting'
 			if existing.name == rtFunc.name 'match'
