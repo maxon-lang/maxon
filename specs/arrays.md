@@ -470,7 +470,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: error.unused-array-typealias -->
+<!-- test: error.unused-array-typealias -->
 A `typealias X = Array with Y` declaration must be referenced **explicitly**
 by name (`X.create()`, `let v X = ...`, etc.) — being implicitly inferable
 from a bare `[...]` array literal does not count as a use. This avoids silent

@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **45 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **505 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **45 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **510 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -206,7 +206,7 @@ Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred 
 - **TypeResolution**: `stringConst`/`stringInterp` produce `MaxonType.named("String")` once String is registered. `namedIdCastCategory` special-cases `"String"` → `CastCategory.string` so call/cast diagnostics distinguish String from generic struct-pointer i64. `materializeStringConstIfNeeded` emits the IR op when stringConst flows into a binop/cmp/call arg or interp part.
 
 ### Verified
-- Spec test parity: **500/505 passed** (same as the pre-Phase-7 baseline — no regression). The 5 remaining failures are pre-existing `string-array-literal-*` cases blocked on Array element-type inference (Array<String> not yet supported) plus one error-detection test (`error.unused-array-typealias`) that lacks a corresponding self-hosted check.
+- Spec test parity: **500/505 passed** (same as the pre-Phase-7 baseline — no regression). The 5 remaining failures are pre-existing `string-array-literal-*` cases blocked on Array element-type inference (Array<String> not yet supported) plus one error-detection test (`error.unused-array-typealias`) that lacked a corresponding self-hosted check at the time. The unused-typealias check (E3062) landed in 2026-05-09; `arrays` now passes 46/46.
 - End-to-end Phase 7 features verified: string literals (`let s = "hello"`), `print(s)`, integer interpolation (`"x = {x}"`), float interpolation (`"y = {y}"`), bool interpolation (`"b = {b}"`), nested interpolation (`"{ "{ "inner" }" }"`).
 
 ### Phase 7 finish (2026-05-07 follow-up — Phase-11.4-adjacent unblock)
@@ -627,6 +627,8 @@ These are stdlib types built on Array + generics + Hashable. Phase 6's `__Manage
 ## Phase 15: Advanced Features & Remaining Specs (~20 specs)
 
 **Specs already passing in this bucket**: `panic`, `range-check-panic`, `unused-parameters`, `duplicate-block-identifiers`, `unknown-keyword-error`, `expected-expression-error`, `missing-return-error`, `stdlib-autodiscovery`.
+
+**E3062 (unused typealias)** landed 2026-05-09 in [`Parser.maxon`](Compiler/Parser.maxon): per-file `localTypealiases` tracks file-private `typealias` decls, `usedTypeAliases` is populated at every parseTypeRef / qualified-static-call / struct-literal / `as`-cast / typealias-RHS-name site, and `checkUnusedTypeAliases` runs at end-of-module. Implicit-inferred uses from bare `[...]` array literals don't count — only literal `Name`-token references do (matching the C# bootstrap). Unblocked `arrays/error.unused-array-typealias` so the `arrays` spec is now 46/46.
 
 ### Specs still to unlock
 `tuples`, `namespaces`, `multi-file`, `export-keyword`, `command-line-args`, `file-io`, `directory`, `panic-stack-trace`, `alloc-tracking`, `codegen-internals`, `managed-memory-element-size`, `stdlib-basic`, `grapheme-clusters`, `slice-memory`, `discarded-results`, `duplicate-functions`, `type-checking`, `function-overloads`, `init-from-literal`, `initablefromarrayliteral`, `register-allocator`, `unused-variables`, `advent`.

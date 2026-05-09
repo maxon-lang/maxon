@@ -206,6 +206,15 @@ export type Parser
 	// monotonically across every literal in the file regardless of how many
 	// user functions sit between them.
 	var moduleInitSynthCounter ParsedInt
+	// E3062 (unused typealias) tracking. `localTypealiases` records every
+	// file-private `typealias Name = ...` parsed in this file with its source
+	// location; `usedTypeAliases` accumulates every type-name token that
+	// resolved through a type-reference site. After parseModule finishes,
+	// `checkUnusedTypeAliases` reports any local alias that wasn't referenced.
+	// Implicit-inferred uses from bare `[...]` array literals don't count —
+	// only literal `Name`-token references do, matching the C# bootstrap.
+	var localTypealiases LocalTypealiasArray
+	var usedTypeAliases ReferencedVarSet
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -216,7 +225,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -265,8 +274,23 @@ export type Parser
 		// MaxonModule is handed off.
 		finalizeModuleInit()
 
+		checkUnusedTypeAliases()
+
 		return module
 	end 'parseModule'
+
+	// E3062: every file-private `typealias` recorded in this Parser must be
+	// referenced explicitly somewhere in the file. Implicit uses inferred from
+	// a bare `[...]` array literal don't count — the alias must appear by name
+	// at a type position (parseTypeRef) or wherever else `usedTypeAliases`
+	// gets populated. Mirrors maxon-sharp's `CheckUnusedTypeAliases`.
+	function checkUnusedTypeAliases()
+		for entry in localTypealiases 'eachAlias'
+			if not usedTypeAliases.contains(entry.name) 'isUnused'
+				reportCompileError(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{entry.name}'", line: entry.line, column: entry.column, filePath: filePath)
+			end 'isUnused'
+		end 'eachAlias'
+	end 'checkUnusedTypeAliases'
 
 	// Reject declarations whose name starts with `__`, and reject `self` as a
 	// binding name. The `__` prefix is reserved for compiler-internal symbols
@@ -368,6 +392,14 @@ export type Parser
 			let pid = project.typeParameters.intern(currentTypeName, paramName: typeToken.value)
 			return MaxonType.typeParameter(pid)
 		end 'isTypeParam'
+
+		// E3062 use-tracking: every parseTypeRef site that consumes a real
+		// identifier counts as a use of any same-named local typealias. Only
+		// identifier tokens get tracked — keyword type names (`int`, `bool`,
+		// `String`) cannot be aliases anyway.
+		if typeToken.kind == TokenKind.identifier 'trackUse'
+			usedTypeAliases.insert(element: typeToken.value)
+		end 'trackUse'
 
 		// Phase 11.0: extend `Base with Args`. After consuming the base name,
 		// peek for `with`; if present, parse a comma-separated arg list (or a
@@ -2033,6 +2065,12 @@ export type Parser
 		if not hasExisting 'firstEntry'
 			project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
 		end 'firstEntry'
+		// File-private aliases participate in the unused-typealias check.
+		// Exported / module-visible aliases skip it because cross-file uses
+		// aren't visible to a single Parser instance.
+		if visibility == Visibility.file 'isLocal'
+			localTypealiases.push(LocalTypealias.create(nameToken.value, line: nameToken.line, column: nameToken.column))
+		end 'isLocal'
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
@@ -2111,6 +2149,9 @@ export type Parser
 		// StdType-typed `project.typealiases` map until step 5 swaps them over.
 		if not sawValidBase and baseToken.kind == TokenKind.identifier 'isAliasName'
 			let targetToken = try consume()
+			// E3062: `typealias B = A` and `typealias E = Base with(A,B)` both
+			// reference the named base/args explicitly.
+			usedTypeAliases.insert(element: targetToken.value)
 			if at(TokenKind.with) 'hasWith'
 				try eat(TokenKind.with)
 				var argNames = StringArray.create()
@@ -2123,6 +2164,7 @@ export type Parser
 							throw ParserError.unhandledToken
 						end 'badArg'
 						_ = try consume()
+						usedTypeAliases.insert(element: argToken.value)
 						argNames.push(argToken.value)
 					end 'argLoop'
 					try expect(TokenKind.rightParen)
@@ -2134,6 +2176,7 @@ export type Parser
 						throw ParserError.unhandledToken
 					end 'badSingle'
 					_ = try consume()
+					usedTypeAliases.insert(element: argToken.value)
 					argNames.push(argToken.value)
 				end 'singleArg'
 
@@ -5416,6 +5459,8 @@ export type Parser
 			return internMaxonType(project, name: "byte")
 		end 'isByte'
 		if typeToken.kind == TokenKind.identifier 'isIdent'
+			// E3062: `expr as IntArray` is a use of `IntArray`.
+			usedTypeAliases.insert(element: typeToken.value)
 			return internMaxonType(project, name: typeToken.value)
 		end 'isIdent'
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected type name after 'as'", line: typeToken.line, column: typeToken.column, filePath: filePath)
@@ -5584,6 +5629,10 @@ export type Parser
 				// from a user-defined `Widget.create(...)` without resolving
 				// the qualifier. `validateCallArgLabels` re-applies the rule
 				// with type-awareness.
+				// E3062 use-tracking: the qualifier in `Foo.method(...)` is the
+				// most common explicit use of an `Array with X` typealias
+				// (`IntArray.create()`).
+				usedTypeAliases.insert(element: token.value)
 				let calleeName = "{token.value}.{memberToken.value}"
 				try eat(TokenKind.dot)
 				try eat(TokenKind.identifier)
@@ -5618,6 +5667,9 @@ export type Parser
 			let memberIsIdent = memberToken.kind == TokenKind.identifier
 			let memberIsEnumCaseKeyword = prefixIsEnum and not memberToken.value.isEmpty()
 			if (memberIsIdent or memberIsEnumCaseKeyword) and afterMember.kind != TokenKind.leftParen 'isFieldRead'
+				// E3062 use-tracking: `Foo.field` and `Foo.case` count as
+				// explicit references to `Foo`.
+				usedTypeAliases.insert(element: token.value)
 				let qualifiedName = "{token.value}.{memberToken.value}"
 				try eat(TokenKind.dot)
 				_ = try consume()
@@ -5678,6 +5730,8 @@ export type Parser
 		// The parser doesn't peek into `structTypes`; the downstream lowering
 		// reports an error if the name doesn't resolve to a struct.
 		if at(TokenKind.leftBrace) 'isStructLiteral'
+			// E3062: `Foo{...}` is a literal use of `Foo`.
+			usedTypeAliases.insert(element: token.value)
 			return try parseStructLiteral(block, typeName: token.value, typeToken: token, typeNameConsumed: true)
 		end 'isStructLiteral'
 
@@ -7809,6 +7863,22 @@ end 'ParamLocation'
 
 typealias ParamLocationArray = Array with ParamLocation
 typealias ReferencedVarSet = Set with String
+
+// Tracks each `typealias` declaration parsed in this file so the parser can
+// emit E3062 (unused typealias) at end-of-module. Only file-private aliases
+// participate in the unused check — exported / module-visible aliases skip it
+// because cross-file uses aren't observable from a single Parser instance.
+type LocalTypealias
+	export let name String
+	export let line ErrorLineNumber
+	export let column ErrorColumnNumber
+
+	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns LocalTypealias
+		return Self{name: name, line: line, column: column}
+	end 'create'
+end 'LocalTypealias'
+
+typealias LocalTypealiasArray = Array with LocalTypealias
 
 // Optional Token wrapper returned by consumeArgLabel. Maxon has no built-in
 // optional type, so a small struct with a presence flag keeps the call-site
