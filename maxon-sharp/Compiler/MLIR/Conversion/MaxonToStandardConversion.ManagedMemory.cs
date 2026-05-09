@@ -2001,6 +2001,7 @@ public static partial class MaxonToStandardConversion {
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
+    Dictionary<string, IrType> typeDefs,
     MaxonValue? errorFlagValue,
     VarRegistry temps) {
 
@@ -2025,7 +2026,8 @@ public static partial class MaxonToStandardConversion {
         // the cursor argument's concrete element type registered in typeDefs
         // (after monomorphization substitutes the generic Element parameter).
         var peekStructTypeName = (result as MaxonStruct)?.TypeName ?? (result as MaxonEnum)?.TypeName;
-        LowerCursorPeekCall(args, result, resultKind.Value, peekStructTypeName, block, valueMap, varTypes, errorFlagValue, temps);
+        var (_, _, _, _, _, peekStorageType) = DeriveManagedElementInfo(args[0], valueMap, typeDefs);
+        LowerCursorPeekCall(args, result, resultKind.Value, peekStructTypeName, peekStorageType, block, valueMap, varTypes, errorFlagValue, temps);
         return true;
       default:
         return false;
@@ -2201,7 +2203,7 @@ public static partial class MaxonToStandardConversion {
     EmitBoundsCheck(block, position, length, "__mm_panic_cursor_oob");
 
     EmitCursorElementLoad(block, cursorVarName, buffer, position, op.ResultKind,
-      op.IsStructElement, op.StructElementTypeName, op.Result, valueMap, varTypes, temps, "ccur");
+      op.IsStructElement, op.StructElementTypeName, op.ElementStorageType, op.Result, valueMap, varTypes, temps, "ccur");
   }
 
   /// <summary>
@@ -2221,6 +2223,7 @@ public static partial class MaxonToStandardConversion {
     MaxonValueKind resultKind,
     bool isStructElement,
     string? structElementTypeName,
+    IrType? elementStorageType,
     MaxonValue result,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -2246,7 +2249,9 @@ public static partial class MaxonToStandardConversion {
       EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
       valueMap[result] = new StdHeapPtr(loadOp.Result.Id, typeName, tempName);
     } else {
-      var elemType = GetManagedMemElementType(resultKind, "EmitCursorElementLoad");
+      // Prefer the precise narrow storage type when supplied (mirrors LowerManagedMemGet's
+      // behavior). Without it, a u32 element loads as i64 and reads adjacent slot bits.
+      var elemType = elementStorageType ?? GetManagedMemElementType(resultKind, "EmitCursorElementLoad");
       var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
       block.AddOp(loadOp);
       valueMap[result] = loadOp.Result;
@@ -2378,6 +2383,7 @@ public static partial class MaxonToStandardConversion {
     MaxonValue? result,
     MaxonValueKind resultKind,
     string? structElementTypeName,
+    IrType? elementStorageType,
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -2408,7 +2414,7 @@ public static partial class MaxonToStandardConversion {
 
     var isStructElement = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum;
     EmitCursorElementLoad(block, cursorVarName, buffer, safeTarget.Result, resultKind,
-      isStructElement, structElementTypeName, result, valueMap, varTypes,
+      isStructElement, structElementTypeName, elementStorageType, result, valueMap, varTypes,
       temps, tempPrefix: "cpeek");
   }
 }

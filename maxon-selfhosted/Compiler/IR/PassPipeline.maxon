@@ -176,7 +176,9 @@ export type PassPipeline
 			let name = passKindToString(pass)
 			logDebug(LogCategory.ir, message: () gives "=== Running pass: {name} ===")
 
+			let passStart = passTimerStart()
 			self.dispatch(pass)
+			recordPassSince(name, startMs: passStart)
 
 			logTrace(LogCategory.ir, message: () gives self.summarizeForPass(pass, name: name))
 
@@ -315,7 +317,11 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 	if stdlibFuncNames.count() > 0 'haveStdlib'
 		module.merge(stdlibSnapshot)
 	end 'haveStdlib'
-	var inlined = inlineModule(module, project: project)
+	// Inliner needs stdlib bodies as *callees* but not as *callers* — they
+	// were already inlined when the stdlib was compiled. On a tiny user input
+	// the caller-walk over hundreds of stdlib functions dominates the user
+	// pipeline; skipping them recovers most of that cost.
+	var inlined = inlineModule(module, project: project, skipCallerNames: stdlibFuncNames)
 	if stdlibFuncNames.count() > 0 'dropMerged'
 		inlined.dropFunctionsByName(names: stdlibFuncNames)
 	end 'dropMerged'
@@ -533,6 +539,97 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		scheduleInstructions gives PipelinePhase.mir
 	end 'phase'
 end 'classifyPhase'
+
+// Profiling support: per-pass wall-clock accumulator across every pipeline
+// run in the process. The spec runner / build CLI drains this via
+// dumpPassTimings() at the end of a run when timing is enabled. Instrumentation
+// is gated on `passTimingsEnabled` so the per-pass `Process.currentTimeMs()`
+// reads aren't paid in production runs.
+export typealias PassMillis = int(0 to u64.max)
+typealias PassMillisMap = Map with(String, PassMillis)
+
+var passTimingsEnabled = false
+var passTimings = PassMillisMap.create()
+var passInvocations = PassMillisMap.create()
+
+export function enablePassTimings()
+	passTimingsEnabled = true
+end 'enablePassTimings'
+
+export function passTimingsActive() returns bool
+	return passTimingsEnabled
+end 'passTimingsActive'
+
+export function recordPassTime(passName String, elapsedMs PassMillis)
+	let prev = try passTimings.get(passName) otherwise 0 as PassMillis
+	passTimings.upsert(passName, value: prev + elapsedMs)
+	let prevCount = try passInvocations.get(passName) otherwise 0 as PassMillis
+	passInvocations.upsert(passName, value: prevCount + 1)
+end 'recordPassTime'
+
+// Capture a wall-clock start point only when timings are active. Returns 0
+// when inactive — a no-op so callers can write the same shape regardless.
+export function passTimerStart() returns PassMillis
+	return (Process.currentTimeMs() if passTimingsEnabled else 0) as PassMillis
+end 'passTimerStart'
+
+// Record `now - startMs` against `passName` when timings are active. Pair
+// with `passTimerStart()` to wrap a block of work without an explicit
+// `if passTimingsActive()` at every callsite.
+export function recordPassSince(passName String, startMs PassMillis)
+	if not passTimingsEnabled 'inactive'
+		return
+	end 'inactive'
+	recordPassTime(passName, elapsedMs: ((Process.currentTimeMs() as PassMillis) - startMs) as PassMillis)
+end 'recordPassSince'
+
+// Print per-pass totals + invocation counts, descending by total ms. Selection
+// sort over the (small) pass list is fine. Resets the accumulator after
+// dumping so subsequent runs in the same process measure their own bursts.
+export function dumpPassTimings()
+	if passTimings.count() == 0 'noData'
+		return
+	end 'noData'
+	var rows = StringArray.create()
+	for (name, _) in passTimings 'collect'
+		rows.push(name)
+	end 'collect'
+	let n = rows.count()
+	for i in 0 upto n 'outer'
+		var bestIdx = i
+		let firstName = try rows.get(i) otherwise panic("dumpPassTimings: rows.get({i}) OOB")
+		var bestMs = try passTimings.get(firstName) otherwise panic("dumpPassTimings: missing timing for '{firstName}'")
+		for j in (i + 1) upto n 'inner'
+			let cn = try rows.get(j) otherwise panic("dumpPassTimings: rows.get({j}) OOB")
+			let cm = try passTimings.get(cn) otherwise panic("dumpPassTimings: missing timing for '{cn}'")
+			if cm > bestMs 'newBest'
+				bestMs = cm
+				bestIdx = j
+			end 'newBest'
+		end 'inner'
+		if bestIdx != i 'swap'
+			let tmp = (try rows.get(i) otherwise panic("dumpPassTimings: row swap get(i) OOB")).clone()
+			let other = (try rows.get(bestIdx) otherwise panic("dumpPassTimings: row swap get(bestIdx) OOB")).clone()
+			try rows.set(i, value: other) otherwise panic("dumpPassTimings: row swap set(i) out of bounds")
+			try rows.set(bestIdx, value: tmp) otherwise panic("dumpPassTimings: row swap set(bestIdx) out of bounds")
+		end 'swap'
+	end 'outer'
+
+	var grandTotal = 0 as PassMillis
+	for sumName in rows 'sumLoop'
+		grandTotal = grandTotal + (try passTimings.get(sumName) otherwise panic("dumpPassTimings: missing timing for '{sumName}'"))
+	end 'sumLoop'
+
+	print("Pass timings (descending; total {grandTotal}ms):\n")
+	for name in rows 'printRow'
+		let ms = try passTimings.get(name) otherwise panic("dumpPassTimings: missing timing for '{name}'")
+		let count = try passInvocations.get(name) otherwise panic("dumpPassTimings: missing invocations for '{name}'")
+		print("  {name}: {ms}ms across {count} invocations\n")
+	end 'printRow'
+
+	passTimings = PassMillisMap.create()
+	passInvocations = PassMillisMap.create()
+end 'dumpPassTimings'
 
 // Returns a human-readable name for a pass, used for logging.
 export function passKindToString(pass PassKind) returns String

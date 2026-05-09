@@ -96,6 +96,11 @@ public static class ForLoopIteratorElisionPass {
     public MaxonValueKind ElementKind;
     // TypeParamName when element is TypeParameter.
     public string? ElementTypeParamName;
+    // Precise narrow storage type when the Element is a ranged primitive (e.g. U32
+    // for `int(0..u32.max)`); null for non-ranged elements. The lowering needs
+    // this to pick the correct load width — without it, a u32 slot is loaded as
+    // i64 and reads adjacent bytes.
+    public IrType? ElementStorageType;
     // Body op indices delimiting the [struct_var_ref iter .. assign __forin_result_N]
     // range we replace with a managed_mem_get + assign.
     public int BodyIterRefIdx;
@@ -167,6 +172,15 @@ public static class ForLoopIteratorElisionPass {
         && elemKind != MaxonValueKind.Byte && elemKind != MaxonValueKind.Short) {
       return null;
     }
+    // Mirror DeriveManagedElementInfo: ranged primitives carry a precise narrow
+    // storage type (e.g. U32 for `int(0..u32.max)`). Without it the lowering would
+    // load u32 elements as i64 and overlap into the next slot.
+    var elemStorageType = elementType switch {
+      IrRangedPrimitiveType rpt => rpt.OptimalType,
+      _ when elementType == IrType.I8 => IrType.U8,
+      _ when elementType == IrType.I16 => IrType.U16,
+      _ => (IrType?)null
+    };
 
     // Find preamble block by name (cond_br's "then" target). The preamble is a
     // single-op block that jumps to the body; the header derives its label from
@@ -263,6 +277,7 @@ public static class ForLoopIteratorElisionPass {
       IterableTypeName = iterableTypeName,
       ElementKind = elemKind,
       ElementTypeParamName = elemTypeParam,
+      ElementStorageType = elemStorageType,
       BodyIterRefIdx = bIterRefIdx,
       BodyForinResultAssignIdx = bForinResultAssignIdx,
       ForinResultVarName = forinResultAssign.VarName,
@@ -346,6 +361,7 @@ public static class ForLoopIteratorElisionPass {
     var getOp = new MaxonManagedMemGetOp(mmRef.Result, bodyIdxRef.Result, m.ElementKind) {
       IsBoundsCheckSafe = true,
       TypeParamName = m.ElementTypeParamName,
+      ElementStorageType = m.ElementStorageType,
     };
     newOps.Add(getOp);
     newOps.Add(new MaxonAssignOp(m.ForinResultVarName, getOp.Result,

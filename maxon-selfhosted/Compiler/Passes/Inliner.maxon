@@ -49,12 +49,22 @@ let MAX_FIXPOINT_ROUNDS = 5
 // don't have to re-thread callers). Idempotent — additional rounds
 // without progress exit immediately.
 //
+// `skipCallerNames` is an optional list of function names that should not be
+// walked as callers. The user-pipeline run merges the entire stdlib snapshot
+// into `module` so the inliner can see stdlib accessor bodies, but stdlib
+// functions themselves were already inlined when the stdlib was compiled —
+// re-walking them as callers wastes time proportional to stdlib size on every
+// user compile (the dominant cost on tiny user inputs). The build-pipeline
+// path that compiles the stdlib leaves `skipCallerNames` empty so all
+// functions get walked.
+//
 // Phase 11.6's minimum-viable shape: the call-graph + decision-rule
 // scaffolding is wired up, but the body-splice is gated to single-block
 // single-return callees. Multi-block bodies and throwing callees are
 // left as no-ops; calling code goes through the original call site
 // unchanged.
-export function inlineModule(module StdModule, project Project) returns StdModule
+export function inlineModule(module StdModule, project Project, skipCallerNames StringArray = StringArray.create()) returns StdModule
+	let skipSet = buildSkipCallerSet(skipCallerNames)
 	var rounds = 0
 	var keepGoing = true
 	var totalSplices = 0
@@ -64,7 +74,7 @@ export function inlineModule(module StdModule, project Project) returns StdModul
 		let cg = buildCallGraph(module)
 		let sccs = computeSccs(cg)
 		let recursive = collectRecursive(sccs, cg: cg)
-		let roundCounts = inlineOneRound(module, project: project, cg: cg, recursive: recursive)
+		let roundCounts = inlineOneRound(module, project: project, cg: cg, recursive: recursive, skipCallers: skipSet)
 		totalSplices = totalSplices + roundCounts.splices
 		totalLoopBonus = totalLoopBonus + roundCounts.loopBonus
 		if roundCounts.splices == 0 'noChange'
@@ -74,6 +84,18 @@ export function inlineModule(module StdModule, project Project) returns StdModul
 	logDebug(LogCategory.ir, message: () gives "inliner: spliced {totalSplices} call site(s) across {rounds} round(s); {totalLoopBonus} from loop-depth bonus")
 	return module
 end 'inlineModule'
+
+typealias CallerSkipSet = Map with(String, bool)
+
+// Build a name → present map for O(1) caller-skip checks. Empty when no
+// names are supplied — callers can short-circuit on count() == 0.
+function buildSkipCallerSet(names StringArray) returns CallerSkipSet
+	var set = CallerSkipSet.create()
+	for name in names 'each'
+		set.upsert(name, value: true)
+	end 'each'
+	return set
+end 'buildSkipCallerSet'
 
 type RoundCounts
 	export var splices ParsedInt
@@ -88,15 +110,22 @@ type RoundCounts
 	end 'zero'
 end 'RoundCounts'
 
-function inlineOneRound(module StdModule, project Project, cg CallGraph, recursive CallGraphStringSet) returns RoundCounts
+function inlineOneRound(module StdModule, project Project, cg CallGraph, recursive CallGraphStringSet, skipCallers CallerSkipSet) returns RoundCounts
 	var funcMap = StdFuncByNameForInliner.create()
 	for func in module.functions 'index'
 		funcMap.upsert(func.name, value: func)
 	end 'index'
 	var splices = 0
 	var loopBonus = 0
+	let skipPresent = skipCallers.count() > 0
 	for callerIdx in 0 upto module.functions.count() 'eachCaller'
 		var caller = try module.functions.get(callerIdx) otherwise panic("inlineOneRound: functions.get OOB at {callerIdx}")
+		if skipPresent 'maybeSkip'
+			let isSkip = try skipCallers.get(caller.name) otherwise false
+			if isSkip 'skipThisCaller'
+				continue
+			end 'skipThisCaller'
+		end 'maybeSkip'
 		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, cg: cg, recursive: recursive)
 		splices = splices + counts.splices
 		loopBonus = loopBonus + counts.loopBonus

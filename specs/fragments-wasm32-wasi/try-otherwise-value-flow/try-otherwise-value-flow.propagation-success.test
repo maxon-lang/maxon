@@ -21,7 +21,7 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @try-otherwise-value-flow.double(local0: u8) -> u8 {
+  func @double(local0: u8) -> u8 {
   entry:
     %5 = mir.param local0 : u8
     %2 = mir.mov_imm 2 : i64
@@ -29,10 +29,10 @@ module {
     %4 = mir.mov_imm 0 : i64
     mir.error_return %3, %4
   }
-  func @try-otherwise-value-flow.wrap() -> u8 {
+  func @wrap() -> u8 {
   entry:
     %2 = mir.mov_imm 5 : i64
-    %3, %4 = mir.try_call @try-otherwise-value-flow.double(%2)
+    %3, %4 = mir.try_call @double(%2)
     %5 = mir.mov_imm 0 : i64
     %6 = mir.cmp ne, %4, %5
     mir.cond_br %6 [then: try_1.err(), else: try_1.cont()]
@@ -43,9 +43,9 @@ module {
     %9 = mir.mov_imm 0 : i64
     mir.error_return %3, %9
   }
-  func @try-otherwise-value-flow.main() -> u8 {
+  func @main() -> u8 {
   entry:
-    %0, %1 = mir.try_call @try-otherwise-value-flow.wrap()
+    %0, %1 = mir.try_call @wrap()
     %2 = mir.mov_imm 0 : i64
     %3 = mir.cmp ne, %1, %2
     mir.cond_br %3 [then: try_1.otherwise(), else: try_1.merge(%0)]

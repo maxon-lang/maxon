@@ -183,6 +183,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// `mrt_write_stdout` / `mrt_write_stderr`.
 	registerBuiltinsIntrinsicSignatures(project)
 	if stdlibLoaded 'cached'
+		let bootstrapStart = passTimerStart()
 		// Parse the synthesized bootstrap first so unresolvedInterfaces
 		// (Error, Iterator, etc.) is populated for this project before
 		// typealiases are restored. runTypeResolution drains it into
@@ -192,7 +193,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 		// which is still empty here. After parsing, the restore paths use
 		// `otherwise ignore` so they silently skip names already registered.
 		parseStdlibBootstrap(project)
+		recordPassSince("__parseStdlibBootstrap", startMs: bootstrapStart)
 
+		let restoreStart = passTimerStart()
 		// Restore metadata into the new project
 		if stdlibCacheValid 'restoreFromCache'
 			restoreStdlibMetadata(project, data: cachedStdlibCacheData)
@@ -209,6 +212,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 				try project.typealiasRanges.insert(name, value: range) otherwise ignore
 			end 'restoreRanges'
 		end 'restoreFromParse'
+		recordPassSince("__restoreStdlibMetadata", startMs: restoreStart)
 
 		// If the target changed, try loading the disk cache for the new target
 		let targetChanged = not stdlibCacheTargetSet or project.target.cpu.ordinal != stdlibCacheCpuOrd or project.target.os.ordinal != stdlibCacheOsOrd

@@ -15,7 +15,7 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @primitive-stringable.main() -> u8 {
+  func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 65 : i64
     %17 = mir.global_addr @__istr_12
@@ -67,56 +67,8 @@ module {
     mir.store %6, %12, 0
     %13 = mir.mov_imm 1 : i64
     mir.store %13, %12, 8
-    mir.br inlined_String.equals_0()
-  inlined_String.equals_0:
-    %39 = mir.load %37, 0
-    %40 = mir.load %39, 8
-    %41 = mir.load %12, 0
-    %42 = mir.load %41, 8
-    %43 = mir.cmp ne, %40, %42
-    mir.cond_br %43 [then: inlined_String.equals_1(), else: inlined_String.equals_2()]
-  inlined_String.equals_1:
-    %44 = mir.mov_imm 0 : i64
-    mir.br inline_cont_primitive-stringable.main_0(%44)
-  inlined_String.equals_2:
-    %45 = mir.mov_imm 0 : i64
-    mir.br inlined_String.equals_3(%45)
-  inlined_String.equals_3:
-    %46 = mir.cmp lt, %45, %40
-    mir.cond_br %46 [then: inlined_String.equals_4(), else: inlined_String.equals_6()]
-  inlined_String.equals_4:
-    %47 = mir.load %37, 0
-    %48, %49 = mir.try_call @__managed_mem_byte_at(%47, %45)
-    %50 = mir.mov_imm 0 : i64
-    %51 = mir.cmp ne, %49, %50
-    mir.cond_br %51 [then: inlined_String.equals_7(), else: inlined_String.equals_9()]
-  inlined_String.equals_5:
-    %52 = mir.mov_imm 1 : i64
-    %53 = mir.add.i64 %45, %52
-    mir.br inlined_String.equals_3(%53)
-  inlined_String.equals_6:
-    %54 = mir.mov_imm 1 : i64
-    mir.br inline_cont_primitive-stringable.main_0(%54)
-  inlined_String.equals_7:
-    %55 = mir.mov_imm 0 : i64
-    mir.br inline_cont_primitive-stringable.main_0(%55)
-  inlined_String.equals_9:
-    %56 = mir.load %12, 0
-    %57, %58 = mir.try_call @__managed_mem_byte_at(%56, %45)
-    %59 = mir.mov_imm 0 : i64
-    %60 = mir.cmp ne, %58, %59
-    mir.cond_br %60 [then: inlined_String.equals_10(), else: inlined_String.equals_12()]
-  inlined_String.equals_10:
-    %61 = mir.mov_imm 0 : i64
-    mir.br inline_cont_primitive-stringable.main_0(%61)
-  inlined_String.equals_12:
-    %62 = mir.cmp ne, %48, %57
-    mir.cond_br %62 [then: inlined_String.equals_13(), else: inlined_String.equals_5()]
-  inlined_String.equals_13:
-    %63 = mir.mov_imm 0 : i64
-    mir.br inline_cont_primitive-stringable.main_0(%63)
-  inline_cont_primitive-stringable.main_0:
-    mir.cond_br %64 [then: ok_1(), else: ok_1.after()]
+    %14 = mir.call @String.equals(%37, %12)
+    mir.cond_br %14 [then: ok_1(), else: ok_1.after()]
   ok_1:
     %15 = mir.mov_imm 1 : i64
     mir.ret %15

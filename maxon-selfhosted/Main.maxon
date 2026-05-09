@@ -9,16 +9,29 @@ function main() returns ExitCode
 		return 1
 	end 'badArgs'
 
-	match args.command 'cmd'
-		build then return runBuild(args)
-		specTest then return runSpecTests(args)
-		testIncremental then return runIncrementalTests()
-		coverageReport then return runCoverageReportCli(args)
-		unknown then printUsage()
+	if args.profilePasses 'enableTimings'
+		enablePassTimings()
+	end 'enableTimings'
+
+	let exit = match args.command 'cmd'
+		build gives runBuild(args)
+		specTest gives runSpecTests(args)
+		testIncremental gives runIncrementalTests()
+		coverageReport gives runCoverageReportCli(args)
+		unknown gives unknownCommand()
 	end 'cmd'
 
-	return 1
+	if args.profilePasses 'emitTimings'
+		dumpPassTimings()
+	end 'emitTimings'
+
+	return exit
 end 'main'
+
+function unknownCommand() returns ExitCode
+	printUsage()
+	return 1
+end 'unknownCommand'
 
 function runCoverageReportCli(args MaxonArgs) returns ExitCode
 	if args.path.isEmpty() 'noPath'
@@ -50,7 +63,7 @@ function printUsage()
 	print("  --target=<TARGET|all>    Cross-compile tests for target (e.g. x64-linux)\n")
 	print("  --update-required        Update RequiredLowering/stderr blocks in spec files\n")
 	print("  --verbose                Show detailed failure messages\n")
-	print("  --workers=N              Number of parallel batch workers (default: 5, 1=serial)\n")
+	print("  --workers=N              Number of parallel batch workers (default: 8, 1=serial)\n")
 	print("\n")
 	print("Logging (all commands):\n")
 	print("  --log=LEVEL              Set all log categories to LEVEL\n")

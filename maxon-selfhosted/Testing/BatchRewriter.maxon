@@ -258,13 +258,20 @@ export typealias BatchIrSliceArray = Array with BatchIrSlice
 // inlining/optimization decisions can differ when more code is in the unit.
 //
 // Strategy: top-level `func @<name>` blocks whose name contains the
-// rewriter's `_b_<sanitized>_` substring are attributed to that test. The
-// substring is stripped from every occurrence within the function body
-// (call targets, label-qualified jumps, lea_func operands, etc.) so the
-// snippet reads as if compiled in isolation. Functions with no `_b_`
-// substring (dispatcher `main`, stdlib, runtime helpers) are not attributed
-// to any test and are dropped.
-export function splitBatchedIr(archIr String, tests SpecTestArray) returns BatchIrSliceArray
+// rewriter's `_b_<sanitized>_` substring are attributed to that test. We then
+// strip both:
+//   - The rewriter's `_b_<sanitized>_` mangling prefix (so e.g.
+//     `_b_append_basic_main` reads as `main` in the slice).
+//   - The batched module's `<specName>.` qualifier (so `arrays.main` reads as
+//     `main`, matching per-fragment compile output where the module is empty).
+// This makes the recorded slice indistinguishable from a per-fragment compile
+// at the symbol-name level — readers and golden-IR tooling can't tell which
+// path produced the fragment. Functions with no `_b_` substring (dispatcher
+// `main`, stdlib, runtime helpers) are not attributed to any test and dropped.
+//
+// `specName` is the batched module name to strip. Pass empty to skip module
+// rewriting (e.g. for tests that weren't actually batched under a module).
+export function splitBatchedIr(archIr String, tests SpecTestArray, specName String) returns BatchIrSliceArray
 	var slices = BatchIrSliceArray.create()
 
 	// Build (sanitized → original) pairs sorted by sanitized length descending,
@@ -277,6 +284,8 @@ export function splitBatchedIr(archIr String, tests SpecTestArray) returns Batch
 
 	let funcs = splitTopLevelFunctions(archIr)
 	var perTest = TestIrPartsArray.create()
+
+	let modulePrefix = "{specName}."
 
 	for fn in funcs 'eachFunc'
 		let name = extractFuncName(fn.header)
@@ -302,7 +311,10 @@ export function splitBatchedIr(archIr String, tests SpecTestArray) returns Batch
 			end 'noMatch'
 
 			let prefix = "_b_{pair.sanitized}_"
-			let stripped = "{fn.header}{fn.body}".replace(prefix, with: "")
+			var stripped = "{fn.header}{fn.body}".replace(prefix, with: "")
+			if not specName.isEmpty() 'hasSpecName'
+				stripped = stripped.replace(modulePrefix, with: "")
+			end 'hasSpecName'
 			pushTestIrPart(perTest, testName: pair.original, part: stripped)
 			break
 		end 'eachPair'

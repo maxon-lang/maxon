@@ -1351,6 +1351,8 @@ public sealed class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind
   public bool IsStructElement { get; init; }
   public string? StructElementTypeName { get; init; }
   public string? TypeParamName { get; init; }
+  /// Optional precise element storage type for narrow ranged primitives — see MaxonManagedMemGetOp.ElementStorageType.
+  public IrType? ElementStorageType { get; init; }
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

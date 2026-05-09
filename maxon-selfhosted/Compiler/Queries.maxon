@@ -284,7 +284,9 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	pushQuery(project, key: key)
 	clearDepsFor(project, key: key)
 
+	let midStart = passTimerStart()
 	let midModule = try queryAllMid(project)
+	recordPassSince("__queryAllMid", startMs: midStart)
 	// Gate: semantic errors collected during the mid pipeline (call-
 	// visibility violations, unknown callees, …) must short-circuit
 	// codegen. Lowering trusts that every call op resolves to a
@@ -295,7 +297,9 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	end 'midErrors'
 	var globalData = project.globalData
 	let stdlibCache = getStdlibCacheData()
+	let backendStart = passTimerStart()
 	let result = try emitBackend(midModule, target: project.target, globalData: globalData, project: project, stdlibCache: stdlibCache)
+	recordPassSince("__emitBackend", startMs: backendStart)
 
 	// Final --dump-stages file for the target-lowering phase. emitBackend runs
 	// Phase 7 (lowerMirToTarget, regalloc, prologue/epilogue) outside the

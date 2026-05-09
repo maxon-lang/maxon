@@ -8817,9 +8817,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       "Returns the absolute executable path as a __ManagedMemory.\n\n`__Builtins.executablePath() returns __ManagedMemory`",
       "maxon_executable_path", 0, freeFunc: "mm_raw_free"),
     // === Process intrinsics ===
-    ["processCreate"] = TwoManagedToCStringRuntimeCall(
+    ["processCreate"] = NManagedToCStringRuntimeCall(
       "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",
-      "maxon_process_create"),
+      "maxon_process_create", 2),
     ["processWait"] = RuntimeCallIntrinsic(
       "Waits for process. Returns 0=completed, 1=timeout, -1=error.\n\n`__Builtins.processWait(handle, timeoutMs) returns int`",
       "maxon_process_wait", 2, true),
@@ -8829,9 +8829,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ["processClose"] = RuntimeCallIntrinsic(
       "Closes a process handle.\n\n`__Builtins.processClose(handle)`",
       "maxon_process_close", 1, false),
-    ["processCreateWithCapture"] = TwoManagedToCStringRuntimeCall(
-      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__Builtins.processCreateWithCapture(cmd_managed, cwd_managed) returns int`",
-      "maxon_process_create_with_capture"),
+    ["processCreateWithCapture"] = NManagedToCStringRuntimeCall(
+      "Creates a process with stdout/stderr capture to caller-supplied file paths. Returns capture struct pointer.\n\n`__Builtins.processCreateWithCapture(cmd_managed, cwd_managed, stdout_path_managed, stderr_path_managed) returns int`",
+      "maxon_process_create_with_capture", 4),
     ["processGetHandle"] = RuntimeCallIntrinsic(
       "Gets hProcess from capture struct.\n\n`__Builtins.processGetHandle(capture_ptr) returns int`",
       "maxon_process_get_handle", 1, true),
@@ -8941,37 +8941,60 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// will resolve to (TypeParameter, "Key").
   /// </summary>
   private (MaxonValueKind kind, string? typeParamName) GetManagedMemElementKind(string structTypeName) {
+    var (kind, typeParamName, _) = GetManagedMemElementKindAndStorage(structTypeName);
+    return (kind, typeParamName);
+  }
+
+  /// Same as GetManagedMemElementKind but also returns the precise narrow storage
+  /// type (e.g. U32 for `int(0..u32.max)`). Used by ops whose lowering needs the
+  /// exact load width to avoid widening to I64 on read for sub-word ranged elements.
+  /// Returns null storage type for type parameters, struct/enum elements, and bare
+  /// __ManagedMemory (no Element).
+  private (MaxonValueKind kind, string? typeParamName, IrType? elementStorageType) GetManagedMemElementKindAndStorage(string structTypeName) {
     if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo)
         && typeInfo is IrStructType structType
         && structType.TypeParams.TryGetValue("Element", out var elemType)) {
       if (elemType is IrTypeParameterType tpt)
-        return (MaxonValueKind.TypeParameter, tpt.ParameterName);
-      return (elemType.ToValueKind(), null);
+        return (MaxonValueKind.TypeParameter, tpt.ParameterName, null);
+      // Mirror DeriveManagedElementInfo: ranged primitives use OptimalType,
+      // bare narrow ints get promoted to unsigned for zero-extending loads.
+      var loadType = elemType switch {
+        IrRangedPrimitiveType rpt => rpt.OptimalType,
+        _ when elemType == IrType.I8 => IrType.U8,
+        _ when elemType == IrType.I16 => IrType.U16,
+        _ => elemType
+      };
+      var resultKind = loadType.ToValueKind();
+      bool isUnion = elemType is IrEnumType et && et.Cases.Any(c => c.AssociatedValues?.Count > 0);
+      bool isStruct = resultKind == MaxonValueKind.Struct || isUnion;
+      IrType? storageType = !isStruct && loadType is not IrEnumType ? loadType : null;
+      return (resultKind, null, storageType);
     }
     // For bare __ManagedMemory (no Element type param), don't fall back to enclosing type —
     // the enclosing type's Element (e.g., String's Element=Character from Iterable) is unrelated.
     var baseResolved = ResolveBaseTypeName(structTypeName);
     if (baseResolved is "__ManagedMemory" or "__ManagedMemoryCursor")
-      return (MaxonValueKind.Integer, null);
+      return (MaxonValueKind.Integer, null, null);
     // Fallback: use enclosing type's "Element" param (existing behavior)
-    var kind = GetElementKind();
-    if (kind == MaxonValueKind.TypeParameter)
-      return (kind, "Element");
-    return (kind, null);
+    var enclosingKind = GetElementKind();
+    if (enclosingKind == MaxonValueKind.TypeParameter)
+      return (enclosingKind, "Element", null);
+    return (enclosingKind, null, null);
   }
 
-  /// Converts two managed args to cstrings, calls a runtime function, returns its result.
-  private static BuiltinInfo TwoManagedToCStringRuntimeCall(string doc, string runtimeName) {
+  /// Converts N managed args to cstrings, calls a runtime function, returns its result.
+  private static BuiltinInfo NManagedToCStringRuntimeCall(string doc, string runtimeName, int argCount) {
     return new(doc, p => {
-      var arg1 = p.ResolveExprValue(p.ParseExpression());
-      p.Expect(TokenType.Comma);
-      var arg2 = p.ResolveExprValue(p.ParseExpression());
+      var cstrings = new List<MaxonValue>();
+      for (int i = 0; i < argCount; i++) {
+        if (i > 0) p.Expect(TokenType.Comma);
+        var arg = p.ResolveExprValue(p.ParseExpression());
+        var cstr = new MaxonManagedToCStringOp(arg);
+        p._currentBlock!.AddOp(cstr);
+        cstrings.Add(cstr.Result!);
+      }
       p.Expect(TokenType.RightParen);
-      var cstr1 = new MaxonManagedToCStringOp(arg1);
-      p._currentBlock!.AddOp(cstr1);
-      var cstr2 = new MaxonManagedToCStringOp(arg2);
-      p._currentBlock!.AddOp(cstr2);
-      var op = new MaxonCallRuntimeOp(runtimeName, [cstr1.Result, cstr2.Result], true);
+      var op = new MaxonCallRuntimeOp(runtimeName, cstrings, true);
       p._currentBlock!.AddOp(op);
       return op.Result;
     });
@@ -9521,9 +9544,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
                     ?? (_typeRegistry.TryGetValue("IterationError", out var iterErr) ? iterErr as IrEnumType : null);
     switch (methodName) {
       case "current": {
-        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var (elementKind, typeParamName, elementStorageType) = GetManagedMemElementKindAndStorage(structTypeName);
         var op = new MaxonCursorCurrentOp(selfValue, elementKind) {
-          TypeParamName = typeParamName
+          TypeParamName = typeParamName,
+          ElementStorageType = elementStorageType
         };
         _currentBlock!.AddOp(op);
         return (true, op.Result);

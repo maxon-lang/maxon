@@ -471,22 +471,33 @@ end 'targetEmitXchgOrSwap'
 // Returns true if standalone register allocation is needed.
 function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) returns bool
 	for func in module.functions 'eachFunc'
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-			for packed in block.opRefs 'eachOp'
-				if regTarget.opHasVirtualRegs(module, packed: packed) 'foundVirtual'
-					return true
-				end 'foundVirtual'
-			end 'eachOp'
-			if block.hasTerminatorOp() 'hasTerm'
-				if regTarget.opHasVirtualRegs(module, packed: block.terminatorIndex()) 'foundVirtualTerm'
-					return true
-				end 'foundVirtualTerm'
-			end 'hasTerm'
-		end 'eachBlock'
+		if functionHasVirtualRegs(module, func: func, regTarget: regTarget) 'fHasVirtual'
+			return true
+		end 'fHasVirtual'
 	end 'eachFunc'
 	return false
 end 'moduleHasVirtualRegs'
+
+// Per-function virtual-register check. Used to skip individual functions in
+// the all-physical fast path: hand-written runtime / coverage stubs use
+// physical registers directly, so re-running SSA regalloc on them is wasted
+// work proportional to runtime size on every user compile.
+function functionHasVirtualRegs(module TargetModule, func IrFunction, regTarget RegAllocTarget) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for packed in block.opRefs 'eachOp'
+			if regTarget.opHasVirtualRegs(module, packed: packed) 'foundVirtual'
+				return true
+			end 'foundVirtual'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			if regTarget.opHasVirtualRegs(module, packed: block.terminatorIndex()) 'foundVirtualTerm'
+				return true
+			end 'foundVirtualTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+	return false
+end 'functionHasVirtualRegs'
 
 // Standalone register allocation pass entry point.
 // Walks each function in the module and checks if any ops contain virtual
@@ -520,12 +531,35 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 		return
 	end 'allPhysical'
 
-	// Virtual registers detected — run standalone register allocation.
+	// Virtual registers detected somewhere — but the user pipeline merges in
+	// the runtime module's hand-written stubs (~50 functions on every compile)
+	// that use physical registers directly. Skipping them here turns the
+	// per-compile regalloc cost from O(user + runtime) into O(user).
 	logDebug(LogCategory.ir, message: () gives "allocateRegisters: virtual registers detected, running standalone regalloc")
 	for func in module.functions 'eachFunc'
+		if not functionHasVirtualRegs(module, func: func, regTarget: regTarget) 'allPhysicalFunc'
+			continue
+		end 'allPhysicalFunc'
+		let funcStart = passTimerStart()
 		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery)
+		// Defer the classify call so its string-format cost is only paid when
+		// timings are active.
+		if passTimingsActive() 'recordFunc'
+			recordPassSince(classifyRegallocFunc(func.name), startMs: funcStart)
+		end 'recordFunc'
 	end 'eachFunc'
 end 'allocateRegistersWithTarget'
+
+// Coarse per-function bucketing for regalloc timings: runtime stubs share a
+// `__regalloc-rt:<name>` prefix so the dump shows the worst offenders, while
+// user functions roll up into a single `__regalloc-user` bucket. Used only
+// when --profile-passes is active.
+function classifyRegallocFunc(name String) returns String
+	if name.startsWith("mrt_") or name.startsWith("__slab_") or name.startsWith("mm_") or name.startsWith("__mm_") 'isRuntime'
+		return "__regalloc-rt:{name}"
+	end 'isRuntime'
+	return "__regalloc-fn:{name}"
+end 'classifyRegallocFunc'
 
 // Increment the use count for a value. Called during pre-scan for each read operand.
 export function incUse(counts RegIntArray, id RegInt)

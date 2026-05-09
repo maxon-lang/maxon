@@ -1,12 +1,27 @@
 // WASM binary format encoding helpers.
 // Provides LEB128 encoding, WASM opcodes, and section writing utilities.
 
+// Linear-memory address bound by the wasm32 spec (offset / pointer / page count
+// fit in a u32). Tighter than MachineWord so out-of-range values get caught at
+// the cast site instead of silently wrapping in sleb128 encoding.
+export typealias Wasm32Offset = int(0 to u32.max)
+
+// Wasm spec index space (function indices, type indices, table indices, local
+// indices, label depths, etc.) — all u32 per the binary format. Encoded as
+// uleb128 so the encoding tolerates wider values, but tightening to u32
+// matches the spec and catches bugs at the cast site.
+export typealias Wasm32Index = int(0 to u32.max)
+
 // --- LEB128 encoding ---
 
-// Encode an unsigned integer as LEB128 into buf.
-export function writeUleb128(buf ByteArray, value MachineWord)
+// Encode a u32 as ULEB128 into buf. Per the wasm32 binary spec all unsigned
+// integer immediates (counts, sizes, indices, alignment hints, memory
+// offsets) fit in u32, so taking Wasm32Index here catches values that
+// overflow the spec at the cast site instead of letting them silently
+// wrap into multi-byte sleb-misdecodable encodings (see writeActiveDataSegment).
+export function writeUleb128(buf ByteArray, value Wasm32Index)
 	var v = value
-	for _ in 0 upto 10 'encode'
+	for _ in 0 upto 5 'encode'
 		let b = v and 0x7F
 		v = v shr 7
 		if v == 0 'done'
@@ -17,10 +32,10 @@ export function writeUleb128(buf ByteArray, value MachineWord)
 	end 'encode'
 end 'writeUleb128'
 
-// Encode an unsigned integer as exactly 5-byte padded LEB128.
+// Encode a u32 as exactly 5-byte padded LEB128.
 // Used for call instructions that need post-hoc patching (stdlib cache linking).
-// 5 bytes can encode up to 2^35 - 1, plenty for function indices.
-export function writeUleb128Fixed5(buf ByteArray, value MachineWord)
+// 5 bytes can encode up to 2^35 - 1, which covers any wasm u32 function index.
+export function writeUleb128Fixed5(buf ByteArray, value Wasm32Index)
 	var v = value
 	buf.push((v and 0x7F) or 0x80)
 	v = v shr 7
@@ -34,7 +49,7 @@ export function writeUleb128Fixed5(buf ByteArray, value MachineWord)
 end 'writeUleb128Fixed5'
 
 // Patch a 5-byte fixed-width ULEB128 at the given offset.
-export function patchUleb128Fixed5(buf ByteArray, offset ByteOffset, value MachineWord)
+export function patchUleb128Fixed5(buf ByteArray, offset ByteOffset, value Wasm32Index)
 	var v = value
 	try buf.set(offset, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
 	v = v shr 7
@@ -212,13 +227,13 @@ export let opF64ReinterpretI64 = 0xBF
 // Write a WASM section: section id, then LEB128 length, then contents.
 export function writeSection(module ByteArray, sectionId MachineWord, contents ByteArray)
 	module.push(sectionId)
-	writeUleb128(module, value: contents.count() as MachineWord)
+	writeUleb128(module, value: contents.count() as Wasm32Index)
 	module.append(contents)
 end 'writeSection'
 
 // Write a WASM name (UTF-8 string with LEB128 length prefix).
 export function writeWasmName(buf ByteArray, name ByteArray)
-	writeUleb128(buf, value: name.count() as MachineWord)
+	writeUleb128(buf, value: name.count() as Wasm32Index)
 	buf.append(name)
 end 'writeWasmName'
 
@@ -227,9 +242,9 @@ end 'writeWasmName'
 // Write a function type: (params) -> (results).
 export function writeFuncType(buf ByteArray, paramTypes ByteArray, resultTypes ByteArray)
 	buf.push(0x60)
-	writeUleb128(buf, value: paramTypes.count() as MachineWord)
+	writeUleb128(buf, value: paramTypes.count() as Wasm32Index)
 	buf.append(paramTypes)
-	writeUleb128(buf, value: resultTypes.count() as MachineWord)
+	writeUleb128(buf, value: resultTypes.count() as Wasm32Index)
 	buf.append(resultTypes)
 end 'writeFuncType'
 
@@ -252,7 +267,7 @@ end 'writeModuleHeader'
 // Each type is a ByteArray encoding a functype (0x60 prefix + params + results).
 export function writeTypeSection(module ByteArray, types ByteArrayArray)
 	var contents = ByteArray.create()
-	writeUleb128(contents, value: types.count() as MachineWord)
+	writeUleb128(contents, value: types.count() as Wasm32Index)
 	for t in types 'each'
 		contents.append(t)
 	end 'each'
@@ -265,15 +280,18 @@ export function writeImportSection(module ByteArray, imports ByteArray)
 end 'writeImportSection'
 
 // Build the function section (maps function index to type index).
-export function writeFunctionSection(module ByteArray, typeIndices ByteArray)
+export function writeFunctionSection(module ByteArray, typeIndices WasmFuncIndexArray)
 	var contents = ByteArray.create()
-	writeUleb128(contents, value: typeIndices.count() as MachineWord)
-	contents.append(typeIndices)
+	writeUleb128(contents, value: typeIndices.count() as Wasm32Index)
+	for idx in typeIndices 'each'
+		writeUleb128(contents, value: idx)
+	end 'each'
 	writeSection(module, sectionId: wasmSectionFunction, contents: contents)
 end 'writeFunctionSection'
 
-// Build the memory section: one memory with initial pages.
-export function writeMemorySection(module ByteArray, initialPages MachineWord)
+// Build the memory section: one memory with initial pages. `initialPages` is
+// u32 per the wasm32 spec; one page is 64 KiB so u32 covers up to 256 TiB.
+export function writeMemorySection(module ByteArray, initialPages Wasm32Index)
 	var contents = ByteArray.create()
 	writeUleb128(contents, value: 1)
 	contents.push(0x00)
@@ -287,35 +305,35 @@ export function writeExportSection(module ByteArray, exports ByteArray)
 end 'writeExportSection'
 
 // Add a function export entry to the exports buffer.
-export function addFuncExport(exports ByteArray, name ByteArray, funcIndex MachineWord, countRef MachineWord) returns MachineWord
+export function addFuncExport(exports ByteArray, name ByteArray, funcIndex Wasm32Index, countRef Wasm32Index) returns Wasm32Index
 	writeWasmName(exports, name: name)
 	exports.push(wasmExportFunc)
 	writeUleb128(exports, value: funcIndex)
-	return countRef + 1
+	return (countRef + 1) as Wasm32Index
 end 'addFuncExport'
 
 // Add a memory export entry to the exports buffer.
-export function addMemoryExport(exports ByteArray, name ByteArray, memIndex MachineWord, countRef MachineWord) returns MachineWord
+export function addMemoryExport(exports ByteArray, name ByteArray, memIndex Wasm32Index, countRef Wasm32Index) returns Wasm32Index
 	writeWasmName(exports, name: name)
 	exports.push(wasmExportMemory)
 	writeUleb128(exports, value: memIndex)
-	return countRef + 1
+	return (countRef + 1) as Wasm32Index
 end 'addMemoryExport'
 
 // Build the code section from a list of function bodies.
 // Each body is a ByteArray encoding the function body (locals + instructions).
 export function writeCodeSection(module ByteArray, bodies ByteArrayArray)
 	var contents = ByteArray.create()
-	writeUleb128(contents, value: bodies.count() as MachineWord)
+	writeUleb128(contents, value: bodies.count() as Wasm32Index)
 	for body in bodies 'each'
-		writeUleb128(contents, value: body.count() as MachineWord)
+		writeUleb128(contents, value: body.count() as Wasm32Index)
 		contents.append(body)
 	end 'each'
 	writeSection(module, sectionId: wasmSectionCode, contents: contents)
 end 'writeCodeSection'
 
 // Build the data section from a list of data segments.
-export function writeDataSection(module ByteArray, segments ByteArray, segmentCount MachineWord)
+export function writeDataSection(module ByteArray, segments ByteArray, segmentCount Wasm32Index)
 	var contents = ByteArray.create()
 	writeUleb128(contents, value: segmentCount)
 	contents.append(segments)
@@ -323,27 +341,31 @@ export function writeDataSection(module ByteArray, segments ByteArray, segmentCo
 end 'writeDataSection'
 
 // Write an active data segment: memory 0, offset = i32.const(offset), data bytes.
-export function writeActiveDataSegment(buf ByteArray, offset MachineWord, data ByteArray)
+// `i32.const` takes a SIGNED LEB128 immediate per the wasm spec — encoding the
+// offset as ULEB128 misdecodes whenever the high bit of the final byte is
+// set (e.g. offset 0x2fbc → bytes `bc 5f`, sleb-decodes to -4164, fails the
+// memory-bounds check at instantiate time).
+export function writeActiveDataSegment(buf ByteArray, offset Wasm32Offset, data ByteArray)
 	buf.push(0x00)
 	buf.push(opI32Const)
-	writeUleb128(buf, value: offset)
+	writeSleb128(buf, value: offset as ParsedInt)
 	buf.push(opEnd)
-	writeUleb128(buf, value: data.count() as MachineWord)
+	writeUleb128(buf, value: data.count() as Wasm32Index)
 	buf.append(data)
 end 'writeActiveDataSegment'
 
 // Add a function import entry to the imports buffer.
-export function addFuncImport(imports ByteArray, moduleName ByteArray, fieldName ByteArray, typeIndex MachineWord, countRef MachineWord) returns MachineWord
+export function addFuncImport(imports ByteArray, moduleName ByteArray, fieldName ByteArray, typeIndex Wasm32Index, countRef Wasm32Index) returns Wasm32Index
 	writeWasmName(imports, name: moduleName)
 	writeWasmName(imports, name: fieldName)
 	imports.push(wasmImportFunc)
 	writeUleb128(imports, value: typeIndex)
-	return countRef + 1
+	return (countRef + 1) as Wasm32Index
 end 'addFuncImport'
 
 // Stage F (closures): table-entry index list. One per addressable user
 // function, in element-section emission order.
-export typealias WasmFuncIndexArray = Array with MachineWord
+export typealias WasmFuncIndexArray = Array with Wasm32Index
 
 // Stage F (closures): write a single anyfunc/funcref table with a fixed
 // initial size and no maximum. The table holds function references that
@@ -351,7 +373,7 @@ export typealias WasmFuncIndexArray = Array with MachineWord
 // exactly one table per module so `call_indirect` can hardcode `(table 0)`.
 // The 0x70 element type is the legacy `anyfunc` encoding (renamed to
 // `funcref` in the reference-types proposal but kept binary-compatible).
-export function writeTableSection(module ByteArray, initialSize MachineWord)
+export function writeTableSection(module ByteArray, initialSize Wasm32Index)
 	var contents = ByteArray.create()
 	writeUleb128(contents, value: 1)
 	contents.push(0x70)
@@ -376,7 +398,7 @@ export function writeElementSection(module ByteArray, funcIndices WasmFuncIndexA
 	contents.push(opI32Const)
 	writeSleb128(contents, value: 0)
 	contents.push(opEnd)
-	writeUleb128(contents, value: funcIndices.count() as MachineWord)
+	writeUleb128(contents, value: funcIndices.count() as Wasm32Index)
 	for idx in funcIndices 'each'
 		writeUleb128(contents, value: idx)
 	end 'each'

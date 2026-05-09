@@ -994,15 +994,31 @@ internal class FunctionCloner {
   private MaxonCursorCurrentOp CloneCursorCurrentOp(MaxonCursorCurrentOp op) {
     var resultKind = _typeSubstitution.SubstituteValueKind(op.ResultKind, op.TypeParamName);
     var paramKey = op.TypeParamName ?? "Element";
-    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var elemType)
+    var hasSubstitution = _typeSubstitution.TryGetValue(paramKey, out var elemType);
+    var isHeapPtrElem = hasSubstitution
       && (elemType is IrStructType || elemType is IrEnumType { HasAssociatedValues: true });
     string? elemTypeName = null;
     if (isHeapPtrElem && elemType is IrType named)
       elemTypeName = named.Name;
+    // After monomorphization the cursor's Element is concrete: derive the precise
+    // narrow storage type so the load width matches the buffer layout (mirrors
+    // DeriveManagedElementInfo). Without this, a u32 element gets loaded as i64
+    // and reads adjacent slot bits — corrupting iteration.
+    IrType? elementStorageType = op.ElementStorageType;
+    if (hasSubstitution && !isHeapPtrElem && elemType is not null) {
+      var loadType = elemType switch {
+        IrRangedPrimitiveType rpt => rpt.OptimalType,
+        _ when elemType == IrType.I8 => IrType.U8,
+        _ when elemType == IrType.I16 => IrType.U16,
+        _ => elemType
+      };
+      elementStorageType = loadType is IrEnumType ? null : loadType;
+    }
     var cloned = new MaxonCursorCurrentOp(MapValue(op.CursorStruct), resultKind) {
       IsStructElement = isHeapPtrElem,
       StructElementTypeName = elemTypeName,
-      TypeParamName = op.TypeParamName
+      TypeParamName = op.TypeParamName,
+      ElementStorageType = elementStorageType
     };
     RegisterHeapElementResult(op.Result, cloned.Result, isHeapPtrElem, elemTypeName, elemType);
     return cloned;

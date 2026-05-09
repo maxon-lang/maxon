@@ -126,7 +126,7 @@ public static partial class MaxonToStandardConversion {
 
     // Intercept synthetic cursor calls before resolving the callee
     if (TryLowerCursorCall(callee, args, result, resultKind, block, valueMap,
-        varTypes, errorFlagValue, temps))
+        varTypes, typeDefs, errorFlagValue, temps))
       return;
 
     // Intercept synthetic __ManagedMemory builtin calls (throwing variants of get/set/slice/etc.)

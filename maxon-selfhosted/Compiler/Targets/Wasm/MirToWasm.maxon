@@ -34,22 +34,22 @@ let scratchEnd = 1024
 // 16 pages = 1 MiB.
 let initialMemoryPages = 16
 
-typealias GlobalDataOffsetMap = Map with(String, MachineWord)
-typealias FuncNameIndexMap = Map with(String, MachineWord)
+typealias GlobalDataOffsetMap = Map with(String, Wasm32Offset)
+typealias FuncNameIndexMap = Map with(String, Wasm32Index)
 
 // Per-function map from a MIR block id to its position in func.blockRefs.
 // Populated once at function entry; queried by every branch / cond_branch
 // emission to resolve a target's dispatch index in O(1).
-typealias BlockIndexMap = Map with(BlockId, MachineWord)
+typealias BlockIndexMap = Map with(BlockId, Wasm32Index)
 
 // One contiguous chunk of bytes placed into the wasm data section. The
 // layout pass produces these once so both the offset map and the active
 // data segments use identical addresses without recomputing offsets.
 type WasmDataChunk
-	export var offset MachineWord
+	export var offset Wasm32Offset
 	export var bytes ByteArray
 
-	export static function create(offset MachineWord, bytes ByteArray) returns WasmDataChunk
+	export static function create(offset Wasm32Offset, bytes ByteArray) returns WasmDataChunk
 		return Self{offset: offset, bytes: bytes}
 	end 'create'
 end 'WasmDataChunk'
@@ -63,6 +63,14 @@ typealias WasmDataChunkArray = Array with WasmDataChunk
 // lookupReturnType / findFunctionIndex) from a linear scan into a single
 // hash lookup, which matters because each call op triggers up to two of
 // those lookups during emission.
+// Lookup failure for function-index queries. Callees that are imports or
+// haven't been registered yet propagate this; the few callers that should
+// treat unknown names as a fallback (lookupReturnInfo, throws) catch and
+// supply a default.
+enum WasmFuncSigError implements Error
+	notFound
+end 'WasmFuncSigError'
+
 type WasmFuncSigs
 	export var returnTypes StdReturnTypeArray
 	export var throwsTypeNames ThrowsClauseArray
@@ -78,25 +86,21 @@ type WasmFuncSigs
 	// functions in order); this method records the index lookup.
 	// `ThrowsClause.none` means the callee is non-throwing.
 	export function pushFunc(name String, returnType StdReturnType, throwsTypeName ThrowsClause = ThrowsClause.none)
-		let idx = self.returnTypes.count() as MachineWord
+		let idx = self.returnTypes.count() as Wasm32Index
 		self.returnTypes.push(returnType)
 		self.throwsTypeNames.push(throwsTypeName)
 		self.nameIndex.upsert(name, value: idx)
 	end 'pushFunc'
 
-	// O(1) lookup of a function's index in the funcNames table. Returns
-	// u64.max as the miss sentinel.
-	export function indexOf(name String) returns MachineWord
-		return try self.nameIndex.get(name) otherwise u64.max
+	// O(1) lookup of a function's index in the funcNames table.
+	export function indexOf(name String) returns Wasm32Index throws WasmFuncSigError
+		return try self.nameIndex.get(name) otherwise throw WasmFuncSigError.notFound
 	end 'indexOf'
 
 	// O(1) check: does the named callee throw? Unknown callees (imports,
 	// not-yet-registered) are treated as non-throwing.
 	export function throws(name String) returns bool
-		let idx = self.indexOf(name)
-		if idx == u64.max 'notFound'
-			return false
-		end 'notFound'
+		let idx = try self.indexOf(name) otherwise return false
 		let tn = try self.throwsTypeNames.get(idx) otherwise ThrowsClause.none
 		return match tn 'kind'
 			none gives false
@@ -174,15 +178,15 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 
 	// Compute global data offsets (same layout as emitWasmModule)
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	var dataOffset = scratchEnd as MachineWord
+	var dataOffset = scratchEnd as Wasm32Offset
 
 	for i in 0 upto globalData.values.count() 'computeOffsets'
 		let name = try globalData.names.get(i) otherwise panic("emitWasmPerFunction: globalData.names.get({i}) failed — names/values arrays out of sync")
 		let data = try globalData.values.get(i) otherwise panic("emitWasmPerFunction: globalData.values.get({i}) failed — names/values arrays out of sync")
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate global data name '{name}' at offset {dataOffset}")
-		dataOffset = dataOffset + (data.count() as MachineWord)
+		dataOffset = (dataOffset + data.count()) as Wasm32Offset
 	end 'computeOffsets'
-	let stackBase = alignUp(dataOffset, alignment: 16)
+	let stackBase = alignUp(dataOffset as ByteCount, alignment: 16) as Wasm32Offset
 
 	// Emit each function body with fixable call indices
 	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: true)
@@ -285,7 +289,7 @@ end 'computeNeededStdlibFunctionsWasm'
 // backends. The returned chunks let the write phase emit active data
 // segments at exactly the offsets the lowering phase already saw, and the
 // returned end offset feeds the stack-base calculation.
-function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset MachineWord, offsets GlobalDataOffsetMap) returns (WasmDataChunkArray, MachineWord)
+function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset Wasm32Offset, offsets GlobalDataOffsetMap) returns (WasmDataChunkArray, Wasm32Offset)
 	var chunks = WasmDataChunkArray.create()
 	var dataOffset = baseOffset
 	for i in 0 upto globalData.values.count() 'rdata'
@@ -293,17 +297,17 @@ function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset MachineWord
 		let data = try globalData.values.get(i) otherwise panic("layoutWasmGlobalData: globalData.values.get({i}) failed — names/values arrays out of sync")
 		try offsets.insert(name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate global data name '{name}' at offset {dataOffset}")
 		chunks.push(WasmDataChunk.create(dataOffset, bytes: data))
-		dataOffset = dataOffset + (data.count() as MachineWord)
+		dataOffset = (dataOffset + data.count()) as Wasm32Offset
 	end 'rdata'
 	for entry in globalData.dataSectionEntries 'dataEntries'
 		try offsets.insert(entry.name, value: dataOffset) otherwise panic("layoutWasmGlobalData: duplicate data section entry '{entry.name}' at offset {dataOffset}")
 		chunks.push(WasmDataChunk.create(dataOffset, bytes: entry.initialBytes))
-		dataOffset = dataOffset + (entry.initialBytes.count() as MachineWord)
+		dataOffset = (dataOffset + entry.initialBytes.count()) as Wasm32Offset
 		// Pad to 8-byte alignment so the next entry starts aligned (matches
 		// `buildDataPreludeSection`). Wasm linear memory is zero-initialized,
 		// so the gap doesn't need an explicit segment.
 		while dataOffset mod 8 != 0 'align'
-			dataOffset = dataOffset + 1
+			dataOffset = (dataOffset + 1) as Wasm32Offset
 		end 'align'
 	end 'dataEntries'
 	return (chunks, dataOffset)
@@ -316,7 +320,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// Build function table: map function names to indices.
 	// Imported functions come first, then module functions.
 	var funcNames = StringArray.create()
-	var funcCount = 0 as MachineWord
+	var funcCount = 0 as Wasm32Index
 	var funcSigs = WasmFuncSigs.create()
 
 	// Determine which stdlib WASM functions are needed (reachability from user calls)
@@ -356,13 +360,13 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var procExitType = ByteArray.create()
 	writeFuncType(procExitType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
 	types.push(procExitType)
-	typeIndexMap.upsert(procExitType, value: 0 as MachineWord)
+	typeIndexMap.upsert(procExitType, value: 0 as Wasm32Index)
 
 	// Type 1: (i32, i32, i32, i32) -> (i32) — fd_write
 	var fdWriteType = ByteArray.create()
 	writeFuncType(fdWriteType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(fdWriteType)
-	typeIndexMap.upsert(fdWriteType, value: 1 as MachineWord)
+	typeIndexMap.upsert(fdWriteType, value: 1 as Wasm32Index)
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
@@ -375,7 +379,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		// because the function section indexes into them positionally;
 		// we still record them in the dedup map so a downstream indirect
 		// call with the same signature picks up the existing entry.
-		let myIdx = types.count() as MachineWord
+		let myIdx = types.count() as Wasm32Index
 		types.push(typeBytes)
 		if not typeIndexMap.contains(typeBytes) 'recordDedup'
 			typeIndexMap.upsert(typeBytes, value: myIdx)
@@ -393,7 +397,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			throwing gives true
 		end 'kind'
 		let typeBytes = buildFuncTypeEntry(func.paramCount, paramTypes: func.paramTypes, returnType: func.returnType, throws: funcThrows)
-		let myIdx = types.count() as MachineWord
+		let myIdx = types.count() as Wasm32Index
 		types.push(typeBytes)
 		if not typeIndexMap.contains(typeBytes) 'recordDedup'
 			typeIndexMap.upsert(typeBytes, value: myIdx)
@@ -412,7 +416,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// --- Import section ---
 	var imports = ByteArray.create()
-	var importCount = 0 as MachineWord
+	var importCount = 0 as Wasm32Index
 	let wasiModule = b"wasi_snapshot_preview1"
 
 	// Import 0: proc_exit
@@ -428,10 +432,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// --- Function section ---
 	// Map each module function to its type index
-	var typeIndices = ByteArray.create()
+	var typeIndices = WasmFuncIndexArray.create()
 	for i in 0 upto funcCount 'eachFunc'
-		let typeIdx = wasiImportCount + i
-		typeIndices.push(typeIdx as MachineWord)
+		let typeIdx = (wasiImportCount + i) as Wasm32Index
+		typeIndices.push(typeIdx)
 	end 'eachFunc'
 	writeFunctionSection(wasm, typeIndices: typeIndices)
 
@@ -446,11 +450,11 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// --- Memory section ---
 	// 1 page = 64 KiB. Reserve enough pages for scratch + heap + global data + stack.
-	writeMemorySection(wasm, initialPages: initialMemoryPages as MachineWord)
+	writeMemorySection(wasm, initialPages: initialMemoryPages as Wasm32Index)
 
 	// --- Export section ---
 	var exports = ByteArray.create()
-	var exportCount = 0 as MachineWord
+	var exportCount = 0 as Wasm32Index
 
 	// Export _start (the WASI entry point = mrt_start)
 	let startFuncIdx = findFunctionIndex(funcSigs, name: "mrt_start", importCount: wasiImportCount)
@@ -474,7 +478,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// can use the same `i` counter.
 	var tableEntries = WasmFuncIndexArray.create()
 	for i in 0 upto funcCount 'collectTableEntries'
-		tableEntries.push(wasiImportCount + i)
+		tableEntries.push((wasiImportCount + i) as Wasm32Index)
 	end 'collectTableEntries'
 	writeElementSection(wasm, funcIndices: tableEntries)
 
@@ -498,8 +502,8 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// do not occupy a fixed range; the slab allocator grows linear memory on
 	// demand via osAllocPages → memory.grow.
 	var globalDataOffsets = GlobalDataOffsetMap.create()
-	let (dataChunks, dataEnd) = layoutWasmGlobalData(globalData, baseOffset: scratchEnd as MachineWord, offsets: globalDataOffsets)
-	let stackBase = alignUp(dataEnd, alignment: 16)
+	let (dataChunks, dataEnd) = layoutWasmGlobalData(globalData, baseOffset: scratchEnd as Wasm32Offset, offsets: globalDataOffsets)
+	let stackBase = alignUp(dataEnd as ByteCount, alignment: 16) as Wasm32Offset
 
 	// --- Code section ---
 	var bodies = ByteArrayArray.create()
@@ -511,7 +515,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	lowering.typeIndices = typeIndexMap
 	for i in 0 upto funcCount 'recordTableIdx'
 		let name = try funcNames.get(i) otherwise panic("invariant: i < funcCount but funcNames.get failed")
-		lowering.funcTableIndices.upsert(name, value: i as MachineWord)
+		lowering.funcTableIndices.upsert(name, value: i as Wasm32Index)
 	end 'recordTableIdx'
 	var noFixups = WasmCallFixupArray.create()
 	for func in module.functions 'emitBodies'
@@ -550,7 +554,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		for chunk in dataChunks 'eachChunk'
 			writeActiveDataSegment(segments, offset: chunk.offset, data: chunk.bytes)
 		end 'eachChunk'
-		writeDataSection(wasm, segments: segments, segmentCount: dataChunks.count() as MachineWord)
+		writeDataSection(wasm, segments: segments, segmentCount: dataChunks.count() as Wasm32Index)
 	end 'hasData'
 
 	// --- Name section (custom section for debug info) ---
@@ -565,13 +569,13 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var moduleNamePayload = ByteArray.create()
 	writeWasmName(moduleNamePayload, name: b"maxon")
 	nameSection.push(0)
-	writeUleb128(nameSection, value: moduleNamePayload.count() as MachineWord)
+	writeUleb128(nameSection, value: moduleNamePayload.count() as Wasm32Index)
 	nameSection.append(moduleNamePayload)
 
 	// Subsection 1: function names. Indices cover both WASI imports and
 	// module-defined functions; the index space is shared.
 	var funcNameMap = ByteArray.create()
-	let totalFuncCount = wasiImportCount + funcCount
+	let totalFuncCount = (wasiImportCount + funcCount) as Wasm32Index
 	writeUleb128(funcNameMap, value: totalFuncCount)
 	writeUleb128(funcNameMap, value: 0)
 	writeWasmName(funcNameMap, name: b"proc_exit")
@@ -579,11 +583,11 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeWasmName(funcNameMap, name: b"fd_write")
 	for i in 0 upto funcCount 'nameFuncs'
 		let name = try funcNames.get(i) otherwise "unknown"
-		writeUleb128(funcNameMap, value: wasiImportCount + i)
+		writeUleb128(funcNameMap, value: (wasiImportCount + i) as Wasm32Index)
 		writeWasmName(funcNameMap, name: name.toByteArray())
 	end 'nameFuncs'
 	nameSection.push(1)
-	writeUleb128(nameSection, value: funcNameMap.count() as MachineWord)
+	writeUleb128(nameSection, value: funcNameMap.count() as Wasm32Index)
 	nameSection.append(funcNameMap)
 
 	writeSection(wasm, sectionId: 0, contents: nameSection)
@@ -598,7 +602,7 @@ end 'emitWasmModule'
 // Stage F (closures): map "type-section signature bytes" → typeIndex
 // for type-section dedup. Direct-call types and indirect-call types
 // share entries — we never emit the same `(params...) -> result` twice.
-typealias WasmTypeIndexMap = Map with(ByteArray, MachineWord)
+typealias WasmTypeIndexMap = Map with(ByteArray, Wasm32Index)
 
 // Stage F (closures): map "function name" → table index. Every user
 // function lands in the function table at a stable index so `funcAddr`
@@ -607,7 +611,7 @@ typealias WasmTypeIndexMap = Map with(ByteArray, MachineWord)
 // element-section entries with the absolute wasm function index
 // (`wasiImportCount + tableIdx + offset_into_module_funcs`) at module
 // emission time.
-typealias WasmFuncTableIndexMap = Map with(String, MachineWord)
+typealias WasmFuncTableIndexMap = Map with(String, Wasm32Index)
 
 type WasmFunctionLowering
 	// Module-level state (constant across all functions)
@@ -615,7 +619,7 @@ type WasmFunctionLowering
 	var funcNames StringArray
 	var funcSigs WasmFuncSigs
 	var globalDataOffsets GlobalDataOffsetMap
-	var stackBase MachineWord
+	var stackBase Wasm32Offset
 	var fixedCalls bool
 	// Stage F (closures): name → table index map for funcAddr lowering.
 	// Empty in stdlib-cache mode (fixedCalls = true) — stdlib doesn't take
@@ -637,8 +641,8 @@ type WasmFunctionLowering
 	// emitted wasm signature carries an extra trailing i64 result and any
 	// `errorReturn` op pushes that flag before `return`.
 	var funcThrows bool
-	var dispatchLocal MachineWord
-	var loopDepth MachineWord
+	var dispatchLocal Wasm32Index
+	var loopDepth Wasm32Index
 	// Accumulator for call fixups in fixedCalls mode. The caller passes one
 	// in via lowerFunction so each emitted function gets its own array.
 	var callFixups WasmCallFixupArray
@@ -652,7 +656,7 @@ type WasmFunctionLowering
 	// the call-site signature for type-section dedup.
 	var funcFloatSet BoolArray
 
-	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord, fixedCalls bool) returns WasmFunctionLowering
+	static function create(module MirModule, funcNames StringArray, funcSigs WasmFuncSigs, globalDataOffsets GlobalDataOffsetMap, stackBase Wasm32Offset, fixedCalls bool) returns WasmFunctionLowering
 		return Self{
 			module: module,
 			funcNames: funcNames,
@@ -667,8 +671,8 @@ type WasmFunctionLowering
 			body: ByteArray.create(),
 			isVoidReturn: true,
 			funcThrows: false,
-			dispatchLocal: 0 as MachineWord,
-			loopDepth: 0 as MachineWord,
+			dispatchLocal: 0 as Wasm32Index,
+			loopDepth: 0 as Wasm32Index,
 			blockIndex: BlockIndexMap.create(),
 			funcFloatSet: BoolArray.create()
 		}
@@ -855,9 +859,9 @@ type WasmFunctionLowering
 		body.push(opLocalGet)
 		writeUleb128(body, value: dispatchLocal)
 		body.push(opBrTable)
-		writeUleb128(body, value: blockCount as MachineWord)
+		writeUleb128(body, value: blockCount as Wasm32Index)
 		for i in 0 upto blockCount 'tableEntries'
-			writeUleb128(body, value: i as MachineWord)
+			writeUleb128(body, value: i as Wasm32Index)
 		end 'tableEntries'
 		writeUleb128(body, value: 0)
 
@@ -929,7 +933,7 @@ type WasmFunctionLowering
 
 		// if condId: dispatch = thenIdx else dispatch = elseIdx
 		body.push(opLocalGet)
-		writeUleb128(body, value: condId as MachineWord)
+		writeUleb128(body, value: condId as Wasm32Index)
 		body.push(opI32WrapI64)
 
 		body.push(opIf)
@@ -978,7 +982,7 @@ type WasmFunctionLowering
 	function emitWasmRet(retValId ValueId)
 		if not isVoidReturn 'hasReturn'
 			body.push(opLocalGet)
-			writeUleb128(body, value: retValId as MachineWord)
+			writeUleb128(body, value: retValId as Wasm32Index)
 		end 'hasReturn'
 		body.push(opReturn)
 	end 'emitWasmRet'
@@ -992,9 +996,9 @@ type WasmFunctionLowering
 					let srcId = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
 					let blockArg = try block.blockArgs.get(i) otherwise panic("invariant: branch arg count exceeds target block.blockArgs count (CFG mismatch)")
 					body.push(opLocalGet)
-					writeUleb128(body, value: srcId as MachineWord)
+					writeUleb128(body, value: srcId as Wasm32Index)
 					body.push(opLocalSet)
-					writeUleb128(body, value: blockArg.valueId as MachineWord)
+					writeUleb128(body, value: blockArg.valueId as Wasm32Index)
 				end 'eachArg'
 				return
 			end 'found'
@@ -1012,11 +1016,11 @@ type WasmFunctionLowering
 
 	function emitMemRefStoreSlot(slotId VarSlot, valueId ValueId)
 		// Store to linear memory at stackBase + slotId * 8
-		let slotOffset = stackBase + (slotId * 8)
+		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI32Const)
 		writeSleb128(body, value: slotOffset as ParsedInt)
 		body.push(opLocalGet)
-		writeUleb128(body, value: valueId as MachineWord)
+		writeUleb128(body, value: valueId as Wasm32Index)
 		body.push(opI64Store)
 		body.push(0x03)
 		writeUleb128(body, value: 0)
@@ -1024,14 +1028,14 @@ type WasmFunctionLowering
 
 	function emitMemRefLoadSlot(resultId ValueId, slotId VarSlot)
 		// Load from linear memory at stackBase + slotId * 8
-		let slotOffset = stackBase + (slotId * 8)
+		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI32Const)
 		writeSleb128(body, value: slotOffset as ParsedInt)
 		body.push(opI64Load)
 		body.push(0x03)
 		writeUleb128(body, value: 0)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitMemRefLoadSlot'
 
 	function emitMirOp(op MirOp)
@@ -1096,21 +1100,21 @@ type WasmFunctionLowering
 			writeSleb128(body, value: value)
 		end 'int'
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitMovImm'
 
 	function emitMovReg(resultId ValueId, srcId ValueId)
 		body.push(opLocalGet)
-		writeUleb128(body, value: srcId as MachineWord)
+		writeUleb128(body, value: srcId as Wasm32Index)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitMovReg'
 
 	function emitBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode)
 		body.push(opLocalGet)
-		writeUleb128(body, value: leftId as MachineWord)
+		writeUleb128(body, value: leftId as Wasm32Index)
 		body.push(opLocalGet)
-		writeUleb128(body, value: rightId as MachineWord)
+		writeUleb128(body, value: rightId as Wasm32Index)
 
 		let wasmOp = match opcode 'pickOp'
 			addI64 gives opI64Add
@@ -1131,12 +1135,12 @@ type WasmFunctionLowering
 
 		body.push(wasmOp)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitBinOp'
 
 	function emitUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode)
 		body.push(opLocalGet)
-		writeUleb128(body, value: operandId as MachineWord)
+		writeUleb128(body, value: operandId as Wasm32Index)
 
 		match opcode 'pickOp'
 			negI64 then emitI64Negate()
@@ -1152,7 +1156,7 @@ type WasmFunctionLowering
 		end 'pickOp'
 
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitUnaryOp'
 
 	// i64 negate: multiply by -1 (WASM has no swap, so 0-x would need a temp local)
@@ -1171,9 +1175,9 @@ type WasmFunctionLowering
 
 	function emitCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate)
 		body.push(opLocalGet)
-		writeUleb128(body, value: leftId as MachineWord)
+		writeUleb128(body, value: leftId as Wasm32Index)
 		body.push(opLocalGet)
-		writeUleb128(body, value: rightId as MachineWord)
+		writeUleb128(body, value: rightId as Wasm32Index)
 
 		let wasmOp = match predicate 'pickOp'
 			eq gives opI64Eq
@@ -1195,7 +1199,7 @@ type WasmFunctionLowering
 		// cmp produces i32 (0 or 1), extend to i64
 		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitCmp'
 
 	function emitCall(resultId ValueId, callee String, argIds ValueIdArray)
@@ -1205,7 +1209,7 @@ type WasmFunctionLowering
 		// pop.
 		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
 			body.push(opLocalSet)
-			writeUleb128(body, value: resultId as MachineWord)
+			writeUleb128(body, value: resultId as Wasm32Index)
 		end 'hasReturnValue'
 	end 'emitCall'
 
@@ -1218,10 +1222,10 @@ type WasmFunctionLowering
 	function emitTryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
 		emitDirectCall(callee: callee, argIds: argIds)
 		body.push(opLocalSet)
-		writeUleb128(body, value: errorFlagId as MachineWord)
+		writeUleb128(body, value: errorFlagId as Wasm32Index)
 		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
 			body.push(opLocalSet)
-			writeUleb128(body, value: resultId as MachineWord)
+			writeUleb128(body, value: resultId as Wasm32Index)
 		end 'hasReturnValue'
 	end 'emitTryCall'
 
@@ -1231,7 +1235,7 @@ type WasmFunctionLowering
 	function emitDirectCall(callee String, argIds ValueIdArray)
 		for argId in argIds 'pushArgs'
 			body.push(opLocalGet)
-			writeUleb128(body, value: argId as MachineWord)
+			writeUleb128(body, value: argId as Wasm32Index)
 		end 'pushArgs'
 
 		let funcIdx = findFunctionIndex(funcSigs, name: callee, importCount: wasiImportCount)
@@ -1254,10 +1258,10 @@ type WasmFunctionLowering
 	function emitErrorReturn(retValId ValueId, errorFlagId ValueId)
 		if not isVoidReturn 'hasPrimary'
 			body.push(opLocalGet)
-			writeUleb128(body, value: retValId as MachineWord)
+			writeUleb128(body, value: retValId as Wasm32Index)
 		end 'hasPrimary'
 		body.push(opLocalGet)
-		writeUleb128(body, value: errorFlagId as MachineWord)
+		writeUleb128(body, value: errorFlagId as Wasm32Index)
 		body.push(opReturn)
 	end 'emitErrorReturn'
 
@@ -1267,10 +1271,7 @@ type WasmFunctionLowering
 	// indistinguishable from a typed callee that returns i64. O(1) via
 	// funcSigs.nameIndex.
 	function lookupReturnInfo(callee String) returns StdReturnType
-		let idx = funcSigs.indexOf(callee)
-		if idx == u64.max 'notFound'
-			return StdReturnType.value(StdType.i64)
-		end 'notFound'
+		let idx = try funcSigs.indexOf(callee) otherwise return StdReturnType.value(StdType.i64)
 		return try funcSigs.returnTypes.get(idx) otherwise StdReturnType.value(StdType.i64)
 	end 'lookupReturnInfo'
 
@@ -1291,7 +1292,7 @@ type WasmFunctionLowering
 	function emitRet(retValId ValueId)
 		if not isVoidReturn 'hasReturn'
 			body.push(opLocalGet)
-			writeUleb128(body, value: retValId as MachineWord)
+			writeUleb128(body, value: retValId as Wasm32Index)
 		end 'hasReturn'
 		body.push(opReturn)
 	end 'emitRet'
@@ -1301,30 +1302,30 @@ type WasmFunctionLowering
 		// If resultId != paramIndex, copy param to result local.
 		if resultId != paramIndex 'needsCopy'
 			body.push(opLocalGet)
-			writeUleb128(body, value: paramIndex as MachineWord)
+			writeUleb128(body, value: paramIndex as Wasm32Index)
 			body.push(opLocalSet)
-			writeUleb128(body, value: resultId as MachineWord)
+			writeUleb128(body, value: resultId as Wasm32Index)
 		end 'needsCopy'
 		// If resultId == paramIndex, the param is already in the right local.
 	end 'emitParam'
 
 	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
 		body.push(opLocalGet)
-		writeUleb128(body, value: baseId as MachineWord)
+		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opF64Load if isFloat else opI64Load)
 		body.push(0x03)
 		writeUleb128(body, value: offset)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitLoad'
 
 	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
 		body.push(opLocalGet)
-		writeUleb128(body, value: baseId as MachineWord)
+		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opLocalGet)
-		writeUleb128(body, value: valueId as MachineWord)
+		writeUleb128(body, value: valueId as Wasm32Index)
 		body.push(opF64Store if isFloat else opI64Store)
 		body.push(0x03)
 		writeUleb128(body, value: offset)
@@ -1333,11 +1334,11 @@ type WasmFunctionLowering
 	function emitStackSlotAddr(resultId ValueId, slotId VarSlot)
 		// Stack slots map to linear memory. Each slot is 8 bytes.
 		// Stack area starts after global data.
-		let slotOffset = stackBase + (slotId * 8)
+		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI64Const)
 		writeSleb128(body, value: slotOffset as ParsedInt)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitStackSlotAddr'
 
 	function emitGlobalAddr(resultId ValueId, name String)
@@ -1345,16 +1346,16 @@ type WasmFunctionLowering
 		body.push(opI64Const)
 		writeSleb128(body, value: offset as ParsedInt)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitGlobalAddr'
 
 	function emitOsExit(codeId ValueId)
 		body.push(opLocalGet)
-		writeUleb128(body, value: codeId as MachineWord)
+		writeUleb128(body, value: codeId as Wasm32Index)
 		// Truncate i64 to i32 for WASI proc_exit
 		body.push(opI32WrapI64)
 		body.push(opCall)
-		writeUleb128(body, value: wasiProcExit as MachineWord)
+		writeUleb128(body, value: wasiProcExit as Wasm32Index)
 	end 'emitOsExit'
 
 	function emitOsWrite(ptrId ValueId, lenId ValueId, fd MachineWord)
@@ -1367,7 +1368,7 @@ type WasmFunctionLowering
 		body.push(opI32Const)
 		writeSleb128(body, value: iovecBase as ParsedInt)
 		body.push(opLocalGet)
-		writeUleb128(body, value: ptrId as MachineWord)
+		writeUleb128(body, value: ptrId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opI32Store)
 		body.push(0x02)
@@ -1377,7 +1378,7 @@ type WasmFunctionLowering
 		body.push(opI32Const)
 		writeSleb128(body, value: (iovecBase + 4) as ParsedInt)
 		body.push(opLocalGet)
-		writeUleb128(body, value: lenId as MachineWord)
+		writeUleb128(body, value: lenId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opI32Store)
 		body.push(0x02)
@@ -1397,7 +1398,7 @@ type WasmFunctionLowering
 		writeSleb128(body, value: nwrittenBase as ParsedInt)
 
 		body.push(opCall)
-		writeUleb128(body, value: wasiFdWrite as MachineWord)
+		writeUleb128(body, value: wasiFdWrite as Wasm32Index)
 
 		// Drop the i32 return value
 		body.push(opDrop)
@@ -1407,13 +1408,13 @@ type WasmFunctionLowering
 		// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).
 		// memory.copy dst src len — all i32 addresses.
 		body.push(opLocalGet)
-		writeUleb128(body, value: dstId as MachineWord)
+		writeUleb128(body, value: dstId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opLocalGet)
-		writeUleb128(body, value: srcId as MachineWord)
+		writeUleb128(body, value: srcId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opLocalGet)
-		writeUleb128(body, value: lenId as MachineWord)
+		writeUleb128(body, value: lenId as Wasm32Index)
 		body.push(opI32WrapI64)
 		// memory.copy opcode: 0xFC 0x0A 0x00 0x00
 		body.push(0xFC)
@@ -1425,15 +1426,15 @@ type WasmFunctionLowering
 	function emitStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId)
 		// addr = base + offset (both i64, wrap to i32)
 		body.push(opLocalGet)
-		writeUleb128(body, value: baseId as MachineWord)
+		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opLocalGet)
-		writeUleb128(body, value: offsetId as MachineWord)
+		writeUleb128(body, value: offsetId as Wasm32Index)
 		body.push(opI64Add)
 		body.push(opI32WrapI64)
 
 		// value
 		body.push(opLocalGet)
-		writeUleb128(body, value: byteId as MachineWord)
+		writeUleb128(body, value: byteId as Wasm32Index)
 		body.push(opI32WrapI64)
 
 		body.push(opI32Store8)
@@ -1444,9 +1445,9 @@ type WasmFunctionLowering
 	function emitLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
 		// addr = base + offset (both i64, wrap to i32)
 		body.push(opLocalGet)
-		writeUleb128(body, value: baseId as MachineWord)
+		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opLocalGet)
-		writeUleb128(body, value: offsetId as MachineWord)
+		writeUleb128(body, value: offsetId as Wasm32Index)
 		body.push(opI64Add)
 		body.push(opI32WrapI64)
 
@@ -1457,7 +1458,7 @@ type WasmFunctionLowering
 		// Extend i32 to i64
 		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitLoadByte'
 
 	function emitLoadFramePtr(resultId ValueId)
@@ -1465,7 +1466,7 @@ type WasmFunctionLowering
 		body.push(opI64Const)
 		writeSleb128(body, value: 0)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitLoadFramePtr'
 
 	// `local.get localId` then truncate the i64 down to the i32 that wasm
@@ -1473,14 +1474,14 @@ type WasmFunctionLowering
 	// memory access has to wrap.
 	function emitLocalAsI32(localId ValueId)
 		body.push(opLocalGet)
-		writeUleb128(body, value: localId as MachineWord)
+		writeUleb128(body, value: localId as Wasm32Index)
 		body.push(opI32WrapI64)
 	end 'emitLocalAsI32'
 
 	// `local.set localId` — pops the wasm stack into the named local.
 	function emitLocalSet(localId ValueId)
 		body.push(opLocalSet)
-		writeUleb128(body, value: localId as MachineWord)
+		writeUleb128(body, value: localId as Wasm32Index)
 	end 'emitLocalSet'
 
 	// i64.load with align=3 (8 bytes) and zero immediate offset. The memory
@@ -1509,7 +1510,7 @@ type WasmFunctionLowering
 	function emitOsAllocPages(resultId ValueId, sizeId ValueId)
 		// pages = (size + 65535) >> 16
 		body.push(opLocalGet)
-		writeUleb128(body, value: sizeId as MachineWord)
+		writeUleb128(body, value: sizeId as Wasm32Index)
 		body.push(opI64Const)
 		writeSleb128(body, value: 65535)
 		body.push(opI64Add)
@@ -1530,7 +1531,7 @@ type WasmFunctionLowering
 
 		// if (resultId == -1i64) unreachable
 		body.push(opLocalGet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 		body.push(opI64Const)
 		writeSleb128(body, value: -1)
 		body.push(opI64Eq)
@@ -1541,7 +1542,7 @@ type WasmFunctionLowering
 
 		// resultId = prevPages * 65536 (the byte offset of the freshly-grown region)
 		body.push(opLocalGet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 		body.push(opI64Const)
 		writeSleb128(body, value: 16)
 		body.push(opI64Shl)
@@ -1576,9 +1577,9 @@ type WasmFunctionLowering
 		// *addr = resultId + val
 		emitLocalAsI32(localId: addrId)
 		body.push(opLocalGet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 		body.push(opLocalGet)
-		writeUleb128(body, value: valId as MachineWord)
+		writeUleb128(body, value: valId as Wasm32Index)
 		body.push(opI64Add)
 		emitI64StoreAtZero()
 	end 'emitAtomicXadd'
@@ -1597,7 +1598,7 @@ type WasmFunctionLowering
 		writeSleb128(body, value: tableIdx as ParsedInt)
 		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitFuncAddr'
 
 	// Stage F (closures): build the wasm functype encoding for an
@@ -1635,14 +1636,14 @@ type WasmFunctionLowering
 		// args before callee index). This mirrors emitCall's arg push.
 		for argId in argIds 'pushArgs'
 			body.push(opLocalGet)
-			writeUleb128(body, value: argId as MachineWord)
+			writeUleb128(body, value: argId as Wasm32Index)
 		end 'pushArgs'
 
 		// Push callee table index. The closure ABI carries the function
 		// pointer as i64 (table index extended via emitFuncAddr); narrow
 		// it back to the i32 that call_indirect expects.
 		body.push(opLocalGet)
-		writeUleb128(body, value: calleeId as MachineWord)
+		writeUleb128(body, value: calleeId as Wasm32Index)
 		body.push(opI32WrapI64)
 
 		// Look up the type-section index for this call signature, dedup-
@@ -1659,7 +1660,7 @@ type WasmFunctionLowering
 		// a separate codepath but don't appear in the closure-self
 		// fixtures.
 		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as MachineWord)
+		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitIndirectCall'
 
 	// ============================================================
@@ -1785,12 +1786,9 @@ end 'WasmFunctionLowering'
 // caller adjusts here. Lives at file scope rather than as a method on
 // WasmFunctionLowering because emitWasmModule and the stdlib-body fixup
 // loop both call it without holding a lowering instance.
-function findFunctionIndex(funcSigs WasmFuncSigs, name String, importCount MachineWord) returns MachineWord
-	let idx = funcSigs.indexOf(name)
-	if idx == u64.max 'notFound'
-		panic("wasm: function not found: {name}")
-	end 'notFound'
-	return importCount + idx
+function findFunctionIndex(funcSigs WasmFuncSigs, name String, importCount Wasm32Index) returns Wasm32Index
+	let idx = try funcSigs.indexOf(name) otherwise panic("wasm: function not found: {name}")
+	return (importCount + idx) as Wasm32Index
 end 'findFunctionIndex'
 
 // ============================================================
@@ -1891,7 +1889,7 @@ function emitWasmPanic() returns ByteArray
 	body.push(opI32Const)
 	writeSleb128(body, value: 8)
 	body.push(opCall)
-	writeUleb128(body, value: wasiFdWrite as MachineWord)
+	writeUleb128(body, value: wasiFdWrite as Wasm32Index)
 	body.push(opDrop)
 
 	// Trap — panic is not a clean exit. Wasmtime will show a backtrace with function names.

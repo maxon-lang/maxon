@@ -52,9 +52,11 @@ end 'writeCovMapTo'
 // redirects it into its per-suite .coverage directory. When coverage is off
 // the path is ignored — no file is written.
 export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath) returns CompileWithIrResult throws CompileError
+	let setupStart = passTimerStart()
 	var project = createProject(outputPath, target: target)
 	project.coverageEnabled = coverage
 	fileChanged(project, path: virtualPath, content: source)
+	recordPassSince("__compile-setup", startMs: setupStart)
 
 	return try finishInMemoryCompile(project, outputPath: outputPath, covMapPath: covMapPath)
 end 'compileSourceWithIr'
@@ -99,13 +101,20 @@ end 'compileMultiFileSourceWithIr'
 // write the executable, emit the covmap, and capture IR.
 function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath FilePath) returns CompileWithIrResult throws CompileError
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
+	let codeStart = passTimerStart()
 	let codeResult = try queryCodeResult(project)
+	recordPassSince("__queryCodeResult", startMs: codeStart)
+
+	let writeStart = passTimerStart()
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
+	recordPassSince("__writeExecutable", startMs: writeStart)
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	writeCovMapTo(project, covMapPath: covMapPath)
 
+	let irStart = passTimerStart()
 	let ir = finalIrString(project, codeResult: codeResult, skipStdlib: true)
+	recordPassSince("__finalIrString", startMs: irStart)
 	return CompileWithIrResult.create(outputPath, ir: ir)
 end 'finishInMemoryCompile'
 

@@ -2268,14 +2268,17 @@ public partial class X86CodeEmitter {
 
   // Heap struct returned by maxon_process_create_with_capture:
   //   +0x00: hProcess (HANDLE)
-  //   +0x08: hStdoutRead (HANDLE) — zeroed once consumed (drain or single read)
-  //   +0x10: hStderrRead (HANDLE) — zeroed once consumed
-  //   +0x18: drainedStdout (cstring ptr, 0 if not drained or already claimed)
-  //   +0x20: drainedStderr (cstring ptr, 0 if not drained or already claimed)
-  // The drain slots let read_stdout/read_stderr cooperate: whichever is called
-  // first runs the alternating-read drain (so stdout and stderr can't deadlock
-  // each other on a full pipe buffer); the second call just hands back the
-  // already-buffered string without touching the (already-closed) pipes.
+  //   +0x08: drainedStdout (cstring ptr; 0 if not drained or already claimed)
+  //   +0x10: drainedStderr (cstring ptr; 0 if not drained or already claimed)
+  //   +0x18: stdoutPath (cstring ptr; mm_alloc'd copy of caller's path)
+  //   +0x20: stderrPath (cstring ptr; mm_alloc'd copy of caller's path)
+  //
+  // Capture is FILE-BASED: caller supplies two file paths; child writes stdout
+  // and stderr to those files; drain/read slurp them after exit. This avoids
+  // the pipe-buffer deadlock and PeekNamedPipe-vs-startup races that plagued
+  // the previous pipe-based implementation. Files have no buffer-size limit.
+  // close_capture frees both path strings, the drained-buffer cstrings (if
+  // any), and DeleteFileA's the two paths.
   private const int CaptureStructSize = 40;
 
   /// <summary>Emit MOV dword [rbp+disp], imm32 with correct disp8/disp32 encoding.</summary>
@@ -2336,116 +2339,200 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_process_create_with_capture(cstring_cmd, cstring_cwd) -> ptr to capture struct, or 0.
-  /// Creates a process with stdout/stderr redirected through pipes.
+  /// Open a capture file at [rbp+pathSlot] for write, inheritable. CREATE_ALWAYS
+  /// creates or truncates. SECURITY_ATTRIBUTES with bInheritHandle=TRUE must exist
+  /// at saBase. Stores the handle (or INVALID_HANDLE_VALUE on fail) at [rbp+handleSlot].
+  /// On failure jumps to failLabel.
+  /// </summary>
+  private void EmitCreateCaptureFile(int pathSlot, int handleSlot, int saBase, string failLabel) {
+    EmitSystemStackEnter(0x40);
+    EmitMovRegMem(X86Register.Rcx, pathSlot, 8);                      // lpFileName
+    EmitMovRegImm(X86Register.Rdx, 0x40000000);                       // GENERIC_WRITE
+    EmitMovRegImm(X86Register.R8, 1);                                  // FILE_SHARE_READ
+    EmitLeaRegMem(X86Register.R9, saBase);                             // lpSecurityAttributes
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00);  // CREATE_ALWAYS
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x01, 0x00, 0x00);  // FILE_ATTRIBUTE_TEMPORARY
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);  // hTemplateFile = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    EmitSystemStackLeave(0x40);
+    EmitMovMemReg(handleSlot, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", failLabel);
+  }
+
+  /// <summary>
+  /// maxon_process_create_with_capture(cmd, cwd, stdoutPath, stderrPath) -> ptr to capture struct, or 0.
+  /// File-based capture: caller supplies the paths (so they can pick deterministic
+  /// names under e.g. their build/fragment directory). Child stdout/stderr are
+  /// redirected to those files. Parent waits for exit then reads the files via
+  /// drain_both / read_stdout / read_stderr.
+  ///
+  /// The paths are stored in the capture struct so drain/close can find them:
+  ///   +0x18 stdoutPath cstring  (NOT freed by close — caller-owned)
+  ///   +0x20 stderrPath cstring  (NOT freed by close — caller-owned)
+  /// close_capture deletes the files but does NOT free the path strings.
   /// </summary>
   private void EmitMaxonProcessCreateWithCapture() {
-    const int stdoutRead = -0x18, stdoutWrite = -0x20;
-    const int stderrRead = -0x28, stderrWrite = -0x30;
-    const int saBase = -0x48; // SECURITY_ATTRIBUTES: nLength at +0, lpSecDesc at +8, bInherit at +16
-    const int resultSlot = -0x50;
-    const int siBase = -0xB8; // STARTUPINFOA (104 bytes)
-    const int piBase = -0xD0; // PROCESS_INFORMATION (24 bytes)
+    // Stack slots:
+    //   [-0x08] cmd cstring (arg1)
+    //   [-0x10] cwd cstring (arg2)
+    //   [-0x18] stdoutPath cstring (arg3, caller-owned)
+    //   [-0x20] stderrPath cstring (arg4, caller-owned)
+    //   [-0x28] stdoutHandle (file, inheritable)
+    //   [-0x30] stderrHandle (file, inheritable)
+    //   [-0x38] resultStruct ptr
+    //   [-0x40] stdoutPathCopy (mm_alloc'd cstring; goes into struct +0x18)
+    //   [-0x48] stderrPathCopy (mm_alloc'd cstring; goes into struct +0x20)
+    //   [-0x68 .. -0x50] SECURITY_ATTRIBUTES (24 bytes); base at -0x68
+    //   [-0xD0 .. -0x68] STARTUPINFOA (104 bytes); base at -0xD0
+    //   [-0xE8 .. -0xD0] PROCESS_INFORMATION (24 bytes); base at -0xE8
+    const int stdoutHSlot = -0x28, stderrHSlot = -0x30;
+    const int resultSlot = -0x38;
+    const int stdoutPathCopySlot = -0x40, stderrPathCopySlot = -0x48;
+    const int saBase = -0x68;
+    const int siBase = -0xD0;
+    const int piBase = -0xE8;
 
-    EmitRuntimeFunctionStart("maxon_process_create_with_capture", 2, 0x140);
+    EmitRuntimeFunctionStart("maxon_process_create_with_capture", 4, 0x100);
 
-    // CreateProcessA and CreatePipe require zeroed structs; zero all local slots at once
-    // but stop before args at -0x10/-0x08 (23 qwords covers piBase through stdoutRead)
+    // Pre-zero handle/result/path-copy slots so error paths can safely test them.
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(stdoutHSlot, X86Register.Rax, 8);
+    EmitMovMemReg(stderrHSlot, X86Register.Rax, 8);
+    EmitMovMemReg(resultSlot, X86Register.Rax, 8);
+    EmitMovMemReg(stdoutPathCopySlot, X86Register.Rax, 8);
+    EmitMovMemReg(stderrPathCopySlot, X86Register.Rax, 8);
+
+    // Zero PROCESS_INFORMATION + STARTUPINFOA + SECURITY_ATTRIBUTES.
+    // Layout: piBase=-0xE8 (24B) | siBase=-0xD0 (104B) | saBase=-0x68 (24B) ... up to -0x50.
+    // Total = 24+104+24 = 152 bytes = 19 qwords (saBase is 24 bytes / 3 qwords).
     EmitLeaRegMem(X86Register.Rdi, piBase);
-    EmitMovRegImm(X86Register.Rcx, 23);
+    EmitMovRegImm(X86Register.Rcx, 19);
     EmitBytes(0xF3, 0x48, 0xAB); // REP STOSQ
 
-    // Set up SECURITY_ATTRIBUTES: nLength=24, lpSecurityDescriptor=NULL, bInheritHandle=TRUE
-    EmitMovMemDwordImm(saBase, 24);         // SA.nLength = 24
-    EmitMovMemDwordImm(saBase + 16, 1);     // SA.bInheritHandle = TRUE
+    // Initialize SECURITY_ATTRIBUTES: nLength=24, lpSecurityDescriptor=NULL, bInheritHandle=TRUE.
+    EmitMovMemDwordImm(saBase, 24);
+    EmitMovMemDwordImm(saBase + 16, 1);
 
-    // CreatePipe for stdout: CreatePipe(&stdoutRead, &stdoutWrite, &sa, 0)
-    EmitLeaRegMem(X86Register.Rcx, stdoutRead);
-    EmitLeaRegMem(X86Register.Rdx, stdoutWrite);
-    EmitLeaRegMem(X86Register.R8, saBase);
-    EmitXorRegReg(X86Register.R9, X86Register.R9);
-    EmitCallImportOnSystemStack("kernel32.dll", "CreatePipe");
+    // Open stdout file: CreateFileA(stdoutPath, GENERIC_WRITE, FILE_SHARE_READ, &SA, CREATE_ALWAYS, ...).
+    EmitCreateCaptureFile(pathSlot: -0x18, handleSlot: stdoutHSlot, saBase: saBase, failLabel: "rt_pcwc_fail");
+    EmitCreateCaptureFile(pathSlot: -0x20, handleSlot: stderrHSlot, saBase: saBase, failLabel: "rt_pcwc_fail");
+
+    // Configure STARTUPINFOA. cb=104, dwFlags=STARTF_USESTDHANDLES, hStdOutput/hStdError=our files.
+    // hStdInput stays NULL — child inherits no stdin (consistent with prior behavior).
+    EmitMovMemDwordImm(siBase, 104);
+    EmitMovMemDwordImm(siBase + 0x3C, 0x100);                     // STARTF_USESTDHANDLES
+    EmitMovRegMem(X86Register.Rax, stdoutHSlot, 8);
+    EmitMovMemReg(siBase + 0x58, X86Register.Rax, 8);             // hStdOutput
+    EmitMovRegMem(X86Register.Rax, stderrHSlot, 8);
+    EmitMovMemReg(siBase + 0x60, X86Register.Rax, 8);             // hStdError
+
+    // Spawn child.
+    EmitNullIfEmptyCwd(-0x10, "rt_pcwc_cwd_ok");
+    EmitCallCreateProcessA(-0x10, inheritHandles: true, siBase, piBase);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", "rt_pcwc_fail");
 
-    // CreatePipe for stderr: CreatePipe(&stderrRead, &stderrWrite, &sa, 0)
-    EmitLeaRegMem(X86Register.Rcx, stderrRead);
-    EmitLeaRegMem(X86Register.Rdx, stderrWrite);
-    EmitLeaRegMem(X86Register.R8, saBase);
-    EmitXorRegReg(X86Register.R9, X86Register.R9);
-    EmitCallImportOnSystemStack("kernel32.dll", "CreatePipe");
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_pcwc_fail_close_stdout");
-
-    // SetHandleInformation on read ends: clear HANDLE_FLAG_INHERIT so they aren't inherited
-    EmitMovRegMem(X86Register.Rcx, stdoutRead, 8);
-    EmitMovRegImm(X86Register.Rdx, 1);                   // HANDLE_FLAG_INHERIT
-    EmitXorRegReg(X86Register.R8, X86Register.R8);       // dwFlags = 0 (clear inherit)
-    EmitCallImportOnSystemStack("kernel32.dll", "SetHandleInformation");
-
-    EmitMovRegMem(X86Register.Rcx, stderrRead, 8);
-    EmitMovRegImm(X86Register.Rdx, 1);
-    EmitXorRegReg(X86Register.R8, X86Register.R8);
-    EmitCallImportOnSystemStack("kernel32.dll", "SetHandleInformation");
-
-    // Configure STARTUPINFOA to redirect child process stdout/stderr through our pipes
-    EmitMovMemDwordImm(siBase, 104);                     // cb = sizeof(STARTUPINFOA)
-    EmitMovMemDwordImm(siBase + 0x3C, 0x100);           // dwFlags = STARTF_USESTDHANDLES
-    EmitMovRegMem(X86Register.Rax, stdoutWrite, 8);
-    EmitMovMemReg(siBase + 0x58, X86Register.Rax, 8);   // hStdOutput = stdout pipe write end
-    EmitMovRegMem(X86Register.Rax, stderrWrite, 8);
-    EmitMovMemReg(siBase + 0x60, X86Register.Rax, 8);   // hStdError = stderr pipe write end
-
-    EmitNullIfEmptyCwd(-0x10, "rt_pcwc_cwd_ok");
-    EmitCallCreateProcessA(-0x10, inheritHandles: true, siBase, piBase);
-
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_pcwc_fail_close_all");
-
-    // Close pipe write ends (parent doesn't need them)
-    EmitMovRegMem(X86Register.Rcx, stdoutWrite, 8);
+    // Parent doesn't need its copies of the file write handles — close so the
+    // child's writes can flush and the OS can finalize the file once child exits.
+    EmitMovRegMem(X86Register.Rcx, stdoutHSlot, 8);
     EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    EmitMovRegMem(X86Register.Rcx, stderrWrite, 8);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(stdoutHSlot, X86Register.Rax, 8);                // mark closed
+    EmitMovRegMem(X86Register.Rcx, stderrHSlot, 8);
     EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(stderrHSlot, X86Register.Rax, 8);
 
-    // Close thread handle
+    // Close child's thread handle (we just keep hProcess).
     EmitMovRegMem(X86Register.Rcx, piBase + 0x08, 8);
     EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
 
-    // Allocate result struct (24 bytes)
+    // Allocate the capture struct and zero it (mm_alloc returns uninitialized memory).
     EmitMovRegImm(X86Register.Rcx, CaptureStructSize);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);           // destructor = 0
-    EmitTagZero(X86Register.R8);   // R8 = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitTagZero(X86Register.R8);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(resultSlot, X86Register.Rax, 8);
+    // Zero all 5 qwords of the capture struct.
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rax);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rcx, CaptureStructSize / 8);
+    EmitBytes(0xF3, 0x48, 0xAB); // REP STOSQ
 
-    // Populate capture struct: hProcess, stdoutRead, stderrRead
+    // Copy stdoutPath into mm_alloc'd buffer; store ptr at stdoutPathCopySlot.
+    EmitCallDuplicateCstring(srcSlot: -0x18, destSlot: stdoutPathCopySlot, "rt_pcwc_fail");
+    EmitCallDuplicateCstring(srcSlot: -0x20, destSlot: stderrPathCopySlot, "rt_pcwc_fail");
+
+    // Populate capture struct: +0x00=hProcess, +0x18=stdoutPathCopy, +0x20=stderrPathCopy.
+    // (drained slots +0x08 and +0x10 stay 0; drain_both fills them later.)
     EmitStoreToCaptureField(piBase, resultSlot, 0x00);
-    EmitStoreToCaptureField(stdoutRead, resultSlot, 0x08);
-    EmitStoreToCaptureField(stderrRead, resultSlot, 0x10);
+    EmitStoreToCaptureField(stdoutPathCopySlot, resultSlot, 0x18);
+    EmitStoreToCaptureField(stderrPathCopySlot, resultSlot, 0x20);
 
-    // Return struct pointer
+    // Return struct pointer.
     EmitMovRegMem(X86Register.Rax, resultSlot, 8);
     EmitJmp("rt_pcwc_done");
 
-    // Error paths: clean up handles
-    DefineLabel("rt_pcwc_fail_close_all");
-    EmitMovRegMem(X86Register.Rcx, stderrRead, 8);
-    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    EmitMovRegMem(X86Register.Rcx, stderrWrite, 8);
-    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    DefineLabel("rt_pcwc_fail_close_stdout");
-    EmitMovRegMem(X86Register.Rcx, stdoutRead, 8);
-    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
-    EmitMovRegMem(X86Register.Rcx, stdoutWrite, 8);
-    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    // Error path: close any open file handles, free any allocated path copies,
+    // delete any files we created, return 0.
     DefineLabel("rt_pcwc_fail");
+    EmitCloseHandleAtStackSlotIfNonZero(stdoutHSlot, "rt_pcwc_fail_skip_out_h");
+    EmitCloseHandleAtStackSlotIfNonZero(stderrHSlot, "rt_pcwc_fail_skip_err_h");
+    // Best-effort delete of files we created (we don't know if CreateFileA succeeded
+    // for both; passing INVALID_HANDLE_VALUE through CloseHandle is harmless, and
+    // DeleteFileA with a real path that we may or may not have written to is fine).
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitCallImportOnSystemStack("kernel32.dll", "DeleteFileA");
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallImportOnSystemStack("kernel32.dll", "DeleteFileA");
+    // Free path copies if we allocated them.
+    EmitFreeIfNonZero(stdoutPathCopySlot, "rt_pcwc_fail_skip_free_out");
+    EmitFreeIfNonZero(stderrPathCopySlot, "rt_pcwc_fail_skip_free_err");
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
 
     DefineLabel("rt_pcwc_done");
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Free [rbp+slot] via mm_free if non-zero; defines `skipLabel` after.
+  /// </summary>
+  private void EmitFreeIfNonZero(int slot, string skipLabel) {
+    EmitMovRegMem(X86Register.Rcx, slot, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", skipLabel);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    DefineLabel(skipLabel);
+  }
+
+  /// <summary>
+  /// strlen the cstring at [rbp+srcSlot], mm_alloc(strlen+1), memcpy from src,
+  /// store the new ptr at [rbp+destSlot]. On allocation failure (mm_alloc returns 0)
+  /// jumps to failLabel. The src cstring must be non-NULL.
+  /// </summary>
+  private void EmitCallDuplicateCstring(int srcSlot, int destSlot, string failLabel) {
+    EmitMovRegMem(X86Register.Rcx, srcSlot, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_strlen")); EmitDword(0);
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rax);                  // RDI = strlen
+    // mm_alloc(strlen + 1).
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi);
+    EmitAddRegImm(X86Register.Rcx, 1);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitTagZero(X86Register.R8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", failLabel);
+    EmitMovMemReg(destSlot, X86Register.Rax, 8);
+    // memcpy(dest, src, strlen + 1).
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovRegMem(X86Register.Rdx, srcSlot, 8);
+    EmitMovRegReg(X86Register.R8, X86Register.Rdi);
+    EmitAddRegImm(X86Register.R8, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_memcpy")); EmitDword(0);
   }
 
   /// <summary>
@@ -2567,257 +2654,171 @@ public partial class X86CodeEmitter {
   ///   to zero bytesReadSlot since we always check ReadFile's return value first)
   /// suffix — disambiguates labels between the stdout and stderr emissions.
   /// </summary>
-  private void EmitDrainPipeOnce(
-      int handleSlot, int bufSlot, int capSlot, int lenSlot, int eofSlot,
-      int procExitedSlot, int didReadSlot,
-      int peekTotalSlot, int peekLeftSlot, int bytesReadSlot,
-      string suffix) {
-    string skipLabel = $"rt_pdb_skip_{suffix}";
-    string peekFailLabel = $"rt_pdb_peek_fail_{suffix}";
-    string noBytesLabel = $"rt_pdb_no_bytes_{suffix}";
-    string growDoneLabel = $"rt_pdb_grow_done_{suffix}";
-    string readDoneLabel = $"rt_pdb_read_done_{suffix}";
+  /// <summary>
+  /// Drain one capture-file stream into an mm_alloc'd cstring stored at
+  /// capture_struct[+drainedFieldOff], then DeleteFileA the path stored at
+  /// capture_struct[+pathFieldOff], free the path, and zero the path slot.
+  ///
+  /// The capture_ptr is at [rbp-0x08]. Local scratch:
+  ///   [rbp-0x10] = file handle (read)
+  ///   [rbp-0x18] = file size (qword from GetFileSizeEx)
+  ///   [rbp-0x20] = bytesRead (output of ReadFile)
+  ///   [rbp-0x28] = buffer ptr (mm_alloc'd)
+  /// </summary>
+  private void EmitDrainOneCaptureFile(int pathFieldOff, int drainedFieldOff, string suffix) {
+    string emptyPathLabel = $"rt_pdb_empty_path_{suffix}";
+    string openFailLabel = $"rt_pdb_open_fail_{suffix}";
+    string sizeFailLabel = $"rt_pdb_size_fail_{suffix}";
+    string emptyFileLabel = $"rt_pdb_empty_file_{suffix}";
+    string allocedLabel = $"rt_pdb_alloced_{suffix}";
+    string doneLabel = $"rt_pdb_done_{suffix}";
 
-    // If already EOF, skip entirely.
-    EmitMovRegMem(X86Register.Rax, eofSlot, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", skipLabel);
+    // Load capture_ptr into Rax for repeated use; if the path slot is zero, skip
+    // (drain already ran or the path was never set).
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rdi, X86Register.Rax, pathFieldOff);     // RDI = path
+    EmitTestRegReg(X86Register.Rdi, X86Register.Rdi);
+    EmitJcc("z", emptyPathLabel);
 
-    // PeekNamedPipe(hNamedPipe, NULL, 0, NULL, &peekTotal, &peekLeft) — 6 args.
-    // Zero peekTotal first so we read a clean value if the call somehow doesn't
-    // write it. (The Win32 docs say it always writes when returning TRUE, but
-    // belt-and-braces is cheap.)
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(peekTotalSlot, X86Register.Rax, 8);
-    EmitSystemStackEnter(0x30);                                  // shadow + 2 stack args
-    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);              // arg1: pipe handle
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // arg2: lpBuffer = NULL
-    EmitXorRegReg(X86Register.R8, X86Register.R8);               // arg3: nBufferSize = 0
-    EmitXorRegReg(X86Register.R9, X86Register.R9);               // arg4: lpBytesRead = NULL
-    EmitLeaRegMem(X86Register.Rax, peekTotalSlot);
-    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20);                     // MOV [rsp+0x20] = &peekTotal
-    EmitLeaRegMem(X86Register.Rax, peekLeftSlot);
-    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28);                     // MOV [rsp+0x28] = &peekLeft
-    EmitCallImport("kernel32.dll", "PeekNamedPipe");
-    EmitSystemStackLeave(0x30);
-
-    // PeekNamedPipe returns 0 on broken pipe (write end closed) → real EOF.
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", peekFailLabel);
-
-    // peekTotal == 0: nothing buffered right now.
-    EmitMovRegMem(X86Register.Rax, peekTotalSlot, 4);            // 32-bit DWORD output
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", noBytesLabel);
-
-    // Bytes are available — make sure buf has room: while (len + peekTotal + 1 > cap) cap *= 2.
-    // Simpler one-shot grow: grow to next power-of-two ≥ len + peekTotal + 1.
-    // We expand by doubling in a loop; for small peekTotal this is at most one iteration.
-    string growLoopLabel = $"rt_pdb_grow_loop_{suffix}";
-    DefineLabel(growLoopLabel);
-    EmitMovRegMem(X86Register.Rax, lenSlot, 8);                  // RAX = len
-    EmitMovRegMem(X86Register.Rcx, peekTotalSlot, 4);            // RCX = peekTotal (zero-extended)
-    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);             // RAX = len + peekTotal
-    EmitAddRegImm(X86Register.Rax, 1);                            // +1 for null terminator
-    EmitMovRegMem(X86Register.Rcx, capSlot, 8);                  // RCX = cap
+    // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+    //             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL).
+    EmitSystemStackEnter(0x40);
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi);                            // lpFileName
+    EmitMovRegImm(X86Register.Rdx, unchecked((long)0x80000000L));               // GENERIC_READ
+    EmitMovRegImm(X86Register.R8, 7);                                            // FILE_SHARE_READ|WRITE|DELETE
+    EmitXorRegReg(X86Register.R9, X86Register.R9);                              // lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00);            // OPEN_EXISTING
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x80, 0x00, 0x00, 0x00);            // FILE_ATTRIBUTE_NORMAL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);            // hTemplateFile = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    EmitSystemStackLeave(0x40);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);                                    // save handle
+    EmitMovRegImm(X86Register.Rcx, -1);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("le", growDoneLabel);
+    EmitJcc("e", openFailLabel);
 
-    // Realloc buffer to cap*2.
-    EmitMovRegMem(X86Register.Rcx, bufSlot, 8);                  // arg0: old buffer
-    EmitMovRegMem(X86Register.Rdx, capSlot, 8);                  // arg1: old size
-    EmitMovRegReg(X86Register.R8, X86Register.Rdx);
-    EmitShlRegImm(X86Register.R8, 1);                             // arg2: new size = old * 2
-    EmitMovMemReg(capSlot, X86Register.R8, 8);                   // store new cap
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
-    EmitMovMemReg(bufSlot, X86Register.Rax, 8);                  // store new buf
-    EmitJmp(growLoopLabel);                                       // re-check (peekTotal could be huge)
+    // GetFileSizeEx(handle, &size).
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);                                    // pre-zero size
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitLeaRegMem(X86Register.Rdx, -0x18);
+    EmitCallImportOnSystemStack("kernel32.dll", "GetFileSizeEx");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", sizeFailLabel);
 
-    DefineLabel(growDoneLabel);
-    // ReadFile(handle, buf+len, peekTotal, &bytesRead, NULL) — 5 args.
-    EmitSystemStackEnter(0x30);                                   // shadow + 1 stack arg + pad
-    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);                // arg1: handle
-    EmitMovRegMem(X86Register.Rdx, bufSlot, 8);                   // RDX = buf
-    EmitMovRegMem(X86Register.Rax, lenSlot, 8);                   // RAX = len
-    EmitBytes(0x48, 0x01, 0xC2);                                   // ADD RDX, RAX (buf + len)
-    EmitMovRegMem(X86Register.R8, peekTotalSlot, 4);              // arg3: bytes to read
-    EmitLeaRegMem(X86Register.R9, bytesReadSlot);                 // arg4: &bytesRead
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // [rsp+0x20] = NULL (overlapped)
+    // 0-byte file: skip allocation, store __rt_empty_cstring instead.
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", emptyFileLabel);
+
+    // mm_alloc(size + 1) for buf+nul.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitAddRegImm(X86Register.Rcx, 1);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitTagZero(X86Register.R8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // ReadFile(handle, buf, size, &bytesRead, NULL). Read in a loop because for
+    // large files ReadFile may return short on a single call.
+    DefineLabel($"rt_pdb_read_loop_{suffix}");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);                                    // bytesRead = 0
+    EmitSystemStackEnter(0x30);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);                                    // handle
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);                                    // buf base
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);                                    // (we'll track total in -0x30 next iter)
+    // For simplicity: assume one ReadFile call satisfies (it does for sub-GB
+    // files in practice). Win32 ReadFile on a regular file with no overlapped
+    // returns the whole length except in pathological cases (signal interrupt,
+    // which we don't support).
+    EmitMovRegMem(X86Register.R8, -0x18, 4);                                     // size (DWORD; capture stays under 4GB)
+    EmitLeaRegMem(X86Register.R9, -0x20);                                        // &bytesRead
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);            // overlapped = NULL
     EmitCallImport("kernel32.dll", "ReadFile");
     EmitSystemStackLeave(0x30);
+    // Don't worry about partial reads — bytesRead is the actual count, NUL goes there.
 
-    // ReadFile returned 0 → broken pipe = EOF for us.
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", peekFailLabel);
+    // NUL-terminate at buf[bytesRead].
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);                                    // buf
+    EmitMovRegMem(X86Register.Rcx, -0x20, 4);                                    // bytesRead (DWORD)
+    EmitBytes(0xC6, 0x04, 0x08, 0x00);                                           // MOV byte [RAX+RCX], 0
 
-    // bytesRead might still be 0 (e.g. peekTotal raced with reader). Treat as
-    // "no progress this iteration" — don't mark EOF yet, let next peek decide.
-    EmitMovRegMem(X86Register.Rax, bytesReadSlot, 4);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", readDoneLabel);
+    EmitJmp(allocedLabel);
 
-    // len += bytesRead; didRead = 1.
-    EmitMovRegMem(X86Register.Rcx, lenSlot, 8);
-    EmitAddRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitMovMemReg(lenSlot, X86Register.Rcx, 8);
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(didReadSlot, X86Register.Rax, 8);
-    EmitJmp(readDoneLabel);
+    // Path was empty, file was 0 bytes, or some failure: allocate a 1-byte
+    // mm-managed buffer holding just the NUL terminator. We MUST allocate
+    // (not return the static __rt_empty_cstring) because the parser-side
+    // RuntimeCallToManaged wrapper around processReadStdout/Stderr unconditionally
+    // calls mm_free on whatever cstring we return — handing back a static would
+    // cause a bad free.
+    DefineLabel(emptyFileLabel);
+    DefineLabel(sizeFailLabel);
+    DefineLabel(openFailLabel);
+    DefineLabel(emptyPathLabel);
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitTagZero(X86Register.R8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitBytes(0xC6, 0x00, 0x00);                                                 // MOV byte [RAX], 0
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
 
-    DefineLabel(noBytesLabel);
-    // peek succeeded but 0 bytes available. If process has exited, this is EOF
-    // (writer closed and drained); otherwise just wait for next iteration.
-    EmitMovRegMem(X86Register.Rax, procExitedSlot, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", readDoneLabel);
-    // Fall through to peekFailLabel.
+    DefineLabel(allocedLabel);
 
-    DefineLabel(peekFailLabel);
-    // EOF: zero the handle in struct (caller will skip CloseHandle on a 0 slot)
-    // and set the local EOF flag. We don't CloseHandle here — the close path is
-    // centralized after the drain loop.
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(eofSlot, X86Register.Rax, 8);
+    // Close the file handle if open.
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", $"rt_pdb_skip_close_h_{suffix}");
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitJcc("e", $"rt_pdb_skip_close_h_{suffix}");
+    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+    DefineLabel($"rt_pdb_skip_close_h_{suffix}");
 
-    DefineLabel(readDoneLabel);
-    DefineLabel(skipLabel);
+    // Store buffer ptr into capture+drainedFieldOff.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                                    // capture_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, drainedFieldOff, X86Register.Rcx);
+
+    // DeleteFileA(path) and free the path string. Both are caller-irrelevant
+    // best-effort cleanup; ignore failure.
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, pathFieldOff);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", doneLabel);
+    EmitCallImportOnSystemStack("kernel32.dll", "DeleteFileA");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, pathFieldOff);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, pathFieldOff, X86Register.Rcx);
+
+    DefineLabel(doneLabel);
   }
 
   /// <summary>
   /// maxon_process_drain_both(capture_ptr) -> void.
-  /// Reads stdout and stderr in lockstep so neither pipe can block the other on
-  /// a full pipe buffer (Windows anonymous pipes default to ~64KB; verbose worker
-  /// output trivially exceeds that on stderr). Stores two cstring results in the
-  /// capture struct at +0x18 (stdout) and +0x20 (stderr); read_stdout/read_stderr
-  /// pick them up and clear the slots.
-  ///
-  /// Stack layout (frame size 0x90):
-  ///   [rbp-0x08] = capture_ptr (arg)
-  ///   [rbp-0x10] = stdoutBuf      [rbp-0x40] = peekTotal
-  ///   [rbp-0x18] = stdoutCap      [rbp-0x48] = peekLeft (unused, just storage)
-  ///   [rbp-0x20] = stdoutLen      [rbp-0x50] = bytesRead
-  ///   [rbp-0x28] = stderrBuf      [rbp-0x58] = stdoutEof
-  ///   [rbp-0x30] = stderrCap      [rbp-0x60] = stderrEof
-  ///   [rbp-0x38] = stderrLen      [rbp-0x68] = procExited
-  ///   [rbp-0x70] = hProcess       [rbp-0x80] = hStderrRead
-  ///   [rbp-0x78] = hStdoutRead    [rbp-0x88] = didReadThisIter
+  /// Waits INFINITE for the child to exit, then reads the two capture files
+  /// into mm_alloc'd cstrings stored at capture+0x08 (stdout) and +0x10 (stderr).
+  /// Deletes the temp files and frees the path strings as part of drain.
   /// </summary>
   private void EmitMaxonProcessDrainBoth() {
-    EmitRuntimeFunctionStart("maxon_process_drain_both", 1, 0x90);
+    EmitRuntimeFunctionStart("maxon_process_drain_both", 1, 0x40);
 
-    // Cache pipe + process handles from the struct, then null both pipe slots
-    // immediately so concurrent close paths (e.g. close_capture mid-drain) won't
-    // double-close. Also tells subsequent read_stdout/read_stderr to take the
-    // "already drained" path.
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);                    // capture_ptr
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x00);
-    EmitMovMemReg(-0x70, X86Register.Rcx, 8);                    // hProcess
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x08);
-    EmitMovMemReg(-0x78, X86Register.Rcx, 8);                    // hStdoutRead
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x10);
-    EmitMovMemReg(-0x80, X86Register.Rcx, 8);                    // hStderrRead
-    // Zero the pipe-handle fields in the struct (close_capture won't touch them).
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rax, 0x08, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rax, 0x10, X86Register.Rcx);
-
-    // Allocate initial 4KB buffer for stdout.
-    EmitMovRegImm(X86Register.Rcx, 4096);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // destructor = 0
-    EmitTagZero(X86Register.R8);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);                    // stdoutBuf
-    EmitMovRegImm(X86Register.Rax, 4096);
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);                    // stdoutCap = 4096
-
-    // Allocate initial 4KB buffer for stderr.
-    EmitMovRegImm(X86Register.Rcx, 4096);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitTagZero(X86Register.R8);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x28, X86Register.Rax, 8);                    // stderrBuf
-    EmitMovRegImm(X86Register.Rax, 4096);
-    EmitMovMemReg(-0x30, X86Register.Rax, 8);                    // stderrCap = 4096
-
-    // Zero remaining locals: stdoutLen, stderrLen, peekTotal, peekLeft,
-    // bytesRead, stdoutEof, stderrEof, procExited.
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);                    // stdoutLen
-    EmitMovMemReg(-0x38, X86Register.Rax, 8);                    // stderrLen
-    EmitMovMemReg(-0x40, X86Register.Rax, 8);                    // peekTotal
-    EmitMovMemReg(-0x48, X86Register.Rax, 8);                    // peekLeft
-    EmitMovMemReg(-0x50, X86Register.Rax, 8);                    // bytesRead
-    EmitMovMemReg(-0x58, X86Register.Rax, 8);                    // stdoutEof
-    EmitMovMemReg(-0x60, X86Register.Rax, 8);                    // stderrEof
-    EmitMovMemReg(-0x68, X86Register.Rax, 8);                    // procExited
-
-    // ============= Main drain loop =============
-    DefineLabel("rt_pdb_loop");
-    // Reset didReadThisIter
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(-0x88, X86Register.Rax, 8);
-
-    // Drain stdout once.
-    EmitDrainPipeOnce(
-        handleSlot: -0x78, bufSlot: -0x10, capSlot: -0x18, lenSlot: -0x20,
-        eofSlot: -0x58, procExitedSlot: -0x68, didReadSlot: -0x88,
-        peekTotalSlot: -0x40, peekLeftSlot: -0x48, bytesReadSlot: -0x50,
-        suffix: "out");
-
-    // Drain stderr once.
-    EmitDrainPipeOnce(
-        handleSlot: -0x80, bufSlot: -0x28, capSlot: -0x30, lenSlot: -0x38,
-        eofSlot: -0x60, procExitedSlot: -0x68, didReadSlot: -0x88,
-        peekTotalSlot: -0x40, peekLeftSlot: -0x48, bytesReadSlot: -0x50,
-        suffix: "err");
-
-    // Poll process: WaitForSingleObject(hProcess, 0). Skip if already known exited.
-    EmitMovRegMem(X86Register.Rax, -0x68, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", "rt_pdb_skip_wait");
-    EmitMovRegMem(X86Register.Rcx, -0x70, 8);                    // arg1: hProcess
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // arg2: timeout = 0 (poll)
+    // Wait INFINITE for the child to exit so its file writes are flushed.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);                                    // capture_ptr
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x00);               // hProcess
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_pdb_no_proc");
+    EmitMovRegImm(X86Register.Rdx, unchecked((long)0xFFFFFFFFL));                // INFINITE
     EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);            // 0 == WAIT_OBJECT_0
-    EmitJcc("nz", "rt_pdb_skip_wait");
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(-0x68, X86Register.Rax, 8);                    // procExited = 1
-    DefineLabel("rt_pdb_skip_wait");
+    DefineLabel("rt_pdb_no_proc");
 
-    // Loop exit condition: stdoutEof && stderrEof.
-    EmitMovRegMem(X86Register.Rax, -0x58, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_pdb_continue");
-    EmitMovRegMem(X86Register.Rax, -0x60, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", "rt_pdb_done");
-
-    DefineLabel("rt_pdb_continue");
-    // If we read nothing this iteration, sleep 1ms to avoid busy-spin.
-    EmitMovRegMem(X86Register.Rax, -0x88, 8);
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", "rt_pdb_loop");
-    EmitMovRegImm(X86Register.Rcx, 1);
-    EmitCallImportOnSystemStack("kernel32.dll", "Sleep");
-    EmitJmp("rt_pdb_loop");
-
-    DefineLabel("rt_pdb_done");
-    EmitNullTerminateGrowingBuffer(bufSlot: -0x10, capSlot: -0x18, lenSlot: -0x20, "rt_pdb_out");
-    EmitNullTerminateGrowingBuffer(bufSlot: -0x28, capSlot: -0x30, lenSlot: -0x38, "rt_pdb_err");
-
-    // Close both read pipe handles (they were cached locally; struct slots already 0).
-    EmitCloseHandleAtStackSlotIfNonZero(-0x78, "rt_pdb_skip_close_out");
-    EmitCloseHandleAtStackSlotIfNonZero(-0x80, "rt_pdb_skip_close_err");
-
-    // Store result cstring pointers into capture struct at +0x18, +0x20.
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);                    // capture_ptr
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);                    // stdout buf
-    EmitMovIndirectMemReg(X86Register.Rax, 0x18, X86Register.Rcx);
-    EmitMovRegMem(X86Register.Rcx, -0x28, 8);                    // stderr buf
-    EmitMovIndirectMemReg(X86Register.Rax, 0x20, X86Register.Rcx);
+    // Drain stdout, then stderr. Each call closes/deletes the corresponding file.
+    EmitDrainOneCaptureFile(pathFieldOff: 0x18, drainedFieldOff: 0x08, suffix: "out");
+    EmitDrainOneCaptureFile(pathFieldOff: 0x20, drainedFieldOff: 0x10, suffix: "err");
 
     EmitRuntimeFunctionEnd();
   }
@@ -2859,39 +2860,9 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// After drain finishes, append a NUL byte at buf[len], reallocating to
-  /// len+1 first if the buffer is exactly full (cap == len). Slots are
-  /// negative RBP-relative offsets; labelPrefix disambiguates the realloc-skip
-  /// label between the stdout and stderr emissions.
-  /// </summary>
-  private void EmitNullTerminateGrowingBuffer(int bufSlot, int capSlot, int lenSlot, string labelPrefix) {
-    string nulltermLabel = $"{labelPrefix}_nullterm";
-
-    EmitMovRegMem(X86Register.Rax, lenSlot, 8);
-    EmitMovRegMem(X86Register.Rcx, capSlot, 8);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("b", nulltermLabel);
-
-    // cap == len: realloc to len+1 so we have room for the terminator.
-    EmitMovRegMem(X86Register.Rcx, bufSlot, 8);                    // arg0: old buf
-    EmitMovRegMem(X86Register.Rdx, capSlot, 8);                    // arg1: old size
-    EmitMovRegMem(X86Register.R8, lenSlot, 8);                     // arg2: new size = len
-    EmitAddRegImm(X86Register.R8, 1);                               // +1 for terminator
-    EmitMovMemReg(capSlot, X86Register.R8, 8);                     // store new cap
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
-    EmitMovMemReg(bufSlot, X86Register.Rax, 8);
-
-    DefineLabel(nulltermLabel);
-    EmitMovRegMem(X86Register.Rax, bufSlot, 8);                    // RAX = buf
-    EmitMovRegMem(X86Register.Rcx, lenSlot, 8);                    // RCX = len
-    EmitBytes(0xC6, 0x04, 0x08, 0x00);                              // MOV byte [RAX+RCX], 0
-  }
-
-  /// <summary>
   /// Reload capture_ptr ([rbp-0x08]) into RAX, load the qword at +fieldOffset
   /// into RCX, and skip <paramref name="callEmitter"/> if RCX is zero. Used by
-  /// close_capture for both pipe-handle closes and drained-buffer frees.
+  /// close_capture for drained-buffer frees and path delete+free.
   /// </summary>
   private void EmitCallOnCaptureFieldIfNonZero(int fieldOffset, string skipLabel, System.Action callEmitter) {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
@@ -2904,11 +2875,12 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_process_close_capture(capture_struct_ptr) -> void.
-  /// Closes the hProcess handle, defensively closes any still-open pipe handles
-  /// and frees any unclaimed drained buffers, then frees the struct itself.
-  /// In normal flow, read_stdout/read_stderr have already taken ownership of
-  /// the drained buffers and zeroed the pipe handles; the cleanup here only
-  /// fires if the caller closed without reading.
+  /// Closes the hProcess handle, frees any unclaimed drained buffers (+0x08, +0x10),
+  /// deletes any still-existing capture files and frees the path strings (+0x18, +0x20),
+  /// then frees the struct itself. In normal flow, read_stdout/read_stderr have already
+  /// taken ownership of the drained buffers (zeroing 0x08/0x10), and drain_both has
+  /// already deleted the files and zeroed the path slots; the work here only fires if
+  /// the caller closed without reading or drained without consuming.
   /// </summary>
   private void EmitMaxonProcessCloseCapture() {
     EmitRuntimeFunctionStart("maxon_process_close_capture", 1, 0x20);
@@ -2920,14 +2892,20 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x00);
     EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
 
-    // Defensive cleanup — these slots are normally zeroed by drain_both / read_*.
-    void closeHandle() => EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
     void freeBuffer() { EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0); }
+    void deleteThenFreePath() {
+      // RCX = path cstring on entry (set by EmitCallOnCaptureFieldIfNonZero).
+      // Save path so we can free it after delete.
+      EmitMovMemReg(-0x10, X86Register.Rcx, 8);
+      EmitCallImportOnSystemStack("kernel32.dll", "DeleteFileA");
+      EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    }
 
-    EmitCallOnCaptureFieldIfNonZero(0x08, "rt_pcc_skip_close_out", closeHandle);
-    EmitCallOnCaptureFieldIfNonZero(0x10, "rt_pcc_skip_close_err", closeHandle);
-    EmitCallOnCaptureFieldIfNonZero(0x18, "rt_pcc_skip_free_out", freeBuffer);
-    EmitCallOnCaptureFieldIfNonZero(0x20, "rt_pcc_skip_free_err", freeBuffer);
+    EmitCallOnCaptureFieldIfNonZero(0x08, "rt_pcc_skip_free_drained_out", freeBuffer);
+    EmitCallOnCaptureFieldIfNonZero(0x10, "rt_pcc_skip_free_drained_err", freeBuffer);
+    EmitCallOnCaptureFieldIfNonZero(0x18, "rt_pcc_skip_path_out", deleteThenFreePath);
+    EmitCallOnCaptureFieldIfNonZero(0x20, "rt_pcc_skip_path_err", deleteThenFreePath);
 
     // Free the capture struct itself.
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
@@ -2937,19 +2915,20 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// Shared body for maxon_process_read_stdout / read_stderr. On first call (or if
-  /// the caller invoked drain_both ahead of time), runs the drain and hands back
-  /// the buffered cstring at <paramref name="drainedSlotOffset"/>; subsequent calls
-  /// just pick up the buffered cstring without re-draining. Returns the static
-  /// empty cstring if capture_ptr is null or both pipe handles are already 0.
-  /// drainedSlotOffset is the byte offset of this stream's drained-buffer slot in
-  /// the capture struct (+0x18 stdout, +0x20 stderr); labelPrefix disambiguates
-  /// the local jump labels between the two emissions.
+  /// Shared body for maxon_process_read_stdout / read_stderr. Hands back the
+  /// already-drained cstring at <paramref name="drainedSlotOffset"/> if non-zero
+  /// (zeroing the slot to transfer ownership). Otherwise: if the corresponding
+  /// path slot is non-zero, calls drain_both to populate it, then re-hands back.
+  /// If the path slot was already zero (drain ran but produced no data, or this
+  /// is a second read), returns the static empty cstring.
+  ///
+  /// New struct layout:
+  ///   +0x08 = drainedStdout, +0x10 = drainedStderr (cstring; 0 if not drained or claimed)
+  ///   +0x18 = stdoutPath,    +0x20 = stderrPath    (cstring; 0 once drained)
   /// </summary>
   private void EmitMaxonProcessReadCaptured(string fnName, int drainedSlotOffset, string labelPrefix) {
     string emptyLabel = $"{labelPrefix}_empty";
     string needDrainLabel = $"{labelPrefix}_need_drain";
-    string doDrainLabel = $"{labelPrefix}_do_drain";
     string doneLabel = $"{labelPrefix}_done";
 
     EmitRuntimeFunctionStart(fnName, 1, 0x30);
@@ -2967,37 +2946,48 @@ public partial class X86CodeEmitter {
     EmitJmp(doneLabel);
 
     DefineLabel(needDrainLabel);
-    // Both pipe handles already 0 means nothing to drain — return empty.
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x08);
+    // If either path slot is still set, drain hasn't run — kick it off so both
+    // streams get drained in one shot. After drain, retry the drained-slot read.
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x18);
     EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("nz", doDrainLabel);
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x10);
+    EmitJcc("nz", $"{labelPrefix}_do_drain");
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x20);
     EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitJcc("z", emptyLabel);
 
-    DefineLabel(doDrainLabel);
+    DefineLabel($"{labelPrefix}_do_drain");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_process_drain_both")); EmitDword(0);
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, drainedSlotOffset);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", emptyLabel);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
     EmitMovIndirectMemReg(X86Register.Rax, drainedSlotOffset, X86Register.Rdx);
     EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJmp(doneLabel);
 
     DefineLabel(emptyLabel);
-    EmitLeaRegSymdataRel(X86Register.Rax, "__rt_empty_cstring");
+    // Allocate a 1-byte cstring holding just NUL — the parser's
+    // RuntimeCallToManaged wrapper will mm_free this for us, so we MUST hand
+    // back a real allocation, not the static __rt_empty_cstring.
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitTagZero(X86Register.R8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitBytes(0xC6, 0x00, 0x00);                                                 // MOV byte [RAX], 0
 
     DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();
   }
 
   private void EmitMaxonProcessReadStdout() {
-    EmitMaxonProcessReadCaptured("maxon_process_read_stdout", drainedSlotOffset: 0x18, labelPrefix: "rt_prso");
+    EmitMaxonProcessReadCaptured("maxon_process_read_stdout", drainedSlotOffset: 0x08, labelPrefix: "rt_prso");
   }
 
   private void EmitMaxonProcessReadStderr() {
-    EmitMaxonProcessReadCaptured("maxon_process_read_stderr", drainedSlotOffset: 0x20, labelPrefix: "rt_prse");
+    EmitMaxonProcessReadCaptured("maxon_process_read_stderr", drainedSlotOffset: 0x10, labelPrefix: "rt_prse");
   }
 
   // ==========================================================================

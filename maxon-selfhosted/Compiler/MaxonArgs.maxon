@@ -36,7 +36,10 @@ export type MaxonArgs
 	export var updateRequired bool
 	export var verbose bool
 	export var coverage bool
-	// Number of parallel batch-worker processes (default 5). 1 = serial.
+	// Print per-pass wall-clock timings at the end of the run. Useful for
+	// understanding where compile time is being spent during spec runs.
+	export var profilePasses bool
+	// Number of parallel batch-worker processes (default 8). 1 = serial.
 	export var workers WorkerCount
 	// Internal flag set by the parent to make this process run one spec's batch only.
 	export var workerSpec String
@@ -63,7 +66,8 @@ export type MaxonArgs
 			updateRequired: false,
 			verbose: false,
 			coverage: false,
-			workers: 5,
+			profilePasses: false,
+			workers: 8,
 			workerSpec: "",
 			workerSingles: "",
 			workerFallback: ""
@@ -130,7 +134,9 @@ export type MaxonArgs
 				args.verbose = true
 			end 'isVerbose' else if arg == "--coverage" 'isCoverage'
 				args.coverage = true
-			end 'isCoverage' else if arg.startsWith("--workers=") 'isWorkers'
+			end 'isCoverage' else if arg == "--profile-passes" 'isProfilePasses'
+				args.profilePasses = true
+			end 'isProfilePasses' else if arg.startsWith("--workers=") 'isWorkers'
 				let workersStr = try CommandLine.optionValue(arg) otherwise ""
 				let w = try int.fromString(workersStr) otherwise throw ArgError.invalidOption(arg)
 				if w < 1 'badWorkers'

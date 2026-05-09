@@ -326,21 +326,29 @@ end 'emitBackend'
 
 function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: lower-mir-to-target ===")
+	let lmtStart = passTimerStart()
 	pipeline.targetModule = backend.lowerMirToTarget()
+	recordPassSince("__lowerMirToTarget", startMs: lmtStart)
 	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "lower-mir-to-target"))
 
 	// Register allocation (target-independent)
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: allocate-registers ===")
+	let regStart = passTimerStart()
 	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
+	recordPassSince("__allocateRegisters", startMs: regStart)
 	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
 
 	// Prologue/epilogue insertion (uses backend for target-specific ops)
 	logDebug(LogCategory.ir, message: () gives "=== Running pass: insert-prologue-epilogue ===")
+	let peStart = passTimerStart()
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
+	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
 	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
 
 	// Emit machine code from the fully-lowered target module
+	let emitStart = passTimerStart()
 	var result = backend.emitTargetCode(stdlibCache)
+	recordPassSince("__emitTargetCode", startMs: emitStart)
 	result.targetModule = pipeline.targetModule
 	return result
 end 'emitBackendWith'
