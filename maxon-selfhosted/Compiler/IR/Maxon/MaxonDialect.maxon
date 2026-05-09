@@ -1333,34 +1333,41 @@ end 'siblingTypeNameOfContext'
 // exactly what we want for parser-time fallbacks before block source
 // info is available.
 export function qualifyCalleeForContext(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns String
-	// `qualified` short-circuits to the user-written name, but Phase 11.0
-	// typealiases (`typealias IntArray = Array with Integer`) mean the head
-	// segment of `IntArray.create` may be a typealias for a registered
-	// struct (`Array`). Run the typealias chase so callers (TypeResolution
-	// `callResultType`, lowering `lowerCall`) see the canonical struct
-	// name and can find the registered signature/return type.
+	let (qualified, _) = qualifyCalleeForContextWithType(project, bare: bare, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	return qualified
+end 'qualifyCalleeForContext'
+
+// Same as `qualifyCalleeForContext` but also returns the receiver
+// MaxonType the typealias chase landed on (for `qualified`/`sibling`
+// contexts). Resolvers that need to thread the receiver's
+// `genericInstance(...)` shape into a call-site sidecar (e.g.
+// `resolvedReceiverTypes` for layout-arg materialization) read this
+// instead of re-chasing the resolved name.
+export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns (String, MaxonType)
 	if isQualifiedCallContext(callContext) 'isQualified'
-		return chaseTypealiasInQualifiedCallee(project, callee: bare, enclosingType: "")
+		return chaseTypealiasInQualifiedCalleeWithType(project, callee: bare, enclosingType: "")
 	end 'isQualified'
 	// `sibling` first tries the enclosing-type prefix; on miss, falls
-	// through to the same probe order as `free`.
+	// through to the same probe order as `free`. The receiver MaxonType
+	// stays `unresolved` for free/sibling resolution — `lowerCall`
+	// re-derives it from `currentTypeName` for sibling instance calls.
 	let siblingTypeName = siblingTypeNameOfContext(callContext)
 	if not siblingTypeName.isEmpty() 'inSibling'
 		let siblingName = "{siblingTypeName}.{bare}"
 		if project.funcReturnTypes.contains(siblingName) 'isSibling'
-			return siblingName
+			return (siblingName, MaxonType.unresolved)
 		end 'isSibling'
 	end 'inSibling'
 	if bare == "main" 'isMain'
-		return bare
+		return (bare, MaxonType.unresolved)
 	end 'isMain'
 	let localName = qualifyName(currentNamespace, name: bare)
 	if project.funcReturnTypes.contains(localName) 'isLocal'
-		return localName
+		return (localName, MaxonType.unresolved)
 	end 'isLocal'
 	let stdlibName = qualifyName("stdlib", name: bare)
 	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
-		return stdlibName
+		return (stdlibName, MaxonType.unresolved)
 	end 'isStdlib'
 	// Cross-file fallback: scan candidates with matching trailing
 	// segment, pick the first visible from `readerFilePath`.
@@ -1371,11 +1378,11 @@ export function qualifyCalleeForContext(project Project, bare String, callContex
 		end 'notFunc'
 		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
-			return candidate
+			return (candidate, MaxonType.unresolved)
 		end 'visible'
 	end 'each'
-	return localName
-end 'qualifyCalleeForContext'
+	return (localName, MaxonType.unresolved)
+end 'qualifyCalleeForContextWithType'
 
 // Look up the visibility/sourceFilePath for a function. Missing entries
 // default to `(global, stdlibBootstrapPath)` — stdlib functions are
@@ -1396,29 +1403,53 @@ end 'funcVisibilityOrDefault'
 // Integer`, swap it for the alias's base struct name. Falls through
 // unchanged on any miss (no dot, unknown receiver, no alias, etc.).
 //
+// Returns the rewritten callee name and the resolved receiver MaxonType
+// — `genericInstance(Array, [Byte])` for `ByteArray`, `named(Array)`
+// for a non-generic alias, or `unresolved` when the head isn't a known
+// typealias. Lowering's `materializeLayoutArg` keys off the returned
+// MaxonType to thread the matching layout descriptor at a
+// `Type.staticMethod()` call site.
+//
 // Used by both TypeResolution (`callResultType`/`qualifyCalleeForContext`)
 // and lowering (`LowerMaxonToStd.lowerCall`/`lowerMethodCall`) so a
 // qualified call always resolves to a registered struct/method name.
-export function chaseTypealiasInQualifiedCallee(project Project, callee String, enclosingType String) returns String
+export function chaseTypealiasInQualifiedCalleeWithType(project Project, callee String, enclosingType String) returns (String, MaxonType)
 	let bytes = callee.toByteArray()
 	let count = bytes.count()
 	let dotIdx = lastIndexOfDotByte(bytes)
 	if dotIdx >= count 'noDot'
-		return callee
+		return (callee, MaxonType.unresolved)
 	end 'noDot'
 	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
 	if project.structTypes.contains(head) 'alreadyResolved'
-		return callee
+		return (callee, MaxonType.named(project.typeNames.intern(head)))
 	end 'alreadyResolved'
-	if let resolved = try chaseTypealiasNameToStruct(project, name: head, enclosingType: enclosingType) 'didResolve'
-		if resolved == head 'sameName'
-			return callee
+	if let resolvedType = try chaseTypealiasNameToType(project, name: head, enclosingType: enclosingType) 'didResolve'
+		let resolvedName = resolvedType.nameOrEmpty(project)
+		if resolvedName.isEmpty() or resolvedName == head 'sameName'
+			return (callee, resolvedType)
 		end 'sameName'
 		let tail = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: count)
-		return "{resolved}.{tail}"
+		return ("{resolvedName}.{tail}", resolvedType)
 	end 'didResolve'
-	return callee
-end 'chaseTypealiasInQualifiedCallee'
+	return (callee, MaxonType.unresolved)
+end 'chaseTypealiasInQualifiedCalleeWithType'
+
+// Return the resolved MaxonType behind a typealias `name`. Mirrors
+// `chaseTypealiasNameToStruct` but stops at the MaxonType layer rather
+// than collapsing to the base struct's bare name — so generic instances
+// keep their `with` arg list, which the call-site receiver-context plumbing
+// needs.
+export function chaseTypealiasNameToType(project Project, name String, enclosingType String) returns MaxonType throws TypealiasChaseError
+	if not enclosingType.isEmpty() 'tryInner'
+		if let st = try project.structTypes.get(enclosingType) 'haveStruct'
+			if let inner = try st.innerAliases.get(name) 'haveInner'
+				return inner
+			end 'haveInner'
+		end 'haveStruct'
+	end 'tryInner'
+	return try project.genericTypealiases.get(name) otherwise throw TypealiasChaseError.unresolved
+end 'chaseTypealiasNameToType'
 
 export typealias ByteSliceIndex = int(0 to u64.max)
 

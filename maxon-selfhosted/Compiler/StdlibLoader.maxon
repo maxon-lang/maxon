@@ -351,6 +351,14 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// so lowerMaxonToStd can look up named types successfully.
 	// Skip semanticCheck — it requires main() which stdlib doesn't have
 	pipeline.addPass(PassKind.resolveTypes)
+	// Phase 11.2 / 11.3: emit layout descriptors and witness tables for
+	// every interned generic instance / conformance the stdlib parse
+	// produced. lowerMaxonToStd's `materializeLayoutArg` reads
+	// `project.layoutDescriptors` at every generic-method call site, so
+	// without these passes stdlib lowering panics with a
+	// "no descriptor for gid …" tripwire on the first such call.
+	pipeline.addPass(PassKind.buildLayoutDescriptors)
+	pipeline.addPass(PassKind.buildWitnessTables)
 	pipeline.addPass(PassKind.lowerMaxonToStd)
 	pipeline.addPass(PassKind.borrowCheck)
 	pipeline.addPass(PassKind.injectDrops)

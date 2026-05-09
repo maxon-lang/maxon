@@ -2087,18 +2087,60 @@ type MaxonToStdLowering
 		// any default-fill consts emitted by slotArgsForCall, then fold its
 		// id into slot 0 of the returned arg list — no second-pass copy.
 		var leadingId = 0
+		var siblingReceiverType = MaxonType.unresolved
 		if isSiblingInstance 'getSelf'
 			leadingId = self.loadSelfPointer(dstBlock)
-		end 'getSelf'
+			// Build the genericInstance receiverContext for sibling calls
+			// inside a generic method so layout-arg materialization can
+			// route through the caller's `__layout_param`. The parser
+			// records `__self` as a bare `named(currentType)`; for a
+			// generic enclosing struct that elides the conditional shape,
+			// which would force `materializeLayoutForGid` to load a
+			// non-existent concrete descriptor.
+			siblingReceiverType = self.enclosingTypeReceiverContext()
+		end 'getSelf' else 'tryStatic'
+			// `Type.staticMethod()` — TypeResolution recorded the
+			// resolved receiver MaxonType (e.g. `genericInstance(Array,
+			// [Byte])` for `ByteArray.init`) so layout-arg materialization
+			// at the implicit-arity branch can pick the right descriptor
+			// without re-chasing typealiases.
+			siblingReceiverType = try self.project.resolvedReceiverTypes.get(opIdx) otherwise MaxonType.unresolved
+		end 'tryStatic'
 		// Free / qualified call: pass calleeQualifiedName so the per-arg
 		// substitution can chase inner-aliases on the callee's enclosing
-		// struct. No receiver-derived type-arg substitution available
-		// (free callee or `Type.staticMethod`); receiverTypeForSubst stays
-		// `unresolved` and `buildSubstitutionForInstance` short-circuits to
-		// the empty subst.
+		// struct. Receiver-derived substitution comes from
+		// `siblingReceiverType` (set above for both sibling and qualified
+		// static call sites).
 		let finalArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStart, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: leadingId, hasLeadingReceiver: isSiblingInstance)
-		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
+		self.emitCallWithArgs(result, qualifiedCallee: qualifiedCallee, argIds: finalArgIds, dstBlock: dstBlock, receiverContext: siblingReceiverType, errorBoundName: errorBoundName)
 	end 'lowerCall'
+
+	// Build the genericInstance receiverContext for the enclosing type
+	// when the current function is an instance method. Returns
+	// `genericInstance(currentType, [typeParameter(P0), ..., typeParameter(Pn)])`
+	// for a generic enclosing type, or `named(currentType)` for a
+	// non-generic one. Returns `unresolved` when no enclosing type is
+	// active (free function); the caller already gates on
+	// `isSiblingInstance` so this branch is only triggered by an
+	// invariant violation in the caller chain.
+	function enclosingTypeReceiverContext() returns MaxonType
+		if self.currentTypeName.isEmpty() 'noType'
+			return MaxonType.unresolved
+		end 'noType'
+		let paramNames = lookupTypeParamsForBase(self.project, baseName: self.currentTypeName)
+		if paramNames.count() == 0 'nonGeneric'
+			return MaxonType.named(self.project.typeNames.intern(self.currentTypeName))
+		end 'nonGeneric'
+		var args = MaxonTypeArray.create()
+		for i in 0 upto paramNames.count() 'eachParam'
+			let pname = try paramNames.get(i) otherwise panic("enclosingTypeReceiverContext: paramNames.get OOB at {i}")
+			let pid = self.project.typeParameters.intern(self.currentTypeName, paramName: pname)
+			args.push(MaxonType.typeParameter(pid))
+		end 'eachParam'
+		let baseId = self.project.typeNames.intern(self.currentTypeName)
+		let gid = self.project.genericInstances.intern(baseId, args: args)
+		return MaxonType.genericInstance(gid)
+	end 'enclosingTypeReceiverContext'
 
 	// Method call on a value receiver. The receiver's struct type comes from
 	// the per-function value-type map; we then resolve `{Type.method}` and
@@ -2245,7 +2287,7 @@ type MaxonToStdLowering
 		// local module or behind a cache restore.
 		let implicitArity = try self.project.genericFunctionImplicitArity.get(qualifiedCallee) otherwise 0
 		if implicitArity >= 1 'addLayout'
-			finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+			finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 			if implicitArity >= 2 'addWitness'
 				finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
 			end 'addWitness'
@@ -2258,7 +2300,7 @@ type MaxonToStdLowering
 		end 'tryCall' else 'plainCall'
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		end 'plainCall'
-		self.recordCallResultType(resultId, callee: qualifiedCallee)
+		self.recordCallResultType(resultId, callee: qualifiedCallee, receiverContext: receiverContext)
 	end 'emitCallWithArgs'
 
 	// Resolve the layout descriptor for the call site and return an
@@ -2268,9 +2310,9 @@ type MaxonToStdLowering
 	// `loadLayoutDescriptor`. Otherwise (caller is itself a generic
 	// body forwarding its own `T`) forward `self.implicitLayoutValueId`
 	// — the layout slot the caller received.
-	function appendLayoutArg(argIds ValueIdArray, receiverContext MaxonType, dstBlock IrBlock) returns ValueIdArray
+	function appendLayoutArg(argIds ValueIdArray, receiverContext MaxonType, qualifiedCallee String, dstBlock IrBlock) returns ValueIdArray
 		var out = argIds
-		let layoutId = self.materializeLayoutArg(receiverContext: receiverContext, dstBlock: dstBlock)
+		let layoutId = self.materializeLayoutArg(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 		out.push(layoutId)
 		return out
 	end 'appendLayoutArg'
@@ -2282,27 +2324,43 @@ type MaxonToStdLowering
 		return out
 	end 'appendWitnessArg'
 
-	function materializeLayoutArg(receiverContext MaxonType, dstBlock IrBlock) returns ValueId
-		return match receiverContext 'pick'
-			genericInstance(gid) gives self.emitLoadLayoutDescriptorForGid(gid, dstBlock: dstBlock)
-			boolean to function gives self.forwardOrPlaceholderLayout(dstBlock)
-			unresolved gives self.forwardOrPlaceholderLayout(dstBlock)
-			typeParameter gives self.forwardOrPlaceholderLayout(dstBlock)
-			interface gives self.forwardOrPlaceholderLayout(dstBlock)
+	function materializeLayoutArg(receiverContext MaxonType, qualifiedCallee String, dstBlock IrBlock) returns ValueId
+		match receiverContext 'pick'
+			genericInstance(gid) then return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
+			typeParameter then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+			interface then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+			unresolved then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+			named then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a bare named type ({receiverContext.toString(self.project)}); TypeResolution should have promoted this to a genericInstance with bound type-args before lowering")
+			boolean to string then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a primitive type ({receiverContext.toString(self.project)}); generic methods cannot be called on primitives")
+			function then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a function type ({receiverContext.toString(self.project)}); function values cannot satisfy a generic-method receiver")
 		end 'pick'
 	end 'materializeLayoutArg'
 
+	// Materialize the layout descriptor for a `genericInstance(gid)`
+	// receiverContext: load the rdata blob for fully-concrete instances,
+	// forward the caller's layout slot for conditional instances (any
+	// type-parameter arg). The conditional case happens when a generic
+	// caller calls another generic method with `Self` or `T` — the
+	// receiver's gid encodes the unbound parameter and the descriptor is
+	// resolved at the caller's call site, not here.
+	function materializeLayoutForGid(gid GenericInstanceId, qualifiedCallee String, dstBlock IrBlock) returns ValueId
+		let (_, gidArgs) = self.project.genericInstances.get(gid)
+		if anyMaxonTypeIsConditional(gidArgs) 'conditional'
+			return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+		end 'conditional'
+		return self.emitLoadLayoutDescriptorForGid(gid, dstBlock: dstBlock)
+	end 'materializeLayoutForGid'
+
 	function emitLoadLayoutDescriptorForGid(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
 		if not self.project.layoutDescriptors.contains(gid) 'missing'
-			// Belt-and-braces: the buildLayoutDescriptors pass should have
-			// emitted a descriptor for every interned gid before lowering
-			// runs. If we reach here the worklist missed a transitive case;
-			// fall back to forwarding the caller's own layout slot rather
-			// than crashing — keeps the build green even when 11.4's call-
-			// site pattern is exercised on a corner case the worklist hasn't
-			// learned yet. A fix to BuildLayoutDescriptors is the right place
-			// to address the underlying gap.
-			return self.forwardOrPlaceholderLayout(dstBlock)
+			// `BuildLayoutDescriptors` is supposed to emit a descriptor
+			// for every interned gid before lowering runs; reaching
+			// here means its worklist missed a transitive case. Panic
+			// so the gap surfaces — silently substituting a wrong
+			// layout would just propagate the bug into runtime
+			// field-offset reads.
+			let shape = genericInstanceIdToString(self.project, id: gid)
+			panic("emitLoadLayoutDescriptorForGid: no descriptor for gid {gid} ({shape}) — BuildLayoutDescriptors missed a transitive case")
 		end 'missing'
 		let label = self.project.layoutDescriptors.labelFor(gid)
 		let resultId = allocValueId(self.funcIdRef)
@@ -2311,20 +2369,20 @@ type MaxonToStdLowering
 		return resultId
 	end 'emitLoadLayoutDescriptorForGid'
 
-	// When no concrete genericInstance is available at the call site,
-	// forward the caller's own layout-param value if the caller has one;
-	// otherwise emit a zero literal (the synthesized stub thunks are
-	// today's only callers in this position and they don't actually use
-	// the layout — the param is present only because the ABI requires it).
-	function forwardOrPlaceholderLayout(dstBlock IrBlock) returns ValueId
-		if self.implicitLayoutValueId != 0 'forward'
-			return self.implicitLayoutValueId
-		end 'forward'
-		let zero = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zero, value: 0))))
-		self.setValueType(zero, t: MaxonType.integer)
-		return zero
-	end 'forwardOrPlaceholderLayout'
+	// Forward the caller's own layout-param slot. Used whenever the call
+	// site's receiverContext doesn't carry a concrete genericInstance
+	// (typeParameter, interface, conditional genericInstance, or an
+	// unresolved free-call receiver). The caller MUST have an implicit
+	// layout param — a non-generic caller passing forward a generic-call
+	// arg has nothing to forward — so a zero `implicitLayoutValueId` is
+	// a phase-ordering bug rather than a state we should paper over with
+	// a sentinel.
+	function forwardCallerLayout(qualifiedCallee String) returns ValueId
+		if self.implicitLayoutValueId == 0 'noSlot'
+			panic("forwardCallerLayout: caller '{self.currentMaxonFunc.name}' has no implicit layout param but call to '{qualifiedCallee}' needs one forwarded — TypeResolution should have either pinned a concrete receiver or marked the caller as generic")
+		end 'noSlot'
+		return self.implicitLayoutValueId
+	end 'forwardCallerLayout'
 
 	function materializeWitnessArg(receiverContext MaxonType, dstBlock IrBlock) returns ValueId
 		// Phase 11.4 spine: route via the caller's own witness slot when
@@ -3554,13 +3612,23 @@ type MaxonToStdLowering
 	// Record the declared return type of a resolved call into the value-type
 	// map so subsequent ops that consume the call's result (field loads,
 	// method calls on it, mixed-family arithmetic, etc.) can resolve.
-	function recordCallResultType(resultId ValueId, callee String)
+	// Promotes a `Self`-shaped return type (parsed as `named(EnclosingType)`)
+	// to the receiver's `genericInstance(EnclosingType, [...])` when the
+	// caller threaded a concrete receiverContext — the bare `funcReturnTypes`
+	// entry doesn't carry the type-arg binding the call site implies.
+	function recordCallResultType(resultId ValueId, callee String, receiverContext MaxonType = MaxonType.unresolved)
 		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
-		let resultType = match returnType 'unwrap'
+		let raw = match returnType 'unwrap'
 			void gives MaxonType.integer
 			value(inner) gives inner
 		end 'unwrap'
-		self.setValueType(resultId, t: resultType)
+		// Promote `named(EnclosingType)` → `genericInstance(EnclosingType, [...])`
+		// when the call site has a concrete receiverContext: `funcReturnTypes`
+		// stores the parser's parsed-as-written shape, which collapses `Self`
+		// before any type-arg context is available. This keeps the value-type
+		// map current at every call site, not just methodCalls TypeResolution
+		// visited.
+		self.setValueType(resultId, t: promoteNamedToGenericInstance(self.project, raw: raw, candidate: receiverContext))
 	end 'recordCallResultType'
 
 	// fieldLoad: read receiver's struct type from the value-type map, find

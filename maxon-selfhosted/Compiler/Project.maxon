@@ -193,6 +193,14 @@ export type Project
 	// chain. Missing entries mean the resolver bailed (interface stub path).
 	export var resolvedCallees ResolvedCalleesMap
 
+	// Per-call-site resolved receiver type. Populated by `resolveAllCalls`
+	// alongside `resolvedCallees`; carries the genericInstance shape the
+	// receiver typealias chased to (e.g. `ByteArray.init(...)` records
+	// `genericInstance(Array, [Byte])` here so lowering's
+	// `materializeLayoutArg` can pick the right concrete or conditional
+	// layout descriptor). Free non-generic calls don't insert.
+	export var resolvedReceiverTypes ResolvedReceiverTypesMap
+
 	// Minimal first-param overload registry. When the parser detects a
 	// duplicate qualified function name and the two functions differ in their
 	// first non-`self` parameter type, both functions are re-keyed under
@@ -324,23 +332,16 @@ export type Project
 	// the witness-table label. Phase 11.0 only seeds the keys.
 	export var conformances ConformanceRegistry
 
-	// Parser-pinned producer types. Keyed by the IR value name the parser
-	// chose for a synthetic op whose semantic type the parser already
-	// knows but the regular `callResultType` lookup can't recover (because
-	// the callee's registered return type is the bare generic and the
-	// generic args aren't carried on the call op's ABI).
-	//
-	// Today's only writer is `parseArrayLiteralExpr`: it pins the
-	// `__ManagedMemory.create(...)` result to `genericInstance(__ManagedMemory,
-	// [unifiedElement])` so the subsequent `__mm.set(i, value: e)` /
-	// `__mm.get(i)` calls go through TypeResolution's generic-arg
-	// substitution and stop tripping the cast-category mismatch on
-	// non-int element types.
-	//
-	// `recordOpResult` (TypeResolution) consults this map first and
-	// records the pinned type into `producerTypes`; falling back to
-	// `callResultType` when no entry is found.
-	export var parserPinnedProducerTypes ParserPinnedProducerTypeMap
+	// Parser → TypeResolution sidecar describing each array literal's
+	// structural pieces. The parser collects only IR-shape information
+	// (the array type's name, the value names of `__mm` and `__arr`, the
+	// per-element value names); TypeResolution unifies the elements'
+	// already-recorded producer types, interns the matching
+	// `genericInstance(...)` arms, and writes them as the producer types
+	// for `__mm` and `__arr`. Each literal's entry is registered under
+	// both `(funcName, mmResultName)` and `(funcName, initResultName)`
+	// so the create- and init-resolution paths each get an O(1) lookup.
+	export var arrayLiteralProducers ArrayLiteralProducerMap
 
 	// Phase 11.0 step 2: project-wide table of resolved generic typealiases.
 	// Generic aliases (`typealias E = Base with(...)`) cannot live in
@@ -471,6 +472,7 @@ export type Project
 			funcSignatures: FuncSignatureMap.create(),
 			callParamTypes: CallParamTypesMap.create(),
 			resolvedCallees: ResolvedCalleesMap.create(),
+			resolvedReceiverTypes: ResolvedReceiverTypesMap.create(),
 			overloadedNames: OverloadedNameMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			unresolvedTopLevelDecls: UnresolvedTopLevelDeclMap.create(),
@@ -489,7 +491,7 @@ export type Project
 			typeParameters: TypeParamRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
 			conformances: ConformanceRegistry.create(),
-			parserPinnedProducerTypes: ParserPinnedProducerTypeMap.create(),
+			arrayLiteralProducers: ArrayLiteralProducerMap.create(),
 			genericTypealiases: GenericTypealiasMap.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
@@ -517,14 +519,50 @@ end 'Project'
 // call site.
 export typealias GenericFunctionImplicitArityMap = Map with(String, ParsedInt)
 
-// Parser-pinned producer-type map. Keyed by `"<funcName>|<valueName>"`
-// where the value name is the IR-level synthetic the parser emitted. The
-// composite key prevents `freshSynthName`-induced collisions across
-// functions (synth-name counters reset per function, so a bare-name keying
-// would have e.g. `__module_init_0`'s `$t5` shadow `main`'s `$t5`). Carries
-// a MaxonType that downstream passes should record into the producer-type
-// table instead of computing one from the op shape.
-export typealias ParserPinnedProducerTypeMap = Map with(String, MaxonType)
+// Structural description of an array literal, recorded by the parser and
+// consumed by TypeResolution. Carries only IR-shape information — no
+// MaxonTypes — so the parser stays out of the type system.
+//
+//   arrayTypeName  : the stdlib type that opted in via BuiltinArrayLiteral
+//                    (typically "Array")
+//   mmResultName   : the IR value name bound by the `__ManagedMemory.create`
+//                    call
+//   initResultName : the IR value name bound by the `T.init(__mm)` call
+//   elemNames      : the IR value names of the literal's elements, in
+//                    source order
+//   elemRanges     : the source range of each element expression, parallel
+//                    to `elemNames` — preserved so a TypeResolution-time
+//                    type-mismatch error can point at the offending element
+//   sourceFilePath : the file the literal was parsed from, recorded so
+//                    error reports survive the parser→TypeResolution hop
+//   errorReported  : sticky flag — set the first time element-type
+//                    unification reports E3005 for this literal, so the
+//                    second resolution pass (the `__arr.init` callsite,
+//                    which sees the same shared entry the `__mm.create`
+//                    callsite already errored on) doesn't double-report
+export type ArrayLiteralProducer
+	export var arrayTypeName String
+	export var mmResultName ByteArray
+	export var initResultName ByteArray
+	export var elemNames ByteArrayArray
+	export var elemRanges SourceRangeArray
+	export var sourceFilePath FilePath
+	export var errorReported bool
+
+	export static function create(arrayTypeName String, mmResultName ByteArray, initResultName ByteArray, elemNames ByteArrayArray, elemRanges SourceRangeArray, sourceFilePath FilePath) returns ArrayLiteralProducer
+		return Self{arrayTypeName: arrayTypeName, mmResultName: mmResultName, initResultName: initResultName, elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: sourceFilePath, errorReported: false}
+	end 'create'
+end 'ArrayLiteralProducer'
+
+// Keyed by `"<funcName>|<valueName>"` where `valueName` is *either* the
+// literal's `__mm` (create-call result) or its `__arr` (init-call result).
+// The parser inserts the same entry under both keys so the create- and
+// init-resolution paths in TypeResolution both get O(1) lookups; the
+// extra entry is cheap (the value is shared by reference). The composite
+// key prevents `freshSynthName`-induced collisions across functions
+// (synth-name counters reset per function, so a bare-name keying would
+// have e.g. `__module_init_0`'s `$t5` shadow `main`'s `$t5`).
+export typealias ArrayLiteralProducerMap = Map with(String, ArrayLiteralProducer)
 
 // Phase 11.7: a single deferred where-clause check, captured during
 // typealias drain.
@@ -1312,6 +1350,15 @@ export typealias CallParamTypesMap = Map with(OpIndex, MaxonTypeArray)
 // receiver whose type didn't reduce to a concrete struct — the
 // interface-dispatch stub path).
 export typealias ResolvedCalleesMap = Map with(OpIndex, String)
+
+// Per-call-site receiver-type sidecar. Keyed by the same OpIndex as
+// `resolvedCallees`; the value is the receiver MaxonType the typealias
+// chase landed on (genericInstance for `ByteArray.init` →
+// `Array with Byte`, plain named for non-generic statics). Lowering's
+// `materializeLayoutArg` reads this to thread the right descriptor at
+// `Type.staticMethod()` call sites where the parser stamped only the
+// resolved bare callee name.
+export typealias ResolvedReceiverTypesMap = Map with(OpIndex, MaxonType)
 
 // Minimal first-param overload registry. Maps a bare qualified function name
 // (the source-level name before mangling, e.g. `Array.contains`) to the list
