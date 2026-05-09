@@ -19,46 +19,31 @@ i8 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.movzx rax, byte [rip+flag]
-    x64.xor ecx, ecx
-    x64.mov [rbp-1], rcx
-    x64.test rax, rax
-    x64.je main.shortAnd_0.merge
-  shortAnd_0.rhs:
-    x64.mov rax, qword [rip+count]
-    x64.mov rcx, 10
-    x64.cmp rax, rcx
-    x64.sete rdx
-    x64.movzx rdx, rdxb
-    x64.mov [rbp-1], rdx
-    x64.jmp main.shortAnd_0.merge
-  shortAnd_0.merge:
-    x64.mov rax, [rbp-1]
-    x64.xor ecx, ecx
-    x64.mov [rbp-2], rcx
-    x64.test rax, rax
-    x64.je main.shortAnd_1.merge
-  shortAnd_1.rhs:
-    x64.movsd xmm0, [rip+ratio]
-    x64.movsd xmm1, [rip+__float_2]
+    x64.prologue stack_size=32
+    x64.lea r8, [rip+__data_count]
+    x64.mov r9, [r8+0] (8b)
+    x64.lea r8, [rip+__data_ratio]
+    x64.lea rsi, [rip+__data_flag]
+    x64.movsd xmm0, [r8+0]
+    x64.mov r8, [rsi+0] (8b)
+    x64.movsd xmm1, [rip+__float_4611686018427387904]
+    x64.cmp r9, 10
+    x64.sete r9
     x64.ucomisd xmm0, xmm1
-    x64.seta rax
-    x64.movzx rax, raxb
-    x64.mov [rbp-2], rax
-    x64.jmp main.shortAnd_1.merge
-  shortAnd_1.merge:
-    x64.mov rax, [rbp-2]
-    x64.test rax, rax
-    x64.je main.read_2.after
-  read_2:
-    x64.xor eax, eax
+    x64.seta rsi
+    x64.and r8, r9
+    x64.and r8, rsi
+    x64.je read_1.after
+  read_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  read_2.after:
-    x64.mov rax, 1
+  read_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
   }

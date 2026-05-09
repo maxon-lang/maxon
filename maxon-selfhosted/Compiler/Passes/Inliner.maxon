@@ -991,6 +991,14 @@ function bindMultiBlockBodyRemap(module StdModule, callee IrFunction, remap Valu
 	var n = nextId
 	for blockRef in callee.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise continue
+		// Block args are definitions too — phi virtuals from the callee's
+		// own try/otherwise lowering carry ValueIds that must get fresh
+		// caller-local IDs, otherwise they collide with the caller's
+		// existing virtuals and the inlined body silently reads or writes
+		// caller values.
+		for blockArg in block.blockArgs 'eachArg'
+			n = bindOneDefine(remap, key: blockArg.valueId, nextId: n)
+		end 'eachArg'
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise continue
 			if isParamOpStd(op) 'skipParam'

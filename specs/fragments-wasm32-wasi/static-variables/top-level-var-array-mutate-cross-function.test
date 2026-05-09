@@ -1,0 +1,195 @@
+// Test: top-level-var-array-mutate-cross-function
+
+typealias Integer = int(i64.min to i64.max)
+
+var counters = [0, 0, 0]
+
+function increment(index Integer)
+	let current = try counters.get(index) otherwise 0
+	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
+end 'increment'
+
+function total() returns Integer
+	let a = try counters.get(0) otherwise 0
+	let b = try counters.get(1) otherwise 0
+	let c = try counters.get(2) otherwise 0
+	return a + b + c
+end 'total'
+
+function main() returns ExitCode
+	increment(0)
+	increment(0)
+	increment(1)
+	increment(2)
+	increment(2)
+	increment(2)
+	return total()
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @increment(local0: i64) {
+  entry:
+    %30 = mir.param local0 : i64
+    %1 = mir.global_addr @__data_counters
+    %2 = mir.load %1, 0
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %31 = mir.load %2, 0
+    %32, %33 = mir.try_call @__managed_mem_get(%31, %30)
+    %34 = mir.mov_imm 0 : i64
+    %35 = mir.cmp ne, %33, %34
+    mir.cond_br %35 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %36 = mir.mov_imm 1 : i64
+    %37 = mir.mov_imm 0 : i64
+    mir.br inline_cont_increment_0(%37, %36)
+  inlined_Array.get_3:
+    %38 = mir.mov_imm 0 : i64
+    mir.br inline_cont_increment_0(%32, %38)
+  inline_cont_increment_0:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp ne, %40, %7
+    mir.cond_br %8 [then: try_1.otherwise(), else: try_1.merge(%39)]
+  try_1.otherwise:
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%10)
+  try_1.merge:
+    %12 = mir.global_addr @__data_counters
+    %13 = mir.load %12, 0
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %29, %16
+    mir.br inlined_Array.set_0()
+  inlined_Array.set_0:
+    %41 = mir.load %13, 0
+    %42, %43 = mir.try_call @__managed_mem_set(%41, %30, %17)
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.cmp ne, %43, %44
+    mir.cond_br %45 [then: inlined_Array.set_1(), else: inlined_Array.set_3()]
+  inlined_Array.set_1:
+    %46 = mir.mov_imm 1 : i64
+    %47 = mir.mov_imm 0 : i64
+    mir.br inline_cont_increment_3(%47, %46)
+  inlined_Array.set_3:
+    %48 = mir.mov_imm 0 : i64
+    %49 = mir.mov_imm 0 : i64
+    mir.br inline_cont_increment_3(%48, %49)
+  inline_cont_increment_3:
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.cmp ne, %51, %21
+    mir.cond_br %22 [then: try_4.otherwise(), else: try_4.merge()]
+  try_4.otherwise:
+    %24 = mir.global_addr @__panic_msg_2
+    %25 = mir.call @mrt_panic(%24)
+    mir.ret %26
+  try_4.merge:
+    mir.ret %28
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @increment(%0)
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.call @increment(%2)
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.call @increment(%4)
+    %6 = mir.mov_imm 2 : i64
+    %7 = mir.call @increment(%6)
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.call @increment(%8)
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.call @increment(%10)
+    mir.br inlined_total_0()
+  inlined_total_0:
+    %13 = mir.global_addr @__data_counters
+    %14 = mir.load %13, 0
+    %15 = mir.mov_imm 0 : i64
+    mir.br inlined_total_10()
+  inlined_total_10:
+    %17 = mir.load %14, 0
+    %18, %19 = mir.try_call @__managed_mem_get(%17, %15)
+    %20 = mir.mov_imm 0 : i64
+    %21 = mir.cmp ne, %19, %20
+    mir.cond_br %21 [then: inlined_total_11(), else: inlined_total_12()]
+  inlined_total_11:
+    %22 = mir.mov_imm 1 : i64
+    %23 = mir.mov_imm 0 : i64
+    mir.br inlined_total_13(%23, %22)
+  inlined_total_12:
+    %24 = mir.mov_imm 0 : i64
+    mir.br inlined_total_13(%18, %24)
+  inlined_total_13:
+    %27 = mir.mov_imm 0 : i64
+    %28 = mir.cmp ne, %26, %27
+    mir.cond_br %28 [then: inlined_total_1(), else: inlined_total_3(%25)]
+  inlined_total_1:
+    %29 = mir.mov_imm 0 : i64
+    mir.br inlined_total_3(%29)
+  inlined_total_3:
+    %31 = mir.global_addr @__data_counters
+    %32 = mir.load %31, 0
+    %33 = mir.mov_imm 1 : i64
+    mir.br inlined_total_14()
+  inlined_total_14:
+    %35 = mir.load %32, 0
+    %36, %37 = mir.try_call @__managed_mem_get(%35, %33)
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.cmp ne, %37, %38
+    mir.cond_br %39 [then: inlined_total_15(), else: inlined_total_16()]
+  inlined_total_15:
+    %40 = mir.mov_imm 1 : i64
+    %41 = mir.mov_imm 0 : i64
+    mir.br inlined_total_17(%41, %40)
+  inlined_total_16:
+    %42 = mir.mov_imm 0 : i64
+    mir.br inlined_total_17(%36, %42)
+  inlined_total_17:
+    %45 = mir.mov_imm 0 : i64
+    %46 = mir.cmp ne, %44, %45
+    mir.cond_br %46 [then: inlined_total_4(), else: inlined_total_6(%43)]
+  inlined_total_4:
+    %47 = mir.mov_imm 0 : i64
+    mir.br inlined_total_6(%47)
+  inlined_total_6:
+    %49 = mir.global_addr @__data_counters
+    %50 = mir.load %49, 0
+    %51 = mir.mov_imm 2 : i64
+    mir.br inlined_total_18()
+  inlined_total_18:
+    %53 = mir.load %50, 0
+    %54, %55 = mir.try_call @__managed_mem_get(%53, %51)
+    %56 = mir.mov_imm 0 : i64
+    %57 = mir.cmp ne, %55, %56
+    mir.cond_br %57 [then: inlined_total_19(), else: inlined_total_20()]
+  inlined_total_19:
+    %58 = mir.mov_imm 1 : i64
+    %59 = mir.mov_imm 0 : i64
+    mir.br inlined_total_21(%59, %58)
+  inlined_total_20:
+    %60 = mir.mov_imm 0 : i64
+    mir.br inlined_total_21(%54, %60)
+  inlined_total_21:
+    %63 = mir.mov_imm 0 : i64
+    %64 = mir.cmp ne, %62, %63
+    mir.cond_br %64 [then: inlined_total_7(), else: inlined_total_9(%61)]
+  inlined_total_7:
+    %65 = mir.mov_imm 0 : i64
+    mir.br inlined_total_9(%65)
+  inlined_total_9:
+    %67 = mir.add.i64 %30, %48
+    %68 = mir.add.i64 %67, %66
+    mir.br inline_cont_main_0(%68)
+  inline_cont_main_0:
+    %70 = mir.mov_imm 125 : i64
+    %71 = mir.cmp ugt, %69, %70
+    mir.cond_br %71 [then: __range_panic_11(), else: __range_ok_11()]
+  __range_panic_11:
+    %72 = mir.global_addr @__panic_msg_14
+    %73 = mir.call @mrt_panic(%72)
+  __range_ok_11:
+    mir.ret %69
+  }
+}
+---

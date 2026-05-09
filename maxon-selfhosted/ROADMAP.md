@@ -87,7 +87,7 @@ The `allocator` and `managed-memory-builtin` specs are marked `status: selfhoste
 
 All operators (`+`/`-`/`*`/`/`/`mod`/`and`/`or`/`xor`/`shl`/`shr`/`not`/comparisons), full precedence, `true`/`false`, parens, block scoping. Both X64 and ARM64 backends emit machine code for all corresponding ops.
 
-**Still pending in this area**: `bitwise-operators` spec (commented in whitelist) — sanity-check that it's a parser/test gap rather than a missing op, then enable.
+**Still pending in this area**: none — `bitwise-operators` was enabled (2026-05-09) after fixing one test whose expected exit code (171) exceeded the post-wasm `ExitCode` range cap of 125.
 
 ---
 
@@ -303,13 +303,16 @@ C# bootstrap.
 - **Maxon Dialect**: `tryCall` / `tryMethodCall` ops (rewritten in place from `call` / `methodCall` by [`tryRewriteCallToTryCall`](Compiler/Parser.maxon#L4091) and `tryRewriteMethodCallToTryMethodCall`), `throw` op (terminator: emits a single `StdCallOp.errorReturn` placing `ordinal+1` in the secondary error register + default primary value).
 - **Std Dialect / runtime**: the **multi-value-return error ABI** carries the error flag across the function-return boundary in the secondary register (RDX/X1) alongside the primary value in R8/X0 — no runtime helpers, no `.data` slot. Lowering at [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon) (`lowerThrow`, `lowerTryCall`, `lowerTryMethodCall`).
 - **Type checking**: E3059 type-mismatch between the call's success type and the `otherwise` fallback type runs in two places — at parse time when both types are concrete primitives (parseTryFallbackDispatch's category check, gated by `maxonTypeIsKnown`), and again at TypeResolution time via [`validateTryOtherwiseTypes`](Compiler/TypeResolution.maxon) which catches the typealias-named-call case (e.g. `try mayFail() otherwise 5.0` where `mayFail returns Integer`) that the parse-time check must skip because typealiases panic in `convertCastCategory` pre-resolution.
-- **`error-handling` spec**: 29/33 fragments now pass — all `try`/`otherwise` shapes, error-flag propagation, type-mismatch diagnostics, throwing-without-`try` rejection, and `try` against a non-throwing callee rejection.
+- **`error-handling` spec**: enabled on the whitelist (2026-05-09); 30/33 fragments pass — all `try`/`otherwise` shapes, error-flag propagation, type-mismatch diagnostics, throwing-without-`try` rejection, and `try` against a non-throwing callee rejection. The `otherwise-return-string` fragment was unblocked by adding `materializeStringConstIfNeeded` inside `parseReturnStatement`. The `otherwise-return-managed-struct` fragment surfaced two regalloc/inliner bugs (described below) whose fixes also recovered correctness for any inlined call site whose continuation block reused phi virtuals — see `boxtest`-style spec coverage.
 
 ### Still pending
 - 3 `error-handling` fragments need Phase 9's union types for associated-value error enums (`assoc-value-throw-catch{,-2}`, `otherwise-block-reused-binding`).
-- 1 `error-handling` fragment needs Phase 7 (`otherwise-return-string`).
 - `if-try` spec not yet whitelisted; sanity-check it parses and runs through the existing infrastructure.
-- The spec is **not** yet on the whitelist because per-fragment skip isn't implemented; whitelisting requires landing the four stragglers above.
+
+### Inliner / regalloc fixes that landed alongside `error-handling` (2026-05-09)
+
+1. **`scanMaxValueId` ignored block args.** The inliner's fresh-id allocator started from `scanMaxValueId(caller) + 1`, but the scan walked only op operands and didn't visit `block.blockArgs`. Try-merge phis allocated by `parseTryFallback` therefore weren't part of the max, so `bindMultiBlockBodyRemap` reused those very ids for the inlined callee body — every inlined call site after a try/otherwise silently aliased the merge phi with a remapped callee virtual. Fixed by walking `block.blockArgs` in `scanMaxValueId` ([`Mem2Reg.maxon:1543`](Compiler/IR/Std/Mem2Reg.maxon#L1543)).
+2. **`bindMultiBlockBodyRemap` ignored callee block args.** Even after the scan fix, the inliner left callee block-arg ValueIds unmapped. `lookupRemap` returned them unchanged, so the cloned callee blocks shared their original ids with the caller's existing virtuals. Fixed by walking `block.blockArgs` and calling `bindOneDefine` for each arg ([`Inliner.maxon:991`](Compiler/Passes/Inliner.maxon#L991)).
 
 ---
 
@@ -576,7 +579,11 @@ Cross-module / link-time inlining; profile-guided optimization; `@specialize` at
 **Goal**: module-level variables, static fields/methods on types.
 
 ### Specs to unlock
-`static-variables` (25/28 passing), `top-level-let` (full), `module-level-struct-var`, `export-var-fields`.
+`static-variables` (28/28 passing on x64 and wasm; enabled on the whitelist 2026-05-09), `top-level-let` (full), `module-level-struct-var`, `export-var-fields`.
+
+The last three `static-variables` fragments needed two unrelated fixes:
+- `consumeConstCastTargetName` now records typealias uses so `var counter = 42 as SmallInt` doesn't emit a spurious E3062 ([`Parser.maxon:1756`](Compiler/Parser.maxon#L1756)).
+- The wasm backend's float-tracking pass missed `MirOp.load(_, _, _, isFloat)`, leaving f64 globals' load result typed as i64 in the wasm locals declaration. The `data-section-f64-8byte` and `data-section-mixed-types` fragments now pass on wasm32-wasi after the float mark in `markFloatMirOp` ([`MirToWasm.maxon:1756`](Compiler/Targets/Wasm/MirToWasm.maxon#L1756)).
 
 ### Done
 - Parser: module-level `var`/`let` declarations and `static var/let` fields with structural `UnresolvedConstExpr` initializers (deferred resolution after enums/typealiases drain).

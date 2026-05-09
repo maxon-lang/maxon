@@ -1757,6 +1757,9 @@ export type Parser
 		let token = cursor.current()
 		if token.kind == TokenKind.identifier 'isIdent'
 			_ = try consume()
+			// E3062: top-level `42 as SmallInt` is a use of `SmallInt`, same
+			// as the in-function `parseCastTargetType` path.
+			usedTypeAliases.insert(element: token.value)
 			return token.value
 		end 'isIdent'
 		throw ParserError.unhandledToken
@@ -3148,7 +3151,11 @@ export type Parser
 		// currentBlock holds the block control-flow landed on after the
 		// expression — if the rhs of a bool `and`/`or` triggered short-circuit
 		// emission, that's a merge block, not the original `block`.
-		module.setTerminator(currentBlock, op: MaxonOp.ret(exprName(resultExpr), range: SourceRange.between(returnToken, last: lastExprToken)))
+		// `parseStringLiteral`'s fast path returns a `stringConst` ExprResult
+		// without emitting a backing op; the ret below would reference an
+		// unbound name (E3013 in lowering).
+		let materializedResult = materializeStringConstIfNeeded(currentBlock, expr: resultExpr, range: SourceRange.between(returnToken, last: lastExprToken))
+		module.setTerminator(currentBlock, op: MaxonOp.ret(exprName(materializedResult), range: SourceRange.between(returnToken, last: lastExprToken)))
 	end 'parseReturnStatement'
 
 	// Emits MaxonOp.panic with a location-prefixed message for the stack trace.

@@ -1,0 +1,63 @@
+// Test: static-and-instance-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Thing
+	static var created = 0
+	export var id Integer
+
+	static function make(n Integer) returns Thing
+		Thing.created = Thing.created + 1
+		return Thing{id: n}
+	end 'make'
+end 'Thing'
+
+function main() returns ExitCode
+	let a = Thing.make(10)
+	let b = Thing.make(20)
+	return Thing.created + a.id + b.id
+end 'main'
+---
+ExitCode: 32
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %12 = mir.global_addr @__data_Thing.created
+    %13 = mir.load %12, 0
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.global_addr @__data_Thing.created
+    mir.store %15, %16, 0
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %0, %18, 0
+    %2 = mir.mov_imm 20 : i64
+    %19 = mir.global_addr @__data_Thing.created
+    %20 = mir.load %19, 0
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.add.i64 %20, %21
+    %23 = mir.global_addr @__data_Thing.created
+    mir.store %22, %23, 0
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %2, %25, 0
+    %4 = mir.global_addr @__data_Thing.created
+    %5 = mir.load %4, 0
+    %7 = mir.load %18, 0
+    %8 = mir.add.i64 %5, %7
+    %10 = mir.load %25, 0
+    %11 = mir.add.i64 %8, %10
+    %26 = mir.mov_imm 125 : i64
+    %27 = mir.cmp ugt, %11, %26
+    mir.cond_br %27 [then: __range_panic_7(), else: __range_ok_7()]
+  __range_panic_7:
+    %28 = mir.global_addr @__panic_msg_10
+    %29 = mir.call @mrt_panic(%28)
+  __range_ok_7:
+    mir.ret %11
+  }
+}
+---

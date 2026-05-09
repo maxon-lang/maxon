@@ -1,0 +1,43 @@
+// Test: data-section-multiple-bools
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i8 1
+i8 0
+i8 1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_a
+    %1 = mir.load %0, 0
+    %2 = mir.global_addr @__data_c
+    %3 = mir.load %2, 0
+    %4 = mir.and.i64 %1, %3
+    %5 = mir.global_addr @__data_b
+    %6 = mir.load %5, 0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp eq, %6, %7
+    %9 = mir.and.i64 %4, %8
+    mir.cond_br %9 [then: read_1(), else: read_1.after()]
+  read_1:
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  read_1.after:
+    %11 = mir.mov_imm 1 : i64
+    mir.ret %11
+  }
+}
+---

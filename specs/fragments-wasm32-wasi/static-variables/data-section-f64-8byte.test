@@ -1,0 +1,33 @@
+// Test: data-section-f64-8byte
+var pi = 3.14
+
+function main() returns ExitCode
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+f64 3.14
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_pi
+    %1 = mir.load %0, 0 : f64
+    %2 = mir.mov_imm 4613937818241073152 : f64
+    %3 = mir.cmp fgt, %1, %2
+    mir.cond_br %3 [then: read_1(), else: read_1.after()]
+  read_1:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  read_1.after:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  }
+}
+---

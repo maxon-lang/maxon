@@ -1,0 +1,53 @@
+// Test: static-var-increment
+type Counter
+	static var count = 0
+
+	static function increment()
+		Counter.count = Counter.count + 1
+	end 'increment'
+end 'Counter'
+
+function main() returns ExitCode
+	Counter.increment()
+	Counter.increment()
+	Counter.increment()
+	return Counter.count
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.global_addr @__data_Counter.count
+    %6 = mir.load %5, 0
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.add.i64 %6, %7
+    %9 = mir.global_addr @__data_Counter.count
+    mir.store %8, %9, 0
+    %10 = mir.global_addr @__data_Counter.count
+    %11 = mir.load %10, 0
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %11, %12
+    %14 = mir.global_addr @__data_Counter.count
+    mir.store %13, %14, 0
+    %15 = mir.global_addr @__data_Counter.count
+    %16 = mir.load %15, 0
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %16, %17
+    %19 = mir.global_addr @__data_Counter.count
+    mir.store %18, %19, 0
+    %3 = mir.global_addr @__data_Counter.count
+    %4 = mir.load %3, 0
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %4, %20
+    mir.cond_br %21 [then: __range_panic_5(), else: __range_ok_5()]
+  __range_panic_5:
+    %22 = mir.global_addr @__panic_msg_8
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_5:
+    mir.ret %4
+  }
+}
+---

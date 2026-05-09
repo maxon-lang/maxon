@@ -1,0 +1,45 @@
+// Test: data-section-mixed-types
+var flag = true
+var count = 10
+var ratio = 2.5
+
+function main() returns ExitCode
+	if flag and (count == 10) and (ratio > 2.0) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i64 10
+f64 2.5
+i8 1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_flag
+    %1 = mir.load %0, 0
+    %2 = mir.global_addr @__data_count
+    %3 = mir.load %2, 0
+    %4 = mir.mov_imm 10 : i64
+    %5 = mir.cmp eq, %3, %4
+    %6 = mir.and.i64 %1, %5
+    %7 = mir.global_addr @__data_ratio
+    %8 = mir.load %7, 0 : f64
+    %9 = mir.mov_imm 4611686018427387904 : f64
+    %10 = mir.cmp fgt, %8, %9
+    %11 = mir.and.i64 %6, %10
+    mir.cond_br %11 [then: read_1(), else: read_1.after()]
+  read_1:
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  read_1.after:
+    %13 = mir.mov_imm 1 : i64
+    mir.ret %13
+  }
+}
+---

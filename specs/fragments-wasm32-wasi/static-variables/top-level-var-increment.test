@@ -1,0 +1,47 @@
+// Test: top-level-var-increment
+
+typealias Integer = int(i64.min to i64.max)
+
+var total = 10
+
+function add(n Integer)
+	total = total + n
+end 'add'
+
+function main() returns ExitCode
+	add(5)
+	add(27)
+	return total
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %6 = mir.global_addr @__data_total
+    %7 = mir.load %6, 0
+    %8 = mir.add.i64 %7, %0
+    %9 = mir.global_addr @__data_total
+    mir.store %8, %9, 0
+    %2 = mir.mov_imm 27 : i64
+    %10 = mir.global_addr @__data_total
+    %11 = mir.load %10, 0
+    %12 = mir.add.i64 %11, %2
+    %13 = mir.global_addr @__data_total
+    mir.store %12, %13, 0
+    %4 = mir.global_addr @__data_total
+    %5 = mir.load %4, 0
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %5, %14
+    mir.cond_br %15 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %16 = mir.global_addr @__panic_msg_4
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_1:
+    mir.ret %5
+  }
+}
+---

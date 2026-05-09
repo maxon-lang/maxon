@@ -1,0 +1,43 @@
+// Test: data-section-i64-then-bool
+var counter = 7
+var flag = true
+
+function main() returns ExitCode
+	if flag 'read'
+		return counter - 7
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i64 7
+i8 1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_flag
+    %1 = mir.load %0, 0
+    mir.cond_br %1 [then: read_1(), else: read_1.after()]
+  read_1:
+    %2 = mir.global_addr @__data_counter
+    %3 = mir.load %2, 0
+    %4 = mir.mov_imm 7 : i64
+    %5 = mir.sub.i64 %3, %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %5, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  read_1.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

@@ -15,16 +15,22 @@ i8 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.movzx rax, byte [rip+flag]
-    x64.test rax, rax
-    x64.je main.read_0.after
-  read_0:
-    x64.xor eax, eax
+    x64.prologue stack_size=16
+    x64.lea r8, [rip+__data_flag]
+    x64.mov r9, [r8+0] (8b)
+    x64.test r9, r9
+    x64.je read_1.after
+  read_1:
+    x64.xor r9d, r9d
+    x64.mov r8, r9
+    x64.epilogue
     x64.ret
-  read_0.after:
-    x64.mov rax, 1
+  read_1.after:
+    x64.mov r9d, 1
+    x64.mov r8, r9
+    x64.epilogue
     x64.ret
   }
 }

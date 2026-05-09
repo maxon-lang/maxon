@@ -20,4 +20,42 @@ end 'main'
 ---
 ExitCode: 42
 ---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_currentCpu
+    %1 = mir.load %0, 0
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %1, %3
+    mir.cond_br %4 [then: check_1.case0(), else: check_1.next0()]
+  check_1.merge:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  check_1.case0:
+    %7 = mir.mov_imm 42 : i64
+    mir.br check_1.merge(%7)
+  check_1.next0:
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.cmp eq, %1, %8
+    mir.cond_br %9 [then: check_1.case1(), else: check_1.next1()]
+  check_1.case1:
+    %10 = mir.mov_imm 1 : i64
+    mir.br check_1.merge(%10)
+  check_1.next1:
+    %11 = mir.mov_imm 2 : i64
+    %12 = mir.cmp eq, %1, %11
+    mir.cond_br %12 [then: check_1.case2(), else: check_1.merge(%2)]
+  check_1.case2:
+    %13 = mir.mov_imm 2 : i64
+    mir.br check_1.merge(%13)
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
 ---

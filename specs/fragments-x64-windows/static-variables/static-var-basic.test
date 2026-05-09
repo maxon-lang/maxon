@@ -12,25 +12,21 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @static-variables.main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 42
-    x64.mov qword [rip+Counter.count], rax
-    x64.mov rcx, qword [rip+Counter.count]
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rcx, rbx
-    x64.jg static-variables.main.__range_panic_0
-    x64.cmp rcx, rdx
-    x64.jl static-variables.main.__range_panic_0
-    x64.jmp static-variables.main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_4]
-    x64.mov rcx, rax
+    x64.lea r8, [rip+__data_Counter.count]
+    x64.mov r9d, 42
+    x64.mov [r8+0], r9 (8b)
+    x64.lea r9, [rip+__data_Counter.count]
+    x64.mov r8, [r9+0] (8b)
+    x64.cmp r8, 125
+    x64.jbe __range_ok_4
+  __range_panic_4:
+    x64.lea r8, [rip+__panic_msg_7]
+    x64.mov rcx, r8
     x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, rcx
+  __range_ok_4:
     x64.epilogue
     x64.ret
   }

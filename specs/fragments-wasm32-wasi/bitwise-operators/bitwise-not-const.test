@@ -1,0 +1,59 @@
+// Test: bitwise-not-const
+let MASK = not 0xFF
+
+function main() returns ExitCode
+	print("{MASK}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+-256
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm -256 : i64
+    %1 = mir.global_addr @__istr_0
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 21 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    %5 = mir.call @mrt_i64_to_string(%0, %4)
+    %6 = mir.global_addr @__istr_1
+    %7 = mir.mov_imm 1 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.add.i64 %9, %5
+    %11 = mir.add.i64 %10, %7
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %11, %12
+    %14 = mir.call @mrt_alloc(%13)
+    mir.memcpy %14, %1, %2
+    %15 = mir.add.i64 %14, %2
+    mir.memcpy %15, %4, %5
+    %16 = mir.add.i64 %15, %5
+    mir.memcpy %16, %6, %7
+    %18 = mir.mov_imm 40 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %14, %19, 0
+    mir.store %11, %19, 8
+    mir.store %11, %19, 16
+    %20 = mir.mov_imm 1 : i64
+    mir.store %20, %19, 24
+    %21 = mir.mov_imm 0 : i64
+    mir.store %21, %19, 32
+    %22 = mir.mov_imm 16 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %19, %23, 0
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %23, 8
+    %27 = mir.load %23, 0
+    %28 = mir.load %27, 0
+    %29 = mir.load %27, 8
+    %30 = mir.call @mrt_write_stdout(%28, %29)
+    %26 = mir.mov_imm 0 : i64
+    mir.ret %26
+  }
+}
+---

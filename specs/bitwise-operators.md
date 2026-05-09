@@ -326,12 +326,12 @@ function main() returns ExitCode
 	var buf = [0, 0]
 	buf.push(42)
 	let x = 0xABCD
-	buf.push(x shr 8)
+	buf.push(x shr 9)
 	return try buf.get(3) otherwise 0
 end 'main'
 ```
 ```exitcode
-171
+85
 ```
 
 <!-- test: shr-consecutive-method-calls -->

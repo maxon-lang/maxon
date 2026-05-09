@@ -1,0 +1,85 @@
+// Test: static-var-bool-adjacent-globals
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'checkFalse'
+		print("flag should be false\n")
+		return 1
+	end 'checkFalse'
+	if counter == 42 'checkCounter'
+		return 0
+	end 'checkCounter'
+	print("counter wrong\n")
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_flag
+    %1 = mir.load %0, 0
+    mir.cond_br %1 [then: checkFalse_1(), else: checkFalse_1.after()]
+  checkFalse_1:
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0
+    %5 = mir.mov_imm 21 : i64
+    mir.store %5, %4, 8
+    %6 = mir.mov_imm -2 : i64
+    mir.store %6, %4, 16
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %4, 24
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 32
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %10, 8
+    %31 = mir.load %10, 0
+    %32 = mir.load %31, 0
+    %33 = mir.load %31, 8
+    %34 = mir.call @mrt_write_stdout(%32, %33)
+    %13 = mir.mov_imm 1 : i64
+    mir.ret %13
+  checkFalse_1.after:
+    %14 = mir.global_addr @__data_counter
+    %15 = mir.load %14, 0
+    %16 = mir.mov_imm 42 : i64
+    %17 = mir.cmp eq, %15, %16
+    mir.cond_br %17 [then: checkCounter_3(), else: checkCounter_3.after()]
+  checkCounter_3:
+    %18 = mir.mov_imm 0 : i64
+    mir.ret %18
+  checkCounter_3.after:
+    %19 = mir.global_addr @__istr_1
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %19, %21, 0
+    %22 = mir.mov_imm 14 : i64
+    mir.store %22, %21, 8
+    %23 = mir.mov_imm -2 : i64
+    mir.store %23, %21, 16
+    %24 = mir.mov_imm 1 : i64
+    mir.store %24, %21, 24
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %21, 32
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %21, %27, 0
+    %28 = mir.mov_imm 1 : i64
+    mir.store %28, %27, 8
+    %35 = mir.load %27, 0
+    %36 = mir.load %35, 0
+    %37 = mir.load %35, 8
+    %38 = mir.call @mrt_write_stdout(%36, %37)
+    %30 = mir.mov_imm 1 : i64
+    mir.ret %30
+  }
+}
+---

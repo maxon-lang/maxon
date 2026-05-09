@@ -1,0 +1,43 @@
+// Test: data-section-bool-then-i64-sorted
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'read'
+		return 1
+	end 'read'
+	return counter - 42
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i64 42
+i8 0
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_flag
+    %1 = mir.load %0, 0
+    mir.cond_br %1 [then: read_1(), else: read_1.after()]
+  read_1:
+    %2 = mir.mov_imm 1 : i64
+    mir.ret %2
+  read_1.after:
+    %3 = mir.global_addr @__data_counter
+    %4 = mir.load %3, 0
+    %5 = mir.mov_imm 42 : i64
+    %6 = mir.sub.i64 %4, %5
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

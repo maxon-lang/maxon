@@ -1544,6 +1544,15 @@ export function scanMaxValueId(func IrFunction, module StdModule) returns ValueI
 	var maxId = 0
 	for blockRef in func.blockRefs 'scanBlocks'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		// Block args define values too — their valueIds must contribute to the
+		// max so the inliner's fresh-id allocator doesn't collide with phi
+		// virtuals (e.g., try-merge phis from try/otherwise lowering) that
+		// don't appear as op operands at the time of scanning.
+		for blockArg in block.blockArgs 'scanArgs'
+			if blockArg.valueId > maxId 'updateMaxArg'
+				maxId = blockArg.valueId
+			end 'updateMaxArg'
+		end 'scanArgs'
 		for packed in block.opRefs 'scanOps'
 			let opMax = maxValueIdInOp(packed, module: module)
 			if opMax > maxId 'updateMax'

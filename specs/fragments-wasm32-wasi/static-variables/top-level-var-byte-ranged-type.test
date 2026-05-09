@@ -1,0 +1,28 @@
+// Test: top-level-var-byte-ranged-type
+typealias SmallInt = int(0 to u8.max)
+
+var counter = 42 as SmallInt
+
+function main() returns ExitCode
+		return counter
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_counter
+    %1 = mir.load %0, 0
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_12(), else: __range_ok_12()]
+  __range_panic_12:
+    %4 = mir.global_addr @__panic_msg_15
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_12:
+    mir.ret %1
+  }
+}
+---

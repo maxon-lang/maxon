@@ -1,0 +1,194 @@
+// Test: shr-consecutive-method-calls
+function main() returns ExitCode
+	var buf = [0]
+	let value = 0xAABBCCDD
+	buf.push(value and 0xFF)
+	buf.push((value shr 8) and 0xFF)
+	buf.push((value shr 16) and 0xFF)
+	buf.push((value shr 24) and 0xFF)
+	let b0 = try buf.get(1) otherwise 0
+	let b1 = try buf.get(2) otherwise 0
+	let b2 = try buf.get(3) otherwise 0
+	let b3 = try buf.get(4) otherwise 0
+	if b0 != 0xDD 'c0'
+		return 10
+	end 'c0'
+	if b1 != 0xCC 'c1'
+		return 20
+	end 'c1'
+	if b2 != 0xBB 'c2'
+		return 30
+	end 'c2'
+	if b3 != 0xAA 'c3'
+		return 40
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 8 : i64
+    %3 = mir.call @__managed_mem_create(%1, %2)
+    %5 = mir.mov_imm 0 : i64
+    %6, %7 = mir.try_call @__managed_mem_set(%3, %5, %0)
+    %8 = mir.mov_imm 1 : i64
+    %9, %10 = mir.try_call @__managed_mem_set_length(%3, %8)
+    %105 = mir.mov_imm 8 : i64
+    %106 = mir.call @mrt_alloc(%105)
+    %107 = mir.mov_imm 40 : i64
+    %108 = mir.call @mrt_alloc(%107)
+    %109 = mir.mov_imm 0 : i64
+    mir.store %109, %108, 0
+    %110 = mir.mov_imm 0 : i64
+    mir.store %110, %108, 8
+    %111 = mir.mov_imm 0 : i64
+    mir.store %111, %108, 16
+    %112 = mir.mov_imm 8 : i64
+    mir.store %112, %108, 24
+    %113 = mir.mov_imm 0 : i64
+    mir.store %113, %108, 32
+    mir.store %108, %106, 0
+    mir.store %3, %106, 0
+    %17 = mir.mov_imm 221 : i64
+    %18 = mir.global_addr @__layout_Array_Int
+    %19 = mir.call @Array.push(%106, %17, %18)
+    %25 = mir.mov_imm 204 : i64
+    %26 = mir.global_addr @__layout_Array_Int
+    %27 = mir.call @Array.push(%106, %25, %26)
+    %33 = mir.mov_imm 187 : i64
+    %34 = mir.global_addr @__layout_Array_Int
+    %35 = mir.call @Array.push(%106, %33, %34)
+    %41 = mir.mov_imm 170 : i64
+    %42 = mir.global_addr @__layout_Array_Int
+    %43 = mir.call @Array.push(%106, %41, %42)
+    %45 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %114 = mir.load %106, 0
+    %115, %116 = mir.try_call @__managed_mem_get(%114, %45)
+    %117 = mir.mov_imm 0 : i64
+    %118 = mir.cmp ne, %116, %117
+    mir.cond_br %118 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %119 = mir.mov_imm 1 : i64
+    %120 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%120, %119)
+  inlined_Array.get_3:
+    %121 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%115, %121)
+  inline_cont_main_0:
+    %49 = mir.mov_imm 0 : i64
+    %50 = mir.cmp ne, %123, %49
+    mir.cond_br %50 [then: try_1.otherwise(), else: try_1.merge(%122)]
+  try_1.otherwise:
+    %52 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%52)
+  try_1.merge:
+    %55 = mir.mov_imm 2 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %124 = mir.load %106, 0
+    %125, %126 = mir.try_call @__managed_mem_get(%124, %55)
+    %127 = mir.mov_imm 0 : i64
+    %128 = mir.cmp ne, %126, %127
+    mir.cond_br %128 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %129 = mir.mov_imm 1 : i64
+    %130 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%130, %129)
+  inlined_Array.get_3:
+    %131 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_3(%125, %131)
+  inline_cont_main_3:
+    %59 = mir.mov_imm 0 : i64
+    %60 = mir.cmp ne, %133, %59
+    mir.cond_br %60 [then: try_4.otherwise(), else: try_4.merge(%132)]
+  try_4.otherwise:
+    %62 = mir.mov_imm 0 : i64
+    mir.br try_4.merge(%62)
+  try_4.merge:
+    %65 = mir.mov_imm 3 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %134 = mir.load %106, 0
+    %135, %136 = mir.try_call @__managed_mem_get(%134, %65)
+    %137 = mir.mov_imm 0 : i64
+    %138 = mir.cmp ne, %136, %137
+    mir.cond_br %138 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %139 = mir.mov_imm 1 : i64
+    %140 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_6(%140, %139)
+  inlined_Array.get_3:
+    %141 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_6(%135, %141)
+  inline_cont_main_6:
+    %69 = mir.mov_imm 0 : i64
+    %70 = mir.cmp ne, %143, %69
+    mir.cond_br %70 [then: try_7.otherwise(), else: try_7.merge(%142)]
+  try_7.otherwise:
+    %72 = mir.mov_imm 0 : i64
+    mir.br try_7.merge(%72)
+  try_7.merge:
+    %75 = mir.mov_imm 4 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %144 = mir.load %106, 0
+    %145, %146 = mir.try_call @__managed_mem_get(%144, %75)
+    %147 = mir.mov_imm 0 : i64
+    %148 = mir.cmp ne, %146, %147
+    mir.cond_br %148 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %149 = mir.mov_imm 1 : i64
+    %150 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_9(%150, %149)
+  inlined_Array.get_3:
+    %151 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_9(%145, %151)
+  inline_cont_main_9:
+    %79 = mir.mov_imm 0 : i64
+    %80 = mir.cmp ne, %153, %79
+    mir.cond_br %80 [then: try_10.otherwise(), else: try_10.merge(%152)]
+  try_10.otherwise:
+    %82 = mir.mov_imm 0 : i64
+    mir.br try_10.merge(%82)
+  try_10.merge:
+    %85 = mir.mov_imm 221 : i64
+    %86 = mir.cmp ne, %101, %85
+    mir.cond_br %86 [then: c0_13(), else: c0_13.after()]
+  c0_13:
+    %87 = mir.mov_imm 10 : i64
+    mir.ret %87
+  c0_13.after:
+    %89 = mir.mov_imm 204 : i64
+    %90 = mir.cmp ne, %102, %89
+    mir.cond_br %90 [then: c1_15(), else: c1_15.after()]
+  c1_15:
+    %91 = mir.mov_imm 20 : i64
+    mir.ret %91
+  c1_15.after:
+    %93 = mir.mov_imm 187 : i64
+    %94 = mir.cmp ne, %103, %93
+    mir.cond_br %94 [then: c2_17(), else: c2_17.after()]
+  c2_17:
+    %95 = mir.mov_imm 30 : i64
+    mir.ret %95
+  c2_17.after:
+    %97 = mir.mov_imm 170 : i64
+    %98 = mir.cmp ne, %104, %97
+    mir.cond_br %98 [then: c3_19(), else: c3_19.after()]
+  c3_19:
+    %99 = mir.mov_imm 40 : i64
+    mir.ret %99
+  c3_19.after:
+    %100 = mir.mov_imm 0 : i64
+    mir.ret %100
+  }
+}
+---

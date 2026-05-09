@@ -1,0 +1,49 @@
+// Test: static-var-multiple-types
+type TypeA
+	static var value = 10
+end 'TypeA'
+
+type TypeB
+	static var value = 20
+end 'TypeB'
+
+function main() returns ExitCode
+	TypeA.value = TypeA.value + 2
+	TypeB.value = TypeB.value + 10
+	return TypeA.value + TypeB.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_TypeA.value
+    %1 = mir.load %0, 0
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.add.i64 %1, %2
+    %4 = mir.global_addr @__data_TypeA.value
+    mir.store %3, %4, 0
+    %5 = mir.global_addr @__data_TypeB.value
+    %6 = mir.load %5, 0
+    %7 = mir.mov_imm 10 : i64
+    %8 = mir.add.i64 %6, %7
+    %9 = mir.global_addr @__data_TypeB.value
+    mir.store %8, %9, 0
+    %10 = mir.global_addr @__data_TypeA.value
+    %11 = mir.load %10, 0
+    %12 = mir.global_addr @__data_TypeB.value
+    %13 = mir.load %12, 0
+    %14 = mir.add.i64 %11, %13
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_6(), else: __range_ok_6()]
+  __range_panic_6:
+    %17 = mir.global_addr @__panic_msg_9
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_6:
+    mir.ret %14
+  }
+}
+---
