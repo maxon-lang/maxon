@@ -324,6 +324,24 @@ export type Project
 	// the witness-table label. Phase 11.0 only seeds the keys.
 	export var conformances ConformanceRegistry
 
+	// Parser-pinned producer types. Keyed by the IR value name the parser
+	// chose for a synthetic op whose semantic type the parser already
+	// knows but the regular `callResultType` lookup can't recover (because
+	// the callee's registered return type is the bare generic and the
+	// generic args aren't carried on the call op's ABI).
+	//
+	// Today's only writer is `parseArrayLiteralExpr`: it pins the
+	// `__ManagedMemory.create(...)` result to `genericInstance(__ManagedMemory,
+	// [unifiedElement])` so the subsequent `__mm.set(i, value: e)` /
+	// `__mm.get(i)` calls go through TypeResolution's generic-arg
+	// substitution and stop tripping the cast-category mismatch on
+	// non-int element types.
+	//
+	// `recordOpResult` (TypeResolution) consults this map first and
+	// records the pinned type into `producerTypes`; falling back to
+	// `callResultType` when no entry is found.
+	export var parserPinnedProducerTypes ParserPinnedProducerTypeMap
+
 	// Phase 11.0 step 2: project-wide table of resolved generic typealiases.
 	// Generic aliases (`typealias E = Base with(...)`) cannot live in
 	// `typealiases TypealiasMap` (StdType-typed) because their resolved form
@@ -471,6 +489,7 @@ export type Project
 			typeParameters: TypeParamRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
 			conformances: ConformanceRegistry.create(),
+			parserPinnedProducerTypes: ParserPinnedProducerTypeMap.create(),
 			genericTypealiases: GenericTypealiasMap.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
@@ -497,6 +516,15 @@ end 'Project'
 // `emitCallWithArgs` needs to decide how many synthetic args to append at a
 // call site.
 export typealias GenericFunctionImplicitArityMap = Map with(String, ParsedInt)
+
+// Parser-pinned producer-type map. Keyed by `"<funcName>|<valueName>"`
+// where the value name is the IR-level synthetic the parser emitted. The
+// composite key prevents `freshSynthName`-induced collisions across
+// functions (synth-name counters reset per function, so a bare-name keying
+// would have e.g. `__module_init_0`'s `$t5` shadow `main`'s `$t5`). Carries
+// a MaxonType that downstream passes should record into the producer-type
+// table instead of computing one from the op shape.
+export typealias ParserPinnedProducerTypeMap = Map with(String, MaxonType)
 
 // Phase 11.7: a single deferred where-clause check, captured during
 // typealias drain.

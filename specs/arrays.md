@@ -495,7 +495,7 @@ error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unus
 
 ### String Array Literals
 
-<!-- disabled-test: string-array-literal-basic -->
+<!-- test: string-array-literal-basic -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["hello", "world"]
@@ -510,7 +510,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: string-array-literal-iterate -->
+<!-- test: string-array-literal-iterate -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["aaa", "bbb", "ccc"]
@@ -525,7 +525,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: string-array-literal-top-level -->
+<!-- test: string-array-literal-top-level -->
 ```maxon
 var names = ["alice", "bob"]
 
@@ -541,7 +541,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: string-array-literal-top-level-pass-to-function -->
+<!-- test: string-array-literal-top-level-pass-to-function -->
 ```maxon
 var items = ["hello"]
 

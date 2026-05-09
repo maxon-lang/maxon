@@ -1450,9 +1450,34 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// against the receiver's generic instantiation. For a non-generic
 	// receiver, buildSubstitutionForInstance returns an empty subst and
 	// substituteType is a no-op.
+	//
+	// Before substituting, unwrap any inner-alias `named(...)` arms — when
+	// the method returns one of the receiver's inner typealiases (e.g.
+	// `Array.createIterator()` returns `ArrayIter` which is the alias for
+	// `ArrayIterator with Element`), `substituteType`'s `named` arm is a
+	// no-op and the receiver's `Element → String` binding never reaches
+	// the alias body. Applying `applyInnerAliasIfNamed` first promotes the
+	// alias to its `genericInstance(...)` form so substitution flows.
+	let aliasResolved = applyInnerAliasFromReceiver(project, t: raw, receiverStructName: structName)
 	let subst = buildSubstitutionForInstance(project, t: normReceiver)
-	return substituteType(project, t: raw, subst: subst)
+	return substituteType(project, t: aliasResolved, subst: subst)
 end 'methodCallResultType'
+
+// Resolve a `named(name)` MaxonType against the named struct's
+// `innerAliases` map. Returns `t` unchanged when:
+//   - `t` is not a named arm
+//   - the receiver struct doesn't exist in `structTypes`
+//   - the named id doesn't match any inner-alias key on that struct
+function applyInnerAliasFromReceiver(project Project, t MaxonType, receiverStructName String) returns MaxonType
+	if receiverStructName.isEmpty() 'noStruct'
+		return t
+	end 'noStruct'
+	let st = try project.structTypes.get(receiverStructName) otherwise return t
+	if st.innerAliases.count() == 0 'noAliases'
+		return t
+	end 'noAliases'
+	return applyInnerAliasIfNamed(project, t: t, innerAliases: st.innerAliases)
+end 'applyInnerAliasFromReceiver'
 
 // Phase 11.0 Step 8a: normalize a receiver type by chasing per-struct inner
 // typealiases (via the current method's enclosing namespace) and project-
@@ -1830,12 +1855,12 @@ function recordFuncOpResults(project Project, module MaxonModule, func IrFunctio
 		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("recordFuncOpResults: opIdx OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, op: op)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: op)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("recordFuncOpResults: terminator OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, op: termOp)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: termOp)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'recordFuncOpResults'
@@ -1852,7 +1877,28 @@ function stringConstResultType(project Project) returns MaxonType
 	return MaxonType.string
 end 'stringConstResultType'
 
-function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, op MaxonOp)
+// Look up the parser-pinned producer type for an op. The parser uses
+// `parserPinnedProducerTypes` to override the result type for a synthetic
+// op whose semantic type it knows but the regular `callResultType` /
+// `methodCallResultType` register-lookup path can't recover (today: the
+// `__ManagedMemory.create` call and `<Array>.init` call inside an array
+// literal, where the pinned type carries the generic-instance Element
+// binding the call op itself doesn't carry).
+//
+// Keyed by `parserPinKey(funcName, valueName)` so collisions between
+// per-function `freshSynthName` allocations don't make a `__module_init_0`
+// pin shadow a `main` value with the same byte name. Throws when no pin
+// exists; call sites use `try ... otherwise` to delegate to the regular
+// resolver.
+function lookupParserPin(project Project, funcName String, name ByteArray) returns MaxonType throws ParserPinError
+	return try project.parserPinnedProducerTypes.get(parserPinKey(funcName: funcName, valueName: name)) otherwise throw ParserPinError.notPinned
+end 'lookupParserPin'
+
+enum ParserPinError implements Error
+	notPinned
+end 'ParserPinError'
+
+function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, funcName String, op MaxonOp)
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
@@ -1871,8 +1917,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
 		condBr then return
 		br then return
-		call(result, callee, callContext, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
-		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
+		call(result, callee, callContext, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: try lookupParserPin(project, funcName: funcName, name: result) otherwise callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
+		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: try lookupParserPin(project, funcName: funcName, name: result) otherwise methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		ret then return
 		panic then return
 		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
@@ -1885,8 +1931,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		enumMatchArm then return
 		error then return
 		throw then return
-		tryCall(result, callee, callContext, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
-		tryMethodCall(result, receiver, methodName, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
+		tryCall(result, callee, callContext, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: try lookupParserPin(project, funcName: funcName, name: result) otherwise callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
+		tryMethodCall(result, receiver, methodName, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: try lookupParserPin(project, funcName: funcName, name: result) otherwise methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		rethrow then return
 		// Stage E (closures): each closure op's result type derives directly
 		// from a field on the op itself, so the producer-type map gets a

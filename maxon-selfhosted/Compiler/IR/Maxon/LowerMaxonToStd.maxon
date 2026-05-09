@@ -587,8 +587,19 @@ function registerManagedMemoryMethods(project Project)
 	let intType = MaxonType.integer
 	let intReturn = MaxonReturnType.value(intType)
 	let mmReturn = MaxonReturnType.value(mmType)
-	// Element is i64 placeholder for now (real generic-element typing is Phase 11).
-	let elementType = MaxonType.integer
+	// `__ManagedMemory.set/get/remove` are polymorphic in the element type —
+	// at the IR level they store/load a single 8-byte slot regardless of
+	// whether the caller is using `Array<int>` or `Array<String>`. Mark the
+	// element-typed slots as `typeParameter("__ManagedMemory","Element")`
+	// instead of hardcoding `int`. When the call site has a typed receiver
+	// (`genericInstance(__ManagedMemory, [E])`) the substitution pass binds
+	// Element → E and the slot reaches lowering as a concrete type; when
+	// substitution can't bind (e.g. inside `Array.push(item)` where the
+	// caller is itself generic), the slot stays `typeParameter(...)` and
+	// `coerceArgToParam` treats it as `int`-category — the same fallback
+	// that integer-array literals exercise today.
+	let elementParamId = project.typeParameters.intern("__ManagedMemory", paramName: "Element")
+	let elementType = MaxonType.typeParameter(elementParamId)
 	let elementReturn = MaxonReturnType.value(elementType)
 
 	// length(self) returns i64

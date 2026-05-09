@@ -1430,7 +1430,15 @@ export type Parser
 		// calls) read/write `synthNameCounter` for every emit.
 		let savedSynth = synthNameCounter
 		synthNameCounter = moduleInitSynthCounter
+		// Swap currentFunc to the module-init function so parser-pinned
+		// producer types (parserPinnedProducerTypes) are keyed under the
+		// init function's name; otherwise the bare-name keying would fall
+		// back to whatever currentFunc was last set to (often a previously-
+		// parsed function) and the pin would silently miss at the read site.
+		let savedFunc = currentFunc
+		currentFunc = moduleInitFunc
 		let result = try parseArrayLiteralExpr(moduleInitBlock)
+		currentFunc = savedFunc
 		moduleInitSynthCounter = synthNameCounter
 		synthNameCounter = savedSynth
 		let literalRange = SourceRange.between(bracketToken, last: previousToken())
@@ -5198,7 +5206,13 @@ export type Parser
 		// Default: fallback is an expression. parseExpression may swap
 		// currentBlock if the fallback contains short-circuit ops; recover
 		// the actual exit block afterwards.
-		let fallbackResult = try parseExpression(fallbackBlock)
+		let rawFallback = try parseExpression(fallbackBlock)
+		// `parseStringLiteral`'s fast path returns a `stringConst`
+		// ExprResult without emitting a backing op; the varStore below
+		// would reference an unbound name (E3013 in lowering). Mirror
+		// every other call-emission site that threads a string-literal
+		// arg into another op.
+		let fallbackResult = materializeStringConstIfNeeded(currentBlock, expr: rawFallback, range: SourceRange.ofToken(tryToken))
 		let fallbackType = exprType(fallbackResult)
 		// E3059: otherwise expression type must match the success type.
 		// Skip the parse-time check when either side is still unresolved or
@@ -5931,6 +5945,55 @@ export type Parser
 		return foundName
 	end 'discoverBuiltinArrayLiteralType'
 
+	// Find the common element type of an array literal so the parser can
+	// pin a `genericInstance(...)` shape onto the synthetic `__mm` and
+	// `__arr` producers. Returns the unified type when every concrete
+	// element agrees; returns `unresolved` for an empty literal, when no
+	// element has a concrete type yet (e.g. all elements are call results
+	// whose return types resolve later), or after reporting E3005 at the
+	// first mismatching element. Elements with `unresolved` types are
+	// skipped rather than treated as a unification failure — TypeResolution
+	// will revisit them later.
+	function unifyArrayLiteralElementTypes(elemTypes MaxonTypeArray, ranges SourceRangeArray) returns MaxonType
+		var unified = MaxonType.unresolved
+		for i in 0 upto elemTypes.count() 'walk'
+			let t = try elemTypes.get(i) otherwise panic("unifyArrayLiteralElementTypes: elemTypes.get OOB at {i}")
+			if isUnresolvedType(t) 'skipUnresolved'
+				continue
+			end 'skipUnresolved'
+			if isUnresolvedType(unified) 'firstConcrete'
+				unified = t
+				continue
+			end 'firstConcrete'
+			if not maxonTypesStructurallyEqual(unified, b: t) 'mismatch'
+				let mismatchRange = try ranges.get(i) otherwise panic("unifyArrayLiteralElementTypes: ranges.get OOB at {i}")
+				let expectedName = unified.toString(project)
+				let gotName = t.toString(project)
+				reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "array literal: element {i} type '{gotName}' does not match unified element type '{expectedName}'", line: mismatchRange.line, column: mismatchRange.column, filePath: filePath)
+				return MaxonType.unresolved
+			end 'mismatch'
+		end 'walk'
+		return unified
+	end 'unifyArrayLiteralElementTypes'
+
+	// Build `genericInstance(<baseTypeName>, [elementType])` and pin it as
+	// the producer type for the IR value `valueName`. Returns the pinned
+	// MaxonType so the caller can also use it as the ExprResult valueType
+	// (the array-literal `init()` site). Both array-literal pin sites
+	// (the synthetic `__mm` and `__arr` values) feed a single-element arg
+	// list, so the helper stays specialised to that shape; widening to N
+	// args would only add a `MaxonTypeArray` parameter that no existing
+	// caller needs.
+	function pinSingleArgGenericProducer(baseTypeName String, elementType MaxonType, valueName ByteArray) returns MaxonType
+		let baseId = project.typeNames.intern(baseTypeName)
+		var giArgs = MaxonTypeArray.create()
+		giArgs.push(elementType)
+		let giId = project.genericInstances.intern(baseId, args: giArgs)
+		let pinned = MaxonType.genericInstance(giId)
+		try project.parserPinnedProducerTypes.insert(parserPinKey(funcName: currentFunc.name, valueName: valueName), value: pinned) otherwise ignore
+		return pinned
+	end 'pinSingleArgGenericProducer'
+
 	// Array literal in expression position. Desugars `[e0, e1, ..., eN]` via
 	// the BuiltinArrayLiteral protocol into:
 	//
@@ -6015,6 +6078,23 @@ export type Parser
 			return ExprResult.direct(zeroName, valueType: MaxonType.unresolved)
 		end 'noArrayType'
 
+		// Phase 2b: unify element types so we can pin a `genericInstance(...)`
+		// type onto the synthetic `__mm` and `__arr` values. Without this
+		// the downstream `__mm.set(i, value: e)` calls land in TypeResolution
+		// against a bare `__ManagedMemory` receiver — substitution can't
+		// bind `Element`, and the value-slot's `typeParameter(Element)`
+		// paramType degrades to the int cast-category, which trips E3005
+		// for any non-int element type.
+		//
+		// `unifiedElemType` stays `unresolved` for empty literals (the
+		// element type comes from the assignment context) and after a
+		// mismatch (already reported as E3005). `havePinned` gates both
+		// pin sites, leaving the producers with their default unresolved
+		// type in those cases — TypeResolution then handles them like any
+		// other untyped IR value.
+		let unifiedElemType = unifyArrayLiteralElementTypes(elemTypes, ranges: elemRanges)
+		let havePinned = not isUnresolvedType(unifiedElemType)
+
 		// Phase 3: allocate __ManagedMemory with capacity = element count.
 		// TODO(elementSize): all current callers store 8-byte values, so the
 		// stride is hardcoded. Generalizing requires either (a) propagating
@@ -6045,6 +6125,11 @@ export type Parser
 		// is OOM — silently swallowing it here is consistent with how the
 		// stdlib's `Array.create` already behaves.
 		emitErrorFlagDrain(range: literalRange)
+		// Pin the create() result to `genericInstance(__ManagedMemory, [E])`
+		// so subsequent `__mm.set(i, value: e)` resolves with Element bound.
+		if havePinned 'pinMm'
+			_ = pinSingleArgGenericProducer("__ManagedMemory", elementType: unifiedElemType, valueName: mmName)
+		end 'pinMm'
 
 		// Phase 4: per-element `__mm.set(i, value: elem)`, each followed by
 		// an error-flag drain. set's bounds-check is against capacity (which
@@ -6106,8 +6191,17 @@ export type Parser
 		initArgRanges.push(literalRange)
 		let initCallee = "{arrayTypeName}.init"
 		module.appendOp(block, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+		// Pin the init() result to `genericInstance(<arrayTypeName>, [E])`
+		// so user-side `arr.get(0)`, for-in iteration, etc. resolve
+		// through the right generic instantiation. When we couldn't unify
+		// an element type the result stays `unresolved` and TypeResolution
+		// infers the type from how the literal is used.
+		var resultType = MaxonType.unresolved
+		if havePinned 'pinArr'
+			resultType = pinSingleArgGenericProducer(arrayTypeName, elementType: unifiedElemType, valueName: arrName)
+		end 'pinArr'
 
-		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
+		return ExprResult.direct(arrName, valueType: resultType)
 	end 'parseArrayLiteralExpr'
 
 	// The preceding op publishes its error flag via the multi-value-return
@@ -7377,6 +7471,14 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	end 'haveAlias'
 	throw MaxonTypeStructNameError.notAStruct
 end 'maxonTypeStructName'
+
+// Compose the parser-pinned-producer-type key. Same shape used at the
+// pin site (parser) and the read site (TypeResolution); centralised so
+// the byte representation can change without scattering touch-ups. Top-
+// level so TypeResolution can call it without dragging in Parser state.
+export function parserPinKey(funcName String, valueName ByteArray) returns String
+	return "{funcName}|{String.from(valueName)}"
+end 'parserPinKey'
 
 // Create a block that is not added to the function's block list.
 // Used as a sink for dead code after fully-terminated if/else branches.
