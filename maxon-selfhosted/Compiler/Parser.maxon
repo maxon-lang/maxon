@@ -284,13 +284,38 @@ export type Parser
 	// a bare `[...]` array literal don't count — the alias must appear by name
 	// at a type position (parseTypeRef) or wherever else `usedTypeAliases`
 	// gets populated. Mirrors maxon-sharp's `CheckUnusedTypeAliases`.
+	//
+	// Suppression: the bootstrap's `PreScanTypeAliasesOnly` short-circuits
+	// further parsing of any file whose pre-scan emitted a diagnostic, so
+	// `CheckUnusedTypeAliases` never runs there. The self-hosted parser keeps
+	// going after a typealias error to maximise per-file recovery, which would
+	// double-report the same alias as both E3061 (or E3060 etc.) and E3062.
+	// Skip the unused-check when the file already has a typealias-related
+	// diagnostic so the wording stays in sync with the bootstrap.
 	function checkUnusedTypeAliases()
+		if fileHasTypealiasDiagnostic() 'alreadyReported'
+			return
+		end 'alreadyReported'
 		for entry in localTypealiases 'eachAlias'
 			if not usedTypeAliases.contains(entry.name) 'isUnused'
 				reportCompileError(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{entry.name}'", line: entry.line, column: entry.column, filePath: filePath)
 			end 'isUnused'
 		end 'eachAlias'
 	end 'checkUnusedTypeAliases'
+
+	// True when `project.diagnostics` already contains an E3061 (duplicate
+	// typealias) entry for this file. The cascade gate in reportCompileError
+	// covers lex/parser/IR errors but doesn't suppress 3xxx-after-3xxx; this
+	// helper plugs the typealias-specific gap.
+	function fileHasTypealiasDiagnostic() returns bool
+		let myPath = filePath.toString()
+		for d in project.diagnostics 'eachDiag'
+			if d.code.rawValue == ErrorCode.semanticDuplicateTypeAlias.rawValue and d.filePath.toString() == myPath 'isMatch'
+				return true
+			end 'isMatch'
+		end 'eachDiag'
+		return false
+	end 'fileHasTypealiasDiagnostic'
 
 	// Reject declarations whose name starts with `__`, and reject `self` as a
 	// binding name. The `__` prefix is reserved for compiler-internal symbols
@@ -1324,18 +1349,17 @@ export type Parser
 			return
 		end 'wasCall'
 
-		// `NAME = TypeName.method(...)` — deferred struct-factory
-		// initializer. We can't yet emit runtime init code, but registering
-		// the binding lets a later read / assignment surface E2013 / a
-		// proper diagnostic instead of choking on the leftover `(...)`.
-		// Both `let` and `var` accept this shape; the entry lands in
-		// `topLevelConstants` either way (mutable runtime-init isn't a
-		// distinction the resolver currently tracks).
+		// `NAME = TypeName.method(...)` — runtime-init struct factory call.
+		// Materialize the call in a synthetic `__module_init_<n>` function
+		// (lazily allocated on first use) and reserve a writable .data slot
+		// for the call result, mirroring the array-literal path. `mrt_start`
+		// invokes every `__module_init_<n>` before `main`, so the slot holds
+		// the factory result by the time user code reads it. Both `let` and
+		// `var` accept this shape — the entry lands in `topLevelVars` so
+		// cross-file `shared.field` reads resolve through `globalLoad` /
+		// `globalStore` just like simple `export var counter = 10` does.
 		if isRuntimeInitInitializer(valueToken) 'isMethodCall'
-			skipToNextLine()
-			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
-			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise ignore
-			logTrace(LogCategory.parser, message: () gives "parser: deferred runtime-init decl '{qualifiedName}' (no init emitted)")
+			try parseTopLevelRuntimeInitDecl(nameToken, qualifiedName: qualifiedName, mutable: mutable, visibility: visibility)
 			return
 		end 'isMethodCall'
 
@@ -1454,41 +1478,73 @@ export type Parser
 	// which the self-hosted compiler does not yet emit; the affected spec
 	// tests don't observe clean shutdown.
 	function parseTopLevelArrayLiteralDecl(nameToken Token, qualifiedName String, mutable bool, visibility Visibility) throws ParserError
+		let firstToken = cursor.current()
+		let result = try parseInModuleInitContext(parseArrayLiteral: true)
+		finalizeTopLevelInitDecl(nameToken, qualifiedName: qualifiedName, mutable: mutable, visibility: visibility, result: result, firstToken: firstToken, kindLabel: "array literal")
+	end 'parseTopLevelArrayLiteralDecl'
+
+	// Top-level `let/var <name> = TypeName.method(...)`. Parses the full call
+	// expression (which may include named/positional arguments and nested
+	// expressions) inside the file's lazy `__module_init_<n>` function and
+	// reserves a writable .data slot for the call result so cross-file reads
+	// of `<name>.field` resolve through `globalLoad` / `globalStore` the same
+	// way as a plain `export var counter = 10`.
+	function parseTopLevelRuntimeInitDecl(nameToken Token, qualifiedName String, mutable bool, visibility Visibility) throws ParserError
+		let firstToken = cursor.current()
+		let result = try parseInModuleInitContext(parseArrayLiteral: false)
+		finalizeTopLevelInitDecl(nameToken, qualifiedName: qualifiedName, mutable: mutable, visibility: visibility, result: result, firstToken: firstToken, kindLabel: "runtime-init")
+	end 'parseTopLevelRuntimeInitDecl'
+
+	// Parse an initializer expression into the file's `__module_init_<n>`
+	// block. Allocates the init function on first call, then swaps
+	// `synthNameCounter` and `currentFunc` so synthesized value names land in
+	// the init function's namespace — the `arrayLiteralProducers` map keys
+	// off `currentFunc.name`, so without the swap a literal here would miss
+	// the TypeResolution read site. Restores both on the way out.
+	function parseInModuleInitContext(parseArrayLiteral bool) returns ExprResult throws ParserError
 		_ = getOrCreateModuleInit()
-		let bracketToken = cursor.current()
-		// Swap the shared synth counter for the dedicated init counter so
-		// names minted across multiple literals stay unique within
-		// `__module_init_<n>`. parseArrayLiteralExpr (and any helpers it
-		// calls) read/write `synthNameCounter` for every emit.
 		let savedSynth = synthNameCounter
 		synthNameCounter = moduleInitSynthCounter
-		// Swap currentFunc to the module-init function so the
-		// `arrayLiteralProducers` entry (keyed by `currentFunc.name`)
-		// lands under the init function's name; otherwise the keying
-		// would fall back to whatever currentFunc was last set to
-		// (often a previously-parsed function) and the entry would
-		// silently miss at the TypeResolution read site.
 		let savedFunc = currentFunc
 		currentFunc = moduleInitFunc
-		let result = try parseArrayLiteralExpr(moduleInitBlock)
+		var result = ExprResult.direct(ByteArray.create(), valueType: MaxonType.unresolved)
+		if parseArrayLiteral 'kind'
+			result = try parseArrayLiteralExpr(moduleInitBlock)
+		end 'kind' else 'general'
+			result = try parseExpression(moduleInitBlock)
+		end 'general'
 		currentFunc = savedFunc
 		moduleInitSynthCounter = synthNameCounter
 		synthNameCounter = savedSynth
-		let literalRange = SourceRange.between(bracketToken, last: previousToken())
+		return result
+	end 'parseInModuleInitContext'
 
-		// Reject duplicates the same way registerUnresolvedTopLevelDecl does.
+	// Common tail for both top-level init paths: emit the `globalStore`,
+	// register the `topLevelVars` entry, and gate `let`-bound names through
+	// `immutableArrayLitNames` so `rewriteUnresolvedAssign` can keep firing
+	// E2013 on subsequent source-level reassignments.
+	//
+	// Slot type is `MaxonType.unresolved` at parse time; TypeResolution's
+	// `fillUnresolvedTypes` pass rewrites the globalStore op once the
+	// initializer's result type is known and a follow-up walk backfills
+	// `topLevelVars[name].slotType` so user reads carry the concrete type.
+	//
+	// Lifetime note: ownership transfers from the init's local refcount into
+	// the slot via `globalStore` and there is no scope-end drop in
+	// `__module_init_<n>` — heap-allocated initializers silently leak at
+	// process exit. The C# bootstrap has a separate `__maxon_global_cleanup`
+	// pass which the self-hosted compiler does not yet emit; the affected
+	// spec tests don't observe clean shutdown.
+	function finalizeTopLevelInitDecl(nameToken Token, qualifiedName String, mutable bool, visibility Visibility, result ExprResult, firstToken Token, kindLabel String)
+		let initRange = SourceRange.between(firstToken, last: previousToken())
+
 		if project.topLevelConstants.contains(qualifiedName) or project.topLevelVars.contains(qualifiedName) 'dupResolved'
 			reportDuplicateConstant(nameToken)
 			return
 		end 'dupResolved'
 
-		module.appendOp(moduleInitBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(result), slotType: exprType(result), range: literalRange))
+		module.appendOp(moduleInitBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(result), slotType: exprType(result), range: initRange))
 
-		// Slot type is `MaxonType.unresolved` at parse time; TypeResolution's
-		// fillUnresolvedTypes pass rewrites the globalStore op once the
-		// `T.init(mm)` call result type is known, and a follow-up walk
-		// backfills `topLevelVars[name].slotType` so subsequent `globalLoad`
-		// rewrites on user reads of `xs` carry the concrete type.
 		let info = TopLevelVarInfo.create(qualifiedName, slotType: exprType(result), initialValue: 0 as IntConstant, visibility: visibility, sourceFilePath: filePath)
 		try project.topLevelVars.insert(qualifiedName, value: info) otherwise 'dupVar'
 			reportDuplicateConstant(nameToken)
@@ -1498,8 +1554,8 @@ export type Parser
 			project.immutableArrayLitNames.push(qualifiedName)
 		end 'isLet'
 
-		logTrace(LogCategory.parser, message: () gives "parser: top-level array literal '{qualifiedName}' → {moduleInitName}")
-	end 'parseTopLevelArrayLiteralDecl'
+		logTrace(LogCategory.parser, message: () gives "parser: top-level {kindLabel} '{qualifiedName}' → {moduleInitName}")
+	end 'finalizeTopLevelInitDecl'
 
 	// Close out this file's synthetic `__module_init_<n>` function once the
 	// top-level parse loop terminates. A null-op when the parser never saw a
@@ -2058,7 +2114,7 @@ export type Parser
 			return
 		end 'shadowing'
 		if collides 'duplicate'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			skipToNextLine()
 			return
 		end 'duplicate'
@@ -2512,7 +2568,8 @@ export type Parser
 			checkReservedDeclName(caseToken)
 
 			// Duplicate-case detection (E3030).
-			if caseNames.contains(caseName) 'duplicateCase'
+			let isDuplicateCase = caseNames.contains(caseName)
+			if isDuplicateCase 'duplicateCase'
 				reportCompileError(project, code: ErrorCode.semanticEnumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 			end 'duplicateCase' else 'recordCase'
 				caseNames.insert(element: caseName)
@@ -2570,6 +2627,16 @@ export type Parser
 					break
 				end 'isDup'
 			end 'checkDup'
+
+			// Skip the push for duplicate-case names so EnumType.create's
+			// downstream unique-name invariant holds even when E3030 has
+			// already been reported. The diagnostic above is the user-facing
+			// signal; suppressing the second EnumCase entry keeps the IR
+			// well-formed for the subsequent passes that walk this enum.
+			if isDuplicateCase 'skipDup'
+				try skipNewlines()
+				continue
+			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
 			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column))

@@ -233,8 +233,14 @@ export function queryAllMid(project Project) returns StdModule throws CompileErr
 
 	let maxonModule = try queryAllModule(project)
 
-	// Gate: if parse errors were collected, stop before the pipeline
-	if hasErrors(project) 'parseErrors'
+	// Gate: structural lex/parser/IR errors leave the IR malformed and the
+	// downstream passes panic on them, so short-circuit. Pure semantic
+	// diagnostics (3xxx) are safe to flow through — running TypeResolution /
+	// visibility checks against an otherwise-well-formed module surfaces
+	// follow-up semantic errors the user would expect (e.g. cross-file
+	// `as HiddenAlias` → E2003 reported alongside its E3062 unused-typealias
+	// origin).
+	if hasStructuralErrors(project) 'parseErrors'
 		popQuery(project)
 		throw CompileError.compileError
 	end 'parseErrors'

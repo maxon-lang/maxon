@@ -52,8 +52,7 @@ let whitelist = ["basics",
 	//             interpolation on Character (1) and the Range stdlib type
 	//             with iterator protocol (6, Phase 11).
 	"arrays",
-	// "export-keyword", — 20/24 pass; remaining 4 need cross-file export logic
-	//                     (Stderr mismatch, exported-struct-var-cross-file).
+	"export-keyword",
 	"static-variables",
 	// "vector", — needs sized `Vector with N` type
 	"bitwise-operators",
@@ -1419,11 +1418,56 @@ function emitWorkerSinglesResult(specName String, passed TestCount, failed TestC
 end 'emitWorkerSinglesResult'
 
 // Emit one failure line for the given spec. The remainder of the line after the
-// prefix is the verbatim failure text; specName contains no colons so the
-// boundary between marker and payload is unambiguous.
+// prefix is the failure text with newlines escaped so the parent's line-based
+// reader sees a single `\n`-terminated record per call. specName contains no
+// colons so the boundary between marker and payload is unambiguous.
 function emitWorkerSinglesFail(specName String, line String)
-	print("{workerSingleFailMarker}{specName}:{line}\n")
+	print("{workerSingleFailMarker}{specName}:{encodeFailPayload(line)}\n")
 end 'emitWorkerSinglesFail'
+
+// Encode a multi-line failure payload into a single line so the parent's
+// line-based reader sees a single `\n`-terminated record per call.
+// Backslash-first so the subsequent newline/CR rules don't double-escape
+// the inserted backslashes. Reversed by `decodeFailPayload`.
+function encodeFailPayload(s String) returns String
+	var result = s.replace("\\", with: "\\\\")
+	result = result.replace("\n", with: "\\n")
+	result = result.replace("\r", with: "\\r")
+	return result
+end 'encodeFailPayload'
+
+// Reverse of `encodeFailPayload`. Walks the bytes once so escape sequences
+// don't recursively re-expand: `\\` → `\`, `\n` → newline, `\r` → CR.
+function decodeFailPayload(s String) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var result = ByteArray.create()
+	var i = 0
+	while i < n 'walk'
+		let b = try bytes.get(i) otherwise break
+		if b == '\\' and i + 1 < n 'isEscape'
+			let nextByte = try bytes.get(i + 1) otherwise 0
+			if nextByte == 'n' 'isN'
+				result.push(10 as Byte)
+				i = i + 2
+				continue
+			end 'isN'
+			if nextByte == 'r' 'isR'
+				result.push(13 as Byte)
+				i = i + 2
+				continue
+			end 'isR'
+			if nextByte == '\\' 'isBackslash'
+				result.push(92 as Byte)
+				i = i + 2
+				continue
+			end 'isBackslash'
+		end 'isEscape'
+		result.push(b)
+		i = i + 1
+	end 'walk'
+	return String.from(result)
+end 'decodeFailPayload'
 
 // Run the non-batchable (single) tests for a comma-separated list of specs.
 // Mirrors runSpecBatchWorker for the non-batchable path so a panic in compile
@@ -1935,7 +1979,7 @@ function parseSinglesFailLine(line String, specName String) returns String
 	for _ in 0 upto prefixLen 'advance'
 		idx = try line.indexAfter(idx) otherwise return ""
 	end 'advance'
-	return line.slice(idx, endIndex: line.endIndex())
+	return decodeFailPayload(line.slice(idx, endIndex: line.endIndex()))
 end 'parseSinglesFailLine'
 
 // A running singles-worker subprocess.

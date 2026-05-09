@@ -13,18 +13,16 @@ ExitCode: 10
 module {
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.lea r9, [rip+__data_counter]
-    x64.mov r8, [r9+0] (8b)
-    x64.cmp r8, 125
-    x64.jbe __range_ok_0
+    %0 = mir.global_addr @__data_counter
+    %1 = mir.load %0, 0
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    x64.lea r8, [rip+__panic_msg_0]
-    x64.mov rcx, r8
-    x64.call mrt_panic
+    %4 = mir.global_addr @__panic_msg_0
+    %5 = mir.call @mrt_panic(%4)
   __range_ok_0:
-    x64.epilogue
-    x64.ret
+    mir.ret %1
   }
 }
 ---

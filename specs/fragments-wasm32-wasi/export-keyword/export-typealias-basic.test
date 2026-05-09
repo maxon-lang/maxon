@@ -1,0 +1,70 @@
+// Test: export-typealias-basic
+
+typealias Integer = int(i64.min to i64.max)
+
+export typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(42)
+	return try arr.get(0) otherwise 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %17 = mir.mov_imm 8 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    %19 = mir.mov_imm 40 : i64
+    %20 = mir.call @mrt_alloc(%19)
+    %21 = mir.mov_imm 0 : i64
+    mir.store %21, %20, 0
+    %22 = mir.mov_imm 0 : i64
+    mir.store %22, %20, 8
+    %23 = mir.mov_imm 0 : i64
+    mir.store %23, %20, 16
+    %24 = mir.mov_imm 8 : i64
+    mir.store %24, %20, 24
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %20, 32
+    mir.store %20, %18, 0
+    %3 = mir.mov_imm 42 : i64
+    %4 = mir.global_addr @__layout_Array_Integer
+    %5 = mir.call @Array.push(%18, %3, %4)
+    %7 = mir.mov_imm 0 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %26 = mir.load %18, 0
+    %27, %28 = mir.try_call @__managed_mem_get(%26, %7)
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp ne, %28, %29
+    mir.cond_br %30 [then: inlined_Array.get_1(), else: inlined_Array.get_3()]
+  inlined_Array.get_1:
+    %31 = mir.mov_imm 1 : i64
+    %32 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%32, %31)
+  inlined_Array.get_3:
+    %33 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%27, %33)
+  inline_cont_main_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp ne, %35, %11
+    mir.cond_br %12 [then: try_1.otherwise(), else: try_1.merge(%34)]
+  try_1.otherwise:
+    %14 = mir.mov_imm 0 : i64
+    mir.br try_1.merge(%14)
+  try_1.merge:
+    %36 = mir.mov_imm 125 : i64
+    %37 = mir.cmp ugt, %16, %36
+    mir.cond_br %37 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %38 = mir.global_addr @__panic_msg_2
+    %39 = mir.call @mrt_panic(%38)
+  __range_ok_1:
+    mir.ret %16
+  }
+}
+---

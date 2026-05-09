@@ -1,14 +1,13 @@
-// Test: exported-function-cross-file
-// --- file: helper.maxon
+// Test: export-function-basic
+
 typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
-	return 42
+	return 21
 end 'helper'
 
-// --- file: main.maxon
 function main() returns ExitCode
-	return helper()
+	return helper() + helper()
 end 'main'
 ---
 ExitCode: 42
@@ -17,9 +16,8 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    x64.mov r9d, 42
-    x64.mov r8, r9
-    x64.ret
+    %2 = mir.mov_imm 42 : i64
+    mir.ret %2
   }
 }
 ---

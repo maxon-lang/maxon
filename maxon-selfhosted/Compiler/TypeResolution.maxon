@@ -125,12 +125,73 @@ end 'buildGenericInstanceType'
 // Phase 11.7: walk every deferred where-clause check and emit E3017 per
 // failing constraint. Runs after `validateConformances` has populated
 // `project.conformances`, so `typeConformsTo` returns accurate verdicts.
+//
+// Also walks each generic-typealias `Base with(Args...)` to flag any arg
+// name that doesn't resolve to a real type, mirroring the bootstrap's
+// parse-time `Unknown type: X` (E2003) emission. The bootstrap fires the
+// check while parsing the typealias body; the self-hosted parser captures
+// the arg names without registry validation and resolves them lazily, so
+// the existence check has to wait until every type registry is populated
+// (typealiases, structs, enums, type parameters of the enclosing decl).
 export function drainPendingConstraintChecks(project Project)
 	for check in project.pendingConstraintChecks 'eachCheck'
 		validateGenericInstanceConstraints(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
+		validateGenericInstanceArgs(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 	end 'eachCheck'
 	project.pendingConstraintChecks = PendingConstraintCheckArray.create()
 end 'drainPendingConstraintChecks'
+
+// Emit E2003 ("Unknown type: X") for every arg-name in a `genericAlias` that
+// can't be resolved as a primitive, typealias, struct, enum, interface, or
+// any other registered type. Reports against the typealias declaration's
+// own location since the per-arg token positions are not threaded through
+// the UnresolvedTypeExpr. Non-genericAlias variants have no arg-names to
+// validate and are no-ops.
+function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+	match expr 'extract'
+		genericAlias(_, args) then validateArgNamesExist(project, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
+		boolPrim then return
+		rangedFloat then return
+		rangedInt then return
+		aliasName then return
+	end 'extract'
+end 'validateGenericInstanceArgs'
+
+function validateArgNamesExist(project Project, args StringArray, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+	for argName in args 'eachArg'
+		if isKnownTypeName(project, name: argName) 'known'
+			continue
+		end 'known'
+		reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Unknown type: {argName}", line: declLine, column: declColumn, filePath: declFilePath)
+	end 'eachArg'
+end 'validateArgNamesExist'
+
+// True when `name` resolves to any registered type (primitive, typealias,
+// struct, enum, interface, generic-typealias, function, or known stdlib
+// builtin) or to an inner-alias slot known to TypeResolution. Also checks
+// the *unresolved* struct/enum/typealias/interface tables: drainPending-
+// ConstraintChecks runs before `resolveAllStructTypes`, so during stdlib
+// build the registries that will hold `Character` etc. are still under
+// the `unresolvedStructTypes` / `unresolvedEnums` keys when we look them
+// up. Differs from `namedIdIsKnown` (which gates a NameId-keyed
+// resolved-type validity check that runs after the unresolved tables have
+// been drained) by also probing those staging maps.
+function isKnownTypeName(project Project, name String) returns bool
+	if isBuiltinTypeName(name) 'isPrim'
+		return true
+	end 'isPrim'
+	if project.unresolvedTypealiases.contains(name) or project.unresolvedStructTypes.contains(name) or project.unresolvedEnums.contains(name) or project.unresolvedInterfaces.contains(name) 'isUnresolved'
+		return true
+	end 'isUnresolved'
+	return namedNameIsKnown(project, name: name)
+end 'isKnownTypeName'
+
+// Shared primitive whitelist for both unresolved-stage and post-resolution
+// type-name validity probes. Includes both the casing of `string` (lower-
+// case used by some stdlib decls) and `String` (the canonical alias name).
+function isBuiltinTypeName(name String) returns bool
+	return name == "bool" or name == "int" or name == "float" or name == "byte" or name == "string" or name == "String" or name == "Character"
+end 'isBuiltinTypeName'
 
 function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
 	match expr 'extract'
@@ -809,9 +870,16 @@ export function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 end 'maxonTypeIsKnown'
 
 function namedIdIsKnown(project Project, id TypeNameId) returns bool
-	let name = project.typeNames.get(id)
-	return project.typealiases.contains(name) or project.structTypes.contains(name) or project.enumTypes.contains(name) or project.funcReturnTypes.contains(name) or project.genericTypealiases.contains(name) or anyStructHasInnerAlias(project, aliasName: name) or project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name) or name == "String" or name == "int" or name == "float" or name == "byte" or name == "bool"
+	return namedNameIsKnown(project, name: project.typeNames.get(id))
 end 'namedIdIsKnown'
+
+// Shared "name resolves to a registered (resolved or interface-staging)
+// type" probe. Used by `namedIdIsKnown` for the post-resolution validity
+// gate and by `isKnownTypeName` for the unresolved-stage probe (which
+// adds checks against the still-unresolved staging maps).
+function namedNameIsKnown(project Project, name String) returns bool
+	return isBuiltinTypeName(name) or project.typealiases.contains(name) or project.structTypes.contains(name) or project.enumTypes.contains(name) or project.funcReturnTypes.contains(name) or project.genericTypealiases.contains(name) or anyStructHasInnerAlias(project, aliasName: name) or project.interfaces.contains(name) or project.unresolvedInterfaces.contains(name)
+end 'namedNameIsKnown'
 
 // Emit E3009 if `t` references an unknown named type and return true so the
 // caller can bail out. Returns false (no diagnostic) when `t` is known.
@@ -1033,6 +1101,16 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 			return
 		end 'visible'
 	end 'isTopLevelVar'
+	// `name` shaped `receiver.field` where `receiver` is a top-level var
+	// (instance variable holding a struct). Rewrite to globalLoad(receiver)
+	// + fieldLoad(field) so cross-file `shared.value` works the same way as
+	// the in-function `shared.value` access would. The static-field shape
+	// (`TypeName.staticField` registered with the dotted qualifiedName) was
+	// caught by the prior topLevelVars lookup, so falling through here means
+	// the dotted form is NOT a registered global itself.
+	if tryRewriteDottedRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasInstanceField'
+		return
+	end 'wasInstanceField'
 	if let entry = try project.topLevelConstants.get(name) 'isConst'
 		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
 			// Enum cases get tagged with the enclosing enum's named MaxonType so
@@ -1063,7 +1141,7 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	if reportEnumUnknownCaseIfApplicable(project, name: name, range: range, filePath: filePath) 'wasEnumCase'
 		return
 	end 'wasEnumCase'
-	reportUnknownName(project, name: name, filePath: filePath)
+	reportUnknownName(project, name: name, range: range, filePath: filePath)
 end 'rewriteUnresolvedRead'
 
 // If `name` looks like `EnumName.case` and `EnumName` is a registered enum
@@ -1243,7 +1321,7 @@ function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIn
 			// level binding is still immutable. Surface E2013 here so the
 			// store doesn't silently rewrite as a globalStore.
 			if project.immutableArrayLitNames.contains(name) 'immutableLet'
-				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
+				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
 				return
 			end 'immutableLet'
 			try module.ops.set(opIdx, value: MaxonOp.globalStore(name, value: value, slotType: info.slotType, range: range)) otherwise panic("rewriteUnresolvedAssign: ops.set OOB at idx={opIdx} (count={module.ops.count()})")
@@ -1256,23 +1334,139 @@ function rewriteUnresolvedAssign(project Project, module MaxonModule, opIdx OpIn
 			// the E2013 wording shared with the C# bootstrap. By the time
 			// this runs `resolveAllTopLevelDecls` has drained every let
 			// into `topLevelConstants`, so a single map check suffices.
-			// The cursor location isn't available here (the rewrite walks
-			// ops post-parse), so we pass 0 / 0 / filePath — diagnostics
-			// are deduplicated by message rather than by exact span.
-			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: 0, column: 0, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{name}'", line: range.line, column: range.column, filePath: filePath)
 			return
 		end 'visible'
 	end 'isConst'
-	reportUnknownName(project, name: name, filePath: filePath)
+	// `name` shaped `receiver.field` where `receiver` is a top-level var.
+	// Mirrors the read path: rewrite to globalLoad(receiver) + fieldStore.
+	if tryRewriteDottedAssign(project, module: module, opIdx: opIdx, name: name, value: value, range: range, filePath: filePath) 'wasInstanceField'
+		return
+	end 'wasInstanceField'
+	reportUnknownName(project, name: name, range: range, filePath: filePath)
 end 'rewriteUnresolvedAssign'
 
-function reportUnknownName(project Project, name String, filePath FilePath)
+// Decompose `receiver.field` reads where the receiver is a top-level var
+// holding a struct value. Replaces the unresolvedRead with a globalLoad of
+// the receiver and inserts a fieldLoad after it carrying the original
+// result name. Returns true on success so the caller skips the not-found
+// diagnostic.
+function tryRewriteDottedRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
+	let resolved = try resolveDottedTopLevelReceiver(project, name: name, filePath: filePath) otherwise return false
+	let receiverName = freshGlobalLoadName(result)
+	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedRead: ops.set OOB at idx={opIdx}")
+	let fieldLoadIdx = module.ops.count()
+	module.ops.push(MaxonOp.fieldLoad(result, receiver: receiverName, fieldName: resolved.fieldName.toByteArray(), range: range))
+	insertOpAfter(module, anchorOpIdx: opIdx, newOpIdx: fieldLoadIdx)
+	return true
+end 'tryRewriteDottedRead'
+
+// Decompose `receiver.field = value` writes where the receiver is a
+// top-level var. Replaces the unresolvedAssign with a globalLoad and
+// inserts a fieldStore after it. Reports E2013 (without rewriting) when
+// the receiver was bound via `let`.
+function tryRewriteDottedAssign(project Project, module MaxonModule, opIdx OpIndex, name String, value ByteArray, range SourceRange, filePath FilePath) returns bool
+	let resolved = try resolveDottedTopLevelReceiver(project, name: name, filePath: filePath) otherwise return false
+	if project.immutableArrayLitNames.contains(resolved.prefix) 'immutableLet'
+		reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{resolved.prefix}'", line: range.line, column: range.column, filePath: filePath)
+		return true
+	end 'immutableLet'
+	let receiverName = freshGlobalLoadName(value)
+	try module.ops.set(opIdx, value: MaxonOp.globalLoad(receiverName, name: resolved.prefix, slotType: resolved.info.slotType, range: range)) otherwise panic("tryRewriteDottedAssign: ops.set OOB at idx={opIdx}")
+	let fieldStoreIdx = module.ops.count()
+	module.ops.push(MaxonOp.fieldStore(receiverName, fieldName: resolved.fieldName.toByteArray(), value: value, range: range))
+	insertOpAfter(module, anchorOpIdx: opIdx, newOpIdx: fieldStoreIdx)
+	return true
+end 'tryRewriteDottedAssign'
+
+// Resolution result for the dotted-receiver helper: the receiver-side
+// prefix, its registered TopLevelVarInfo, and the trailing field name.
+type ResolvedDottedReceiver
+	export var prefix String
+	export var fieldName String
+	export var info TopLevelVarInfo
+
+	export static function create(prefix String, fieldName String, info TopLevelVarInfo) returns ResolvedDottedReceiver
+		self.prefix = prefix
+		self.fieldName = fieldName
+		self.info = info
+		return ResolvedDottedReceiver{}
+	end 'create'
+end 'ResolvedDottedReceiver'
+
+// Shared resolution for `receiver.field` lookup against `topLevelVars`.
+// Throws CompileError when the dotted form doesn't resolve to a visible
+// top-level var with a non-empty trailing field name, so the read/assign
+// callers can short-circuit via `try ... otherwise return false` without
+// nesting per-failure-mode conditionals at every call site.
+function resolveDottedTopLevelReceiver(project Project, name String, filePath FilePath) returns ResolvedDottedReceiver throws CompileError
+	let prefix = leadingSegment(name)
+	if prefix.count() == name.count() 'noDot'
+		throw CompileError.compileError
+	end 'noDot'
+	let info = try project.topLevelVars.get(prefix) otherwise throw CompileError.compileError
+	if not isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: filePath) 'notVisible'
+		throw CompileError.compileError
+	end 'notVisible'
+	let fieldName = trailingSegmentAfterDot(name)
+	if fieldName.isEmpty() 'noField'
+		throw CompileError.compileError
+	end 'noField'
+	return ResolvedDottedReceiver.create(prefix, fieldName: fieldName, info: info)
+end 'resolveDottedTopLevelReceiver'
+
+// Splice `newOpIdx` into whichever block's opRefs currently holds
+// `anchorOpIdx`, immediately after that anchor. Mirrors `insertBitNotAfter`
+// — every op produced during type-resolution rewrites lives in exactly
+// one block, so the linear scan is bounded by the block's own length.
+function insertOpAfter(module MaxonModule, anchorOpIdx OpIndex, newOpIdx OpIndex)
+	for blockRef in 0 upto module.blocks.count() 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("insertOpAfter: blockRef OOB")
+		var insertPos = -1 as ParsedInt
+		for posIdx in 0 upto block.opRefs.count() 'eachOpRef'
+			let ref = try block.opRefs.get(posIdx) otherwise panic("insertOpAfter: posIdx OOB")
+			if ref == anchorOpIdx 'foundAnchor'
+				insertPos = posIdx
+				break
+			end 'foundAnchor'
+		end 'eachOpRef'
+		if insertPos >= 0 'doInsert'
+			try block.opRefs.insert(insertPos + 1, value: newOpIdx) otherwise panic("insertOpAfter: opRefs.insert OOB")
+			return
+		end 'doInsert'
+	end 'eachBlock'
+	panic("insertOpAfter: anchor op at idx={anchorOpIdx} not registered in any block")
+end 'insertOpAfter'
+
+// Synthesize a name for the inserted globalLoad. Prefixed so IR dumps
+// distinguish it from user-emitted names; suffixed with the related
+// op's primary name so the receiver ↔ field pairing stays scannable.
+function freshGlobalLoadName(related ByteArray) returns ByteArray
+	let s = "$gload_{String.from(related)}"
+	return s.toByteArray()
+end 'freshGlobalLoadName'
+
+// Return the segment of `name` after the first '.', or an empty string
+// when there is no dot or the dot is the last character.
+function trailingSegmentAfterDot(name String) returns String
+	let bytes = name.toByteArray()
+	for i in 0 upto bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise return ""
+		if b == '.' 'isDot'
+			let suffixBytes = try bytes.slice(i + 1, endIndex: bytes.count()) otherwise return ""
+			return String.from(suffixBytes)
+		end 'isDot'
+	end 'scan'
+	return ""
+end 'trailingSegmentAfterDot'
+
+function reportUnknownName(project Project, name String, range SourceRange, filePath FilePath)
 	// Wording matches the C# bootstrap's E2004 phrasing for unresolved
 	// reads. For dotted names (`Foo.bar`) we report the *prefix* before
 	// the first dot — that's the part that didn't resolve to a
 	// variable / type / enum the project knows about.
 	let display = leadingSegment(name)
-	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{display}'", line: 0, column: 0, filePath: filePath)
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{display}'", line: range.line, column: range.column, filePath: filePath)
 end 'reportUnknownName'
 
 // Return the leading segment of `name` up to (but not including) the

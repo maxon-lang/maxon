@@ -1778,6 +1778,22 @@ export function hasErrors(project Project) returns bool
 	return project.diagnostics.count() > 0
 end 'hasErrors'
 
+// True when at least one diagnostic represents a structural failure that
+// makes downstream IR passes unsafe to run — lexer (1xxx), parser (2xxx),
+// or IR-stage (4xxx) errors. Pure semantic-stage diagnostics (3xxx) leave
+// the IR intact and are safe to flow through type-resolution / visibility
+// passes so additional follow-up errors (e.g. cross-file `as Hidden` →
+// E2003) can still be reported alongside them.
+export function hasStructuralErrors(project Project) returns bool
+	for d in project.diagnostics 'eachDiag'
+		let raw = d.code.rawValue
+		if raw < 3000 or (raw >= 4000 and raw < 5000) 'isStructural'
+			return true
+		end 'isStructural'
+	end 'eachDiag'
+	return false
+end 'hasStructuralErrors'
+
 // Resolve a source-level type name to its MaxonType, interning the name when
 // it is not a primitive. All source-level names (typealiases, struct types,
 // etc.) flow through the same path: the parser records MaxonType.named(id)
