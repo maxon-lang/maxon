@@ -147,7 +147,7 @@ end 'drainPendingConstraintChecks'
 // own location since the per-arg token positions are not threaded through
 // the UnresolvedTypeExpr. Non-genericAlias variants have no arg-names to
 // validate and are no-ops.
-function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	match expr 'extract'
 		genericAlias(_, args) then validateArgNamesExist(project, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
 		boolPrim then return
@@ -157,7 +157,7 @@ function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, d
 	end 'extract'
 end 'validateGenericInstanceArgs'
 
-function validateArgNamesExist(project Project, args StringArray, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+function validateArgNamesExist(project Project, args StringArray, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	for argName in args 'eachArg'
 		if isKnownTypeName(project, name: argName) 'known'
 			continue
@@ -193,7 +193,7 @@ function isBuiltinTypeName(name String) returns bool
 	return name == "bool" or name == "int" or name == "float" or name == "byte" or name == "string" or name == "String" or name == "Character"
 end 'isBuiltinTypeName'
 
-function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	match expr 'extract'
 		genericAlias(baseName, args) then validateConstraintsFor(project, baseName: baseName, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
 		boolPrim then return
@@ -203,7 +203,7 @@ function validateGenericInstanceConstraints(project Project, expr UnresolvedType
 	end 'extract'
 end 'validateGenericInstanceConstraints'
 
-function validateConstraintsFor(project Project, baseName String, args StringArray, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath)
+function validateConstraintsFor(project Project, baseName String, args StringArray, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	let typeParams = lookupTypeParamsForBase(project, baseName: baseName)
 	let whereClauses = lookupWhereClausesForBase(project, baseName: baseName)
 	if whereClauses.count() == 0 'noConstraints'
@@ -513,6 +513,13 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		// conformance. Bindings are interned through the project's
 		// type-name table so the substituted `MaxonType.named(id)` shares
 		// the canonical id with every other reference to the same name.
+		// `Self` in an interface body parses to `MaxonType.named(<ifaceName>)`
+		// (currentTypeName resolution at parse time), so we add an extra
+		// binding mapping the interface's own name to the conforming type's
+		// name. Without this binding, signature-matching would compare an
+		// interface's `equals(other Self)` (resolved to `equals(other Equatable)`)
+		// against an implementer's `equals(other String)` and reject the
+		// otherwise-correct conformance.
 		var bindingNames = StringArray.create()
 		var bindingTypes = MaxonTypeArray.create()
 		for i in 0 upto iface.usesParams.count() 'buildBindings'
@@ -521,6 +528,8 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 			bindingNames.push(paramName)
 			bindingTypes.push(internMaxonType(project, name: argName))
 		end 'buildBindings'
+		bindingNames.push(conf.interfaceName)
+		bindingTypes.push(internMaxonType(project, name: declName))
 
 		for sig in iface.methods 'eachMethod'
 			let substituted = substituteMethodSig(project, sig: sig, bindingNames: bindingNames, bindingTypes: bindingTypes)
@@ -756,6 +765,14 @@ end 'validateConformancesForResolved'
 // interner. Unknown names land as `MaxonType.named(<name>)` placeholders
 // that lowering can later upgrade — the conformance entry just needs the
 // shape, not the typing-correctness, recorded.
+//
+// Also walks the interface's `extends` chain and records a derived
+// conformance for every parent — `type Impl implements Extended` where
+// `interface Extended extends Base` ends up registering both
+// `(Impl, Extended)` and `(Impl, Base)`. Without this, the witness-table
+// builder won't emit a `(Impl, Base)` table and call sites that pass an
+// `Impl` to a `Base`-typed parameter materialize a null witness pointer
+// (interface-method-via-extended-interface segfaults at runtime).
 function recordConformance(project Project, typeName String, conf Conformance)
 	var withArgs = MaxonTypeArray.create()
 	for i in 0 upto conf.withArgs.count() 'eachArg'
@@ -763,7 +780,43 @@ function recordConformance(project Project, typeName String, conf Conformance)
 		withArgs.push(internMaxonType(project, name: argName))
 	end 'eachArg'
 	_ = project.conformances.intern(typeName, interfaceName: conf.interfaceName, withArgs: withArgs)
+	var visited = StringArray.create()
+	recordParentConformancesHelper(project, typeName: typeName, interfaceName: conf.interfaceName, withArgs: withArgs, visited: visited)
 end 'recordConformance'
+
+// Walk `interfaceName`'s `extends` chain transitively and record a
+// conformance entry for `typeName` against every ancestor. The same
+// `withArgs` list is reused — interface inheritance in Maxon doesn't
+// rebind associated-type parameters today, so the child's bindings are
+// also valid bindings for each parent. A duplicate visit is gated by the
+// conformance registry's idempotent `intern` and a local `visited` set
+// guards against cycles in malformed interface graphs.
+function recordParentConformancesHelper(project Project, typeName String, interfaceName String, withArgs MaxonTypeArray, visited StringArray)
+	for v in visited 'cycleGuard'
+		if v == interfaceName 'seen'
+			return
+		end 'seen'
+	end 'cycleGuard'
+	visited.push(interfaceName)
+
+	var parents = StringArray.create()
+	if let resolved = try project.interfaces.get(interfaceName) 'fromResolved'
+		for p in resolved.extendsNames 'eachP'
+			parents.push(p)
+		end 'eachP'
+	end 'fromResolved' else 'tryUnresolved'
+		if let unresolved = try project.unresolvedInterfaces.get(interfaceName) 'fromUnresolved'
+			for p in unresolved.extendsNames 'eachU'
+				parents.push(p)
+			end 'eachU'
+		end 'fromUnresolved'
+	end 'tryUnresolved'
+
+	for parentName in parents 'eachParent'
+		_ = project.conformances.intern(typeName, interfaceName: parentName, withArgs: withArgs)
+		recordParentConformancesHelper(project, typeName: typeName, interfaceName: parentName, withArgs: withArgs, visited: visited)
+	end 'eachParent'
+end 'recordParentConformancesHelper'
 
 // Phase 11.1 step 5c: walk every parser-recorded extension and:
 //   1. Register each `addedConformances` entry in `project.conformances`.

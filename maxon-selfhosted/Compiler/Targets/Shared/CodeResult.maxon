@@ -39,6 +39,7 @@ export type DebugSymbol
 end 'DebugSymbol'
 
 export typealias DebugSymbolArray = Array with DebugSymbol
+export typealias DebugSymbolIndexMap = Map with(String, CodeOffset)
 
 // Zip parallel function-name and code-offset arrays into a DebugSymbolArray.
 export function buildDebugSymbols(labelNames StringArray, labelOffsets CodeOffsetArray) returns DebugSymbolArray
@@ -140,32 +141,34 @@ export function appendFuncAbs64Seeds(seeds StringArray, relocs RdataRelocationAr
 	end 'each'
 end 'appendFuncAbs64Seeds'
 
-// Look up a function's code offset by name. Hard error on miss — every
-// reloc target must correspond to a `.text` symbol the backend recorded.
-export function lookupFuncCodeOffset(debugSymbols DebugSymbolArray, name String) returns CodeOffset
-	for sym in debugSymbols 'scan'
-		if sym.name == name 'hit'
-			return sym.codeOffset
-		end 'hit'
-	end 'scan'
-	panic("lookupFuncCodeOffset: no .text symbol named '{name}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
-end 'lookupFuncCodeOffset'
+// Build a name→codeOffset map from a DebugSymbolArray for O(1) reloc patching.
+// `patchFuncAbs64InRdata` walks every reloc and would otherwise do a linear
+// scan of `debugSymbols` per reloc — at scale (thousands of relocs against
+// thousands of symbols) that's quadratic.
+function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
+	var index = DebugSymbolIndexMap.create()
+	for sym in debugSymbols 'each'
+		index.upsert(sym.name, value: sym.codeOffset)
+	end 'each'
+	return index
+end 'buildDebugSymbolIndex'
 
 // Patch every funcAbs64InRdata reloc by writing the absolute VA of the
 // referenced .text function into the rdata slot. Format-neutral: callers
 // pass `textAbsBase` already collapsed for their target (PE: imageBase +
 // textRva; ELF: textVAddr; Mach-O: textSectionVMAddr).
 export function patchFuncAbs64InRdata(rdata ByteArray, rdataRelocs RdataRelocationArray, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
+	let symbolIndex = buildDebugSymbolIndex(debugSymbols)
 	for reloc in rdataRelocs 'patch'
 		match reloc.kind 'k'
 			ripRelDisp32 to covdataArm64Adr then break 'k'
-			funcAbs64InRdata(funcName, _, offsetInLabel) then patchOneFuncAbs64InRdata(rdata, descriptorOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel, funcName: funcName, textAbsBase: textAbsBase, debugSymbols: debugSymbols)
+			funcAbs64InRdata(funcName, _, offsetInLabel) then patchOneFuncAbs64InRdata(rdata, descriptorOffset: reloc.rdataOffset, offsetInLabel: offsetInLabel, funcName: funcName, textAbsBase: textAbsBase, symbolIndex: symbolIndex)
 		end 'k'
 	end 'patch'
 end 'patchFuncAbs64InRdata'
 
-function patchOneFuncAbs64InRdata(rdata ByteArray, descriptorOffset CodeOffset, offsetInLabel ByteOffset, funcName String, textAbsBase MachineWord, debugSymbols DebugSymbolArray)
-	let funcCodeOffset = lookupFuncCodeOffset(debugSymbols, name: funcName)
+function patchOneFuncAbs64InRdata(rdata ByteArray, descriptorOffset CodeOffset, offsetInLabel ByteOffset, funcName String, textAbsBase MachineWord, symbolIndex DebugSymbolIndexMap)
+	let funcCodeOffset = try symbolIndex.get(funcName) otherwise panic("patchOneFuncAbs64InRdata: no .text symbol named '{funcName}' (BuildLayoutDescriptors emitted a reloc to a function that wasn't compiled)")
 	let absVa = textAbsBase + funcCodeOffset
 	let slot = descriptorOffset + offsetInLabel
 	patchQword(rdata, offset: slot, value: absVa)

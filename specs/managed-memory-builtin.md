@@ -261,7 +261,7 @@ function main() returns ExitCode
 	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 7) otherwise return 3
-	let v = try mm.get(99) otherwise return 0
+	let _ = try mm.get(99) otherwise return 0
 	return 5
 end 'main'
 ```
@@ -292,7 +292,7 @@ end 'main'
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
-	let s = try mm.slice(0, endIndex: 99) otherwise return 0
+	let _ = try mm.slice(0, endIndex: 99) otherwise return 0
 	return 5
 end 'main'
 ```

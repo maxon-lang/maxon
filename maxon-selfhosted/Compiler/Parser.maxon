@@ -116,11 +116,13 @@ export type Parser
 	// mirroring the C# bootstrap compiler's throw-to-top-level recovery. Suppresses
 	// cascading E3013 (missing-return) and out-of-place `end` consumption.
 	var abortBody bool
-	// Per-function unused-parameter tracking. paramLocations records each
-	// parameter's declaration site; referencedVars records every name read by
-	// identifier/assignment/dot-call paths in the body. Both are reset at the
-	// top of parseFunction and consulted by checkUnusedParameters.
+	// Per-function unused-parameter and unused-local tracking. paramLocations
+	// records each parameter's declaration site; localVarLocations records
+	// each `let`/`var` declaration's site; referencedVars records every name
+	// read by identifier/assignment/dot-call paths in the body. All three are
+	// reset at the top of parseFunction and consulted by checkUnusedParameters.
 	var paramLocations ParamLocationArray
+	var localVarLocations ParamLocationArray
 	var referencedVars ReferencedVarSet
 	// Per-function counter for minting synthetic intermediate names (`$t0`,
 	// `$t1`, …). Reset to 0 at the top of each function parse. Each synthetic
@@ -225,7 +227,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -902,7 +904,13 @@ export type Parser
 			return
 		end 'aborted'
 
-		checkUnusedParameters(methodName: nameToken.value, isMethod: isMethod)
+		// Capture the body's line range so the deferred unused-var consumer
+		// can decide whether a primary diagnostic landed inside this function.
+		// `previousToken()` points at the last consumed body token (typically
+		// the trailing newline before `end`), so its line is a tight upper
+		// bound. `nameToken.line` is the lower bound — params declared on the
+		// header line still fall inside this range.
+		checkUnusedParameters(methodName: nameToken.value, isMethod: isMethod, startLine: nameToken.line, endLine: previousToken().line)
 
 		// Functions with a declared return type must terminate on every path —
 		// report E3013 rather than silently falling through to an implicit 0.
@@ -2450,17 +2458,17 @@ export type Parser
 		// registration time means the static cache is populated by the time
 		// stdlib parsing finishes — which is critical because user code's
 		// array literals trigger after stdlib's `unresolvedStructTypes` has
-		// been drained by `resolveAllStructTypes`. The diagnostic on
-		// duplicate implementing types fires here (parse-time) so the
-		// downstream parser-side discovery walk can stay assumption-free.
+		// been drained by `resolveAllStructTypes`. User types may also
+		// declare conformance to `BuiltinArrayLiteral` without conflict —
+		// stdlib's `Array` is registered first (the cache-set short-circuits
+		// on a non-empty prior) and remains the canonical desugaring target
+		// for `[...]` literals; user implementations are valid declarations
+		// but don't displace the stdlib entry.
 		for conf in conformances 'discoverBal'
 			if conf.interfaceName != "BuiltinArrayLiteral" 'notBal'
 				continue
 			end 'notBal'
-			let prior = getCachedBuiltinArrayLiteralTypeName()
-			if not prior.isEmpty() and prior != currentTypeName 'duplicateImpl'
-				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "BuiltinArrayLiteral already implemented by '{prior}'; '{currentTypeName}' would overlap", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
-			end 'duplicateImpl' else 'firstImpl'
+			if getCachedBuiltinArrayLiteralTypeName().isEmpty() 'firstImpl'
 				setCachedBuiltinArrayLiteralTypeName(currentTypeName)
 			end 'firstImpl'
 		end 'discoverBal'
@@ -2868,8 +2876,11 @@ export type Parser
 
 		var returnType = MaxonReturnType.void
 		if accept(TokenKind.returns) 'hasReturn'
-			let typeToken = try consumeExpecting("type name")
-			returnType = MaxonReturnType.value(internMaxonType(project, name: typeToken.value))
+			// Use parseTypeRef so `Self` resolves through the enclosing
+			// interface's `currentTypeName` and so any same-named local
+			// typealias gets tracked for E3062 (unused) — both behaviors
+			// were missing when this site read a single token directly.
+			returnType = MaxonReturnType.value(try parseTypeRef())
 		end 'hasReturn'
 
 		let throwsName = try parseThrowsClause()
@@ -3733,7 +3744,7 @@ export type Parser
 	// name (from any arm) so we can resolve the scrutinee's enum type, the
 	// set of seen pattern keys (which includes covered case names), and the
 	// source position of the closing `end` for the diagnostic.
-	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, seenKeys ReferencedVarSet, errorLine ErrorLineNumber, errorColumn ErrorColumnNumber)
+	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
 		if not hasEnumArm 'noEnum'
 			return
 		end 'noEnum'
@@ -4588,6 +4599,14 @@ export type Parser
 			return
 		end 'badName'
 		checkReservedDeclName(nameToken)
+
+		// Track the declaration site so checkUnusedParameters can emit E3012
+		// against unused locals after the body is fully parsed. `_` is the
+		// discard convention and is skipped — the unused check treats it as
+		// always referenced.
+		if nameToken.value != "_" 'recordLocal'
+			localVarLocations.push(ParamLocation.create(nameToken.value, line: nameToken.line, column: nameToken.column))
+		end 'recordLocal'
 
 		try expect(TokenKind.equals)
 		currentBlock = block
@@ -6050,29 +6069,37 @@ export type Parser
 		if not cached.isEmpty() 'haveCached'
 			return cached
 		end 'haveCached'
-		var foundName = ""
-		var ambiguous = false
+		// Stdlib's `Array` is the canonical desugaring target — when it
+		// declares `implements BuiltinArrayLiteral`, return it directly so
+		// user types that also declare the conformance don't displace the
+		// stdlib entry. Falls back to the first conforming type otherwise.
+		if let arrayEntry = try project.unresolvedStructTypes.get("Array") 'arrayKnown'
+			if structDeclaresBuiltinArrayLiteral(arrayEntry) 'isBal'
+				setCachedBuiltinArrayLiteralTypeName("Array")
+				return "Array"
+			end 'isBal'
+		end 'arrayKnown'
+
 		for (typeName, entry) in project.unresolvedStructTypes 'scan'
-			for conf in entry.implementedInterfaces 'confLoop'
-				if conf.interfaceName != "BuiltinArrayLiteral" 'notMatch'
-					continue
-				end 'notMatch'
-				if foundName != "" and foundName != typeName 'duplicate'
-					ambiguous = true
-				end 'duplicate' else 'firstHit'
-					foundName = typeName
-				end 'firstHit'
-			end 'confLoop'
+			if structDeclaresBuiltinArrayLiteral(entry) 'isBal'
+				setCachedBuiltinArrayLiteralTypeName(typeName)
+				return typeName
+			end 'isBal'
 		end 'scan'
-		if ambiguous 'ambig'
-			throw BuiltinArrayLiteralError.unresolved
-		end 'ambig'
-		if foundName.isEmpty() 'noneFound'
-			throw BuiltinArrayLiteralError.unresolved
-		end 'noneFound'
-		setCachedBuiltinArrayLiteralTypeName(foundName)
-		return foundName
+		throw BuiltinArrayLiteralError.unresolved
 	end 'discoverBuiltinArrayLiteralType'
+
+	// True when an unresolved struct entry's `implementedInterfaces` list
+	// declares conformance to `BuiltinArrayLiteral`. Helper for the
+	// canonical-vs-fallback branches in `discoverBuiltinArrayLiteralType`.
+	function structDeclaresBuiltinArrayLiteral(entry UnresolvedStructType) returns bool
+		for conf in entry.implementedInterfaces 'eachConf'
+			if conf.interfaceName == "BuiltinArrayLiteral" 'isBal'
+				return true
+			end 'isBal'
+		end 'eachConf'
+		return false
+	end 'structDeclaresBuiltinArrayLiteral'
 
 	// Array literal in expression position. Desugars `[e0, e1, ..., eN]` via
 	// the BuiltinArrayLiteral protocol into:
@@ -6803,6 +6830,7 @@ export type Parser
 		currentBlock = module.addBlockAt(liftedFunc, label: "entry", filePath: filePath.toString(), firstLine: leftParenToken.line)
 		scope = Scope.create()
 		paramLocations = ParamLocationArray.create()
+		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
 		synthNameCounter = 0
 		inClosure = true
@@ -7313,33 +7341,47 @@ export type Parser
 		// scope to resolve captured slot ids long after parsing finished).
 		scope = Scope.create()
 		paramLocations = ParamLocationArray.create()
+		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
 		synthNameCounter = 0
 	end 'resetSymbolTable'
 
-	// Emit E3012 for the first parameter whose name never appeared on a read
-	// path in the body, matching the C# compiler's throw-on-first behavior.
-	// Reporting every unused parameter would add noise that isn't in the spec.
-	// `_` is the discard convention and is skipped. Local `var`/`let` bindings
-	// are not yet tracked in self-hosted.
-	function checkUnusedParameters(methodName String, isMethod bool)
-		// Phase 11.7: parameters of methods that satisfy an interface's
-		// required signature are dictated by the interface — silent on those
-		// names matches the C# bootstrap and the spec
-		// (interface-method-unused-param-allowed). Free functions and
-		// type-private methods still error.
-		if isMethod and isInterfaceRequiredMethod(methodName) 'skipIface'
-			return
-		end 'skipIface'
+	// Defer this function's unused-variable check (E3012) onto Project so
+	// SemanticCheck can run it after TypeResolution has reported any primary
+	// diagnostics for the same body. Parameters are pushed first, locals
+	// after — that order lets the consumer report parameters before locals
+	// (matching the C# bootstrap's first-issue-wins emission). `_` parameters
+	// are the discard convention and are filtered out at capture time.
+	//
+	// Phase 11.7: parameters of methods that satisfy an interface's required
+	// signature are dictated by the interface — record `skipParamCheck` so
+	// the consumer skips the param scan but still reports unused locals
+	// (interface-method-unused-param-allowed accepts unused params; the
+	// matching local-still-errors test still requires a local check).
+	function checkUnusedParameters(methodName String, isMethod bool, startLine LineNumber, endLine LineNumber)
+		let skipParamCheck = isMethod and isInterfaceRequiredMethod(methodName)
+		var candidates = UnusedCandidateArray.create()
 		for param in paramLocations 'eachParam'
 			if param.name == "_" 'isDiscard'
 				continue
 			end 'isDiscard'
-			if not referencedVars.contains(param.name) 'unused'
-				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{param.name}'", line: param.line, column: param.column, filePath: filePath)
-				return
-			end 'unused'
+			candidates.push(UnusedCandidate.create(param.name, line: param.line, column: param.column))
 		end 'eachParam'
+		let paramCount = candidates.count()
+		for local in localVarLocations 'eachLocal'
+			candidates.push(UnusedCandidate.create(local.name, line: local.line, column: local.column))
+		end 'eachLocal'
+
+		if candidates.count() == 0 'nothingToCheck'
+			return
+		end 'nothingToCheck'
+
+		var referenced = ReferencedNameSet.create()
+		for name in referencedVars 'eachRef'
+			referenced.insert(element: name)
+		end 'eachRef'
+
+		project.pendingUnusedChecks.push(PendingUnusedCheck.create(filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine))
 	end 'checkUnusedParameters'
 
 	// Phase 11.7: does the enclosing type's `implements` list (transitively
@@ -7927,10 +7969,10 @@ end 'TryFallbackOutcome'
 // an E3012 error back to the declaration site rather than the function header.
 type ParamLocation
 	export let name String
-	export let line ErrorLineNumber
-	export let column ErrorColumnNumber
+	export let line LineNumber
+	export let column ColumnNumber
 
-	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns ParamLocation
+	export static function create(name String, line LineNumber, column ColumnNumber) returns ParamLocation
 		return Self{name: name, line: line, column: column}
 	end 'create'
 end 'ParamLocation'
@@ -7944,10 +7986,10 @@ typealias ReferencedVarSet = Set with String
 // because cross-file uses aren't observable from a single Parser instance.
 type LocalTypealias
 	export let name String
-	export let line ErrorLineNumber
-	export let column ErrorColumnNumber
+	export let line LineNumber
+	export let column ColumnNumber
 
-	export static function create(name String, line ErrorLineNumber, column ErrorColumnNumber) returns LocalTypealias
+	export static function create(name String, line LineNumber, column ColumnNumber) returns LocalTypealias
 		return Self{name: name, line: line, column: column}
 	end 'create'
 end 'LocalTypealias'

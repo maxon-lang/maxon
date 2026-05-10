@@ -287,6 +287,16 @@ end 'PassPipeline'
 // Idempotent — re-stamping later passes' shape is safe.
 function runResolveTypesAndStamp(project Project, module MaxonModule, filePath FilePath)
 	runTypeResolution(project, module: module, filePath: filePath)
+	// Drain the parser's deferred E3012 (unused variable) checks here,
+	// at the tail of the resolveTypes pass, rather than from semanticCheck.
+	// resolveTypes emits primary diagnostics like E3009 (cast errors), and
+	// the per-pass error gate throws after this dispatch returns — moving
+	// the unused-var drain into semanticCheck would skip the check on any
+	// file with such an error. Anchoring it here keeps the
+	// "primary-error-suppresses-secondary" ordering the C# bootstrap relies
+	// on while still emitting E3012 for cleanly-resolved functions in
+	// otherwise-noisy files (the void-function-unused spec).
+	checkPendingUnusedVars(project)
 	stampFunctionContentHashes(project, module: module)
 end 'runResolveTypesAndStamp'
 

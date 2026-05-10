@@ -202,9 +202,15 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	return result
 end 'emitWasmPerFunction'
 
-// Compute which stdlib WASM functions are needed by analyzing user MIR call ops.
-function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
-	// Collect all callee names from user MIR
+// Compute which stdlib WASM functions are needed by analyzing user MIR call
+// ops AND every `funcAbs64InRdata` reloc target. The reloc seeds matter
+// because layout-copy / destroy / witness thunks aren't reached through a
+// direct `call` op — they're invoked indirectly through descriptors loaded
+// from rdata. Without seeding from relocs, those thunks would be missing
+// from the wasm function table and `patchFuncAbs64InRdataForWasm` would
+// trip the panic-on-miss check. Mirrors the native targets, which already
+// use `appendFuncAbs64Seeds` for the same reason at link time.
+function computeNeededWasmStdlibFunctions(module MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns StdlibFuncNameSet
 	var seeds = StringArray.create()
 
 	for func in module.functions 'eachFunc'
@@ -225,6 +231,8 @@ function computeNeededWasmStdlibFunctions(module MirModule, stdlibCache StdlibCa
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
+
+	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
 
 	return computeNeededStdlibFunctionsWasm(seeds, stdlibCache: stdlibCache)
 end 'computeNeededWasmStdlibFunctions'
@@ -281,6 +289,42 @@ end 'computeNeededStdlibFunctionsWasm'
 // Module assembly
 // ============================================================
 
+// Wasm twin of `patchFuncAbs64InRdata`. Every `funcAbs64InRdata` reloc
+// queued by `BuildLayoutDescriptors` and `BuildWitnessTables` names an
+// 8-byte slot in an rdata blob (a layout descriptor's copy/destroy slot or
+// a witness table's method slot). Native writers patch the slot with the
+// target function's absolute code VA; the wasm equivalent is the function-
+// table index that `call_indirect` consumes — both ends agree on the slot
+// offset, only the value differs. Without this patch the slots stay zero
+// on disk and any runtime dispatch loads zero, picking table[0] which
+// has the wrong signature and trips wasm's "indirect call type mismatch".
+//
+// `funcSigs.nameIndex` maps a function name to its position in the wasm
+// function table — `pushFunc` keeps the index in lockstep with `funcNames`
+// during the collect phase. `computeNeededWasmStdlibFunctions` seeds
+// reachability from these reloc targets, so by the time we patch, every
+// reloc target must already be in the table. `indexOf` throws on miss; we
+// translate that to a panic to mirror the native `lookupFuncCodeOffset`
+// contract.
+function patchFuncAbs64InRdataForWasm(globalData GlobalDataTable, funcSigs WasmFuncSigs)
+	for reloc in globalData.pendingRdataRelocs 'eachReloc'
+		match reloc.kind 'k'
+			ripRelDisp32 to covdataArm64Adr then break 'k'
+			funcAbs64InRdata(funcName, rdataLabel, offsetInLabel) then patchOneFuncAbs64InRdataWasm(globalData, funcName: funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel, funcSigs: funcSigs)
+		end 'k'
+	end 'eachReloc'
+end 'patchFuncAbs64InRdataForWasm'
+
+function patchOneFuncAbs64InRdataWasm(globalData GlobalDataTable, funcName String, rdataLabel String, offsetInLabel ByteOffset, funcSigs WasmFuncSigs)
+	let blobIdx = try globalData.nameIndex.get(rdataLabel) otherwise panic("patchOneFuncAbs64InRdataWasm: nameIndex missing rdata label '{rdataLabel}'")
+	let tableIdx = try funcSigs.indexOf(funcName) otherwise panic("patchOneFuncAbs64InRdataWasm: no function-table entry named '{funcName}' (BuildLayoutDescriptors / BuildWitnessTables emitted a reloc to a function not present in the wasm function table)")
+	// ByteArray is a heap-managed reference so `.get()` aliases the
+	// canonical bytes stored in `globalData.values` — `patchQword` mutates
+	// in place and no write-back is needed.
+	var blob = try globalData.values.get(blobIdx) otherwise panic("patchOneFuncAbs64InRdataWasm: values.get failed for blob '{rdataLabel}'")
+	patchQword(blob, offset: offsetInLabel, value: tableIdx as MachineWord)
+end 'patchOneFuncAbs64InRdataWasm'
+
 // Lay out the wasm linear-memory image of the global data table starting at
 // `baseOffset`. Each rdata entry (string literals, named globals) and each
 // data-section entry (top-level `var` and static-field globals) gets its
@@ -323,8 +367,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var funcCount = 0 as Wasm32Index
 	var funcSigs = WasmFuncSigs.create()
 
-	// Determine which stdlib WASM functions are needed (reachability from user calls)
-	let neededStdlib = computeNeededWasmStdlibFunctions(module, stdlibCache: stdlibCache)
+	// Determine which stdlib WASM functions are needed (reachability from
+	// user calls + funcAbs64InRdata reloc targets — see helper for why both
+	// matter on wasm).
+	let neededStdlib = computeNeededWasmStdlibFunctions(module, globalData: globalData, stdlibCache: stdlibCache)
 
 	// Walk module functions first, then needed stdlib functions, pushing
 	// each into both the parallel funcNames array and the funcSigs index
@@ -491,6 +537,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			addNamedGlobalData(globalData, name: gName, data: gData)
 		end 'notPresent'
 	end 'mergeStdlibData'
+
+	// Phase 11.3 (wasm): patch every `funcAbs64InRdata` reloc into its
+	// witness/layout rdata blob with the target function's wasm table index.
+	// Native targets store an absolute code VA in the same 8-byte slot; wasm
+	// has no addressable code section, so the slot holds the function-table
+	// index that `call_indirect` reads. Without this patch, the witness
+	// slots stay zero on disk and a runtime dispatch loads zero, making
+	// `call_indirect` trap with "indirect call type mismatch" against
+	// table[0]. Runs before `layoutWasmGlobalData` so the patched bytes
+	// land in the data segments verbatim.
+	patchFuncAbs64InRdataForWasm(globalData, funcSigs: funcSigs)
 
 	// --- Compute memory layout for global data and stack ---
 	// Global data lives immediately after the iovec scratch (1024..). Stack

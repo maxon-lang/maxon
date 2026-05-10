@@ -36,38 +36,36 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Buffer.read(rcx: i64) -> i64 {
+  func @Buffer.read(local0: i64) -> i64 {
   entry:
-    x64.mov r9, [rcx+0] (8b)
-    x64.mov r8, r9
-    x64.ret
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0
+    mir.ret %1
   }
-  func @Buffer.write(rcx: i64, rdx: i64) {
+  func @Buffer.write(local0: i64, local1: i64) {
   entry:
-    x64.mov [rcx+0], rdx (8b)
-    x64.ret
+    %5 = mir.param local0 : i64
+    %6 = mir.param local1 : i64
+    mir.store %6, %5, 0
+    mir.ret %4
   }
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8d, 8
-    x64.mov rcx, r8
-    x64.call mrt_alloc
-    x64.xor r9d, r9d
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9d, 42
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9, [r8+0] (8b)
-    x64.cmp r9, 125
-    x64.jbe __range_ok_1
+    %0 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %0, %8, 0
+    %3 = mir.mov_imm 42 : i64
+    mir.store %3, %8, 0
+    %9 = mir.load %8, 0
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_1(), else: __range_ok_1()]
   __range_panic_1:
-    x64.lea r8, [rip+__panic_msg_1]
-    x64.mov rcx, r8
-    x64.call mrt_panic
+    %12 = mir.global_addr @__panic_msg_1
+    %13 = mir.call @mrt_panic(%12)
   __range_ok_1:
-    x64.mov r8, r9
-    x64.epilogue
-    x64.ret
+    mir.ret %9
   }
 }
 ---

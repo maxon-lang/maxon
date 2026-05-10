@@ -64,18 +64,15 @@ export union ErrorCode
 	irInvalidFieldAccess = 4006
 end 'ErrorCode'
 
-export typealias ErrorLineNumber = int(0 to 1000000)
-export typealias ErrorColumnNumber = int(0 to 10000)
-
 // A single diagnostic (error) collected during compilation.
 export type Diagnostic
 	export let code ErrorCode
 	export let message String
-	export let line ErrorLineNumber
-	export let column ErrorColumnNumber
+	export let line LineNumber
+	export let column ColumnNumber
 	export let filePath FilePath
 
-	export static function create(code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns Diagnostic
+	export static function create(code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath) returns Diagnostic
 		return Self{code: code, message: message, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'Diagnostic'
@@ -101,7 +98,7 @@ export typealias DiagnosticArray = Array with Diagnostic
 // upstream stages have already complained. Tests that assert multiple
 // errors (e.g. `void-function-unused` with two independent semantic
 // problems) still work because they have no upstream error first.
-export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
+export function reportCompileError(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
 	let newIsSemantic = code.rawValue >= 3000 and code.rawValue < 4000
 	for d in project.diagnostics 'firstErrorGate'
 		let existingIsLexParser = d.code.rawValue >= 1000 and d.code.rawValue < 3000

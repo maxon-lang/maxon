@@ -30,64 +30,132 @@ end 'runSemanticChecks'
 
 // Phase 3b conformance check: walk every struct and enum, and for any with
 // expected method signatures (from a resolved `implements` clause), verify
-// the type declares a method matching each expected name. Methods are stored
-// in `project.funcReturnTypes` under the qualified name `{TypeName}.{method}`,
-// so existence reduces to a map lookup. Missing methods are aggregated per
-// type and reported in a single E3016 diagnostic mirroring the C# bootstrap's
-// shape.
-//
-// Signature equality (parameter types, return type, throws clause) is left
-// for a future pass — Phase 3b stops at name presence so the "missing
-// method(s)" diagnostic surfaces while the richer "wrong signature" form
-// (E3017 in the C# bootstrap) lands later.
+// the type declares a method matching each expected entry. Methods are stored
+// in `project.funcReturnTypes` / `project.funcSignatures` under the qualified
+// name `{TypeName}.{method}`. Missing methods produce one diagnostic shape;
+// wrong-signature methods (declared but with mismatched parameter or return
+// types) produce a second shape. Both are emitted as E3016 in a single
+// diagnostic per type, mirroring the C# bootstrap's behaviour.
 function checkInterfaceConformance(project Project)
 	for (_, st) in project.structTypes 'eachStruct'
 		if st.expectedMethods.count() == 0 'noExpect'
 			continue
 		end 'noExpect'
-		reportMissingMethods(project, typeName: st.name, expected: st.expectedMethods, line: st.nameLine, column: st.nameColumn, filePath: st.sourceFilePath)
+		checkConformanceForType(project, typeName: st.name, expected: st.expectedMethods, line: st.nameLine, column: st.nameColumn, filePath: st.sourceFilePath)
 	end 'eachStruct'
 
 	for (_, et) in project.enumTypes 'eachEnum'
 		if et.expectedMethods.count() == 0 'noExpect'
 			continue
 		end 'noExpect'
-		reportMissingMethods(project, typeName: et.name, expected: et.expectedMethods, line: et.nameLine, column: et.nameColumn, filePath: et.sourceFilePath)
+		checkConformanceForType(project, typeName: et.name, expected: et.expectedMethods, line: et.nameLine, column: et.nameColumn, filePath: et.sourceFilePath)
 	end 'eachEnum'
 end 'checkInterfaceConformance'
 
-// Phase 11.7: heuristic for whether a declaring file lives under the stdlib
-// tree. The signature-mismatch arm of E3016 is suppressed for stdlib-declared
-// types — it's not yet clever enough to follow Self / typealias / extends
-// chains and can false-positive on otherwise valid stdlib conformances. User
-// types still get full mismatch detection.
-function isStdlibFilePath(p FilePath) returns bool
-	let s = p.toString()
-	return s.contains("stdlib")
-end 'isStdlibFilePath'
-
-// Compare each expected signature's name against the type's declared
-// methods. Existence is checked via `project.funcReturnTypes.contains` since
-// the parser registers every method there under `{TypeName}.{methodName}`.
-// Builds a list of formatted missing signatures and emits E3016 once when
-// the list is non-empty.
-//
-function reportMissingMethods(project Project, typeName String, expected InterfaceMethodSigArray, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
+// Compare each expected signature against the type's declared methods.
+// Existence is checked via `project.funcReturnTypes.contains` since the parser
+// registers every method there under `{TypeName}.{methodName}`. Methods that
+// exist are compared for parameter and return type compatibility against the
+// interface's expected signature; mismatches produce the "wrong signature"
+// arm of E3016. The "missing method(s)" arm wins over the "wrong signature"
+// arm when both are non-empty so the user sees the more fundamental gap
+// first, matching the C# bootstrap's diagnostic ordering.
+function checkConformanceForType(project Project, typeName String, expected InterfaceMethodSigArray, line LineNumber, column ColumnNumber, filePath FilePath)
 	var missing = StringArray.create()
+	var wrongSig = StringArray.create()
 	for sig in expected 'eachExpected'
 		let qualified = "{typeName}.{sig.name}"
 		if not project.funcReturnTypes.contains(qualified) 'absent'
 			missing.push(formatMethodSig(project, sig: sig))
 			continue
 		end 'absent'
+		// Static interface methods are validated by the compiler directly; no
+		// runtime witness is dispatched against them, so a signature-shape
+		// mismatch can't cause a call-site type confusion. Skip them here to
+		// match the C# bootstrap's `if (method.IsStatic) ... continue` branch.
+		if sig.isStatic 'isStatic'
+			continue
+		end 'isStatic'
+		let actualReturn = try project.funcReturnTypes.get(qualified) otherwise panic("checkConformanceForType: funcReturnTypes.get '{qualified}' missing despite contains")
+		let actualSig = try project.funcSignatures.get(qualified) otherwise panic("checkConformanceForType: funcSignatures.get '{qualified}' missing despite contains")
+		if not signatureMatches(sig, actualParamNames: actualSig.paramNames, actualParamTypes: actualSig.paramTypes, actualReturn: actualReturn) 'mismatch'
+			let actualFormatted = formatActualSignature(project, methodName: sig.name, paramNames: actualSig.paramNames, paramTypes: actualSig.paramTypes, returnType: actualReturn)
+			wrongSig.push("{actualFormatted} (expected {formatMethodSig(project, sig: sig)})")
+		end 'mismatch'
 	end 'eachExpected'
 
-	if missing.count() == 0 'allOk'
+	if missing.count() > 0 'missingFirst'
+		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildMissingMessage(typeName, missing: missing), line: line, column: column, filePath: filePath)
 		return
-	end 'allOk'
+	end 'missingFirst'
 
-	reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildMissingMessage(typeName, missing: missing), line: line, column: column, filePath: filePath)
-end 'reportMissingMethods'
+	if wrongSig.count() > 0 'mismatchOnly'
+		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildWrongSignatureMessage(typeName, wrongSig: wrongSig), line: line, column: column, filePath: filePath)
+	end 'mismatchOnly'
+end 'checkConformanceForType'
+
+// Compare an expected interface signature against an actual implementation's
+// param names, param types, and return type. The actual paramTypes carry an
+// implicit leading `__self` for instance methods; we skip it before the
+// element-wise compare since the interface signature never names self. Param
+// names are compared too because Maxon's named-argument calling convention
+// makes the parameter name part of the public contract — interface implementers
+// must keep the names the same as the interface or call sites that go through
+// the interface will fail to bind.
+function signatureMatches(expected InterfaceMethodSig, actualParamNames StringArray, actualParamTypes MaxonTypeArray, actualReturn MaxonReturnType) returns bool
+	let skipSelf = 1 if actualParamNames.count() > 0 and (try actualParamNames.get(0) otherwise "") == "__self" else 0
+	let actualUserCount = actualParamNames.count() - skipSelf
+	if actualUserCount != expected.paramTypes.count() 'arity'
+		return false
+	end 'arity'
+	for i in 0 upto expected.paramTypes.count() 'each'
+		let expName = try expected.paramNames.get(i) otherwise panic("signatureMatches: expected.paramNames.get OOB at {i}")
+		let expType = try expected.paramTypes.get(i) otherwise panic("signatureMatches: expected.paramTypes.get OOB at {i}")
+		let actName = try actualParamNames.get(i + skipSelf) otherwise panic("signatureMatches: actualParamNames.get OOB at {i}")
+		let actType = try actualParamTypes.get(i + skipSelf) otherwise panic("signatureMatches: actualParamTypes.get OOB at {i}")
+		if expName != actName 'nameMismatch'
+			return false
+		end 'nameMismatch'
+		if not maxonTypesStructurallyEqual(expType, b: actType) 'typeMismatch'
+			return false
+		end 'typeMismatch'
+	end 'each'
+	return maxonReturnTypesStructurallyEqual(expected.returnType, b: actualReturn)
+end 'signatureMatches'
+
+// Render a `(p1 T1, p2 T2)` parameter list, skipping the first `startIndex`
+// slots. The actual-signature path passes startIndex=1 to elide the implicit
+// `__self` slot instance methods carry; the interface side passes 0.
+function formatParamList(project Project, paramNames StringArray, paramTypes MaxonTypeArray, startIndex MachineWord) returns String
+	var paramList = ""
+	for i in startIndex upto paramNames.count() 'eachParam'
+		if i > startIndex 'sep'
+			paramList.append(", ")
+		end 'sep'
+		let pname = try paramNames.get(i) otherwise panic("formatParamList: paramNames.get OOB at {i}")
+		let ptype = try paramTypes.get(i) otherwise panic("formatParamList: paramTypes.get OOB at {i}")
+		paramList.append("{pname} {ptype.toString(project)}")
+	end 'eachParam'
+	return paramList
+end 'formatParamList'
+
+// Render the trailing ` returns T` clause (or ` returns void`).
+function formatReturnPart(project Project, returnType MaxonReturnType) returns String
+	return match returnType 'ret'
+		void gives " returns void"
+		value(inner) gives " returns {inner.toString(project)}"
+	end 'ret'
+end 'formatReturnPart'
+
+// Render a function's actual signature in the same shape as `formatMethodSig`
+// produces for the interface's expected entry. Skips a leading `__self` slot
+// so instance methods print as `name(p1 T1, p2 T2) returns R` without leaking
+// the implicit self parameter into user-facing diagnostics.
+function formatActualSignature(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType) returns String
+	let skipSelf = 1 if paramNames.count() > 0 and (try paramNames.get(0) otherwise "") == "__self" else 0
+	let paramList = formatParamList(project, paramNames: paramNames, paramTypes: paramTypes, startIndex: skipSelf)
+	return "{methodName}({paramList}){formatReturnPart(project, returnType: returnType)}"
+end 'formatActualSignature'
 
 // Render an InterfaceMethodSig as a one-line declaration string in the
 // shape the C# bootstrap emits:
@@ -98,28 +166,12 @@ end 'reportMissingMethods'
 // ` returns void` to match the C# bootstrap's `FormatResolved`. A
 // non-throwing method omits the `throws` clause.
 function formatMethodSig(project Project, sig InterfaceMethodSig) returns String
-	var paramList = ""
-	let paramCount = sig.paramTypes.count()
-	for i in 0 upto paramCount 'eachParam'
-		if i > 0 'sep'
-			paramList.append(", ")
-		end 'sep'
-		let pname = try sig.paramNames.get(i) otherwise panic("formatMethodSig: paramNames.get OOB at {i}")
-		let ptype = try sig.paramTypes.get(i) otherwise panic("formatMethodSig: paramTypes.get OOB at {i}")
-		paramList.append("{pname} {ptype.toString(project)}")
-	end 'eachParam'
-
-	let returnPart = match sig.returnType 'ret'
-		void gives " returns void"
-		value(inner) gives " returns {inner.toString(project)}"
-	end 'ret'
-
+	let paramList = formatParamList(project, paramNames: sig.paramNames, paramTypes: sig.paramTypes, startIndex: 0)
 	let throwsPart = match sig.throwsTypeName 'fmt'
 		none gives ""
 		throwing(n) gives " throws {n}"
 	end 'fmt'
-
-	return "{sig.name}({paramList}){returnPart}{throwsPart}"
+	return "{sig.name}({paramList}){formatReturnPart(project, returnType: sig.returnType)}{throwsPart}"
 end 'formatMethodSig'
 
 // Compose the full E3016 diagnostic body. Each missing entry sits on its own
@@ -132,6 +184,75 @@ function buildMissingMessage(typeName String, missing StringArray) returns Strin
 	end 'eachMissing'
 	return msg
 end 'buildMissingMessage'
+
+// Compose the wrong-signature E3016 body. Same indentation shape as
+// `buildMissingMessage` so test scrapers and downstream parsers handle the
+// two arms uniformly.
+function buildWrongSignatureMessage(typeName String, wrongSig StringArray) returns String
+	var msg = "Partial interface implementation: type '{typeName}' has {wrongSig.count()} method(s) with wrong signature:"
+	for entry in wrongSig 'eachWrong'
+		msg.append("\n  - {entry}")
+	end 'eachWrong'
+	return msg
+end 'buildWrongSignatureMessage'
+
+// Drain the parser's deferred E3012 candidates. For each candidate function:
+//   1. If a prior diagnostic landed inside this function's source range,
+//      skip the entry — the C# bootstrap throws on the first error it sees,
+//      so a primary error inside a body suppresses any secondary unused-var
+//      diagnostic for the same body. Other functions in the same file (e.g.
+//      a clean `doNothing` next to a noisy `main`) still report normally.
+//   2. Otherwise, walk the parameter slots first (when not suppressed by
+//      `skipParamCheck`), then the local slots, and emit one E3012 against
+//      the first unreferenced name encountered. Reporting every unused
+//      candidate would add noise that isn't in the spec; the bootstrap
+//      throws on the first.
+export function checkPendingUnusedVars(project Project)
+	for entry in project.pendingUnusedChecks 'eachEntry'
+		if functionHasPriorDiagnostic(project, entry: entry) 'skipFn'
+			continue
+		end 'skipFn'
+
+		let startIndex = entry.paramCount if entry.skipParamCheck else 0
+		let endIndex = entry.candidates.count()
+		var i = startIndex
+		while i < endIndex 'scan'
+			let candidate = try entry.candidates.get(i) otherwise panic("checkPendingUnusedVars: candidates.get OOB at {i}")
+			if not entry.referenced.contains(candidate.name) 'unused'
+				reportCompileError(project, code: ErrorCode.semanticUnusedVariable, message: "unused variable: '{candidate.name}'", line: candidate.line, column: candidate.column, filePath: entry.filePath)
+				break
+			end 'unused'
+			i = i + 1
+		end 'scan'
+	end 'eachEntry'
+end 'checkPendingUnusedVars'
+
+// True when `project.diagnostics` carries any entry whose filePath matches
+// the pending entry's path AND whose line falls within the entry's source
+// range. Used to short-circuit the deferred unused-variable check on a per-
+// function basis: a clean function in a file that contains a noisy one
+// still emits its E3012, while the noisy function's own unused names get
+// suppressed as cascade noise.
+//
+// Diagnostics with `line == 0` are file-scoped (e.g. TypeResolution's cast
+// validator anchors at file level); they're treated as "in every body" so
+// we don't emit a stray E3012 in a function whose body contains the actual
+// cast — line/column zero is the only signal we have at this layer.
+function functionHasPriorDiagnostic(project Project, entry PendingUnusedCheck) returns bool
+	let myPath = entry.filePath.toString()
+	for d in project.diagnostics 'eachDiag'
+		if d.filePath.toString() != myPath 'differentFile'
+			continue
+		end 'differentFile'
+		if d.line == 0 'fileScoped'
+			return true
+		end 'fileScoped'
+		if d.line >= entry.startLine and d.line <= entry.endLine 'insideRange'
+			return true
+		end 'insideRange'
+	end 'eachDiag'
+	return false
+end 'functionHasPriorDiagnostic'
 
 // Phase 4e error-handling rules.
 // Walks every function in the module and checks:

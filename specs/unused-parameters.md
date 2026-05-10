@@ -1,6 +1,6 @@
 ---
 feature: unused-parameters
-status: stable
+status: selfhosted
 keywords: [parameters, warnings, errors, unused]
 category: diagnostics
 ---
@@ -131,8 +131,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/void-function-unused.test:5:20: unused variable: 'x'
 error E3005: specs/fragments/unused-parameters/void-function-unused.test:10:2: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3012: specs/fragments/unused-parameters/void-function-unused.test:5:20: unused variable: 'x'
 ```
 
 <!-- test: method-on-non-conforming-type-still-errors -->

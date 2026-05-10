@@ -79,7 +79,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 21
+let CACHE_FORMAT_VERSION = 22
 
 // ============================================================
 // Types
@@ -396,8 +396,8 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	buf.reserve(4096)
 	try encodeStdlibCacheBody(project, buf: buf, data: data, target: target, contentChecksum: contentChecksum) otherwise(e) 'corrupt'
 		match e 'kind'
-			absent then logInfo(LogCategory.compiler, message: () gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
-			invalidEncoding then logInfo(LogCategory.compiler, message: () gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
+			absent then logError(LogCategory.compiler, message: () gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
+			invalidEncoding then logError(LogCategory.compiler, message: () gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
 		end 'kind'
 		return
 	end 'corrupt'
@@ -409,7 +409,7 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	end 'hasParent'
 
 	try File.writeBinary(path, content: buf) otherwise 'writeErr'
-		logInfo(LogCategory.compiler, message: () gives "Failed to write stdlib cache to {path}")
+		logError(LogCategory.compiler, message: () gives "Failed to write stdlib cache to {path}")
 	end 'writeErr'
 end 'writeStdlibCache'
 
@@ -1748,6 +1748,35 @@ function readFilePath(buf ByteArray, offset ByteOffset) returns (FilePath, ByteO
 	let path = try FilePath.from(s) otherwise FilePath from ""
 	return (path, p)
 end 'readFilePath'
+
+// Optional-string codec where the `absent` tag restores to "". Used for
+// fields that synthesized functions leave empty (`namespace`,
+// `sourceFilePath`) — the mandatory codec would throw
+// `CacheCorruption.invalidEncoding` on the empty payload.
+function writeOptionalStringDefaultEmpty(buf ByteArray, value String) throws CacheCorruption
+	try writeOptionalString(buf, present: not value.isEmpty(), value: value)
+end 'writeOptionalStringDefaultEmpty'
+
+function readOptionalStringDefaultEmpty(buf ByteArray, offset ByteOffset) returns (String, ByteOffset) throws CacheCorruption
+	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+		match e 'kind'
+			absent then return ("", offset + 1)
+			invalidEncoding then throw CacheCorruption.invalidEncoding
+		end 'kind'
+	end 'pickArm'
+	return result
+end 'readOptionalStringDefaultEmpty'
+
+// FilePath wrapper around the empty-default optional-string codec.
+function writeOptionalFilePath(buf ByteArray, p FilePath) throws CacheCorruption
+	try writeOptionalStringDefaultEmpty(buf, value: p.toString())
+end 'writeOptionalFilePath'
+
+function readOptionalFilePath(buf ByteArray, offset ByteOffset) returns (FilePath, ByteOffset) throws CacheCorruption
+	let (s, nextPos) = try readOptionalStringDefaultEmpty(buf, offset: offset)
+	let path = try FilePath.from(s) otherwise FilePath from ""
+	return (path, nextPos)
+end 'readOptionalFilePath'
 
 // --- StringArray ---
 
@@ -3163,9 +3192,14 @@ end 'readIrBlock'
 
 function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorruption
 	try writeString(buf, s: func.name)
-	try writeString(buf, s: func.namespace)
+	// Synthesized functions (e.g. `__layout_copy_*`, `__destruct_*`) leave
+	// `namespace` and `sourceFilePath` empty — route both through the
+	// optional-string codec rather than the mandatory writeString,
+	// otherwise the cache write throws CacheCorruption.invalidEncoding
+	// and the persistence is silently skipped at every clean build.
+	try writeOptionalStringDefaultEmpty(buf, value: func.namespace)
 	writeVisibility(buf, v: func.visibility)
-	try writeFilePath(buf, p: func.sourceFilePath)
+	try writeOptionalFilePath(buf, p: func.sourceFilePath)
 	writeDword(buf, value: func.paramCount)
 	writeStdReturnType(buf, rt: func.returnType)
 	writeStdTypeArrayCodec(buf, arr: func.paramTypes)
@@ -3180,12 +3214,14 @@ end 'writeStdIrFunction'
 
 function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset) throws CacheCorruption
 	let (name, p1) = try readString(buf, offset: offset)
-	var pos = p1
-	let (namespace, p2) = try readString(buf, offset: pos)
-	pos = p2
+	// `namespace` round-trips through the optional-string codec because
+	// synthesized functions (e.g. `__layout_copy_*`) leave it empty — see
+	// the matching writer for the rationale.
+	let (namespace, p2) = try readOptionalStringDefaultEmpty(buf, offset: p1)
+	var pos = p2
 	let (visibility, p3) = try readVisibility(buf, offset: pos)
 	pos = p3
-	let (sourceFilePath, p4) = try readFilePath(buf, offset: pos)
+	let (sourceFilePath, p4) = try readOptionalFilePath(buf, offset: pos)
 	pos = p4
 	let paramCount = readDword(buf, offset: pos)
 	pos = pos + 4

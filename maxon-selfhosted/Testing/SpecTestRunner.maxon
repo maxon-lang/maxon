@@ -56,7 +56,7 @@ let whitelist = ["basics",
 	"static-variables",
 	// "vector", — needs sized `Vector with N` type
 	"bitwise-operators",
-	// "interface-conformance", — disabled: Phase 11.x in-progress failures
+	"interface-conformance",
 	// "interfaces", — disabled: Phase 11.x in-progress failures
 	"equatable",
 	"primitive-stringable",
@@ -1411,6 +1411,37 @@ end 'runSpecBatchWorker'
 let workerSingleFailMarker = "WORKER_SINGLE_FAIL:"
 let workerSingleResultMarker = "WORKER_SINGLE_RESULT:"
 
+// True if the worker's stderr looks like a runtime panic from the compiler
+// itself (not a test fragment's panic — those are captured into the per-test
+// .err file, not the worker's own stderr). The runtime emits panics in a fixed
+// format: a `panic at <file>:<line>: <msg>` line followed by `Stack trace:`
+// and one `  in <funcName>` per frame. Detecting both anchors avoids false
+// positives from logs that incidentally contain the word "panic".
+function workerStderrIsCompilerPanic(stderr String) returns bool
+	if stderr.isEmpty() 'empty'
+		return false
+	end 'empty'
+	if not stderr.contains("panic at ") 'noPanicAt'
+		return false
+	end 'noPanicAt'
+	return stderr.contains("\nStack trace:")
+end 'workerStderrIsCompilerPanic'
+
+// Abort the parent runner immediately with the worker's panic output. Called
+// when a worker subprocess panicked during compilation: re-running the same
+// fragment in a fresh subprocess would just re-panic, so further retries waste
+// minutes. Print the worker's stderr verbatim (it already includes the panic
+// message and stack trace) and panic the parent with a one-line summary so
+// the test run aborts with a non-zero exit code.
+function abortOnWorkerCompilerPanic(workerLabel String, stderr String)
+	printError("\n=== Compiler panic in worker ({workerLabel}) — aborting test run ===\n")
+	printError(stderr)
+	if not stderr.endsWith("\n") 'noTrailingNl'
+		printError("\n")
+	end 'noTrailingNl'
+	panic("Compiler panicked while running spec tests; see stderr above")
+end 'abortOnWorkerCompilerPanic'
+
 // Emit one WORKER_SINGLE_RESULT summary line for a spec.
 // Format: WORKER_SINGLE_RESULT:{specName}:{passed}:{failed}:compileMs:{ms}
 function emitWorkerSinglesResult(specName String, passed TestCount, failed TestCount, compileMs Millis)
@@ -1751,6 +1782,11 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 		let stdoutStr = Process.captureStdout(h.handle)
 		let stderrStr = Process.captureStderr(h.handle)
 		_ = Process.captureWait(h.handle, timeoutMs: 0)
+		// Abort if the worker panicked — see batch/singles drain sites for
+		// rationale.
+		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
+			abortOnWorkerCompilerPanic("fallback [{h.specNames}]", stderr: stderrStr)
+		end 'panicked'
 		if not stderrStr.isEmpty() 'hasStderr'
 			printError(stderrStr)
 		end 'hasStderr'
@@ -1883,6 +1919,11 @@ function retryFallbackTestsIndividually(specName String, tests SpecTestArray, ex
 		let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: "", verbose: verbose)
 		let (captureOut, captureErr) = captureFilePaths(fragmentDir, stem: "retry-{specName}-{t.name}")
 		let pr = Process.captureOutput(cmd, stdoutPath: captureOut, stderrPath: captureErr, timeoutMs: 0)
+		// A panic during the per-test retry means the compiler is broken for
+		// this test — looping over the rest will just waste time re-panicking.
+		if workerStderrIsCompilerPanic(pr.stderr) 'panicked'
+			abortOnWorkerCompilerPanic("retry [{specName}/{t.name}]", stderr: pr.stderr)
+		end 'panicked'
 		if not pr.stderr.isEmpty() 'hasStderr'
 			printError(pr.stderr)
 		end 'hasStderr'
@@ -2078,6 +2119,12 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 		let stdoutStr = Process.captureStdout(h.handle)
 		let stderrStr = Process.captureStderr(h.handle)
 		_ = Process.captureWait(h.handle, timeoutMs: 0)
+		// Abort early on a compiler panic. Per-test retry of a deterministic
+		// panic just compounds the wait — fail fast so the user sees the
+		// panic now instead of after every other worker has also drained.
+		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
+			abortOnWorkerCompilerPanic("singles [{h.specNames}]", stderr: stderrStr)
+		end 'panicked'
 		outcomes.push(SinglesWorkerOutcome.create(h.specNames, stdout: stdoutStr, stderr: stderrStr))
 	end 'collectHandles'
 
@@ -2590,6 +2637,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		let stderr = Process.captureStderr(worker.handle)
 		_ = Process.captureWait(worker.handle, timeoutMs: 0)
 		markPhase("batch drained worker [{worker.specNames}] stdoutLen={stdout.count()} stderrLen={stderr.count()}")
+
+		// A compiler panic in any batch worker means re-running its tests in
+		// new subprocesses would just re-panic; abort the whole run now so the
+		// user sees the panic immediately rather than waiting for fallback
+		// retries to grind through one process per test.
+		if workerStderrIsCompilerPanic(stderr) 'panicked'
+			abortOnWorkerCompilerPanic("batch [{worker.specNames}]", stderr: stderr)
+		end 'panicked'
 
 		// Forward the worker's log output to our stderr.
 		if not stderr.isEmpty() 'hasWorkerStderr'

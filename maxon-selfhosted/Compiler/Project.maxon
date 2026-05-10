@@ -446,6 +446,16 @@ export type Project
 	// triple — an E3017 is emitted per failing constraint.
 	export var pendingConstraintChecks PendingConstraintCheckArray
 
+	// Deferred unused-variable checks (E3012). The parser pushes one entry
+	// per function — capturing parameter and local declarations seen in the
+	// body — but doesn't run the actual check at parse time, since later
+	// passes (TypeResolution's E3009 cast-error path, primarily) may emit
+	// errors for the same body that would otherwise be obscured by a
+	// premature E3012. SemanticCheck drains this list and emits one E3012
+	// per function, skipping any function whose source file already carries
+	// a diagnostic.
+	export var pendingUnusedChecks PendingUnusedCheckArray
+
 	// Stage B (closures): hand out the next unique `_$closure_<N>` suffix
 	// and bump the counter. Called by the parser at every closure
 	// expression to keep lifted-function names disjoint.
@@ -507,7 +517,8 @@ export type Project
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
-			pendingConstraintChecks: PendingConstraintCheckArray.create()
+			pendingConstraintChecks: PendingConstraintCheckArray.create(),
+			pendingUnusedChecks: PendingUnusedCheckArray.create()
 		}
 	end 'create'
 end 'Project'
@@ -518,6 +529,56 @@ end 'Project'
 // `emitCallWithArgs` needs to decide how many synthetic args to append at a
 // call site.
 export typealias GenericFunctionImplicitArityMap = Map with(String, ParsedInt)
+
+// One name + declaration site to test for unread-ness. Captured by the
+// parser at every parameter and local declaration site; consumed by
+// SemanticCheck's deferred unused-var pass.
+export type UnusedCandidate
+	export let name String
+	export let line LineNumber
+	export let column ColumnNumber
+
+	export static function create(name String, line LineNumber, column ColumnNumber) returns UnusedCandidate
+		return Self{name: name, line: line, column: column}
+	end 'create'
+end 'UnusedCandidate'
+
+export typealias UnusedCandidateArray = Array with UnusedCandidate
+
+// One deferred unused-variable check: the parser captures every parameter
+// and local declaration in a function body along with the names referenced
+// from it, then defers the actual cross-check to SemanticCheck. Deferring
+// avoids false-positive E3012 emissions when a later pass (TypeResolution,
+// most often via a cast error) reports a primary diagnostic that the C#
+// bootstrap would have thrown on before reaching its unused-var pass.
+//
+// `skipParamCheck` is true when the function is an interface-required
+// method — the parameter names are dictated by the interface and silently
+// unused params are valid for stub implementations. Local-var detection
+// still runs in that case.
+//
+// `startLine`/`endLine` describe the source range covered by this function
+// body so the consumer can decide on a per-function basis whether a primary
+// diagnostic landed inside the same body — files that hold both clean and
+// erroneous functions (e.g. spec `unused-parameters/void-function-unused`)
+// must still emit E3012 for the clean function while suppressing the noisy
+// secondary diagnostic for the dirty one.
+export type PendingUnusedCheck
+	export let filePath FilePath
+	export let candidates UnusedCandidateArray
+	export let referenced ReferencedNameSet
+	export let skipParamCheck bool
+	export let paramCount ParsedInt
+	export let startLine LineNumber
+	export let endLine LineNumber
+
+	export static function create(filePath FilePath, candidates UnusedCandidateArray, referenced ReferencedNameSet, skipParamCheck bool, paramCount ParsedInt, startLine LineNumber, endLine LineNumber) returns PendingUnusedCheck
+		return Self{filePath: filePath, candidates: candidates, referenced: referenced, skipParamCheck: skipParamCheck, paramCount: paramCount, startLine: startLine, endLine: endLine}
+	end 'create'
+end 'PendingUnusedCheck'
+
+export typealias PendingUnusedCheckArray = Array with PendingUnusedCheck
+export typealias ReferencedNameSet = Set with String
 
 // Structural description of an array literal, recorded by the parser and
 // consumed by TypeResolution. Carries only IR-shape information — no
@@ -569,11 +630,11 @@ export typealias ArrayLiteralProducerMap = Map with(String, ArrayLiteralProducer
 export type PendingConstraintCheck
 	export var name String
 	export var expr UnresolvedTypeExpr
-	export var declLine ErrorLineNumber
-	export var declColumn ErrorColumnNumber
+	export var declLine LineNumber
+	export var declColumn ColumnNumber
 	export var declFilePath FilePath
 
-	export static function create(name String, expr UnresolvedTypeExpr, declLine ErrorLineNumber, declColumn ErrorColumnNumber, declFilePath FilePath) returns PendingConstraintCheck
+	export static function create(name String, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath) returns PendingConstraintCheck
 		return Self{name: name, expr: expr, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath}
 	end 'create'
 end 'PendingConstraintCheck'
@@ -1433,11 +1494,11 @@ export type UnresolvedTypealias
 	export var visibility Visibility
 	// Parse-time source location; carried so resolver-emitted diagnostics
 	// (cycle, unknown-name) can point back at the original declaration.
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, expr UnresolvedTypeExpr, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTypealias
+	export static function create(name String, expr UnresolvedTypeExpr, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedTypealias
 		return Self{name: name, expr: expr, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedTypealias'
@@ -1472,8 +1533,8 @@ export type UnresolvedStructType
 	// TypeResolution's named-type visibility walk.
 	export var visibility Visibility
 	// Source location of the `type Name` token, for duplicate-type diagnostics.
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 	export var filePath FilePath
 	// Phase 1b: the parsed `implements I1, I2 with X, ...` clause, captured
 	// as bare interface and type-parameter names. Empty when no clause was
@@ -1497,7 +1558,7 @@ export type UnresolvedStructType
 	// substitution; for now they are recorded only.
 	export var innerAliases InnerAliasMap
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, typeParams StringArray, whereClauses WhereClauseArray, innerAliases InnerAliasMap) returns UnresolvedStructType
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, typeParams StringArray, whereClauses WhereClauseArray, innerAliases InnerAliasMap) returns UnresolvedStructType
 		return Self{name: name, fields: fields, byteSize: byteSize, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, typeParams: typeParams, whereClauses: whereClauses, innerAliases: innerAliases}
 	end 'create'
 end 'UnresolvedStructType'
@@ -1534,11 +1595,11 @@ export type UnresolvedExtension
 	export var visibility Visibility
 	// Source location of the target-type token, for any future
 	// per-extension diagnostic.
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 	export var filePath FilePath
 
-	export static function create(targetTypeName String, targetTypeParams StringArray, addedConformances ConformanceArray, whereClauses WhereClauseArray, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedExtension
+	export static function create(targetTypeName String, targetTypeParams StringArray, addedConformances ConformanceArray, whereClauses WhereClauseArray, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedExtension
 		return Self{targetTypeName: targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedExtension'
@@ -1719,11 +1780,11 @@ export type UnresolvedTopLevelDecl
 	// Parse-time source location for resolver-emitted diagnostics (cycle,
 	// unknown-name). `filePath` doubles as the visibility anchor —
 	// visibility lookups compare against this.
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 	export var filePath FilePath
 
-	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
+	export static function create(name String, rootExprId UnresolvedConstExprId, mutable bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedTopLevelDecl
 		return Self{name: name, rootExprId: rootExprId, mutable: mutable, visibility: visibility, line: line, column: column, filePath: filePath}
 	end 'create'
 end 'UnresolvedTopLevelDecl'
@@ -1952,8 +2013,8 @@ export type StructType
 	// declaration rather than the file root. Stdlib-cached struct types
 	// land at (0, 0) — they never carry an `implements` clause, so the
 	// conformance check never reads these fields for them.
-	export var nameLine ErrorLineNumber
-	export var nameColumn ErrorColumnNumber
+	export var nameLine LineNumber
+	export var nameColumn ColumnNumber
 	// Phase 3a: the method signatures the type is required to provide,
 	// derived from `implementedInterfaces` with each interface's
 	// type-parameter names (`Element`, `Iter`, ...) substituted by the
@@ -1970,7 +2031,7 @@ export type StructType
 	// instance the parser captured.
 	export var innerAliases ResolvedInnerAliasMap
 
-	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray, innerAliases ResolvedInnerAliasMap) returns StructType
+	export static function create(name String, fields StructFieldArray, byteSize FieldOffset, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, innerAliases ResolvedInnerAliasMap) returns StructType
 		var fieldByName = FieldNameIndexMap.create()
 		for i in 0 upto fields.count() 'buildIndex'
 			let field = try fields.get(i) otherwise panic("StructType.create: fields.get OOB at {i} (count={fields.count()})")
@@ -1999,10 +2060,10 @@ export type EnumCase
 	export var name String
 	export var ordinal CaseOrdinal
 	export var rawValue IntConstant
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 
-	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line ErrorLineNumber, column ErrorColumnNumber) returns EnumCase
+	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber) returns EnumCase
 		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column}
 	end 'create'
 end 'EnumCase'
@@ -2026,15 +2087,15 @@ export type EnumType
 	// / `nameColumn` — Phase 3b's E3016 anchors at the enum decl when an
 	// enum's conformance check fails. Stdlib-cached enums land at (0, 0)
 	// because they never carry an `implements` clause.
-	export var nameLine ErrorLineNumber
-	export var nameColumn ErrorColumnNumber
+	export var nameLine LineNumber
+	export var nameColumn ColumnNumber
 	// Phase 3a: substituted method signatures from the enum's
 	// `implements` clause. Mirrors `StructType.expectedMethods`. Enums
 	// can declare regular `function` members in their body, so the
 	// conformance check in Phase 3b is identical to structs.
 	export var expectedMethods InterfaceMethodSigArray
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine ErrorLineNumber, nameColumn ErrorColumnNumber, expectedMethods InterfaceMethodSigArray) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
@@ -2055,15 +2116,15 @@ export type UnresolvedEnumType
 	// the parser registers for the enum's name. The pre-register entry
 	// (created before the body is walked) reuses this when patched.
 	export var visibility Visibility
-	export var line ErrorLineNumber
-	export var column ErrorColumnNumber
+	export var line LineNumber
+	export var column ColumnNumber
 	export var filePath FilePath
 	// Phase 1b: the parsed `implements I1, I2, ...` clause, captured as
 	// bare interface and type-parameter names. Empty when no clause was
 	// present. Phase 3 will validate conformance — currently metadata only.
 	export var implementedInterfaces ConformanceArray
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedEnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedEnumType
 		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces}
 	end 'create'
 end 'UnresolvedEnumType'

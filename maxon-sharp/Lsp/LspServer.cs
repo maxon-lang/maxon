@@ -705,7 +705,7 @@ public class LspServer {
   }
 
   private static string FormatRangedType(IrRangedPrimitiveType ranged) {
-    var baseName = ranged.BaseType.Name;
+    var baseName = IrType.FormatAsSourceName(ranged.BaseType);
     if (ranged.IsFloatBased) {
       var lower = FormatFloatRangeBound(ranged.FloatLower);
       var upper = FormatFloatRangeBound(ranged.FloatUpper);
