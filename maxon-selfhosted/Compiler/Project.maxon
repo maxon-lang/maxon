@@ -427,11 +427,12 @@ export type Project
 	// keep their callees alive even though no `call` op names them.
 	export var livenessRoots StringArray
 
-	// Phase 11.4: per-function count of synthetic trailing params (0, 1=layout,
-	// or 2=layout+witness) that the Maxon→Std lowering injects when the body
-	// is a generic. Populated during `transferFuncs` alongside
-	// `IrFunction.hasImplicitLayoutParam`/`hasImplicitWitnessParam`, persisted
-	// through the stdlib cache so cache-hit user builds see the same flag a
+	// Phase 11.4: per-function shape of synthetic trailing params that the
+	// Maxon→Std lowering injects when the body is a generic — a layout slot
+	// plus one witness slot per where-clause `(typeParam, interface)` pair.
+	// Populated during `transferFuncs` alongside
+	// `IrFunction.hasImplicitLayoutParam`/`implicitWitnessConstraints`, persisted
+	// through the stdlib cache so cache-hit user builds see the same shape a
 	// fresh-from-source build would. Read by `emitCallWithArgs` to decide
 	// whether to append synthetic args at a call site — using a project-wide
 	// map instead of a local `stdModule.functions` scan so the per-function
@@ -539,12 +540,32 @@ export type Project
 	end 'create'
 end 'Project'
 
-// Phase 11.4: count of synthetic trailing params (0/1/2) per generic function
-// name. 1 = implicit layout descriptor only; 2 = layout + witness table; 0
-// (or absent) = no implicit args. The number is exactly what
-// `emitCallWithArgs` needs to decide how many synthetic args to append at a
-// call site.
-export typealias GenericFunctionImplicitArityMap = Map with(String, ParsedInt)
+// Phase 11.4: per-generic-function shape of synthetic trailing params.
+// `hasLayout` is true iff the function takes an implicit layout-descriptor
+// slot. `witnessConstraints` lists the where-clause entries that contribute
+// trailing `__witness_*` slots, in declaration order. Total trailing params
+// = (1 if hasLayout else 0) + witnessConstraints.count().
+//
+// Read by `emitCallWithArgs` so the caller knows how many synthetic args to
+// append at a call site, and which `(typeParam, interface)` pair each one
+// witnesses. Persists through the stdlib cache so per-function lowering of
+// user code (where stdlib funcs aren't in the local module) reaches the
+// right shape — without it, the call op is under-arity (silent ABI
+// corruption on x64, validator rejection on wasm).
+export type GenericFunctionImplicits
+	export var hasLayout bool
+	export var witnessConstraints WhereClauseArray
+
+	export static function create(hasLayout bool, witnessConstraints WhereClauseArray) returns GenericFunctionImplicits
+		return Self{hasLayout: hasLayout, witnessConstraints: witnessConstraints}
+	end 'create'
+
+	export static function none() returns GenericFunctionImplicits
+		return Self{hasLayout: false, witnessConstraints: WhereClauseArray.create()}
+	end 'none'
+end 'GenericFunctionImplicits'
+
+export typealias GenericFunctionImplicitArityMap = Map with(String, GenericFunctionImplicits)
 
 // One name + declaration site to test for unread-ness. Captured by the
 // parser at every parameter and local declaration site; consumed by

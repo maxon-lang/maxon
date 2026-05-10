@@ -92,13 +92,16 @@ export type IrFunction
 
 	// Phase 11.4: trailing-param convention. A generic function carries an
 	// implicit `__layout_param` after user args (and after `__env` for a
-	// closure-lifted body). Its where-clauses, if any, contribute a single
-	// `__witness_param` after the layout slot. Final order:
-	//   (user_args..., __env?, __layout, __witness?)
-	// Both flags default to false; LowerMaxonToStd sets them as it
-	// discovers a generic body.
+	// closure-lifted body). Each where-clause constraint on the enclosing
+	// type contributes one `__witness_param` after the layout slot, in
+	// declaration order. Final order:
+	//   (user_args..., __env?, __layout, __witness_0?, __witness_1?, ...)
+	// `implicitWitnessConstraints` is empty for non-generic / unconstrained
+	// generic functions; LowerMaxonToStd populates it as it discovers a
+	// generic body. Each entry's (paramName, requiredTraitName) names the
+	// `(typeParam, interface)` pair its trailing slot witnesses.
 	export var hasImplicitLayoutParam bool
-	export var hasImplicitWitnessParam bool
+	export var implicitWitnessConstraints WhereClauseArray
 
 	// Phase 11.5: deterministic content hash over signature + body shape,
 	// computed by computeFunctionContentHash after resolveTypes. Used as the
@@ -146,7 +149,7 @@ export type IrFunction
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
-			hasImplicitWitnessParam: false,
+			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create()
 		}
@@ -181,7 +184,7 @@ export type IrFunction
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
-			hasImplicitWitnessParam: false,
+			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
 			slotMaxonTypes: MaxonTypeArray.create()
 		}
@@ -218,7 +221,7 @@ export type IrFunction
 			calleeSavedGprs: src.calleeSavedGprs,
 			calleeSavedFps: src.calleeSavedFps,
 			hasImplicitLayoutParam: src.hasImplicitLayoutParam,
-			hasImplicitWitnessParam: src.hasImplicitWitnessParam,
+			implicitWitnessConstraints: src.implicitWitnessConstraints,
 			contentHash: src.contentHash,
 			slotMaxonTypes: src.slotMaxonTypes
 		}

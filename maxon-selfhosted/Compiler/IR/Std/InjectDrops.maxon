@@ -158,18 +158,16 @@ end 'injectDropsInFunction'
 
 // C1.b: derive the entry-block param ValueId for the implicit `__layout`
 // param. Layered after user args and the optional `__env` slot, with the
-// optional `__witness` slot sitting one further past the layout slot.
-// Hard-panics if called when `hasImplicitLayoutParam` is false — that's an
-// upstream contract violation, not a runtime condition we can recover from.
+// per-constraint `__witness_*` slots sitting past the layout slot in
+// declaration order. Hard-panics if called when `hasImplicitLayoutParam`
+// is false — that's an upstream contract violation, not a runtime
+// condition we can recover from.
 export function getImplicitLayoutValueId(func IrFunction) returns ValueId
 	if not func.hasImplicitLayoutParam 'noLayout'
 		panic("getImplicitLayoutValueId: func '{func.name}' has no implicit layout param")
 	end 'noLayout'
-	var trailingIdx = (func.paramCount - 1) as ValueId
-	if func.hasImplicitWitnessParam 'witnessLast'
-		trailingIdx = trailingIdx - 1
-	end 'witnessLast'
-	return trailingIdx
+	let witnessCount = func.implicitWitnessConstraints.count()
+	return (func.paramCount - witnessCount - 1) as ValueId
 end 'getImplicitLayoutValueId'
 
 // ============================================================

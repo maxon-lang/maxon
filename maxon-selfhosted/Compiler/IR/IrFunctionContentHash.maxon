@@ -95,11 +95,11 @@ export function computeFunctionSignatureHash(project Project, func IrFunction) r
 	end 'layoutOn' else 'layoutOff'
 		h = mix(h, value: 0 as ContentHash)
 	end 'layoutOff'
-	if func.hasImplicitWitnessParam 'witnessOn'
-		h = mix(h, value: 1 as ContentHash)
-	end 'witnessOn' else 'witnessOff'
-		h = mix(h, value: 0 as ContentHash)
-	end 'witnessOff'
+	h = mix(h, value: func.implicitWitnessConstraints.count() as ContentHash)
+	for wc in func.implicitWitnessConstraints 'eachWitness'
+		h = mixString(h, s: wc.paramName)
+		h = mixString(h, s: wc.requiredTraitName)
+	end 'eachWitness'
 	return h
 end 'computeFunctionSignatureHash'
 

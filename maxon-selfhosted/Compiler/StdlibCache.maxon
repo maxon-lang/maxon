@@ -79,7 +79,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 24
+let CACHE_FORMAT_VERSION = 25
 
 // ============================================================
 // Types
@@ -1843,6 +1843,37 @@ function readStringArray(buf ByteArray, offset ByteOffset) returns (StringArray,
 	return (arr, pos)
 end 'readStringArray'
 
+// --- WhereClauseArray ---
+//
+// Each entry is `(paramName, requiredTraitName, declaringTypeName)`. Used by
+// `IrFunction.implicitWitnessConstraints` to record one implicit `__witness_*`
+// trailing param per where-clause entry, in declaration order.
+
+function writeWhereClauseArray(buf ByteArray, arr WhereClauseArray) throws CacheCorruption
+	writeDword(buf, value: arr.count())
+	for wc in arr 'eachClause'
+		try writeString(buf, s: wc.paramName)
+		try writeString(buf, s: wc.requiredTraitName)
+		try writeString(buf, s: wc.declaringTypeName)
+	end 'eachClause'
+end 'writeWhereClauseArray'
+
+function readWhereClauseArray(buf ByteArray, offset ByteOffset) returns (WhereClauseArray, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = WhereClauseArray.create()
+	for _ in 0 upto count 'eachClause'
+		let (paramName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (requiredTraitName, p2) = try readString(buf, offset: pos)
+		pos = p2
+		let (declaringTypeName, p3) = try readString(buf, offset: pos)
+		pos = p3
+		arr.push(WhereClause.createScoped(paramName, requiredTraitName: requiredTraitName, declaringTypeName: declaringTypeName))
+	end 'eachClause'
+	return (arr, pos)
+end 'readWhereClauseArray'
+
 function writeMaxonTypeArray(project Project, buf ByteArray, arr MaxonTypeArray) throws CacheCorruption
 	writeDword(buf, value: arr.count())
 	for t in arr 'eachType'
@@ -2145,9 +2176,10 @@ end 'readWitnessTableRegistry'
 
 function writeGenericFunctionImplicitArityMap(buf ByteArray, m GenericFunctionImplicitArityMap) throws CacheCorruption
 	writeDword(buf, value: m.count())
-	for (name, arity) in m 'eachEntry'
+	for (name, implicits) in m 'eachEntry'
 		try writeString(buf, s: name)
-		writeDword(buf, value: arity as MachineWord)
+		writeBoolByte(buf, b: implicits.hasLayout)
+		try writeWhereClauseArray(buf, arr: implicits.witnessConstraints)
 	end 'eachEntry'
 end 'writeGenericFunctionImplicitArityMap'
 
@@ -2158,9 +2190,11 @@ function readGenericFunctionImplicitArityMap(buf ByteArray, offset ByteOffset) r
 	for _ in 0 upto count 'eachEntry'
 		let (name, p1) = try readString(buf, offset: pos)
 		pos = p1
-		let arity = readDword(buf, offset: pos)
-		pos = pos + 4
-		try m.insert(name, value: arity as ParsedInt) otherwise ignore
+		let (hasLayout, p2) = readBoolByte(buf, offset: pos)
+		pos = p2
+		let (witnessConstraints, p3) = try readWhereClauseArray(buf, offset: pos)
+		pos = p3
+		try m.insert(name, value: GenericFunctionImplicits.create(hasLayout, witnessConstraints: witnessConstraints)) otherwise ignore
 	end 'eachEntry'
 	return (m, pos)
 end 'readGenericFunctionImplicitArityMap'
@@ -3253,7 +3287,7 @@ function writeStdIrFunction(buf ByteArray, func IrFunction) throws CacheCorrupti
 	end 'eachBlockRef'
 	writeQword(buf, value: func.nextBlockId)
 	writeBoolByte(buf, b: func.hasImplicitLayoutParam)
-	writeBoolByte(buf, b: func.hasImplicitWitnessParam)
+	try writeWhereClauseArray(buf, arr: func.implicitWitnessConstraints)
 end 'writeStdIrFunction'
 
 function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction, ByteOffset) throws CacheCorruption
@@ -3289,10 +3323,10 @@ function readStdIrFunction(buf ByteArray, offset ByteOffset) returns (IrFunction
 	func.nextBlockId = nextBlockId
 	let (hasLayout, p7) = readBoolByte(buf, offset: pos)
 	pos = p7
-	let (hasWitness, p8) = readBoolByte(buf, offset: pos)
+	let (witnessConstraints, p8) = try readWhereClauseArray(buf, offset: pos)
 	pos = p8
 	func.hasImplicitLayoutParam = hasLayout
-	func.hasImplicitWitnessParam = hasWitness
+	func.implicitWitnessConstraints = witnessConstraints
 	return (func, pos)
 end 'readStdIrFunction'
 

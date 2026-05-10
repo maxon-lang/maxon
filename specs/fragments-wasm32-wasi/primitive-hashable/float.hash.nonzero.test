@@ -1,0 +1,46 @@
+// Test: float.hash.nonzero
+function main() returns ExitCode
+	let f = 3.14
+	let h = f.hash()
+	if h != 0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989086 : f64
+    mir.br inlined_float.hash_0()
+  inlined_float.hash_0:
+    %8 = mir.bitcast.f64.i64 %0
+    %9 = mir.mov_imm 9223372036854775807 : i64
+    %10 = mir.neg.i64 %9
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.sub.i64 %10, %11
+    %13 = mir.cmp eq, %8, %12
+    mir.cond_br %13 [then: inlined_float.hash_1(), else: inlined_float.hash_2()]
+  inlined_float.hash_1:
+    %14 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%14)
+  inlined_float.hash_2:
+    %15 = mir.mov_imm 4294967295 : i64
+    %16 = mir.and.i64 %8, %15
+    mir.br inline_cont_main_0(%16)
+  inline_cont_main_0:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp ne, %17, %4
+    mir.cond_br %5 [then: check_1(), else: check_1.after()]
+  check_1:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  check_1.after:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+}
+---

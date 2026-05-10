@@ -14,27 +14,49 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @primitive-hashable.main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
     x64.movsd xmm0, [rip+__float_0]
     x64.movsd xmm1, [rip+__float_0]
-    x64.movsd [rbp-8], xmm1
-    x64.call stdlib.float.hash
-    x64.mov [rbp-16], rax
-    x64.movsd xmm1, [rbp-8]
-    x64.movsd xmm0, xmm1
-    x64.call stdlib.float.hash
-    x64.mov rcx, [rbp-16]
-    x64.cmp rcx, rax
-    x64.jne primitive-hashable.main.eq_0.after
-  eq_0:
-    x64.mov rax, 1
-    x64.epilogue
+    x64.subsd xmm1, xmm0
+    x64.movsd xmm0, [rip+__float_0]
+  inlined_float.hash_0:
+    x64.mov r8, 9223372036854775807
+    x64.neg r8
+    x64.sub r8, 1
+    x64.movq r9, xmm0
+    x64.cmp r9, r8
+    x64.jne inlined_float.hash_2
+  inlined_float.hash_1:
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_float.hash_2:
+    x64.mov r8d, 4294967295
+    x64.and r9, r8
+    x64.mov r8, r9
+  inline_cont_main_0:
+  inlined_float.hash_0:
+    x64.mov r9, 9223372036854775807
+    x64.neg r9
+    x64.sub r9, 1
+    x64.movq rsi, xmm1
+    x64.cmp rsi, r9
+    x64.jne inlined_float.hash_2
+  inlined_float.hash_1:
+    x64.xor r9d, r9d
+    x64.jmp inline_cont_main_6
+  inlined_float.hash_2:
+    x64.mov r9d, 4294967295
+    x64.and rsi, r9
+    x64.mov r9, rsi
+  inline_cont_main_6:
+    x64.cmp r8, r9
+    x64.jne eq_1.after
+  eq_1:
+    x64.mov r8d, 1
     x64.ret
-  eq_0.after:
-    x64.xor eax, eax
-    x64.epilogue
+  eq_1.after:
+    x64.xor r8d, r8d
     x64.ret
   }
 }

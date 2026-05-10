@@ -857,12 +857,12 @@ type MaxonToStdLowering
 	// body never references the descriptor so leaving the slot at 0 is
 	// inert. Set when the function is detected as generic at lowering entry.
 	var implicitLayoutValueId ValueId
-	// Phase 11.4: per-function ValueId of the synthetic `__witness_param`
-	// trailing param. 0 means "function has no implicit witness param".
-	// Set when the function has any where-clause constraints (the witness
-	// table for the first constraint lives in this slot — multi-constraint
-	// dispatch is a refinement deferred past the spine).
-	var implicitWitnessValueId ValueId
+	// Phase 11.4: per-function ValueIds of the synthetic `__witness_*`
+	// trailing params, parallel to `currentMaxonFunc.implicitWitnessConstraints`
+	// (one slot per `(typeParam, interface)` constraint, in declaration order).
+	// Empty when the function has no where-clauses; populated when the
+	// function-body emission resolves the trailing slot ids.
+	var implicitWitnessValueIds ValueIdArray
 	// Stage E (closures): the IrFunction currently being lowered. Set at
 	// the top of each function's body walk and read by lowerClosureCreate
 	// to look up the OUTER function's `scope` for capture-slot resolution.
@@ -907,7 +907,7 @@ type MaxonToStdLowering
 			fnEnvVarNames: FnEnvMap.create(),
 			liftedEnvValueId: 0,
 			implicitLayoutValueId: 0,
-			implicitWitnessValueId: 0,
+			implicitWitnessValueIds: ValueIdArray.create(),
 			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0),
 			interfaceWitnessSlots: InterfaceWitnessSlotMap.create(),
 			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create(),
@@ -1077,7 +1077,10 @@ type MaxonToStdLowering
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = try self.maxonModule.functions.get(i) otherwise panic("invariant: i < functions.count() but get failed")
 			let needsLayout = functionIsGenericForLowering(self.project, func: func)
-			let needsWitness = needsLayout and functionHasWhereClausesForLowering(self.project, func: func)
+			var witnessConstraints = WhereClauseArray.create()
+			if needsLayout 'collectConstraints'
+				witnessConstraints = collectFunctionWitnessConstraints(self.project, func: func)
+			end 'collectConstraints'
 			var stdParams = StdTypeArray.create()
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(self.project, ref: paramType))
@@ -1087,19 +1090,23 @@ type MaxonToStdLowering
 				func.paramCount = func.paramCount + 1
 				func.hasImplicitLayoutParam = true
 			end 'addLayout'
-			if needsWitness 'addWitness'
+			// Phase 11.4: one trailing `__witness_*` slot per where-clause
+			// constraint, in declaration order. Multiple constraints on a
+			// single type-param (e.g. `Key is Hashable and Equatable`)
+			// produce parallel slots so each `(typeParam, interface)` pair
+			// has its own witness pointer.
+			for _ in 0 upto witnessConstraints.count() 'addWitness'
 				stdParams.push(StdType.i64)
 				func.paramCount = func.paramCount + 1
-				func.hasImplicitWitnessParam = true
 			end 'addWitness'
-			// Phase 11.4: record the implicit-arity in a project-wide map so
+			func.implicitWitnessConstraints = witnessConstraints
+			// Phase 11.4: record the implicit shape in a project-wide map so
 			// per-function pipeline runs (where the callee isn't in the local
 			// stdModule.functions) can still discover whether a callsite needs
 			// the synthetic layout/witness args appended. See the field comment
 			// in Project.maxon for the architectural rationale.
 			if needsLayout 'recordArity'
-				let arity = (2 if needsWitness else 1) as ParsedInt
-				self.project.genericFunctionImplicitArity.upsert(func.name, value: arity)
+				self.project.genericFunctionImplicitArity.upsert(func.name, value: GenericFunctionImplicits.create(true, witnessConstraints: witnessConstraints))
 			end 'recordArity'
 			func.returnType = maxonReturnTypeToStdReturnType(self.project, ref: func.maxonReturnType)
 			func.paramTypes = stdParams
@@ -1124,7 +1131,7 @@ type MaxonToStdLowering
 		// Walk each function's blocks and lower their ops. The walk reads
 		// `self.stdModule.functions` (not `maxonModule.functions`) so the
 		// Phase 11.4 synthetic-trailing-param updates done in transferFuncs
-		// (paramCount, hasImplicitLayoutParam, hasImplicitWitnessParam) are
+		// (paramCount, hasImplicitLayoutParam, implicitWitnessConstraints) are
 		// the values consumed below — `funcIdRef` must start past the
 		// synthetic slots so SSA ids don't collide with them.
 		for srcFunc in self.stdModule.functions 'eachFunc'
@@ -1170,7 +1177,7 @@ type MaxonToStdLowering
 			self.fnEnvVarNames = FnEnvMap.create()
 			self.liftedEnvValueId = 0
 			self.implicitLayoutValueId = 0
-			self.implicitWitnessValueId = 0
+			self.implicitWitnessValueIds = ValueIdArray.create()
 			self.currentMaxonFunc = srcFunc
 			// C1.c: rebuild the interface-witness-slot side map for this
 			// function. Cheap walk over slotMaxonTypes; runs once per
@@ -1184,15 +1191,16 @@ type MaxonToStdLowering
 			self.interfaceWitnessValueIds = InterfaceWitnessValueIdMap.create()
 			// Phase 11.4: layer the synthetic trailing param ValueIds AFTER
 			// the env slot (if any) so the indirect-call helpers can still
-			// derive their env arg from the original liftedEnvValueId. The
-			// witness slot, if present, sits one further past the layout slot.
+			// derive their env arg from the original liftedEnvValueId. Witness
+			// slots, in declaration order, sit one-by-one past the layout
+			// slot so per-(typeParam, interface) dispatch can index directly.
 			if srcFunc.hasImplicitLayoutParam 'stampLayout'
-				var trailingIdx = (srcFunc.paramCount - 1) as ValueId
-				if srcFunc.hasImplicitWitnessParam 'witnessLast'
-					self.implicitWitnessValueId = trailingIdx
-					trailingIdx = trailingIdx - 1
-				end 'witnessLast'
-				self.implicitLayoutValueId = trailingIdx
+				let constraintCount = srcFunc.implicitWitnessConstraints.count()
+				let firstWitnessIdx = (srcFunc.paramCount - constraintCount) as ValueId
+				for wIdx in 0 upto constraintCount 'eachWitness'
+					self.implicitWitnessValueIds.push((firstWitnessIdx + wIdx) as ValueId)
+				end 'eachWitness'
+				self.implicitLayoutValueId = (firstWitnessIdx - 1) as ValueId
 			end 'stampLayout'
 			for pIdx in 0 upto srcFunc.maxonParamTypes.count() 'seedParams'
 				let pType = try srcFunc.maxonParamTypes.get(pIdx) otherwise MaxonType.integer
@@ -1251,8 +1259,8 @@ type MaxonToStdLowering
 			if entryRef >= 0 and srcFunc.hasImplicitLayoutParam 'emitSyntheticParams'
 				var entryBlock = try self.stdModule.blocks.get(entryRef) otherwise panic("invariant: entryRef from blockRefs not in stdModule.blocks")
 				self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitLayoutValueId, paramIndex: self.implicitLayoutValueId as VarSlot, paramType: StdType.i64)))
-				if srcFunc.hasImplicitWitnessParam 'witnessParam'
-					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(self.implicitWitnessValueId, paramIndex: self.implicitWitnessValueId as VarSlot, paramType: StdType.i64)))
+				for witnessId in self.implicitWitnessValueIds 'witnessParam'
+					self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(witnessId, paramIndex: witnessId as VarSlot, paramType: StdType.i64)))
 				end 'witnessParam'
 			end 'emitSyntheticParams'
 
@@ -1992,7 +2000,22 @@ type MaxonToStdLowering
 	// Lower a cmp. Same family-matching logic as binop: if the declared
 	// operand type resolves to float, promote int-backed operands before
 	// emitting. Result is always i64 (bool).
+	//
+	// Phase 11.4: when the operand type is a constrained type-parameter
+	// (e.g. `Key` with `where Key is Equatable`), `==` and `!=` desugar to
+	// witness-based `Equatable.equals` dispatch so the actual per-type
+	// equality runs. Other comparisons on type parameters (e.g. `<`) would
+	// route to `Comparable.compare`; we wire only `eq`/`ne` today since
+	// that's what stdlib hash-table code reaches for. The fallback to raw
+	// integer compare keeps `int`/`bool`/etc. paths unchanged.
 	function lowerCmp(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock)
+		let isEqOrNe = predicateIsEqOrNe(predicate)
+		let isTypeParam = maxonTypeMentionsTypeParam(operandType)
+		if isEqOrNe and isTypeParam 'witnessEq'
+			if self.tryLowerTypeParamEquality(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock) 'didDispatch'
+				return
+			end 'didDispatch'
+		end 'witnessEq'
 		var leftId = self.resolveName(left)
 		var rightId = self.resolveName(right)
 		let operandIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType))
@@ -2005,6 +2028,44 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId))))
 		self.setIsFloat(resultId, isFloat: false)
 	end 'lowerCmp'
+
+	// Phase 11.4: desugar `a == b` / `a != b` on a constrained type-param
+	// operand into `a.equals(b)` (negated for `!=`) using the caller's
+	// implicit witness slot for `Equatable`. Returns false when no
+	// matching witness exists; the caller falls back to raw cmp.
+	function tryLowerTypeParamEquality(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock) returns bool
+		let pid = match operandType 'extractPid'
+			typeParameter(id) gives id
+			default panic("tryLowerTypeParamEquality: operandType not typeParameter despite the dispatch guard")
+		end 'extractPid'
+		let paramName = self.project.typeParameters.getName(pid)
+		if let matched = try self.findConstraintForMethod(paramName: paramName, methodName: "equals") 'hit'
+			let witnessAddrId = try self.implicitWitnessValueIds.get(matched.constraintIndex) otherwise panic("tryLowerTypeParamEquality: implicitWitnessValueIds desync at idx {matched.constraintIndex}")
+			var argIds = ValueIdArray.create()
+			argIds.push(self.resolveName(left))
+			argIds.push(self.resolveName(right))
+			let isNe = predicateIsNe(predicate)
+			if isNe 'negate'
+				// `!=` flips the bool result with `xor 1`, so we need a
+				// separate ValueId for the underlying equals output before
+				// defining the parser-visible `result` name.
+				let eqResultId = allocValueId(self.funcIdRef)
+				self.emitWitnessDispatch(eqResultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: "equals", argIds: argIds, dstBlock: dstBlock)
+				let resultId = self.defineName(result)
+				let oneId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: oneId, value: 1))))
+				self.setValueType(oneId, t: MaxonType.integer)
+				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.xorI64, resultId: resultId, leftId: eqResultId, rightId: oneId))))
+				self.setIsFloat(resultId, isFloat: false)
+			end 'negate' else 'plain'
+				let resultId = self.defineName(result)
+				self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: "equals", argIds: argIds, dstBlock: dstBlock)
+			end 'plain'
+			return true
+		end 'hit' else 'noMatch'
+			return false
+		end 'noMatch'
+	end 'tryLowerTypeParamEquality'
 
 	function lowerRefEq(result ByteArray, left ByteArray, right ByteArray, negate bool, dstBlock IrBlock)
 		let leftId = self.resolveName(left)
@@ -2219,6 +2280,18 @@ type MaxonToStdLowering
 					return
 				end 'havePrimSig'
 			end 'havePrim'
+			// Phase 11.4: receiver is a constrained type-parameter (e.g.
+			// `key Key` where `Key is Hashable`). Find the caller's witness
+			// slot whose `(paramName, traitName)` declares this method, and
+			// dispatch through it via `witnessMethod` + `indirectCall`. The
+			// receiver is a plain value (8 bytes or fewer, same inline-fits
+			// invariant the fat-pointer path relies on).
+			if maxonTypeMentionsTypeParam(receiverType) 'typeParamDispatch'
+				if self.tryLowerConstrainedTypeParamDispatch(result, receiverId: receiverId, receiverType: receiverType, methodName: methodName, args: args, dstBlock: dstBlock) 'didDispatch'
+					self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+					return
+				end 'didDispatch'
+			end 'typeParamDispatch'
 			self.lowerInterfaceMethodCallStub(result, methodName: methodName, dstBlock: dstBlock)
 			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 			return
@@ -2269,8 +2342,8 @@ type MaxonToStdLowering
 	// fallback and the full-slot path going through the same spot.
 	//
 	// Phase 11.4: when the callee is a generic body (its IrFunction has
-	// `hasImplicitLayoutParam` / `hasImplicitWitnessParam`), append the
-	// synthetic trailing layout-descriptor and witness-table arg ids before
+	// `hasImplicitLayoutParam` / non-empty `implicitWitnessConstraints`),
+	// append the synthetic trailing layout-descriptor and per-constraint witness arg ids before
 	// emitting the call. The descriptor is resolved from `receiverContext`
 	// (a `genericInstance(gid)` MaxonType produces a label via
 	// `project.layoutDescriptors.labelFor(gid)`); when the context isn't a
@@ -2297,11 +2370,11 @@ type MaxonToStdLowering
 		// and wasm rejected at validation. The project-level lookup gives a
 		// consistent arity decision regardless of whether the callee is in the
 		// local module or behind a cache restore.
-		let implicitArity = try self.project.genericFunctionImplicitArity.get(qualifiedCallee) otherwise 0
-		if implicitArity >= 1 'addLayout'
+		let calleeImplicits = try self.project.genericFunctionImplicitArity.get(qualifiedCallee) otherwise GenericFunctionImplicits.none()
+		if calleeImplicits.hasLayout 'addLayout'
 			finalArgIds = self.appendLayoutArg(finalArgIds, receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
-			if implicitArity >= 2 'addWitness'
-				finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, dstBlock: dstBlock)
+			for wc in calleeImplicits.witnessConstraints 'addWitness'
+				finalArgIds = self.appendWitnessArg(finalArgIds, receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, constraint: wc, dstBlock: dstBlock)
 			end 'addWitness'
 		end 'addLayout'
 		let resultId = self.defineName(result)
@@ -2329,9 +2402,9 @@ type MaxonToStdLowering
 		return out
 	end 'appendLayoutArg'
 
-	function appendWitnessArg(argIds ValueIdArray, receiverContext MaxonType, dstBlock IrBlock) returns ValueIdArray
+	function appendWitnessArg(argIds ValueIdArray, receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueIdArray
 		var out = argIds
-		let witnessId = self.materializeWitnessArg(receiverContext: receiverContext, dstBlock: dstBlock)
+		let witnessId = self.materializeWitnessArg(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, constraint: constraint, dstBlock: dstBlock)
 		out.push(witnessId)
 		return out
 	end 'appendWitnessArg'
@@ -2396,27 +2469,101 @@ type MaxonToStdLowering
 		return self.implicitLayoutValueId
 	end 'forwardCallerLayout'
 
-	function materializeWitnessArg(receiverContext MaxonType, dstBlock IrBlock) returns ValueId
-		// Phase 11.4 spine: route via the caller's own witness slot when
-		// available; the explicit per-conformance witness lookup is wired
-		// in at the methodCall path where the receiver's struct name is in
-		// hand. The free-call path (no receiver) lands here today with
-		// `receiverContext == unresolved`, so forwarding is the right
-		// default. `receiverContext` is plumbed through so the future
-		// refinement that materializes a witness from the callee's
-		// where-clause + receiver's concrete type can be added without
-		// touching every call site again.
-		match receiverContext 'discard'
-			boolean to interface then break 'discard'
-		end 'discard'
-		if self.implicitWitnessValueId != 0 'forward'
-			return self.implicitWitnessValueId
-		end 'forward'
-		let zero = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zero, value: 0))))
-		self.setValueType(zero, t: MaxonType.integer)
-		return zero
+	// Materialize the witness pointer for one constraint of the callee's
+	// where-clause. The constraint is `(paramName, requiredTraitName)` in
+	// the callee's parameter scope; the substitution that maps `paramName`
+	// to a concrete type is read off the call site's `receiverContext`:
+	//   - `genericInstance(gid)`: pair the receiver's `usesParams` (from
+	//     `getParamNames(declaringTypeName)`) with `gidArgs` to find the
+	//     concrete type bound to `paramName`. If concrete, load the
+	//     `(concreteType, traitName)` witness label. If still a typeParam
+	//     (caller is itself generic, forwarding `T`), fall through to the
+	//     forwarding path.
+	//   - `typeParameter` / `unresolved`: caller is itself generic; find
+	//     the matching slot in the caller's `implicitWitnessValueIds`
+	//     (parallel to `currentMaxonFunc.implicitWitnessConstraints`) by
+	//     `(paramName, requiredTraitName)` match.
+	function materializeWitnessArg(receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueId
+		// Try to resolve `constraint.paramName` to a concrete type via
+		// the receiverContext's substitution.
+		let bound = self.resolveCalleeParamToConcreteType(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, paramName: constraint.paramName)
+		match bound 'pick'
+			concrete(typeName) then return self.emitLoadWitnessTable(typeName, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
+			forwardFromCaller then return self.forwardCallerWitness(qualifiedCallee: qualifiedCallee, constraint: constraint)
+		end 'pick'
 	end 'materializeWitnessArg'
+
+	function emitLoadWitnessTable(typeName String, interfaceName String, dstBlock IrBlock) returns ValueId
+		if not self.project.witnessTables.contains(typeName, interfaceName: interfaceName) 'missing'
+			panic("emitLoadWitnessTable: no witness table for ({typeName}, {interfaceName}) — BuildWitnessTables missed a case or constraint isn't satisfied")
+		end 'missing'
+		let label = self.project.witnessTables.labelFor(typeName, interfaceName: interfaceName)
+		let resultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return resultId
+	end 'emitLoadWitnessTable'
+
+	function forwardCallerWitness(qualifiedCallee String, constraint WhereClause) returns ValueId
+		// The caller must have an implicit witness slot for the same
+		// `(paramName, traitName)` pair that the callee's where-clause
+		// names. Match on the bare paramName + traitName: the caller's
+		// param-name space must align with the callee's because the
+		// caller is forwarding its own `T` into a callee that re-binds
+		// to the same `T`. Mismatches surface as a panic — that's a
+		// phase-ordering / TypeResolution bug, not a runtime condition.
+		let constraints = self.currentMaxonFunc.implicitWitnessConstraints
+		for i in 0 upto constraints.count() 'scan'
+			let cc = try constraints.get(i) otherwise panic("forwardCallerWitness: constraints.get OOB at {i}")
+			if cc.paramName == constraint.paramName and cc.requiredTraitName == constraint.requiredTraitName 'hit'
+				return try self.implicitWitnessValueIds.get(i) otherwise panic("forwardCallerWitness: implicitWitnessValueIds desync at {i}")
+			end 'hit'
+		end 'scan'
+		panic("forwardCallerWitness: caller '{self.currentMaxonFunc.name}' has no witness for ({constraint.paramName}, {constraint.requiredTraitName}) but call to '{qualifiedCallee}' needs one — TypeResolution should have either pinned a concrete receiver or matched the constraint shape")
+	end 'forwardCallerWitness'
+
+	// Resolve the callee's bare type-parameter name to a concrete type at
+	// this call site. Returns `concrete(name)` when the receiverContext
+	// supplies a fully-resolved binding, `forwardFromCaller` when the
+	// binding is itself a type-parameter (caller is generic and forwards
+	// `T`).
+	function resolveCalleeParamToConcreteType(receiverContext MaxonType, qualifiedCallee String, paramName String) returns ResolvedCalleeParam
+		match receiverContext 'pick'
+			genericInstance(gid) then break 'pick'
+			typeParameter then return ResolvedCalleeParam.forwardFromCaller
+			interface then return ResolvedCalleeParam.forwardFromCaller
+			unresolved then return ResolvedCalleeParam.forwardFromCaller
+			named then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is a bare named type")
+			boolean then return ResolvedCalleeParam.concrete("bool")
+			integer then return ResolvedCalleeParam.concrete("int")
+			float then return ResolvedCalleeParam.concrete("float")
+			string then return ResolvedCalleeParam.concrete("String")
+			function then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is a function type")
+		end 'pick'
+		// genericInstance case: pair the declaring type's usesParams with
+		// gidArgs and pluck out the entry whose paramName matches.
+		let (baseTypeNameId, gidArgs) = match receiverContext 'getGid'
+			genericInstance(gid) gives self.project.genericInstances.get(gid)
+			default panic("resolveCalleeParamToConcreteType: receiverContext shape changed mid-resolve")
+		end 'getGid'
+		let baseTypeName = self.project.typeNames.get(baseTypeNameId)
+		let usesParams = self.project.typeParameters.getParamNames(baseTypeName)
+		if usesParams.count() != gidArgs.count() 'mismatch'
+			panic("resolveCalleeParamToConcreteType: usesParams.count() ({usesParams.count()}) != gidArgs.count() ({gidArgs.count()}) for '{baseTypeName}' — generic instantiation arity bug")
+		end 'mismatch'
+		for i in 0 upto usesParams.count() 'scan'
+			let p = try usesParams.get(i) otherwise panic("resolveCalleeParamToConcreteType: usesParams.get OOB at {i}")
+			if p == paramName 'hit'
+				let bound = try gidArgs.get(i) otherwise panic("resolveCalleeParamToConcreteType: gidArgs.get OOB at {i}")
+				return resolvedCalleeParamFromMaxonType(self.project, t: bound)
+			end 'hit'
+		end 'scan'
+		// paramName not in this struct's usesParams — could be a callee
+		// param that doesn't appear on the receiver (e.g. a free generic
+		// fn). Fall back to forwarding; the body will load whatever the
+		// caller's current scope provides.
+		return ResolvedCalleeParam.forwardFromCaller
+	end 'resolveCalleeParamToConcreteType'
 
 	// Convenience wrapper for the no-signature fallback in lowerCall: resolve
 	// args verbatim (no leading receiver) and emit the call.
@@ -3262,27 +3409,96 @@ type MaxonToStdLowering
 		end 'iface'
 		let witnessAddrId = try self.interfaceWitnessValueIds.get(receiverId) otherwise panic("lowerInterfaceMethodCall: no witness ValueId paired with receiverId={receiverId} (interface={interfaceName}, method={String.from(methodName)}); the receiver's varLoad did not pair its witness companion")
 		let methodNameStr = String.from(methodName)
-		let methodIdx = methodIndexInInterface(self.project, interfaceName: interfaceName, methodName: methodNameStr)
+		let argIds = self.buildDispatchArgIds(receiverId: receiverId, args: args)
+		let resultId = self.defineName(result)
+		self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
+	end 'lowerInterfaceMethodCall'
+
+	// Phase 11.4: dispatch a method call on a constrained type-parameter
+	// receiver (e.g. `key.hash()` where `key: Key` and `Key is Hashable`).
+	// Walks the enclosing function's `implicitWitnessConstraints`, finds
+	// the `(paramName, interface)` pair whose paramName matches the
+	// receiver's type-parameter and whose interface declares `methodName`,
+	// then emits a witness-based dispatch identical to the fat-pointer
+	// path. Receiver is a plain value (8 bytes or fewer) so it goes
+	// straight in as arg 0 — no fat-pointer split.
+	//
+	// Returns false if no constraint covers this method. The caller falls
+	// back to `lowerInterfaceMethodCallStub` which keeps the runtime panic
+	// for genuinely unconstrained type parameters.
+	function tryLowerConstrainedTypeParamDispatch(result ByteArray, receiverId ValueId, receiverType MaxonType, methodName ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		let pid = match receiverType 'extractPid'
+			typeParameter(id) gives id
+			default panic("tryLowerConstrainedTypeParamDispatch: receiver type isn't typeParameter despite the dispatch guard")
+		end 'extractPid'
+		let receiverParamName = self.project.typeParameters.getName(pid)
+		let methodNameStr = String.from(methodName)
+		if let matched = try self.findConstraintForMethod(paramName: receiverParamName, methodName: methodNameStr) 'hit'
+			let witnessAddrId = try self.implicitWitnessValueIds.get(matched.constraintIndex) otherwise panic("tryLowerConstrainedTypeParamDispatch: implicitWitnessValueIds desync at idx {matched.constraintIndex}")
+			let argIds = self.buildDispatchArgIds(receiverId: receiverId, args: args)
+			let resultId = self.defineName(result)
+			self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
+			return true
+		end 'hit' else 'noMatch'
+			return false
+		end 'noMatch'
+	end 'tryLowerConstrainedTypeParamDispatch'
+
+	// Locate the `(constraintIndex, interfaceName)` pair in the enclosing
+	// function's `implicitWitnessConstraints` whose typeParameter matches
+	// `paramName` and whose interface declares `methodName`. Throws when
+	// nothing matches; the equality and method-dispatch call sites both
+	// use `if let try` to fall back to non-witness lowering.
+	function findConstraintForMethod(paramName String, methodName String) returns MatchedConstraint throws ConstraintLookupError
+		let constraints = self.currentMaxonFunc.implicitWitnessConstraints
+		for i in 0 upto constraints.count() 'scan'
+			let cc = try constraints.get(i) otherwise panic("findConstraintForMethod: constraints.get OOB at {i}")
+			if cc.paramName != paramName 'paramMismatch'
+				continue
+			end 'paramMismatch'
+			let iface = try self.project.interfaces.get(cc.requiredTraitName) otherwise 'noIface'
+				continue
+			end 'noIface'
+			for j in 0 upto iface.methods.count() 'eachMethod'
+				let m = try iface.methods.get(j) otherwise panic("findConstraintForMethod: methods.get OOB at {j}")
+				if m.name == methodName 'hit'
+					return MatchedConstraint.create(i as ParsedInt, interfaceName: cc.requiredTraitName)
+				end 'hit'
+			end 'eachMethod'
+		end 'scan'
+		throw ConstraintLookupError.notFound
+	end 'findConstraintForMethod'
+
+	// Emit the canonical witness-table dispatch sequence shared by every
+	// path that turns an interface method call into IR:
+	//   1. `witnessMethod(witnessAddr, idx)` — materializes fn pointer.
+	//   2. `indirectCall(fnPtr, argIds)` — invokes through it.
+	//   3. Stamp `resultId`'s MaxonType from the interface method's
+	//      declared return so chained access can resolve. Void returns
+	//      leave the integer default (the result slot is unused).
+	function emitWitnessDispatch(resultId ValueId, witnessAddrId ValueId, interfaceName String, methodName String, argIds ValueIdArray, dstBlock IrBlock)
+		let methodIdx = methodIndexInInterface(self.project, interfaceName: interfaceName, methodName: methodName)
 		let fnPtrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.witnessMethod(fnPtrId, witnessAddrId: witnessAddrId, methodIndex: methodIdx)))
 		self.setValueType(fnPtrId, t: MaxonType.integer)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: fnPtrId, argIds: argIds)))
+		let returnType = interfaceMethodReturnType(self.project, interfaceName: interfaceName, methodName: methodName)
+		match returnType 'stamp'
+			void then break 'stamp'
+			value(inner) then self.setValueType(resultId, t: inner)
+		end 'stamp'
+	end 'emitWitnessDispatch'
+
+	// Build the `[receiver, args...]` ValueId list every witness-dispatch
+	// call site assembles before emitting indirectCall.
+	function buildDispatchArgIds(receiverId ValueId, args ByteArrayArray) returns ValueIdArray
 		var argIds = ValueIdArray.create()
 		argIds.push(receiverId)
 		for argName in args 'eachArg'
 			argIds.push(self.resolveName(argName))
 		end 'eachArg'
-		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: fnPtrId, argIds: argIds)))
-		// Stamp the result's MaxonType from the interface method's declared
-		// return type so a chained `g.greet().toString()` (or arithmetic on
-		// the result) can resolve. Void returns leave the MaxonType at the
-		// default integer (the result slot is unused in that case).
-		let returnType = interfaceMethodReturnType(self.project, interfaceName: interfaceName, methodName: methodNameStr)
-		match returnType 'stamp'
-			void then break 'stamp'
-			value(inner) then self.setValueType(resultId, t: inner)
-		end 'stamp'
-	end 'lowerInterfaceMethodCall'
+		return argIds
+	end 'buildDispatchArgIds'
 
 	// Stub for method calls whose receiver type didn't reduce to a
 	// concrete struct AND isn't a true interface (those go through
@@ -4448,25 +4664,88 @@ function maxonTypeMentionsTypeParam(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeMentionsTypeParam'
 
-// Phase 11.4: where-clauses are recorded on the declaring struct type, not
-// the function. A method on `type Foo[T] uses T where T Equatable` has
-// witnesses; a method on `type Foo[T] uses T` doesn't. Today's stdlib has
-// none of the latter — every generic that needs constraints declares them
-// at the type level.
-function functionHasWhereClausesForLowering(project Project, func IrFunction) returns bool
+// Phase 11.4: result of mapping a callee's bare type-parameter name to its
+// concrete binding at a specific call site. `concrete(name)` carries the
+// pinned struct/primitive type name (e.g. "int", "Map"); `forwardFromCaller`
+// means the binding is itself a type-parameter from the caller's scope —
+// the witness should ride the caller's own implicit witness slot.
+union ResolvedCalleeParam
+	concrete(typeName String)
+	forwardFromCaller
+end 'ResolvedCalleeParam'
+
+// Phase 11.4: result of locating a where-clause witness slot covering a
+// specific method call. `constraintIndex` is parallel to
+// `implicitWitnessValueIds` / `implicitWitnessConstraints`; `interfaceName`
+// is the trait the chosen constraint requires.
+type MatchedConstraint
+	export var constraintIndex ParsedInt
+	export var interfaceName String
+
+	export static function create(constraintIndex ParsedInt, interfaceName String) returns MatchedConstraint
+		return Self{constraintIndex: constraintIndex, interfaceName: interfaceName}
+	end 'create'
+end 'MatchedConstraint'
+
+enum ConstraintLookupError implements Error
+	notFound
+end 'ConstraintLookupError'
+
+// Project a `MaxonType` (a callee param's bound) onto the witness-table
+// key space. Concrete struct/primitive types route to a witness lookup;
+// `typeParameter` and unresolved forms forward to the caller. `interface`
+// bindings would imply a witness-of-an-interface — not modeled today; we
+// fall through to forwarding so the caller's witness slot supplies it,
+// which is the correct shape for the only path that hits this today
+// (caller is generic, callee is constrained on the same `T`).
+function resolvedCalleeParamFromMaxonType(project Project, t MaxonType) returns ResolvedCalleeParam
+	return match t 'pick'
+		boolean gives ResolvedCalleeParam.concrete("bool")
+		integer gives ResolvedCalleeParam.concrete("int")
+		float gives ResolvedCalleeParam.concrete("float")
+		string gives ResolvedCalleeParam.concrete("String")
+		named(id) gives ResolvedCalleeParam.concrete(project.typeNames.get(id))
+		genericInstance(gid) gives resolvedCalleeParamFromGenericInstance(project, gid: gid)
+		typeParameter gives ResolvedCalleeParam.forwardFromCaller
+		interface gives ResolvedCalleeParam.forwardFromCaller
+		unresolved gives ResolvedCalleeParam.forwardFromCaller
+		function gives ResolvedCalleeParam.forwardFromCaller
+	end 'pick'
+end 'resolvedCalleeParamFromMaxonType'
+
+function resolvedCalleeParamFromGenericInstance(project Project, gid GenericInstanceId) returns ResolvedCalleeParam
+	let (baseId, _) = project.genericInstances.get(gid)
+	return ResolvedCalleeParam.concrete(project.typeNames.get(baseId))
+end 'resolvedCalleeParamFromGenericInstance'
+
+// Phase 11.4: walk the enclosing type's interned type-parameters and emit a
+// `WhereClause` per `(paramName, requiredTraitName)` pair in declaration
+// order. Multiple constraints on a single param (e.g. `Key is Hashable and
+// Equatable`) produce one entry each — every entry corresponds to one
+// trailing `__witness_*` slot on the lowered function.
+//
+// Iteration order is the typeParam declaration order (outer loop) crossed
+// with the constraint declaration order from `addConstraint` (inner loop),
+// matching the parser's left-to-right walk of the `where` clause. This is
+// the canonical order both the function body and every call site rely on
+// when indexing witness slots.
+function collectFunctionWitnessConstraints(project Project, func IrFunction) returns WhereClauseArray
+	var out = WhereClauseArray.create()
 	if let recvType = try enclosingTypeName(project, name: func.name) 'haveRecv'
 		for i in 0 upto project.typeParameters.declaringTypeNames.count() 'scan'
-			let d = try project.typeParameters.declaringTypeNames.get(i) otherwise ""
+			let d = try project.typeParameters.declaringTypeNames.get(i) otherwise panic("collectFunctionWitnessConstraints: declaringTypeNames.get OOB at {i}")
 			if d == recvType 'match'
+				let paramName = project.typeParameters.getName(i)
 				let cs = project.typeParameters.getConstraints(i)
-				if cs.count() > 0 'hasConstraint'
-					return true
-				end 'hasConstraint'
+				for j in 0 upto cs.count() 'eachTrait'
+					let traitName = try cs.get(j) otherwise panic("collectFunctionWitnessConstraints: constraints.get OOB at {j}")
+					out.push(WhereClause.createScoped(paramName, requiredTraitName: traitName, declaringTypeName: recvType))
+				end 'eachTrait'
 			end 'match'
 		end 'scan'
 	end 'haveRecv'
-	return false
-end 'functionHasWhereClausesForLowering'
+	return out
+end 'collectFunctionWitnessConstraints'
 
 function enclosingTypeName(project Project, name String) returns String throws EnclosingTypeError
 	let bytes = name.toByteArray()
@@ -4708,3 +4987,25 @@ function refEqOpcode(negate bool) returns StdArithBinaryOpcode
 	end 'ne'
 	return StdArithBinaryOpcode.cmpI64Eq
 end 'refEqOpcode'
+
+function predicateIsEqOrNe(predicate CmpPredicate) returns bool
+	return match predicate 'p'
+		eq gives true
+		ne gives true
+		lt gives false
+		le gives false
+		gt gives false
+		ge gives false
+	end 'p'
+end 'predicateIsEqOrNe'
+
+function predicateIsNe(predicate CmpPredicate) returns bool
+	return match predicate 'p'
+		ne gives true
+		eq gives false
+		lt gives false
+		le gives false
+		gt gives false
+		ge gives false
+	end 'p'
+end 'predicateIsNe'
