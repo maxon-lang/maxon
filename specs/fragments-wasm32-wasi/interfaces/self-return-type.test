@@ -1,0 +1,78 @@
+// Test: self-return-type
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Movable
+	function move(dx Integer, dy Integer) returns Self
+end 'Movable'
+
+type Point implements Movable
+	export var x Integer
+	export var y Integer
+
+	function move(dx Integer, dy Integer) returns Point
+		return Point{x: x + dx, y: y + dy}
+	end 'move'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(x: 10, y: 20)
+	let p2 = p.move(5, dy: 10)
+	return p2.x + p2.y
+end 'main'
+---
+ExitCode: 45
+---
+// CompiledIR
+module {
+  func @Point.move(local0: i64, local1: i64, local2: i64) -> i64 {
+  entry:
+    %13 = mir.param local0 : i64
+    %14 = mir.param local1 : i64
+    %15 = mir.param local2 : i64
+    %3 = mir.mov_imm 16 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    %5 = mir.load %13, 0
+    %8 = mir.add.i64 %5, %14
+    mir.store %8, %4, 0
+    %9 = mir.load %13, 8
+    %12 = mir.add.i64 %9, %15
+    mir.store %12, %4, 8
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %0, %13, 0
+    mir.store %1, %13, 8
+    %4 = mir.mov_imm 5 : i64
+    %5 = mir.mov_imm 10 : i64
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    %16 = mir.load %13, 0
+    %17 = mir.add.i64 %16, %4
+    mir.store %17, %15, 0
+    %18 = mir.load %13, 8
+    %19 = mir.add.i64 %18, %5
+    mir.store %19, %15, 8
+    %8 = mir.load %15, 0
+    %10 = mir.load %15, 8
+    %11 = mir.add.i64 %8, %10
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %11, %20
+    mir.cond_br %21 [then: __range_panic_4(), else: __range_ok_4()]
+  __range_panic_4:
+    %22 = mir.global_addr @__panic_msg_4
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_4:
+    mir.ret %11
+  }
+}
+---

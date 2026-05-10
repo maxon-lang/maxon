@@ -531,14 +531,59 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		bindingNames.push(conf.interfaceName)
 		bindingTypes.push(internMaxonType(project, name: declName))
 
-		for sig in iface.methods 'eachMethod'
-			let substituted = substituteMethodSig(project, sig: sig, bindingNames: bindingNames, bindingTypes: bindingTypes)
-			expected.push(substituted)
-		end 'eachMethod'
+		// Walk this interface and every transitively-extended parent so the
+		// implementing type is responsible for satisfying the inherited methods
+		// too — `interface Derived extends Base` means a type that
+		// `implements Derived` must declare every method from both `Derived`
+		// and `Base`. Each parent contributes a `(parentName → declName)`
+		// binding so any `Self` references inside the parent's signatures
+		// (parsed as `MaxonType.named(<parentName>)`) substitute back to the
+		// implementing type, mirroring the C# bootstrap's `CollectInterfaceMethods`.
+		var visited = StringArray.create()
+		collectInterfaceMethodsInto(project, iface: iface, declName: declName, directInterfaceName: conf.interfaceName, bindingNames: bindingNames, bindingTypes: bindingTypes, expected: expected, visited: visited)
 	end 'eachConf'
 
 	return expected
 end 'computeExpectedMethodsForConformances'
+
+// Walk an interface and its `extends` ancestors, appending each method
+// signature (substituted against the binding map) into `expected`. The
+// `visited` set guards against cycles and against an ancestor being reached
+// twice via two different extends paths. For each ancestor visited, we
+// temporarily push `(ancestorName → declName)` onto the shared binding
+// arrays so any `Self` references parsed inside that ancestor's body
+// resolve to the implementing type, then pop after recursion so siblings
+// see the original binding state.
+function collectInterfaceMethodsInto(project Project, iface IrInterface, declName String, directInterfaceName String, bindingNames StringArray, bindingTypes MaxonTypeArray, expected InterfaceMethodSigArray, visited StringArray)
+	for v in visited 'checkVisit'
+		if v == iface.name 'hit'
+			return
+		end 'hit'
+	end 'checkVisit'
+	visited.push(iface.name)
+
+	for sig in iface.methods 'eachMethod'
+		var substituted = substituteMethodSig(project, sig: sig, bindingNames: bindingNames, bindingTypes: bindingTypes)
+		substituted.sourceInterfaceName = iface.name
+		substituted.directInterfaceName = directInterfaceName
+		expected.push(substituted)
+	end 'eachMethod'
+
+	for parentName in iface.extendsNames 'eachParent'
+		let parent = try project.interfaces.get(parentName) otherwise continue
+		// Augment bindings with `(parentName → declName)` so the parent's
+		// `Self` references substitute correctly. The parent inherits the
+		// child's `usesParams` bindings unchanged — interface inheritance in
+		// Maxon doesn't introduce new type parameters at the boundary.
+		// Push/pop the augmentation so sibling parents at this level see the
+		// original binding state on entry.
+		bindingNames.push(parentName)
+		bindingTypes.push(internMaxonType(project, name: declName))
+		collectInterfaceMethodsInto(project, iface: parent, declName: declName, directInterfaceName: directInterfaceName, bindingNames: bindingNames, bindingTypes: bindingTypes, expected: expected, visited: visited)
+		try bindingNames.pop() otherwise panic("collectInterfaceMethodsInto: bindingNames.pop after parent {parentName}")
+		try bindingTypes.pop() otherwise panic("collectInterfaceMethodsInto: bindingTypes.pop after parent {parentName}")
+	end 'eachParent'
+end 'collectInterfaceMethodsInto'
 
 // Apply the binding map to one method signature: every parameter type and
 // the return type get walked through `substituteMaxonType`; the throws

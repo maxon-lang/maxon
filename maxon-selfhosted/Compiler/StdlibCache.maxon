@@ -1332,7 +1332,10 @@ end 'translateMaxonReturnType'
 function translateInterfaceMethodSig(project Project, data StdlibCacheData, sig InterfaceMethodSig) returns InterfaceMethodSig
 	let destParamTypes = translateCapturedTypeArray(project, data: data, src: sig.paramTypes)
 	let destReturn = translateMaxonReturnType(project, data: data, rt: sig.returnType)
-	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, isStatic: sig.isStatic, line: sig.line, column: sig.column)
+	var translated = InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: destParamTypes, returnType: destReturn, throwsTypeName: sig.throwsTypeName, isStatic: sig.isStatic, line: sig.line, column: sig.column)
+	translated.sourceInterfaceName = sig.sourceInterfaceName
+	translated.directInterfaceName = sig.directInterfaceName
+	return translated
 end 'translateInterfaceMethodSig'
 
 // Translate a captured IrInterface: each method sig's paramTypes / returnType

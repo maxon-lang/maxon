@@ -884,6 +884,7 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 - A type can conform to multiple interfaces: `type Foo implements A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
 - Static interface methods use `static function method()` syntax in implementations
+- One interface can extend another with `interface Derived extends Base`. A type that lists `implements Derived` must declare every method from `Derived` and every method transitively inherited from `Base`; missing methods inherited via `extends` are reported with a `(from BaseName)` suffix in the diagnostic
 
 **Interface-Typed Parameters**
 

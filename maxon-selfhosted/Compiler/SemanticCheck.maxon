@@ -66,7 +66,11 @@ function checkConformanceForType(project Project, typeName String, expected Inte
 	for sig in expected 'eachExpected'
 		let qualified = "{typeName}.{sig.name}"
 		if not project.funcReturnTypes.contains(qualified) 'absent'
-			missing.push(formatMethodSig(project, sig: sig))
+			var entry = formatMethodSig(project, sig: sig)
+			if not sig.sourceInterfaceName.isEmpty() and sig.sourceInterfaceName != sig.directInterfaceName 'fromExtends'
+				entry = "{entry} (from {sig.sourceInterfaceName})"
+			end 'fromExtends'
+			missing.push(entry)
 			continue
 		end 'absent'
 		// Static interface methods are validated by the compiler directly; no

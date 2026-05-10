@@ -29,6 +29,20 @@ export type InterfaceMethodSig
 	export var isStatic bool
 	export var line LineNumber
 	export var column ColumnNumber
+	// Originating interface — the name of the interface that declared this
+	// method signature. For methods inherited via `extends`, this is the
+	// ancestor's name, not the directly-implemented child's name. Empty
+	// string when the field is irrelevant (parser-emitted entries before
+	// conformance substitution carry "" here; expected-method substitution
+	// fills it in).
+	export var sourceInterfaceName String = ""
+	// Directly-implemented interface — the name of the interface listed on
+	// the conforming type's `implements` clause that pulled this method in.
+	// When `sourceInterfaceName == directInterfaceName`, the method comes
+	// straight off the directly-listed interface; otherwise the method is
+	// inherited through `extends` and the diagnostic gets a `(from <src>)`
+	// suffix so users can find which ancestor declared the missing entry.
+	export var directInterfaceName String = ""
 
 	export static function create(name String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType, throwsTypeName ThrowsClause, isStatic bool, line LineNumber, column ColumnNumber) returns InterfaceMethodSig
 		return Self{name: name, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType, throwsTypeName: throwsTypeName, isStatic: isStatic, line: line, column: column}

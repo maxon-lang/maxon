@@ -27,13 +27,15 @@ Phase 10:  Closures               [~] closure-self landed (function types in par
                                       env capture for `self`, indirect calls on x64/arm64/wasm);
                                       general closure-capture (arbitrary outer locals) still pending
 Phase 11:  Interfaces & Generics  [~] hybrid model — 11.0–11.4 spine + 11.6 inliner with multi-block splice +
-                                      loop-depth multipliers landed. Five of the six Phase-11 specs
-                                      previously whitelisted (`interface-conformance`, `interfaces`,
-                                      `where-clauses`, `associated-types`, `ranged-typealias`) were
-                                      disabled during 2026-05-05 code review pending Phase-11.x stabilisation;
-                                      only `equatable` (7/7) remains enabled. C1.e (PrimitiveExtensions)
-                                      blocked on Phase 7 string interpolation; C2.d (per-function dispatch)
-                                      deferred to follow-up sessions.
+                                      loop-depth multipliers landed. `interfaces` re-enabled
+                                      2026-05-09 with transitive `extends` conformance check (E3016
+                                      now reports inherited missing methods with the matching
+                                      `(from <ParentInterface>)` annotation). Four Phase-11 specs
+                                      remain disabled (`interface-conformance`, `where-clauses`,
+                                      `associated-types`, `ranged-typealias`) pending Phase-11.x
+                                      stabilisation. C1.e (PrimitiveExtensions) blocked on Phase 7
+                                      string interpolation; C2.d (per-function dispatch) deferred to
+                                      follow-up sessions.
 Phase 12:  Global Variables       [~] top-level let / var (int / float / bool / enum / `as`-cast /
                                       let-ref initializers), static var/let, float-typed globals
                                       via XMM load/store; struct runtime initializers possible

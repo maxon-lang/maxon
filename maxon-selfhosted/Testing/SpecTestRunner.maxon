@@ -57,7 +57,7 @@ let whitelist = ["basics",
 	// "vector", — needs sized `Vector with N` type
 	"bitwise-operators",
 	"interface-conformance",
-	// "interfaces", — disabled: Phase 11.x in-progress failures
+	"interfaces",
 	"equatable",
 	"primitive-stringable",
 	// "byte-string-literal", — 5/8 fragments pass with the byteStringLiteral
@@ -626,6 +626,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let compileStart = Process.currentTimeMs()
 	let batchedSource = buildResult.source
 	let covMapPath = batchExePath.changeExtension(".covmap")
+	emitWorkerCompiling("{specName} (batch of {tests.count()})")
 	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
@@ -865,6 +866,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// resolve like a real on-disk project.
 	startCapturingErrors()
 	let compileStart = Process.currentTimeMs()
+	emitWorkerCompiling("{specName}/{testName}")
 	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
 		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
@@ -1411,6 +1413,65 @@ end 'runSpecBatchWorker'
 let workerSingleFailMarker = "WORKER_SINGLE_FAIL:"
 let workerSingleResultMarker = "WORKER_SINGLE_RESULT:"
 
+// Breadcrumb marker workers emit on stderr right before each compile. The
+// parent uses the most recent one to identify which compile triggered a panic.
+// Format: `WORKER_COMPILING:<label>\n` where label is `spec/test` for single
+// fragments, `spec (batch of N)` for batch compiles. Stripped by the parent
+// before forwarding stderr so they don't pollute normal test output.
+let workerCompilingMarker = "WORKER_COMPILING:"
+
+// Emit the breadcrumb. Workers call this immediately before each compile so
+// that if the compile panics, the parent can read the last breadcrumb and
+// report which test was being compiled.
+function emitWorkerCompiling(label String)
+	printError("{workerCompilingMarker}{label}\n")
+end 'emitWorkerCompiling'
+
+// Pull the most recent `WORKER_COMPILING:` label out of the worker's stderr,
+// or empty if none. Walks lines; the last match wins, since panics happen
+// during the most recent compile.
+function lastCompilingLabelFromStderr(stderr String) returns String
+	var lastLabel = ""
+	let lines = stderr.split("\n")
+	for line in lines 'each'
+		let trimmed = trimWhitespace(line)
+		if not trimmed.startsWith(workerCompilingMarker) 'notMarker'
+			continue
+		end 'notMarker'
+		// The marker ends in `:` and the payload follows. Find the first colon
+		// so we don't have to take the marker's character count manually.
+		let colonIdx = try trimmed.findFirst(":") otherwise continue
+		let afterColon = try trimmed.indexAfter(colonIdx) otherwise continue
+		lastLabel = trimmed.slice(afterColon, endIndex: trimmed.endIndex())
+	end 'each'
+	return lastLabel
+end 'lastCompilingLabelFromStderr'
+
+// Strip `WORKER_COMPILING:` lines from a stderr blob so the parent's normal
+// forwarding doesn't dump them on the user. We keep the trailing newline of
+// each non-stripped line intact so multi-line panic traces stay readable.
+function stripCompilingBreadcrumbs(stderr String) returns String
+	if not stderr.contains(workerCompilingMarker) 'fastPath'
+		return stderr
+	end 'fastPath'
+	let lines = stderr.split("\n")
+	var out = ""
+	var first = true
+	for line in lines 'each'
+		let trimmed = trimWhitespace(line)
+		if trimmed.startsWith(workerCompilingMarker) 'skip'
+			continue
+		end 'skip'
+		if first 'firstLine'
+			out = line
+			first = false
+		end 'firstLine' else 'restLine'
+			out = "{out}\n{line}"
+		end 'restLine'
+	end 'each'
+	return out
+end 'stripCompilingBreadcrumbs'
+
 // True if the worker's stderr looks like a runtime panic from the compiler
 // itself (not a test fragment's panic — those are captured into the per-test
 // .err file, not the worker's own stderr). The runtime emits panics in a fixed
@@ -1434,12 +1495,20 @@ end 'workerStderrIsCompilerPanic'
 // message and stack trace) and panic the parent with a one-line summary so
 // the test run aborts with a non-zero exit code.
 function abortOnWorkerCompilerPanic(workerLabel String, stderr String)
+	let compilingLabel = lastCompilingLabelFromStderr(stderr)
+	let cleaned = stripCompilingBreadcrumbs(stderr)
 	printError("\n=== Compiler panic in worker ({workerLabel}) — aborting test run ===\n")
-	printError(stderr)
-	if not stderr.endsWith("\n") 'noTrailingNl'
+	if not compilingLabel.isEmpty() 'hasLabel'
+		printError("Panicked while compiling: {compilingLabel}\n")
+	end 'hasLabel'
+	printError(cleaned)
+	if not cleaned.endsWith("\n") 'noTrailingNl'
 		printError("\n")
 	end 'noTrailingNl'
-	panic("Compiler panicked while running spec tests; see stderr above")
+	if compilingLabel.isEmpty() 'noLabel'
+		panic("Compiler panicked while running spec tests; see stderr above")
+	end 'noLabel'
+	panic("Compiler panicked while compiling {compilingLabel}; see stderr above")
 end 'abortOnWorkerCompilerPanic'
 
 // Emit one WORKER_SINGLE_RESULT summary line for a spec.
@@ -1787,8 +1856,9 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
 			abortOnWorkerCompilerPanic("fallback [{h.specNames}]", stderr: stderrStr)
 		end 'panicked'
-		if not stderrStr.isEmpty() 'hasStderr'
-			printError(stderrStr)
+		let cleanedStderr = stripCompilingBreadcrumbs(stderrStr)
+		if not cleanedStderr.isEmpty() 'hasStderr'
+			printError(cleanedStderr)
 		end 'hasStderr'
 		workerStdouts.push(stdoutStr)
 		workerSpecLists.push(h.specNames)
@@ -1924,8 +1994,9 @@ function retryFallbackTestsIndividually(specName String, tests SpecTestArray, ex
 		if workerStderrIsCompilerPanic(pr.stderr) 'panicked'
 			abortOnWorkerCompilerPanic("retry [{specName}/{t.name}]", stderr: pr.stderr)
 		end 'panicked'
-		if not pr.stderr.isEmpty() 'hasStderr'
-			printError(pr.stderr)
+		let cleanedStderr = stripCompilingBreadcrumbs(pr.stderr)
+		if not cleanedStderr.isEmpty() 'hasStderr'
+			printError(cleanedStderr)
 		end 'hasStderr'
 		var sawResult = false
 		let lines = pr.stdout.split("\n")
@@ -2133,7 +2204,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 
 	for w in outcomes 'collect'
 		let stdout = w.stdout
-		let stderr = w.stderr
+		let stderr = stripCompilingBreadcrumbs(w.stderr)
 
 		if not stderr.isEmpty() 'hasStderr'
 			printError(stderr)
@@ -2646,9 +2717,11 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			abortOnWorkerCompilerPanic("batch [{worker.specNames}]", stderr: stderr)
 		end 'panicked'
 
-		// Forward the worker's log output to our stderr.
-		if not stderr.isEmpty() 'hasWorkerStderr'
-			printError(stderr)
+		// Forward the worker's log output to our stderr (minus compile-breadcrumb
+		// markers, which are only useful for panic diagnosis).
+		let cleanedStderr = stripCompilingBreadcrumbs(stderr)
+		if not cleanedStderr.isEmpty() 'hasWorkerStderr'
+			printError(cleanedStderr)
 		end 'hasWorkerStderr'
 
 		// Track which specs this worker was assigned so we can detect missing results.

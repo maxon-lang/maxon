@@ -1,0 +1,57 @@
+// Test: method-call-syntax
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Incrementable
+	function inc() returns Integer
+end 'Incrementable'
+
+type Value implements Incrementable
+	let n Integer
+
+	function inc() returns Integer
+		return n + 1
+	end 'inc'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let v = Value.create(n: 41)
+	return v.inc()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Value.inc(local0: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %1 = mir.load %5, 0
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.add.i64 %1, %3
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 41 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0
+    %6 = mir.load %5, 0
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.add.i64 %6, %7
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_5(), else: __range_ok_5()]
+  __range_panic_5:
+    %11 = mir.global_addr @__panic_msg_5
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_5:
+    mir.ret %8
+  }
+}
+---

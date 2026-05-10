@@ -259,7 +259,7 @@ type Counter implements Describable
 	let count Integer
 
 	function describe() returns Integer
-		return 100 + count
+		return 50 + count
 	end 'describe'
 
 	function value() returns Integer
@@ -272,12 +272,12 @@ type Counter implements Describable
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 42)
+	let c = Counter.create(count: 12)
 	return c.describe() + c.value()
 end 'main'
 ```
 ```exitcode
-184
+74
 ```
 
 

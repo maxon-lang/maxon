@@ -27,34 +27,31 @@ ExitCode: 15
 ---
 // CompiledIR
 module {
-  func @Accumulator.add(rcx: i64, rdx: i64) -> i64 {
+  func @Accumulator.add(local0: i64, local1: i64) -> i64 {
   entry:
-    x64.mov r8, [rcx+0] (8b)
-    x64.mov r9, r8
-    x64.add r9, rdx
-    x64.mov r8, r9
-    x64.ret
+    %6 = mir.param local0 : i64
+    %7 = mir.param local1 : i64
+    %2 = mir.load %6, 0
+    %5 = mir.add.i64 %2, %7
+    mir.ret %5
   }
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8d, 8
-    x64.mov rcx, r8
-    x64.call mrt_alloc
-    x64.mov r9d, 10
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, r9
-    x64.add r8, 5
-    x64.cmp r8, 125
-    x64.jbe __range_ok_2
+    %0 = mir.mov_imm 10 : i64
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %0, %6, 0
+    %3 = mir.mov_imm 5 : i64
+    %7 = mir.load %6, 0
+    %8 = mir.add.i64 %7, %3
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_2(), else: __range_ok_2()]
   __range_panic_2:
-    x64.lea r8, [rip+__panic_msg_2]
-    x64.mov rcx, r8
-    x64.call mrt_panic
+    %11 = mir.global_addr @__panic_msg_2
+    %12 = mir.call @mrt_panic(%11)
   __range_ok_2:
-    x64.epilogue
-    x64.ret
+    mir.ret %8
   }
 }
 ---
