@@ -31,28 +31,26 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 10
-    x64.mov [r12+0], r8 (8b)
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.mov r9, [r8+0] (8b)
-    x64.mov esi, 42
-    x64.mov [r9+0], rsi (8b)
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, [r9+0] (8b)
-    x64.cmp r8, 125
-    x64.jbe __range_ok_1
+    %0 = mir.mov_imm 10 : i64
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %11, %13, 0
+    %5 = mir.load %13, 0
+    %6 = mir.mov_imm 42 : i64
+    mir.store %6, %5, 0
+    %8 = mir.load %13, 0
+    %9 = mir.load %8, 0
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %9, %14
+    mir.cond_br %15 [then: __range_panic_1(), else: __range_ok_1()]
   __range_panic_1:
-    x64.lea rcx, [rip+__panic_msg_1]
-    x64.call mrt_panic
+    %16 = mir.global_addr @__panic_msg_1
+    %17 = mir.call @mrt_panic(%16)
   __range_ok_1:
-    x64.epilogue
-    x64.ret
+    mir.ret %9
   }
 }
 ---

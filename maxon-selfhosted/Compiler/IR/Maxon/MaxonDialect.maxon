@@ -996,7 +996,11 @@ export union MaxonOp
 	//     `Type.method`), then resolves the field as for fieldLoad/Store.
 	structAlloc(result ByteArray, structName ByteArray, range SourceRange)
 	fieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, range SourceRange)
-	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, range SourceRange)
+	// `isInit` distinguishes a struct-literal field initialization (where
+	// writing a `let`-declared field is part of construction) from a post-
+	// construction reassignment (where `let` rejects with E2013). Lowering
+	// only enforces immutability when `isInit == false`.
+	fieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange)
 	selfFieldLoad(result ByteArray, fieldName ByteArray, range SourceRange)
 	selfFieldStore(fieldName ByteArray, value ByteArray, range SourceRange)
 	// Parser-emitted placeholder for a bare or qualified name read whose
@@ -1171,7 +1175,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		panic(stringId, _) gives "maxon.panic \"{project.strings.get(stringId)}\" #{stringId}"
 		structAlloc(result, structName, _) gives "%{String.from(result)} = maxon.struct_alloc {lb}type = {String.from(structName)}{rb}"
 		fieldLoad(result, receiver, fieldName, _) gives "%{String.from(result)} = maxon.field_load %{String.from(receiver)}.{String.from(fieldName)}"
-		fieldStore(receiver, fieldName, value, _) gives "maxon.field_store %{String.from(receiver)}.{String.from(fieldName)}, %{String.from(value)}"
+		fieldStore(receiver, fieldName, value, _, _) gives "maxon.field_store %{String.from(receiver)}.{String.from(fieldName)}, %{String.from(value)}"
 		selfFieldLoad(result, fieldName, _) gives "%{String.from(result)} = maxon.self_field_load .{String.from(fieldName)}"
 		selfFieldStore(fieldName, value, _) gives "maxon.self_field_store .{String.from(fieldName)}, %{String.from(value)}"
 		unresolvedRead(result, name, _) gives "%{String.from(result)} = maxon.unresolved_read @{name}"

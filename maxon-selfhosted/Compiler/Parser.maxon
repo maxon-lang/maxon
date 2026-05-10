@@ -54,6 +54,11 @@ export typealias BoolArray = Array with bool
 
 typealias TokenIter = ArrayIterator with Token
 
+// Number of `.field` segments on a field-assignment LHS (`a.b.c = …` has
+// depth 2). No concrete upper bound — bounded only by source-program size.
+typealias FieldChainDepth = int(0 to u64.max)
+typealias ChainPeekOffset = int(0 to u64.max)
+
 // Stage E (closures): one entry per distinct outer-scope name captured by
 // a closure body. The parser appends to `closureCaptures` in first-reference
 // order so `index` doubles as the env-array slot at lowering time. Capture
@@ -1057,27 +1062,31 @@ export type Parser
 			_ = try parseExpression(block)
 			return
 		end 'isCall' else if peekToken.kind == TokenKind.dot 'maybeDotCall'
-			// Distinguish three identifier-dot-identifier-equals shapes:
-			//   localVar.field = expr   → fieldStore on the loaded local
-			//   TypeName.field = expr   → qualified-global store (TypeResolution
-			//                              rewrites to globalStore once
-			//                              `project.topLevelVars` is populated)
-			//   anything else with a dot → method call / field read on the
-			//                              expression path
+			// Distinguish field-assignment shapes from expression-path uses
+			// (method calls, field reads):
+			//   localVar.field(.field)* = expr → fieldStore on the loaded local
+			//                                     (zero-or-more chained loads)
+			//   TypeName.field = expr          → qualified-global store (TypeResolution
+			//                                     rewrites to globalStore once
+			//                                     `project.topLevelVars` is populated)
+			//   anything else with a dot       → method call / field read on the
+			//                                     expression path
 			// The local-var case must come first so a local `newState` shadows
 			// any global / type with the same leading name.
-			let afterDot = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
-			let afterField = try cursor.peek(3) otherwise throw ParserError.unexpectedEof
-			if afterDot.kind == TokenKind.identifier and afterField.kind == TokenKind.equals 'maybeQualified'
+			let chainLen = chainedFieldAssignDepth()
+			if chainLen >= 1 'isFieldAssign'
 				let receiverName = cursor.current().value
-				if scope.contains(receiverName) 'isLocalFieldAssign'
-					try parseLocalFieldAssignment(block)
+				if scope.contains(receiverName) 'leadingIsLocal'
+					try parseLocalFieldAssignment(block, chainLen: chainLen)
 					return
-				end 'isLocalFieldAssign'
-				let qualifiedName = "{receiverName}.{afterDot.value}"
-				try parseGlobalAssignment(block, qualifiedName: qualifiedName)
-				return
-			end 'maybeQualified'
+				end 'leadingIsLocal'
+				if chainLen == 1 'singleDot'
+					let afterDot = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
+					let qualifiedName = "{receiverName}.{afterDot.value}"
+					try parseGlobalAssignment(block, qualifiedName: qualifiedName)
+					return
+				end 'singleDot'
+			end 'isFieldAssign'
 			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
 			_ = try parseExpression(block)
 			return
@@ -1128,28 +1137,72 @@ export type Parser
 		_ = try parseExpression(block)
 	end 'parseSelfStatement'
 
-	// Parse `localVar.fieldName = <expr>` for a `localVar` already in scope.
-	// Loads the local var, then emits a fieldStore on the loaded value.
-	// TypeResolution validates the field name against the receiver's struct
-	// type. Caller has proven identifier-dot-identifier-equals via peeks AND
-	// that the leading identifier is in `scope` (so a local shadows a same-
-	// named top-level var/type).
-	function parseLocalFieldAssignment(block IrBlock) throws ParserError
-		let nameToken = try consume()
-		try eat(TokenKind.dot)
-		let fieldToken = try consume()
-		try eat(TokenKind.equals)
+	// Returns the number of `.identifier` segments after the leading
+	// identifier when the cursor sits at an `identifier(.identifier)+ =`
+	// pattern. Returns 0 if the pattern does not match. The leading-
+	// identifier-is-local check is the caller's responsibility — that
+	// distinction decides between a local-var fieldStore and a qualified-
+	// global store.
+	function chainedFieldAssignDepth() returns FieldChainDepth
+		var depth = 0 as FieldChainDepth
+		var offset = 1 as ChainPeekOffset
+		while true 'count'
+			let dotTok = try cursor.peek(offset) otherwise return 0 as FieldChainDepth
+			if dotTok.kind != TokenKind.dot 'notDot'
+				break
+			end 'notDot'
+			let fieldTok = try cursor.peek(offset + 1) otherwise return 0 as FieldChainDepth
+			if fieldTok.kind != TokenKind.identifier 'notId'
+				return 0 as FieldChainDepth
+			end 'notId'
+			depth = depth + 1
+			offset = offset + 2
+		end 'count'
+		if depth == 0 'noDots'
+			return 0 as FieldChainDepth
+		end 'noDots'
+		let trailing = try cursor.peek(offset) otherwise return 0 as FieldChainDepth
+		if trailing.kind != TokenKind.equals 'notAssign'
+			return 0 as FieldChainDepth
+		end 'notAssign'
+		return depth
+	end 'chainedFieldAssignDepth'
 
+	// Parse `localVar.field1(.fieldN)* = <expr>` where `localVar` is in
+	// scope. Lowers to: varLoad(localVar) → fieldLoad(field1) → … →
+	// fieldStore(lastField, value: rhs). Each intermediate fieldLoad's
+	// result becomes the receiver of the next op, so a `.value =` write
+	// flows down the same load path a read would synthesize. The single-
+	// field case (`x.f = …`, chainLen == 1) emits varLoad + fieldStore
+	// with no intermediate loads. TypeResolution / lowering perform the
+	// per-field validation (existence, mutability) on each emitted op.
+	function parseLocalFieldAssignment(block IrBlock, chainLen FieldChainDepth) throws ParserError
+		let nameToken = try consume()
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		let receiverName = freshSynthName()
 		let nameRange = SourceRange.ofToken(nameToken)
+		var receiverName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.varLoad(receiverName, slotId: slot, slotType: MaxonType.unresolved, range: nameRange))
+
+		// Walk the first chainLen-1 dots as field reads to materialize the
+		// innermost struct receiver, leaving the final dot for the store.
+		for _ in 0 upto chainLen - 1 'eachLoad'
+			try eat(TokenKind.dot)
+			let fieldTok = try consume()
+			let nextReceiver = freshSynthName()
+			let loadRange = SourceRange.ofToken(fieldTok)
+			module.appendOp(block, op: MaxonOp.fieldLoad(nextReceiver, receiver: receiverName, fieldName: fieldTok.value.toByteArray(), range: loadRange))
+			receiverName = nextReceiver
+		end 'eachLoad'
+
+		try eat(TokenKind.dot)
+		let lastFieldTok = try consume()
+		try eat(TokenKind.equals)
 
 		currentBlock = block
 		let exprResult = try parseExpression(block)
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
-		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: fieldToken.value.toByteArray(), value: exprName(exprResult), range: stmtRange))
+		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: lastFieldTok.value.toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
 	end 'parseLocalFieldAssignment'
 
 	// Parse `TypeName.fieldName = <expr>`. The store target is emitted as
@@ -2401,6 +2454,7 @@ export type Parser
 
 			let kindToken = cursor.current()
 			if kindToken.kind == TokenKind.var or kindToken.kind == TokenKind.let 'isField'
+				let isMutableField = kindToken.kind == TokenKind.var
 				try eat(kindToken.kind)
 				let fieldNameToken = try consume()
 				checkReservedDeclName(fieldNameToken)
@@ -2410,7 +2464,7 @@ export type Parser
 				// types are all handled uniformly. The legacy single-token
 				// consume couldn't see any of these shapes.
 				let fieldType = try parseTypeRef()
-				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset))
+				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset, isMutable: isMutableField))
 				fieldOffset = fieldOffset + 8
 				try skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.typealias 'isInnerAlias'
@@ -3165,7 +3219,7 @@ export type Parser
 			if let fieldSlot = try scope.lookup(field.name) 'hasField'
 				let fieldValName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.varLoad(fieldValName, slotId: fieldSlot, slotType: field.fieldType, range: SourceRange.none()))
-				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, fieldName: field.name.toByteArray(), value: fieldValName, range: SourceRange.none()))
+				module.appendOp(block, op: MaxonOp.fieldStore(selfLoadName, fieldName: field.name.toByteArray(), value: fieldValName, isInit: true, range: SourceRange.none()))
 			end 'hasField'
 		end 'eachField'
 	end 'emitFieldWritebacks'
@@ -6171,7 +6225,7 @@ export type Parser
 			let fieldValue = try parseExpression(block)
 			let fieldLastToken = previousToken()
 
-			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
+			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 
 			try skipNewlines()
 		end 'fields'

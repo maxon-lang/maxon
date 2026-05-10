@@ -79,7 +79,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 23
+let CACHE_FORMAT_VERSION = 24
 
 // ============================================================
 // Types
@@ -590,6 +590,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			try writeString(buf, s: field.name)
 			try writeMaxonType(project, buf: buf, t: field.fieldType)
 			writeDword(buf, value: field.offset)
+			writeBoolByte(buf, b: field.isMutable)
 		end 'eachField'
 
 		// Cache v7: persist the per-struct inner-typealias map so cache-hit
@@ -1022,7 +1023,9 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			pos = p13
 			let fieldOffset = readDword(buf, offset: pos)
 			pos = pos + 4
-			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset))
+			let (isMutable, pIm) = readBoolByte(buf, offset: pos)
+			pos = pIm
+			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable))
 		end 'eachField'
 
 		// Cache v7: read back the per-struct inner-typealias map. The
@@ -1385,7 +1388,7 @@ end 'translateIrInterface'
 function translateStructType(project Project, data StdlibCacheData, st StructType) returns StructType
 	var fields = StructFieldArray.create()
 	for f in st.fields 'eachField'
-		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset))
+		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable))
 	end 'eachField'
 	var translatedInner = ResolvedInnerAliasMap.create()
 	for (aliasName, aliasType) in st.innerAliases 'eachInner'

@@ -472,8 +472,8 @@ function registerManagedMemoryCursorStruct(project Project)
 	end 'alreadyDone'
 	var fields = StructFieldArray.create()
 	let i64Type = MaxonType.integer
-	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0))
-	fields.push(StructField.create("position", fieldType: i64Type, offset: 8))
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true))
+	fields.push(StructField.create("position", fieldType: i64Type, offset: 8, isMutable: true))
 	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryCursorStruct: stdlib bootstrap path rejected")
 	let st = StructType.create("__ManagedMemoryCursor", fields: fields, byteSize: 16, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 	try project.structTypes.insert("__ManagedMemoryCursor", value: st) otherwise ignore
@@ -529,11 +529,11 @@ function registerManagedMemoryStruct(project Project)
 	end 'alreadyDone'
 	var fields = StructFieldArray.create()
 	let i64Type = MaxonType.integer
-	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0))
-	fields.push(StructField.create("length", fieldType: i64Type, offset: 8))
-	fields.push(StructField.create("capacity", fieldType: i64Type, offset: 16))
-	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24))
-	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32))
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true))
+	fields.push(StructField.create("length", fieldType: i64Type, offset: 8, isMutable: true))
+	fields.push(StructField.create("capacity", fieldType: i64Type, offset: 16, isMutable: true))
+	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24, isMutable: true))
+	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32, isMutable: true))
 	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryStruct: stdlib bootstrap path rejected")
 	let st = StructType.create("__ManagedMemory", fields: fields, byteSize: 40, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 	try project.structTypes.insert("__ManagedMemory", value: st) otherwise ignore
@@ -743,9 +743,11 @@ end 'LabelSlotError'
 type FieldHit
 	export var offset FieldOffset
 	export var fieldType MaxonType
+	export var isMutable bool
+	export var structName String
 
-	export static function create(offset FieldOffset, fieldType MaxonType) returns FieldHit
-		return Self{offset: offset, fieldType: fieldType}
+	export static function create(offset FieldOffset, fieldType MaxonType, isMutable bool, structName String) returns FieldHit
+		return Self{offset: offset, fieldType: fieldType, isMutable: isMutable, structName: structName}
 	end 'create'
 end 'FieldHit'
 
@@ -1298,7 +1300,7 @@ type MaxonToStdLowering
 			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
 			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
 			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
-			fieldStore(receiver, fieldName, value, _) then self.lowerFieldStore(receiver: receiver, fieldName: fieldName, value: value, dstBlock: dstBlock)
+			fieldStore(receiver, fieldName, value, isInit, range) then self.lowerFieldStore(receiver: receiver, fieldName: fieldName, value: value, isInit: isInit, range: range, dstBlock: dstBlock)
 			selfFieldLoad(result, fieldName, _) then self.lowerSelfFieldLoad(result, fieldName: fieldName, dstBlock: dstBlock)
 			selfFieldStore(fieldName, value, _) then self.lowerSelfFieldStore(fieldName: fieldName, value: value, dstBlock: dstBlock)
 			// `unresolvedRead`/`unresolvedAssign` are parser-emitted placeholders
@@ -3632,7 +3634,7 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerFieldLoad'
 
-	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, dstBlock IrBlock)
+	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
@@ -3640,6 +3642,14 @@ type MaxonToStdLowering
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			return
 		end 'notFound'
+		// `let` fields are immutable post-construction, but writable when the
+		// store is an in-literal initializer; the parser tags those stores with
+		// `isInit: true` (struct literals + factory writeback paths).
+		if not isInit and not hit.isMutable 'immutableField'
+			let path = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
+			reportCompileError(self.project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to field '{hit.structName}.{fieldNameStr}' because it is immutable (declare with 'var' to make it mutable)", line: range.line, column: range.column, filePath: path)
+			return
+		end 'immutableField'
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: self.resolveName(value), isFloat: isFloat)))
 	end 'lowerFieldStore'
@@ -3712,7 +3722,7 @@ type MaxonToStdLowering
 		let structType = try self.project.structTypes.get(structName) otherwise throw FieldLookupError.notFound
 		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise throw FieldLookupError.notFound
 		let field = try structType.fields.get(fieldIdx) otherwise panic("StructType.fieldByName references missing field index {fieldIdx} on '{structName}' (count={structType.fields.count()})")
-		return FieldHit.create(field.offset, fieldType: field.fieldType)
+		return FieldHit.create(field.offset, fieldType: field.fieldType, isMutable: field.isMutable, structName: structName)
 	end 'lookupFieldByStructName'
 
 	// The parser only ever produces condBr/br/ret/enumMatchArm as block

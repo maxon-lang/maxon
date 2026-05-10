@@ -2008,14 +2008,18 @@ export function anyStructHasInnerAlias(project Project, aliasName String) return
 	return false
 end 'anyStructHasInnerAlias'
 
-// Struct field descriptor: name, type, and byte offset within the struct.
+// Struct field descriptor: name, type, byte offset, and `var`/`let`
+// mutability. `isMutable` mirrors the source-level keyword so post-construction
+// writes (`receiver.field = value`) can be rejected with E2013 against
+// `let`-declared fields without re-parsing.
 export type StructField
 	export var name String
 	export var fieldType MaxonType
 	export var offset FieldOffset
+	export var isMutable bool
 
-	export static function create(name String, fieldType MaxonType, offset FieldOffset) returns StructField
-		return Self{name: name, fieldType: fieldType, offset: offset}
+	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool) returns StructField
+		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable}
 	end 'create'
 end 'StructField'
 
