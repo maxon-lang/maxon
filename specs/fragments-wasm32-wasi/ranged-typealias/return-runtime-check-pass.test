@@ -1,0 +1,44 @@
+// Test: return-runtime-check-pass
+typealias Score = int(0 to 100)
+
+function half(s Score) returns Score
+	return s / 2
+end 'half'
+
+function main() returns ExitCode
+	return half(84)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @half(local0: u8) -> u8 {
+  entry:
+    %4 = mir.param local0 : u8
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.div.i64 %4, %2
+    %5 = mir.mov_imm 100 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_8(), else: __range_ok_8()]
+  __range_panic_8:
+    %7 = mir.global_addr @__panic_msg_9
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_8:
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 84 : i64
+    %1 = mir.call @half(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_9(), else: __range_ok_9()]
+  __range_panic_9:
+    %4 = mir.global_addr @__panic_msg_10
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_9:
+    mir.ret %1
+  }
+}
+---

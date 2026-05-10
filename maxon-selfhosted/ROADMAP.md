@@ -73,11 +73,39 @@ Legend: `[x]` complete, `[~]` partially done, `[ ]` not started.
 - **ARM64 backend** ([`Compiler/Targets/Arm64/`](Compiler/Targets/Arm64/)): full mirror of X64 backend.
 - **Object writers**: PE ([`Targets/Windows/PeWriter.maxon`](Compiler/Targets/Windows/PeWriter.maxon)), ELF ([`Targets/Linux/ElfWriter.maxon`](Compiler/Targets/Linux/ElfWriter.maxon)), Mach-O ([`Targets/Macos/MachOWriter.maxon`](Compiler/Targets/Macos/MachOWriter.maxon)), Wasm ([`Targets/Wasm/`](Compiler/Targets/Wasm/)).
 
-### Currently whitelisted specs (45)
+### Currently whitelisted specs (46)
 
-`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `match-simple`, `module-keyword`, `lexer-parser-robustness`, `try-otherwise-value-flow`, `closure-self`, `reserved-double-underscore`, `allocator`, `managed-memory-builtin`, `equatable`, `primitive-stringable`.
+`basics`, `print-function`, `variables`, `arithmetic`, `float-type`, `panic`, `range-check-panic`, `assignment`, `comparison-operators`, `expressions`, `function-declaration`, `if-statements`, `literals`, `return-statement`, `unary-negation`, `method-calls`, `static-methods`, `byte-type`, `type-casting`, `lexer-edge-cases`, `unary-operators`, `parentheses`, `missing-return-error`, `unknown-keyword-error`, `expected-expression-error`, `unused-parameters`, `parameter-labels`, `duplicate-block-identifiers`, `method-call-on-parameter`, `type-methods`, `self-keyword`, `contextual-literal-typing`, `implicit-type-conversion`, `namespaces`, `stdlib-basic`, `stdlib-autodiscovery`, `match-simple`, `module-keyword`, `lexer-parser-robustness`, `try-otherwise-value-flow`, `closure-self`, `reserved-double-underscore`, `allocator`, `managed-memory-builtin`, `equatable`, `primitive-stringable`, `ranged-typealias`.
 
-The previously-whitelisted Phase-11 specs (`enums-simple`, `interface-conformance`, `interfaces`, `where-clauses`, `associated-types`, `ranged-typealias`) were disabled during the 2026-05-05 code review. Each of those specs had partial-failure fragments tied to in-flight Phase-11.x work (witness-table interface dispatch, `__layout`/`__witness` runtime dispatch, ranged-int E3009/E3005 diagnostics, and a runtime cast issue). They will be re-enabled as the corresponding Phase-11.x work stabilises. Specs blocked entirely on Phase-11.4 dispatch (`interface-extensions`, `conditional-extensions`, `parsable-interface`, `primitive-comparable`, `primitive-cloneable`, `primitive-hashable`) remain commented out — they exit cleanly with `interface dispatch for method 'X' is unimplemented (Phase 11.4)` when a fragment hits the dispatch site.
+`ranged-typealias` was re-enabled on 2026-05-09 (43/43 fragments passing on
+both x64-windows and wasm32-wasi). Coverage:
+
+- Parse-time diagnostics: E2003 for bare-sized-type shorthand
+  (`typealias I = i64`), E3005 for mismatched type qualifiers, byte-
+  range overflow/negative, unrepresentable ranges, out-of-range integer
+  bound ordering.
+- Compile-time literal-range checks: E3005 on `LITERAL as RangedAlias`
+  (including unary-negated literals like `-5 as Positive`) and on
+  `return LITERAL` against ranged return types.
+- Runtime cast-site range checks: a new Maxon-level
+  [`expandCastRangeChecks`](Compiler/Passes/ExpandCastRangeChecks.maxon)
+  pass replaces parser-emitted `MaxonOp.castCheck` placeholders with a
+  cmp + condBr + panic guard, splitting the host block in place. The
+  pass uses [`addBlockAtPosition`](Compiler/IR/IrModule.maxon) so the
+  panic + continue blocks land immediately after the host in
+  `func.blockRefs`, preserving the def-before-use invariant lowering
+  relies on for SSA-name resolution.
+- Cast-category fix: storage and cast category are now decoupled.
+  `int(...)` aliases still narrow storage via `computeOptimalIntType`
+  (so `ExitCode = int(0 to 255)` packs as u8), but the user-declared
+  cast category is pinned in a new `project.typealiasCastCategories`
+  sidecar so a u8-stored `int(...)` alias still validates as `int` at
+  cast/compare sites. `byte(...)` aliases route through a new
+  `UnresolvedTypeExpr.rangedByte` arm and pin to the `byte` category.
+  The sidecar round-trips through the stdlib cache (CACHE_FORMAT_VERSION
+  bumped to 23).
+
+The Phase-11 specs `where-clauses` and `associated-types` remain disabled — their partial-failure fragments are tied to in-flight Phase-11.x work (witness-table interface dispatch, `__layout`/`__witness` runtime dispatch). They will be re-enabled as the corresponding Phase-11.x work stabilises. Specs blocked entirely on Phase-11.4 dispatch (`interface-extensions`, `conditional-extensions`, `parsable-interface`, `primitive-comparable`, `primitive-cloneable`, `primitive-hashable`) remain commented out — they exit cleanly with `interface dispatch for method 'X' is unimplemented (Phase 11.4)` when a fragment hits the dispatch site.
 
 The `allocator` and `managed-memory-builtin` specs are marked `status: selfhosted` in their frontmatter — the C# bootstrap runner skips them via [SpecParser.cs](../maxon-sharp/Testing/SpecParser.cs) since the bootstrap doesn't expose the `__mm_*` intrinsics they exercise.
 

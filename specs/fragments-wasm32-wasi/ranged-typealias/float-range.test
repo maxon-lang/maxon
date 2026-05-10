@@ -1,0 +1,27 @@
+// Test: float-range
+typealias Pct = float(0.0 to 100.0)
+
+function main() returns ExitCode
+	let p = 75.5 as Pct
+	return trunc(p)
+end 'main'
+---
+ExitCode: 75
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4635013257122283520 : f64
+    %2 = mir.fptosi.i64 %0
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %5 = mir.global_addr @__panic_msg_2
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_1:
+    mir.ret %2
+  }
+}
+---

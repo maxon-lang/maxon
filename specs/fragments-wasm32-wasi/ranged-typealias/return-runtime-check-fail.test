@@ -1,0 +1,51 @@
+// Test: return-runtime-check-fail
+typealias Score = int(0 to 100)
+
+function doubleScore(s Score) returns Score
+	return s * 2
+end 'doubleScore'
+
+function main() returns ExitCode
+	return doubleScore(60)
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at return-runtime-check-fail.test:5: Range check failed: value outside typealias 'Score'
+Stack trace:
+  in ranged-typealias.doubleScore
+  in main
+  in mrt_start
+```
+---
+// CompiledIR
+module {
+  func @ranged-typealias.doubleScore(local0: u8) -> u8 {
+  entry:
+    %4 = mir.param local0 : u8
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    %5 = mir.mov_imm 100 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 60 : i64
+    %1 = mir.call @ranged-typealias.doubleScore(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %4 = mir.global_addr @__panic_msg_1
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_1:
+    mir.ret %1
+  }
+}
+---

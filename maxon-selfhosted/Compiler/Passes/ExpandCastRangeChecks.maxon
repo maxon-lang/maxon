@@ -1,0 +1,288 @@
+// ExpandCastRangeChecks Pass — Maxon-level: rewrite parser-emitted
+// `castCheck(value, aliasName, range)` placeholders into the runtime
+// guard sequence.
+//
+// Runs after TypeResolution so every named typealias has a registered
+// range in `project.typealiasRanges`. Walks each function's blocks; for
+// each `MaxonOp.castCheck` whose target alias has a narrow range and
+// whose value isn't a known literal (literals get the compile-time
+// E3005 treatment in checkConvertLiteralRange), the pass splits the
+// host block:
+//
+//   block A:    [..., convert, cmp, condBr to panicBlock / continueBlock]
+//   panicBlock: [maxon.panic("Range check failed: ...")]
+//   continue:   [<remaining ops>, <original terminator>]
+//
+// Multiple casts in one block produce cascaded splits — each continueBlock
+// becomes the new "host" for any subsequent castCheck originally in the
+// same source block.
+
+export function expandCastRangeChecks(project Project, module MaxonModule, sourceFileName String)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		var func = try module.functions.get(funcIdx) otherwise panic("expandCastRangeChecks: funcIdx OOB")
+		processCastChecksInFunc(project, module: module, func: func, sourceFileName: sourceFileName)
+		try module.functions.set(funcIdx, value: func) otherwise panic("expandCastRangeChecks: functions.set OOB")
+	end 'eachFunc'
+end 'expandCastRangeChecks'
+
+function processCastChecksInFunc(project Project, module MaxonModule, func IrFunction, sourceFileName String)
+	// Snapshot the block ref list because new continueBlocks get appended
+	// during the walk. Iterating over the live list would visit the
+	// continueBlocks we just split off and try to process them again —
+	// safe (their castChecks are already expanded), but redundant.
+	var snapshot = BlockRefArray.create()
+	for ref in func.blockRefs 'snap'
+		snapshot.push(ref)
+	end 'snap'
+	for blockRef in snapshot 'eachBlock'
+		processCastChecksInBlock(project, module: module, func: func, initialBlockRef: blockRef, sourceFileName: sourceFileName)
+	end 'eachBlock'
+end 'processCastChecksInFunc'
+
+// Walk a single source block, expanding castCheck ops as they appear.
+// `hostBlockRef` tracks the current host: it starts as the original block
+// and shifts to a fresh continueBlock after every split. Linear — each
+// op is visited at most once because the trailing ops are physically
+// moved to the continueBlock when we split.
+function processCastChecksInBlock(project Project, module MaxonModule, func IrFunction, initialBlockRef BlockRef, sourceFileName String)
+	var hostBlockRef = initialBlockRef
+	var pos = 0
+	while pos < hostBlockOpCount(module, blockRef: hostBlockRef) 'walk'
+		let opIdx = readBlockOpIdx(module, blockRef: hostBlockRef, pos: pos)
+		let op = try module.ops.get(opIdx) otherwise panic("processCastChecksInBlock: opIdx OOB")
+		if op.name != "castCheck" 'notCheck'
+			pos = pos + 1
+			continue
+		end 'notCheck'
+		let info = extractCastCheckInfo(project, op: op)
+		if not info.needsExpansion 'noExpand'
+			// Drop the placeholder — alias has no narrow range, or isn't a
+			// ranged primitive at all.
+			eraseOpAt(module, blockRef: hostBlockRef, pos: pos)
+			continue
+		end 'noExpand'
+		// Compile-time literal short-circuit: if the operand traces back
+		// to a known literal (int or float), TypeResolution.checkConvertLiteralRange
+		// has already emitted E3005 for any out-of-range case, so reaching
+		// here means the literal fits the alias range. The runtime guard
+		// would always succeed — drop the placeholder.
+		let lit = findLiteralProducerInFunc(project, module: module, func: func, operandName: info.value)
+		if lit.found 'literalAlreadyChecked'
+			eraseOpAt(module, blockRef: hostBlockRef, pos: pos)
+			continue
+		end 'literalAlreadyChecked'
+		let newHostRef = splitBlockAtCastCheck(project, module: module, func: func, hostBlockRef: hostBlockRef, splitAt: pos, info: info, sourceFileName: sourceFileName)
+		hostBlockRef = newHostRef
+		// continueBlock starts fresh at pos 0 — the trailing ops we moved
+		// over may themselves carry more castChecks.
+		pos = 0
+	end 'walk'
+end 'processCastChecksInBlock'
+
+function hostBlockOpCount(module MaxonModule, blockRef BlockRef) returns OpCount
+	let block = try module.blocks.get(blockRef) otherwise panic("hostBlockOpCount: blockRef OOB")
+	return block.opRefs.count()
+end 'hostBlockOpCount'
+
+function readBlockOpIdx(module MaxonModule, blockRef BlockRef, pos OpCount) returns OpIndex
+	let block = try module.blocks.get(blockRef) otherwise panic("readBlockOpIdx: blockRef OOB")
+	return try block.opRefs.get(pos) otherwise panic("readBlockOpIdx: pos OOB")
+end 'readBlockOpIdx'
+
+// Remove the op at index `pos` from the block's opRefs list. Used when a
+// castCheck doesn't need expansion — its placeholder has no Std lowering
+// so leaving it in would trip the "castCheck reached lowering" panic.
+function eraseOpAt(module MaxonModule, blockRef BlockRef, pos OpCount)
+	let block = try module.blocks.get(blockRef) otherwise panic("eraseOpAt: blockRef OOB")
+	_ = try block.opRefs.remove(at: pos) otherwise panic("eraseOpAt: pos OOB")
+end 'eraseOpAt'
+
+type CastCheckInfo
+	export var needsExpansion bool
+	export var value ByteArray
+	export var aliasName String
+	export var range TypealiasRange
+	export var sourceRange SourceRange
+
+	export static function none() returns CastCheckInfo
+		return Self{needsExpansion: false, value: ByteArray.create(), aliasName: "", range: TypealiasRange.create(0, upper: 0), sourceRange: SourceRange.none()}
+	end 'none'
+
+	export static function some(value ByteArray, aliasName String, range TypealiasRange, sourceRange SourceRange) returns CastCheckInfo
+		return Self{needsExpansion: true, value: value, aliasName: aliasName, range: range, sourceRange: sourceRange}
+	end 'some'
+end 'CastCheckInfo'
+
+// Decide whether a `castCheck` op needs runtime guard expansion. Skips
+// when the alias has no narrow range, isn't a ranged primitive, or the
+// alias resolves to a non-narrow storage type.
+function extractCastCheckInfo(project Project, op MaxonOp) returns CastCheckInfo
+	return match op 'extract'
+		castCheck(value, aliasName, range) gives extractCastCheckPayload(project, value: value, aliasName: aliasName, sourceRange: range)
+		default panic("extractCastCheckInfo: caller must pass a castCheck op")
+	end 'extract'
+end 'extractCastCheckInfo'
+
+function extractCastCheckPayload(project Project, value ByteArray, aliasName String, sourceRange SourceRange) returns CastCheckInfo
+	let typealiasRange = try project.typealiasRanges.get(aliasName) otherwise return CastCheckInfo.none()
+	if isFullRange(project, aliasName: aliasName, range: typealiasRange) 'fullRange'
+		return CastCheckInfo.none()
+	end 'fullRange'
+	return CastCheckInfo.some(value, aliasName: aliasName, range: typealiasRange, sourceRange: sourceRange)
+end 'extractCastCheckPayload'
+
+// Split `hostBlock` at op-index `splitAt` (the castCheck's position). Ops
+// before `splitAt` stay; the castCheck and trailing ops + terminator
+// move so that:
+//   hostBlock:    [ops 0..splitAt-1] + cmp + condBr to panic / continue
+//   panicBlock:   [maxon.panic(...)]
+//   continueBlock: [ops splitAt+1..end] + original terminator
+// Returns continueBlock.id so the caller threads it back as the new host.
+function splitBlockAtCastCheck(project Project, module MaxonModule, func IrFunction, hostBlockRef BlockRef, splitAt OpCount, info CastCheckInfo, sourceFileName String) returns BlockRef
+	let id = nextCastCheckId(project)
+	let panicLabel = "__cast_panic_{id}"
+	let okLabel = "__cast_ok_{id}"
+	// Insert the panic + continue blocks IN func.blockRefs immediately after
+	// the host. Lowering walks func.blockRefs linearly and resolves SSA
+	// names by definition order; the continuation block carries any ops
+	// that originally followed the castCheck and may define names later
+	// blocks consume, so it must appear before the parser's downstream
+	// blocks. Pure append (the default `addBlock`) breaks that invariant.
+	let hostListIdx = blockListIndexOf(func, blockRef: hostBlockRef)
+	let continueBlockRef = module.blocks.count()
+	var continueBlock = try module.addBlockAtPosition(func, label: okLabel, blockRefPos: hostListIdx + 1) otherwise panic("splitBlockAtCastCheck: addBlockAtPosition OOB for continueBlock")
+	var panicBlock = try module.addBlockAtPosition(func, label: panicLabel, blockRefPos: hostListIdx + 1) otherwise panic("splitBlockAtCastCheck: addBlockAtPosition OOB for panicBlock")
+	// `panicBlock` was inserted before `continueBlock`, so the final
+	// blockRefs order is [host, panic, continue, ... rest]. Both blocks
+	// already carry their own BlockIds for branch targeting.
+
+	var hostBlock = try module.blocks.get(hostBlockRef) otherwise panic("splitBlockAtCastCheck: hostBlockRef OOB")
+	moveTrailingOpsAndTerminator(hostBlock, fromIndex: splitAt + 1, dst: continueBlock)
+	// Drop the castCheck placeholder — splitAt is the last surviving entry
+	// in the host's opRefs after the trailing move; truncating clears it.
+	truncateOpRefsTo(hostBlock, length: splitAt)
+	emitCastCheckGuard(project, module: module, func: func, hostBlockRef: hostBlockRef, hostBlock: hostBlock, info: info, panicBlockId: panicBlock.id, continueBlockId: continueBlock.id, checkId: id)
+	emitCastPanic(project, module: module, panicBlock: panicBlock, info: info, sourceFileName: sourceFileName)
+
+	return continueBlockRef
+end 'splitBlockAtCastCheck'
+
+// Linear scan to locate the position of `blockRef` within `func.blockRefs`.
+// Cast-check expansion runs once per source `as` cast, and casts are rare,
+// so the O(N) lookup amortises trivially.
+function blockListIndexOf(func IrFunction, blockRef BlockRef) returns NodeIndex
+	var pos = 0
+	for ref in func.blockRefs 'scan'
+		if ref == blockRef 'match'
+			return pos
+		end 'match'
+		pos = pos + 1
+	end 'scan'
+	panic("blockListIndexOf: blockRef {blockRef} not registered in func '{func.name}'")
+end 'blockListIndexOf'
+
+// Move every op at index >= `fromIndex` from src.opRefs into dst.opRefs.
+// Also transfers the terminator if src had one. Caller follows with
+// `truncateOpRefsTo` to drop the moved entries (plus the castCheck entry
+// at index fromIndex - 1) from src.
+function moveTrailingOpsAndTerminator(src IrBlock, fromIndex OpCount, dst IrBlock)
+	let total = src.opRefs.count()
+	for i in fromIndex upto total 'eachOp'
+		let opIdx = try src.opRefs.get(i) otherwise panic("moveTrailingOpsAndTerminator: i OOB")
+		dst.opRefs.append(opIdx)
+	end 'eachOp'
+	if src.hasTerminatorOp() 'hasTerm'
+		dst.terminator = src.terminator
+		src.terminator = Terminator.unset
+	end 'hasTerm'
+end 'moveTrailingOpsAndTerminator'
+
+// Truncate block.opRefs to the first `length` entries.
+function truncateOpRefsTo(block IrBlock, length OpCount)
+	while block.opRefs.count() > length 'pop'
+		_ = try block.opRefs.removeLast() otherwise panic("truncateOpRefsTo: removeLast on non-empty list")
+	end 'pop'
+end 'truncateOpRefsTo'
+
+// Emit the comparison + condBr that drive the runtime range check. For
+// `0 to N` int ranges (the typical unsigned-style alias) we need both
+// a lower-bound and upper-bound test; we cascade via a fresh
+// `__cast_check_lo_N` block. Float ranges use the same shape but with
+// float comparison predicates.
+function emitCastCheckGuard(project Project, module MaxonModule, func IrFunction, hostBlockRef BlockRef, hostBlock IrBlock, info CastCheckInfo, panicBlockId BlockId, continueBlockId BlockId, checkId ParsedInt)
+	let typealiasRange = info.range
+	let needsLower = typealiasRange.lower > i64.min
+	let needsUpper = typealiasRange.upper < i64.max
+	if not needsLower and not needsUpper 'noCheck'
+		// Defensive: extractCastCheckPayload already filters the full-range
+		// case, but if some alias slips through we just branch through.
+		module.setTerminator(hostBlock, op: MaxonOp.br(continueBlockId, range: info.sourceRange))
+		return
+	end 'noCheck'
+	let aliasIsFloat = aliasIsFloatType(project, name: info.aliasName)
+	let operandType = MaxonType.float if aliasIsFloat else MaxonType.integer
+	if needsLower and needsUpper 'both'
+		let loLabel = "__cast_check_lo_{checkId}"
+		// Insert the lo-check block right after the host so lowering still
+		// walks predecessors before successors. The host has just been
+		// terminated with a condBr to (panic, lo); `lo` then either panics
+		// or branches to continue.
+		let hostListIdx = blockListIndexOf(func, blockRef: hostBlockRef)
+		var loBlock = try module.addBlockAtPosition(func, label: loLabel, blockRefPos: hostListIdx + 1) otherwise panic("emitCastCheckGuard: addBlockAtPosition OOB for loBlock")
+		emitSingleBoundCheck(module, srcBlock: hostBlock, info: info, bound: typealiasRange.upper, predicate: CmpPredicate.gt, operandType: operandType, panicBlockId: panicBlockId, okBlockId: loBlock.id)
+		emitSingleBoundCheck(module, srcBlock: loBlock, info: info, bound: typealiasRange.lower, predicate: CmpPredicate.lt, operandType: operandType, panicBlockId: panicBlockId, okBlockId: continueBlockId)
+		return
+	end 'both'
+	if needsUpper 'upperOnly'
+		emitSingleBoundCheck(module, srcBlock: hostBlock, info: info, bound: typealiasRange.upper, predicate: CmpPredicate.gt, operandType: operandType, panicBlockId: panicBlockId, okBlockId: continueBlockId)
+		return
+	end 'upperOnly'
+	emitSingleBoundCheck(module, srcBlock: hostBlock, info: info, bound: typealiasRange.lower, predicate: CmpPredicate.lt, operandType: operandType, panicBlockId: panicBlockId, okBlockId: continueBlockId)
+end 'emitCastCheckGuard'
+
+// Emit `lit = bound; cmp = value PRED lit; cond_br cmp -> panic, else -> ok`.
+function emitSingleBoundCheck(module MaxonModule, srcBlock IrBlock, info CastCheckInfo, bound RangeBound, predicate CmpPredicate, operandType MaxonType, panicBlockId BlockId, okBlockId BlockId)
+	let boundName = freshCastCheckSynthName()
+	module.appendOp(srcBlock, op: MaxonOp.literal(boundName, value: bound, valueType: operandType, range: info.sourceRange))
+	let cmpName = freshCastCheckSynthName()
+	module.appendOp(srcBlock, op: MaxonOp.cmp(cmpName, left: info.value, right: boundName, predicate: predicate, leftType: operandType, rightType: operandType, operandType: operandType, range: info.sourceRange))
+	module.setTerminator(srcBlock, op: MaxonOp.condBr(cmpName, thenTarget: panicBlockId, elseTarget: okBlockId, range: info.sourceRange))
+end 'emitSingleBoundCheck'
+
+// Emit `maxon.panic` on the panic block carrying the standard range-check
+// failure message. The string is interned in `project.strings`; lowering
+// resolves it through the existing panic-lowering machinery. `panic` is
+// a body op at the Maxon level (lowered to globalAddr + call mrt_panic),
+// so we appendOp + flag the block as `Terminator.dead` since mrt_panic
+// never returns.
+function emitCastPanic(project Project, module MaxonModule, panicBlock IrBlock, info CastCheckInfo, sourceFileName String)
+	let msg = "panic at {sourceFileName}:{info.sourceRange.line}: Range check failed: value outside typealias '{info.aliasName}'"
+	let stringId = project.strings.intern(msg)
+	module.appendOp(panicBlock, op: MaxonOp.panic(stringId, range: info.sourceRange))
+	panicBlock.terminator = Terminator.dead
+end 'emitCastPanic'
+
+// True when an alias's storage type is a float — used to pick float vs
+// integer comparison predicates for the bound checks.
+function aliasIsFloatType(project Project, name String) returns bool
+	let stdType = try project.typealiases.get(name) otherwise return false
+	return stdTypeIsFloat(stdType)
+end 'aliasIsFloatType'
+
+// Per-project monotonic counter for cast-check labels (`__cast_panic_N`,
+// `__cast_ok_N`, `__cast_check_lo_N`).
+function nextCastCheckId(project Project) returns ParsedInt
+	let id = project.castCheckCounter
+	project.castCheckCounter = project.castCheckCounter + 1
+	return id
+end 'nextCastCheckId'
+
+// Pass-local synthetic-name counter for the cmp-result and bound-literal
+// values the guard emits. Shared across the full pass run; each name is
+// unique within the module because it's emitted as a fresh op.
+var castCheckSynthCounter = 0
+
+function freshCastCheckSynthName() returns ByteArray
+	castCheckSynthCounter = castCheckSynthCounter + 1
+	return "$__castcheck_{castCheckSynthCounter}".toByteArray()
+end 'freshCastCheckSynthName'

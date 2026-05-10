@@ -13,50 +13,34 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @ranged-typealias.half(s: i64) -> u8 {
+  func @half(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 2
-    x64.mov edx, ecx
-    x64.mov ecx, eax
-    x64.mov [rbp-8], rdx
-    x64.mov rax, rdx
-    x64.xor edx, edx
-    x64.div32 rcx
-    x64.xor edx, edx
-    x64.mov ebx, rax
-    x64.mov rsi, 100
-    x64.mov edi, rax
-    x64.cmp rdi, rsi
-    x64.jg ranged-typealias.half.__range_panic_0
-    x64.cmp rbx, rdx
-    x64.jl ranged-typealias.half.__range_panic_0
-    x64.jmp ranged-typealias.half.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_11]
-    x64.mov rcx, rax
+    x64.mov r8d, 2
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv r8
+    x64.mov r8, rax
+    x64.cmp r8, 100
+    x64.jbe __range_ok_8
+  __range_panic_8:
+    x64.lea rcx, [rip+__panic_msg_9]
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_8:
     x64.epilogue
     x64.ret
   }
-  func @ranged-typealias.main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 84
-    x64.call ranged-typealias.half
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg ranged-typealias.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl ranged-typealias.main.__range_panic_0
-    x64.jmp ranged-typealias.main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_12]
-    x64.mov rcx, rax
+    x64.mov ecx, 84
+    x64.call half
+    x64.cmp r8, 125
+    x64.jbe __range_ok_9
+  __range_panic_9:
+    x64.lea rcx, [rip+__panic_msg_10]
     x64.call mrt_panic
-  __range_ok_0:
+  __range_ok_9:
     x64.epilogue
     x64.ret
   }

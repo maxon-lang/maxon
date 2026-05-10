@@ -1,0 +1,40 @@
+// Test: f32-arithmetic
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	let a = 10.0 as F
+	let b = 3.0 as F
+	let sum = a + b
+	let diff = a - b
+	let prod = a * b
+	let quot = a / b
+	return trunc(sum + diff + prod + quot)
+end 'main'
+---
+ExitCode: 53
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4621819117588971520 : f64
+    %1 = mir.mov_imm 4613937818241073152 : f64
+    %4 = mir.add.f64 %0, %1
+    %7 = mir.sub.f64 %0, %1
+    %10 = mir.mul.f64 %0, %1
+    %13 = mir.div.f64 %0, %1
+    %16 = mir.add.f64 %4, %7
+    %18 = mir.add.f64 %16, %10
+    %20 = mir.add.f64 %18, %13
+    %21 = mir.fptosi.i64 %20
+    %22 = mir.mov_imm 125 : i64
+    %23 = mir.cmp ugt, %21, %22
+    mir.cond_br %23 [then: __range_panic_13(), else: __range_ok_13()]
+  __range_panic_13:
+    %24 = mir.global_addr @__panic_msg_14
+    %25 = mir.call @mrt_panic(%24)
+  __range_ok_13:
+    mir.ret %21
+  }
+}
+---

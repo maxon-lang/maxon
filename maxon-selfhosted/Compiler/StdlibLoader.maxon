@@ -10,6 +10,12 @@ var stdlibTypealiases = TypealiasMap.create()
 // on the second project and trip the parser's E2001 shadowing check.
 var stdlibTypealiasVisibilities = TypealiasVisibilityMap.create()
 var stdlibTypealiasRanges = TypealiasRangeMap.create()
+// Sidecar mirror of `project.typealiasCastCategories` for the in-process
+// stdlib snapshot. Same rationale as the visibility/range mirrors above:
+// a second project reusing the cached stdlib needs to see the same
+// user-declared cast category for ranged aliases (so `int(0 to 255)`
+// stays `int` even after the u8-storage choice).
+var stdlibTypealiasCastCategories = TypealiasCastCategoryMap.create()
 
 // Phase 11.6 cross-module inlining: process-wide snapshot of the stdlib's
 // post-dce StdModule. Populated either by the cache-build path (from
@@ -211,6 +217,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 			for (name, range) in stdlibTypealiasRanges 'restoreRanges'
 				try project.typealiasRanges.insert(name, value: range) otherwise ignore
 			end 'restoreRanges'
+			for (name, category) in stdlibTypealiasCastCategories 'restoreCategories'
+				try project.typealiasCastCategories.insert(name, value: category) otherwise ignore
+			end 'restoreCategories'
 		end 'restoreFromParse'
 		recordPassSince("__restoreStdlibMetadata", startMs: restoreStart)
 
@@ -309,6 +318,9 @@ export function getStdlibModule(project Project) returns MaxonModule
 	for (name, range) in project.typealiasRanges 'cacheRanges'
 		stdlibTypealiasRanges.upsert(name, value: range)
 	end 'cacheRanges'
+	for (name, category) in project.typealiasCastCategories 'cacheCategories'
+		stdlibTypealiasCastCategories.upsert(name, value: category)
+	end 'cacheCategories'
 
 	// Build and write stdlib cache for next time.
 	// After writing, switch to cached mode so subsequent calls in the same
@@ -359,6 +371,9 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// "no descriptor for gid …" tripwire on the first such call.
 	pipeline.addPass(PassKind.buildLayoutDescriptors)
 	pipeline.addPass(PassKind.buildWitnessTables)
+	// Expand parser-emitted `castCheck` placeholders before lowering so
+	// stdlib's own `as RangedAlias` casts get their runtime guards.
+	pipeline.addPass(PassKind.expandCastRangeChecks)
 	pipeline.addPass(PassKind.lowerMaxonToStd)
 	pipeline.addPass(PassKind.borrowCheck)
 	pipeline.addPass(PassKind.injectDrops)

@@ -1,0 +1,30 @@
+// Test: f32-range
+typealias SmallFloat = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	let x = 3.5 as SmallFloat
+	let y = 1.5 as SmallFloat
+	return trunc(x + y)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4615063718147915776 : f64
+    %1 = mir.mov_imm 4609434218613702656 : f64
+    %4 = mir.add.f64 %0, %1
+    %5 = mir.fptosi.i64 %4
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %5, %6
+    mir.cond_br %7 [then: __range_panic_12(), else: __range_ok_12()]
+  __range_panic_12:
+    %8 = mir.global_addr @__panic_msg_13
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_12:
+    mir.ret %5
+  }
+}
+---

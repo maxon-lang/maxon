@@ -589,7 +589,20 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 			let clobberMask = regTarget.getImplicitGprDefs(module, packed: packed)
 
 			if clobberMask > 0 'hasClobbers'
+				let firstPseudoId = nextPseudoId
 				nextPseudoId = emitClobberRanges(ranges, mask: clobberMask, blockId: blockId, opIdx: opIdx + 1, nextId: nextPseudoId)
+				// `movRegReg physDest, virtSrc` clobbers physDest at the same
+				// position virtSrc dies. Without a copy-link, the half-open
+				// intervals overlap by one position and the interference graph
+				// blocks the colorer from honoring virtSrc's hint to physDest.
+				// Linking the clobber pseudo to virtSrc lets `isCopyBoundaryOverlap`
+				// suppress the spurious 1-position conflict, so a return value
+				// produced by `movRegImm` lands directly in the return register
+				// instead of routing through a scratch register first.
+				let probe = opQuery.decodeReturnMovProbe(module, packed: packed)
+				if probe.found and probe.destOrd != RM_NONE and probe.srcId >= 0 'isPhysToVirtMov'
+					linkClobberToVirtSrc(ranges, firstPseudoId: firstPseudoId, lastPseudoId: nextPseudoId, physOrd: probe.destOrd, virtSrcId: probe.srcId)
+				end 'isPhysToVirtMov'
 			end 'hasClobbers'
 
 			opIdx = opIdx + 1
@@ -690,6 +703,28 @@ end 'getExplicitPhysReadsWith'
 function emitClobberRanges(ranges LiveRangeArray, mask RegMask, blockId BlockId, opIdx RegInt, nextId RegInt) returns RegInt
 	return emitFixedRegRanges(ranges, mask: mask, blockId: blockId, startPos: opIdx, endPos: opIdx + 1, nextId: nextId)
 end 'emitClobberRanges'
+
+// Walk the pseudo-ranges just emitted for the current op and tag the one
+// pinned to `physOrd` with a copy-link to `virtSrcId`. The link tells the
+// interference graph that the 1-position boundary overlap between the
+// vreg's death and the clobber's birth is a copy artifact, not a real
+// conflict — symmetrical to how the existing copy-hint flow handles
+// vreg-to-vreg movRegReg.
+function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastPseudoId RegInt, physOrd RegOrdinal, virtSrcId RegInt)
+	let total = ranges.count()
+	var i = total - 1
+	while i >= 0 'scanBack'
+		var range = try ranges.get(i) otherwise break
+		if range.valueId < firstPseudoId 'beforeWindow'
+			break
+		end 'beforeWindow'
+		if range.valueId < lastPseudoId and range.fixedReg == physOrd 'isTarget'
+			range.copyHintValueId = virtSrcId
+			return
+		end 'isTarget'
+		i = i - 1
+	end 'scanBack'
+end 'linkClobberToVirtSrc'
 
 // Emit one pseudo LiveRange per set bit in a register mask.
 // Each pseudo range is pinned to a physical register ordinal and participates

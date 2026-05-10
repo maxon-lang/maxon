@@ -79,7 +79,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 22
+let CACHE_FORMAT_VERSION = 23
 
 // ============================================================
 // Types
@@ -156,6 +156,10 @@ export type StdlibCacheData
 	// E2001 shadowing check.
 	export var typealiasVisibilities TypealiasVisibilityMap
 	export var typealiasRanges TypealiasRangeMap
+	// Mirror of `project.typealiasCastCategories` so the cache restore path
+	// re-populates the user-declared cast category for ranged-primitive
+	// aliases (e.g. ExitCode keeps `int` even though it stores as u8).
+	export var typealiasCastCategories TypealiasCastCategoryMap
 	export var funcReturnTypes FuncReturnTypeMap
 	export var funcSignatures FuncSignatureMap
 	export var structTypes StructTypeMap
@@ -214,6 +218,7 @@ export type StdlibCacheData
 			typealiases: TypealiasMap.create(),
 			typealiasVisibilities: TypealiasVisibilityMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
+			typealiasCastCategories: TypealiasCastCategoryMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			structTypes: StructTypeMap.create(),
@@ -539,6 +544,15 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		writeQword(buf, value: range.lower)
 		writeQword(buf, value: range.upper)
 	end 'eachRange'
+
+	// Typealias cast categories — stored as the CastCategory enum's ordinal
+	// so the on-disk encoding is stable across name changes (the enum cases
+	// would have to be reordered for the value to drift).
+	writeDword(buf, value: data.typealiasCastCategories.count())
+	for (name, category) in data.typealiasCastCategories 'eachCategory'
+		try writeString(buf, s: name)
+		writeDword(buf, value: category.ordinal)
+	end 'eachCategory'
 
 	// Function return types
 	writeDword(buf, value: data.funcReturnTypes.count())
@@ -923,6 +937,19 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		pos = pos + 8
 		try data.typealiasRanges.insert(name, value: TypealiasRange.create(lower, upper: upper)) otherwise ignore
 	end 'eachRange'
+
+	// Typealias cast categories
+	let categoryCount = readDword(buf, offset: pos)
+	pos = pos + 4
+
+	for _ in 0 upto categoryCount 'eachCategory'
+		let (name, pCatName) = try readString(buf, offset: pos)
+		pos = pCatName
+		let categoryTag = readDword(buf, offset: pos)
+		pos = pos + 4
+		let category = try CastCategory.allCases.get(categoryTag) otherwise panic("readStdlibCache: unknown CastCategory tag {categoryTag}")
+		try data.typealiasCastCategories.insert(name, value: category) otherwise ignore
+	end 'eachCategory'
 
 	// Function return types
 	let rtCount = readDword(buf, offset: pos)
@@ -1400,6 +1427,10 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.typealiasRanges.insert(name, value: range) otherwise ignore
 	end 'copyRanges'
 
+	for (name, category) in project.typealiasCastCategories 'copyCategories'
+		try data.typealiasCastCategories.insert(name, value: category) otherwise ignore
+	end 'copyCategories'
+
 	for (name, rt) in project.funcReturnTypes 'copyRts'
 		try data.funcReturnTypes.insert(name, value: rt) otherwise ignore
 	end 'copyRts'
@@ -1527,6 +1558,13 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 	for (name, range) in data.typealiasRanges 'restoreRanges'
 		try project.typealiasRanges.insert(name, value: range) otherwise ignore
 	end 'restoreRanges'
+
+	// Restore typealias cast categories so ranged-primitive aliases keep
+	// their user-declared category (`int`/`byte`/`float`) across a cache
+	// round-trip.
+	for (name, category) in data.typealiasCastCategories 'restoreCategories'
+		try project.typealiasCastCategories.insert(name, value: category) otherwise ignore
+	end 'restoreCategories'
 
 	// Restore function return types and seed the method-name index in
 	// lockstep so DFE's methodCall handling sees stdlib methods alongside

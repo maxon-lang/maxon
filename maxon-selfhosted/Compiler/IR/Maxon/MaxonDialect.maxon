@@ -141,6 +141,23 @@ export union MaxonType
 			interface(id) gives project.interfaceRegistry.getName(id)
 		end 'name'
 	end 'nameOrEmpty'
+
+	// Source-level name iff this is a `named(id)` typealias, "" otherwise.
+	// Stricter than `nameOrEmpty` — the cast-range-check pass and convert-
+	// validation walker only care about typealias-shaped targets and need
+	// "" for type-parameters / generic-instances / interfaces so they can
+	// short-circuit cleanly.
+	export function namedAliasNameOrEmpty(project Project) returns String
+		return match self 'name'
+			named(id) gives project.typeNames.get(id)
+			boolean to string gives ""
+			function gives ""
+			unresolved gives ""
+			typeParameter gives ""
+			genericInstance gives ""
+			interface gives ""
+		end 'name'
+	end 'namedAliasNameOrEmpty'
 end 'MaxonType'
 
 // True iff `t` is a `MaxonType.function(_)`. Cheap discriminator for the
@@ -914,6 +931,16 @@ export union MaxonOp
 	// by `line` / `column` fields on this variant specifically; it now flows
 	// through the uniform `range` field along with every other op.
 	convert(result ByteArray, operand ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange)
+	// Runtime range-check placeholder for `EXPR as RangedAlias`. Emitted by
+	// the parser immediately after a `convert` whose target is a named type
+	// — the parser has no way to know yet whether the alias has a narrow
+	// range. The `expandCastRangeChecks` pass runs after TypeResolution,
+	// looks up `aliasName` in `project.typealiasRanges`, and either drops
+	// the op (full-range alias, literal-only operand handled by E3005) or
+	// splits the host block into a comparison + condBr + panic guard.
+	// Lowering must never see this op — the expander rewrites every
+	// instance before LowerMaxonToStd runs.
+	castCheck(value ByteArray, aliasName String, range SourceRange)
 	// Comparisons. leftType and rightType carry each operand's source-level type
 	// so TypeResolution can diagnose mismatched comparisons (E3005) and lowering
 	// can pick the correct opcode family. operandType is the advisory "joined"
@@ -1134,6 +1161,7 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		binop(result, left, right, opKind, operandType, _) gives "%{String.from(result)} = maxon.binop %{String.from(left)}, %{String.from(right)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		unop(result, operand, opKind, operandType, _) gives "%{String.from(result)} = maxon.unop %{String.from(operand)} {lb}op = {opKind.rawValue}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		convert(result, operand, fromType, toType, _, _) gives "%{String.from(result)} = maxon.convert %{String.from(operand)} : {fromType.toString(project)} -> {toType.toString(project)}"
+		castCheck(value, aliasName, _) gives "maxon.cast_check %{String.from(value)} : {aliasName}"
 		cmp(result, left, right, predicate, _, _, operandType, _) gives "%{String.from(result)} = maxon.cmp %{String.from(left)}, %{String.from(right)} {lb}op = {predicate.name}{rb} {lb}type = {operandType.toString(project)}{rb}"
 		refEq(result, left, right, negate, _) gives "%{String.from(result)} = maxon.{refEqMnemonic(negate)} %{String.from(left)}, %{String.from(right)}"
 		condBr(cond, thenTarget, elseTarget, _) gives maxonCondBrToString(cond, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)

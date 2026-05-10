@@ -1,0 +1,31 @@
+// Test: f32-comparison
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	let a = 3.0 as F
+	let b = 5.0 as F
+	if a < b 'less'
+		return 1
+	end 'less'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4613937818241073152 : f64
+    %1 = mir.mov_imm 4617315517961601024 : f64
+    %4 = mir.cmp flt, %0, %1
+    mir.cond_br %4 [then: less_1(), else: less_1.after()]
+  less_1:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  less_1.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

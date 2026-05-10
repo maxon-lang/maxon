@@ -140,6 +140,13 @@ export type Project
 	// Populated by the TypeResolution pass alongside `typealiases`.
 	export var typealiasRanges TypealiasRangeMap
 
+	// Typealias cast category: maps alias names to the user-declared cast
+	// family (int / byte / float). Populated by the TypeResolution pass for
+	// ranged-primitive aliases so storage narrowing (e.g. `int(0 to 255)` →
+	// u8) doesn't flip the alias into a different cast category. Aliases
+	// without an entry derive their category from their resolved StdType.
+	export var typealiasCastCategories TypealiasCastCategoryMap
+
 	// Unresolved typealias registry: every `typealias Name = ...` the parser
 	// sees lands here first. The TypeResolution pass runs a fixed-point loop
 	// over this map, moving each entry into `typealiases` (and
@@ -365,6 +372,13 @@ export type Project
 	// `parseClosure` invocation; the parser never decrements.
 	export var closureCounter ClosureCounter
 
+	// Per-project counter for cast-site range-check label minting
+	// (`__cast_panic_N`, `__cast_ok_N`, `__cast_check_lo_N`). Bumped once
+	// per expanded `castCheck` op in `expandCastRangeChecks`. Reset is
+	// not needed across compiles — the counter just produces unique
+	// labels per run.
+	export var castCheckCounter ParsedInt
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -474,6 +488,7 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasVisibilities: TypealiasVisibilityMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
+			typealiasCastCategories: TypealiasCastCategoryMap.create(),
 			unresolvedTypealiases: UnresolvedTypealiasMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcThrowsTypes: FuncThrowsTypeMap.create(),
@@ -505,6 +520,7 @@ export type Project
 			genericTypealiases: GenericTypealiasMap.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
+			castCheckCounter: 0,
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -1224,10 +1240,22 @@ export typealias VarInfoMap = Map with(String, VarInfo)
 export typealias StringArray = Array with String
 
 // The typealias registry maps source-level alias names (e.g. "ExitCode", "AsciiValue")
-// to their concrete ABI-level StdType. Populated by the parser from range bounds
-// via computeOptimalIntType; consulted by lowerMaxonToStd to resolve MaxonType.named
-// references to a concrete width. Floating-point aliases always map to StdType.f64.
+// to their concrete ABI-level StdType. Populated by the resolver from range bounds via
+// computeOptimalIntType (narrowest unsigned width for `int(0..N)` aliases). The cast
+// *category* (int / byte / float) is tracked separately in `TypealiasCastCategoryMap`
+// so a narrow u8 storage choice doesn't flip a user-declared `int(...)` alias into
+// the `byte` cast family. Range information lives alongside in `TypealiasRangeMap`
+// for runtime range-check emission.
 export typealias TypealiasMap = Map with(String, StdType)
+
+// Sidecar map: alias name → user-declared cast category. Distinct from the storage
+// type because `int(0 to 255)` narrows to u8 storage but must still report as `int`
+// at cast/compare validation (otherwise `someInt as MyAlias` would be rejected as
+// int → byte for a non-literal). Populated by the resolver: `int(...)` → int,
+// `byte(...)` → byte, `float(...)` → float. Aliases that just rename another named
+// type don't appear here — the lookup walks the alias chain and lands on a base
+// type whose category is already encoded in StdType.
+export typealias TypealiasCastCategoryMap = Map with(String, CastCategory)
 
 // Sidecar visibility info for a resolved typealias. Stored separately from
 // `TypealiasMap` because that map's value is a primitive `StdType`, so we
@@ -1464,10 +1492,14 @@ export typealias TypealiasRangeMap = Map with(String, TypealiasRange)
 // in without touching the parse-time scaffolding.
 
 export union UnresolvedTypeExpr
-	// `int(LOWER to UPPER)` / `byte(LOWER to UPPER)` — resolvable immediately.
+	// `int(LOWER to UPPER)` — bounds are already normalized to inclusive form
+	// at parse time (an `upto N` upper becomes `N - 1`). Cast category is
+	// always `int` regardless of the optimal narrow storage type.
 	rangedInt(lower RangeBound, upper RangeBound)
-	// `float(LOWER to UPPER)` — resolvable immediately. Bounds are kept for
-	// future range-check work even though every float alias maps to f64 today.
+	// `byte(LOWER to UPPER)` — separate arm so cast category is `byte`.
+	rangedByte(lower RangeBound, upper RangeBound)
+	// `float(LOWER to UPPER)` — bounds are stored as i64 bit patterns of the
+	// IEEE-754 double bounds. Always normalized to inclusive form at parse time.
 	rangedFloat(lower RangeBound, upper RangeBound)
 	// `bool` RHS — resolvable immediately.
 	boolPrim
@@ -1481,6 +1513,11 @@ export union UnresolvedTypeExpr
 	// `MaxonType.genericInstance(...)` and stores it in `project.genericTypealiases`,
 	// not `project.typealiases` (which is StdType-typed).
 	genericAlias(baseName String, args StringArray)
+	// Sentinel for a syntactically valid but semantically rejected typealias
+	// (range validation failure). Carried through resolution so the unused-
+	// typealias check (E3062) suppresses its cascade — the E3005 raised at
+	// parse time is the single user-visible diagnostic.
+	invalid
 end 'UnresolvedTypeExpr'
 
 export type UnresolvedTypealias

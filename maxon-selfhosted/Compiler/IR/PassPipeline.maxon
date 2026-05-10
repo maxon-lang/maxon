@@ -35,6 +35,11 @@ export union PassKind
 	// blobs are in place before lowerMaxonToStd needs to materialize a
 	// witness label at an interface-typed value construction site).
 	buildWitnessTables
+	// Expand parser-emitted `castCheck` placeholders into runtime range
+	// guard sequences. Runs after type resolution (so alias ranges are
+	// known) but before lowering (which would otherwise panic on the
+	// placeholder).
+	expandCastRangeChecks
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
@@ -208,6 +213,7 @@ export type PassPipeline
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
+			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName)
 
 			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
 			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
@@ -374,6 +380,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		deadFunctionElimination gives PassClassification.wholeModule
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
+		expandCastRangeChecks gives PassClassification.wholeModule
 		augmentWithRuntime gives PassClassification.wholeModule
 		instrumentCoverage gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
@@ -427,6 +434,11 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// `(typeName, interfaceName)` conformance. Runs after layout
 	// descriptors and still before DFE for the same livenessRoots reason.
 	passes.push(PassKind.buildWitnessTables)
+	// Expand parser-emitted `castCheck` placeholders into runtime range
+	// guards. Must run before DFE so any synthesized panic strings are
+	// part of the live op set, and before lowerMaxonToStd because the
+	// placeholder has no Std lowering.
+	passes.push(PassKind.expandCastRangeChecks)
 	passes.push(PassKind.deadFunctionElimination)
 	// Phase 3: Maxon → Std
 	passes.push(PassKind.lowerMaxonToStd)
@@ -530,6 +542,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		deadFunctionElimination gives PipelinePhase.maxon
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
+		expandCastRangeChecks gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
 		borrowCheck gives PipelinePhase.std
 		injectDrops gives PipelinePhase.std
@@ -649,6 +662,7 @@ export function passKindToString(pass PassKind) returns String
 		deadFunctionElimination gives "dead-function-elimination"
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"
+		expandCastRangeChecks gives "expand-cast-range-checks"
 		borrowCheck gives "borrow-check"
 		injectDrops gives "inject-drops"
 		insertRangeChecks gives "insert-range-checks"

@@ -2134,8 +2134,11 @@ export type Parser
 		end 'firstEntry'
 		// File-private aliases participate in the unused-typealias check.
 		// Exported / module-visible aliases skip it because cross-file uses
-		// aren't visible to a single Parser instance.
-		if visibility == Visibility.file 'isLocal'
+		// aren't visible to a single Parser instance. A typealias whose RHS
+		// failed range validation also skips the check — the E3005 already
+		// raised is the user-visible diagnostic; cascading E3062 would
+		// distract.
+		if visibility == Visibility.file and not isInvalidTypealiasExpr(expr) 'isLocal'
 			localTypealiases.push(LocalTypealias.create(nameToken.value, line: nameToken.line, column: nameToken.column))
 		end 'isLocal'
 		skipToNextLine()
@@ -2185,22 +2188,23 @@ export type Parser
 
 			try eat(TokenKind.leftParen)
 
-			let lowerBound = try parseTypeBound()
-
-			try expect(TokenKind.to)
-
-			let upperBound = try parseTypeBound()
-
-			if isFloat 'computeFloat'
-				expr = UnresolvedTypeExpr.rangedFloat(lowerBound, upper: upperBound)
-			end 'computeFloat' else 'computeInt'
-				// `byte(lo to hi)` is just an unsigned integer alias; the
-				// resolver will pick the narrowest StdType via
-				// computeOptimalIntType.
-				expr = UnresolvedTypeExpr.rangedInt(lowerBound, upper: upperBound)
-			end 'computeInt'
+			let parsed = try parseRangedPrimitiveBounds(baseToken, isFloat: isFloat, isByte: isByte)
+			expr = parsed
 			sawValidBase = true
 		end 'isNumeric'
+
+		// Bare sized-type shorthand `typealias Integer = i64` is rejected with
+		// E2003, mirroring the C# bootstrap. Without this branch the bare-
+		// identifier RHS path below would accept `i64` and the resolver later
+		// would complain about an unknown type.
+		if not sawValidBase and baseToken.kind == TokenKind.identifier and isSizedTypeName(baseToken.value) 'isBareSized'
+			let nextTok = try cursor.peek(1) otherwise Token.eof()
+			if nextTok.kind != TokenKind.dot 'notMinMax'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Bare sized type '{baseToken.value}' is not allowed. Use explicit range syntax, e.g. 'int({baseToken.value}.min to {baseToken.value}.max)'", line: baseToken.line, column: baseToken.column, filePath: filePath)
+				skipToNextLine()
+				throw ParserError.unhandledToken
+			end 'notMinMax'
+		end 'isBareSized'
 
 		// Bare identifier RHS: `typealias A = B` aliases an existing named
 		// type. The resolver picks up the chain in a later iteration once
@@ -3169,27 +3173,29 @@ export type Parser
 		end 'eachField'
 	end 'emitFieldWritebacks'
 
-	// Parse a type bound: a number literal, negative literal, or T.min/T.max.
-	// Mutates pos and returns just BoundValue.
+	// Parse an int range bound: a number literal, negative literal, or T.min/T.max.
+	// Returns the bound value plus the type-qualifier name when the bound was
+	// `T.min`/`T.max` (empty string when it was a literal). Callers compare
+	// qualifiers to detect mismatched type bounds (E3005).
 	// entry: cursor AT first token of the bound (minus, intLit, or identifier).
 	// exit:  cursor AT last-consumed token of the bound.
-	function parseTypeBound() returns BoundValue throws ParserError
+	function parseIntRangeBound() returns BoundResult throws ParserError
 		if accept(TokenKind.minus) 'isNeg'
 			let numToken = try consume()
 			let value = try parseInt(numToken.value) otherwise 'negOverflow'
 				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(numToken.value)}' is outside the range of int", line: numToken.line, column: numToken.column, filePath: filePath)
-				return 0
+				return BoundResult.create(0, qualifier: "")
 			end 'negOverflow'
-			return 0 - value
+			return BoundResult.create(0 - value, qualifier: "")
 		end 'isNeg'
 
 		if at(TokenKind.intLiteral) 'isLit'
 			let token = try consume()
 			let value = try parseInt(token.value) otherwise 'litOverflow'
 				reportLiteralOverflow(token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int")
-				return 0
+				return BoundResult.create(0, qualifier: "")
 			end 'litOverflow'
-			return value
+			return BoundResult.create(value, qualifier: "")
 		end 'isLit'
 
 		if at(TokenKind.identifier) and atOffset(TokenKind.dot, offset: 1) 'maybeTypeBound'
@@ -3198,12 +3204,152 @@ export type Parser
 				let typeNameToken = try consume()
 				try eat(TokenKind.dot)
 				let fieldNameToken = try consume()
-				return resolveTypeBound(typeNameToken.value, field: fieldNameToken.value)
+				return BoundResult.create(resolveTypeBound(typeNameToken.value, field: fieldNameToken.value), qualifier: typeNameToken.value)
 			end 'hasField'
 		end 'maybeTypeBound'
 
-		return 0
-	end 'parseTypeBound'
+		return BoundResult.create(0, qualifier: "")
+	end 'parseIntRangeBound'
+
+	// Parse a float range bound: float literal, negative float literal, or
+	// T.min/T.max (where T is f32 or f64). Returns the IEEE-754 double bit
+	// pattern as i64, plus the qualifier. Integer literals are accepted and
+	// converted (so `float(0 to 100.0)` works).
+	function parseFloatRangeBound() returns BoundResult throws ParserError
+		if accept(TokenKind.minus) 'isNeg'
+			let numToken = try consume()
+			let bits = try parseFloatBoundBits(numToken, negate: true) otherwise 'negOverflow'
+				return BoundResult.create(0, qualifier: "")
+			end 'negOverflow'
+			return BoundResult.create(bits, qualifier: "")
+		end 'isNeg'
+
+		if at(TokenKind.floatLiteral) or at(TokenKind.intLiteral) 'isLit'
+			let token = try consume()
+			let bits = try parseFloatBoundBits(token, negate: false) otherwise 'litOverflow'
+				return BoundResult.create(0, qualifier: "")
+			end 'litOverflow'
+			return BoundResult.create(bits, qualifier: "")
+		end 'isLit'
+
+		if at(TokenKind.identifier) and atOffset(TokenKind.dot, offset: 1) 'maybeTypeBound'
+			let fieldToken = try cursor.peek(2) otherwise throw ParserError.unexpectedEof
+			if fieldToken.kind == TokenKind.identifier 'hasField'
+				let typeNameToken = try consume()
+				try eat(TokenKind.dot)
+				let fieldNameToken = try consume()
+				return BoundResult.create(resolveFloatTypeBound(typeNameToken.value, field: fieldNameToken.value), qualifier: typeNameToken.value)
+			end 'hasField'
+		end 'maybeTypeBound'
+
+		return BoundResult.create(0, qualifier: "")
+	end 'parseFloatRangeBound'
+
+	// Parse a number-literal token as a float and return its IEEE-754 i64
+	// bit pattern. Accepts both intLiteral and floatLiteral tokens. `negate`
+	// applies a unary-minus to the parsed value before reinterpreting.
+	function parseFloatBoundBits(token Token, negate bool) returns IntConstant throws ParserError
+		if token.kind == TokenKind.floatLiteral 'isFloat'
+			let bits = try parseFloatBits(token.value) otherwise 'overflow'
+				reportLiteralOverflow(token: token, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float")
+				throw ParserError.overflow
+			end 'overflow'
+			if negate 'doNegate'
+				return negateFloatBits(bits)
+			end 'doNegate'
+			return bits
+		end 'isFloat'
+		// Integer literal — re-interpret as float by parsing the integer and
+		// converting via IEEE-754 round-to-nearest. Only powers-of-two and
+		// small integers occur in practice (range-bound literals like 0, 100).
+		let intValue = try parseInt(token.value) otherwise 'intOverflow'
+			reportLiteralOverflow(token: token, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int")
+			throw ParserError.overflow
+		end 'intOverflow'
+		let signed = intValue if not negate else 0 - intValue
+		return floatBitsFromInt(signed)
+	end 'parseFloatBoundBits'
+
+	// Parse the inside of `int(...)`, `byte(...)`, or `float(...)` after the
+	// opening paren is consumed. Validates ranges and returns the appropriate
+	// UnresolvedTypeExpr arm. Reports E3005 on bound mismatches and replaces
+	// the alias's RHS with `invalid` so downstream resolution proceeds without
+	// cascading.
+	function parseRangedPrimitiveBounds(baseToken Token, isFloat bool, isByte bool) returns UnresolvedTypeExpr throws ParserError
+		var lowerBound = BoundResult.create(0, qualifier: "")
+		var upperBound = BoundResult.create(0, qualifier: "")
+		if isFloat 'parseFloat'
+			lowerBound = try parseFloatRangeBound()
+		end 'parseFloat' else 'parseInt'
+			lowerBound = try parseIntRangeBound()
+		end 'parseInt'
+
+		var upperInclusive = true
+		if accept(TokenKind.to) 'isTo'
+			upperInclusive = true
+		end 'isTo' else if accept(TokenKind.upto) 'isUpto'
+			upperInclusive = false
+		end 'isUpto' else 'badSep'
+			let cur = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected 'to' or 'upto' in range", line: cur.line, column: cur.column, filePath: filePath)
+			skipToNextLine()
+			throw ParserError.unhandledToken
+		end 'badSep'
+
+		if isFloat 'parseFloatU'
+			upperBound = try parseFloatRangeBound()
+		end 'parseFloatU' else 'parseIntU'
+			upperBound = try parseIntRangeBound()
+		end 'parseIntU'
+
+		try expect(TokenKind.rightParen)
+
+		// Mismatched type qualifiers — both sides explicitly named a type
+		// and they disagree. Reports against the upper-bound column for
+		// stable diagnostic anchoring (matches the C# bootstrap).
+		if lowerBound.qualifier != "" and upperBound.qualifier != "" and lowerBound.qualifier != upperBound.qualifier 'mismatched'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Mismatched type bounds: '{lowerBound.qualifier}.min' and '{upperBound.qualifier}.max' must reference the same type", line: baseToken.line, column: baseToken.column + 4, filePath: filePath)
+			return UnresolvedTypeExpr.invalid
+		end 'mismatched'
+
+		// Byte ranges must fit in 0..255.
+		if isByte 'byteCheck'
+			if lowerBound.value < 0 or upperBound.value < 0 or upperBound.value > 255 'badByte'
+				reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Invalid byte range: bounds must be within 0 to u8.max", line: baseToken.line, column: baseToken.column + 4, filePath: filePath)
+				return UnresolvedTypeExpr.invalid
+			end 'badByte'
+		end 'byteCheck'
+
+		// Range ordering. For ints, treat non-negative lower as unsigned for
+		// the comparison so `0 to u64.max` (where u64.max wraps to -1 signed)
+		// is valid.
+		var invalidRange = false
+		if isFloat 'orderFloat'
+			invalidRange = floatBitsGreater(lowerBound.value, b: upperBound.value) or (lowerBound.value == upperBound.value and not upperInclusive)
+		end 'orderFloat' else 'orderInt'
+			invalidRange = isInvalidIntRange(lowerBound.value, upper: upperBound.value, upperInclusive: upperInclusive)
+		end 'orderInt'
+
+		if invalidRange 'badOrder'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Invalid range: lower bound {lowerBound.value} must be less than upper bound {upperBound.value}", line: baseToken.line, column: baseToken.column, filePath: filePath)
+			return UnresolvedTypeExpr.invalid
+		end 'badOrder'
+
+		// Normalize `upto N` to inclusive `to N - 1` for ints so downstream
+		// passes only ever see one bound shape.
+		var normalizedUpper = upperBound.value
+		if not upperInclusive and not isFloat 'normalizeUpto'
+			normalizedUpper = upperBound.value - 1
+		end 'normalizeUpto'
+
+		if isFloat 'returnFloat'
+			return UnresolvedTypeExpr.rangedFloat(lowerBound.value, upper: normalizedUpper)
+		end 'returnFloat'
+		if isByte 'returnByte'
+			return UnresolvedTypeExpr.rangedByte(lowerBound.value, upper: normalizedUpper)
+		end 'returnByte'
+		return UnresolvedTypeExpr.rangedInt(lowerBound.value, upper: normalizedUpper)
+	end 'parseRangedPrimitiveBounds'
 
 	// --- Return statement ---
 
@@ -5527,11 +5673,36 @@ export type Parser
 			let targetMaxonType = try parseCastTargetType()
 			let fromMaxonType = exprType(result)
 			let resultName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: SourceRange.between(asToken, last: targetLastToken)))
+			let castRange = SourceRange.between(asToken, last: targetLastToken)
+			module.appendOp(block, op: MaxonOp.convert(resultName, operand: exprName(result), fromType: fromMaxonType, toType: targetMaxonType, implicit: false, range: castRange))
+			// Pair every named-type cast with a `castCheck` placeholder so
+			// the post-resolution `expandCastRangeChecks` pass can splice
+			// in a runtime range guard once the alias's bounds are known.
+			// Casts to primitive `int`/`float`/`bool`/`byte` (no alias name)
+			// don't need a runtime check — the parser already gates literal
+			// values via E3009. Same-alias casts (`b as Byte` where `b: Byte`)
+			// are also skipped — the value is already constrained to the
+			// alias's range by an earlier check at its definition site.
+			if not maxonTypesStructurallyEqual(fromMaxonType, b: targetMaxonType) 'differentTypes'
+				emitCastCheckIfNamed(block, value: resultName, targetType: targetMaxonType, castRange: castRange)
+			end 'differentTypes'
 			result = ExprResult.direct(resultName, valueType: targetMaxonType)
 		end 'castLoop'
 		return result
 	end 'parseAsCasts'
+
+	// Emit a `castCheck` placeholder when the cast target is a named type.
+	// The post-resolution expander walks every `castCheck`, looks up the
+	// alias's range, and either drops the op (full-range alias, or alias
+	// that wasn't a ranged primitive at all) or splits the host block to
+	// insert a runtime guard.
+	function emitCastCheckIfNamed(block IrBlock, value ByteArray, targetType MaxonType, castRange SourceRange)
+		let aliasName = targetType.namedAliasNameOrEmpty(project)
+		if aliasName.isEmpty() 'noAlias'
+			return
+		end 'noAlias'
+		module.appendOp(block, op: MaxonOp.castCheck(value, aliasName: aliasName, range: castRange))
+	end 'emitCastCheckIfNamed'
 
 	// Parse the type appearing after `as`. Accepts the bare primitive
 	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
@@ -5736,6 +5907,21 @@ export type Parser
 			end 'isDotCall'
 		end 'maybeDotCall'
 
+		// Sized type bound: `u16.max`, `i32.min`, etc. as a standalone
+		// expression. Must run before the qualified-read path below — that
+		// path emits an `unresolvedRead("u16.max")` which TypeResolution
+		// can't satisfy.
+		if at(TokenKind.dot) and isSizedTypeName(token.value) 'maybeTypeBoundExpr'
+			let fieldToken = try cursor.peek(1) otherwise Token.eof()
+			if fieldToken.kind == TokenKind.identifier and (fieldToken.value == "min" or fieldToken.value == "max") 'isTypeBoundExpr'
+				let bound = resolveTypeBound(token.value, field: fieldToken.value)
+				try eat(TokenKind.dot)
+				try eat(TokenKind.identifier)
+				let boundName = emitLiteral(block, value: bound, valueType: MaxonType.integer, range: SourceRange.between(token, last: fieldToken))
+				return ExprResult.direct(boundName, valueType: MaxonType.integer)
+			end 'isTypeBoundExpr'
+		end 'maybeTypeBoundExpr'
+
 		// Qualified static-field read: TypeName.field, where the qualified name
 		// names a registered static var (.data slot) or static let
 		// (compile-time integer constant). Methods take precedence above;
@@ -5804,18 +5990,6 @@ export type Parser
 			end 'inMethod'
 			return emitCallAndResult(block, calleeName: bareCallee, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
-
-		// Sized type bound: u64.max, i32.min, etc.
-		if at(TokenKind.dot) 'maybeTypeBound'
-			let fieldToken = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
-			if fieldToken.kind == TokenKind.identifier and (fieldToken.value == "min" or fieldToken.value == "max") and isSizedTypeName(token.value) 'isTypeBound'
-				let bound = resolveTypeBound(token.value, field: fieldToken.value)
-				try eat(TokenKind.dot)
-				try eat(TokenKind.identifier)
-				let boundName = emitLiteral(block, value: bound, valueType: MaxonType.integer, range: SourceRange.between(token, last: fieldToken))
-				return ExprResult.direct(boundName, valueType: MaxonType.integer)
-			end 'isTypeBound'
-		end 'maybeTypeBound'
 
 		// Struct construction: TypeName{field: value, ...}
 		// Ranged-primitive construction (`Foo{42}`) was removed in favor of
@@ -7691,6 +7865,20 @@ end 'infixBindingPower'
 
 export typealias BoundValue = int(i64.min to i64.max)
 
+// Captured parse result for a single int/float range bound — the integer
+// value (or IEEE-754 i64 bit pattern, for floats) plus the source-level
+// type qualifier (`u32`, `i64`, …) when the bound was a `T.min`/`T.max`
+// expression. The qualifier is empty for plain literals; callers compare
+// the two sides' qualifiers to detect E3005 mismatches.
+type BoundResult
+	export let value BoundValue
+	export let qualifier String
+
+	export static function create(value BoundValue, qualifier String) returns BoundResult
+		return Self{value: value, qualifier: qualifier}
+	end 'create'
+end 'BoundResult'
+
 let typeBoundsTable = [
 	"u8.min": 0, "u8.max": 255, "u16.min": 0, "u16.max": 65535, "u32.min": 0, "u32.max": 4294967295, "u64.min": 0, "u64.max": -1,
 	"i8.min": -128, "i8.max": 127, "i16.min": -32768, "i16.max": 32767, "i32.min": -2147483648, "i32.max": 2147483647, "i64.min": -9223372036854775808, "i64.max": 9223372036854775807
@@ -7702,6 +7890,18 @@ function resolveTypeBound(typeName String, field String) returns BoundValue
 	return try typeBoundsTable.get(key) otherwise 0
 end 'resolveTypeBound'
 
+// IEEE-754 bit patterns for f32/f64 finite extremes, encoded as i64 so the
+// existing RangeBound (which is i64) can carry them through the resolver.
+let floatTypeBoundsTable = [
+	"f64.min": -4503599627370497, "f64.max": 9218868437227405311,
+	"f32.min": -1011110350135427073, "f32.max": 5727507168572555263
+]
+
+function resolveFloatTypeBound(typeName String, field String) returns BoundValue
+	let key = "{typeName}.{field}"
+	return try floatTypeBoundsTable.get(key) otherwise 0
+end 'resolveFloatTypeBound'
+
 // True when `name` is one of the fixed-width integer keywords whose
 // `.min`/`.max` bound expressions exist in `typeBoundsTable`. Inlined at
 // each runtime call site for years; kept as a helper now that the const
@@ -7710,11 +7910,107 @@ export function isSizedTypeName(name String) returns bool
 	return name == "u8" or name == "u16" or name == "u32" or name == "u64" or name == "i8" or name == "i16" or name == "i32" or name == "i64"
 end 'isSizedTypeName'
 
-// Pick the narrowest StdType that can hold a typealias's range of values.
+// True when `expr` is the `invalid` sentinel arm. Suppresses the unused-
+// typealias cascade so a single E3005 reaches the user.
+export function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
+	return match expr 'check'
+		invalid gives true
+		boolPrim gives false
+		rangedInt gives false
+		rangedByte gives false
+		rangedFloat gives false
+		aliasName gives false
+		genericAlias gives false
+	end 'check'
+end 'isInvalidTypealiasExpr'
+
+// Negate an IEEE-754 double encoded as i64 bits — flip the sign bit.
+function negateFloatBits(bits BoundValue) returns BoundValue
+	let signBit = -9223372036854775808
+	return bits xor signBit
+end 'negateFloatBits'
+
+// Convert a signed integer to its IEEE-754 double bit pattern. Only used
+// for small range-bound literals (0, 100, etc.) where rounding loss is
+// inconsequential.
+function floatBitsFromInt(value BoundValue) returns BoundValue
+	if value == 0 'zero'
+		return 0
+	end 'zero'
+	let isNeg = value < 0
+	let mag = value if not isNeg else 0 - value
+	// Find leading-bit position. mag is positive non-zero in the i64 range,
+	// so the position is in [0, 62].
+	var pos = 0
+	var probe = mag
+	while probe > 1 'shift'
+		probe = probe shr 1
+		pos = pos + 1
+	end 'shift'
+	let exponent = pos + 1023
+	// Mantissa: drop the implicit leading 1, shift to fill 52 bits.
+	let topBit = 1 shl pos
+	let fraction = mag - topBit
+	var mantissa = 0
+	if pos <= 52 'leftShift'
+		mantissa = fraction shl (52 - pos)
+	end 'leftShift' else 'rightShift'
+		mantissa = fraction shr (pos - 52)
+	end 'rightShift'
+	let signBit = -9223372036854775808 if isNeg else 0
+	let exponentBits = exponent shl 52
+	return signBit or exponentBits or mantissa
+end 'floatBitsFromInt'
+
+// Compare two doubles encoded as i64 bit patterns: true iff `a > b` in
+// IEEE-754 ordering. Used to validate `lower <= upper` without a runtime
+// float-compare op.
+export function floatBitsGreater(a BoundValue, b BoundValue) returns bool
+	if a == b 'eq'
+		return false
+	end 'eq'
+	let aNeg = a < 0
+	let bNeg = b < 0
+	if aNeg and not bNeg 'aLess'
+		return false
+	end 'aLess'
+	if bNeg and not aNeg 'aGreater'
+		return true
+	end 'aGreater'
+	if aNeg 'bothNeg'
+		// Larger magnitude (smaller signed bits) is the smaller double.
+		return a < b
+	end 'bothNeg'
+	return a > b
+end 'floatBitsGreater'
+
+// True when an int range (lower, upper, upperInclusive) is invalid.
+// `0 to u64.max` is fine: u64.max stores as the wrapped value -1, and a
+// non-negative `lower` with a wrapped `upper` represents the full unsigned
+// span, which is always valid.
+function isInvalidIntRange(lower BoundValue, upper BoundValue, upperInclusive bool) returns bool
+	// Unsigned compare: when both operands are non-negative as signed,
+	// signed comparison agrees with unsigned. When `upper < 0` it
+	// represents a u64 value above i64.max; that's always larger than a
+	// non-negative lower so the range is valid.
+	if lower >= 0 and upper < 0 'unsignedWrapped'
+		return false
+	end 'unsignedWrapped'
+	return lower > upper or (lower == upper and not upperInclusive)
+end 'isInvalidIntRange'
+
+// Pick the narrowest StdType that can hold an `int(...)` alias's range.
+// The alias's *cast category* is tracked separately via
+// `project.typealiasCastCategories`, so narrowing to u8/u16 here doesn't
+// flip a user-declared `int(...)` into the `byte` cast family — storage
+// is independent of category.
+//
 // Negative lower bounds fall through to signed i64 because signed narrow
 // widths aren't yet used at the Std level.
 export function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
 	if lower >= 0 'unsigned'
+		// `upper < 0` represents a u64 value above i64.max — needs full u64
+		// to round-trip cleanly.
 		if upper < 0 'wrappedU64'
 			return StdType.u64
 		end 'wrappedU64'

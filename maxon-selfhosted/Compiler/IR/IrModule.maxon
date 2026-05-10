@@ -118,6 +118,23 @@ export type IrModule uses Op
 		return block
 	end 'addBlock'
 
+	// Variant that inserts the new block's blockRef in `func.blockRefs` at
+	// the given list position rather than appending. Used by Maxon-level
+	// passes that split a block: the continuation block must appear in
+	// linear order immediately after its predecessor so the (block-order,
+	// def-before-use) invariant downstream lowering relies on still holds
+	// after the split.
+	export function addBlockAtPosition(func IrFunction, label String, blockRefPos NodeIndex) returns IrBlock throws ArrayError
+		let id = func.nextBlockId
+		func.nextBlockId = func.nextBlockId + 1
+		let blockIdx = blocks.count()
+		let block = IrBlock.create(id, label: label)
+		blocks.push(block)
+		try func.blockRefs.insert(blockRefPos, value: blockIdx) otherwise throw ArrayError.indexOutOfBounds
+		self.blockSourceInfo.push(BlockSourceInfo.empty())
+		return block
+	end 'addBlockAtPosition'
+
 	// Parser-facing variant of addBlock that records the block's source
 	// footprint (file path + opening line) in the parallel blockSourceInfo
 	// table. `firstLine` is the line of the token that triggered the block's

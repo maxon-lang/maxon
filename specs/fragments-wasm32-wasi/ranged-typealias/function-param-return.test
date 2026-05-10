@@ -1,0 +1,44 @@
+// Test: function-param-return
+typealias Score = int(0 to 100)
+
+function double(s Score) returns Score
+	return s * 2
+end 'double'
+
+function main() returns ExitCode
+	return double(21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @double(local0: u8) -> u8 {
+  entry:
+    %4 = mir.param local0 : u8
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    %5 = mir.mov_imm 100 : i64
+    %6 = mir.cmp ugt, %3, %5
+    mir.cond_br %6 [then: __range_panic_2(), else: __range_ok_2()]
+  __range_panic_2:
+    %7 = mir.global_addr @__panic_msg_3
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_2:
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 21 : i64
+    %1 = mir.call @double(%0)
+    %2 = mir.mov_imm 125 : i64
+    %3 = mir.cmp ugt, %1, %2
+    mir.cond_br %3 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %4 = mir.global_addr @__panic_msg_4
+    %5 = mir.call @mrt_panic(%4)
+  __range_ok_3:
+    mir.ret %1
+  }
+}
+---

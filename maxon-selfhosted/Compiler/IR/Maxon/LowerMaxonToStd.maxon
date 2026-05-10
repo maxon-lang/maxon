@@ -1342,6 +1342,11 @@ type MaxonToStdLowering
 			// type is concrete (e.g. `String`, `Array`). Nothing to lower
 			// here.
 			forInIterable then return
+			// `castCheck` is a parser-emitted placeholder that the
+			// `expandCastRangeChecks` pass must rewrite before lowering.
+			// Reaching it here means the pass was skipped — that's a
+			// pipeline-ordering bug.
+			castCheck then panic("LowerMaxonToStd: castCheck reached lowering — expandCastRangeChecks did not run")
 		end 'lower'
 	end 'lowerOp'
 

@@ -83,8 +83,10 @@ type RangeCheckInserter
 		// typealiasRanges is sparse; absent means the alias has no narrow range and needs no checks.
 		let range = try typealiasRanges.get(aliasName) otherwise return
 
-		// Skip if range covers the full i64 range — no value can be out of bounds
-		if isFullRange(range) 'fullRange'
+		// Skip if range covers the full underlying-type range — no value can
+		// be out of bounds. For float aliases this matches f64.min/f64.max
+		// bit patterns, not i64 extremes.
+		if isFullRange(project, aliasName: aliasName, range: range) 'fullRange'
 			return
 		end 'fullRange'
 
@@ -111,7 +113,11 @@ type RangeCheckInserter
 	// known constant in this block, in which case constant folding has
 	// already done the job (or will diagnose statically).
 	function checkRetValue(func IrFunction, block IrBlock, retValId ValueId, returnType MaxonReturnType, aliasName String, range TypealiasRange)
-		let constValue = findConstValue(retValId, block: block, module: module)
+		// The literal defining `retValId` may live in a predecessor block when
+		// a Maxon-level pass split the original return block (e.g.
+		// expandCastRangeChecks). Walk every block in the function so the
+		// constant-fold escape hatch still fires for `return CONST` shapes.
+		let constValue = findConstValueAcrossFunc(retValId, func: func, module: module)
 		if constValue != RANGE_CHECK_UNKNOWN 'isConst'
 			return
 		end 'isConst'
@@ -129,7 +135,11 @@ type RangeCheckInserter
 		var panicBlock = module.addBlock(func, label: panicLabel)
 		var continueBlock = module.addBlock(func, label: okLabel)
 
-		if needsUpperCheck and needsLowerCheck and range.lower == 0 'unsignedCheck'
+		// `0 to N` int ranges fold both bound checks into a single unsigned
+		// `cmpUgt`. Floats with lower == 0 (i.e. lower == 0.0 as bits) are
+		// not eligible because IEEE-754 ordering doesn't match unsigned int
+		// ordering — emit a dual check instead.
+		if needsUpperCheck and needsLowerCheck and range.lower == 0 and not typeInfo.isFloat 'unsignedCheck'
 			self.emitUnsignedUpperCheck(block, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id)
 		end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 			let loLabel = buildLabel("__range_check_lo_", id: checkId)
@@ -254,6 +264,21 @@ function findConstValue(valueId ValueId, block IrBlock, module StdModule) return
 	return RANGE_CHECK_UNKNOWN
 end 'findConstValue'
 
+// Variant that walks every block in the function. Used by checkRetValue
+// when the literal that produced the return value may live in a
+// predecessor block — common after Maxon-level passes (e.g. cast-check
+// expansion) split a return block at an intermediate op.
+function findConstValueAcrossFunc(valueId ValueId, func IrFunction, module StdModule) returns ParsedInt
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("findConstValueAcrossFunc: blockRef OOB")
+		let result = findConstValue(valueId, block: block, module: module)
+		if result != RANGE_CHECK_UNKNOWN 'found'
+			return result
+		end 'found'
+	end 'eachBlock'
+	return RANGE_CHECK_UNKNOWN
+end 'findConstValueAcrossFunc'
+
 // Returns the constant value if `opIdx` is an arith.const whose resultId matches `valueId`,
 // otherwise returns RANGE_CHECK_UNKNOWN.
 function tryExtractArithConstIfMatches(opIdx OpIndex, module StdModule, valueId ValueId) returns ParsedInt
@@ -290,26 +315,35 @@ function buildPanicMessage(aliasName String, sourceFileName String, sourceLine L
 	return "panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{aliasName}'"
 end 'buildPanicMessage'
 
-// Check if a range covers the full i64 range (no value can be out of bounds).
-// All values in the self-hosted compiler are i64 at runtime, so a range that
-// spans i64.min to i64.max needs no check. Exported so the inliner can
-// consult the same predicate when deciding whether a callee's return path
-// will produce a (frame-bearing) range-check panic.
-export function isFullRange(range TypealiasRange) returns bool
+// Check if a range covers every value of the alias's underlying type (so no
+// value can be out of bounds). Int aliases compare against `i64.min`/`i64.max`;
+// float aliases compare against the IEEE-754 bit patterns of `f64.min`/
+// `f64.max` because float bounds flow through `TypealiasRange` as i64-encoded
+// bit patterns, not as numeric values. Exported so the inliner can consult
+// the same predicate when deciding whether a callee's return path will
+// produce a (frame-bearing) range-check panic.
+export function isFullRange(project Project, aliasName String, range TypealiasRange) returns bool
+	let stdType = try project.typealiases.get(aliasName) otherwise return range.lower <= i64.min and range.upper == i64.max
+	if stdTypeIsFloat(stdType) 'isFloat'
+		let f64MinBits = -4503599627370497
+		let f64MaxBits = 9218868437227405311
+		return range.lower == f64MinBits and range.upper == f64MaxBits
+	end 'isFloat'
 	return range.lower <= i64.min and range.upper == i64.max
 end 'isFullRange'
 
 // Opcodes and StdType for range checks, resolved from the function's return type.
 type RangeCheckTypeInfo
 	export var stdType StdType
+	export var isFloat bool
 	export var constOpcode StdArithConstOpcode
 	export var cmpLtOpcode StdArithBinaryOpcode
 	export var cmpGtOpcode StdArithBinaryOpcode
 	export var cmpLeOpcode StdArithBinaryOpcode
 	export var cmpGeOpcode StdArithBinaryOpcode
 
-	static function create(stdType StdType, constOpcode StdArithConstOpcode, cmpLtOpcode StdArithBinaryOpcode, cmpGtOpcode StdArithBinaryOpcode, cmpLeOpcode StdArithBinaryOpcode, cmpGeOpcode StdArithBinaryOpcode) returns RangeCheckTypeInfo
-		return Self{stdType: stdType, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode, cmpLeOpcode: cmpLeOpcode, cmpGeOpcode: cmpGeOpcode}
+	static function create(stdType StdType, isFloat bool, constOpcode StdArithConstOpcode, cmpLtOpcode StdArithBinaryOpcode, cmpGtOpcode StdArithBinaryOpcode, cmpLeOpcode StdArithBinaryOpcode, cmpGeOpcode StdArithBinaryOpcode) returns RangeCheckTypeInfo
+		return Self{stdType: stdType, isFloat: isFloat, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode, cmpLeOpcode: cmpLeOpcode, cmpGeOpcode: cmpGeOpcode}
 	end 'create'
 end 'RangeCheckTypeInfo'
 
@@ -329,7 +363,7 @@ function resolveRangeCheckType(project Project, returnType MaxonReturnType) retu
 	end 'unwrap'
 	let stdType = maxonTypeToStdType(project, ref: valueType)
 	if stdTypeIsFloat(stdType) 'isFloat'
-		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: StdArithConstOpcode.constF64, cmpLtOpcode: StdArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpF64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpF64Ge)
+		return RangeCheckTypeInfo.create(StdType.f64, isFloat: true, constOpcode: StdArithConstOpcode.constF64, cmpLtOpcode: StdArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpF64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpF64Ge)
 	end 'isFloat'
-	return RangeCheckTypeInfo.create(StdType.i64, constOpcode: StdArithConstOpcode.constI64, cmpLtOpcode: StdArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpI64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpI64Ge)
+	return RangeCheckTypeInfo.create(StdType.i64, isFloat: false, constOpcode: StdArithConstOpcode.constI64, cmpLtOpcode: StdArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: StdArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: StdArithBinaryOpcode.cmpI64Le, cmpGeOpcode: StdArithBinaryOpcode.cmpI64Ge)
 end 'resolveRangeCheckType'
