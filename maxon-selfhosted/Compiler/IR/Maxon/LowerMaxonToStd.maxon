@@ -1504,7 +1504,13 @@ type MaxonToStdLowering
 		arrArgIds.push(arrSizeId)
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: arrArgIds)))
-		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("Array")))
+		// Pin the value-type map to the same gid TypeResolution recorded for
+		// the byteStringLiteral op, so downstream `bytes.count()` and
+		// `bytes.get(i)` method dispatches read a bound generic instance
+		// (with a layout descriptor) instead of a bare `named(Array)` — the
+		// latter trips `materializeLayoutArg`'s panic. The parser leaves the
+		// type unresolved; lowering matches what the resolver wrote on the op.
+		self.setValueType(resultId, t: byteStringLiteralResultType(self.project))
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
 	end 'lowerByteStringLiteral'

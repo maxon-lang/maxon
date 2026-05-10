@@ -6376,8 +6376,11 @@ export type Parser
 		let stringId = project.strings.intern(String.from(decoded))
 		let name = freshSynthName()
 		module.appendOp(block, op: MaxonOp.byteStringLiteral(name, stringId: stringId, range: range))
-		let arrType = MaxonType.named(project.typeNames.intern("Array"))
-		return ExprResult.direct(name, valueType: arrType)
+		// Leave the bound generic-instance result type to TypeResolution —
+		// matching how `parseArrayLiteralExpr` returns `unresolved` and lets
+		// the resolver intern the `Array with ...` gid. The parser only emits
+		// the op; type-system facts belong to the resolution pass.
+		return ExprResult.direct(name, valueType: MaxonType.unresolved)
 	end 'parseByteStringLiteralExpr'
 
 	function parseSelfExpr(block IrBlock) returns ExprResult throws ParserError

@@ -2248,6 +2248,21 @@ function stringConstResultType(project Project) returns MaxonType
 	return MaxonType.string
 end 'stringConstResultType'
 
+// Phase 7: a `b"..."` byte-string literal lowers to an `Array with byte`
+// wrapper around a __ManagedMemory whose element_size is 1. The result
+// type is the bound generic instance — bare `MaxonType.named("Array")`
+// would leave subsequent method calls (`bytes.count()`, `bytes.get(i)`)
+// without the layout binding lowering's `materializeLayoutArg` requires
+// for implicit-layout-arg generic methods. Element type is
+// `MaxonType.integer` because Maxon's source-level type system has a
+// single integer arm; byte-ness is conveyed at the StdDialect level
+// (i8/u8) via the consuming typealias, not the MaxonType encoding.
+// Exported so `LowerMaxonToStd.lowerByteStringLiteral` can pin the
+// per-function value-type map to the identical gid the resolver wrote.
+export function byteStringLiteralResultType(project Project) returns MaxonType
+	return internSingleArgGenericInstance(project, baseTypeName: "Array", elementType: MaxonType.integer)
+end 'byteStringLiteralResultType'
+
 // Resolve a `call`/`tryCall` op's result type, with a special case for
 // the two ops the parser emits for an array literal
 // (`__ManagedMemory.create` for `__mm` and `<arrayTypeName>.init` for
@@ -2468,7 +2483,7 @@ function staticTypeFromOpIfMatches(project Project, op MaxonOp, name ByteArray) 
 		literal(result, _, valueType, _) then return try staticTypedResult(name: name, result: result, t: valueType)
 		stringConst(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Array")))
+		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: byteStringLiteralResultType(project))
 		stringInterp to forInIterable then throw ArrayLiteralLookupError.notFound
 	end 'pick'
 end 'staticTypeFromOpIfMatches'
@@ -2488,7 +2503,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Array")))
+		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: byteStringLiteralResultType(project))
 		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
 		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
@@ -3781,7 +3796,7 @@ function typedResultFromOpIfMatches(project Project, op MaxonOp, name ByteArray)
 		literal(result, _, valueType, _) then return try staticTypedResult(name: name, result: result, t: valueType)
 		stringConst(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Array")))
+		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: byteStringLiteralResultType(project))
 		varLoad(result, _, slotType, _) then return try staticTypedResult(name: name, result: result, t: slotType)
 		globalLoad(result, _, slotType, _) then return try staticTypedResult(name: name, result: result, t: slotType)
 		stringInterp(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
