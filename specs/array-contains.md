@@ -16,7 +16,7 @@ category: collections
 <!-- test: bytearray-array-contains -->
 Check that ByteArrayArray.contains() uses content equality, not pointer identity.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias ByteArrayArray = Array with ByteArray
 

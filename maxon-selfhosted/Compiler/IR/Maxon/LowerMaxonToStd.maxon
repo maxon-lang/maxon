@@ -1663,7 +1663,6 @@ type MaxonToStdLowering
 		return match kind 'k'
 			i64 gives self.materializeIntToString(valueId, dstBlock: dstBlock)
 			u64 gives self.materializeIntToString(valueId, dstBlock: dstBlock)
-			byte gives self.materializeIntToString(valueId, dstBlock: dstBlock)
 			string gives self.materializeStringStructPart(valueId, dstBlock: dstBlock)
 			character gives self.materializeStringStructPart(valueId, dstBlock: dstBlock)
 			f64 gives self.materializeFloatToString(valueId, dstBlock: dstBlock)
@@ -3353,8 +3352,8 @@ type MaxonToStdLowering
 	//   - Type-checking the arg's MaxonType (carried on the call op as
 	//     `argTypes[i]`) against the signature's declared paramType. Same
 	//     CastCategory (or compiler-recognized implicit conversion) is
-	//     accepted: int↔float, int→byte, float→byte, byte→int|float emit a
-	//     compile-inserted convert in `dstBlock`. Mismatches emit E3005.
+	//     accepted: int↔float emits a compile-inserted convert in `dstBlock`.
+	//     Mismatches emit E3005.
 	//   - Filling unfilled slots with integer-literal defaults from the
 	//     signature (emitted as fresh constI64 ops, then run through the
 	//     same conversion machinery so a default value of 0 lands as f64
@@ -3558,29 +3557,14 @@ type MaxonToStdLowering
 	// conversions. Categorical dispatch keeps the convert kernel small —
 	// caller has already validated that the (from, to) pair is admissible.
 	function emitImplicitConvert(valueId ValueId, fromCategory CastCategory, toCategory CastCategory, dstBlock IrBlock) returns ValueId
-		// byte → int : byte and int share the i64 representation; same-rep
-		// alias, no op emitted.
-		if fromCategory == CastCategory.byte and toCategory == CastCategory.int 'byteToInt'
-			return valueId
-		end 'byteToInt'
-		// int|byte → float : both int and byte values flow as i64 internally,
-		// so siToFp converts either directly.
-		if (fromCategory == CastCategory.int or fromCategory == CastCategory.byte) and toCategory == CastCategory.float 'intToFloat'
+		// int → float : siToFp.
+		if fromCategory == CastCategory.int and toCategory == CastCategory.float 'intToFloat'
 			return self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.siToFpF64, resultType: MaxonType.float, dstBlock: dstBlock)
 		end 'intToFloat'
 		// float → int : fpToSi truncates toward zero.
 		if fromCategory == CastCategory.float and toCategory == CastCategory.int 'floatToInt'
 			return self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.fpToSiI64, resultType: MaxonType.integer, dstBlock: dstBlock)
 		end 'floatToInt'
-		// int → byte : keep low 8 bits via `and 0xFF`.
-		if fromCategory == CastCategory.int and toCategory == CastCategory.byte 'intToByte'
-			return self.emitByteTruncate(valueId, dstBlock: dstBlock)
-		end 'intToByte'
-		// float → byte : truncate to int, then mask to byte.
-		if fromCategory == CastCategory.float and toCategory == CastCategory.byte 'floatToByte'
-			let intId = self.emitUnaryConvert(valueId, opcode: StdArithUnaryOpcode.fpToSiI64, resultType: MaxonType.integer, dstBlock: dstBlock)
-			return self.emitByteTruncate(intId, dstBlock: dstBlock)
-		end 'floatToByte'
 		panic("emitImplicitConvert: unhandled pair ({castCategoryName(fromCategory)} -> {castCategoryName(toCategory)})")
 	end 'emitImplicitConvert'
 
@@ -3594,18 +3578,6 @@ type MaxonToStdLowering
 		self.setValueType(convId, t: resultType)
 		return convId
 	end 'emitUnaryConvert'
-
-	// Truncate an i64-resident value to its low 8 bits via `and 0xFF`.
-	// Used for both int→byte and float→byte (after the float→int step).
-	function emitByteTruncate(valueId ValueId, dstBlock IrBlock) returns ValueId
-		let maskId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: maskId, value: 255))))
-		self.setValueType(maskId, t: MaxonType.integer)
-		let truncId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.andI64, resultId: truncId, leftId: valueId, rightId: maskId))))
-		self.setValueType(truncId, t: MaxonType.integer)
-		return truncId
-	end 'emitByteTruncate'
 
 	// Resolve a `name:` label to its slot index in the user-facing portion of
 	// the signature via the precomputed nameToIndex map. Throws
@@ -4379,7 +4351,6 @@ export function primitiveExtensionTypeNameWithProject(project Project, t MaxonTy
 	let stdType = try project.typealiases.get(name) otherwise throw NotPrimitiveExtension.notPrimitive
 	return match stdType.rawValue.castCategory 'cat'
 		int gives "int"
-		byte gives "byte"
 		float gives "float"
 		bool gives "bool"
 		string gives "String"
@@ -4409,22 +4380,14 @@ end 'mismatchTypeName'
 // when one endpoint is a string we want the diagnostic to use the
 // source-level name ("String") rather than collapsing into a category.
 function isPrimitiveCategory(c CastCategory) returns bool
-	return c == CastCategory.int or c == CastCategory.float or c == CastCategory.byte or c == CastCategory.bool
+	return c == CastCategory.int or c == CastCategory.float or c == CastCategory.bool
 end 'isPrimitiveCategory'
 
 // Categorical predicate: does `from` admit an implicit conversion to `to`
-// at a call site? Mirrors the C# bootstrap's
-// `ConvertArgToParamType` table — the only conversions the language permits
-// at a call boundary today.
-//
-//   int   ↔ float : siToFp / fpToSi
-//   int   → byte  : truncate to low 8 bits (and 0xFF)
-//   float → byte  : fpToSi, then truncate to byte
-//   byte  → int   : same i64 representation, no op emitted
-//   byte  → float : siToFp on the i64-resident byte
-//
-// All other pairs (anything involving bool or string) reject — caller emits
-// E3005. Same-category pairs short-circuit before calling this predicate.
+// at a call site? The only cross-category conversions the language permits
+// today are int ↔ float (siToFp / fpToSi). All other pairs reject and the
+// caller emits E3005. Same-category pairs short-circuit before calling
+// this predicate.
 export function implicitlyConvertible(from CastCategory, to CastCategory) returns bool
 	if from == CastCategory.int and to == CastCategory.float 'intToFloat'
 		return true
@@ -4432,18 +4395,6 @@ export function implicitlyConvertible(from CastCategory, to CastCategory) return
 	if from == CastCategory.float and to == CastCategory.int 'floatToInt'
 		return true
 	end 'floatToInt'
-	if from == CastCategory.int and to == CastCategory.byte 'intToByte'
-		return true
-	end 'intToByte'
-	if from == CastCategory.float and to == CastCategory.byte 'floatToByte'
-		return true
-	end 'floatToByte'
-	if from == CastCategory.byte and to == CastCategory.int 'byteToInt'
-		return true
-	end 'byteToInt'
-	if from == CastCategory.byte and to == CastCategory.float 'byteToFloat'
-		return true
-	end 'byteToFloat'
 	return false
 end 'implicitlyConvertible'
 
@@ -4509,7 +4460,7 @@ end 'functionHasWhereClausesForLowering'
 
 function enclosingTypeName(project Project, name String) returns String throws EnclosingTypeError
 	let bytes = name.toByteArray()
-	let dotByte = 0x2E as byte
+	let dotByte = 0x2E
 	var lastDot = -1
 	var i = bytes.count() - 1
 	while i >= 0 'scan'

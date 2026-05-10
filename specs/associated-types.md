@@ -398,7 +398,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 interface ByteSource uses Element
 	function getByte() returns Element

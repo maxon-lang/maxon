@@ -30,7 +30,7 @@ Both orderings work: `byte == enum` and `enum == byte`.
 <!-- test: byte-enum-comparison.byte-eq-enum -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 enum Ascii
 	underscore = 95
@@ -55,7 +55,7 @@ end 'main'
 <!-- test: byte-enum-comparison.enum-eq-byte -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 enum Ascii
 	underscore = 95
@@ -80,7 +80,7 @@ end 'main'
 <!-- test: byte-enum-comparison.byte-ne-enum -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 enum Ascii
 	underscore = 95

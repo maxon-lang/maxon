@@ -122,7 +122,7 @@ end 'main'
 
 <!-- test: byte-array-hash -->
 ```maxon
-typealias ByteVal = byte(0 to u8.max)
+typealias ByteVal = int(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
@@ -145,7 +145,7 @@ end 'main'
 
 <!-- test: byte-array-equals -->
 ```maxon
-typealias ByteVal = byte(0 to u8.max)
+typealias ByteVal = int(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode

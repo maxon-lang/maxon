@@ -161,11 +161,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                 var failCount = failures.Count(f => !f.StartsWith("  "));
                 Logger.Error(LogCategory.Testing, $"[FAIL] {specName} ({total - failCount}/{total})");
                 foreach (var f in failures) {
-                  if (f.StartsWith("  ")) {
-                    if (_verbose) Logger.Error(LogCategory.Testing, f);
-                  } else {
-                    Logger.Error(LogCategory.Testing, f);
-                  }
+                  Logger.Error(LogCategory.Testing, f);
                 }
               }
             }

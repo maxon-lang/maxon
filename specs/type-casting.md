@@ -9,19 +9,20 @@ category: type-system
 
 ## Documentation
 
-The `as` keyword performs safe type casting between Maxon's primitive types (`int`, `float`, `byte`, `bool`).
+The `as` keyword performs safe type casting between Maxon's primitive types (`int`, `float`, `bool`).
 
 ### Safe Casts (Allowed)
 
 Only widening casts that never lose data are permitted:
 
 ```text
-byte -> int       // 8-bit unsigned to 64-bit signed (always fits)
-byte -> float     // 8-bit unsigned to 64-bit double (always fits)
 int -> float      // 64-bit signed to 64-bit double (may lose precision for large values)
-int literal 0-255 -> byte   // Compile-time range-checked narrowing
 same -> same      // No-op (any type to itself)
 ```
+
+Casts between ranged-int typealiases (e.g. `int(0 to u8.max)` to `int(i64.min to i64.max)`) are
+always permitted; out-of-range literals are rejected at compile time, and out-of-range expressions
+are rejected at runtime by the function-return range check.
 
 ### Syntax
 
@@ -32,24 +33,19 @@ expression as TargetType
 ### Examples
 
 ```text
-var b = 42 as byte       // int literal in range -> byte (OK)
-var i = b as int         // byte -> int widening (OK)
-var f = b as float       // byte -> float widening (OK)
+typealias Byte = int(0 to u8.max)
+var b = 42 as Byte       // int literal in range (OK)
+var i = b as int         // ranged int -> int (OK)
 var g = 100 as float     // int -> float widening (OK)
 ```
 
-### Unsafe Casts (Compile Error E3008)
+### Unsafe Casts (Compile Error E3009)
 
-Narrowing casts and lossy conversions are not allowed. The compiler reports error E3009:
+Lossy conversions are not allowed. The compiler reports error E3009:
 
 ```text
-var x = 5
-var b = x as byte        // ERROR: int variable -> byte (narrowing)
-var b = 256 as byte      // ERROR: int literal out of range
 var i = 5.0 as int       // ERROR: use trunc/round/floor/ceil instead
-var i = 5.0 as byte      // ERROR: float -> byte not allowed
 var i = true as int      // ERROR: bool -> int not allowed
-var b = true as byte     // ERROR: bool -> byte not allowed
 var f = true as float    // ERROR: bool -> float not allowed
 var b = 0 as bool        // ERROR: int -> bool not allowed
 var b = 0.0 as bool      // ERROR: float -> bool not allowed
@@ -69,7 +65,7 @@ For float-to-integer conversion, use the explicit conversion functions:
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
@@ -84,7 +80,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0 as Byte
@@ -99,7 +95,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 255 as Byte
@@ -114,7 +110,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 100 as Byte
@@ -129,7 +125,7 @@ end 'main'
 ```maxon
 
 typealias Float = float(f64.min to f64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 50 as Byte
@@ -203,7 +199,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
@@ -219,7 +215,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 10 as Byte
@@ -236,7 +232,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 25 as Byte
@@ -251,25 +247,10 @@ end 'main'
 
 ### Unsafe Casts (Compile Errors)
 
-<!-- test: error.int-var-to-byte -->
-```maxon
-
-typealias Byte = byte(0 to u8.max)
-
-function main() returns ExitCode
-	let x = 5
-	let b = x as Byte
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:12: Cannot cast from int to byte
-```
-
 <!-- test: error.int-literal-out-of-range -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let x = 256 as Byte
@@ -277,13 +258,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:14: Cannot cast from int to byte
+error E3005: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:14: Value 256 is outside the range of 'Byte' (int(0 to 255))
 ```
 
 <!-- test: error.negative-literal-to-byte -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let x = -1 as Byte
@@ -291,7 +272,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:13: Cannot cast from int to byte
+error E3005: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:13: Value -1 is outside the range of 'Byte' (int(0 to 255))
 ```
 
 <!-- test: error.float-to-int -->
@@ -306,20 +287,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3009: specs/fragments/type-casting/error.float-to-int.test:6:14: Cannot cast from float to int
-```
-
-<!-- test: error.float-to-byte -->
-```maxon
-
-typealias Byte = byte(0 to u8.max)
-
-function main() returns ExitCode
-	let x = 5.0 as Byte
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:14: Cannot cast from float to byte
 ```
 
 <!-- test: error.bool-to-int -->
@@ -355,7 +322,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:12: Cannot 
 <!-- test: error.bool-to-byte -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = true
@@ -364,7 +331,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:12: Cannot cast from bool to byte
+error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:12: Cannot cast from bool to int
 ```
 
 <!-- test: error.int-to-bool -->
@@ -392,7 +359,7 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:14: Cannot 
 <!-- test: error.byte-to-bool -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
@@ -401,5 +368,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot cast from byte to bool
+error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot cast from int to bool
 ```

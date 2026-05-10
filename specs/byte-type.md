@@ -16,7 +16,7 @@ The `byte` type represents a single 8-bit unsigned value (0-255).
 Use the `as byte` cast to create byte values from integers:
 
 ```maxon
-typealias Pixel = byte(0 to u8.max)
+typealias Pixel = int(0 to u8.max)
 
 var b = 255 as Pixel        // 8-bit unsigned value
 var zero = 0 as Pixel       // Zero byte
@@ -41,7 +41,7 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
@@ -57,7 +57,7 @@ end 'main'
 <!-- test: byte-max -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 255 as Byte
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: byte-zero -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0 as Byte
@@ -93,7 +93,7 @@ end 'main'
 <!-- test: byte-from-hex -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0xff as Byte

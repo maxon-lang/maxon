@@ -16,7 +16,7 @@ category: collections
 <!-- test: cursor-basic-traversal -->
 Create a cursor and traverse all elements using advance/current.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -45,7 +45,7 @@ end 'main'
 <!-- test: cursor-index -->
 Verify that index() returns the current position.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -74,7 +74,7 @@ end 'main'
 <!-- test: cursor-peek -->
 Peek ahead without moving the cursor.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -101,7 +101,7 @@ end 'main'
 <!-- test: cursor-retreat -->
 Advance then retreat and verify position.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -129,7 +129,7 @@ end 'main'
 <!-- test: cursor-advance-by -->
 Skip multiple positions with advanceBy(n).
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -156,7 +156,7 @@ end 'main'
 <!-- test: cursor-seek -->
 Seek jumps to an arbitrary valid position.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -181,7 +181,7 @@ end 'main'
 <!-- test: cursor-seek-out-of-bounds -->
 Seek to an out-of-bounds index throws and leaves position unchanged.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -207,7 +207,7 @@ end 'main'
 <!-- test: cursor-advance-throws-at-end -->
 Verify advance throws IterationError.exhausted at end.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -240,7 +240,7 @@ end 'main'
 <!-- test: cursor-retreat-throws-at-start -->
 Verify retreat throws IterationError.atStart at position 0.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -267,7 +267,7 @@ end 'main'
 <!-- test: cursor-retreat-by -->
 Rewind the cursor multiple positions with retreatBy.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -295,7 +295,7 @@ end 'main'
 <!-- test: cursor-retreat-by-throws-at-start -->
 Verify retreatBy throws IterationError.atStart when asked to move past position 0.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -325,7 +325,7 @@ end 'main'
 <!-- test: cursor-empty-array-throws -->
 Verify cursor() throws IterationError.exhausted on empty array.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -345,7 +345,7 @@ end 'main'
 <!-- test: cursor-peek-throws-out-of-bounds -->
 Verify peek throws when looking past the end.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode

@@ -302,7 +302,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
 
@@ -329,7 +329,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
 
@@ -356,7 +356,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
 
@@ -382,7 +382,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
 
@@ -418,7 +418,7 @@ end 'main'
 <!-- test: byte-array-count -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
 

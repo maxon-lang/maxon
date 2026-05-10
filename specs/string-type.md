@@ -951,7 +951,7 @@ end 'main'
 <!-- test: heap-string-data-access -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	// Verify heap-allocated string data is accessible via bytes()

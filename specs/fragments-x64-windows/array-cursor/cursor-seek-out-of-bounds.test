@@ -1,5 +1,5 @@
 // Test: cursor-seek-out-of-bounds
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
@@ -27,26 +27,19 @@ module {
     x64.prologue stack_size=32
     x64.call ByteArray.create
     x64.mov [rbp-8], rax
-    x64.mov rax, 10
-    x64.mov rcx, 255
-    x64.and rax, rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 10
+    x64.call ByteArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 20
+    x64.call ByteArray.push
     x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, rax
-    x64.call ByteArray.push
-    x64.mov rbx, 20
-    x64.mov rsi, 255
-    x64.and rbx, rsi
-    x64.mov rdi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, rbx
-    x64.call ByteArray.push
-    x64.mov r8, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call ByteArray.cursor
     x64.mov [rbp-16], rax
-    x64.xor r9d, r9d
-    x64.cmp rdx, r9
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
     x64.je array-cursor.main.otherwise_continue_1
   otherwise_error_0:
     x64.mov rax, [rbp-16]

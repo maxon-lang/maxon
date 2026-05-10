@@ -2169,18 +2169,15 @@ export type Parser
 			sawValidBase = true
 		end 'isBool'
 
-		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float or baseToken.kind == TokenKind.byte 'isNumeric'
+		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
-			let isByte = baseToken.kind == TokenKind.byte
 			try eat(baseToken.kind)
 
 			if not at(TokenKind.leftParen) 'noParen'
 				var example = "int(0 to 100)"
 				if isFloat 'floatEx'
 					example = "float(f64.min to f64.max)"
-				end 'floatEx' else if isByte 'byteEx'
-					example = "byte(0 to u8.max)"
-				end 'byteEx'
+				end 'floatEx'
 				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: filePath)
 				skipToNextLine()
 				throw ParserError.unhandledToken
@@ -2188,7 +2185,7 @@ export type Parser
 
 			try eat(TokenKind.leftParen)
 
-			let parsed = try parseRangedPrimitiveBounds(baseToken, isFloat: isFloat, isByte: isByte)
+			let parsed = try parseRangedPrimitiveBounds(baseToken, isFloat: isFloat)
 			expr = parsed
 			sawValidBase = true
 		end 'isNumeric'
@@ -2269,7 +2266,7 @@ export type Parser
 		end 'isAliasName'
 
 		if not sawValidBase 'unsupported'
-			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' RHS must be 'bool', a ranged primitive (int(...)/float(...)/byte(...)), or another type name; got '{tokenValueToString(baseToken.value)}'", line: baseToken.line, column: baseToken.column, filePath: filePath)
+			reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' RHS must be 'bool', a ranged primitive (int(...)/float(...)), or another type name; got '{tokenValueToString(baseToken.value)}'", line: baseToken.line, column: baseToken.column, filePath: filePath)
 			skipToNextLine()
 			throw ParserError.unhandledToken
 		end 'unsupported'
@@ -3270,12 +3267,12 @@ export type Parser
 		return floatBitsFromInt(signed)
 	end 'parseFloatBoundBits'
 
-	// Parse the inside of `int(...)`, `byte(...)`, or `float(...)` after the
-	// opening paren is consumed. Validates ranges and returns the appropriate
+	// Parse the inside of `int(...)` or `float(...)` after the opening paren
+	// is consumed. Validates ranges and returns the appropriate
 	// UnresolvedTypeExpr arm. Reports E3005 on bound mismatches and replaces
 	// the alias's RHS with `invalid` so downstream resolution proceeds without
 	// cascading.
-	function parseRangedPrimitiveBounds(baseToken Token, isFloat bool, isByte bool) returns UnresolvedTypeExpr throws ParserError
+	function parseRangedPrimitiveBounds(baseToken Token, isFloat bool) returns UnresolvedTypeExpr throws ParserError
 		var lowerBound = BoundResult.create(0, qualifier: "")
 		var upperBound = BoundResult.create(0, qualifier: "")
 		if isFloat 'parseFloat'
@@ -3312,14 +3309,6 @@ export type Parser
 			return UnresolvedTypeExpr.invalid
 		end 'mismatched'
 
-		// Byte ranges must fit in 0..255.
-		if isByte 'byteCheck'
-			if lowerBound.value < 0 or upperBound.value < 0 or upperBound.value > 255 'badByte'
-				reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Invalid byte range: bounds must be within 0 to u8.max", line: baseToken.line, column: baseToken.column + 4, filePath: filePath)
-				return UnresolvedTypeExpr.invalid
-			end 'badByte'
-		end 'byteCheck'
-
 		// Range ordering. For ints, treat non-negative lower as unsigned for
 		// the comparison so `0 to u64.max` (where u64.max wraps to -1 signed)
 		// is valid.
@@ -3345,9 +3334,6 @@ export type Parser
 		if isFloat 'returnFloat'
 			return UnresolvedTypeExpr.rangedFloat(lowerBound.value, upper: normalizedUpper)
 		end 'returnFloat'
-		if isByte 'returnByte'
-			return UnresolvedTypeExpr.rangedByte(lowerBound.value, upper: normalizedUpper)
-		end 'returnByte'
 		return UnresolvedTypeExpr.rangedInt(lowerBound.value, upper: normalizedUpper)
 	end 'parseRangedPrimitiveBounds'
 
@@ -5705,7 +5691,7 @@ export type Parser
 	end 'emitCastCheckIfNamed'
 
 	// Parse the type appearing after `as`. Accepts the bare primitive
-	// keywords (`int`, `float`, `bool`, `byte`) and registered typealias
+	// keywords (`int`, `float`, `bool`) and registered typealias
 	// identifiers — the former resolve to MaxonType primitives, the latter
 	// stay as MaxonType.named so the typealias registry drives lowering.
 	function parseCastTargetType() returns MaxonType throws ParserError
@@ -5719,9 +5705,6 @@ export type Parser
 		if typeToken.kind == TokenKind.bool 'isBool'
 			return MaxonType.boolean
 		end 'isBool'
-		if typeToken.kind == TokenKind.byte 'isByte'
-			return internMaxonType(project, name: "byte")
-		end 'isByte'
 		if typeToken.kind == TokenKind.identifier 'isIdent'
 			// E3062: `expr as IntArray` is a use of `IntArray`.
 			usedTypeAliases.insert(element: typeToken.value)
@@ -6729,9 +6712,6 @@ export type Parser
 		if name == "Character" 'isChar'
 			return InterpExprKind.character
 		end 'isChar'
-		if name == "byte" or name == "Byte" 'isByte'
-			return InterpExprKind.byte
-		end 'isByte'
 		if name == "bool" 'isBool'
 			return InterpExprKind.bool
 		end 'isBool'
@@ -6823,10 +6803,10 @@ export type Parser
 
 	// Whether a token is acceptable as a type-name in a parameter list, a
 	// `returns <type>` clause, etc. Identifiers are user types; the
-	// keyword-like primitive types (`int`, `float`, `bool`, `byte`) are
+	// keyword-like primitive types (`int`, `float`, `bool`) are
 	// also valid type-name tokens.
 	function isTypeNameToken(token Token) returns bool
-		return token.kind == TokenKind.identifier or token.kind == TokenKind.int or token.kind == TokenKind.float or token.kind == TokenKind.bool or token.kind == TokenKind.byte or token.kind == TokenKind.array
+		return token.kind == TokenKind.identifier or token.kind == TokenKind.int or token.kind == TokenKind.float or token.kind == TokenKind.bool or token.kind == TokenKind.array
 	end 'isTypeNameToken'
 
 	// Consume tokens from a composite interpolated string. Used by
@@ -7917,7 +7897,6 @@ export function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
 		invalid gives true
 		boolPrim gives false
 		rangedInt gives false
-		rangedByte gives false
 		rangedFloat gives false
 		aliasName gives false
 		genericAlias gives false

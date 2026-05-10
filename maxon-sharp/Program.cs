@@ -57,7 +57,7 @@ class Program {
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
     Console.WriteLine("  --workers=N              Use N worker threads (default: ProcessorCount - 2)");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR + MmTrace stderr");
-    Console.WriteLine("  --verbose                Show detailed failure messages for failing tests");
+    Console.WriteLine("  --verbose                Show per-test PASS/FAIL timing logs");
     Console.WriteLine("  --no-batch               Disable per-spec compile batching (each test compiled individually)");
     Console.WriteLine();
     Console.WriteLine("Logging (all commands):");

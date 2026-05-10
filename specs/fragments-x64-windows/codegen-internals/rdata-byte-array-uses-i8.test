@@ -1,7 +1,7 @@
 // Test: rdata-byte-array-uses-i8
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let arr = [10 as Byte, 20 as Byte, 30 as Byte]
@@ -20,7 +20,7 @@ i8[] 10, 20, 30
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=96
+    x64.prologue stack_size=112
     x64.xor eax, eax
     x64.mov rcx, 3
     x64.xor edx, edx
@@ -83,8 +83,6 @@ module {
     x64.xor edx, edx
     x64.call __Array_i8.get
     x64.xor ecx, ecx
-    x64.mov rbx, 255
-    x64.and rcx, rbx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rax
     x64.xor eax, eax
@@ -101,8 +99,6 @@ module {
     x64.mov rdx, 1
     x64.call __Array_i8.get
     x64.xor ecx, ecx
-    x64.mov rbx, 255
-    x64.and rcx, rbx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
     x64.xor eax, eax
@@ -119,8 +115,6 @@ module {
     x64.mov rdx, 2
     x64.call __Array_i8.get
     x64.xor ecx, ecx
-    x64.mov rbx, 255
-    x64.and rcx, rbx
     x64.mov [rbp-72], rcx
     x64.mov [rbp-80], rax
     x64.xor eax, eax
@@ -135,12 +129,16 @@ module {
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rbp-64]
     x64.add rcx, rdx
-    x64.add rcx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rcx, rsi
+    x64.mov ebx, ecx
+    x64.mov esi, eax
+    x64.add rbx, rsi
+    x64.xor edi, edi
+    x64.mov r8, rbx
+    x64.mov r9, 4294967295
+    x64.mov eax, rbx
+    x64.cmp rax, r9
     x64.jg main.__range_panic_13
-    x64.cmp rcx, rbx
+    x64.cmp r8, rdi
     x64.jl main.__range_panic_13
     x64.jmp main.__range_ok_13
   __range_panic_13:
@@ -148,14 +146,15 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_13:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-88], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-16]
+    x64.mov [rbp-88], rax
+    x64.mov [rbp-96], rbx
+    x64.mov [rbp-104], r8
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-88]
+    x64.mov rax, [rbp-96]
     x64.epilogue
     x64.ret
   }

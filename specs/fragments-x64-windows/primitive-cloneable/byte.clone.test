@@ -1,7 +1,7 @@
 // Test: byte.clone
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let x = 65 as Byte
@@ -16,16 +16,13 @@ module {
   func @primitive-cloneable.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 65
-    x64.mov rcx, 255
-    x64.and rax, rcx
-    x64.mov rcx, rax
-    x64.call stdlib.byte.clone
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg primitive-cloneable.main.__range_panic_0
+    x64.mov rcx, 65
+    x64.call stdlib.int.clone
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
+    x64.jg primitive-cloneable.main.__range_panic_0
+    x64.cmp rax, rcx
     x64.jl primitive-cloneable.main.__range_panic_0
     x64.jmp primitive-cloneable.main.__range_ok_0
   __range_panic_0:

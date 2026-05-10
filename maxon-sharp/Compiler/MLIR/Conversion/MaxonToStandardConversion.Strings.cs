@@ -110,7 +110,10 @@ public static partial class MaxonToStandardConversion {
 	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
-		// ByteArray layout: managed at offset 0 (single field)
+		// ByteArray layout: managed at offset 0 (single field). The literal's
+		// static element type is `int(0 to u8.max)`; OptimalType narrows that to
+		// U8, so `__managed_mem_get`/`__managed_mem_set` emit 1-byte loads/stores
+		// that match the 1-byte rdata storage written below.
 		var rdataLabel = $"__bstr_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);

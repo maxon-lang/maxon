@@ -393,7 +393,7 @@ type IntBox implements Container with Integer // OK
 ```maxon
 typealias Port = int(0 to 65535)
 typealias Percentage = float(0.0 to 100.0)
-typealias Pixel = byte(0 to u8.max)
+typealias Pixel = int(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
 ```
 

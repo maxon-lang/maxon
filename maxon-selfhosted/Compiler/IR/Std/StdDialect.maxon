@@ -20,7 +20,6 @@
 export enum CastCategory
 	int
 	float
-	byte
 	bool
 	// String has no Std-level cast story (yet) — it exists in this enum so
 	// MaxonType.string can flow through convertCastCategory without
@@ -33,13 +32,11 @@ export function castCategoryName(cat CastCategory) returns String
 	return cat.name
 end 'castCategoryName'
 
-// True for numeric integer-family categories (int and byte). Used by the
-// otherwise-type-mismatch check to allow int literals to coerce to byte-sized
-// named types (e.g. ExitCode = i8), mirroring the C# compiler's IsNumericKind logic.
+// True for the integer category. Retained for symmetry with float/bool/string
+// predicates used by the call-site type checker.
 export function castCategoryIsIntegerFamily(cat CastCategory) returns bool
 	return match cat 'check'
 		int gives true
-		byte gives true
 		float gives false
 		bool gives false
 		string gives false
@@ -59,11 +56,11 @@ end 'StdTypeInfo'
 
 export enum StdType
 	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool}
-	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.byte}
+	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.byte}
+	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
 	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}

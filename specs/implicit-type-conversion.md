@@ -1,7 +1,7 @@
 ---
 feature: implicit-type-conversion
 status: stable
-keywords: [types, conversion, implicit, coercion, int, float, byte]
+keywords: [types, conversion, implicit, coercion, int, float]
 category: type-system
 ---
 
@@ -17,9 +17,6 @@ Maxon supports implicit type conversions between compatible numeric types. These
 |---------|---------|---------------------------------------------|
 | `int`   | `float` | Convert integer to floating point           |
 | `float` | `int`   | Truncate toward zero                        |
-| `int`   | `byte`  | Keep lower 8 bits (0-255)                   |
-| `float` | `byte`  | Truncate to int, then keep lower 8 bits     |
-| `byte`  | `int`   | Zero-extend to 64-bit integer               |
 
 ### Function Arguments
 
@@ -80,62 +77,6 @@ end 'main'
 42
 ```
 
-<!-- test: byte-to-int-param -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
-
-function takeInt(x Integer) returns Integer
-	return x
-end 'takeInt'
-
-function main() returns ExitCode
-	let b = 42 as Byte
-	return takeInt(b)
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: int-to-byte-param-truncates -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
-
-function takeByte(x Byte) returns Integer
-	return x as Integer
-end 'takeByte'
-
-function main() returns ExitCode
-	return takeByte(300)
-end 'main'
-```
-```exitcode
-44
-```
-
-<!-- test: int-var-to-byte-param -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
-
-function takeByte(x Byte) returns Integer
-	return x as Integer
-end 'takeByte'
-
-function main() returns ExitCode
-	let i = 300
-	return takeByte(i)
-end 'main'
-```
-```exitcode
-44
-```
-
 <!-- test: float-to-int-param-truncates -->
 ```maxon
 
@@ -152,47 +93,6 @@ end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- test: float-to-byte-param -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
-
-function takeByte(x Byte) returns Integer
-	return x as Integer
-end 'takeByte'
-
-function main() returns ExitCode
-	let f = 300.9
-	return takeByte(f)
-end 'main'
-```
-```exitcode
-44
-```
-
-<!-- test: function-return-to-byte-param -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
-
-function getInt() returns Integer
-	return 300
-end 'getInt'
-
-function takeByte(x Byte) returns Integer
-	return x as Integer
-end 'takeByte'
-
-function main() returns ExitCode
-	return takeByte(getInt())
-end 'main'
-```
-```exitcode
-44
 ```
 
 <!-- test: expression-to-float-param -->

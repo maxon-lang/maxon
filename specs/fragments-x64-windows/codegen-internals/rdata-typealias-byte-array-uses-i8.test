@@ -1,25 +1,30 @@
-// Test: short-type.u16-array-basic
-typealias U16 = int(0 to 65535)
+// Test: rdata-typealias-byte-array-uses-i8
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let arr = [100 as U16, 200 as U16, 300 as U16]
-	let a = try arr.get(0) otherwise 0
-	let b = try arr.get(1) otherwise 0
-	let c = try arr.get(2) otherwise 0
-	return a + b + c
+	let arr = ByteArray from [10, 20, 30]
+	let v0 = try arr.get(0) otherwise 0 as Byte
+	let v1 = try arr.get(1) otherwise 0 as Byte
+	let v2 = try arr.get(2) otherwise 0 as Byte
+	return v0 + v1 + v2
 end 'main'
 ---
-ExitCode: 600
+ExitCode: 60
+RequiredRdata: ```
+i8[] 10, 20, 30
+```
 ---
 // CompiledIR
 module {
-  func @short-type.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    x64.prologue stack_size=96
+    x64.prologue stack_size=112
     x64.xor eax, eax
     x64.mov rcx, 3
     x64.xor edx, edx
-    x64.mov rbx, 2
+    x64.mov rbx, 1
     x64.xor esi, esi
     x64.lea_func rdi, [__destruct___ManagedMemory]
     x64.mov r8, rdi
@@ -38,7 +43,7 @@ module {
     x64.xor ecx, ecx
     x64.mov [rax+16], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, 2
+    x64.mov rcx, 1
     x64.mov [rax+24], rcx
     x64.mov rax, [rbp-8]
     x64.xor ecx, ecx
@@ -51,7 +56,7 @@ module {
     x64.mov rdx, rcx
     x64.xor ecx, ecx
     x64.call maxon_bounds_check
-    x64.lea_func rax, [__destruct___Array_i16]
+    x64.lea_func rax, [__destruct_ByteArray]
     x64.mov rcx, rax
     x64.mov rdx, rcx
     x64.mov rcx, 8
@@ -63,7 +68,7 @@ module {
     x64.mov [rcx+0], rax
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
-    x64.lea_rdata rax, [__const_array_short-type.main_arr]
+    x64.lea_rdata rax, [__const_array_main_arr]
     x64.mov rcx, rax
     x64.mov rax, [rbp-16]
     x64.mov rdx, [rax+0]
@@ -76,75 +81,131 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
-    x64.call __Array_i16.get
+    x64.call ByteArray.get
     x64.xor ecx, ecx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je short-type.main.otherwise_default_continue_4
+    x64.je main.otherwise_default_continue_4
   otherwise_default_error_3:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-32], rax
-    x64.jmp short-type.main.otherwise_default_continue_4
+    x64.jmp main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x64.mov rax, [rbp-32]
     x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-16]
     x64.mov rdx, 1
-    x64.call __Array_i16.get
+    x64.call ByteArray.get
     x64.xor ecx, ecx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je short-type.main.otherwise_default_continue_8
+    x64.je main.otherwise_default_continue_8
   otherwise_default_error_7:
     x64.mov rax, [rbp-48]
     x64.mov [rbp-56], rax
-    x64.jmp short-type.main.otherwise_default_continue_8
+    x64.jmp main.otherwise_default_continue_8
   otherwise_default_continue_8:
     x64.mov rax, [rbp-56]
     x64.mov [rbp-64], rax
     x64.mov rcx, [rbp-16]
     x64.mov rdx, 2
-    x64.call __Array_i16.get
+    x64.call ByteArray.get
     x64.xor ecx, ecx
     x64.mov [rbp-72], rcx
     x64.mov [rbp-80], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je short-type.main.otherwise_default_continue_12
+    x64.je main.otherwise_default_continue_12
   otherwise_default_error_11:
     x64.mov rax, [rbp-72]
     x64.mov [rbp-80], rax
-    x64.jmp short-type.main.otherwise_default_continue_12
+    x64.jmp main.otherwise_default_continue_12
   otherwise_default_continue_12:
     x64.mov rax, [rbp-80]
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rbp-64]
     x64.add rcx, rdx
-    x64.add rcx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rcx, rsi
-    x64.jg short-type.main.__range_panic_13
-    x64.cmp rcx, rbx
-    x64.jl short-type.main.__range_panic_13
-    x64.jmp short-type.main.__range_ok_13
+    x64.mov ebx, ecx
+    x64.mov esi, eax
+    x64.add rbx, rsi
+    x64.xor edi, edi
+    x64.mov r8, rbx
+    x64.mov r9, 4294967295
+    x64.mov eax, rbx
+    x64.cmp rax, r9
+    x64.jg main.__range_panic_13
+    x64.cmp r8, rdi
+    x64.jl main.__range_panic_13
+    x64.jmp main.__range_ok_13
   __range_panic_13:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_13:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-88], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-16]
+    x64.mov [rbp-88], rax
+    x64.mov [rbp-96], rbx
+    x64.mov [rbp-104], r8
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-88]
+    x64.mov rax, [rbp-96]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_ByteArray.done
+  done:
     x64.epilogue
     x64.ret
   }

@@ -16,7 +16,7 @@ Storing and retrieving ByteArray (`Array with Byte`) values from an outer Array.
 <!-- test: array-of-bytebuffer-push-get-count -->
 Push a ByteArray into an outer Array, retrieve it, and call .count() on it.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias ByteArrayArray = Array with ByteArray
 

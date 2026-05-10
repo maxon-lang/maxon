@@ -60,7 +60,6 @@ function tryResolveTypeExpr(project Project, expr UnresolvedTypeExpr) returns Re
 		// choice can't reclassify the alias as `byte`.
 		rangedInt(lower, upper) gives ResolveResult.doneRanged(computeOptimalIntType(lower: lower, upper: upper), range: TypealiasRange.create(lower, upper: upper))
 		// `byte(...)` always lowers to u8 storage and `byte` cast category.
-		rangedByte(lower, upper) gives ResolveResult.doneRanged(StdType.u8, range: TypealiasRange.create(lower, upper: upper))
 		aliasName(name) gives tryResolveAliasName(project, name: name)
 		// Phase 11.0 step 2: generic typealiases never flow through this
 		// StdType-typed channel — `drainResolvableTypealiases` handles them
@@ -96,7 +95,6 @@ end 'DeclaredCastCategory'
 function declaredCastCategoryFor(expr UnresolvedTypeExpr) returns DeclaredCastCategory
 	return match expr 'pick'
 		rangedInt gives DeclaredCastCategory.some(CastCategory.int)
-		rangedByte gives DeclaredCastCategory.some(CastCategory.byte)
 		rangedFloat gives DeclaredCastCategory.some(CastCategory.float)
 		boolPrim gives DeclaredCastCategory.none()
 		aliasName gives DeclaredCastCategory.none()
@@ -115,7 +113,6 @@ function isGenericAliasExpr(expr UnresolvedTypeExpr) returns bool
 		boolPrim gives false
 		rangedFloat gives false
 		rangedInt gives false
-		rangedByte gives false
 		aliasName gives false
 		invalid gives false
 	end 'check'
@@ -149,7 +146,6 @@ function resolveGenericAliasExpr(project Project, expr UnresolvedTypeExpr, decla
 		boolPrim then panic("resolveGenericAliasExpr: caller passed boolPrim — must be genericAlias")
 		rangedFloat then panic("resolveGenericAliasExpr: caller passed rangedFloat — must be genericAlias")
 		rangedInt then panic("resolveGenericAliasExpr: caller passed rangedInt — must be genericAlias")
-		rangedByte then panic("resolveGenericAliasExpr: caller passed rangedByte — must be genericAlias")
 		aliasName then panic("resolveGenericAliasExpr: caller passed aliasName — must be genericAlias")
 		invalid then panic("resolveGenericAliasExpr: caller passed invalid — must be genericAlias")
 	end 'extract'
@@ -197,7 +193,6 @@ function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, d
 		boolPrim then return
 		rangedFloat then return
 		rangedInt then return
-		rangedByte then return
 		aliasName then return
 		invalid then return
 	end 'extract'
@@ -236,7 +231,7 @@ end 'isKnownTypeName'
 // type-name validity probes. Includes both the casing of `string` (lower-
 // case used by some stdlib decls) and `String` (the canonical alias name).
 function isBuiltinTypeName(name String) returns bool
-	return name == "bool" or name == "int" or name == "float" or name == "byte" or name == "string" or name == "String" or name == "Character"
+	return name == "bool" or name == "int" or name == "float" or name == "string" or name == "String" or name == "Character"
 end 'isBuiltinTypeName'
 
 function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
@@ -245,7 +240,6 @@ function validateGenericInstanceConstraints(project Project, expr UnresolvedType
 		boolPrim then return
 		rangedFloat then return
 		rangedInt then return
-		rangedByte then return
 		aliasName then return
 		invalid then return
 	end 'extract'
@@ -419,7 +413,6 @@ function reportUnresolvedTypealias(project Project, entry UnresolvedTypealias)
 		aliasName(target) then reportAliasNameUnresolved(project, entry: entry, target: target)
 		boolPrim then panic("TypeResolution: boolPrim left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		rangedInt then panic("TypeResolution: rangedInt left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
-		rangedByte then panic("TypeResolution: rangedByte left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		rangedFloat then panic("TypeResolution: rangedFloat left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		genericAlias then panic("TypeResolution: genericAlias left unresolved for '{entry.name}' — drainResolvableTypealiases unconditionally resolves these into project.genericTypealiases")
 		invalid then panic("TypeResolution: invalid left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
@@ -1070,60 +1063,13 @@ function reportIfUnknownTypeAt(project Project, t MaxonType, range SourceRange, 
 	return true
 end 'reportIfUnknownTypeAt'
 
-// Scan ops up to `opIdx` (exclusive) to locate the op that produced
-// `targetId`. Returns true if found and the value it carries is between 0
-// and 255 inclusive. Used to permit `N as Byte` when N is an int literal in
-// byte range.
-function operandIsIntLiteralInByteRange(module MaxonModule, opIdx OpIndex, targetName ByteArray) returns bool
-	var idx = opIdx
-	while idx > 0 'walkBack'
-		idx = idx - 1
-		let op = try module.ops.get(idx) otherwise panic("invariant: idx < opIdx <= module.ops.count() but get failed")
-		let foundLiteralInRange = checkLiteralMatch(op, targetName: targetName)
-		if foundLiteralInRange.found 'done'
-			return foundLiteralInRange.inRange
-		end 'done'
-	end 'walkBack'
-	return false
-end 'operandIsIntLiteralInByteRange'
-
-type LiteralCheck
-	export var found bool
-	export var inRange bool
-
-	export static function miss() returns LiteralCheck
-		return Self{found: false, inRange: false}
-	end 'miss'
-
-	export static function hit(inRange bool) returns LiteralCheck
-		return Self{found: true, inRange: inRange}
-	end 'hit'
-end 'LiteralCheck'
-
-function checkLiteralMatch(op MaxonOp, targetName ByteArray) returns LiteralCheck
-	if op.name == "literal" 'isLit'
-		match op 'extract'
-			literal(result, value, _, _) then return extractLiteralCheck(result, targetName: targetName, value: value)
-			default panic("unreachable: already checked name == literal")
-		end 'extract'
-	end 'isLit'
-	return LiteralCheck.miss()
-end 'checkLiteralMatch'
-
-function extractLiteralCheck(result ByteArray, targetName ByteArray, value ParsedInt) returns LiteralCheck
-	if not byteArraysEqual(result, b: targetName) 'noMatch'
-		return LiteralCheck.miss()
-	end 'noMatch'
-	return LiteralCheck.hit(value >= 0 and value <= 255)
-end 'extractLiteralCheck'
-
-function validateConvertOp(project Project, module MaxonModule, func IrFunction, opIdx OpIndex, operandName ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange, filePath FilePath)
+function validateConvertOp(project Project, module MaxonModule, func IrFunction, operandName ByteArray, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange, filePath FilePath)
 	// Compiler-synthesized conversions (e.g. trunc(Float) → int) bypass the
 	// widening-only rules the user-level `as` casts enforce.
 	if implicit 'skip'
 		return
 	end 'skip'
-	let crossCategoryFailed = validateConvert(project, module: module, opIdx: opIdx, operandName: operandName, fromType: fromType, toType: toType, filePath: filePath)
+	let crossCategoryFailed = validateConvert(project, fromType: fromType, toType: toType, filePath: filePath)
 	// Compile-time range check for `LITERAL as RangedAlias`. If the operand
 	// resolves to a literal in the producing op stream and the target is a
 	// named typealias with a registered range, emit E3005 when the value
@@ -1321,7 +1267,6 @@ end 'namedIdStorageNumericKind'
 function castCategoryNumericKind(category CastCategory) returns NumericKind
 	return match category 'pick'
 		int gives NumericKind.integer
-		byte gives NumericKind.integer
 		float gives NumericKind.floating
 		bool gives NumericKind.notNumeric
 		string gives NumericKind.notNumeric
@@ -1425,22 +1370,21 @@ end 'formatFloatBits'
 // alias still prints as `int(...)`. Falls back to `int` when the alias has
 // no pinned category (alias chains land here).
 function formatTypealiasRange(project Project, aliasName String, range TypealiasRange) returns String
-	// `typealiasCastCategories` is only populated for `int(...)`/`byte(...)`/
-	// `float(...)` aliases (see `declaredCastCategoryFor`), so the bool/string
-	// arms are unreachable. The match is statement-shaped + early-return so
-	// each unreachable arm panics rather than silently surfacing an `int(...)`
+	// `typealiasCastCategories` is only populated for `int(...)`/`float(...)`
+	// aliases (see `declaredCastCategoryFor`), so the bool/string arms are
+	// unreachable. The match is statement-shaped + early-return so each
+	// unreachable arm panics rather than silently surfacing an `int(...)`
 	// shape under the wrong category name.
 	let category = try project.typealiasCastCategories.get(aliasName) otherwise CastCategory.int
 	match category 'pick'
 		float then return "float({formatFloatBits(range.lower)} to {formatFloatBits(range.upper)})"
-		byte then return "byte({range.lower} to {range.upper})"
 		int then return "int({range.lower} to {range.upper})"
-		bool then panic("formatTypealiasRange: alias '{aliasName}' has bool category — typealiasCastCategories should only carry int/byte/float")
-		string then panic("formatTypealiasRange: alias '{aliasName}' has string category — typealiasCastCategories should only carry int/byte/float")
+		bool then panic("formatTypealiasRange: alias '{aliasName}' has bool category — typealiasCastCategories should only carry int/float")
+		string then panic("formatTypealiasRange: alias '{aliasName}' has string category — typealiasCastCategories should only carry int/float")
 	end 'pick'
 end 'formatTypealiasRange'
 
-function validateConvert(project Project, module MaxonModule, opIdx OpIndex, operandName ByteArray, fromType MaxonType, toType MaxonType, filePath FilePath) returns bool
+function validateConvert(project Project, fromType MaxonType, toType MaxonType, filePath FilePath) returns bool
 	if reportIfUnknownType(project, t: fromType, filePath: filePath) 'unknownFrom'
 		return true
 	end 'unknownFrom'
@@ -1455,21 +1399,7 @@ function validateConvert(project Project, module MaxonModule, opIdx OpIndex, ope
 		return false
 	end 'sameType'
 
-	// int literal 0-255 → byte is allowed; falls back through to the
-	// widening cases when the operand isn't a literal in range.
-	if targetCategory == CastCategory.byte and sourceCategory == CastCategory.int 'intToByte'
-		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: operandName) 'inRange'
-			return false
-		end 'inRange'
-	end 'intToByte'
-
-	// Widening rules: byte→int, byte→float, int→float.
-	if sourceCategory == CastCategory.byte and targetCategory == CastCategory.int 'byteToInt'
-		return false
-	end 'byteToInt'
-	if sourceCategory == CastCategory.byte and targetCategory == CastCategory.float 'byteToFloat'
-		return false
-	end 'byteToFloat'
+	// Widening rule: int→float is the only cross-category cast permitted.
 	if sourceCategory == CastCategory.int and targetCategory == CastCategory.float 'intToFloat'
 		return false
 	end 'intToFloat'
@@ -1479,10 +1409,9 @@ function validateConvert(project Project, module MaxonModule, opIdx OpIndex, ope
 end 'validateConvert'
 
 // Validate a cmp op's operand types. Comparisons are category-strict: both
-// sides must land in the same CastCategory (int/float/byte/bool), with one
-// narrow exception — a byte operand may be compared to an in-range int
-// literal. Any other mismatch emits E3005.
-function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, leftName ByteArray, rightName ByteArray, leftType MaxonType, rightType MaxonType, range SourceRange, filePath FilePath)
+// sides must land in the same CastCategory (int/float/bool). Any mismatch
+// emits E3005.
+function validateCompareOp(project Project, leftType MaxonType, rightType MaxonType, range SourceRange, filePath FilePath)
 	if reportIfUnknownTypeAt(project, t: leftType, range: range, filePath: filePath) 'unknownLeft'
 		return
 	end 'unknownLeft'
@@ -1494,17 +1423,6 @@ function validateCompareOp(project Project, module MaxonModule, opIdx OpIndex, l
 	if leftCategory == rightCategory 'sameCategory'
 		return
 	end 'sameCategory'
-
-	if leftCategory == CastCategory.byte and rightCategory == CastCategory.int 'byteVsIntLiteral'
-		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: rightName) 'inRange'
-			return
-		end 'inRange'
-	end 'byteVsIntLiteral'
-	if rightCategory == CastCategory.byte and leftCategory == CastCategory.int 'intLiteralVsByte'
-		if operandIsIntLiteralInByteRange(module, opIdx: opIdx, targetName: leftName) 'inRange'
-			return
-		end 'inRange'
-	end 'intLiteralVsByte'
 
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "type mismatch: 'cannot compare {castCategoryName(leftCategory)} with {castCategoryName(rightCategory)}'", line: range.line, column: range.column, filePath: filePath)
 end 'validateCompareOp'
@@ -3194,9 +3112,6 @@ function interpKindForNamedTypeName(name String, fallback InterpExprKind) return
 	if name == "Character" 'isChar'
 		return InterpExprKind.character
 	end 'isChar'
-	if name == "byte" or name == "Byte" 'isByte'
-		return InterpExprKind.byte
-	end 'isByte'
 	if name == "bool" 'isBool'
 		return InterpExprKind.bool
 	end 'isBool'
@@ -4429,7 +4344,7 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "cmp" 'isCmp'
 			match op 'extract'
-				cmp(_, left, right, _, leftType, rightType, _, range) then validateCompareOp(project, module: module, opIdx: opIdx, leftName: left, rightName: right, leftType: leftType, rightType: rightType, range: range, filePath: filePath)
+				cmp(_, _, _, _, leftType, rightType, _, range) then validateCompareOp(project, leftType: leftType, rightType: rightType, range: range, filePath: filePath)
 				default panic("unreachable: already checked name == cmp")
 			end 'extract'
 		end 'isCmp'
@@ -4470,16 +4385,16 @@ function validateConvertOpsPerFunc(project Project, module MaxonModule, filePath
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("validateConvertOpsPerFunc: opIdx OOB")
 				if op.name == "convert" 'isConvert'
-					dispatchConvertValidation(project, module: module, func: func, op: op, opIdx: opIdx, filePath: funcFilePath)
+					dispatchConvertValidation(project, module: module, func: func, op: op, filePath: funcFilePath)
 				end 'isConvert'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateConvertOpsPerFunc'
 
-function dispatchConvertValidation(project Project, module MaxonModule, func IrFunction, op MaxonOp, opIdx OpIndex, filePath FilePath)
+function dispatchConvertValidation(project Project, module MaxonModule, func IrFunction, op MaxonOp, filePath FilePath)
 	match op 'extract'
-		convert(_, operand, fromType, toType, implicit, range) then validateConvertOp(project, module: module, func: func, opIdx: opIdx, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, filePath: filePath)
+		convert(_, operand, fromType, toType, implicit, range) then validateConvertOp(project, module: module, func: func, operandName: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, filePath: filePath)
 		default panic("unreachable: caller checked name == convert")
 	end 'extract'
 end 'dispatchConvertValidation'

@@ -177,7 +177,7 @@ i8[] 5
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let arr = [10 as Byte, 20 as Byte, 30 as Byte]
@@ -185,6 +185,27 @@ function main() returns ExitCode
 	let v1 = try arr.get(1) otherwise 0 as Byte
 	let v2 = try arr.get(2) otherwise 0 as Byte
 	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+end 'main'
+```
+```exitcode
+60
+```
+```RequiredRdata
+i8[] 10, 20, 30
+```
+
+<!-- test: rdata-typealias-byte-array-uses-i8 -->
+```maxon
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	let arr = ByteArray from [10, 20, 30]
+	let v0 = try arr.get(0) otherwise 0 as Byte
+	let v1 = try arr.get(1) otherwise 0 as Byte
+	let v2 = try arr.get(2) otherwise 0 as Byte
+	return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode

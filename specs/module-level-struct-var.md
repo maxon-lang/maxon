@@ -39,7 +39,7 @@ end 'main'
 <!-- test: module-struct-nested-method-call -->
 Module-level struct var nested field method call.
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type State

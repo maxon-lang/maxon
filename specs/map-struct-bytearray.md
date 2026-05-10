@@ -16,7 +16,7 @@ Storing and retrieving structs that contain ByteArray (Array with Byte) fields f
 Map.get returns struct with ByteArray field intact.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type Entry
@@ -59,7 +59,7 @@ end 'main'
 Accessing a struct field inside an untaken if branch must not corrupt function parameters.
 Uses a module-level struct with a Map field (same pattern as QueryDatabase).
 ```maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 typealias Count = int(0 to u64.max)
 
@@ -116,7 +116,7 @@ new
 Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries.
 ```maxon
 // --- file: 0-Types.maxon
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 export typealias ByteArray = Array with Byte
 export typealias Count = int(0 to u64.max)
 

@@ -9049,9 +9049,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (!_typeRegistry.TryGetValue(typeName, out var regType)
         || regType is not IrStructType regStruct
         || regStruct.TypeParams.Count == 0) return source;
-    // Normalize ranged primitives to their base type name so that e.g.
-    // ByteArray (Element=Byte) and __Array_i8 (Element=i8) resolve identically.
-    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is IrRangedPrimitiveType rpt ? rpt.BaseType.Name : t.Name))}";
+    // Normalize ranged primitives to their OptimalType (the actual storage shape)
+    // so that e.g. ByteArray (Element=Byte where Byte=int(0..u8.max), Optimal=u8) and
+    // __Array_i8 (Element=i8) resolve identically. Using BaseType would key Byte
+    // on i64 since `int(...)` aliases all share the int base, splitting them from
+    // byte-string-literal-emitted Array<i8> instances.
+    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is IrRangedPrimitiveType rpt ? OptimalRangedTypeName(rpt) : t.Name))}";
+  }
+
+  /// Storage-name canonicalization for ranged primitives: u8 and i8 collapse to
+  /// "i8" so byte-string-literal-emitted Array<i8> matches both signed and
+  /// unsigned u8-wide ranges.
+  private static string OptimalRangedTypeName(IrRangedPrimitiveType rpt) {
+    var n = rpt.OptimalType.Name;
+    return (n == "u8" || n == "i8") ? "i8" : n;
   }
 
   /// Gets the Element type parameter name for a managed-list-family type (ManagedList or ManagedListNode alias).
@@ -13718,7 +13729,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       // Parse first element to determine if this is a map or array literal
+      _lastRangedTypeName = null;
       var firstExpr = ResolveExprValue(ParseExpression());
+      var firstRangedName = _lastRangedTypeName;
       SkipNewlines();
 
       ExprResult.Direct result;
@@ -13727,7 +13740,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         result = ParseMapLiteral(firstExpr, bracketToken);
       } else {
         // Array literal: [expr, expr, ...]
-        result = ParseArrayLiteralWithFirstElement(firstExpr);
+        result = ParseArrayLiteralWithFirstElement(firstExpr, firstRangedName);
       }
 
       // Handle chained member access: [1,2,3].get(0) or ["a": 1].get("a")
@@ -14855,16 +14868,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Continues parsing an array literal when '[' has already been consumed and the first element
   /// has already been parsed. Used when detecting map vs array literal syntax.
   /// </summary>
-  private ExprResult.Direct ParseArrayLiteralWithFirstElement(MaxonValue firstElement) {
+  private ExprResult.Direct ParseArrayLiteralWithFirstElement(MaxonValue firstElement, string? firstRangedName = null) {
     var elements = new List<MaxonValue> { firstElement };
+    var elementRangedNames = new List<string?> { firstRangedName };
     while (Check(TokenType.Comma)) {
       Advance();
       SkipNewlines();
       if (Check(TokenType.RightBracket)) break; // trailing comma
+      _lastRangedTypeName = null;
       elements.Add(ResolveExprValue(ParseExpression()));
+      elementRangedNames.Add(_lastRangedTypeName);
       SkipNewlines();
     }
     Expect(TokenType.RightBracket);
+
+    ApplyInferredNarrowingToArrayLiteralElements(elements, elementRangedNames);
 
     var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) =
       EmitManagedMemoryFromElements(elements);
@@ -15102,9 +15120,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           && st.TypeParams.TryGetValue("Element", out var elemType)) {
         // Direct match (e.g., Element is "String" and we're looking for "String")
         if (elemType.Name == elementTypeName) return aliasName;
-        // Ranged type match (e.g., Element is "Int" which is int(min..max), we're looking for "i64")
-        if (elemType is IrRangedPrimitiveType rpt && rpt.BaseType.Name == elementTypeName)
-          return aliasName;
+        // Ranged type match: prefer OptimalType.Name (the actual storage type) over
+        // BaseType.Name. This lets `Byte = int(0 to u8.max)` (BaseType=i64, Optimal=u8)
+        // match a byte-string-literal looking for "i8" element layout, while still
+        // matching `Integer = int(min..max)` against "i64". Falls back to BaseType
+        // for legacy callers that key on the source-level base.
+        if (elemType is IrRangedPrimitiveType rpt) {
+          if (rpt.OptimalType.Name == elementTypeName) return aliasName;
+          // i8/u8 are interchangeable as byte storage; map both to a canonical match.
+          if ((rpt.OptimalType.Name == "u8" || rpt.OptimalType.Name == "i8")
+              && (elementTypeName == "u8" || elementTypeName == "i8"))
+            return aliasName;
+          if (rpt.BaseType.Name == elementTypeName) return aliasName;
+        }
         // Alias equivalence: elementTypeName may be an auto-generated alias (e.g., "__Array_i8")
         // that is structurally equivalent to a named alias (e.g., "ByteArray"). Check if both
         // resolve to the same source type with matching type parameters after resolving ranged
@@ -15153,32 +15181,74 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // compile-time check for literals, runtime check otherwise, and a Short
     // re-tag when the optimal storage type is i16/u16. This is what gives
     // `U16Array from [10, 20, 30]` narrow `.rdata` storage.
+    //
+    // When no explicit target is supplied, also infer one from per-element
+    // `as <RangedType>` casts: if every element parsed to the same narrow
+    // ranged type, treat that as the target so e.g.
+    // `[10 as Byte, 20 as Byte, 30 as Byte]` gets stride-1 .rdata storage.
     var elements = new List<MaxonValue>();
+    var elementRangedNames = new List<string?>();
     if (!Check(TokenType.RightBracket)) {
-      elements.Add(NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType));
+      _lastRangedTypeName = null;
+      var first = NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType);
+      elements.Add(first);
+      elementRangedNames.Add(_lastRangedTypeName);
       while (Check(TokenType.Comma)) {
         Advance();
         if (Check(TokenType.RightBracket)) break; // trailing comma
-        elements.Add(NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType));
+        _lastRangedTypeName = null;
+        var next = NarrowElementToTarget(ResolveExprValue(ParseExpression()), targetRangedElementType);
+        elements.Add(next);
+        elementRangedNames.Add(_lastRangedTypeName);
       }
     }
     Expect(TokenType.RightBracket);
 
+    if (targetRangedElementType == null) {
+      ApplyInferredNarrowingToArrayLiteralElements(elements, elementRangedNames);
+    }
+
     return EmitManagedMemoryFromElements(elements);
   }
 
-  // Apply the target ranged element type's range-check + Short re-tag to a
+  // When every element of an array literal was an `as <RangedType>` cast
+  // to the same narrow ranged typealias (one whose OptimalType is sub-i64),
+  // re-tag each element to the narrow value-kind so the array's storage
+  // stride matches. This is what makes `[10 as Byte, 20 as Byte, 30 as Byte]`
+  // emit stride-1 .rdata. The range-check has already happened during the
+  // per-element `as` cast, so the post-parse pass skips it to avoid
+  // duplicate runtime guards.
+  private void ApplyInferredNarrowingToArrayLiteralElements(List<MaxonValue> elements, List<string?> rangedNames) {
+    if (elements.Count == 0) return;
+    var first = rangedNames[0];
+    if (first == null) return;
+    foreach (var n in rangedNames) {
+      if (n != first) return;
+    }
+    if (!_typeRegistry.TryGetValue(first, out var t) || t is not IrRangedPrimitiveType rpt) return;
+    if (rpt.OptimalType.SizeInBytes >= 8) return;
+    for (int i = 0; i < elements.Count; i++) {
+      elements[i] = NarrowElementToTarget(elements[i], rpt, skipRangeCheck: true);
+    }
+  }
+
+  // Apply the target ranged element type's range-check + narrow re-tag to a
   // single array-literal element value. Returns the value unchanged when no
   // target is supplied or the target's optimal type doesn't need narrowing.
   // Mirrors what ParseRangedPrimitiveConstruction (now removed) used to do
-  // for `Score{n}`-style construction syntax.
-  private MaxonValue NarrowElementToTarget(MaxonValue value, IrRangedPrimitiveType? target) {
+  // for `Score{n}`-style construction syntax. When skipRangeCheck is true
+  // the caller has already validated the value against this same ranged type
+  // (e.g. via `as Byte`) — only the narrow re-tag is applied.
+  private MaxonValue NarrowElementToTarget(MaxonValue value, IrRangedPrimitiveType? target, bool skipRangeCheck = false) {
     if (target == null) return value;
     var expectedKind = target.BaseType.ToValueKind();
-    var validated = ValidateAndEmitRangeCheck(value, target, expectedKind, Current());
+    var validated = skipRangeCheck
+      ? value
+      : ValidateAndEmitRangeCheck(value, target, expectedKind, Current());
     var optimalKind = target.OptimalType.ToValueKind();
-    if (optimalKind == MaxonValueKind.Short) {
-      var castOp = new MaxonCastOp(validated, MaxonValueKind.Short);
+    if (optimalKind is MaxonValueKind.Byte or MaxonValueKind.Short
+        && GetValueKind(validated) != optimalKind) {
+      var castOp = new MaxonCastOp(validated, optimalKind);
       _currentBlock!.AddOp(castOp);
       return castOp.Result;
     }
@@ -17029,11 +17099,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       (MaxonValueKind.Float, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
       (MaxonValueKind.Float32, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
       (MaxonValueKind.Integer, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
+      (MaxonValueKind.Integer, MaxonValueKind.Short) => EmitCast(arg, MaxonValueKind.Short),
       (MaxonValueKind.Float, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Float32, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Float32, MaxonValueKind.Float) => EmitCast(arg, MaxonValueKind.Float),
       (MaxonValueKind.Float, MaxonValueKind.Float32) => EmitCast(arg, MaxonValueKind.Float32),
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => arg, // byte is stored as i64 internally
+      (MaxonValueKind.Short, MaxonValueKind.Integer) => arg, // short is stored as i64 internally
+      (MaxonValueKind.Short, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
+      (MaxonValueKind.Byte, MaxonValueKind.Short) => EmitCast(arg, MaxonValueKind.Short),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"argument type mismatch for '{paramName}': expected '{KindToTypeName(paramKind)}', got '{KindToTypeName(argKind)}'",
         callToken.Line, callToken.Column)

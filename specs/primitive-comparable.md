@@ -251,7 +251,7 @@ end 'main'
 <!-- test: byte.compare.less -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let a = 10 as Byte

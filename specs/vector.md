@@ -91,7 +91,7 @@ Vectors are ideal for:
 
 ```text
 typealias Float = float(f64.min to f64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias Point3D = Vector with 3 Float
 typealias Color = Vector with 4 Byte      // RGBA
 typealias Mat2x2 = Vector with 4 Float    // 2x2 matrix stored flat
@@ -1450,7 +1450,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 typealias ByteVec4 = Vector with 4 Byte
 
 function main() returns ExitCode

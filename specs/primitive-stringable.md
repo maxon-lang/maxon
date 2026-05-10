@@ -96,7 +96,7 @@ end 'main'
 <!-- test: byte.toString -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let x = 65 as Byte

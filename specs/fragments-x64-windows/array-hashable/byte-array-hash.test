@@ -1,5 +1,5 @@
 // Test: byte-array-hash
-typealias ByteVal = byte(0 to u8.max)
+typealias ByteVal = int(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
@@ -23,33 +23,23 @@ module {
     x64.prologue stack_size=16
     x64.call ByteArr.create
     x64.mov [rbp-8], rax
-    x64.mov rax, 65
-    x64.mov rcx, 255
-    x64.and rax, rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 65
+    x64.call ByteArr.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 66
+    x64.call ByteArr.push
     x64.mov rdx, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, rax
+    x64.mov rdx, 67
     x64.call ByteArr.push
-    x64.mov rbx, 66
-    x64.mov rsi, 255
-    x64.and rbx, rsi
-    x64.mov rdi, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, rbx
-    x64.call ByteArr.push
-    x64.mov r8, 67
-    x64.mov r9, 255
-    x64.and r8, r9
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, r8
-    x64.call ByteArr.push
-    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call ByteArr.hash
-    x64.mov ecx, rax
-    x64.xor eax, eax
-    x64.cmp rcx, rax
+    x64.mov esi, rax
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
     x64.je array-hashable.main.nonzero_0.after
   nonzero_0:
     x64.mov rax, [rbp-8]

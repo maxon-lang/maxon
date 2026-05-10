@@ -1,7 +1,7 @@
 // Test: byte-element-type
 
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = byte(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
 interface ByteSource uses Element
 	function getByte() returns Element
@@ -34,12 +34,24 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.movsx rdx, byte ptr [rax+0]
+    x64.mov rdx, [rax+0]
+    x64.xor eax, eax
+    x64.mov rbx, 255
+    x64.cmp rdx, rbx
+    x64.jg SingleByte.getByte.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl SingleByte.getByte.__range_panic_0
+    x64.jmp SingleByte.getByte.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_4]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
-  func @SingleByte.create(b: i8) -> i64 {
+  func @SingleByte.create(b: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-16], rcx
@@ -50,7 +62,7 @@ module {
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-16]
-    x64.mov byte ptr [rax+0], rcxb
+    x64.mov [rax+0], rcx
     x64.mov rdx, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
@@ -61,31 +73,29 @@ module {
   func @associated-types.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 42
-    x64.mov rcx, 255
-    x64.and rax, rcx
-    x64.mov rcx, rax
+    x64.mov rcx, 42
     x64.call SingleByte.create
     x64.mov [rbp-8], rax
-    x64.mov rdx, [rbp-8]
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.call SingleByte.getByte
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rax, rsi
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
     x64.jg associated-types.main.__range_panic_0
-    x64.cmp rax, rbx
+    x64.cmp rax, rcx
     x64.jl associated-types.main.__range_panic_0
     x64.jmp associated-types.main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_4]
+    x64.lea_symdata rax, [__panic_msg_5]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-8]
+    x64.mov rbx, [rbp-8]
     x64.mov [rbp-16], rax
-    x64.test rcx, rcx
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_16
+    x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_16
     x64.mov rax, [rbp-16]
