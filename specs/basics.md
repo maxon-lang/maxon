@@ -251,12 +251,12 @@ module {
     maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
     %1 = maxon.literal {value = 3.14 : f64}
     %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
-    maxon.cond_br %2 [then: check_0, else: other_1]
+    maxon.cond_br %2 [then: check_0, else: other_0]
   check_0:
     %3 = maxon.literal {value = 1 : i64}
     maxon.scope_end [x]
     maxon.return %3
-  other_1:
+  other_0:
     %4 = maxon.literal {value = 0 : i64}
     maxon.scope_end [x]
     maxon.return %4
@@ -269,11 +269,11 @@ module {
     %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 3.14 : f64}
     %2 = arith.cmpf eq %0, %1
-    cf.cond_br %2 [then: check_0, else: other_1]
+    cf.cond_br %2 [then: check_0, else: other_0]
   check_0:
     %3 = arith.constant {value = 1 : i64}
     func.return %3
-  other_1:
+  other_0:
     %4 = arith.constant {value = 0 : i64}
     func.return %4
   }
@@ -285,12 +285,12 @@ module {
     x64.movsd xmm0, [rip+__float_3.14]
     x64.movsd xmm1, [rip+__float_3.14]
     x64.ucomisd xmm0, xmm1
-    x64.jne main.other_1
-    x64.jp main.other_1
+    x64.jne main.other_0
+    x64.jp main.other_0
   check_0:
     x64.mov rax, 1
     x64.ret
-  other_1:
+  other_0:
     x64.xor eax, eax
     x64.ret
   }

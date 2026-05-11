@@ -141,6 +141,21 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return StringIndex.create(idx.charIndex() + 1, bytePos: byteStart + byteLen)
 	end 'indexAfter'
 
+	/// Get the index before the given position (for reverse iteration).
+	/// Mirror of indexAfter: stepping backward from `idx` to the previous
+	/// grapheme boundary. Throws when called on `startIndex()` since there
+	/// is no prior grapheme.
+	export function indexBefore(idx StringIndex) returns StringIndex throws StringError
+		if idx.bytePos() == 0 'atStart'
+			throw StringError.invalidIndex
+		end 'atStart'
+		if isAsciiFlag 'asciiPath'
+			return StringIndex.create(idx.charIndex() - 1, bytePos: idx.bytePos() - 1)
+		end 'asciiPath'
+		let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: idx.bytePos())
+		return StringIndex.create(idx.charIndex() - 1, bytePos: graphemeStart)
+	end 'indexBefore'
+
 	/// Append another string's content to this string in place.
 	export function append(other String)
 		managed.append(other.managed)

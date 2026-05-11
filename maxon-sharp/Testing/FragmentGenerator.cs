@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using MaxonSharp.Compiler.Ir.Core;
 
 namespace MaxonSharp.Testing;
 
@@ -713,7 +714,11 @@ public static partial class FragmentGenerator {
       sb.AppendLine("module {");
       foreach (var fn in parts) sb.Append(fn);
       sb.AppendLine("}");
-      result[testName] = sb.ToString().TrimEnd();
+      // Re-stabilize counter-based label numbering against this test's slice
+      // of functions only. The batched IR uses module-wide counters (e.g.
+      // `__nonnull_skip_47`) that depend on every other test in the batch;
+      // restabilizing here makes the numbers depend only on this test's IR.
+      result[testName] = IrPrinter.StabilizeLabels(sb.ToString()).TrimEnd();
     }
 
     return result;

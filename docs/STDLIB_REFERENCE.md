@@ -424,6 +424,42 @@ print("{last.charIndex()}\n")   // 12
 
 ---
 
+## String Indexing and Slicing
+
+`StringIndex` carries both a grapheme-cluster index and a byte position, so stepping is O(1) without re-scanning UTF-8. Use `startIndex()` / `endIndex()` to obtain the endpoints, `indexAfter` / `indexBefore` to step, and `charAt` / `slice` to read.
+
+```maxon
+var s = "héllo"
+var idx = s.startIndex()
+let first = s.charAt(idx)                              // 'h'
+idx = try s.indexAfter(idx) otherwise s.endIndex()
+let second = s.charAt(idx)                             // 'é'
+
+// Walk backward from the end:
+var i = s.endIndex()
+while i != s.startIndex() 'rev'
+	i = try s.indexBefore(i) otherwise break
+	print("{s.charAt(i)}\n")
+end 'rev'
+
+// Slice between two indices:
+let head = s.slice(s.startIndex(), endIndex: idx)      // "hé"
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `startIndex()` | `StringIndex` | Index of the first grapheme cluster |
+| `endIndex()` | `StringIndex` | One-past-the-end index |
+| `charAt(idx StringIndex)` | `Character` | Grapheme cluster at `idx` |
+| `indexAfter(idx StringIndex)` | `StringIndex throws StringError` | Next grapheme boundary. Throws at `endIndex()`. |
+| `indexBefore(idx StringIndex)` | `StringIndex throws StringError` | Previous grapheme boundary. Throws at `startIndex()`. |
+| `slice(start StringIndex, endIndex StringIndex)` | `String` | Substring `[start, endIndex)` |
+| `slice(start StringIndex, length GraphemeCount)` | `String` | Substring starting at `start`, `length` graphemes long |
+
+`StringIndex.charIndex()` returns the grapheme-cluster index; `StringIndex.bytePos()` returns the UTF-8 byte offset. Both are O(1) accessors.
+
+---
+
 ## String Properties
 
 ```maxon

@@ -3960,12 +3960,12 @@ module {
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
     %1 = maxon.literal {value = 10 : i64}
     %2 = maxon.binop %0, %1 {op = eq}
-    maxon.cond_br %2 [then: check_0, else: other_1]
+    maxon.cond_br %2 [then: check_0, else: other_0]
   check_0:
     %3 = maxon.literal {value = 42 : i64}
     maxon.scope_end [x]
     maxon.return %3
-  other_1:
+  other_0:
     %4 = maxon.literal {value = 0 : i64}
     maxon.scope_end [x]
     maxon.return %4
@@ -3978,11 +3978,11 @@ module {
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 10 : i64}
     %2 = arith.cmpi eq %0, %1
-    cf.cond_br %2 [then: check_0, else: other_1]
+    cf.cond_br %2 [then: check_0, else: other_0]
   check_0:
     %3 = arith.constant {value = 42 : i64}
     func.return %3
-  other_1:
+  other_0:
     %4 = arith.constant {value = 0 : i64}
     func.return %4
   }
@@ -3994,11 +3994,11 @@ module {
     x64.mov rax, 10
     x64.mov rcx, 10
     x64.cmp rax, rcx
-    x64.jne main.other_1
+    x64.jne main.other_0
   check_0:
     x64.mov rax, 42
     x64.ret
-  other_1:
+  other_0:
     x64.xor eax, eax
     x64.ret
   }
@@ -4091,13 +4091,13 @@ module {
     maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.binop %1, %3 {op = eq}
-    maxon.cond_br %4 [then: check_0, else: other_1]
+    maxon.cond_br %4 [then: check_0, else: other_0]
   check_0:
     %5 = maxon.literal {value = 2 : i64}
     maxon.assign %5 {var = extra} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br check_0.merge
-  other_1:
+  other_0:
     %6 = maxon.literal {value = 100 : i64}
     maxon.assign %6 {var = extra} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
@@ -4111,10 +4111,10 @@ module {
     %12 = maxon.literal {value = 4294967295 : i64}
     %13 = maxon.binop %9, %12 {op = gt}
     %14 = maxon.binop %11, %13 {op = or}
-    maxon.cond_br %14 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-if-else-value-survives-branch.test:11: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [base, cond, extra]
     maxon.return %9
   }
@@ -4128,12 +4128,12 @@ module {
     %1 = arith.constant {value = 1 : i64}
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.cmpi eq %1, %3
-    cf.cond_br %4 [then: check_0, else: other_1]
+    cf.cond_br %4 [then: check_0, else: other_0]
   check_0:
     %5 = arith.constant {value = 2 : i64}
     memref.store %5, extra
     cf.br check_0.merge
-  other_1:
+  other_0:
     %6 = arith.constant {value = 100 : i64}
     memref.store %6, extra
     cf.br check_0.merge
@@ -4146,12 +4146,12 @@ module {
     %12 = arith.constant {value = 4294967295 : i64}
     %13 = arith.cmpi gt %9, %12
     %14 = arith.ori1 %11, %13
-    cf.cond_br %14 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %15 = memref.lea_symdata __panic_msg_0
     %16 = std.ptr_to_i64 %15
     std.call_runtime @mrt_panic %16
-  __range_ok_2:
+  __range_ok_0:
     func.return %9
   }
 }
@@ -4165,12 +4165,12 @@ module {
     x64.mov rcx, 1
     x64.mov rdx, 1
     x64.cmp rcx, rdx
-    x64.jne main.other_1
+    x64.jne main.other_0
   check_0:
     x64.mov rax, 2
     x64.mov [rbp-16], rax
     x64.jmp main.check_0.merge
-  other_1:
+  other_0:
     x64.mov rax, 100
     x64.mov [rbp-16], rax
     x64.jmp main.check_0.merge
@@ -4181,15 +4181,15 @@ module {
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rdx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -4361,10 +4361,10 @@ module {
     %10 = maxon.literal {value = 4294967295 : i64}
     %11 = maxon.binop %7, %10 {op = gt}
     %12 = maxon.binop %9, %11 {op = or}
-    maxon.cond_br %12 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-while-loop-counter.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [i]
     maxon.return %7
   }
@@ -4394,12 +4394,12 @@ module {
     %10 = arith.constant {value = 4294967295 : i64}
     %11 = arith.cmpi gt %7, %10
     %12 = arith.ori1 %9, %11
-    cf.cond_br %12 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %13 = memref.lea_symdata __panic_msg_0
     %14 = std.ptr_to_i64 %13
     std.call_runtime @mrt_panic %14
-  __range_ok_1:
+  __range_ok_0:
     func.return %7
   }
 }
@@ -4427,15 +4427,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -4606,10 +4606,10 @@ module {
     %16 = maxon.literal {value = 4294967295 : i64}
     %17 = maxon.binop %13, %16 {op = gt}
     %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-while-loop-accumulator.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [sum, i]
     maxon.return %13
   }
@@ -4647,12 +4647,12 @@ module {
     %16 = arith.constant {value = 4294967295 : i64}
     %17 = arith.cmpi gt %13, %16
     %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @mrt_panic %20
-  __range_ok_1:
+  __range_ok_0:
     func.return %13
   }
 }
@@ -4691,15 +4691,15 @@ module {
     x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rdx, rax
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
@@ -4894,8 +4894,8 @@ module {
     %9 = maxon.binop %8, %7 {op = mod}
     %10 = maxon.literal {value = 0 : i64}
     %11 = maxon.binop %9, %10 {op = eq}
-    maxon.cond_br %11 [then: even_1, else: odd_2]
-  even_1:
+    maxon.cond_br %11 [then: even_0, else: odd_0]
+  even_0:
     %12 = maxon.var_ref {var = even_sum} {type = i64}
     %13 = maxon.var_ref {var = i} {type = i64}
     %14 = maxon.binop %12, %13 {op = add}
@@ -4905,15 +4905,15 @@ module {
     %17 = maxon.binop %16, %15 {op = add}
     maxon.assign %17 {var = count} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br even_1.merge
-  odd_2:
+    maxon.br even_0.merge
+  odd_0:
     %18 = maxon.var_ref {var = odd_sum} {type = i64}
     %19 = maxon.var_ref {var = i} {type = i64}
     %20 = maxon.binop %18, %19 {op = add}
     maxon.assign %20 {var = odd_sum} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br even_1.merge
-  even_1.merge:
+    maxon.br even_0.merge
+  even_0.merge:
     %21 = maxon.literal {value = 1 : i64}
     %22 = maxon.var_ref {var = i} {type = i64}
     %23 = maxon.binop %22, %21 {op = add}
@@ -4933,10 +4933,10 @@ module {
     %33 = maxon.literal {value = 4294967295 : i64}
     %34 = maxon.binop %30, %33 {op = gt}
     %35 = maxon.binop %32, %34 {op = or}
-    maxon.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    maxon.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-while-loop-multiple-accumulators.test:16: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_3:
+  __range_ok_0:
     maxon.scope_end [even_sum, odd_sum, count, i]
     maxon.return %30
   }
@@ -4965,8 +4965,8 @@ module {
     %9 = arith.remsi %8, %7
     %10 = arith.constant {value = 0 : i64}
     %11 = arith.cmpi eq %9, %10
-    cf.cond_br %11 [then: even_1, else: odd_2]
-  even_1:
+    cf.cond_br %11 [then: even_0, else: odd_0]
+  even_0:
     %12 = memref.load even_sum : i64
     %13 = memref.load i : i64
     %14 = arith.addi %12, %13
@@ -4975,14 +4975,14 @@ module {
     %16 = memref.load count : i64
     %17 = arith.addi %16, %15
     memref.store %17, count
-    cf.br even_1.merge
-  odd_2:
+    cf.br even_0.merge
+  odd_0:
     %18 = memref.load odd_sum : i64
     %19 = memref.load i : i64
     %20 = arith.addi %18, %19
     memref.store %20, odd_sum
-    cf.br even_1.merge
-  even_1.merge:
+    cf.br even_0.merge
+  even_0.merge:
     %21 = arith.constant {value = 1 : i64}
     %22 = memref.load i : i64
     %23 = arith.addi %22, %21
@@ -5001,12 +5001,12 @@ module {
     %33 = arith.constant {value = 4294967295 : i64}
     %34 = arith.cmpi gt %30, %33
     %35 = arith.ori1 %32, %34
-    cf.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    cf.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %36 = memref.lea_symdata __panic_msg_0
     %37 = std.ptr_to_i64 %36
     std.call_runtime @mrt_panic %37
-  __range_ok_3:
+  __range_ok_0:
     func.return %30
   }
 }
@@ -5038,8 +5038,8 @@ module {
     x64.idiv rbx
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.jne main.odd_2
-  even_1:
+    x64.jne main.odd_0
+  even_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-32]
     x64.add rax, rcx
@@ -5048,14 +5048,14 @@ module {
     x64.mov rbx, [rbp-24]
     x64.add rbx, rdx
     x64.mov [rbp-24], rbx
-    x64.jmp main.even_1.merge
-  odd_2:
+    x64.jmp main.even_0.merge
+  odd_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-32]
     x64.add rax, rcx
     x64.mov [rbp-16], rax
-    x64.jmp main.even_1.merge
-  even_1.merge:
+    x64.jmp main.even_0.merge
+  even_0.merge:
     x64.mov rax, 1
     x64.mov rcx, [rbp-32]
     x64.add rcx, rax
@@ -5074,15 +5074,15 @@ module {
     x64.xor esi, esi
     x64.mov edi, 4294967295
     x64.cmp rdx, rdi
-    x64.jg main.__range_panic_3
+    x64.jg main.__range_panic_0
     x64.cmp rdx, rsi
-    x64.jl main.__range_panic_3
-    x64.jmp main.__range_ok_3
-  __range_panic_3:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_3:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
@@ -5355,15 +5355,15 @@ module {
     %5 = maxon.literal {value = 5 : i64}
     %6 = maxon.var_ref {var = i} {type = i64}
     %7 = maxon.binop %6, %5 {op = le}
-    maxon.cond_br %7 [then: first_1, else: second_2]
-  first_1:
+    maxon.cond_br %7 [then: first_0, else: second_0]
+  first_0:
     %8 = maxon.var_ref {var = result} {type = i64}
     %9 = maxon.var_ref {var = i} {type = i64}
     %10 = maxon.binop %8, %9 {op = add}
     maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br first_1.merge
-  second_2:
+    maxon.br first_0.merge
+  second_0:
     %11 = maxon.literal {value = 2 : i64}
     %12 = maxon.var_ref {var = i} {type = i64}
     %13 = maxon.binop %12, %11 {op = mul}
@@ -5371,8 +5371,8 @@ module {
     %15 = maxon.binop %14, %13 {op = add}
     maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br first_1.merge
-  first_1.merge:
+    maxon.br first_0.merge
+  first_0.merge:
     %16 = maxon.literal {value = 1 : i64}
     %17 = maxon.var_ref {var = i} {type = i64}
     %18 = maxon.binop %17, %16 {op = add}
@@ -5388,10 +5388,10 @@ module {
     %24 = maxon.literal {value = 4294967295 : i64}
     %25 = maxon.binop %21, %24 {op = gt}
     %26 = maxon.binop %23, %25 {op = or}
-    maxon.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    maxon.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-nested-if-in-loop.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_3:
+  __range_ok_0:
     maxon.scope_end [result, i]
     maxon.return %21
   }
@@ -5414,22 +5414,22 @@ module {
     %5 = arith.constant {value = 5 : i64}
     %6 = memref.load i : i64
     %7 = arith.cmpi le %6, %5
-    cf.cond_br %7 [then: first_1, else: second_2]
-  first_1:
+    cf.cond_br %7 [then: first_0, else: second_0]
+  first_0:
     %8 = memref.load result : i64
     %9 = memref.load i : i64
     %10 = arith.addi %8, %9
     memref.store %10, result
-    cf.br first_1.merge
-  second_2:
+    cf.br first_0.merge
+  second_0:
     %11 = arith.constant {value = 2 : i64}
     %12 = memref.load i : i64
     %13 = arith.muli %12, %11
     %14 = memref.load result : i64
     %15 = arith.addi %14, %13
     memref.store %15, result
-    cf.br first_1.merge
-  first_1.merge:
+    cf.br first_0.merge
+  first_0.merge:
     %16 = arith.constant {value = 1 : i64}
     %17 = memref.load i : i64
     %18 = arith.addi %17, %16
@@ -5444,12 +5444,12 @@ module {
     %24 = arith.constant {value = 4294967295 : i64}
     %25 = arith.cmpi gt %21, %24
     %26 = arith.ori1 %23, %25
-    cf.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @mrt_panic %28
-  __range_ok_3:
+  __range_ok_0:
     func.return %21
   }
 }
@@ -5472,22 +5472,22 @@ module {
     x64.mov rax, 5
     x64.mov rcx, [rbp-16]
     x64.cmp rcx, rax
-    x64.jg main.second_2
-  first_1:
+    x64.jg main.second_0
+  first_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-16]
     x64.add rax, rcx
     x64.mov [rbp-8], rax
-    x64.jmp main.first_1.merge
-  second_2:
+    x64.jmp main.first_0.merge
+  second_0:
     x64.mov rax, 2
     x64.mov rcx, [rbp-16]
     x64.imul rcx, rax
     x64.mov rdx, [rbp-8]
     x64.add rdx, rcx
     x64.mov [rbp-8], rdx
-    x64.jmp main.first_1.merge
-  first_1.merge:
+    x64.jmp main.first_0.merge
+  first_0.merge:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -5503,15 +5503,15 @@ module {
     x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
-    x64.jg main.__range_panic_3
+    x64.jg main.__range_panic_0
     x64.cmp rdx, rax
-    x64.jl main.__range_panic_3
-    x64.jmp main.__range_ok_3
-  __range_panic_3:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_3:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
@@ -5746,13 +5746,13 @@ module {
   outer_0:
     %5 = maxon.literal {value = 0 : i64}
     maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br inner_1.header
-  inner_1.header:
+    maxon.br inner_0.header
+  inner_0.header:
     %6 = maxon.literal {value = 4 : i64}
     %7 = maxon.var_ref {var = j} {type = i64}
     %8 = maxon.binop %7, %6 {op = lt}
-    maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    maxon.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = maxon.literal {value = 1 : i64}
     %10 = maxon.var_ref {var = total} {type = i64}
     %11 = maxon.binop %10, %9 {op = add}
@@ -5762,8 +5762,8 @@ module {
     %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br inner_1.header
-  inner_1.exit:
+    maxon.br inner_0.header
+  inner_0.exit:
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = i} {type = i64}
     %17 = maxon.binop %16, %15 {op = add}
@@ -5777,10 +5777,10 @@ module {
     %21 = maxon.literal {value = 4294967295 : i64}
     %22 = maxon.binop %18, %21 {op = gt}
     %23 = maxon.binop %20, %22 {op = or}
-    maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-nested-loops.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [total, i]
     maxon.return %18
   }
@@ -5802,13 +5802,13 @@ module {
   outer_0:
     %5 = arith.constant {value = 0 : i64}
     memref.store %5, j
-    cf.br inner_1.header
-  inner_1.header:
+    cf.br inner_0.header
+  inner_0.header:
     %6 = arith.constant {value = 4 : i64}
     %7 = memref.load j : i64
     %8 = arith.cmpi lt %7, %6
-    cf.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    cf.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = arith.constant {value = 1 : i64}
     %10 = memref.load total : i64
     %11 = arith.addi %10, %9
@@ -5817,8 +5817,8 @@ module {
     %13 = memref.load j : i64
     %14 = arith.addi %13, %12
     memref.store %14, j
-    cf.br inner_1.header
-  inner_1.exit:
+    cf.br inner_0.header
+  inner_0.exit:
     %15 = arith.constant {value = 1 : i64}
     %16 = memref.load i : i64
     %17 = arith.addi %16, %15
@@ -5831,12 +5831,12 @@ module {
     %21 = arith.constant {value = 4294967295 : i64}
     %22 = arith.cmpi gt %18, %21
     %23 = arith.ori1 %20, %22
-    cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @mrt_panic %25
-  __range_ok_2:
+  __range_ok_0:
     func.return %18
   }
 }
@@ -5858,13 +5858,13 @@ module {
   outer_0:
     x64.xor eax, eax
     x64.mov [rbp-24], rax
-    x64.jmp main.inner_1.header
-  inner_1.header:
+    x64.jmp main.inner_0.header
+  inner_0.header:
     x64.mov rax, 4
     x64.mov rcx, [rbp-24]
     x64.cmp rcx, rax
-    x64.jge main.inner_1.exit
-  inner_1:
+    x64.jge main.inner_0.exit
+  inner_0:
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
@@ -5873,8 +5873,8 @@ module {
     x64.mov rbx, [rbp-24]
     x64.add rbx, rdx
     x64.mov [rbp-24], rbx
-    x64.jmp main.inner_1.header
-  inner_1.exit:
+    x64.jmp main.inner_0.header
+  inner_0.exit:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -5885,15 +5885,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -6118,13 +6118,13 @@ module {
   outer_0:
     %5 = maxon.literal {value = 1 : i64}
     maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br inner_1.header
-  inner_1.header:
+    maxon.br inner_0.header
+  inner_0.header:
     %6 = maxon.var_ref {var = j} {type = i64}
     %7 = maxon.var_ref {var = i} {type = i64}
     %8 = maxon.binop %6, %7 {op = le}
-    maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    maxon.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = maxon.literal {value = 1 : i64}
     %10 = maxon.var_ref {var = total} {type = i64}
     %11 = maxon.binop %10, %9 {op = add}
@@ -6134,8 +6134,8 @@ module {
     %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br inner_1.header
-  inner_1.exit:
+    maxon.br inner_0.header
+  inner_0.exit:
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = i} {type = i64}
     %17 = maxon.binop %16, %15 {op = add}
@@ -6149,10 +6149,10 @@ module {
     %21 = maxon.literal {value = 4294967295 : i64}
     %22 = maxon.binop %18, %21 {op = gt}
     %23 = maxon.binop %20, %22 {op = or}
-    maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-nested-loops-with-outer-var.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [total, i]
     maxon.return %18
   }
@@ -6174,13 +6174,13 @@ module {
   outer_0:
     %5 = arith.constant {value = 1 : i64}
     memref.store %5, j
-    cf.br inner_1.header
-  inner_1.header:
+    cf.br inner_0.header
+  inner_0.header:
     %6 = memref.load j : i64
     %7 = memref.load i : i64
     %8 = arith.cmpi le %6, %7
-    cf.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    cf.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = arith.constant {value = 1 : i64}
     %10 = memref.load total : i64
     %11 = arith.addi %10, %9
@@ -6189,8 +6189,8 @@ module {
     %13 = memref.load j : i64
     %14 = arith.addi %13, %12
     memref.store %14, j
-    cf.br inner_1.header
-  inner_1.exit:
+    cf.br inner_0.header
+  inner_0.exit:
     %15 = arith.constant {value = 1 : i64}
     %16 = memref.load i : i64
     %17 = arith.addi %16, %15
@@ -6203,12 +6203,12 @@ module {
     %21 = arith.constant {value = 4294967295 : i64}
     %22 = arith.cmpi gt %18, %21
     %23 = arith.ori1 %20, %22
-    cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @mrt_panic %25
-  __range_ok_2:
+  __range_ok_0:
     func.return %18
   }
 }
@@ -6230,13 +6230,13 @@ module {
   outer_0:
     x64.mov rax, 1
     x64.mov [rbp-24], rax
-    x64.jmp main.inner_1.header
-  inner_1.header:
+    x64.jmp main.inner_0.header
+  inner_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-16]
     x64.cmp rax, rcx
-    x64.jg main.inner_1.exit
-  inner_1:
+    x64.jg main.inner_0.exit
+  inner_0:
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
@@ -6245,8 +6245,8 @@ module {
     x64.mov rbx, [rbp-24]
     x64.add rbx, rdx
     x64.mov [rbp-24], rbx
-    x64.jmp main.inner_1.header
-  inner_1.exit:
+    x64.jmp main.inner_0.header
+  inner_0.exit:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -6257,15 +6257,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -6517,10 +6517,10 @@ module {
     %18 = maxon.literal {value = 4294967295 : i64}
     %19 = maxon.binop %15, %18 {op = gt}
     %20 = maxon.binop %17, %19 {op = or}
-    maxon.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %20 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-loop-with-function-call.test:16: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [sum, i]
     maxon.return %15
   }
@@ -6564,12 +6564,12 @@ module {
     %18 = arith.constant {value = 4294967295 : i64}
     %19 = arith.cmpi gt %15, %18
     %20 = arith.ori1 %17, %19
-    cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %20 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @mrt_panic %22
-  __range_ok_1:
+  __range_ok_0:
     func.return %15
   }
 }
@@ -6612,15 +6612,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -8130,10 +8130,10 @@ module {
     %39 = maxon.literal {value = 4294967295 : i64}
     %40 = maxon.binop %36, %39 {op = gt}
     %41 = maxon.binop %38, %40 {op = or}
-    maxon.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-loop-pressure-with-call.test:23: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [a, b, c, d, e, f, i]
     maxon.return %36
   }
@@ -8205,12 +8205,12 @@ module {
     %39 = arith.constant {value = 4294967295 : i64}
     %40 = arith.cmpi gt %36, %39
     %41 = arith.ori1 %38, %40
-    cf.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %42 = memref.lea_symdata __panic_msg_0
     %43 = std.ptr_to_i64 %42
     std.call_runtime @mrt_panic %43
-  __range_ok_1:
+  __range_ok_0:
     func.return %36
   }
 }
@@ -8285,15 +8285,15 @@ module {
     x64.xor r8d, r8d
     x64.mov r9, 4294967295
     x64.cmp rdx, r9
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rdx, r8
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
@@ -8786,32 +8786,32 @@ module {
   outer_0:
     %6 = maxon.literal {value = 0 : i64}
     maxon.assign %6 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br inner_1.header
-  inner_1.header:
+    maxon.br inner_0.header
+  inner_0.header:
     %7 = maxon.literal {value = 3 : i64}
     %8 = maxon.var_ref {var = j} {type = i64}
     %9 = maxon.binop %8, %7 {op = lt}
-    maxon.cond_br %9 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    maxon.cond_br %9 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %10 = maxon.var_ref {var = i} {type = i64}
     %11 = maxon.var_ref {var = j} {type = i64}
     %12 = maxon.binop %10, %11 {op = eq}
-    maxon.cond_br %12 [then: diag_2, else: diag_2.merge]
-  diag_2:
+    maxon.cond_br %12 [then: diag_0, else: diag_0.merge]
+  diag_0:
     %13 = maxon.literal {value = 1 : i64}
     %14 = maxon.var_ref {var = total} {type = i64}
     %15 = maxon.binop %14, %13 {op = add}
     maxon.assign %15 {var = total} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br diag_2.merge
-  diag_2.merge:
+    maxon.br diag_0.merge
+  diag_0.merge:
     %16 = maxon.literal {value = 1 : i64}
     %17 = maxon.var_ref {var = j} {type = i64}
     %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br inner_1.header
-  inner_1.exit:
+    maxon.br inner_0.header
+  inner_0.exit:
     %19 = maxon.literal {value = 1 : i64}
     %20 = maxon.var_ref {var = i} {type = i64}
     %21 = maxon.binop %20, %19 {op = add}
@@ -8827,10 +8827,10 @@ module {
     %27 = maxon.literal {value = 4294967295 : i64}
     %28 = maxon.binop %24, %27 {op = gt}
     %29 = maxon.binop %26, %28 {op = or}
-    maxon.cond_br %29 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    maxon.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-value-live-across-nested-control.test:16: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_3:
+  __range_ok_0:
     maxon.scope_end [sentinel, total, i]
     maxon.return %24
   }
@@ -8854,30 +8854,30 @@ module {
   outer_0:
     %6 = arith.constant {value = 0 : i64}
     memref.store %6, j
-    cf.br inner_1.header
-  inner_1.header:
+    cf.br inner_0.header
+  inner_0.header:
     %7 = arith.constant {value = 3 : i64}
     %8 = memref.load j : i64
     %9 = arith.cmpi lt %8, %7
-    cf.cond_br %9 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    cf.cond_br %9 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %10 = memref.load i : i64
     %11 = memref.load j : i64
     %12 = arith.cmpi eq %10, %11
-    cf.cond_br %12 [then: diag_2, else: diag_2.merge]
-  diag_2:
+    cf.cond_br %12 [then: diag_0, else: diag_0.merge]
+  diag_0:
     %13 = arith.constant {value = 1 : i64}
     %14 = memref.load total : i64
     %15 = arith.addi %14, %13
     memref.store %15, total
-    cf.br diag_2.merge
-  diag_2.merge:
+    cf.br diag_0.merge
+  diag_0.merge:
     %16 = arith.constant {value = 1 : i64}
     %17 = memref.load j : i64
     %18 = arith.addi %17, %16
     memref.store %18, j
-    cf.br inner_1.header
-  inner_1.exit:
+    cf.br inner_0.header
+  inner_0.exit:
     %19 = arith.constant {value = 1 : i64}
     %20 = memref.load i : i64
     %21 = arith.addi %20, %19
@@ -8892,12 +8892,12 @@ module {
     %27 = arith.constant {value = 4294967295 : i64}
     %28 = arith.cmpi gt %24, %27
     %29 = arith.ori1 %26, %28
-    cf.cond_br %29 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    cf.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %30 = memref.lea_symdata __panic_msg_0
     %31 = std.ptr_to_i64 %30
     std.call_runtime @mrt_panic %31
-  __range_ok_3:
+  __range_ok_0:
     func.return %24
   }
 }
@@ -8921,30 +8921,30 @@ module {
   outer_0:
     x64.xor eax, eax
     x64.mov [rbp-32], rax
-    x64.jmp main.inner_1.header
-  inner_1.header:
+    x64.jmp main.inner_0.header
+  inner_0.header:
     x64.mov rax, 3
     x64.mov rcx, [rbp-32]
     x64.cmp rcx, rax
-    x64.jge main.inner_1.exit
-  inner_1:
+    x64.jge main.inner_0.exit
+  inner_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-32]
     x64.cmp rax, rcx
-    x64.jne main.diag_2.merge
-  diag_2:
+    x64.jne main.diag_0.merge
+  diag_0:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
     x64.mov [rbp-16], rcx
-    x64.jmp main.diag_2.merge
-  diag_2.merge:
+    x64.jmp main.diag_0.merge
+  diag_0.merge:
     x64.mov rax, 1
     x64.mov rcx, [rbp-32]
     x64.add rcx, rax
     x64.mov [rbp-32], rcx
-    x64.jmp main.inner_1.header
-  inner_1.exit:
+    x64.jmp main.inner_0.header
+  inner_0.exit:
     x64.mov rax, 1
     x64.mov rcx, [rbp-24]
     x64.add rcx, rax
@@ -8957,15 +8957,15 @@ module {
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
-    x64.jg main.__range_panic_3
+    x64.jg main.__range_panic_0
     x64.cmp rax, rdx
-    x64.jl main.__range_panic_3
-    x64.jmp main.__range_ok_3
-  __range_panic_3:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_3:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -9247,10 +9247,10 @@ module {
     %16 = maxon.literal {value = 4294967295 : i64}
     %17 = maxon.binop %13, %16 {op = gt}
     %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-fibonacci.test:12: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [a, b, i]
     maxon.return %13
   }
@@ -9290,12 +9290,12 @@ module {
     %16 = arith.constant {value = 4294967295 : i64}
     %17 = arith.cmpi gt %13, %16
     %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @mrt_panic %20
-  __range_ok_1:
+  __range_ok_0:
     func.return %13
   }
 }
@@ -9333,15 +9333,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -10665,7 +10665,7 @@ module {
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.literal {value = 2 : i64}
     %5 = maxon.binop %3, %4 {op = lt}
-    maxon.cond_br %5 [then: branch_0, else: other_1]
+    maxon.cond_br %5 [then: branch_0, else: other_0]
   branch_0:
     %6 = maxon.literal {value = 10 : i64}
     maxon.assign %6 {var = x} {kind = i64} {mut = 1 : i1}
@@ -10675,7 +10675,7 @@ module {
     maxon.assign %8 {var = z} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br branch_0.merge
-  other_1:
+  other_0:
     %9 = maxon.literal {value = 1 : i64}
     maxon.assign %9 {var = x} {kind = i64} {mut = 1 : i1}
     %10 = maxon.literal {value = 2 : i64}
@@ -10695,10 +10695,10 @@ module {
     %19 = maxon.literal {value = 4294967295 : i64}
     %20 = maxon.binop %16, %19 {op = gt}
     %21 = maxon.binop %18, %20 {op = or}
-    maxon.cond_br %21 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-multi-var-branch-merge.test:15: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [x, y, z]
     maxon.return %16
   }
@@ -10710,7 +10710,7 @@ module {
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.constant {value = 2 : i64}
     %5 = arith.cmpi lt %3, %4
-    cf.cond_br %5 [then: branch_0, else: other_1]
+    cf.cond_br %5 [then: branch_0, else: other_0]
   branch_0:
     %6 = arith.constant {value = 10 : i64}
     memref.store %6, x
@@ -10719,7 +10719,7 @@ module {
     %8 = arith.constant {value = 12 : i64}
     memref.store %8, z
     cf.br branch_0.merge
-  other_1:
+  other_0:
     %9 = arith.constant {value = 1 : i64}
     memref.store %9, x
     %10 = arith.constant {value = 2 : i64}
@@ -10738,12 +10738,12 @@ module {
     %19 = arith.constant {value = 4294967295 : i64}
     %20 = arith.cmpi gt %16, %19
     %21 = arith.ori1 %18, %20
-    cf.cond_br %21 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %22 = memref.lea_symdata __panic_msg_0
     %23 = std.ptr_to_i64 %22
     std.call_runtime @mrt_panic %23
-  __range_ok_2:
+  __range_ok_0:
     func.return %16
   }
 }
@@ -10755,7 +10755,7 @@ module {
     x64.mov rax, 1
     x64.mov rcx, 2
     x64.cmp rax, rcx
-    x64.jge main.other_1
+    x64.jge main.other_0
   branch_0:
     x64.mov rax, 10
     x64.mov [rbp-8], rax
@@ -10764,7 +10764,7 @@ module {
     x64.mov rdx, 12
     x64.mov [rbp-24], rdx
     x64.jmp main.branch_0.merge
-  other_1:
+  other_0:
     x64.mov rax, 1
     x64.mov [rbp-8], rax
     x64.mov rcx, 2
@@ -10781,15 +10781,15 @@ module {
     x64.xor ebx, ebx
     x64.mov esi, 4294967295
     x64.cmp rax, rsi
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rbx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -11224,10 +11224,10 @@ module {
     %14 = maxon.literal {value = 4294967295 : i64}
     %15 = maxon.binop %11, %14 {op = gt}
     %16 = maxon.binop %13, %15 {op = or}
-    maxon.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-statement-assignment.test:10: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, result, __match_process_0]
     maxon.return %11
   }
@@ -11268,12 +11268,12 @@ module {
     %14 = arith.constant {value = 4294967295 : i64}
     %15 = arith.cmpi gt %11, %14
     %16 = arith.ori1 %13, %15
-    cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %17 = memref.lea_symdata __panic_msg_0
     %18 = std.ptr_to_i64 %17
     std.call_runtime @mrt_panic %18
-  __range_ok_1:
+  __range_ok_0:
     func.return %11
   }
 }
@@ -11312,15 +11312,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -11825,10 +11825,10 @@ module {
     %24 = maxon.literal {value = 4294967295 : i64}
     %25 = maxon.binop %21, %24 {op = gt}
     %26 = maxon.binop %23, %25 {op = or}
-    maxon.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-statement-fallthrough.test:11: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, result, __match_cascade_0]
     maxon.return %21
   }
@@ -11886,12 +11886,12 @@ module {
     %24 = arith.constant {value = 4294967295 : i64}
     %25 = arith.cmpi gt %21, %24
     %26 = arith.ori1 %23, %25
-    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @mrt_panic %28
-  __range_ok_1:
+  __range_ok_0:
     func.return %21
   }
 }
@@ -11947,15 +11947,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -12226,10 +12226,10 @@ module {
     %14 = maxon.literal {value = 4294967295 : i64}
     %15 = maxon.binop %11, %14 {op = gt}
     %16 = maxon.binop %13, %15 {op = or}
-    maxon.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-expression-basic.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, __matchexpr_eval_0, result, __match_eval_0]
     maxon.return %11
   }
@@ -12270,12 +12270,12 @@ module {
     %14 = arith.constant {value = 4294967295 : i64}
     %15 = arith.cmpi gt %11, %14
     %16 = arith.ori1 %13, %15
-    cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %16 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %17 = memref.lea_symdata __panic_msg_0
     %18 = std.ptr_to_i64 %17
     std.call_runtime @mrt_panic %18
-  __range_ok_1:
+  __range_ok_0:
     func.return %11
   }
 }
@@ -12314,15 +12314,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -12546,10 +12546,10 @@ module {
     %22 = maxon.literal {value = 4294967295 : i64}
     %23 = maxon.binop %19, %22 {op = gt}
     %24 = maxon.binop %21, %23 {op = or}
-    maxon.cond_br %24 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-expression-or-patterns.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, __matchexpr_eval_0, result, __match_eval_0]
     maxon.return %19
   }
@@ -12598,12 +12598,12 @@ module {
     %22 = arith.constant {value = 4294967295 : i64}
     %23 = arith.cmpi gt %19, %22
     %24 = arith.ori1 %21, %23
-    cf.cond_br %24 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %25 = memref.lea_symdata __panic_msg_0
     %26 = std.ptr_to_i64 %25
     std.call_runtime @mrt_panic %26
-  __range_ok_1:
+  __range_ok_0:
     func.return %19
   }
 }
@@ -12652,15 +12652,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -12904,10 +12904,10 @@ module {
     %16 = maxon.literal {value = 4294967295 : i64}
     %17 = maxon.binop %13, %16 {op = gt}
     %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-expression-in-arithmetic.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, __matchexpr_eval_0, doubled, __match_eval_0]
     maxon.return %13
   }
@@ -12950,12 +12950,12 @@ module {
     %16 = arith.constant {value = 4294967295 : i64}
     %17 = arith.cmpi gt %13, %16
     %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @mrt_panic %20
-  __range_ok_1:
+  __range_ok_0:
     func.return %13
   }
 }
@@ -12996,15 +12996,15 @@ module {
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rdx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -13247,10 +13247,10 @@ module {
     %19 = maxon.literal {value = 4294967295 : i64}
     %20 = maxon.binop %16, %19 {op = gt}
     %21 = maxon.binop %18, %20 {op = or}
-    maxon.cond_br %21 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at match-statement-with-function-call.test:17: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [x, result, __match_process_0]
     maxon.return %16
   }
@@ -13300,12 +13300,12 @@ module {
     %19 = arith.constant {value = 4294967295 : i64}
     %20 = arith.cmpi gt %16, %19
     %21 = arith.ori1 %18, %20
-    cf.cond_br %21 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %22 = memref.lea_symdata __panic_msg_0
     %23 = std.ptr_to_i64 %22
     std.call_runtime @mrt_panic %23
-  __range_ok_1:
+  __range_ok_0:
     func.return %16
   }
 }
@@ -13353,15 +13353,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -13724,28 +13724,28 @@ module {
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12, %11 = maxon.try_call @register-allocator.mayFail
-    maxon.assign %11 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %12 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.literal {value = 0 : i64}
     %14 = maxon.binop %11, %13 {op = ne}
-    maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_1]
+    maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_0]
   otherwise_error_0:
     %15 = maxon.literal {value = 42 : i64}
     maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_continue_1
-  otherwise_continue_1:
-    %16 = maxon.var_ref {var = __try_result_3} {type = i64}
+    maxon.br otherwise_continue_0
+  otherwise_continue_0:
+    %16 = maxon.var_ref {var = __try_result_0} {type = i64}
     %17 = maxon.var_ref {var = result} {type = i64}
     %18 = maxon.literal {value = 0 : i64}
     %19 = maxon.binop %17, %18 {op = lt}
     %20 = maxon.literal {value = 4294967295 : i64}
     %21 = maxon.binop %17, %20 {op = gt}
     %22 = maxon.binop %19, %21 {op = or}
-    maxon.cond_br %22 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
+    maxon.cond_br %22 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at error-otherwise-block.test:18: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_4:
-    maxon.scope_end [result, __try_error_2, __try_result_3]
+  __range_ok_0:
+    maxon.scope_end [result, __try_error_0, __try_result_0]
     maxon.return %17
   }
 }
@@ -13765,24 +13765,24 @@ module {
     %4, %5 = func.try_call @register-allocator.mayFail
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi ne %5, %6
-    cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_1]
+    cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_0]
   otherwise_error_0:
     %8 = arith.constant {value = 42 : i64}
     memref.store %8, result
-    cf.br otherwise_continue_1
-  otherwise_continue_1:
+    cf.br otherwise_continue_0
+  otherwise_continue_0:
     %10 = memref.load result : i64
     %11 = arith.constant {value = 0 : i64}
     %12 = arith.cmpi lt %10, %11
     %13 = arith.constant {value = 4294967295 : i64}
     %14 = arith.cmpi gt %10, %13
     %15 = arith.ori1 %12, %14
-    cf.cond_br %15 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
+    cf.cond_br %15 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %16 = memref.lea_symdata __panic_msg_0
     %17 = std.ptr_to_i64 %16
     std.call_runtime @mrt_panic %17
-  __range_ok_4:
+  __range_ok_0:
     func.return %10
   }
 }
@@ -13805,25 +13805,25 @@ module {
     x64.call register-allocator.mayFail
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.je main.otherwise_continue_1
+    x64.je main.otherwise_continue_0
   otherwise_error_0:
     x64.mov rax, 42
     x64.mov [rbp-8], rax
-    x64.jmp main.otherwise_continue_1
-  otherwise_continue_1:
+    x64.jmp main.otherwise_continue_0
+  otherwise_continue_0:
     x64.mov rax, [rbp-8]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_4
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_4
-    x64.jmp main.__range_ok_4
-  __range_panic_4:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_4:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -13994,35 +13994,35 @@ module {
   func @register-allocator.middle() -> i64 {
   entry:
     %11, %10 = maxon.try_call @register-allocator.inner
-    maxon.assign %10 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %11 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %10 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
     %13 = maxon.binop %10, %12 {op = ne}
-    maxon.cond_br %13 [then: propagate_error_0, else: try_continue_1]
+    maxon.cond_br %13 [then: propagate_error_0, else: try_continue_0]
   propagate_error_0:
-    %14 = maxon.var_ref {var = __try_error_2} {type = i64}
-    maxon.scope_end [__try_error_2, __try_result_3]
+    %14 = maxon.var_ref {var = __try_error_0} {type = i64}
+    maxon.scope_end [__try_error_0, __try_result_0]
     maxon.return %14
-  try_continue_1:
-    %15 = maxon.var_ref {var = __try_result_3} {type = i64}
+  try_continue_0:
+    %15 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %15 {var = x} {kind = i64} {decl = 1 : i1}
-    maxon.scope_end [__try_error_2, x, __try_result_3]
+    maxon.scope_end [__try_error_0, x, __try_result_0]
     maxon.return %15
   }
   func @main() -> i64 {
   entry:
     %18, %17 = maxon.try_call @register-allocator.middle
     %19 = maxon.literal {value = 99 : i64}
-    maxon.assign %19 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %19 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %20 = maxon.literal {value = 0 : i64}
     %21 = maxon.binop %17, %20 {op = ne}
-    maxon.cond_br %21 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %22 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.cond_br %21 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %22 = maxon.var_ref {var = __try_default_0} {type = i64}
     maxon.assign %22 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    maxon.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %23 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %23 {var = x} {kind = i64} {decl = 1 : i1}
     %24 = maxon.literal {value = 0 : i64}
@@ -14030,11 +14030,11 @@ module {
     %26 = maxon.literal {value = 4294967295 : i64}
     %27 = maxon.binop %23, %26 {op = gt}
     %28 = maxon.binop %25, %27 {op = or}
-    maxon.cond_br %28 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
+    maxon.cond_br %28 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at error-propagate-through-caller.test:20: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_4:
-    maxon.scope_end [__try_default_1, x, __try_result_0]
+  __range_ok_0:
+    maxon.scope_end [__try_default_0, x, __try_result_0]
     maxon.return %23
   }
 }
@@ -14050,44 +14050,44 @@ module {
   func @register-allocator.middle() -> i64 {
   entry:
     %3, %4 = func.try_call @register-allocator.inner
-    memref.store %4, __try_error_2
-    memref.store %3, __try_result_3
+    memref.store %4, __try_error_0
+    memref.store %3, __try_result_0
     %5 = arith.constant {value = 0 : i64}
     %6 = arith.cmpi ne %4, %5
-    cf.cond_br %6 [then: propagate_error_0, else: try_continue_1]
+    cf.cond_br %6 [then: propagate_error_0, else: try_continue_0]
   propagate_error_0:
-    %7 = memref.load __try_error_2 : i64
+    %7 = memref.load __try_error_0 : i64
     func.error_return %7
-  try_continue_1:
-    %8 = memref.load __try_result_3 : i64
+  try_continue_0:
+    %8 = memref.load __try_result_0 : i64
     func.return %8
   }
   func @main() -> u32 {
   entry:
     %9, %10 = func.try_call @register-allocator.middle
     %11 = arith.constant {value = 99 : i64}
-    memref.store %11, __try_default_1
+    memref.store %11, __try_default_0
     memref.store %9, __try_result_0
     %12 = arith.constant {value = 0 : i64}
     %13 = arith.cmpi ne %10, %12
-    cf.cond_br %13 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %14 = memref.load __try_default_1 : i64
+    cf.cond_br %13 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %14 = memref.load __try_default_0 : i64
     memref.store %14, __try_result_0
-    cf.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    cf.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %15 = memref.load __try_result_0 : i64
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.cmpi lt %15, %16
     %18 = arith.constant {value = 4294967295 : i64}
     %19 = arith.cmpi gt %15, %18
     %20 = arith.ori1 %17, %19
-    cf.cond_br %20 [then: __range_panic_4, else: __range_ok_4]
-  __range_panic_4:
+    cf.cond_br %20 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @mrt_panic %22
-  __range_ok_4:
+  __range_ok_0:
     func.return %15
   }
 }
@@ -14110,13 +14110,13 @@ module {
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je register-allocator.middle.try_continue_1
+    x64.je register-allocator.middle.try_continue_0
   propagate_error_0:
     x64.mov rdx, [rbp-8]
     x64.xor eax, eax
     x64.epilogue
     x64.ret
-  try_continue_1:
+  try_continue_0:
     x64.mov rax, [rbp-16]
     x64.xor edx, edx
     x64.epilogue
@@ -14131,25 +14131,25 @@ module {
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-16], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_4
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_4
-    x64.jmp main.__range_ok_4
-  __range_panic_4:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_4:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }
@@ -14396,45 +14396,45 @@ module {
   entry:
     %13, %12 = maxon.try_call @register-allocator.getA
     %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 0 : i64}
     %16 = maxon.binop %12, %15 {op = ne}
-    maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %17 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.cond_br %16 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %17 = maxon.var_ref {var = __try_default_0} {type = i64}
     maxon.assign %17 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    maxon.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %18 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
     %21, %20 = maxon.try_call @register-allocator.getB
     %22 = maxon.literal {value = 0 : i64}
-    maxon.assign %22 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %21 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %21 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %23 = maxon.literal {value = 0 : i64}
     %24 = maxon.binop %20, %23 {op = ne}
-    maxon.cond_br %24 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %25 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %25 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %26 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.cond_br %24 [then: otherwise_default_error_1, else: otherwise_default_continue_1]
+  otherwise_default_error_1:
+    %25 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %25 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_1
+  otherwise_default_continue_1:
+    %26 = maxon.var_ref {var = __try_result_1} {type = i64}
     maxon.assign %26 {var = b} {kind = i64} {decl = 1 : i1}
     %29, %28 = maxon.try_call @register-allocator.getC
     %30 = maxon.literal {value = 12 : i64}
-    maxon.assign %30 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %29 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %30 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %29 {var = __try_result_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %28, %31 {op = ne}
-    maxon.cond_br %32 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
-  otherwise_default_error_10:
-    %33 = maxon.var_ref {var = __try_default_9} {type = i64}
-    maxon.assign %33 {var = __try_result_8} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_11
-  otherwise_default_continue_11:
-    %34 = maxon.var_ref {var = __try_result_8} {type = i64}
+    maxon.cond_br %32 [then: otherwise_default_error_2, else: otherwise_default_continue_2]
+  otherwise_default_error_2:
+    %33 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %33 {var = __try_result_2} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_2
+  otherwise_default_continue_2:
+    %34 = maxon.var_ref {var = __try_result_2} {type = i64}
     maxon.assign %34 {var = c} {kind = i64} {decl = 1 : i1}
     %35 = maxon.var_ref {var = a} {type = i64}
     %36 = maxon.var_ref {var = b} {type = i64}
@@ -14445,11 +14445,11 @@ module {
     %41 = maxon.literal {value = 4294967295 : i64}
     %42 = maxon.binop %38, %41 {op = gt}
     %43 = maxon.binop %40, %42 {op = or}
-    maxon.cond_br %43 [then: __range_panic_12, else: __range_ok_12]
-  __range_panic_12:
+    maxon.cond_br %43 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at error-multiple-try-calls.test:25: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_12:
-    maxon.scope_end [__try_default_1, a, __try_default_5, b, __try_default_9, c, __try_result_0, __try_result_4, __try_result_8]
+  __range_ok_0:
+    maxon.scope_end [__try_default_0, a, __try_default_1, b, __try_default_2, c, __try_result_0, __try_result_1, __try_result_2]
     maxon.return %38
   }
 }
@@ -14476,45 +14476,45 @@ module {
   entry:
     %5, %6 = func.try_call @register-allocator.getA
     %7 = arith.constant {value = 0 : i64}
-    memref.store %7, __try_default_1
+    memref.store %7, __try_default_0
     memref.store %5, __try_result_0
     %8 = arith.constant {value = 0 : i64}
     %9 = arith.cmpi ne %6, %8
-    cf.cond_br %9 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %10 = memref.load __try_default_1 : i64
+    cf.cond_br %9 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %10 = memref.load __try_default_0 : i64
     memref.store %10, __try_result_0
-    cf.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    cf.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %11 = memref.load __try_result_0 : i64
     memref.store %11, a
     %12, %13 = func.try_call @register-allocator.getB
     %14 = arith.constant {value = 0 : i64}
-    memref.store %14, __try_default_5
-    memref.store %12, __try_result_4
+    memref.store %14, __try_default_1
+    memref.store %12, __try_result_1
     %15 = arith.constant {value = 0 : i64}
     %16 = arith.cmpi ne %13, %15
-    cf.cond_br %16 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %17 = memref.load __try_default_5 : i64
-    memref.store %17, __try_result_4
-    cf.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %18 = memref.load __try_result_4 : i64
+    cf.cond_br %16 [then: otherwise_default_error_1, else: otherwise_default_continue_1]
+  otherwise_default_error_1:
+    %17 = memref.load __try_default_1 : i64
+    memref.store %17, __try_result_1
+    cf.br otherwise_default_continue_1
+  otherwise_default_continue_1:
+    %18 = memref.load __try_result_1 : i64
     memref.store %18, b
     %19, %20 = func.try_call @register-allocator.getC
     %21 = arith.constant {value = 12 : i64}
-    memref.store %21, __try_default_9
-    memref.store %19, __try_result_8
+    memref.store %21, __try_default_2
+    memref.store %19, __try_result_2
     %22 = arith.constant {value = 0 : i64}
     %23 = arith.cmpi ne %20, %22
-    cf.cond_br %23 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
-  otherwise_default_error_10:
-    %24 = memref.load __try_default_9 : i64
-    memref.store %24, __try_result_8
-    cf.br otherwise_default_continue_11
-  otherwise_default_continue_11:
-    %25 = memref.load __try_result_8 : i64
+    cf.cond_br %23 [then: otherwise_default_error_2, else: otherwise_default_continue_2]
+  otherwise_default_error_2:
+    %24 = memref.load __try_default_2 : i64
+    memref.store %24, __try_result_2
+    cf.br otherwise_default_continue_2
+  otherwise_default_continue_2:
+    %25 = memref.load __try_result_2 : i64
     %26 = memref.load a : i64
     %27 = memref.load b : i64
     %28 = arith.addi %26, %27
@@ -14524,12 +14524,12 @@ module {
     %32 = arith.constant {value = 4294967295 : i64}
     %33 = arith.cmpi gt %29, %32
     %34 = arith.ori1 %31, %33
-    cf.cond_br %34 [then: __range_panic_12, else: __range_ok_12]
-  __range_panic_12:
+    cf.cond_br %34 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %35 = memref.lea_symdata __panic_msg_0
     %36 = std.ptr_to_i64 %35
     std.call_runtime @mrt_panic %36
-  __range_ok_12:
+  __range_ok_0:
     func.return %29
   }
 }
@@ -14565,12 +14565,12 @@ module {
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-16], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
     x64.call register-allocator.getB
@@ -14579,12 +14579,12 @@ module {
     x64.mov [rbp-40], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_7
-  otherwise_default_error_6:
+    x64.je main.otherwise_default_continue_1
+  otherwise_default_error_1:
     x64.mov rax, [rbp-32]
     x64.mov [rbp-40], rax
-    x64.jmp main.otherwise_default_continue_7
-  otherwise_default_continue_7:
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_continue_1:
     x64.mov rax, [rbp-40]
     x64.mov [rbp-48], rax
     x64.call register-allocator.getC
@@ -14593,12 +14593,12 @@ module {
     x64.mov [rbp-64], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_11
-  otherwise_default_error_10:
+    x64.je main.otherwise_default_continue_2
+  otherwise_default_error_2:
     x64.mov rax, [rbp-56]
     x64.mov [rbp-64], rax
-    x64.jmp main.otherwise_default_continue_11
-  otherwise_default_continue_11:
+    x64.jmp main.otherwise_default_continue_2
+  otherwise_default_continue_2:
     x64.mov rax, [rbp-64]
     x64.mov rcx, [rbp-24]
     x64.mov rdx, [rbp-48]
@@ -14607,15 +14607,15 @@ module {
     x64.xor ebx, ebx
     x64.mov esi, 4294967295
     x64.cmp rcx, rsi
-    x64.jg main.__range_panic_12
+    x64.jg main.__range_panic_0
     x64.cmp rcx, rbx
-    x64.jl main.__range_panic_12
-    x64.jmp main.__range_ok_12
-  __range_panic_12:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_12:
+  __range_ok_0:
     x64.mov rax, rcx
     x64.epilogue
     x64.ret
@@ -14951,32 +14951,32 @@ module {
     %18 = maxon.literal {value = 2 : i64}
     %21, %20 = maxon.try_call @register-allocator.lookup %18
     %22 = maxon.literal {value = 0 : i64}
-    maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %22 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %23 = maxon.literal {value = 0 : i64}
     %24 = maxon.binop %20, %23 {op = ne}
-    maxon.cond_br %24 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %25 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.cond_br %24 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %25 = maxon.var_ref {var = __try_default_0} {type = i64}
     maxon.assign %25 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    maxon.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %26 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %26 {var = a} {kind = i64} {decl = 1 : i1}
     %27 = maxon.literal {value = 99 : i64}
     %30, %29 = maxon.try_call @register-allocator.lookup %27
     %31 = maxon.literal {value = 42 : i64}
-    maxon.assign %31 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %30 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %31 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %30 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %32 = maxon.literal {value = 0 : i64}
     %33 = maxon.binop %29, %32 {op = ne}
-    maxon.cond_br %33 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %34 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %34 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %35 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.cond_br %33 [then: otherwise_default_error_1, else: otherwise_default_continue_1]
+  otherwise_default_error_1:
+    %34 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %34 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_1
+  otherwise_default_continue_1:
+    %35 = maxon.var_ref {var = __try_result_1} {type = i64}
     maxon.assign %35 {var = b} {kind = i64} {decl = 1 : i1}
     %36 = maxon.literal {value = 256 : i64}
     %37 = maxon.binop %35, %36 {op = mod} {optimalType = i64}
@@ -14987,11 +14987,11 @@ module {
     %42 = maxon.literal {value = 4294967295 : i64}
     %43 = maxon.binop %39, %42 {op = gt}
     %44 = maxon.binop %41, %43 {op = or}
-    maxon.cond_br %44 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
+    maxon.cond_br %44 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at error-throw-in-match.test:21: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_8:
-    maxon.scope_end [__try_default_1, a, __try_default_5, b, __try_result_0, __try_result_4]
+  __range_ok_0:
+    maxon.scope_end [__try_default_0, a, __try_default_1, b, __try_result_0, __try_result_1]
     maxon.return %39
   }
 }
@@ -15030,32 +15030,32 @@ module {
     %12 = arith.constant {value = 2 : i64}
     %13, %14 = func.try_call @register-allocator.lookup %12
     %15 = arith.constant {value = 0 : i64}
-    memref.store %15, __try_default_1
+    memref.store %15, __try_default_0
     memref.store %13, __try_result_0
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.cmpi ne %14, %16
-    cf.cond_br %17 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %18 = memref.load __try_default_1 : i64
+    cf.cond_br %17 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %18 = memref.load __try_default_0 : i64
     memref.store %18, __try_result_0
-    cf.br otherwise_default_continue_3
-  otherwise_default_continue_3:
+    cf.br otherwise_default_continue_0
+  otherwise_default_continue_0:
     %19 = memref.load __try_result_0 : i64
     memref.store %19, a
     %20 = arith.constant {value = 99 : i64}
     %21, %22 = func.try_call @register-allocator.lookup %20
     %23 = arith.constant {value = 42 : i64}
-    memref.store %23, __try_default_5
-    memref.store %21, __try_result_4
+    memref.store %23, __try_default_1
+    memref.store %21, __try_result_1
     %24 = arith.constant {value = 0 : i64}
     %25 = arith.cmpi ne %22, %24
-    cf.cond_br %25 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %26 = memref.load __try_default_5 : i64
-    memref.store %26, __try_result_4
-    cf.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %27 = memref.load __try_result_4 : i64
+    cf.cond_br %25 [then: otherwise_default_error_1, else: otherwise_default_continue_1]
+  otherwise_default_error_1:
+    %26 = memref.load __try_default_1 : i64
+    memref.store %26, __try_result_1
+    cf.br otherwise_default_continue_1
+  otherwise_default_continue_1:
+    %27 = memref.load __try_result_1 : i64
     %28 = arith.constant {value = 256 : i64}
     %29 = arith.remsi %27, %28
     %30 = memref.load a : i64
@@ -15065,12 +15065,12 @@ module {
     %34 = arith.constant {value = 4294967295 : i64}
     %35 = arith.cmpi gt %31, %34
     %36 = arith.ori1 %33, %35
-    cf.cond_br %36 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
+    cf.cond_br %36 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %37 = memref.lea_symdata __panic_msg_0
     %38 = std.ptr_to_i64 %37
     std.call_runtime @mrt_panic %38
-  __range_ok_8:
+  __range_ok_0:
     func.return %31
   }
 }
@@ -15121,12 +15121,12 @@ module {
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-16], rax
-    x64.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
     x64.mov rcx, 99
@@ -15136,12 +15136,12 @@ module {
     x64.mov [rbp-40], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_7
-  otherwise_default_error_6:
+    x64.je main.otherwise_default_continue_1
+  otherwise_default_error_1:
     x64.mov rax, [rbp-32]
     x64.mov [rbp-40], rax
-    x64.jmp main.otherwise_default_continue_7
-  otherwise_default_continue_7:
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_continue_1:
     x64.mov rax, [rbp-40]
     x64.mov rcx, 256
     x64.cqo
@@ -15151,15 +15151,15 @@ module {
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
-    x64.jg main.__range_panic_8
+    x64.jg main.__range_panic_0
     x64.cmp rax, rdx
-    x64.jl main.__range_panic_8
-    x64.jmp main.__range_ok_8
-  __range_panic_8:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_8:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

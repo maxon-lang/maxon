@@ -5,12 +5,14 @@
 // identical across phases and live here to avoid drift.
 
 // Wrap a concatenation of per-function strings in the `module { ... }`
-// envelope that every phase emits. Used by every printer so spec fragments
-// have a uniform layout across targets.
+// envelope that every phase emits, then renumber counter-based labels
+// (see `stabilizeLabels` below). Routing the rewrite through this shared
+// helper guarantees every dialect printer — MaxonPrinter, StdPrinter,
+// MirPrinter, TargetPrinter — gets identical label-stability treatment.
 export function formatModuleWrapper(functionsBody String) returns String
 	let lb = "\{"
 	let rb = "\}"
-	return "module {lb}\n{functionsBody}{rb}\n"
+	return stabilizeLabels("module {lb}\n{functionsBody}{rb}\n")
 end 'formatModuleWrapper'
 
 // Format the opening line of a function in the Std/MIR dialects, which both
@@ -35,3 +37,608 @@ export function formatStdFuncHeader(func IrFunction) returns String
 	end 'hasReturn'
 	return "{sb} {lb}\n"
 end 'formatStdFuncHeader'
+
+// --- Stable label renumbering ---
+//
+// Counter-based identifier names in the lowering pipeline (block labels,
+// synthetic variables, rdata/symdata symbols) carry trailing `_<digits>`
+// suffixes minted from various counters. Most of those counters bump across
+// the whole compile unit — stdlib functions that are filtered out of
+// fragment output still drive the counters, and batched compiles share
+// counters across every test in the batch. A small unrelated change can
+// therefore shift every label number in every printed fragment.
+//
+// stabilizeLabels rewrites recognized counter-suffixed identifiers in the
+// printed IR text so they restart at _0 in order of first appearance within
+// that text. This is purely cosmetic — only the printed text is rewritten;
+// the underlying IR, emitted assembly, symdata symbols, and debug info keep
+// the original counter-based names. Safe to call multiple times; a text
+// that is already dense stays dense. Called both at the end of every IR
+// print and after batched-IR splitting (so each test's slice is stable
+// both on its own and against unrelated tests in the same batch).
+//
+// Detection is context-based rather than prefix-list-based: we collect
+// every identifier that appears in a position where the printer is known
+// to emit a label or label-like identifier — block headers, explicit
+// label-def ops, `{var = NAME}` attributes, branch targets, memref var
+// refs, scope-end lists, and symdata/rdata operands in `[NAME]` brackets —
+// then renumber any identifier that ends in `_<digits>`. This captures
+// both compiler-internal names (`__panic_msg_N`, `__range_panic_N`, ...)
+// and user-given block labels that were uniquified with a counter, without
+// needing to enumerate every prefix.
+
+typealias StableLabelIndex = int(0 to u64.max)
+typealias LabelRenameMap = Map with(String, String)
+typealias NextIndexMap = Map with(String, StableLabelIndex)
+// Tracks `[...]` nesting depth inside a single IR line. Lines never reach
+// the wide range — a few levels at most — but we use the full range so a
+// malformed input can't trigger a range panic in a cosmetic pass.
+typealias BracketDepth = int(0 to u64.max)
+
+// Sentinel for the "module-scope" namespace shared by all data labels
+// (symdata/rdata symbols). `<` is rejected by the lexer so user names
+// can't collide with this sentinel.
+let MODULE_SCOPE = "<module>"
+
+export function stabilizeLabels(text String) returns String
+	var renames = LabelRenameMap.create()
+	var nextNum = NextIndexMap.create()
+
+	let normalized = text.replace("\r\n", with: "\n")
+	let lines = normalized.split("\n")
+
+	// Pass 1: collect candidate labels. Walk lines tracking the enclosing
+	// function; for each line, find label-introducing contexts and register
+	// any counter-suffixed identifier seen in them.
+	var currentFunc = ""
+	for line in lines 'scanLines'
+		let funcName = extractTopLevelFuncName(line)
+		if not funcName.isEmpty() 'inFunc'
+			currentFunc = funcName
+			continue
+		end 'inFunc'
+		collectLabelsFromLine(line, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+	end 'scanLines'
+
+	if renames.count() == 0 'nothingToDo'
+		return text
+	end 'nothingToDo'
+
+	// Pass 2: rewrite. Walk lines again, replacing identifier-runs that have
+	// a rename map entry. Identifier-runs include dots and dashes so that
+	// `<funcQual>.<label>` forms (e.g. `main.__range_panic_3`) get matched
+	// as a single token. Tokens that aren't in the map pass through
+	// unchanged.
+	var out = ""
+	let lineCount = lines.count()
+	for idx in 0 upto lineCount 'eachLine'
+		if idx > 0 'sep'
+			out.append("\n")
+		end 'sep'
+		let line = try lines.get(idx) otherwise panic("stabilizeLabels: idx in range but lines.get failed")
+		appendRewrittenLine(out, line: line, renames: renames)
+	end 'eachLine'
+	return out
+end 'stabilizeLabels'
+
+// If `line` is a top-level function header `  func @<name>(`, return the
+// name. Otherwise return "". Indent of exactly two spaces matches every
+// printer's emit shape.
+function extractTopLevelFuncName(line String) returns String
+	let marker = "  func @"
+	if not line.startsWith(marker) 'noMatch'
+		return ""
+	end 'noMatch'
+	var name = ""
+	var pastMarker = 0
+	let markerLen = marker.count()
+	for c in line 'eachChar'
+		if pastMarker < markerLen 'inMarker'
+			pastMarker = pastMarker + 1
+			continue
+		end 'inMarker'
+		if isIdentChar(c) 'isIdent'
+			name.append(c.toString())
+		end 'isIdent' else 'notIdent'
+			break
+		end 'notIdent'
+	end 'eachChar'
+	return name
+end 'extractTopLevelFuncName'
+
+// Walk `line` and look for the contexts that introduce or reference a
+// label-like identifier:
+//   - Block headers: line matches `^  <ident>:` (2-space indent).
+//   - `x64.label <name>` — explicit label-def op (target dialect).
+//   - `{var = NAME}` — Maxon-dialect variable decl attribute.
+//   - `memref.store %X, NAME`, `memref.load NAME`, `maxon.struct_var_ref NAME` —
+//     variable refs in Standard/Maxon dialects (no explicit decl; first use
+//     introduces the variable).
+//   - `maxon.scope_end [a, b, c]` — variable cleanup list.
+//   - `x64.j<cond> NAME`, `x64.jmp NAME`, `cf.br NAME`, `maxon.br NAME` —
+//     branch targets (bare or function-qualified `<func>.<name>`).
+//   - `then: NAME` / `else: NAME` — cond_br arms in MIR/Standard dialects.
+//   - `lea_symdata <reg>, [NAME]` / `lea_rdata <reg>, [NAME]` — module-scoped
+//     data labels (real symdata/rdata symbols).
+//
+// Each registered identifier that has a `<base>_<digits>` shape becomes a
+// renumbering candidate. Sub-label suffixes are stripped (`k_15.cmp0` →
+// register `k_15`); the substitution pass in Pass 2 preserves the `.cmp0`
+// portion verbatim around the renumbered base.
+function collectLabelsFromLine(line String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	// Block header: `^  <ident>:` (exactly two leading spaces, identifier,
+	// colon, then end of line / whitespace).
+	if line.startsWith("  ") and not line.startsWith("    ") 'blockHeaderShape'
+		let headerName = extractBlockHeader(line)
+		if not headerName.isEmpty() 'isHeader'
+			registerCandidate(headerName, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		end 'isHeader'
+	end 'blockHeaderShape'
+
+	// Token-driven contexts: walk the line once, collecting identifier-runs
+	// and inspecting the small bit of context (preceding marker phrase or
+	// surrounding punctuation) that follows each.
+	scanLineForContextualLabels(line, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+end 'collectLabelsFromLine'
+
+// Pull the block-header name from `  <ident>:` lines. Returns "" if the
+// line doesn't match the expected shape.
+//
+// State machine over the chars:
+//   0 = expect first space; 1 = expect second space;
+//   2 = collecting identifier; 3 = saw colon, expecting only whitespace.
+function extractBlockHeader(line String) returns String
+	var state = 0
+	var name = ""
+	for c in line 'walk'
+		if state == 0 'wantSp1'
+			if c != ' ' 'notSp'
+				return ""
+			end 'notSp'
+			state = 1
+			continue
+		end 'wantSp1'
+		if state == 1 'wantSp2'
+			if c != ' ' 'notSp2'
+				return ""
+			end 'notSp2'
+			state = 2
+			continue
+		end 'wantSp2'
+		if state == 2 'collectName'
+			if isIdentChar(c) 'isIdent'
+				name.append(c.toString())
+				continue
+			end 'isIdent'
+			if c == ':' 'colon'
+				state = 3
+				continue
+			end 'colon'
+			return ""
+		end 'collectName'
+		if state == 3 'afterColon'
+			if c != ' ' and c != '\t' 'nonWs'
+				return ""
+			end 'nonWs'
+			continue
+		end 'afterColon'
+	end 'walk'
+	if state == 3 and not name.isEmpty() 'valid'
+		return name
+	end 'valid'
+	return ""
+end 'extractBlockHeader'
+
+// Walk identifier-runs in `line` and for each, look at the small bit of
+// surrounding context (the byte sequence immediately before the run) to
+// decide whether it's a label-introducing context. This handles every
+// non-block-header context in one pass.
+function scanLineForContextualLabels(line String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	// We accumulate a moving window: the last 32 characters before the
+	// current position. When we hit the start of an identifier-run we
+	// classify the run by inspecting the window's suffix.
+	//
+	// We also track whether we're inside `[...]` brackets so that
+	// identifiers like `[__panic_msg_0]` get classified as data labels.
+	var bracketDepth = 0
+	var token = ""
+	var precedingWindow = ""
+	let windowMax = 32
+	for c in line 'eachChar'
+		if isIdentChar(c) 'identChar'
+			token.append(c.toString())
+		end 'identChar' else 'delim'
+			if not token.isEmpty() 'flush'
+				classifyAndRegister(token, precedingWindow: precedingWindow, bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+				token = ""
+			end 'flush'
+			if c == '[' 'openBracket'
+				bracketDepth = bracketDepth + 1
+			end 'openBracket'
+			if c == ']' 'closeBracket'
+				if bracketDepth > 0 'depthOK'
+					bracketDepth = bracketDepth - 1
+				end 'depthOK'
+			end 'closeBracket'
+		end 'delim'
+		// Maintain the trailing window.
+		precedingWindow.append(c.toString())
+		if precedingWindow.count() > windowMax 'trim'
+			precedingWindow = sliceLast(precedingWindow, count: windowMax)
+		end 'trim'
+	end 'eachChar'
+	if not token.isEmpty() 'flushTail'
+		classifyAndRegister(token, precedingWindow: precedingWindow, bracketDepth: bracketDepth, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+	end 'flushTail'
+end 'scanLineForContextualLabels'
+
+// Classify `token` based on the text immediately before it. The window
+// holds the most recent ~32 characters consumed before this token began.
+function classifyAndRegister(token String, precedingWindow String, bracketDepth BracketDepth, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	// Data label context: identifier inside `[...]` brackets after a
+	// `lea_symdata`/`lea_rdata` op. The op + register precedes the `[`,
+	// so we check the window for those markers.
+	if bracketDepth > 0 'inBrackets'
+		if precedingWindow.contains("lea_symdata") or precedingWindow.contains("lea_rdata") 'isDataLabel'
+			registerCandidateInScope(token, scope: MODULE_SCOPE, renames: renames, nextNum: nextNum)
+			return
+		end 'isDataLabel'
+	end 'inBrackets'
+
+	// Branch target context: token follows `x64.j<cond> `, `x64.jmp `,
+	// `cf.br `, `maxon.br `. The space-separated layout in the printer
+	// means the marker ends in a space; the window's last few chars are
+	// the marker.
+	if endsWithBranchMarker(precedingWindow) 'isBranchTarget'
+		registerBranchTarget(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isBranchTarget'
+
+	// `then: NAME` / `else: NAME` inside `cond_br`.
+	if endsWithCondBrArm(precedingWindow) 'isCondBrArm'
+		registerBranchTarget(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isCondBrArm'
+
+	// `x64.label NAME` — explicit label def.
+	if endsWithLabelDef(precedingWindow) 'isLabelDef'
+		registerCandidate(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isLabelDef'
+
+	// `{var = NAME}` — variable attribute.
+	if endsWithVarAttr(precedingWindow) 'isVarAttr'
+		registerCandidate(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isVarAttr'
+
+	// `memref.store %X, NAME` / `memref.load NAME` /
+	// `maxon.struct_var_ref NAME` — variable refs.
+	if endsWithMemRefVar(precedingWindow) 'isMemRefVar'
+		registerCandidate(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isMemRefVar'
+
+	// `maxon.scope_end [a, b, c]` — variable cleanup. Detect by being
+	// inside brackets following a `scope_end` marker.
+	if bracketDepth > 0 and precedingWindow.contains("scope_end") 'isScopeEnd'
+		registerCandidate(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+		return
+	end 'isScopeEnd'
+end 'classifyAndRegister'
+
+function endsWithBranchMarker(window String) returns bool
+	// Branch ops always end with `<op> ` (a literal space) immediately
+	// before the target name. We enumerate the known op suffixes the
+	// printers emit:
+	//   - `cf.br ` / `maxon.br ` for the Standard / Maxon dialects.
+	//   - `x64.jmp ` and `x64.j<cond> ` for the x64 dialect, with conds
+	//     drawn from the small fixed set the codegen emits.
+	for suffix in branchMarkerSuffixes() 'eachSuffix'
+		if window.endsWith(suffix) 'match'
+			return true
+		end 'match'
+	end 'eachSuffix'
+	return false
+end 'endsWithBranchMarker'
+
+// The full set of `<op> ` opcode-suffix strings the printer emits in front
+// of a branch target. Listed exhaustively so endsWithBranchMarker doesn't
+// have to scan for a generic shape; the conditions are a closed set in the
+// x64 codegen, and the dialect-prefixed forms are a closed set in the
+// Standard / Maxon dialects.
+function branchMarkerSuffixes() returns StringArray
+	var arr = StringArray.create()
+	arr.push("cf.br ")
+	arr.push("maxon.br ")
+	arr.push("x64.jmp ")
+	arr.push("x64.je ")
+	arr.push("x64.jne ")
+	arr.push("x64.jl ")
+	arr.push("x64.jle ")
+	arr.push("x64.jg ")
+	arr.push("x64.jge ")
+	arr.push("x64.jz ")
+	arr.push("x64.jnz ")
+	arr.push("x64.ja ")
+	arr.push("x64.jae ")
+	arr.push("x64.jb ")
+	arr.push("x64.jbe ")
+	arr.push("x64.js ")
+	arr.push("x64.jns ")
+	arr.push("x64.jp ")
+	arr.push("x64.jnp ")
+	arr.push("x64.jo ")
+	arr.push("x64.jno ")
+	arr.push("x64.jc ")
+	arr.push("x64.jnc ")
+	return arr
+end 'branchMarkerSuffixes'
+
+function endsWithCondBrArm(window String) returns bool
+	return window.endsWith("then: ") or window.endsWith("else: ")
+end 'endsWithCondBrArm'
+
+function endsWithLabelDef(window String) returns bool
+	return window.endsWith("x64.label ")
+end 'endsWithLabelDef'
+
+function endsWithVarAttr(window String) returns bool
+	// Matches `{var = ` or `{var=`.
+	return window.endsWith("\{var = ") or window.endsWith("\{var=")
+end 'endsWithVarAttr'
+
+function endsWithMemRefVar(window String) returns bool
+	if window.endsWith("memref.load ") or window.endsWith("maxon.struct_var_ref ") 'loadOrRef'
+		return true
+	end 'loadOrRef'
+	// `memref.store %X, NAME` — the marker is `, ` after the store value.
+	// Distinguishing `, ` after a store from `, ` in other contexts is
+	// only safe if `memref.store` appears earlier in the window.
+	return window.endsWith(", ") and window.contains("memref.store")
+end 'endsWithMemRefVar'
+
+// Walk `line` and append it to `out`, emitting each identifier-run via the
+// rename map (or unchanged if no rename was registered). Delimiters pass
+// through verbatim. Identifier-runs are the same shape as in Pass 1.
+function appendRewrittenLine(out String, line String, renames LabelRenameMap)
+	var token = ""
+	for c in line 'eachChar'
+		if isIdentChar(c) 'ident'
+			token.append(c.toString())
+		end 'ident' else 'delim'
+			if not token.isEmpty() 'flush'
+				out.append(rewriteToken(token, renames: renames))
+				token = ""
+			end 'flush'
+			out.append(c.toString())
+		end 'delim'
+	end 'eachChar'
+	if not token.isEmpty() 'flushTail'
+		out.append(rewriteToken(token, renames: renames))
+	end 'flushTail'
+end 'appendRewrittenLine'
+
+// Substitute `token` via the rename map, with special handling for compound
+// tokens that have a counter-suffixed prefix followed by `.<sub>` sub-label
+// suffixes (e.g. `k_15.cmp0` → `<rename of k_15>.cmp0`). Try the whole
+// token first, then progressively shorter prefixes split at each `.` from
+// right to left, preferring the longest matching prefix.
+function rewriteToken(token String, renames LabelRenameMap) returns String
+	let direct = try renames.get(token) otherwise ""
+	if not direct.isEmpty() 'gotIt'
+		return direct
+	end 'gotIt'
+	let startIdx = token.startIndex()
+	let endIdx = token.endIndex()
+	var idx = endIdx.clone()
+	while idx != startIdx 'walkBack'
+		idx = try token.indexBefore(idx) otherwise break
+		if token.charAt(idx) != '.' 'notDot'
+			continue
+		end 'notDot'
+		let prefix = token.slice(startIdx, endIndex: idx)
+		let prefixRename = try renames.get(prefix) otherwise ""
+		if not prefixRename.isEmpty() 'foundPrefix'
+			// Append the `.<rest>` tail to the renamed prefix.
+			let tail = token.slice(idx, endIndex: endIdx)
+			return "{prefixRename}{tail}"
+		end 'foundPrefix'
+	end 'walkBack'
+	return token
+end 'rewriteToken'
+
+// Chars allowed inside an identifier-run for the purposes of stabilizeLabels.
+// Function names can also start with a digit when synthesized by the batched
+// test rewriter (e.g. `1-Logic.storeAndCheck`), but the digit is just another
+// alphanumeric — no special start-char logic needed.
+function isIdentChar(c Character) returns bool
+	return Ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-'
+end 'isIdentChar'
+
+// Register a token discovered in a function-scoped definition context. If
+// the token doesn't end in `_<digits>` it's not a counter-suffixed label
+// and we leave it alone. If the token has a `<base>_<digits>.<sub>` shape
+// (sub-label suffix), we register the `<base>_<digits>` prefix and let
+// rewriteToken splice the `.<sub>` portion back at substitution time.
+function registerCandidate(token String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	if currentFunc.isEmpty() 'noFunc'
+		return
+	end 'noFunc'
+	registerCandidateInScope(token, scope: currentFunc, renames: renames, nextNum: nextNum)
+end 'registerCandidate'
+
+// Register a token already known to be in module scope (a data label).
+function registerCandidateInScope(token String, scope String, renames LabelRenameMap, nextNum NextIndexMap)
+	// Whole-token form first.
+	let head = trailingDigitsHead(token)
+	if not head.isEmpty() 'whole'
+		assignRename(scope: scope, original: token, baseName: head, renames: renames, nextNum: nextNum)
+		return
+	end 'whole'
+	// Sub-label form: split at the first `.`, register the prefix portion
+	// if IT is counter-suffixed (`k_15.cmp0` → register `k_15`).
+	let dotIdx = try token.findFirst(".") otherwise return
+	let prefix = token.slice(token.startIndex(), endIndex: dotIdx)
+	let prefixHead = trailingDigitsHead(prefix)
+	if prefixHead.isEmpty() 'noPrefixHead'
+		return
+	end 'noPrefixHead'
+	assignRename(scope: scope, original: prefix, baseName: prefixHead, renames: renames, nextNum: nextNum)
+end 'registerCandidateInScope'
+
+// Register a branch target. Targets can be bare (function-local) or
+// function-qualified (`<func>.<name>`), and may have sub-label suffixes
+// (`<func>.<name>_<N>.<sub>`). The function qualifier becomes the scope;
+// otherwise the enclosing function is the scope. We walk the dots in the
+// target from right to left; for each candidate split, the part after the
+// dot — possibly minus its own first sub-label suffix — must be a counter-
+// suffixed identifier for the split to be valid. The first valid split
+// wins; the part before the dot is the scope.
+function registerBranchTarget(target String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	let startIdx = target.startIndex()
+	let endIdx = target.endIndex()
+	var idx = endIdx.clone()
+	while idx != startIdx 'walkBack'
+		idx = try target.indexBefore(idx) otherwise break
+		if target.charAt(idx) != '.' 'notDot'
+			continue
+		end 'notDot'
+		let scope = target.slice(startIdx, endIndex: idx)
+		let afterStart = try target.indexAfter(idx) otherwise continue
+		let after = target.slice(afterStart, endIndex: endIdx)
+
+		// Direct match: `after` ends in `_<digits>`.
+		let head = trailingDigitsHead(after)
+		if not head.isEmpty() 'directLabel'
+			if not scope.isEmpty() 'haveScope'
+				assignRename(scope: scope, original: after, baseName: head, renames: renames, nextNum: nextNum)
+			end 'haveScope'
+			return
+		end 'directLabel'
+
+		// Sub-label form: `after` is `<base>_<digits>.<sub>` — find the
+		// first `.` and try the prefix portion.
+		let subDotIdx = try after.findFirst(".") otherwise continue
+		let afterPrefix = after.slice(after.startIndex(), endIndex: subDotIdx)
+		let afterPrefixHead = trailingDigitsHead(afterPrefix)
+		if not afterPrefixHead.isEmpty() 'prefixLabel'
+			if not scope.isEmpty() 'haveScope2'
+				assignRename(scope: scope, original: afterPrefix, baseName: afterPrefixHead, renames: renames, nextNum: nextNum)
+			end 'haveScope2'
+			return
+		end 'prefixLabel'
+	end 'walkBack'
+
+	// No dot found → bare label. Register against the enclosing function.
+	registerCandidate(target, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
+end 'registerBranchTarget'
+
+// Assign a stable rename for (scope, original) if we haven't seen it
+// before. The next stable number per (scope, baseName) is monotonic per
+// stabilizeLabels call and starts at 0.
+function assignRename(scope String, original String, baseName String, renames LabelRenameMap, nextNum NextIndexMap)
+	let key = "{scope}|{original}"
+	if renames.contains(key) 'alreadySeen'
+		return
+	end 'alreadySeen'
+	let nextKey = "{scope}|{baseName}"
+	let stable = try nextNum.get(nextKey) otherwise 0
+	nextNum.upsert(nextKey, value: stable + 1)
+	let rewritten = "{baseName}_{stable}"
+	// Insert two map entries: one keyed by the scope-qualified original (for
+	// disambiguating per-scope lookups in the future) and one keyed by just
+	// the original token (for the bare lookup used by appendRewrittenLine).
+	// In practice the original names produced by counter-based labels are
+	// unique across the whole printed text — module-wide and function-wide
+	// counters mint distinct numbers — so the bare-key version doesn't
+	// collide between scopes for *different* renumberings.
+	try renames.insert(original.clone(), value: rewritten) otherwise ignore
+	try renames.insert(key.clone(), value: rewritten) otherwise ignore
+end 'assignRename'
+
+// If `token` ends in `_<digits>` (at least one digit), return everything
+// before the underscore that starts the suffix. Otherwise return "".
+// Examples:
+//   "__panic_msg_47"     → "__panic_msg"
+//   "main.__range_ok_0"  → "main.__range_ok"
+//   "main"               → ""
+//   "skip_buf_0_x"       → "" (does not end in digits)
+//   "42"                 → "" (entire token is digits — no prefix)
+//
+// One-pass: track the start position of the latest `_<digits>+` run; if
+// it's still active at end-of-token, slice the head before it.
+function trailingDigitsHead(token String) returns String
+	if token.isEmpty() 'empty'
+		return ""
+	end 'empty'
+
+	var charsBefore = 0
+	var runStart = 0
+	var runIsAllDigits = false
+	var runHadDigit = false
+	for c in token 'walk'
+		if c == '_' 'underscore'
+			runStart = charsBefore
+			runIsAllDigits = true
+			runHadDigit = false
+		end 'underscore' else 'notUnderscore'
+			if runIsAllDigits 'inCandidate'
+				if Ascii.isDigit(c) 'digit'
+					runHadDigit = true
+				end 'digit' else 'nonDigit'
+					runIsAllDigits = false
+					runHadDigit = false
+				end 'nonDigit'
+			end 'inCandidate'
+		end 'notUnderscore'
+		charsBefore = charsBefore + 1
+	end 'walk'
+
+	if not runIsAllDigits 'notAtEnd'
+		return ""
+	end 'notAtEnd'
+	if not runHadDigit 'noDigitInRun'
+		return ""
+	end 'noDigitInRun'
+	if runStart == 0 'noHead'
+		// Token like "_42" — head before underscore is empty, no prefix.
+		return ""
+	end 'noHead'
+	return sliceFirst(token, count: runStart)
+end 'trailingDigitsHead'
+
+// Return the first `count` grapheme clusters of `s`. Callers always pass
+// values in `[0, s.count()]`, so an out-of-range index is an invariant
+// violation rather than recoverable error.
+function sliceFirst(s String, count GraphemeCount) returns String
+	if count == 0 'empty'
+		return ""
+	end 'empty'
+	let start = s.startIndex()
+	let endIdx = try advanceIndex(s, start: start, count: count) otherwise panic("sliceFirst: count exceeds s.count() — caller invariant")
+	return s.slice(start, endIndex: endIdx)
+end 'sliceFirst'
+
+// Return the last `count` grapheme clusters of `s`. Like sliceFirst but
+// from the right edge.
+function sliceLast(s String, count GraphemeCount) returns String
+	let total = s.count()
+	if count >= total 'all'
+		return s
+	end 'all'
+	let start = s.startIndex()
+	let skipCount = total - count
+	let cutIdx = try advanceIndex(s, start: start, count: skipCount) otherwise panic("sliceLast: skipCount exceeds s.count() — caller invariant")
+	return s.slice(cutIdx, endIndex: s.endIndex())
+end 'sliceLast'
+
+function advanceIndex(s String, start StringIndex, count GraphemeCount) returns StringIndex throws StringError
+	var idx = start
+	var remaining = count
+	while remaining > 0 'step'
+		idx = try s.indexAfter(idx)
+		remaining = remaining - 1
+	end 'step'
+	return idx
+end 'advanceIndex'

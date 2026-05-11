@@ -326,7 +326,12 @@ export function splitBatchedIr(archIr String, tests SpecTestArray, specName Stri
 			sb = "{sb}{part}"
 		end 'eachPart'
 		sb = "{sb}\}"
-		slices.push(BatchIrSlice.create(entry.testName, ir: sb))
+		// Re-stabilize counter-based label numbering against this test's slice
+		// of functions only. The batched IR uses module-wide counters (e.g.
+		// `__panic_msg_47`) that depend on every other test in the batch;
+		// restabilizing here makes the numbers depend only on this test's IR.
+		let stable = stabilizeLabels(sb)
+		slices.push(BatchIrSlice.create(entry.testName, ir: stable))
 	end 'eachTest'
 
 	return slices

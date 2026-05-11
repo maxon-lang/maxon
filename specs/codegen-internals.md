@@ -274,38 +274,38 @@ module {
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.literal {value = 77 : i64}
     %11 = maxon.try_call @__Array_i64.set %8, %9, %10
-    maxon.assign %11 {var = __try_error_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
     %13 = maxon.binop %11, %12 {op = ne}
-    maxon.cond_br %13 [then: otherwise_panic_1, else: otherwise_continue_2]
-  otherwise_panic_1:
+    maxon.cond_br %13 [then: otherwise_panic_0, else: otherwise_continue_0]
+  otherwise_panic_0:
     maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:4: test invariant: set OOB"
-  otherwise_continue_2:
+  otherwise_continue_0:
     %14 = maxon.struct_var_ref arr
     %15 = maxon.literal {value = 0 : i64}
     %18, %17 = maxon.try_call @__Array_i64.get %14, %15
     %19 = maxon.literal {value = 0 : i64}
-    maxon.assign %19 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %18 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %19 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %20 = maxon.literal {value = 0 : i64}
     %21 = maxon.binop %17, %20 {op = ne}
-    maxon.cond_br %21 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %22 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %22 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %23 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.cond_br %21 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %22 = maxon.var_ref {var = __try_default_0} {type = i64}
+    maxon.assign %22 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_0
+  otherwise_default_continue_0:
+    %23 = maxon.var_ref {var = __try_result_0} {type = i64}
     %24 = maxon.literal {value = 0 : i64}
     %25 = maxon.binop %23, %24 {op = lt}
     %26 = maxon.literal {value = 4294967295 : i64}
     %27 = maxon.binop %23, %26 {op = gt}
     %28 = maxon.binop %25, %27 {op = or}
-    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
+    maxon.cond_br %28 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_8:
-    maxon.scope_end [arr, __try_error_3, __try_default_5, __try_result_4]
+  __range_ok_0:
+    maxon.scope_end [arr, __try_error_0, __try_default_0, __try_result_0]
     maxon.return %23
   }
 }
@@ -323,18 +323,18 @@ module {
     %8 = std.ptr_to_i64 %7
     %9 = arith.constant {value = 1 : i64}
     %10 = std.call_runtime @mm_alloc %6, %8, %9
-    memref.store %10, __struct_6
-    %11 = memref.load __struct_6 : i64
+    memref.store %10, __struct_0
+    %11 = memref.load __struct_0 : i64
     memref.store_indirect %1, %11+0
-    %12 = memref.load __struct_6 : i64
+    %12 = memref.load __struct_0 : i64
     memref.store_indirect %2, %12+8
-    %13 = memref.load __struct_6 : i64
+    %13 = memref.load __struct_0 : i64
     memref.store_indirect %3, %13+16
-    %14 = memref.load __struct_6 : i64
+    %14 = memref.load __struct_0 : i64
     memref.store_indirect %4, %14+24
-    %15 = memref.load __struct_6 : i64
+    %15 = memref.load __struct_0 : i64
     memref.store_indirect %5, %15+32
-    %16 = memref.load __struct_6 : i64
+    %16 = memref.load __struct_0 : i64
     %17 = memref.load_indirect %16+24
     %18 = arith.constant {value = 0 : i64}
     %19 = memref.lea_symdata __mm_panic_element_size_zero
@@ -346,7 +346,7 @@ module {
     %24 = arith.constant {value = 2 : i64}
     %25 = std.call_runtime @mm_alloc %21, %23, %24
     memref.store %25, arr
-    %26 = memref.load __struct_6 : i64
+    %26 = memref.load __struct_0 : i64
     %27 = memref.load arr : i64
     memref.store_indirect %26, %27+0
     std.call_runtime @mm_incref %26
@@ -365,38 +365,38 @@ module {
     %37 = func.try_call @__Array_i64.set %36, %34, %35
     %38 = arith.constant {value = 0 : i64}
     %39 = arith.cmpi ne %37, %38
-    cf.cond_br %39 [then: otherwise_panic_1, else: otherwise_continue_2]
-  otherwise_panic_1:
+    cf.cond_br %39 [then: otherwise_panic_0, else: otherwise_continue_0]
+  otherwise_panic_0:
     %40 = memref.lea_symdata __panic_msg_0
     %41 = std.ptr_to_i64 %40
     std.call_runtime @mrt_panic %41
-  otherwise_continue_2:
+  otherwise_continue_0:
     %42 = arith.constant {value = 0 : i64}
     %43 = memref.load arr : i64
     %44, %45 = func.try_call @__Array_i64.get %43, %42
     %46 = arith.constant {value = 0 : i64}
-    memref.store %46, __try_default_5
-    memref.store %44, __try_result_4
+    memref.store %46, __try_default_0
+    memref.store %44, __try_result_0
     %47 = arith.constant {value = 0 : i64}
     %48 = arith.cmpi ne %45, %47
-    cf.cond_br %48 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %49 = memref.load __try_default_5 : i64
-    memref.store %49, __try_result_4
-    cf.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %50 = memref.load __try_result_4 : i64
+    cf.cond_br %48 [then: otherwise_default_error_0, else: otherwise_default_continue_0]
+  otherwise_default_error_0:
+    %49 = memref.load __try_default_0 : i64
+    memref.store %49, __try_result_0
+    cf.br otherwise_default_continue_0
+  otherwise_default_continue_0:
+    %50 = memref.load __try_result_0 : i64
     %51 = arith.constant {value = 0 : i64}
     %52 = arith.cmpi lt %50, %51
     %53 = arith.constant {value = 4294967295 : i64}
     %54 = arith.cmpi gt %50, %53
     %55 = arith.ori1 %52, %54
-    cf.cond_br %55 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
+    cf.cond_br %55 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %56 = memref.lea_symdata __panic_msg_1
     %57 = std.ptr_to_i64 %56
     std.call_runtime @mrt_panic %57
-  __range_ok_8:
+  __range_ok_0:
     %58 = memref.load arr : i64
     std.call_runtime_if_nonnull @mm_decref %58
     func.return %50
@@ -512,12 +512,12 @@ module {
     x64.call __Array_i64.set
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_continue_2
-  otherwise_panic_1:
+    x64.je main.otherwise_continue_0
+  otherwise_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  otherwise_continue_2:
+  otherwise_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
     x64.xor edx, edx
@@ -527,25 +527,25 @@ module {
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je main.otherwise_default_continue_7
-  otherwise_default_error_6:
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-32], rax
-    x64.jmp main.otherwise_default_continue_7
-  otherwise_default_continue_7:
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
     x64.mov rax, [rbp-32]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_8
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_8
-    x64.jmp main.__range_ok_8
-  __range_panic_8:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_8:
+  __range_ok_0:
     x64.mov rbx, [rbp-16]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
@@ -570,9 +570,9 @@ module {
     x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
+    x64.jz __nonnull_skip_0
     x64.call mm_decref
-    x64.label __nonnull_skip_2
+    x64.label __nonnull_skip_0
     x64.jmp __destruct___ManagedMemory.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
@@ -599,9 +599,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
+    x64.jz __nonnull_skip_0
     x64.call mm_decref
-    x64.label __nonnull_skip_3
+    x64.label __nonnull_skip_0
     x64.jmp __destruct___Array_i64.done
   done:
     x64.epilogue
