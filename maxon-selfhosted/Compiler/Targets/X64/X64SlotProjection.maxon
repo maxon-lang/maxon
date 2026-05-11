@@ -1,0 +1,256 @@
+// X64-specific slot read/write/escape projection and op rewriting for the
+// shared SlotLivenessRenumber pass.
+
+// Build the CFG + RPO for `func` and invoke the shared slot-renumber pass.
+// Encapsulating the CFG construction here (rather than inside the shared
+// pass) avoids a bootstrap-compiler bug where two callers both monomorphize
+// `buildIrFunctionCfg` for the same target's OpQuery and trip a
+// duplicate-key in the interface-alias specializer.
+export function renumberX64SlotsForFunction(module TargetModule, func IrFunction)
+	let opQuery = X64OpQuery.create()
+	let cfg = buildIrFunctionCfg(func, module: module, opQuery: opQuery)
+	let entryBlockId = x64GetEntryBlockId(module, func: func)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
+	renumberSlotsForFunction(module, func: func, cfg: cfg, rpo: rpo, projection: X64SlotProjection.create())
+end 'renumberX64SlotsForFunction'
+
+function x64GetEntryBlockId(module TargetModule, func IrFunction) returns BlockId
+	if func.blockRefs.count() == 0 'noBlocks'
+		return 0
+	end 'noBlocks'
+	let blockRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	let entry = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+	return entry.id
+end 'x64GetEntryBlockId'
+
+export type X64SlotProjection implements SlotProjection
+	export let tag RegInt
+
+	// --- Slot projection ---
+
+	function collectReads(module TargetModule, packed OpIndex, reads VarSlotArray)
+		let op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		x64CollectSlotReads(op, reads: reads)
+	end 'collectReads'
+
+	function collectWrites(module TargetModule, packed OpIndex, writes VarSlotArray)
+		let op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		x64CollectSlotWrites(op, writes: writes)
+	end 'collectWrites'
+
+	function collectEscapes(module TargetModule, packed OpIndex, escapes VarSlotArray)
+		let op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		x64CollectSlotEscapes(op, escapes: escapes)
+	end 'collectEscapes'
+
+	function rewriteOp(module TargetModule, packed OpIndex, remap RegIntArray)
+		let op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+		let rewritten = rewriteX64OpSlots(op, remap: remap)
+		try module.x64Ops.set(packed, value: rewritten) otherwise panic("invariant: packed opIdx not in module.x64Ops")
+	end 'rewriteOp'
+
+	// --- Factory ---
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+end 'X64SlotProjection'
+
+// ============================================================
+// Top-level helpers — pure functions over X64Op variants
+// ============================================================
+
+function pushVarSlotArrayInto(src VarSlotArray, dst VarSlotArray)
+	for s in src 'each'
+		dst.push(s)
+	end 'each'
+end 'pushVarSlotArrayInto'
+
+function x64CollectSlotReads(op X64Op, reads VarSlotArray)
+	match op 'check'
+		loadSlot(_, slotIndex) then reads.push(slotIndex)
+		loadF64Slot(slotIndex) then reads.push(slotIndex)
+		syscall(_, _, argSlots) then pushVarSlotArrayInto(argSlots, dst: reads)
+		iatCall(_, _, argSlots) then pushVarSlotArrayInto(argSlots, dst: reads)
+		storeByteOp(baseSlot, offsetSlot, byteSlot) then collectStoreByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
+		loadByteOp(_, baseSlot, offsetSlot) then collectLoadByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot)
+		memcpyOp(dstSlot, srcSlot, lenSlot) then collectMemcpyReads(reads, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		// Catch-all: every X64Op variant not matched above reads zero slots.
+		// Listed as a series of disjoint ranges around the matched arms.
+		prologue to movRegImm32 then break 'check'
+		movSlot then break 'check'
+		addRegReg to jmp then break 'check'
+		movF64Slot then break 'check'
+		movF64Rdata to callDirect then break 'check'
+		globalAddr to stackAddrOp then break 'check'
+		movRegReg to lockXaddMemReg then break 'check'
+	end 'check'
+end 'x64CollectSlotReads'
+
+function collectStoreByteReads(reads VarSlotArray, baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot)
+	reads.push(baseSlot)
+	reads.push(offsetSlot)
+	reads.push(byteSlot)
+end 'collectStoreByteReads'
+
+function collectLoadByteReads(reads VarSlotArray, baseSlot VarSlot, offsetSlot VarSlot)
+	reads.push(baseSlot)
+	reads.push(offsetSlot)
+end 'collectLoadByteReads'
+
+function collectMemcpyReads(reads VarSlotArray, dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
+	reads.push(dstSlot)
+	reads.push(srcSlot)
+	reads.push(lenSlot)
+end 'collectMemcpyReads'
+
+function x64CollectSlotWrites(op X64Op, writes VarSlotArray)
+	match op 'check'
+		movSlot(slotIndex, _) then writes.push(slotIndex)
+		movF64Slot(slotIndex) then writes.push(slotIndex)
+		syscall(resultSlot, _, _) then writes.push(resultSlot)
+		iatCall(resultSlot, _, _) then writes.push(resultSlot)
+		globalAddr(resultSlot, _) then writes.push(resultSlot)
+		stackAddrOp(resultSlot, _) then writes.push(resultSlot)
+		loadByteOp(resultSlot, _, _) then writes.push(resultSlot)
+		prologue to movRegImm32 then break 'check'
+		loadSlot to jmp then break 'check'
+		loadF64Slot to callDirect then break 'check'
+		storeByteOp then break 'check'
+		memcpyOp to lockXaddMemReg then break 'check'
+	end 'check'
+end 'x64CollectSlotWrites'
+
+function x64CollectSlotEscapes(op X64Op, escapes VarSlotArray)
+	match op 'check'
+		stackAddrOp(_, targetSlot) then escapes.push(targetSlot)
+		prologue to globalAddr then break 'check'
+		storeByteOp to lockXaddMemReg then break 'check'
+	end 'check'
+end 'x64CollectSlotEscapes'
+
+function remapSlot(slot VarSlot, remap RegIntArray) returns VarSlot
+	let mapped = try remap.get(slot) otherwise return slot
+	if mapped < 0 'unused'
+		return slot
+	end 'unused'
+	return mapped
+end 'remapSlot'
+
+function remapVarSlotArray(arr VarSlotArray, remap RegIntArray) returns VarSlotArray
+	var out = VarSlotArray.create()
+	for s in arr 'each'
+		out.push(remapSlot(s, remap: remap))
+	end 'each'
+	return out
+end 'remapVarSlotArray'
+
+// Rewrite op slot indices via `remap`. Returns a fresh op for slot-bearing
+// variants; returns the input op for everything else.
+//
+// IMPORTANT: We do NOT use a `prologue to ... gives op` range catch-all for
+// the non-slot variants. Empirically that produces a "default-valued" op
+// (the union discriminant survives but payload fields are zeroed) — the
+// `value` immediate on `addRegImm` was getting clobbered to 0, which broke
+// pointer arithmetic in the emitted asm. Instead, every catch-all variant
+// is enumerated by name with `gives op`, so Maxon binds `op` as the original
+// value for that specific pattern, not as a discriminant-only reconstruction.
+function rewriteX64OpSlots(op X64Op, remap RegIntArray) returns X64Op
+	return match op 'check'
+		movSlot(slotIndex, srcReg) gives X64Op.movSlot(remapSlot(slotIndex, remap: remap), srcReg: srcReg)
+		loadSlot(destReg, slotIndex) gives X64Op.loadSlot(destReg, slotIndex: remapSlot(slotIndex, remap: remap))
+		movF64Slot(slotIndex) gives X64Op.movF64Slot(remapSlot(slotIndex, remap: remap))
+		loadF64Slot(slotIndex) gives X64Op.loadF64Slot(remapSlot(slotIndex, remap: remap))
+		syscall(resultSlot, number, argSlots) gives X64Op.syscall(remapSlot(resultSlot, remap: remap), number: number, argSlots: remapVarSlotArray(argSlots, remap: remap))
+		iatCall(resultSlot, slotIndex, argSlots) gives X64Op.iatCall(remapSlot(resultSlot, remap: remap), slotIndex: slotIndex, argSlots: remapVarSlotArray(argSlots, remap: remap))
+		globalAddr(resultSlot, name) gives X64Op.globalAddr(remapSlot(resultSlot, remap: remap), name: name)
+		stackAddrOp(resultSlot, targetSlot) gives X64Op.stackAddrOp(remapSlot(resultSlot, remap: remap), targetSlot: remapSlot(targetSlot, remap: remap))
+		storeByteOp(baseSlot, offsetSlot, byteSlot) gives X64Op.storeByteOp(remapSlot(baseSlot, remap: remap), offsetSlot: remapSlot(offsetSlot, remap: remap), byteSlot: remapSlot(byteSlot, remap: remap))
+		loadByteOp(resultSlot, baseSlot, offsetSlot) gives X64Op.loadByteOp(remapSlot(resultSlot, remap: remap), baseSlot: remapSlot(baseSlot, remap: remap), offsetSlot: remapSlot(offsetSlot, remap: remap))
+		memcpyOp(dstSlot, srcSlot, lenSlot) gives X64Op.memcpyOp(remapSlot(dstSlot, remap: remap), srcSlot: remapSlot(srcSlot, remap: remap), lenSlot: remapSlot(lenSlot, remap: remap))
+		// Non-slot variants: return the input op unchanged. Per-variant
+		// arms so payload bindings are introduced fresh and `op` evaluates
+		// to the same Op value with its original payload preserved.
+		prologue gives op
+		epilogue gives op
+		ret gives op
+		movRegImm gives op
+		movRegImm32 gives op
+		addRegReg gives op
+		subRegReg gives op
+		addRegImm gives op
+		subRegImm gives op
+		imulRegReg gives op
+		idivRcx gives op
+		iremRcx gives op
+		negReg gives op
+		bitNotReg gives op
+		andRegReg gives op
+		orRegReg gives op
+		xorRegReg gives op
+		shlRegCl gives op
+		sarRegCl gives op
+		shrRegCl gives op
+		cmpRaxRcx gives op
+		testRaxRax gives op
+		condJump gives op
+		jmp gives op
+		movF64Rdata gives op
+		ucomisd gives op
+		subRspImm gives op
+		addRspImm gives op
+		movRspOffsetReg gives op
+		loadRegRbpOffset gives op
+		callDirect gives op
+		movRegReg gives op
+		cmpRegReg gives op
+		cmpRegImm gives op
+		testRegReg gives op
+		cqo gives op
+		idivReg gives op
+		spillToStack gives op
+		reloadFromStack gives op
+		xorRegRegSelf gives op
+		callIndirect gives op
+		xchgRegReg gives op
+		movXmmXmm gives op
+		spillXmmToStack gives op
+		reloadXmmFromStack gives op
+		movXmmRipRel gives op
+		addXmm gives op
+		subXmm gives op
+		mulXmm gives op
+		divXmm gives op
+		sqrtXmm gives op
+		roundXmm gives op
+		ucomisXmm gives op
+		cvtSi2Float gives op
+		cvttFloat2Si gives op
+		cvtSd2Ss gives op
+		cvtSs2Sd gives op
+		movqXmmToGpr gives op
+		movqGprToXmm gives op
+		andMaskRipRel gives op
+		storeIndirect gives op
+		loadIndirect gives op
+		storeIndirectXmm gives op
+		loadIndirectXmm gives op
+		globalLoad gives op
+		globalStore gives op
+		globalLoadXmm gives op
+		globalStoreXmm gives op
+		leaFromStack gives op
+		leaRipRelative gives op
+		leaFuncAddr gives op
+		setcc gives op
+		cmov gives op
+		movsxd gives op
+		movzx32 gives op
+		nullSafeLoad gives op
+		repMovsb gives op
+		repStosq gives op
+		lockIncMemory gives op
+		lockDecMemory gives op
+		lockXaddMemReg gives op
+	end 'check'
+end 'rewriteX64OpSlots'

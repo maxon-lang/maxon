@@ -449,8 +449,30 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   public HashSet<int> StackEligibleStructs { get; } = [];
 
   public void AddFunction(IrFunction<TOp> func) {
+    // Defensive: replace any existing function with the same name in place.
+    // AddFunction has historically allowed silent duplicates, but downstream
+    // passes that use `Functions.ToDictionary(f => f.Name)` crash on them.
+    if (_indexDirty) {
+      // Index is stale — rebuild it so we can do the lookup quickly. This is
+      // worth the cost because the alternative is an O(N) linear scan on
+      // every AddFunction call.
+      EnsureFunctionIndex();
+    }
+    if (_exactIndex.TryGetValue(func.Name, out var existing) && !ReferenceEquals(existing, func)) {
+      // Replace existing function in-place.
+      for (int i = 0; i < Functions.Count; i++) {
+        if (ReferenceEquals(Functions[i], existing)) {
+          Functions[i] = func;
+          break;
+        }
+      }
+      UnindexFunction(existing);
+      IndexFunction(func);
+      _callGraph?.Invalidate();
+      return;
+    }
     Functions.Add(func);
-    if (!_indexDirty) IndexFunction(func);
+    IndexFunction(func);
     _callGraph?.NoteAdded(func);
   }
 

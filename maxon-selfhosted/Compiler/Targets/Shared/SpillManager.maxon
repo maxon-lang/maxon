@@ -294,9 +294,172 @@ end 'computeMaxPressure'
 // Spill slot allocation
 // ============================================================
 
-export function allocateSpillSlots(decision SpillDecision)
-	var nextSlotOffset = 0
+// Two ranges interfere iff some block contains an interval from each whose
+// half-open [startPos, endPos) ranges overlap. Mirrors the SSAColoring
+// interference check.
+function rangesInterfere(a LiveRange, b LiveRange) returns bool
+	for ai in a.intervals 'eachA'
+		for bi in b.intervals 'eachB'
+			if ai.blockId == bi.blockId 'sameBlock'
+				if ai.startPos < bi.endPos and bi.startPos < ai.endPos 'overlap'
+					return true
+				end 'overlap'
+			end 'sameBlock'
+		end 'eachB'
+	end 'eachA'
+	return false
+end 'rangesInterfere'
 
+// Earliest startPos across all of a range's intervals — the global "start
+// time" we sort by for linear-scan.
+function rangeEarliestStart(range LiveRange) returns RegInt
+	var best = i64.max
+	for iv in range.intervals 'each'
+		if iv.startPos < best 'lower'
+			best = iv.startPos
+		end 'lower'
+	end 'each'
+	if best == i64.max 'noIntervals'
+		return 0
+	end 'noIntervals'
+	return best
+end 'rangeEarliestStart'
+
+// Pool of stack slots already assigned by linear-scan, available for reuse.
+// Each entry tracks the most recent occupant of a slot offset; a new range
+// reuses the slot iff it does not interfere with any range that has been
+// assigned to that slot so far. (Slot offsets compress liveness from many
+// non-interfering ranges into one storage location, so we track the FULL
+// set of prior occupants, not just the most recent — sharing slot X among
+// {A, B, C} requires C to interfere with neither A nor B.)
+type SlotPool
+	export var slotOffsets RegIntArray
+	export var slotOccupants LiveRangeArrayArray
+
+	export static function create() returns SlotPool
+		return Self{slotOffsets: RegIntArray.create(), slotOccupants: LiveRangeArrayArray.create()}
+	end 'create'
+end 'SlotPool'
+
+typealias LiveRangeArrayArray = Array with LiveRangeArray
+
+// Try to find an existing slot in `pool` whose occupants don't interfere
+// with `range`. Returns the slot offset, or -1 if none is reusable.
+function findReusableSlot(pool SlotPool, range LiveRange) returns RegInt
+	var i = 0
+	while i < pool.slotOffsets.count() 'scan'
+		let occupants = try pool.slotOccupants.get(i) otherwise panic("invariant: slotOccupants get OOB after count() guard")
+		var compatible = true
+		for occupant in occupants 'checkEach'
+			if rangesInterfere(occupant, b: range) 'conflict'
+				compatible = false
+				break
+			end 'conflict'
+		end 'checkEach'
+		if compatible 'reuse'
+			return try pool.slotOffsets.get(i) otherwise panic("invariant: slotOffsets get OOB after count() guard")
+		end 'reuse'
+		i = i + 1
+	end 'scan'
+	return -1
+end 'findReusableSlot'
+
+// Add `range` as a new occupant of an existing slot at `offset`.
+function recordSlotOccupant(pool SlotPool, offset RegInt, range LiveRange)
+	var i = 0
+	while i < pool.slotOffsets.count() 'scan'
+		let slotOff = try pool.slotOffsets.get(i) otherwise panic("invariant: slotOffsets get OOB after count() guard")
+		if slotOff == offset 'match'
+			var occupants = try pool.slotOccupants.get(i) otherwise panic("invariant: slotOccupants get OOB after count() guard")
+			occupants.push(range)
+			try pool.slotOccupants.set(i, value: occupants) otherwise panic("invariant: slotOccupants set OOB after count() guard")
+			return
+		end 'match'
+		i = i + 1
+	end 'scan'
+	panic("recordSlotOccupant: offset {offset} not found in pool")
+end 'recordSlotOccupant'
+
+// Register a freshly-allocated slot in the pool with `range` as its first occupant.
+function addNewSlot(pool SlotPool, offset RegInt, range LiveRange)
+	pool.slotOffsets.push(offset)
+	var occupants = LiveRangeArray.create()
+	occupants.push(range)
+	pool.slotOccupants.push(occupants)
+end 'addNewSlot'
+
+// Sort spilled ranges by earliest startPos (ascending). Returns a permutation
+// of indices into `ranges`, leaving the input array untouched. Uses insertion
+// sort — spill set sizes here are typically <100, so O(n^2) is fine.
+function sortRangesByStart(ranges LiveRangeArray) returns RegIntArray
+	let count = ranges.count()
+	var order = RegIntArray.create()
+	var i = 0
+	while i < count 'init'
+		order.push(i)
+		i = i + 1
+	end 'init'
+
+	var si = 1
+	while si < count 'sort'
+		let keyIdx = try order.get(si) otherwise panic("invariant: order.get OOB during sort")
+		let keyRange = try ranges.get(keyIdx) otherwise panic("invariant: ranges.get OOB during sort")
+		let keyStart = rangeEarliestStart(keyRange)
+
+		var j = si - 1
+		while j >= 0 'insert'
+			let jIdx = try order.get(j) otherwise break
+			let jRange = try ranges.get(jIdx) otherwise break
+			if rangeEarliestStart(jRange) <= keyStart 'inPlace'
+				break
+			end 'inPlace'
+			try order.set(j + 1, value: jIdx) otherwise panic("invariant: order.set OOB")
+			j = j - 1
+		end 'insert'
+		try order.set(j + 1, value: keyIdx) otherwise panic("invariant: order.set OOB")
+		si = si + 1
+	end 'sort'
+
+	return order
+end 'sortRangesByStart'
+
+// Allocate spill slots for ranges of a single regClass using linear-scan
+// coloring. Returns the (now-bumped) high-water nextSlotOffset.
+function allocateSlotsForClass(ranges LiveRangeArray, decision SpillDecision, nextSlotOffset RegInt) returns RegInt
+	if ranges.count() == 0 'empty'
+		return nextSlotOffset
+	end 'empty'
+
+	let order = sortRangesByStart(ranges)
+	var pool = SlotPool.create()
+	var watermark = nextSlotOffset
+
+	var oi = 0
+	while oi < order.count() 'assign'
+		let rangeIdx = try order.get(oi) otherwise panic("invariant: order.get OOB after count() guard")
+		let range = try ranges.get(rangeIdx) otherwise panic("invariant: ranges.get OOB during assign")
+		let vid = range.valueId
+		let reuseOffset = findReusableSlot(pool, range: range)
+		var chosenOffset = 0
+		if reuseOffset >= 0 'gotReuse'
+			chosenOffset = reuseOffset
+			recordSlotOccupant(pool, offset: chosenOffset, range: range)
+		end 'gotReuse' else 'allocateNew'
+			chosenOffset = watermark
+			watermark = watermark + SPILL_SLOT_SIZE
+			addNewSlot(pool, offset: chosenOffset, range: range)
+		end 'allocateNew'
+
+		if vid < decision.spillSlotAssignment.count() 'inBounds'
+			try decision.spillSlotAssignment.set(vid, value: chosenOffset) otherwise panic("invariant: decision.spillSlotAssignment.set OOB")
+		end 'inBounds'
+		oi = oi + 1
+	end 'assign'
+
+	return watermark
+end 'allocateSlotsForClass'
+
+export function allocateSpillSlots(decision SpillDecision)
 	// Find max valueId to size the assignment array
 	var maxValueId = 0
 	for range in decision.spilledRanges 'findMax'
@@ -310,16 +473,21 @@ export function allocateSpillSlots(decision SpillDecision)
 		decision.spillSlotAssignment.push(RM_NO_STACK_HOME)
 	end 'grow'
 
-	// Assign slots sequentially
-	for range in decision.spilledRanges 'assign'
-		let vid = range.valueId
+	// Partition ranges by regClass. Slots are shared only within a class so
+	// reload-op selection (gpr mov vs xmm movsd) still matches the value at
+	// every use site.
+	var gprRanges = LiveRangeArray.create()
+	var fpRanges = LiveRangeArray.create()
+	for range in decision.spilledRanges 'partition'
+		match range.regClass 'rc'
+			gpr then gprRanges.push(range)
+			fp then fpRanges.push(range)
+		end 'rc'
+	end 'partition'
 
-		if vid < decision.spillSlotAssignment.count() 'inBounds'
-			try decision.spillSlotAssignment.set(vid, value: nextSlotOffset) otherwise panic("invariant: decision.spillSlotAssignment.set OOB")
-		end 'inBounds'
-
-		nextSlotOffset = nextSlotOffset + SPILL_SLOT_SIZE
-	end 'assign'
+	var nextSlotOffset = 0
+	nextSlotOffset = allocateSlotsForClass(gprRanges, decision: decision, nextSlotOffset: nextSlotOffset)
+	nextSlotOffset = allocateSlotsForClass(fpRanges, decision: decision, nextSlotOffset: nextSlotOffset)
 
 	decision.totalSpillSize = nextSlotOffset
 	logDebug(LogCategory.ir, message: () gives "spill-mgr: slots={decision.spilledRanges.count()} totalBytes={nextSlotOffset}")

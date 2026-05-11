@@ -1,0 +1,586 @@
+// Target-agnostic slot liveness analysis and renumbering.
+//
+// After ISel, each backend has assigned stack slots greedily — each new
+// slot request bumps a counter and never reuses prior slots, even when
+// those slots are dead. Most temps generated inside the OS/stdlib lowering
+// helpers die the moment the consuming op is emitted.
+//
+// This pass walks the lowered op stream, builds per-slot liveness
+// intervals (treating slots as pseudo-values), and renumbers slot indices
+// via linear-scan coloring so non-overlapping slots share storage.
+//
+// Slots whose address escapes (`lea`-of-slot constructs) cannot be tracked
+// statically past the address-leak, so they're treated as live across the
+// whole function and never coalesced.
+//
+// Runs after MirTo<Target>Conversion, before the SSA register allocator.
+// The regalloc's own spill slots (`spillToStack`/`reloadFromStack`) use
+// a separate raw-byte-offset namespace and run later, so they don't
+// participate in this pass.
+//
+// Target-specific concerns — projecting an op to its (reads, writes,
+// escapes) slot lists, and rewriting an op with a remapped slot index —
+// are factored out behind the SlotProjection interface.
+
+// ============================================================
+// Target-specific projection interface
+// ============================================================
+
+export interface SlotProjection
+	// Append all slot indices READ by this op to `reads`.
+	function collectReads(module TargetModule, packed OpIndex, reads VarSlotArray)
+	// Append all slot indices WRITTEN by this op to `writes`.
+	function collectWrites(module TargetModule, packed OpIndex, writes VarSlotArray)
+	// Append all slot indices whose ADDRESS is taken by this op to `escapes`.
+	function collectEscapes(module TargetModule, packed OpIndex, escapes VarSlotArray)
+	// Rewrite the op at `packed` in `module`, replacing every slot index
+	// `s` with `remap[s]`. The implementation should mutate module storage
+	// in place (e.g. via module.x64Ops.set(packed, ...) or the arm64
+	// equivalent).
+	function rewriteOp(module TargetModule, packed OpIndex, remap RegIntArray)
+end 'SlotProjection'
+
+// ============================================================
+// Slot range and helpers
+// ============================================================
+
+// A slot's live range, expressed as a list of per-block intervals
+// (half-open [startPos, endPos)) using the same op-position scheme as
+// LiveRangeBuilder: op at index i has position i+1; live-in covers
+// startPos 0, live-out covers endPos = blockLen.
+export type SlotRange
+	export var slotIdx VarSlot
+	export var intervals IntervalArray
+	export var escaped bool
+
+	export static function create(slotIdx VarSlot) returns SlotRange
+		return Self{slotIdx: slotIdx, intervals: IntervalArray.create(), escaped: false}
+	end 'create'
+end 'SlotRange'
+
+export typealias SlotRangeArray = Array with SlotRange
+export typealias SlotRangeArrayArray = Array with SlotRangeArray
+
+// Wrapper around `SlotRangeArrayArray`. The extra field-access hop is what
+// Maxon's borrow checker needs to let `appendOccupant` both read an existing
+// occupant list (`pool.occupantsByColor.get(c)`) and write it back
+// (`pool.occupantsByColor.set(c, ...)`) without flagging an overlapping
+// mutable borrow. (See the parallel ownership trick in SpillManager's
+// `SlotPool` / `recordSlotOccupant`.)
+type ColorPool
+	export var occupantsByColor SlotRangeArrayArray
+
+	export static function create() returns ColorPool
+		return Self{occupantsByColor: SlotRangeArrayArray.create()}
+	end 'create'
+end 'ColorPool'
+
+// ============================================================
+// Max slot index
+// ============================================================
+
+function findMaxSlotIdx(module TargetModule, func IrFunction, projection SlotProjection) returns VarSlot
+	var maxSlot = -1
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for packed in block.opRefs 'eachOp'
+			maxSlot = updateMaxSlotForOp(module, packed: packed, projection: projection, maxSlot: maxSlot)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			maxSlot = updateMaxSlotForOp(module, packed: block.terminatorIndex(), projection: projection, maxSlot: maxSlot)
+		end 'hasTerm'
+	end 'eachBlock'
+	return maxSlot + 1
+end 'findMaxSlotIdx'
+
+function updateMaxSlotForOp(module TargetModule, packed OpIndex, projection SlotProjection, maxSlot VarSlot) returns VarSlot
+	var current = maxSlot
+
+	let reads = VarSlotArray.create()
+	projection.collectReads(module, packed: packed, reads: reads)
+	current = maxOfVarSlotArray(reads, current: current)
+
+	let writes = VarSlotArray.create()
+	projection.collectWrites(module, packed: packed, writes: writes)
+	current = maxOfVarSlotArray(writes, current: current)
+
+	let escapes = VarSlotArray.create()
+	projection.collectEscapes(module, packed: packed, escapes: escapes)
+	current = maxOfVarSlotArray(escapes, current: current)
+
+	return current
+end 'updateMaxSlotForOp'
+
+function maxOfVarSlotArray(slots VarSlotArray, current VarSlot) returns VarSlot
+	var best = current
+	for s in slots 'each'
+		if s > best 'higher'
+			best = s
+		end 'higher'
+	end 'each'
+	return best
+end 'maxOfVarSlotArray'
+
+// ============================================================
+// Per-block use/def + escaped-slot scan
+// ============================================================
+
+type SlotUseDef
+	export var useSets BoolArrayArray
+	export var defSets BoolArrayArray
+	export var escaped BoolArray
+	export var maxSlotIdx VarSlot
+
+	export static function create(useSets BoolArrayArray, defSets BoolArrayArray, escaped BoolArray, maxSlotIdx VarSlot) returns SlotUseDef
+		return Self{useSets: useSets, defSets: defSets, escaped: escaped, maxSlotIdx: maxSlotIdx}
+	end 'create'
+end 'SlotUseDef'
+
+function scanSlotUseDef(module TargetModule, func IrFunction, numBlocks BlockId, maxSlotIdx VarSlot, projection SlotProjection) returns SlotUseDef
+	var useSets = BoolArrayArray.create()
+	var defSets = BoolArrayArray.create()
+	var bi = 0
+	while bi < numBlocks 'init'
+		useSets.push(createBoolVector(maxSlotIdx))
+		defSets.push(createBoolVector(maxSlotIdx))
+		bi = bi + 1
+	end 'init'
+
+	var escaped = createBoolVector(maxSlotIdx)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		let blockId = block.id
+		var useSet = try useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
+		var defSet = try defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
+
+		for packed in block.opRefs 'eachOp'
+			scanOpSlots(module, packed: packed, projection: projection, useSet: useSet, defSet: defSet, escaped: escaped)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			scanOpSlots(module, packed: block.terminatorIndex(), projection: projection, useSet: useSet, defSet: defSet, escaped: escaped)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return SlotUseDef.create(useSets, defSets: defSets, escaped: escaped, maxSlotIdx: maxSlotIdx)
+end 'scanSlotUseDef'
+
+function scanOpSlots(module TargetModule, packed OpIndex, projection SlotProjection, useSet BoolArray, defSet BoolArray, escaped BoolArray)
+	let reads = VarSlotArray.create()
+	projection.collectReads(module, packed: packed, reads: reads)
+	for s in reads 'eachR'
+		if not boolVectorGet(defSet, index: s) 'notDef'
+			boolVectorSet(useSet, index: s)
+		end 'notDef'
+	end 'eachR'
+
+	let writes = VarSlotArray.create()
+	projection.collectWrites(module, packed: packed, writes: writes)
+	for s in writes 'eachW'
+		boolVectorSet(defSet, index: s)
+	end 'eachW'
+
+	let escapes = VarSlotArray.create()
+	projection.collectEscapes(module, packed: packed, escapes: escapes)
+	for s in escapes 'eachE'
+		boolVectorSet(escaped, index: s)
+	end 'eachE'
+end 'scanOpSlots'
+
+// ============================================================
+// Liveness fixed point
+// ============================================================
+
+function computeSlotLiveness(cfg CfgInfo, rpo RpoInfo, ud SlotUseDef) returns LivenessInfo
+	let numBlocks = cfg.numBlocks
+	let maxSlotIdx = ud.maxSlotIdx
+
+	var liveIn = BoolArrayArray.create()
+	var liveOut = BoolArrayArray.create()
+	var bi = 0
+	while bi < numBlocks 'init'
+		liveIn.push(createBoolVector(maxSlotIdx))
+		liveOut.push(createBoolVector(maxSlotIdx))
+		bi = bi + 1
+	end 'init'
+
+	var changed = true
+	while changed 'fp'
+		changed = false
+		var ri = rpo.order.count() - 1
+		while ri >= 0 'eachBlock'
+			let blockId = try rpo.order.get(ri) otherwise 'skip'
+				ri = ri - 1
+				continue
+			end 'skip'
+
+			var blockLiveOut = try liveOut.get(blockId) otherwise panic("invariant: liveOut sized to numBlocks but get({blockId}) failed")
+			var blockLiveIn = try liveIn.get(blockId) otherwise panic("invariant: liveIn sized to numBlocks but get({blockId}) failed")
+			let succs = try cfg.successors.get(blockId) otherwise panic("invariant: cfg.successors sized to numBlocks but get({blockId}) failed")
+
+			for succ in succs 'eachSucc'
+				let succLiveIn = try liveIn.get(succ) otherwise panic("invariant: succ id < numBlocks but liveIn.get failed")
+				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'unionChanged'
+					changed = true
+				end 'unionChanged'
+			end 'eachSucc'
+
+			let blockUse = try ud.useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
+			let blockDef = try ud.defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
+			if computeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'inChanged'
+				changed = true
+			end 'inChanged'
+
+			ri = ri - 1
+		end 'eachBlock'
+	end 'fp'
+
+	// Escaped slots are live everywhere — their address may be
+	// dereferenced anywhere in the function and we can't track the
+	// indirection statically.
+	var si = 0
+	while si < maxSlotIdx 'eachSlot'
+		let isEsc = boolVectorGet(ud.escaped, index: si)
+		if isEsc 'esc'
+			var bi2 = 0
+			while bi2 < numBlocks 'eachBlk'
+				var inVec = try liveIn.get(bi2) otherwise panic("invariant: liveIn sized to numBlocks but get({bi2}) failed")
+				var outVec = try liveOut.get(bi2) otherwise panic("invariant: liveOut sized to numBlocks but get({bi2}) failed")
+				boolVectorSet(inVec, index: si)
+				boolVectorSet(outVec, index: si)
+				bi2 = bi2 + 1
+			end 'eachBlk'
+		end 'esc'
+		si = si + 1
+	end 'eachSlot'
+
+	return LivenessInfo.create(liveIn, liveOut: liveOut, maxValueId: maxSlotIdx)
+end 'computeSlotLiveness'
+
+// ============================================================
+// Per-slot interval construction
+// ============================================================
+
+function buildSlotRanges(module TargetModule, func IrFunction, liveness LivenessInfo, ud SlotUseDef, projection SlotProjection) returns SlotRangeArray
+	let maxSlotIdx = ud.maxSlotIdx
+	var ranges = SlotRangeArray.create()
+
+	var s = 0
+	while s < maxSlotIdx 'eachSlot'
+		var range = SlotRange.create(s)
+		range.escaped = boolVectorGet(ud.escaped, index: s)
+		ranges.push(range)
+		s = s + 1
+	end 'eachSlot'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		let blockId = block.id
+		let blockLen = block.opRefs.count() + 1 // +1 for terminator slot
+		let blockLiveIn = try liveness.liveIn.get(blockId) otherwise panic("invariant: liveIn sized to numBlocks but get({blockId}) failed")
+		let blockLiveOut = try liveness.liveOut.get(blockId) otherwise panic("invariant: liveOut sized to numBlocks but get({blockId}) failed")
+
+		var firstWrite = RegIntArray.create()
+		var lastUse = RegIntArray.create()
+		var si = 0
+		while si < maxSlotIdx 'initPerSlot'
+			firstWrite.push(-1)
+			lastUse.push(-1)
+			si = si + 1
+		end 'initPerSlot'
+
+		var opIdx = 0
+		for packed in block.opRefs 'eachOp'
+			recordBlockSlotPositions(module, packed: packed, projection: projection, opPos: opIdx + 1, firstWrite: firstWrite, lastUse: lastUse)
+			opIdx = opIdx + 1
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			recordBlockSlotPositions(module, packed: block.terminatorIndex(), projection: projection, opPos: opIdx + 1, firstWrite: firstWrite, lastUse: lastUse)
+		end 'hasTerm'
+
+		var t = 0
+		while t < maxSlotIdx 'buildPerSlot'
+			let liveIn = boolVectorGet(blockLiveIn, index: t)
+			let liveOut = boolVectorGet(blockLiveOut, index: t)
+			let fw = try firstWrite.get(t) otherwise panic("invariant: firstWrite sized to maxSlotIdx but get({t}) failed")
+			let lu = try lastUse.get(t) otherwise panic("invariant: lastUse sized to maxSlotIdx but get({t}) failed")
+
+			let hasLocalActivity = fw >= 0 or lu >= 0
+
+			if not liveIn and not liveOut and not hasLocalActivity 'noActivity'
+				t = t + 1
+				continue
+			end 'noActivity'
+
+			var startPos = 0
+			if liveIn 'liveInStart'
+				startPos = 0
+			end 'liveInStart' else 'startFromDef'
+				if fw >= 0 'fromFw'
+					startPos = fw
+				end 'fromFw' else 'fromLuOnly'
+					startPos = lu
+				end 'fromLuOnly'
+			end 'startFromDef'
+
+			var endPos = blockLen
+			if liveOut 'liveOutEnd'
+				endPos = blockLen
+			end 'liveOutEnd' else 'endFromUse'
+				if lu >= 0 'fromLu'
+					endPos = lu + 1
+				end 'fromLu' else 'fromStartOnly'
+					endPos = startPos + 1
+				end 'fromStartOnly'
+			end 'endFromUse'
+
+			pushInterval(ranges, slotIdx: t, blockId: blockId, startPos: startPos, endPos: endPos)
+			t = t + 1
+		end 'buildPerSlot'
+	end 'eachBlock'
+
+	return ranges
+end 'buildSlotRanges'
+
+function pushInterval(ranges SlotRangeArray, slotIdx VarSlot, blockId BlockId, startPos RegInt, endPos RegInt)
+	var range = try ranges.get(slotIdx) otherwise panic("invariant: ranges.get OOB in pushInterval")
+	range.intervals.push(Interval.create(blockId, startPos: startPos, endPos: endPos))
+end 'pushInterval'
+
+function recordBlockSlotPositions(module TargetModule, packed OpIndex, projection SlotProjection, opPos RegInt, firstWrite RegIntArray, lastUse RegIntArray)
+	let reads = VarSlotArray.create()
+	projection.collectReads(module, packed: packed, reads: reads)
+	for s in reads 'eachR'
+		if s < lastUse.count() 'inBounds'
+			try lastUse.set(s, value: opPos) otherwise panic("invariant: lastUse.set OOB")
+		end 'inBounds'
+	end 'eachR'
+
+	let writes = VarSlotArray.create()
+	projection.collectWrites(module, packed: packed, writes: writes)
+	for s in writes 'eachW'
+		if s < firstWrite.count() 'inBoundsFw'
+			let existing = try firstWrite.get(s) otherwise panic("invariant: firstWrite.get OOB after bounds check")
+			if existing < 0 'firstSeen'
+				try firstWrite.set(s, value: opPos) otherwise panic("invariant: firstWrite.set OOB")
+			end 'firstSeen'
+		end 'inBoundsFw'
+		if s < lastUse.count() 'inBoundsLu'
+			try lastUse.set(s, value: opPos) otherwise panic("invariant: lastUse.set OOB")
+		end 'inBoundsLu'
+	end 'eachW'
+end 'recordBlockSlotPositions'
+
+// ============================================================
+// Interference + coloring
+// ============================================================
+
+function slotRangesInterfere(a SlotRange, b SlotRange) returns bool
+	for ai in a.intervals 'eachA'
+		for bi in b.intervals 'eachB'
+			if ai.blockId == bi.blockId 'sameBlock'
+				if ai.startPos < bi.endPos and bi.startPos < ai.endPos 'overlap'
+					return true
+				end 'overlap'
+			end 'sameBlock'
+		end 'eachB'
+	end 'eachA'
+	return false
+end 'slotRangesInterfere'
+
+function rangeEarliestStart(range SlotRange) returns RegInt
+	var best = i64.max
+	for iv in range.intervals 'each'
+		if iv.startPos < best 'lower'
+			best = iv.startPos
+		end 'lower'
+	end 'each'
+	if best == i64.max 'noIntervals'
+		return 0
+	end 'noIntervals'
+	return best
+end 'rangeEarliestStart'
+
+// Append `range` to the existing color's occupant list. Isolated into a
+// function so the borrow on `colorPool` lives strictly inside this call —
+// the borrow checker won't let us hold both `let occupants = colorPool.get(c)`
+// and call `colorPool.set(c, ...)` in the same outer scope.
+function appendOccupant(pool ColorPool, color RegInt, range SlotRange)
+	var occupants = try pool.occupantsByColor.get(color) otherwise panic("invariant: pool get OOB in appendOccupant")
+	occupants.push(range)
+	try pool.occupantsByColor.set(color, value: occupants) otherwise panic("invariant: pool set OOB in appendOccupant")
+end 'appendOccupant'
+
+// Scan the color pool for the first slot whose occupants are all compatible
+// (i.e. non-interfering, non-escaped) with `range`. Returns the color index
+// or -1 if no existing slot is reusable. Extracted into its own function so
+// the borrow on `pool` is released before the caller mutates it.
+function findCompatibleColor(pool ColorPool, range SlotRange) returns RegInt
+	var ci = 0
+	while ci < pool.occupantsByColor.count() 'scanPool'
+		let occupants = try pool.occupantsByColor.get(ci) otherwise panic("invariant: pool get OOB after count() guard")
+		var compatible = true
+		for occ in occupants 'eachOcc'
+			if occ.escaped 'occEsc'
+				compatible = false
+				break
+			end 'occEsc'
+			if slotRangesInterfere(occ, b: range) 'conflict'
+				compatible = false
+				break
+			end 'conflict'
+		end 'eachOcc'
+		if compatible 'reuse'
+			return ci
+		end 'reuse'
+		ci = ci + 1
+	end 'scanPool'
+	return -1
+end 'findCompatibleColor'
+
+// Linear-scan color slot ranges. Returns (remap, newSlotCount):
+//   remap[oldSlot] = newSlot, or -1 for slots with no intervals.
+// Escaped slots are colored first, each into its own color, so they never
+// share storage with anything else.
+function colorSlots(ranges SlotRangeArray, maxSlotIdx VarSlot) returns (RegIntArray, VarSlot)
+	var remap = RegIntArray.create()
+	var i = 0
+	while i < maxSlotIdx 'init'
+		remap.push(-1)
+		i = i + 1
+	end 'init'
+
+	var order = RegIntArray.create()
+	var s = 0
+	while s < maxSlotIdx 'initOrder'
+		let r = try ranges.get(s) otherwise panic("invariant: ranges sized to maxSlotIdx but get({s}) failed")
+		if r.intervals.count() > 0 or r.escaped 'live'
+			order.push(s)
+		end 'live'
+		s = s + 1
+	end 'initOrder'
+
+	// Insertion sort by (escaped first, then earliestStart ascending).
+	let count = order.count()
+	var si = 1
+	while si < count 'sort'
+		let keyIdx = try order.get(si) otherwise panic("invariant: order.get OOB during sort")
+		let keyRange = try ranges.get(keyIdx) otherwise panic("invariant: ranges.get OOB during sort")
+		let keyStart = rangeEarliestStart(keyRange)
+		let keyEsc = keyRange.escaped
+
+		var j = si - 1
+		while j >= 0 'insert'
+			let jIdx = try order.get(j) otherwise break
+			let jRange = try ranges.get(jIdx) otherwise break
+			let jStart = rangeEarliestStart(jRange)
+			let jEsc = jRange.escaped
+
+			if jEsc and not keyEsc 'inPlace1'
+				break
+			end 'inPlace1'
+			if jEsc == keyEsc and jStart <= keyStart 'inPlace2'
+				break
+			end 'inPlace2'
+
+			try order.set(j + 1, value: jIdx) otherwise panic("invariant: order.set OOB")
+			j = j - 1
+		end 'insert'
+		try order.set(j + 1, value: keyIdx) otherwise panic("invariant: order.set OOB")
+		si = si + 1
+	end 'sort'
+
+	var pool = ColorPool.create()
+
+	var oi = 0
+	while oi < count 'assign'
+		let slotIdx = try order.get(oi) otherwise panic("invariant: order.get OOB during assign")
+		let range = try ranges.get(slotIdx) otherwise panic("invariant: ranges.get OOB during assign")
+
+		var chosenColor = -1
+
+		if not range.escaped 'tryReuse'
+			chosenColor = findCompatibleColor(pool, range: range)
+		end 'tryReuse'
+
+		if chosenColor < 0 'newColor'
+			chosenColor = pool.occupantsByColor.count()
+			var fresh = SlotRangeArray.create()
+			fresh.push(range)
+			pool.occupantsByColor.push(fresh)
+		end 'newColor' else 'augment'
+			appendOccupant(pool, color: chosenColor, range: range)
+		end 'augment'
+
+		try remap.set(slotIdx, value: chosenColor) otherwise panic("invariant: remap.set OOB")
+		oi = oi + 1
+	end 'assign'
+
+	return (remap, pool.occupantsByColor.count())
+end 'colorSlots'
+
+function anyEscaped(escaped BoolArray, maxSlotIdx VarSlot) returns bool
+	var i = 0
+	while i < maxSlotIdx 'each'
+		if boolVectorGet(escaped, index: i) 'esc'
+			return true
+		end 'esc'
+		i = i + 1
+	end 'each'
+	return false
+end 'anyEscaped'
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+// Caller-supplied CFG/RPO. We accept these instead of computing them inside
+// so the shared body doesn't need a TargetOpQuery type parameter, which
+// previously caused a duplicate-monomorphization crash in the bootstrap
+// compiler when both the regalloc and this pass specialized
+// `buildIrFunctionCfg` for the same target.
+export function renumberSlotsForFunction(module TargetModule, func IrFunction, cfg CfgInfo, rpo RpoInfo, projection SlotProjection)
+	let maxSlotIdx = findMaxSlotIdx(module, func: func, projection: projection)
+	if maxSlotIdx == 0 'noSlots'
+		// No slot-bearing ops — nothing to do, but still pin varSlotCount to 0.
+		func.stackSize = func.stackSize - func.varSlotCount * 8
+		func.varSlotCount = 0
+		return
+	end 'noSlots'
+
+	let ud = scanSlotUseDef(module, func: func, numBlocks: cfg.numBlocks, maxSlotIdx: maxSlotIdx, projection: projection)
+
+	// Bail out of any function whose slots are escaped via address-taking
+	// (e.g. `lea reg, [rbp - N]`). Escapes are emitted by stdlib lowering
+	// helpers that treat a contiguous BLOCK of slots as a scratch buffer
+	// addressed by pointer arithmetic against one canonical slot's address
+	// — see `mrt_i64_to_string`'s 20-byte stack buffer at `[rbp-0x18 .. rbp-0x4]`.
+	// Slot liveness alone doesn't reason about adjacent-slot buffer use,
+	// so coalescing here is unsafe for those functions.
+	if anyEscaped(ud.escaped, maxSlotIdx: maxSlotIdx) 'escapesPresent'
+		logDebug(LogCategory.ir, message: () gives "slot-renumber: skip func={func.name} reason=escapes")
+		return
+	end 'escapesPresent'
+
+	let liveness = computeSlotLiveness(cfg, rpo: rpo, ud: ud)
+	let ranges = buildSlotRanges(module, func: func, liveness: liveness, ud: ud, projection: projection)
+	let (remap, newSlotCount) = colorSlots(ranges, maxSlotIdx: maxSlotIdx)
+
+	for blockRef in func.blockRefs 'rewriteBlocks'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for packed in block.opRefs 'rewriteOps'
+			projection.rewriteOp(module, packed: packed, remap: remap)
+		end 'rewriteOps'
+		if block.hasTerminatorOp() 'rewriteTerm'
+			projection.rewriteOp(module, packed: block.terminatorIndex(), remap: remap)
+		end 'rewriteTerm'
+	end 'rewriteBlocks'
+
+	let oldVarBytes = func.varSlotCount * 8
+	let newVarBytes = newSlotCount * 8
+	func.stackSize = func.stackSize - oldVarBytes + newVarBytes
+	func.varSlotCount = newSlotCount
+
+	logDebug(LogCategory.ir, message: () gives "slot-renumber: func={func.name} oldSlots={maxSlotIdx} newSlots={newSlotCount}")
+end 'renumberSlotsForFunction'
