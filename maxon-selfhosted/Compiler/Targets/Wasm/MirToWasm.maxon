@@ -126,6 +126,26 @@ end 'WasmCallFixup'
 
 export typealias WasmCallFixupArray = Array with WasmCallFixup
 
+// Phase 11.4: per-function fixup for an `opCallIndirect`'s embedded
+// type-section index. WASM encodes the type index inline in the function
+// body, so a stdlib-cached body has to defer the actual index until
+// the user-build assembles the final wasm type section (the indices a
+// user pipeline assigns may not match the ones the stdlib pipeline used
+// when it lowered the body). `signatureBytes` is the encoded
+// `writeFuncType` blob; the user-build looks it up against its own
+// typeIndexMap (or registers it if missing) and writes the resolved
+// index into the body at `bodyOffset` as a fixed-width 5-byte ULEB128.
+export type WasmTypeFixup
+	export var bodyOffset CodeOffset
+	export var signatureBytes ByteArray
+
+	export static function create(bodyOffset CodeOffset, signatureBytes ByteArray) returns WasmTypeFixup
+		return Self{bodyOffset: bodyOffset, signatureBytes: signatureBytes}
+	end 'create'
+end 'WasmTypeFixup'
+
+export typealias WasmTypeFixupArray = Array with WasmTypeFixup
+
 // Per-function WASM emission result for caching. `throwsTypeName` mirrors
 // IrFunction.throwsTypeName as a `ThrowsClause`: `none` means non-throwing,
 // `throwing(name)` carries the bare error-enum name. Throwing functions
@@ -139,6 +159,11 @@ export type WasmObjectFunction
 	export var throwsTypeName ThrowsClause
 	export var body ByteArray
 	export var callFixups WasmCallFixupArray
+	// Fixups for inline type-section indices of `call_indirect` ops. The
+	// stdlib-cache wasm path writes a placeholder index at lower time and
+	// patches it at user-build module-assembly time once the type section
+	// is finalized — same shape as `callFixups` for direct calls.
+	export var typeFixups WasmTypeFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none) returns WasmObjectFunction
 		return Self{
@@ -148,7 +173,8 @@ export type WasmObjectFunction
 			paramTypes: paramTypes,
 			throwsTypeName: throwsTypeName,
 			body: ByteArray.create(),
-			callFixups: WasmCallFixupArray.create()
+			callFixups: WasmCallFixupArray.create(),
+			typeFixups: WasmTypeFixupArray.create()
 		}
 	end 'create'
 end 'WasmObjectFunction'
@@ -193,7 +219,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	for func in module.functions 'eachFunc'
 		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes, throwsTypeName: func.throwsTypeName)
 
-		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups)
+		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups)
 		objFunc.body = body
 
 		result.push(objFunc)
@@ -458,6 +484,21 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// shape would still find an entry.
 	collectIndirectCallTypes(module, types: types, typeIndexMap: typeIndexMap)
 
+	// Phase 11.4: cached stdlib functions can also contain indirect-call
+	// type fixups (witness-method dispatch). Register their signatures
+	// against the type section now so the section is sealed with every
+	// needed entry; the stdlib body patcher below resolves the indices
+	// out of `typeIndexMap`. Only walk needed bodies so an unreferenced
+	// stdlib function doesn't bloat the type table.
+	for func in stdlibCache.wasmFunctions 'seedStdlibIndirectTypes'
+		if not neededStdlib.contains(func.name) 'skip'
+			continue
+		end 'skip'
+		for tyFix in func.typeFixups 'eachFixup'
+			_ = lookupOrRegisterIndirectType(types, typeIndexMap: typeIndexMap, signatureBytes: tyFix.signatureBytes)
+		end 'eachFixup'
+	end 'seedStdlibIndirectTypes'
+
 	writeTypeSection(wasm, types: types)
 
 	// --- Import section ---
@@ -575,8 +616,9 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 		lowering.funcTableIndices.upsert(name, value: i as Wasm32Index)
 	end 'recordTableIdx'
 	var noFixups = WasmCallFixupArray.create()
+	var noTypeFixups = WasmTypeFixupArray.create()
 	for func in module.functions 'emitBodies'
-		let body = lowering.lowerFunction(func, fixups: noFixups)
+		let body = lowering.lowerFunction(func, fixups: noFixups, tyFixups: noTypeFixups)
 		bodies.push(body)
 	end 'emitBodies'
 
@@ -594,6 +636,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			let funcIdx = findFunctionIndex(funcSigs, name: fixup.targetName, importCount: wasiImportCount)
 			patchUleb128Fixed5(body, offset: fixup.bodyOffset, value: funcIdx)
 		end 'patchCalls'
+
+		// Patch indirect-call type-section indices. The fixup carries the
+		// encoded function-type signature; if the user pipeline's type
+		// section already has an index for that shape, reuse it. Otherwise
+		// register a fresh index (appending to `types`). This keeps the
+		// type table compact and ensures the index written into the body
+		// resolves at runtime to the right call_indirect signature.
+		for tyFix in func.typeFixups 'patchTypes'
+			let resolvedTypeIdx = lookupOrRegisterIndirectType(types, typeIndexMap: typeIndexMap, signatureBytes: tyFix.signatureBytes)
+			patchUleb128Fixed5(body, offset: tyFix.bodyOffset, value: resolvedTypeIdx)
+		end 'patchTypes'
 
 		bodies.push(body)
 	end 'emitStdlibBodies'
@@ -703,6 +756,11 @@ type WasmFunctionLowering
 	// Accumulator for call fixups in fixedCalls mode. The caller passes one
 	// in via lowerFunction so each emitted function gets its own array.
 	var callFixups WasmCallFixupArray
+	// Same pattern for indirect-call type-index fixups. In fixedCalls mode
+	// the type indices a user-build assigns may differ from the ones the
+	// stdlib pipeline used, so we write a placeholder and record the
+	// signature bytes here; emitWasmModule walks these at link time.
+	var typeFixups WasmTypeFixupArray
 	// Per-function blockId → index map. Populated at the top of
 	// lowerFunction by walking func.blockRefs once, so every emitted
 	// branch resolves its target block index in O(1) instead of scanning
@@ -724,6 +782,7 @@ type WasmFunctionLowering
 			funcTableIndices: WasmFuncTableIndexMap.create(),
 			typeIndices: WasmTypeIndexMap.create(),
 			callFixups: WasmCallFixupArray.create(),
+			typeFixups: WasmTypeFixupArray.create(),
 			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
 			body: ByteArray.create(),
 			isVoidReturn: true,
@@ -739,7 +798,7 @@ type WasmFunctionLowering
 	// Function body emission
 	// ============================================================
 
-	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray) returns ByteArray
+	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray, tyFixups WasmTypeFixupArray) returns ByteArray
 		// Replace mrt_panic with a simplified WASM version that writes the
 		// message cstring to stderr then traps (wasmtime provides the backtrace).
 		if srcFunc.name == "mrt_panic" 'isPanic'
@@ -758,6 +817,7 @@ type WasmFunctionLowering
 			throwing gives true
 		end 'kind'
 		callFixups = fixups
+		typeFixups = tyFixups
 
 		// Build the per-function blockId → blockRefs-index map up front.
 		// Without this, every emitted branch / cond_branch did a linear
@@ -1663,6 +1723,33 @@ type WasmFunctionLowering
 	// the per-function floatSet); resultId's type comes from the same
 	// bitset. The bytes returned are exactly what `writeFuncType` would
 	// produce, so they can be used as-is for type-section dedup keys.
+	// Human-readable rendering of an indirect-call signature for panic
+	// messages. Mirrors `buildIndirectCallTypeBytes`'s float/int decision
+	// but produces "(i64, f64) -> i64" instead of opaque wasm bytes, so a
+	// "type not pre-registered" diagnostic actually says WHICH shape is
+	// missing.
+	function describeIndirectCallShape(resultId ValueId, argIds ValueIdArray) returns String
+		var s = "("
+		for i in 0 upto argIds.count() 'eachArg'
+			if i > 0 'sep'
+				s.append(", ")
+			end 'sep'
+			let argId = try argIds.get(i) otherwise panic("describeIndirectCallShape: argIds.get OOB at {i}")
+			if isFloatLocal(funcFloatSet, localIdx: argId as MachineWord) 'isFloat'
+				s.append("f64")
+			end 'isFloat' else 'isInt'
+				s.append("i64")
+			end 'isInt'
+		end 'eachArg'
+		s.append(") -> ")
+		if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
+			s.append("f64")
+		end 'floatRes' else 'intRes'
+			s.append("i64")
+		end 'intRes'
+		return s
+	end 'describeIndirectCallShape'
+
 	function buildIndirectCallTypeBytes(resultId ValueId, argIds ValueIdArray) returns ByteArray
 		var params = ByteArray.create()
 		for argId in argIds 'eachArg'
@@ -1704,12 +1791,20 @@ type WasmFunctionLowering
 		body.push(opI32WrapI64)
 
 		// Look up the type-section index for this call signature, dedup-
-		// shared with direct-call types via the pre-populated map.
+		// shared with direct-call types via the pre-populated map. In
+		// `fixedCalls` mode (stdlib-cache emission), the user-build will
+		// own the final type-section layout; we record a typeFixup and
+		// write a 5-byte placeholder that gets patched at module-assembly
+		// time.
 		let typeBytes = buildIndirectCallTypeBytes(resultId, argIds: argIds)
-		let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitIndirectCall: type not pre-registered for indirect call (emitWasmModule must populate typeIndices for every (params,result) shape used by call_indirect)")
-
 		body.push(opCallIndirect)
-		writeUleb128(body, value: typeIdx)
+		if fixedCalls 'useFixed'
+			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
+			writeUleb128Fixed5(body, value: 0)
+		end 'useFixed' else 'useVariable'
+			let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitIndirectCall: type not pre-registered for indirect call in '{func.name}' (resultId={resultId} argCount={argIds.count()} shape={describeIndirectCallShape(resultId, argIds: argIds)}); emitWasmModule must walk every MirOp.indirectCall in advance and seed typeIndices for the (params,result) shape. See `collectIndirectCallTypes` for the existing pre-pass")
+			writeUleb128(body, value: typeIdx)
+		end 'useVariable'
 		writeUleb128(body, value: 0)
 
 		// Store the result. All indirect calls today produce an i64/f64
@@ -2130,6 +2225,21 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 		end 'eachBlock'
 	end 'eachFunc'
 end 'collectIndirectCallTypes'
+
+// Look up a wasm function-type signature in the type-section dedup map;
+// register a fresh entry when missing. Used by both the local user-pipeline
+// pre-pass and the stdlib-cache fixup walker, which both need the type
+// section finalized before `writeTypeSection`. Returns the resolved
+// index (existing or newly-assigned).
+function lookupOrRegisterIndirectType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, signatureBytes ByteArray) returns Wasm32Index
+	let existing = try typeIndexMap.get(signatureBytes) otherwise 'register'
+		let newIdx = types.count() as Wasm32Index
+		types.push(signatureBytes)
+		typeIndexMap.upsert(signatureBytes, value: newIdx as MachineWord)
+		return newIdx
+	end 'register'
+	return existing as Wasm32Index
+end 'lookupOrRegisterIndirectType'
 
 function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, argIds ValueIdArray)
 	var params = ByteArray.create()

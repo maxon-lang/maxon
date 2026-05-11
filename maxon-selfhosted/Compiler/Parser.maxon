@@ -337,6 +337,9 @@ export type Parser
 		if namespace == "stdlib" and filePath.filename() == "Builtins.maxon" 'isBuiltins'
 			return
 		end 'isBuiltins'
+		if filePath.filename() == "stdlib-bootstrap.maxon" 'isBootstrap'
+			return
+		end 'isBootstrap'
 		if nameToken.value == "self" 'selfReserved'
 			reportCompileError(project, code: ErrorCode.parserReservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			return
@@ -365,27 +368,43 @@ export type Parser
 	// lexer (see actionTable's skipOther), so the inner `parseTypeRef` calls
 	// see a flat run of types between the parens.
 	function parseTypeRef() returns MaxonType throws ParserError
-		// Function-type form: `(T1, T2) returns R` or `() returns R` or
-		// `(T1) returns R` (variadic-arity not supported — function types
-		// are fully parenthesized at every call site).
-		if at(TokenKind.leftParen) 'isFn'
+		// Paren-prefixed type: either a function type `(T1, T2) returns R`
+		// or a tuple type `(T1, T2, ...)` (2+ elements, no `returns`).
+		// Empty `()` and single-element `(T)` followed by `returns` are
+		// always function types; `()` alone is a void→void function type.
+		if at(TokenKind.leftParen) 'isParen'
 			try eat(TokenKind.leftParen)
-			var fnParamTypes = MaxonTypeArray.create()
+			var innerTypes = MaxonTypeArray.create()
 			while not at(TokenKind.rightParen) 'paramTypes'
 				let inner = try parseTypeRef()
-				fnParamTypes.push(inner)
+				innerTypes.push(inner)
+				if at(TokenKind.rightParen) 'doneParams'
+					break
+				end 'doneParams'
+				try expect(TokenKind.comma)
 			end 'paramTypes'
 			try eat(TokenKind.rightParen)
-			// `returns` is optional — its absence means the function type
-			// returns void. Mirrors C# bootstrap's `ParseFunctionType`.
-			var fnReturn = MaxonReturnType.void
-			if accept(TokenKind.returns) 'hasReturn'
-				let inner = try parseTypeRef()
-				fnReturn = MaxonReturnType.value(inner)
+			// `returns` always means function type. Otherwise: 2+ inner
+			// types means tuple; 0 or 1 stays a function type (void-arg
+			// returning void / single-arg returning void). This matches
+			// the C# bootstrap's disambiguation rule.
+			if at(TokenKind.returns) 'hasReturn'
+				try eat(TokenKind.returns)
+				let retInner = try parseTypeRef()
+				let fnReturn = MaxonReturnType.value(retInner)
+				let id = internFunctionType(project, paramTypes: innerTypes, returnType: fnReturn)
+				return MaxonType.function(id)
 			end 'hasReturn'
-			let id = internFunctionType(project, paramTypes: fnParamTypes, returnType: fnReturn)
+			if innerTypes.count() >= 2 'isTuple'
+				let baseName = "__Tuple{innerTypes.count()}"
+				let baseId = project.typeNames.intern(baseName)
+				let giid = project.genericInstances.intern(baseId, args: innerTypes)
+				return MaxonType.genericInstance(giid)
+			end 'isTuple'
+			let fnReturn = MaxonReturnType.void
+			let id = internFunctionType(project, paramTypes: innerTypes, returnType: fnReturn)
 			return MaxonType.function(id)
-		end 'isFn'
+		end 'isParen'
 
 		// Phase 11.0 step 3b: bare `Self` in any type position resolves to the
 		// enclosing type's name. The lexer emits `Self` as a dedicated
@@ -448,6 +467,10 @@ export type Parser
 				while not at(TokenKind.rightParen) 'argLoop'
 					let inner = try parseTypeRef()
 					args.push(inner)
+					if at(TokenKind.rightParen) 'doneArgs'
+						break
+					end 'doneArgs'
+					try expect(TokenKind.comma)
 				end 'argLoop'
 				try expect(TokenKind.rightParen)
 			end 'parenList' else 'singleArg'
@@ -551,6 +574,7 @@ export type Parser
 			if cursor.current().kind == TokenKind.rightParen 'endParams'
 				break
 			end 'endParams'
+			try expect(TokenKind.comma)
 		end 'paramLoop'
 	end 'parseFunctionParametersInner'
 
@@ -611,10 +635,8 @@ export type Parser
 	// `is` is a TokenKind keyword in expression contexts (reference identity),
 	// but the where-clause grammar disambiguates positionally: the cursor only
 	// reaches this slot when the parent decl-header parser explicitly invokes
-	// `parseWhereClause`. Commas separating successive constraints are
-	// dropped by the lexer's `skipOther`, so the loop's inner identifier
-	// check naturally picks up the next constraint without an explicit
-	// `accept(TokenKind.comma)`.
+	// `parseWhereClause`. Multiple constraints (one per type-parameter) are
+	// separated by commas; conjunctions on a single parameter use `and`.
 	function parseWhereClause() returns WhereClauseArray throws ParserError
 		var clauses = WhereClauseArray.create()
 		if not accept(TokenKind.where) 'noWhere'
@@ -639,6 +661,9 @@ export type Parser
 				let traitToken = try consumeExpecting("trait name")
 				clauses.push(WhereClause.create(paramToken.value, requiredTraitName: traitToken.value))
 			end 'traitLoop'
+			if not accept(TokenKind.comma) 'noMoreClauses'
+				break
+			end 'noMoreClauses'
 		end 'paramLoop'
 		return clauses
 	end 'parseWhereClause'
@@ -668,8 +693,8 @@ export type Parser
 		end 'noImpl'
 
 		// At least one conformance is required after `implements`. Subsequent
-		// conformances are signalled by another identifier in the next slot
-		// (the comma between them is dropped by the lexer).
+		// conformances are signalled by a comma followed by another
+		// identifier in the next slot.
 		while at(TokenKind.identifier) 'list'
 			let nameToken = try consumeExpecting("interface name")
 			var withArgs = StringArray.create()
@@ -678,6 +703,10 @@ export type Parser
 					while at(TokenKind.identifier) 'argLoop'
 						let argToken = try consumeExpecting("type parameter name")
 						withArgs.push(argToken.value)
+						if at(TokenKind.rightParen) 'doneArgs'
+							break
+						end 'doneArgs'
+						try expect(TokenKind.comma)
 					end 'argLoop'
 					try expect(TokenKind.rightParen)
 				end 'parenList' else 'singleArg'
@@ -686,6 +715,9 @@ export type Parser
 				end 'singleArg'
 			end 'hasWith'
 			list.push(Conformance.create(nameToken.value, withArgs: withArgs, line: nameToken.line, column: nameToken.column))
+			if not accept(TokenKind.comma) 'noMoreConf'
+				break
+			end 'noMoreConf'
 		end 'list'
 
 		return list
@@ -1637,6 +1669,112 @@ export type Parser
 		module.setTerminator(moduleInitBlock, op: MaxonOp.ret(zeroName, range: SourceRange.none()))
 	end 'finalizeModuleInit'
 
+	// Phase 11.x: parse a field default-value expression (`var f T = expr`)
+	// into a synthetic helper function. The helper is registered as
+	// `<TypeName>.__field_init_<fieldName>` so `enclosingTypeName` resolves
+	// it back to the enclosing struct — this in turn makes
+	// `functionIsGenericForLowering` / `functionHasWhereClausesForLowering`
+	// see the enclosing generic params and inject the same implicit
+	// layout / witness trailing slots the rest of the type's methods get.
+	//
+	// The cursor must be positioned at the first token of the default
+	// expression on entry; exits with the cursor on the token AFTER the
+	// expression (typically the trailing newline).
+	function parseFieldDefaultInitHelper(typeName String, fieldName String, fieldType MaxonType, fieldLine LineNumber) throws ParserError
+		let helperName = "{typeName}.__field_init_{fieldName}"
+		let returnType = MaxonReturnType.value(fieldType)
+		var helperFunc = IrFunction.create(helperName, maxonReturnType: returnType, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: fieldLine)
+		helperFunc.namespace = namespace
+		// Stay file-private — these helpers are only ever called from
+		// struct-literal lowerings inside the declaring file's compilation
+		// unit. Cross-file users of the struct go through their own copy of
+		// the lowerer, which synthesizes a parallel call.
+		helperFunc.visibility = Visibility.file
+		helperFunc.sourceFilePath = filePath
+		helperFunc.nameLine = fieldLine
+		helperFunc.nameColumn = 1
+		let helperBlock = module.addBlockAt(helperFunc, label: "entry", filePath: filePath.toString(), firstLine: fieldLine)
+
+		// Swap parser state into the helper. The synth-name counter is
+		// per-function so we save and restore it the same way
+		// `parseInModuleInitContext` does — without this, names minted by
+		// the default-expression parse would collide with the outer
+		// function (which currently doesn't exist, but the same counter
+		// gets reused by subsequent helpers in the same type body).
+		let savedFunc = currentFunc
+		let savedBlock = currentBlock
+		let savedSynth = synthNameCounter
+		currentFunc = helperFunc
+		currentBlock = helperBlock
+		synthNameCounter = 0
+
+		let result = try parseExpression(helperBlock)
+		let retName = exprName(result)
+		module.setTerminator(helperBlock, op: MaxonOp.ret(retName, range: SourceRange.none()))
+
+		currentFunc = savedFunc
+		currentBlock = savedBlock
+		synthNameCounter = savedSynth
+
+		// Register the helper. Skip funcReturnTypes / funcSignatures
+		// registration when a duplicate exists (shouldn't happen — the
+		// `<TypeName>.__field_init_<fieldName>` key is unique by
+		// construction — but the insert API is contract-checked).
+		try project.funcReturnTypes.insert(helperName, value: returnType) otherwise ignore
+		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise ignore
+		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise ignore
+		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise ignore
+		project.livenessRoots.push(helperName)
+		module.functions.push(helperFunc)
+	end 'parseFieldDefaultInitHelper'
+
+	// Infer the declared type of a shorthand `var f = <literal>` field from
+	// the literal's lead-token kind. The valid lead tokens are int/float/
+	// string/char/bool literals plus a leading `-` for negative numerics.
+	// Enum-case shorthand (`var f = Color.red`) needs cross-decl lookup to
+	// resolve `Color` to its enum type, so it lands as `unresolved` and
+	// TypeResolution finishes the job. Anything else is a programming
+	// error in the shorthand — the full `var f T = expr` form should be
+	// used for non-literal defaults.
+	function inferShorthandFieldType(leadToken Token, fieldNameToken Token) returns MaxonType
+		// Negative numeric literal: peek past the unary `-` to the digit
+		// token so the kind check sees the literal, not the operator.
+		let litKind = inferShorthandLitKind(leadToken)
+		if litKind == TokenKind.intLiteral 'isInt'
+			return MaxonType.integer
+		end 'isInt'
+		if litKind == TokenKind.floatLiteral 'isFloat'
+			return MaxonType.float
+		end 'isFloat'
+		if litKind == TokenKind.true or litKind == TokenKind.false 'isBool'
+			return MaxonType.boolean
+		end 'isBool'
+		if litKind == TokenKind.stringLiteral 'isStr'
+			return MaxonType.string
+		end 'isStr'
+		// Character literals fit in an int slot; TypeResolution refines to
+		// the declared Codepoint typealias if the user later annotates one.
+		if litKind == TokenKind.charLiteral 'isChar'
+			return MaxonType.integer
+		end 'isChar'
+		// Identifier-led shorthand (enum case like `Color.red`) — defer to
+		// TypeResolution, which can see the enum declaration and pin the
+		// type once cross-decl info is available.
+		if litKind == TokenKind.identifier 'isIdent'
+			return MaxonType.unresolved
+		end 'isIdent'
+		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "field '{fieldNameToken.value}' shorthand default must be a literal (int, float, bool, string, char, or enum case); use full form 'var {fieldNameToken.value} Type = expr' for arbitrary expressions", line: leadToken.line, column: leadToken.column, filePath: filePath)
+		return MaxonType.unresolved
+	end 'inferShorthandFieldType'
+
+	function inferShorthandLitKind(leadToken Token) returns TokenKind
+		if leadToken.kind != TokenKind.minus 'notNeg'
+			return leadToken.kind
+		end 'notNeg'
+		let next = try cursor.peek(1) otherwise return leadToken.kind
+		return next.kind
+	end 'inferShorthandLitKind'
+
 	// True when the initializer is shaped like `Identifier . identifier (`,
 	// which the C# bootstrap treats as a deferred struct-factory call. The
 	// self-hosted compiler doesn't emit the runtime init yet, but the
@@ -2222,6 +2360,42 @@ export type Parser
 			sawValidBase = true
 		end 'isBool'
 
+		// Tuple-type RHS: `typealias Entry = (Key, Value)` desugars to a
+		// generic instance of a synthetic `__TupleN` base struct. The
+		// arity decides the base (`__Tuple2` for 2 elements, `__Tuple3`
+		// for 3); each element must be a bare identifier (a type-param
+		// in the enclosing scope, or a type name resolvable later). The
+		// generic-alias resolver path then folds this into a real
+		// `MaxonType.genericInstance`. Mirrors the C# bootstrap's tuple
+		// typealias handling.
+		if not sawValidBase and baseToken.kind == TokenKind.leftParen 'isTuple'
+			try eat(TokenKind.leftParen)
+			var elemNames = StringArray.create()
+			while not at(TokenKind.rightParen) 'tupleLoop'
+				let elemTok = cursor.current()
+				if not isTypeNameToken(elemTok) 'badElem'
+					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple element must be a type name, got '{tokenValueToString(elemTok.value)}'", line: elemTok.line, column: elemTok.column, filePath: filePath)
+					skipToNextLine()
+					throw ParserError.unhandledToken
+				end 'badElem'
+				_ = try consume()
+				usedTypeAliases.insert(element: elemTok.value)
+				elemNames.push(elemTok.value)
+				if at(TokenKind.rightParen) 'doneTuple'
+					break
+				end 'doneTuple'
+				try expect(TokenKind.comma)
+			end 'tupleLoop'
+			try expect(TokenKind.rightParen)
+			if elemNames.count() < 2 'badArity'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple must have at least 2 elements", line: baseToken.line, column: baseToken.column, filePath: filePath)
+				throw ParserError.unhandledToken
+			end 'badArity'
+			let baseName = "__Tuple{elemNames.count()}"
+			expr = UnresolvedTypeExpr.genericAlias(baseName, args: elemNames)
+			sawValidBase = true
+		end 'isTuple'
+
 		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
 			try eat(baseToken.kind)
@@ -2287,6 +2461,10 @@ export type Parser
 						_ = try consume()
 						usedTypeAliases.insert(element: argToken.value)
 						argNames.push(argToken.value)
+						if at(TokenKind.rightParen) 'doneAliasArgs'
+							break
+						end 'doneAliasArgs'
+						try expect(TokenKind.comma)
 					end 'argLoop'
 					try expect(TokenKind.rightParen)
 				end 'parenList' else 'singleArg'
@@ -2394,6 +2572,9 @@ export type Parser
 				let paramToken = try consume()
 				usesParams.push(paramToken.value)
 				_ = project.typeParameters.intern(currentTypeName, paramName: paramToken.value)
+				if not accept(TokenKind.comma) 'doneUses'
+					break
+				end 'doneUses'
 			end 'usesLoop'
 		end 'hasUses'
 		currentTypeParams = usesParams
@@ -2458,13 +2639,33 @@ export type Parser
 				try eat(kindToken.kind)
 				let fieldNameToken = try consume()
 				checkReservedDeclName(fieldNameToken)
-				// Phase 11.0 step 3c: route field types through `parseTypeRef`
-				// so `Self`, in-scope type parameters (`Element`), generic
-				// instances (`__ManagedMemory with Element`), and function
-				// types are all handled uniformly. The legacy single-token
-				// consume couldn't see any of these shapes.
-				let fieldType = try parseTypeRef()
-				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset, isMutable: isMutableField))
+				// Shorthand `var f = literal` infers the type from the
+				// literal's lead-token kind; the full form `var f T = expr`
+				// parses the type explicitly and accepts any expression as
+				// default. Both produce a synthetic helper function
+				// `<TypeName>.__field_init_<fieldName>` so downstream
+				// struct-literal lowerings can call it for any `Self{...}`
+				// that omits the field.
+				var fieldType = MaxonType.unresolved
+				var hasFieldDefault = false
+				if at(TokenKind.equals) 'shorthandForm'
+					try eat(TokenKind.equals)
+					fieldType = inferShorthandFieldType(cursor.current(), fieldNameToken: fieldNameToken)
+					try parseFieldDefaultInitHelper(typeName: currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
+					hasFieldDefault = true
+				end 'shorthandForm' else 'typedForm'
+					// Phase 11.0 step 3c: route field types through `parseTypeRef`
+					// so `Self`, in-scope type parameters (`Element`), generic
+					// instances (`__ManagedMemory with Element`), and function
+					// types are all handled uniformly.
+					fieldType = try parseTypeRef()
+					if at(TokenKind.equals) 'hasDefault'
+						try eat(TokenKind.equals)
+						try parseFieldDefaultInitHelper(typeName: currentTypeName, fieldName: fieldNameToken.value, fieldType: fieldType, fieldLine: fieldNameToken.line)
+						hasFieldDefault = true
+					end 'hasDefault'
+				end 'typedForm'
+				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset, isMutable: isMutableField, hasDefault: hasFieldDefault))
 				fieldOffset = fieldOffset + 8
 				try skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.typealias 'isInnerAlias'
@@ -2777,6 +2978,9 @@ export type Parser
 			while at(TokenKind.identifier) 'extLoop'
 				let parentToken = try consume()
 				extendsNames.push(parentToken.value)
+				if not accept(TokenKind.comma) 'doneExtends'
+					break
+				end 'doneExtends'
 			end 'extLoop'
 		end 'hasExtends'
 
@@ -2785,6 +2989,9 @@ export type Parser
 			while at(TokenKind.identifier) 'usesLoop'
 				let paramToken = try consume()
 				usesParams.push(paramToken.value)
+				if not accept(TokenKind.comma) 'doneIfaceUses'
+					break
+				end 'doneIfaceUses'
 			end 'usesLoop'
 		end 'hasUses'
 
@@ -2904,8 +3111,7 @@ export type Parser
 		let savedInFunctionParam = inFunctionParam
 		inFunctionParam = true
 
-		// Commas are skipped at the lexer, so parameter pairs land as a flat
-		// run of `name Type name Type ...` between the parens. Stop when the
+		// Parameter pairs are `name Type` separated by commas. Stop when the
 		// next token is the closing `)`.
 		while not at(TokenKind.rightParen) 'paramLoop'
 			let paramNameToken = try consumeExpecting("identifier")
@@ -2924,6 +3130,10 @@ export type Parser
 			end 'recovered'
 			paramNames.push(paramNameToken.value)
 			paramTypes.push(paramType)
+			if at(TokenKind.rightParen) 'doneIfaceParams'
+				break
+			end 'doneIfaceParams'
+			try expect(TokenKind.comma)
 		end 'paramLoop'
 
 		try expect(TokenKind.rightParen)
@@ -2974,6 +3184,9 @@ export type Parser
 				let paramToken = try consume()
 				targetTypeParams.push(paramToken.value)
 				_ = project.typeParameters.intern(targetTypeName, paramName: paramToken.value)
+				if not accept(TokenKind.comma) 'doneExtUses'
+					break
+				end 'doneExtUses'
 			end 'usesLoop'
 		end 'hasUses' else 'inheritParams'
 			// Target hasn't been parsed yet (cross-file extension or
@@ -5114,8 +5327,13 @@ export type Parser
 		// methodCall, or other deferred-type producer. Skip the parse-time
 		// bool check in that case — TypeResolution re-validates `and`/`or`
 		// once producer types are resolved (via validateBinopTypes or the
-		// equivalent post-parse pass).
-		if not maxonTypeIsBool(exprType(rhsResult)) and not isUnresolvedMaxonType(exprType(rhsResult)) 'rhsTypeMismatch'
+		// equivalent post-parse pass). Cmp ops (`<`, `>=`, `==`, …) emit
+		// their result with valueType `integer` even though they're
+		// semantically bool — the comparison-emitter at the Pratt-loop tail
+		// hard-codes integer for parser cmp results. Accept integer here so
+		// `<bool> and <cmp>` doesn't false-positive.
+		let rhsT = exprType(rhsResult)
+		if not maxonTypeIsBool(rhsT) and not isUnresolvedMaxonType(rhsT) and not maxonTypeIsInt(rhsT) 'rhsTypeMismatch'
 			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{opName}' requires both operands to be the same type (both bool or both int)", line: opLine, column: opToken.column, filePath: filePath)
 		end 'rhsTypeMismatch'
 
@@ -5219,9 +5437,21 @@ export type Parser
 			let notToken = try consume()
 			let notRange = SourceRange.ofToken(notToken)
 			let operand = try parseUnary(block)
+			// Emit `logicalNot` unconditionally; the lowerer reads the
+			// operand's resolved MaxonType (after TypeResolution) to pick
+			// between XOR-with-1 (bool) and XOR-with-(-1) (int) semantics.
+			// Type-driven dispatch belongs in lowering / TypeResolution,
+			// not here.
+			//
+			// Use `currentBlock` (not the original `block` param) as the
+			// emission target: a short-circuit `or`/`and` operand earlier
+			// in the call chain (e.g. `not (t or f)`) moves control flow
+			// to a merge block, where the operand's defining SSA op lives.
+			// Appending here to the original entry block would emit the
+			// unop in a different block from its producer, breaking SSA.
 			let resultName = freshSynthName()
-			module.appendOp(block, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: notRange))
-			return ExprResult.direct(resultName, valueType: MaxonType.integer)
+			module.appendOp(currentBlock, op: MaxonOp.unop(resultName, operand: exprName(operand), opKind: UnaryOpKind.logicalNot, operandType: MaxonType.unresolved, range: notRange))
+			return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
 		end 'isNot'
 
 		return try parseAsCasts(block, expr: try parsePostfix(block, expr: try parsePrimary(block)))
@@ -6138,6 +6368,7 @@ export type Parser
 				if cursor.index() <= argStartPos 'stuckArg'
 					break
 				end 'stuckArg'
+				try expect(TokenKind.comma)
 			end 'argLoop'
 		end 'hasArgs'
 		try expect(TokenKind.rightParen)
@@ -6218,7 +6449,15 @@ export type Parser
 		let ptrName = freshSynthName()
 		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
 
-		// Parse field: value pairs and emit one fieldStore per field.
+		// Track user-provided field names so we can synthesize calls to
+		// `<TypeName>.__field_init_<fieldName>` for any defaulted fields
+		// the literal omits. Lookup goes through `unresolvedStructTypes`
+		// — at parse time this is the only place fields land (the resolved
+		// `structTypes` registry is populated later by TypeResolution).
+		var providedFieldNames = StringArray.create()
+
+		// Parse field: value pairs and emit one fieldStore per field. Pairs
+		// may be separated by commas, newlines, or both.
 		while not at(TokenKind.rightBrace) 'fields'
 			let fieldNameToken = try consume()
 			try eat(TokenKind.colon)
@@ -6226,12 +6465,47 @@ export type Parser
 			let fieldLastToken = previousToken()
 
 			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
+			providedFieldNames.push(fieldNameToken.value)
 
+			_ = accept(TokenKind.comma)
 			try skipNewlines()
 		end 'fields'
 		try eat(TokenKind.rightBrace)
+
+		// Phase 11.x: for every defaulted field the literal didn't supply,
+		// emit a call to its `__field_init_*` helper followed by a
+		// fieldStore. The helper was synthesized during `parseTypeDecl`,
+		// so it's registered in `project.funcReturnTypes` by the time any
+		// `Self{...}` (or cross-method literal) parses. Cross-file struct
+		// literals work the same way provided the declaring file was
+		// parsed first — the parser walks files in user-declared order,
+		// matching `project.unresolvedStructTypes` population timing.
+		if let unresolved = try project.unresolvedStructTypes.get(typeName) 'haveDecl'
+			for declField in unresolved.fields 'eachField'
+				if not declField.hasDefault 'noDefault'
+					continue
+				end 'noDefault'
+				if stringArrayContains(providedFieldNames, name: declField.name) 'userProvided'
+					continue
+				end 'userProvided'
+				let helperName = "{typeName}.__field_init_{declField.name}"
+				let initCallName = freshSynthName()
+				module.appendOp(block, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
+				module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+			end 'eachField'
+		end 'haveDecl'
+
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: typeName))
 	end 'parseStructLiteral'
+
+	function stringArrayContains(arr StringArray, name String) returns bool
+		for item in arr 'scan'
+			if item == name 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'stringArrayContains'
 
 	function parsePrimaryMatch(block IrBlock) returns ExprResult throws ParserError
 		// Each leaf consumes its first token itself (stream-style) and exits
@@ -6382,6 +6656,7 @@ export type Parser
 				if cursor.index() <= elemStartPos 'stuckElem'
 					break
 				end 'stuckElem'
+				try expect(TokenKind.comma)
 			end 'elemLoop'
 		end 'hasElements'
 		try expect(TokenKind.rightBracket)
@@ -6895,10 +7170,43 @@ export type Parser
 		if isClosure() 'isClos'
 			return try parseClosure(block)
 		end 'isClos'
+		let openToken = cursor.current()
 		try eat(TokenKind.leftParen)
 		let inner = try parseExpression(block)
+		if not at(TokenKind.comma) 'plainParen'
+			try expect(TokenKind.rightParen)
+			return inner
+		end 'plainParen'
+		// Tuple expression `(e0, e1, ...)` — desugars to a struct literal
+		// for the synthetic `__TupleN` base struct (arity from element
+		// count). Fields are named `_0`, `_1`, etc. Elements are
+		// comma-separated; the leading `(`, first element, and comma have
+		// already been consumed.
+		var elemNames = ByteArrayArray.create()
+		elemNames.push(exprName(inner))
+		while accept(TokenKind.comma) 'tupleLoop'
+			let loopStart = cursor.index()
+			let nextElem = try parseExpression(block)
+			elemNames.push(exprName(nextElem))
+			// Stuck-guard mirrors parseCallArgsRaw: a failed inner parse
+			// may park the cursor on a synchronization-stop token; without
+			// this we'd spin in place.
+			if cursor.index() <= loopStart 'stuck'
+				break
+			end 'stuck'
+		end 'tupleLoop'
 		try expect(TokenKind.rightParen)
-		return inner
+		let arity = elemNames.count()
+		let baseName = "__Tuple{arity}"
+		let typeNameBytes = baseName.toByteArray()
+		let ptrName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(openToken)))
+		for i in 0 upto arity 'eachField'
+			let elemValue = try elemNames.get(i) otherwise panic("parseParenExpr: elemNames.get OOB at {i}")
+			let fieldName = "_{i}".toByteArray()
+			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName, value: elemValue, isInit: true, range: SourceRange.ofToken(openToken)))
+		end 'eachField'
+		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: baseName))
 	end 'parseParenExpr'
 
 	// Stage B (closures): lookahead-only test for the closure-expression
@@ -6980,9 +7288,10 @@ export type Parser
 			paramNames.push(nameToken.value)
 			paramTypes.push(paramType)
 			paramCount = paramCount + 1
-			// Commas between params are dropped by the lexer (skipOther),
-			// so the loop just keeps consuming `name Type` pairs until the
-			// matching `)` shows up.
+			if at(TokenKind.rightParen) 'doneClosureParams'
+				break
+			end 'doneClosureParams'
+			try expect(TokenKind.comma)
 		end 'paramLoop'
 
 		try expect(TokenKind.rightParen)
@@ -7721,6 +8030,15 @@ function maxonTypeIsBool(t MaxonType) returns bool
 		typeParameter to interface gives false
 	end 'check'
 end 'maxonTypeIsBool'
+
+function maxonTypeIsInt(t MaxonType) returns bool
+	return match t 'check'
+		integer gives true
+		boolean gives false
+		float to unresolved gives false
+		typeParameter to interface gives false
+	end 'check'
+end 'maxonTypeIsInt'
 
 // A named type is a "reference" (heap-allocated struct/enum/function) when
 // the project knows about it in the corresponding registry. For named types

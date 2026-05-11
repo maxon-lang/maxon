@@ -79,7 +79,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 25
+let CACHE_FORMAT_VERSION = 26
 
 // ============================================================
 // Types
@@ -506,6 +506,17 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			writeDword(buf, value: fixup.bodyOffset)
 			try writeString(buf, s: fixup.targetName)
 		end 'eachFixup'
+
+		// WASM type-section fixups (indirect-call signature indices). Each
+		// entry persists the bodyOffset and the encoded function-type
+		// signature bytes. On cache restore the user-build re-runs the
+		// type-section fixup walker to patch the body.
+		writeDword(buf, value: func.typeFixups.count())
+		for tyFix in func.typeFixups 'eachTyFix'
+			writeDword(buf, value: tyFix.bodyOffset)
+			writeDword(buf, value: tyFix.signatureBytes.count())
+			buf.append(tyFix.signatureBytes)
+		end 'eachTyFix'
 	end 'eachWasmFunc'
 
 	// GlobalData
@@ -872,6 +883,24 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			pos = wp4
 			wFunc.callFixups.push(WasmCallFixup.create(wOffset, targetName: wTarget))
 		end 'eachFixup'
+
+		// WASM type-section fixups (one per indirect-call site in the
+		// cached body). Mirrors the writer; bodyOffset is the position of
+		// the 5-byte fixed ULEB128 placeholder, signatureBytes is the
+		// encoded function-type the user-build resolves against its own
+		// type section.
+		let wTyFixCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		for _ in 0 upto wTyFixCount 'eachTyFix'
+			let tyOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let sigLen = readDword(buf, offset: pos)
+			pos = pos + 4
+			var sigBytes = ByteArray.create()
+			sigBytes.reserve(sigLen)
+			pos = copyBytesInto(sigBytes, buf: buf, offset: pos, len: sigLen)
+			wFunc.typeFixups.push(WasmTypeFixup.create(tyOffset, signatureBytes: sigBytes))
+		end 'eachTyFix'
 
 		data.wasmFunctions.push(wFunc)
 	end 'eachWasmFunc'

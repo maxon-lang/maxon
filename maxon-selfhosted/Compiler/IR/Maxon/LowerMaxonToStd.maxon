@@ -1368,7 +1368,14 @@ type MaxonToStdLowering
 		end 'asFloat'
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: value))))
+		// Set float-ness first (it collapses the value-type to `float` or
+		// `integer`), then overwrite with the precise litType so downstream
+		// type-driven dispatch (e.g. `lowerUnop` for `logicalNot`) can read
+		// the bool/named distinction back. Order matters: `setIsFloat`
+		// calls `setValueType(id, integer)` which would otherwise wipe the
+		// litType we want preserved.
 		self.setIsFloat(resultId, isFloat: isFloat)
+		self.setValueType(resultId, t: litType)
 	end 'lowerLiteral'
 
 	// Lower a maxon.stringConst op to a heap-allocated String struct
@@ -1982,6 +1989,7 @@ type MaxonToStdLowering
 		let isFloatNeg = match opKind 'isFloatNeg'
 			neg gives self.getIsFloat(operandId)
 			bitNot gives false
+			logicalNot gives false
 		end 'isFloatNeg'
 		if isFloatNeg 'floatNeg'
 			let zeroId = allocValueId(self.funcIdRef)
@@ -1992,6 +2000,35 @@ type MaxonToStdLowering
 			self.setIsFloat(resultId, isFloat: true)
 			return
 		end 'floatNeg'
+		// Logical NOT lowers to `operand XOR mask` where mask is 1 for a
+		// bool operand and -1 (all-ones) for an int operand. The operand's
+		// MaxonType comes from the per-value type map populated by the
+		// parser / TypeResolution; bool produces the 1-flipping semantics
+		// `not` expects, int produces `~` (bitwise complement) semantics
+		// for the only other path the source-level `not` keyword reaches.
+		let isLogicalNot = match opKind 'isLogNot'
+			logicalNot gives true
+			neg gives false
+			bitNot gives false
+		end 'isLogNot'
+		if isLogicalNot 'logicalNot'
+			let operandType = self.getValueType(operandId)
+			let operandIsBool = match operandType 'isBool'
+				boolean gives true
+				integer to function gives false
+				unresolved gives true
+				typeParameter to interface gives false
+			end 'isBool'
+			let maskVal = (1 if operandIsBool else (0 - 1)) as ParsedInt
+			let maskId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: maskId, value: maskVal))))
+			self.setValueType(maskId, t: operandType)
+			let resultId = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.xorI64, resultId: resultId, leftId: operandId, rightId: maskId))))
+			self.setIsFloat(resultId, isFloat: false)
+			self.setValueType(resultId, t: operandType)
+			return
+		end 'logicalNot'
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.unary(StdArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
 		self.setIsFloat(resultId, isFloat: false)
@@ -2027,6 +2064,11 @@ type MaxonToStdLowering
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId))))
 		self.setIsFloat(resultId, isFloat: false)
+		// Cmp opcodes produce 0 or 1 — semantically bool. Tag the result
+		// as `boolean` (overriding the `integer` setIsFloat just wrote)
+		// so `not <cmp>` sees a bool operand and emits XOR-with-1
+		// (logical NOT) rather than XOR-with-(-1) (bitwise NOT).
+		self.setValueType(resultId, t: MaxonType.boolean)
 	end 'lowerCmp'
 
 	// Phase 11.4: desugar `a == b` / `a != b` on a constrained type-param
@@ -2415,11 +2457,41 @@ type MaxonToStdLowering
 			typeParameter then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
 			interface then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
 			unresolved then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
-			named then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a bare named type ({receiverContext.toString(self.project)}); TypeResolution should have promoted this to a genericInstance with bound type-args before lowering")
+			named(id) then return self.materializeLayoutForNamed(id, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 			boolean to string then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a primitive type ({receiverContext.toString(self.project)}); generic methods cannot be called on primitives")
 			function then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a function type ({receiverContext.toString(self.project)}); function values cannot satisfy a generic-method receiver")
 		end 'pick'
 	end 'materializeLayoutArg'
+
+	// `Type.staticMethod()` calls where TypeResolution couldn't recover the
+	// generic-instance shape (because the source-level return type was a
+	// bare `Self`/`Type` rather than `Type with(...)`) land here. If the
+	// receiver's declaring type is itself generic AND the caller's
+	// enclosing type has the same type-parameter names, promote the bare
+	// `named` to a `genericInstance` using the caller's typeParameter ids.
+	// `materializeLayoutForGid` then sees conditional args and forwards
+	// the caller's layout slot. This mirrors what
+	// `enclosingTypeReceiverContext` does for instance methods on Self.
+	function materializeLayoutForNamed(nameId TypeNameId, qualifiedCallee String, dstBlock IrBlock) returns ValueId
+		let baseName = self.project.typeNames.get(nameId)
+		let baseParams = self.project.typeParameters.getParamNames(baseName)
+		if baseParams.count() == 0 'notGeneric'
+			panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a bare named type ({baseName}); the receiver's declaring type is non-generic so no layout is available")
+		end 'notGeneric'
+		var args = MaxonTypeArray.create()
+		for i in 0 upto baseParams.count() 'eachParam'
+			let pname = try baseParams.get(i) otherwise panic("materializeLayoutForNamed: baseParams.get OOB at {i}")
+			// Resolve through the caller's type-param scope so the
+			// resulting gid is conditional (forwards from caller's
+			// layout) rather than pinned to the callee's distinct
+			// type-param ids.
+			let pid = self.project.typeParameters.intern(self.currentTypeName, paramName: pname)
+			args.push(MaxonType.typeParameter(pid))
+		end 'eachParam'
+		let baseId = self.project.typeNames.intern(baseName)
+		let gid = self.project.genericInstances.intern(baseId, args: args)
+		return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
+	end 'materializeLayoutForNamed'
 
 	// Materialize the layout descriptor for a `genericInstance(gid)`
 	// receiverContext: load the rdata blob for fully-concrete instances,
@@ -2463,7 +2535,11 @@ type MaxonToStdLowering
 	// a phase-ordering bug rather than a state we should paper over with
 	// a sentinel.
 	function forwardCallerLayout(qualifiedCallee String) returns ValueId
-		if self.implicitLayoutValueId == 0 'noSlot'
+		// The legitimate layout slot can be `0` for a zero-user-param
+		// generic helper (e.g. `Type.__field_init_<field>`), so we can't
+		// use a sentinel-zero check here. Probe `hasImplicitLayoutParam`
+		// on the current function instead.
+		if not self.currentMaxonFunc.hasImplicitLayoutParam 'noSlot'
 			panic("forwardCallerLayout: caller '{self.currentMaxonFunc.name}' has no implicit layout param but call to '{qualifiedCallee}' needs one forwarded — TypeResolution should have either pinned a concrete receiver or marked the caller as generic")
 		end 'noSlot'
 		return self.implicitLayoutValueId
@@ -2533,7 +2609,7 @@ type MaxonToStdLowering
 			typeParameter then return ResolvedCalleeParam.forwardFromCaller
 			interface then return ResolvedCalleeParam.forwardFromCaller
 			unresolved then return ResolvedCalleeParam.forwardFromCaller
-			named then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is a bare named type")
+			named then return ResolvedCalleeParam.forwardFromCaller
 			boolean then return ResolvedCalleeParam.concrete("bool")
 			integer then return ResolvedCalleeParam.concrete("int")
 			float then return ResolvedCalleeParam.concrete("float")
@@ -4129,10 +4205,25 @@ type MaxonToStdLowering
 	// size, then call mrt_alloc. The result's MaxonType is recorded so
 	// downstream field/method ops on it can resolve.
 	function lowerStructAlloc(result ByteArray, structName ByteArray, dstBlock IrBlock)
-		let structNameStr = String.from(structName)
+		let rawNameStr = String.from(structName)
+		// Chase typealias chains so `KeyArray{}` (where
+		// `typealias KeyArray = Array with Key`) resolves to the
+		// underlying `Array` struct. Inner-aliases (declared inside the
+		// enclosing struct's body) and top-level generic aliases both
+		// route through `chaseTypealiasNameToStruct`. Initialize with
+		// an empty `""` and overwrite below so we don't accidentally
+		// alias `rawNameStr` (E3078 — a mutable binding can't be
+		// initialized from a `let`-bound value without cloning).
+		var structNameStr = ""
+		structNameStr = rawNameStr
+		if not self.project.structTypes.contains(rawNameStr) 'tryChase'
+			if let chased = try chaseTypealiasNameToStruct(self.project, name: rawNameStr, enclosingType: self.currentTypeName) 'didChase'
+				structNameStr = chased
+			end 'didChase'
+		end 'tryChase'
 		var byteSize = 0
 		let structType = try self.project.structTypes.get(structNameStr) otherwise 'unknownType'
-			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown struct type '{structNameStr}' in structAlloc")
+			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown struct type '{rawNameStr}' in structAlloc")
 			byteSize = 0
 			let placeholderResultId = self.defineName(result)
 			self.setValueType(placeholderResultId, t: MaxonType.integer)
@@ -4954,9 +5045,15 @@ function binOpSupportsFloat(opKind BinOpKind) returns bool
 end 'binOpSupportsFloat'
 
 function unaryOpKindToArithOpcode(opKind UnaryOpKind) returns StdArithUnaryOpcode
+	match opKind 'verify'
+		neg then break 'verify'
+		bitNot then break 'verify'
+		logicalNot then panic("unaryOpKindToArithOpcode: logicalNot is handled inline by lowerUnop and must not reach this opcode map")
+	end 'verify'
 	return match opKind 'map'
 		neg gives StdArithUnaryOpcode.negI64
 		bitNot gives StdArithUnaryOpcode.bitNotI64
+		logicalNot gives StdArithUnaryOpcode.bitNotI64
 	end 'map'
 end 'unaryOpKindToArithOpcode'
 

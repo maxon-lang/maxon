@@ -1314,6 +1314,7 @@ function unopHitIfNegMatch(result ByteArray, operandName ByteArray, operand Byte
 	let isNeg = match opKind 'kind'
 		neg gives true
 		bitNot gives false
+		logicalNot gives false
 	end 'kind'
 	if not isNeg 'notNeg'
 		return UnopHit.miss()
@@ -3526,12 +3527,14 @@ function freshIntermediateNameForCmp(result ByteArray) returns ByteArray
 end 'freshIntermediateNameForCmp'
 
 function insertBitNotAfter(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, range SourceRange)
-	// Append a bitNot op into the module's ops array AND register it in
-	// whichever block owned the original cmp. We find the block by
+	// Append a logicalNot op into the module's ops array AND register it
+	// in whichever block owned the original cmp. We find the block by
 	// scanning blockRefs — the cmp's index is in exactly one block's
-	// opRefs.
+	// opRefs. Logical-NOT (not bitwise) is required here: the operand is
+	// the bool result of `equals`, and the consumer expects 0/1 — bitNot
+	// on bool would produce -1/-2, both truthy.
 	let bitNotIdx = module.ops.count()
-	module.ops.push(MaxonOp.unop(result, operand: operand, opKind: UnaryOpKind.bitNot, operandType: MaxonType.integer, range: range))
+	module.ops.push(MaxonOp.unop(result, operand: operand, opKind: UnaryOpKind.logicalNot, operandType: MaxonType.boolean, range: range))
 	for blockRef in 0 upto module.blocks.count() 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("insertBitNotAfter: blockRef OOB")
 		var insertPos = -1 as ParsedInt

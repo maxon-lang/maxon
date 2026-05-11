@@ -37,10 +37,6 @@ end 'buildWitnessTables'
 function emitWitnessForConformance(project Project, globalData GlobalDataTable, cid ConformanceId)
 	let (typeName, interfaceName, withArgs) = project.conformances.get(cid)
 
-	if project.witnessTables.contains(typeName, interfaceName: interfaceName) 'alreadyEmitted'
-		return
-	end 'alreadyEmitted'
-
 	// Conditional conformances (any type-parameter still unbound) are emitted
 	// lazily by 11.4 when the call site fixes the type-arg. Detect by walking
 	// `withArgs` for `typeParameter` arms — the unconditional case has either
@@ -64,26 +60,40 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 	for m in iface.methods 'eachMethod'
 		let implName = "{typeName}.{m.name}"
 		methodImplNames.push(implName)
+		// Push each impl name onto `livenessRoots` unconditionally so DFE
+		// keeps the function alive even on user-builds where the witness
+		// table was restored from cache (`project.witnessTables` already
+		// has the entry, but DFE still needs the root push every pipeline
+		// run). The cache stores `witnessTables` / `staticRdataValues`
+		// but NOT `globalData.pendingRdataRelocs`, so we also re-push the
+		// funcAbs64 relocs below — patching at PE write time needs them.
 		project.livenessRoots.push(implName)
 	end 'eachMethod'
+
+	let alreadyEmitted = project.witnessTables.contains(typeName, interfaceName: interfaceName)
 
 	let isFatBoxed = maxonTypeWidthBytes(project, t: asMaxonTypeForName(project, name: typeName)) > 8
 
 	let parentLabel = pickParentWitnessLabel(project, iface: iface, typeName: typeName)
 
-	let table = WitnessTable.create(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
-	let bytes = encodeWitnessTable(table)
+	if not alreadyEmitted 'emitNew'
+		let table = WitnessTable.create(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
+		let bytes = encodeWitnessTable(table)
+		addNamedGlobalData(globalData, name: label, data: bytes)
+		project.staticRdataValues.upsert(label, value: bytes)
+		project.witnessTables.intern(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
+	end 'emitNew'
 
-	addNamedGlobalData(globalData, name: label, data: bytes)
-	project.staticRdataValues.upsert(label, value: bytes)
-
+	// Re-push func-abs64 relocs every time. The relocs live on
+	// `globalData.pendingRdataRelocs` which is per-pipeline-run; the
+	// cache restore brings back the witness-table registry and the rdata
+	// bytes, but NOT these relocs (they're target-specific and patching
+	// happens at PE/ELF/MachO write time, after any cache load).
 	for i in 0 upto methodImplNames.count() 'eachReloc'
 		let implName = try methodImplNames.get(i) otherwise panic("buildWitnessTables: methodImplNames.get OOB at {i}")
 		let slotOffset = WITNESS_OFFSET_METHODS + 8 * i
 		pushFuncAbs64Reloc(globalData, rdataLabel: label, funcName: implName, offsetInLabel: slotOffset)
 	end 'eachReloc'
-
-	project.witnessTables.intern(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
 end 'emitWitnessForConformance'
 
 // Pick the first `extends` parent the conforming type also implements; the

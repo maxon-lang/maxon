@@ -82,7 +82,7 @@ function checkConformanceForType(project Project, typeName String, expected Inte
 		end 'isStatic'
 		let actualReturn = try project.funcReturnTypes.get(qualified) otherwise panic("checkConformanceForType: funcReturnTypes.get '{qualified}' missing despite contains")
 		let actualSig = try project.funcSignatures.get(qualified) otherwise panic("checkConformanceForType: funcSignatures.get '{qualified}' missing despite contains")
-		if not signatureMatches(sig, actualParamNames: actualSig.paramNames, actualParamTypes: actualSig.paramTypes, actualReturn: actualReturn) 'mismatch'
+		if not signatureMatches(project, expected: sig, actualParamNames: actualSig.paramNames, actualParamTypes: actualSig.paramTypes, actualReturn: actualReturn) 'mismatch'
 			let actualFormatted = formatActualSignature(project, methodName: sig.name, paramNames: actualSig.paramNames, paramTypes: actualSig.paramTypes, returnType: actualReturn)
 			wrongSig.push("{actualFormatted} (expected {formatMethodSig(project, sig: sig)})")
 		end 'mismatch'
@@ -106,7 +106,7 @@ end 'checkConformanceForType'
 // makes the parameter name part of the public contract — interface implementers
 // must keep the names the same as the interface or call sites that go through
 // the interface will fail to bind.
-function signatureMatches(expected InterfaceMethodSig, actualParamNames StringArray, actualParamTypes MaxonTypeArray, actualReturn MaxonReturnType) returns bool
+function signatureMatches(project Project, expected InterfaceMethodSig, actualParamNames StringArray, actualParamTypes MaxonTypeArray, actualReturn MaxonReturnType) returns bool
 	let skipSelf = 1 if actualParamNames.count() > 0 and (try actualParamNames.get(0) otherwise "") == "__self" else 0
 	let actualUserCount = actualParamNames.count() - skipSelf
 	if actualUserCount != expected.paramTypes.count() 'arity'
@@ -120,12 +120,64 @@ function signatureMatches(expected InterfaceMethodSig, actualParamNames StringAr
 		if expName != actName 'nameMismatch'
 			return false
 		end 'nameMismatch'
-		if not maxonTypesStructurallyEqual(expType, b: actType) 'typeMismatch'
+		if not maxonTypesMatchForConformance(project, expected: expType, actual: actType) 'typeMismatch'
 			return false
 		end 'typeMismatch'
 	end 'each'
-	return maxonReturnTypesStructurallyEqual(expected.returnType, b: actualReturn)
+	return maxonReturnTypesMatchForConformance(project, expected: expected.returnType, actual: actualReturn)
 end 'signatureMatches'
+
+// Conformance-side type comparison. Stricter than plain structural equality
+// at one specific cross-scope shape: interface method signatures are parsed
+// with `currentTypeParams = []` (interface bodies don't push their
+// `usesParams` into the in-scope type-param table), so a type-parameter
+// reference inside the signature lands as `MaxonType.named("Element")`
+// rather than `MaxonType.typeParameter(...)`. The implementing type's
+// methods, by contrast, are parsed with `currentTypeParams = ["Element",
+// ...]`, so the same identifier lands as `typeParameter(id)`. Strict
+// structural equality would reject the otherwise-correct conformance.
+// Treat `named("X")` and `typeParameter(id)` as equal when `id`'s declared
+// param name is `X`. All other arms fall back to plain structural equality.
+function maxonTypesMatchForConformance(project Project, expected MaxonType, actual MaxonType) returns bool
+	if maxonTypesStructurallyEqual(expected, b: actual) 'eq'
+		return true
+	end 'eq'
+	let expName = match expected 'expCase'
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+	end 'expCase'
+	if expName.isEmpty() 'noExpName'
+		return false
+	end 'noExpName'
+	let actParamName = match actual 'actCase'
+		typeParameter(id) gives project.typeParameters.getName(id)
+		boolean to string gives ""
+		named gives ""
+		function gives ""
+		unresolved gives ""
+		genericInstance gives ""
+		interface gives ""
+	end 'actCase'
+	return not actParamName.isEmpty() and actParamName == expName
+end 'maxonTypesMatchForConformance'
+
+function maxonReturnTypesMatchForConformance(project Project, expected MaxonReturnType, actual MaxonReturnType) returns bool
+	return match expected 'cmp'
+		void gives match actual 'aVoid'
+			void gives true
+			value gives false
+		end 'aVoid'
+		value(innerExp) gives match actual 'aVal'
+			void gives false
+			value(innerAct) gives maxonTypesMatchForConformance(project, expected: innerExp, actual: innerAct)
+		end 'aVal'
+	end 'cmp'
+end 'maxonReturnTypesMatchForConformance'
 
 // Render a `(p1 T1, p2 T2)` parameter list, skipping the first `startIndex`
 // slots. The actual-signature path passes startIndex=1 to elide the implicit

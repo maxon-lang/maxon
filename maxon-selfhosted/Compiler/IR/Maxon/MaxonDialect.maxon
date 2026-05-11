@@ -806,7 +806,17 @@ end 'BinOpKind'
 
 export union UnaryOpKind
 	neg = "neg"
+	// Bitwise complement (`~` semantics): for a 64-bit operand, flips every
+	// bit. Currently the parser doesn't emit this directly — `not` always
+	// emits `logicalNot` — but the kind is kept so a future `~` operator
+	// or a TypeResolution rewrite of `logicalNot` over int operands has a
+	// distinct lowering target.
 	bitNot = "bitNot"
+	// Logical NOT (`not` keyword): on a bool, produces the opposite bool;
+	// on an integer with a constrained range that includes 0 and 1, the
+	// lowerer interprets it as XOR-with-1. Parser emits this unconditionally;
+	// lowerUnop picks the right opcode based on the operand's resolved type.
+	logicalNot = "logicalNot"
 end 'UnaryOpKind'
 
 export union CmpPredicate

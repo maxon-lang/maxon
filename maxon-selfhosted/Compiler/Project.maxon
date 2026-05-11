@@ -2038,9 +2038,15 @@ export type StructField
 	export var fieldType MaxonType
 	export var offset FieldOffset
 	export var isMutable bool
+	// True when the field declaration carried a `= <expr>` default value.
+	// At parse time, a synthetic helper `<TypeName>.__field_init_<fieldName>`
+	// is generated that evaluates the default expression; this flag tells
+	// the struct-literal lowerer to call that helper for any literal that
+	// omits this field.
+	export var hasDefault bool
 
-	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool) returns StructField
-		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable}
+	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false) returns StructField
+		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault}
 	end 'create'
 end 'StructField'
 
