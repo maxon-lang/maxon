@@ -1,14 +1,42 @@
 // Common Subexpression Elimination (CSE) Pass.
 // Walks module -> functions -> blocks -> ops.
-// For each arith.binary, computes a value number from (opcode, leftId, rightId).
-// If a duplicate expression is found within the same block, remaps the result
-// to the earlier computation's resultId.
-// After identifying duplicates, applies substitution across all remaining ops.
+//
+// Stage A (function-wide): hoist duplicate `arith.const` ops into the entry
+// block. The entry block dominates every reachable block so the canonical
+// def is in scope at every original use site. Shrinks IR after inlining,
+// where spliced callees flood the caller with the same constants per arm
+// (`Math.pow` emits `const 0.0` 9 times across its branches, etc.).
+//
+// Stage B (per-block): for each `arith.binary`, computes a value number from
+// (opcode, leftId, rightId). If a duplicate expression is found within the
+// same block, remap the result to the earlier computation's resultId.
+//
+// After identifying duplicates, the rewrite pass drops duplicates and
+// substitutes operand references to the canonical resultId.
 
 // Sentinel meaning "no remap for this valueId"
 let REMAP_NONE = i64.max
 
 typealias ValueNumberMap = Map with(String, ValueId)
+
+// Map from "{opcodeOrd}:{value}" -> canonical ValueId for the function-wide
+// constant hoist. Each const-key gets at most one entry pointing at the
+// canonical (entry-block) def's resultId; every duplicate const op in the
+// function remaps to it.
+typealias ConstCanonicalMap = Map with(String, ValueId)
+
+// Occurrence counts keyed the same way; values are duplicate-occurrence
+// tallies, not ValueIds.
+typealias DuplicateCount = int(0 to u64.max)
+typealias ConstCountMap = Map with(String, DuplicateCount)
+
+// Position into an OpIndexList. Distinct from ValueId — these are list
+// positions, not SSA value identifiers.
+typealias OpListPos = int(0 to u64.max)
+
+function constKey(opcodeOrd ValueId, value ParsedInt) returns String
+	return "{opcodeOrd}:{value}"
+end 'constKey'
 
 // Build a hash key from the triple (opcodeOrd, leftId, rightId).
 function vnKey(opcodeOrd ValueId, leftId ValueId, rightId ValueId) returns String
@@ -31,36 +59,211 @@ end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module StdModule) returns StdModule
 	for func in module.functions 'eachFunc'
+		// Stage A: function-wide constant hoisting.
+		var fnRemap = ValueIdArray.create()
+		hoistDuplicateConstantsToEntry(module, func: func, remap: fnRemap)
+
 		for blockRef in func.blockRefs 'eachBlock'
 			var block = try module.blocks.get(blockRef) otherwise panic("Block not found in module")
 
-			// Phase 1: Walk ops, build value numbering table and remap table
+			// Stage B (per-block): extend the remap table with same-block
+			// binary duplicates and rewrite the block's ops.
 			var vnMap = ValueNumberMap.create()
-			var remap = ValueIdArray.create()
 
 			for packed in block.opRefs 'buildVN'
-				cseAnalyzePackedOp(module, opIdx: packed, vnMap: vnMap, remap: remap)
+				cseAnalyzePackedOp(module, opIdx: packed, vnMap: vnMap, remap: fnRemap)
 			end 'buildVN'
 
-			// Phase 2: Rewrite ops — skip duplicate binary ops, substitute values in all others
 			let oldOps = block.opRefs
 			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'rewrite'
-				if isDuplicatePackedOp(module, opIdx: packed, remap: remap) 'skipDup'
+				if isDuplicatePackedOp(module, opIdx: packed, remap: fnRemap) 'skipDup'
 					continue
 				end 'skipDup'
-				cseSubstitutePackedOp(module, opIdx: packed, remap: remap, dstBlock: block)
+				cseSubstitutePackedOp(module, opIdx: packed, remap: fnRemap, dstBlock: block)
 			end 'rewrite'
 
-			// Rewrite terminator
 			if block.hasTerminatorOp() 'hasTerm'
-				cseSubstituteTerminator(module, terminator: block.terminatorIndex(), remap: remap, dstBlock: block)
+				cseSubstituteTerminator(module, terminator: block.terminatorIndex(), remap: fnRemap, dstBlock: block)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
 	return module
 end 'eliminateCommonSubexpressions'
+
+// Stage A: function-wide constant hoisting.
+//
+// First pass: count per-key occurrences. Second pass: for each key that
+// meets MIN_HOIST_OCCURRENCES, designate the entry-block def (existing or
+// freshly emitted) as canonical. Third pass: install remap entries for
+// every duplicate.
+//
+// SSA soundness: entry dominates everything, so the canonical def is in
+// scope at every remap site. The downstream regalloc must rematerialize
+// const-typed virtuals at each use rather than maintain one live range,
+// otherwise the hoisted canonical conflicts with ABI-constrained uses
+// (errorReturn wanting `0` in both rdx and r8 across paths). That
+// rematerialization lives in the live-range builder.
+function hoistDuplicateConstantsToEntry(module StdModule, func IrFunction, remap ValueIdArray)
+	if func.blockRefs.count() == 0 'noBlocks'
+		return
+	end 'noBlocks'
+
+	var counts = ConstCountMap.create()
+	var entryDefs = ConstCanonicalMap.create()
+	let entryBlockRef = try func.blockRefs.get(0) otherwise panic("hoistDuplicateConstantsToEntry: blockRefs.count() > 0 but get(0) failed")
+	let entryBlockId = (try module.blocks.get(entryBlockRef) otherwise panic("hoistDuplicateConstantsToEntry: entry blockRef not in module.blocks")).id
+
+	for blockRef in func.blockRefs 'countPass'
+		let block = try module.blocks.get(blockRef) otherwise panic("hoistDuplicateConstantsToEntry: blockRef not in module.blocks")
+		let isEntry = block.id == entryBlockId
+		for packed in block.opRefs 'eachOp'
+			let constOp = try lookupConstOp(module, opIdx: packed) otherwise continue
+			let key = constKey(constOp.opcode.ordinal, value: constOp.value)
+			let prevCount = try counts.get(key) otherwise 0 as DuplicateCount
+			counts.upsert(key, value: prevCount + 1)
+			if isEntry and not entryDefs.contains(key) 'firstEntryDef'
+				entryDefs.upsert(key, value: constOp.resultId)
+			end 'firstEntryDef'
+		end 'eachOp'
+	end 'countPass'
+
+	var canonicalIds = ConstCanonicalMap.create()
+	var entryBlock = try module.blocks.get(entryBlockRef) otherwise panic("hoistDuplicateConstantsToEntry: entry blockRef not in module.blocks (second read)")
+	var nextValueIdRef = ValueIdRef.create(scanMaxValueId(func, module: module) + 1)
+	var freshConstIndices = OpIndexList.create()
+	for (key, count) in counts 'planCanonicals'
+		if count < MIN_HOIST_OCCURRENCES 'noDedupe'
+			continue
+		end 'noDedupe'
+		if let existing = try entryDefs.get(key) 'haveEntryDef'
+			canonicalIds.upsert(key, value: existing)
+		end 'haveEntryDef' else 'needsFresh'
+			let parts = splitConstKey(key)
+			let opcode = constOpcodeFromOrdinal(parts.opcodeOrd)
+			let resultId = allocValueId(nextValueIdRef)
+			let newOp = StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: resultId, value: parts.value)))
+			let newOpIdx = module.ops.count()
+			module.ops.push(newOp)
+			freshConstIndices.append(newOpIdx)
+			canonicalIds.upsert(key, value: resultId)
+		end 'needsFresh'
+	end 'planCanonicals'
+
+	if freshConstIndices.count() > 0 'havefresh'
+		var insertPos = countLeadingParamOps(module, opRefs: entryBlock.opRefs)
+		for newOpIdx in freshConstIndices 'eachFresh'
+			try entryBlock.opRefs.insert(at: insertPos, value: newOpIdx) otherwise panic("hoistDuplicateConstantsToEntry: insertPos in [0, opRefs.count()] but insert failed")
+			insertPos = insertPos + 1
+		end 'eachFresh'
+		try module.blocks.set(entryBlockRef, value: entryBlock) otherwise panic("hoistDuplicateConstantsToEntry: blocks.set OOB writing entry block")
+	end 'havefresh'
+
+	for blockRef in func.blockRefs 'remapPass'
+		let block = try module.blocks.get(blockRef) otherwise panic("hoistDuplicateConstantsToEntry: blockRef not in module.blocks (third pass)")
+		for packed in block.opRefs 'eachOp'
+			let constOp = try lookupConstOp(module, opIdx: packed) otherwise continue
+			let key = constKey(constOp.opcode.ordinal, value: constOp.value)
+			if let canonical = try canonicalIds.get(key) 'haveCanonical'
+				if constOp.resultId != canonical 'isDuplicate'
+					growRemap(remap, size: constOp.resultId + 1)
+					try remap.set(constOp.resultId, value: canonical) otherwise panic("hoistDuplicateConstantsToEntry: remap.set OOB")
+					logTrace(LogCategory.ir, message: () gives "cse-hoist: const %{constOp.resultId} -> canonical %{canonical} (key={key})")
+				end 'isDuplicate'
+			end 'haveCanonical'
+		end 'eachOp'
+	end 'remapPass'
+end 'hoistDuplicateConstantsToEntry'
+
+// Threshold for the Stage A hoist: only merge constants with this many
+// occurrences. The motivating case (Math.pow's 9 `const 0.0` + 7 `const
+// 1.0`) crosses comfortably while smaller duplicate sets get left alone —
+// hoisting widens live ranges, and a low threshold can regress functions
+// where the consts have spread-out uses across many call sites.
+let MIN_HOIST_OCCURRENCES = 6 as DuplicateCount
+
+enum ConstOpLookupError implements Error
+	notConst
+end 'ConstOpLookupError'
+
+// Return the StdArithConst at opIdx, or throw if the op is anything else.
+// Used by Stage A to walk every op once, picking out the const ops.
+function lookupConstOp(module StdModule, opIdx OpIndex) returns StdArithConst throws ConstOpLookupError
+	let stdOp = try module.ops.get(opIdx) otherwise throw ConstOpLookupError.notConst
+	return match stdOp 'outer'
+		arith(a) gives match a 'inner'
+			const(c) gives c
+			unary throws ConstOpLookupError.notConst
+			binary throws ConstOpLookupError.notConst
+		end 'inner'
+		control throws ConstOpLookupError.notConst
+		call throws ConstOpLookupError.notConst
+		memory throws ConstOpLookupError.notConst
+		system throws ConstOpLookupError.notConst
+	end 'outer'
+end 'lookupConstOp'
+
+type ConstKeyParts
+	export var opcodeOrd ValueId
+	export var value ParsedInt
+
+	export static function create(opcodeOrd ValueId, value ParsedInt) returns ConstKeyParts
+		return Self{opcodeOrd: opcodeOrd, value: value}
+	end 'create'
+end 'ConstKeyParts'
+
+function splitConstKey(key String) returns ConstKeyParts
+	let sep = try key.findFirst(":") otherwise panic("splitConstKey: malformed key '{key}' (no separator)")
+	let opcodeStr = key.slice(key.startIndex(), endIndex: sep)
+	let valueStart = try key.indexAfter(sep) otherwise panic("splitConstKey: malformed key '{key}' (separator at end)")
+	let valueStr = key.slice(valueStart, endIndex: key.endIndex())
+	let opcodeOrd = try int.fromString(opcodeStr) otherwise panic("splitConstKey: opcode ordinal '{opcodeStr}' not an int (key={key})")
+	let value = try int.fromString(valueStr) otherwise panic("splitConstKey: value '{valueStr}' not an int (key={key})")
+	return ConstKeyParts.create(opcodeOrd, value: value)
+end 'splitConstKey'
+
+function constOpcodeFromOrdinal(opcodeOrd ValueId) returns StdArithConstOpcode
+	if opcodeOrd == StdArithConstOpcode.constI64.ordinal 'isI64'
+		return StdArithConstOpcode.constI64
+	end 'isI64'
+	if opcodeOrd == StdArithConstOpcode.constF64.ordinal 'isF64'
+		return StdArithConstOpcode.constF64
+	end 'isF64'
+	panic("constOpcodeFromOrdinal: unknown ordinal {opcodeOrd}")
+end 'constOpcodeFromOrdinal'
+
+// Position of the first non-param op in `opRefs`. Stage A inserts the
+// hoisted const ops here so they sit after the function's `param` ops
+// (which must remain at the head of the entry block).
+function countLeadingParamOps(module StdModule, opRefs OpIndexList) returns OpListPos
+	var count = 0 as OpListPos
+	for opIdx in opRefs 'scan'
+		let stdOp = try module.ops.get(opIdx) otherwise break
+		let isParam = match stdOp 'check'
+			call(c) gives match c 'inner'
+				param gives true
+				ret gives false
+				call gives false
+				tryCall gives false
+				indirectCall gives false
+				witnessCall gives false
+				funcRef gives false
+				tailCall gives false
+				errorReturn gives false
+			end 'inner'
+			arith gives false
+			control gives false
+			memory gives false
+			system gives false
+		end 'check'
+		if not isParam 'notParam'
+			break
+		end 'notParam'
+		count = count + 1
+	end 'scan'
+	return count
+end 'countLeadingParamOps'
 
 // ============================================================
 // Phase 1: Analysis — build value numbering and remap tables
@@ -116,8 +319,12 @@ end 'isDuplicatePackedOp'
 
 function isRemappedArithOp(op StdArithOp, remap ValueIdArray) returns bool
 	return match op 'check'
+		// Stage A's hoist installs remap entries for duplicate consts; the
+		// rewrite pass must drop them so only the canonical entry-block def
+		// survives (otherwise SSA gets two defs of the same logical value).
+		const(c) gives isRemapped(c.resultId, remap: remap)
 		binary(b) gives isRemapped(b.resultId, remap: remap)
-		const to unary gives false
+		unary gives false
 	end 'check'
 end 'isRemappedArithOp'
 

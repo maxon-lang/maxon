@@ -35,33 +35,33 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.xor eax, eax
-    x64.xor edx, edx
+    x64.prologue stack_size=32
+    x64.xor r12d, r12d
     x64.mov ecx, 64
+    x64.mov rdx, r12
+    x64.mov rax, r12
     x64.call mm_alloc
-    x64.mov r12, r8
-    x64.mov rcx, r12
+    x64.mov r13, r8
+    x64.mov rcx, r13
     x64.call mm_incref
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call mm_incref
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call mm_incref
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call mm_decref
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call mm_decref
-    x64.mov rcx, r12
+    x64.mov rcx, r13
     x64.call mm_decref
     x64.lea r8, [rip+__mm_alloc_count]
-    x64.mov r13, [r8+0] (8b)
-    x64.mov rcx, r12
+    x64.mov r14, [r8+0] (8b)
+    x64.mov rcx, r13
     x64.call mm_decref
     x64.lea r8, [rip+__mm_alloc_count]
     x64.mov r9, [r8+0] (8b)
-    x64.xor r8d, r8d
-    x64.cmp r13, 1
-    x64.je a_0.after
+    x64.cmp r14, 1
+    x64.je __phi_trampoline_0_0
   a_0:
     x64.mov r8d, 1
   a_0.after:
@@ -74,7 +74,7 @@ module {
     x64.test r9, r9
     x64.jne ok_0.after
   ok_0:
-    x64.xor r8d, r8d
+    x64.mov r8, r12
     x64.epilogue
     x64.ret
   ok_0.after:
@@ -95,6 +95,9 @@ module {
     x64.mov r8d, 3
     x64.epilogue
     x64.ret
+  __phi_trampoline_0_0:
+    x64.mov r8, r12
+    x64.jmp a_0.after
   __phi_trampoline_2_0:
     x64.mov r9, r8
     x64.jmp b_0.after

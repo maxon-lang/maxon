@@ -43,7 +43,11 @@
 // tunes them based on benchmark output.
 
 let TINY_OP_THRESHOLD = 10
-let MEDIUM_OP_THRESHOLD = 50
+// 40 keeps small accessor-style helpers eligible while gating out the larger
+// arithmetic library functions (Math.pow ~50 ops, Math.exp ~44 ops post-CSE-
+// const-hoist). Inlining Math.pow into every call site blew up code size and
+// caused regressions in regalloc pressure; calls win there.
+let MEDIUM_OP_THRESHOLD = 40
 let LOOP_DEPTH_1_MULT = 3
 let LOOP_DEPTH_2_MULT = 6
 let CONCRETE_DESC_MULT = 2

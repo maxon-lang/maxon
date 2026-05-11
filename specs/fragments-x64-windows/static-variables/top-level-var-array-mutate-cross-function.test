@@ -33,12 +33,12 @@ module {
   func @increment(rcx: i64) {
   entry:
     x64.prologue stack_size=16
-    x64.mov rbx, rcx
+    x64.mov r12, rcx
     x64.lea r8, [rip+__data_counters]
     x64.mov r9, [r8+0] (8b)
   inlined_Array.get_0:
     x64.mov rcx, [r9+0] (8b)
-    x64.mov rdx, rbx
+    x64.mov rdx, r12
     x64.call __managed_mem_get
     x64.test rdx, rdx
     x64.je inlined_Array.get_2
@@ -49,18 +49,20 @@ module {
   inlined_Array.get_2:
     x64.xor r9d, r9d
   inline_cont_increment_0:
+    x64.xor esi, esi
     x64.test r9, r9
-    x64.je try_0.merge
-  try_0.otherwise:
-    x64.xor r8d, r8d
+    x64.je try_0.ok
+    x64.jmp try_0.merge
+  try_0.ok:
+    x64.mov rsi, r8
   try_0.merge:
-    x64.lea r9, [rip+__data_counters]
-    x64.mov rsi, [r9+0] (8b)
-    x64.mov rax, r8
+    x64.lea r8, [rip+__data_counters]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rax, rsi
     x64.add rax, 1
   inlined_Array.set_0:
-    x64.mov rcx, [rsi+0] (8b)
-    x64.mov rdx, rbx
+    x64.mov rcx, [r9+0] (8b)
+    x64.mov rdx, r12
     x64.call __managed_mem_set
     x64.test rdx, rdx
     x64.je inlined_Array.set_2
@@ -86,12 +88,13 @@ module {
   }
   func @total() -> i64 {
   entry:
-    x64.prologue stack_size=16
+    x64.prologue stack_size=32
     x64.lea r8, [rip+__data_counters]
     x64.mov r9, [r8+0] (8b)
-    x64.xor edx, edx
+    x64.xor r12d, r12d
   inlined_Array.get_0:
     x64.mov rcx, [r9+0] (8b)
+    x64.mov rdx, r12
     x64.call __managed_mem_get
     x64.test rdx, rdx
     x64.je inlined_Array.get_2
@@ -103,10 +106,11 @@ module {
     x64.xor r9d, r9d
   inline_cont_total_0:
     x64.test r9, r9
-    x64.je __phi_trampoline_13_0
-  try_0.otherwise:
-    x64.xor r8d, r8d
-    x64.mov rbx, r8
+    x64.je try_0.ok
+    x64.mov r13, r12
+    x64.jmp try_0.merge
+  try_0.ok:
+    x64.mov r13, r8
   try_0.merge:
     x64.lea r8, [rip+__data_counters]
     x64.mov r9, [r8+0] (8b)
@@ -124,10 +128,11 @@ module {
     x64.xor r9d, r9d
   inline_cont_total_1:
     x64.test r9, r9
-    x64.je __phi_trampoline_17_0
-  try_1.otherwise:
-    x64.xor r8d, r8d
-    x64.mov r12, r8
+    x64.je try_1.ok
+    x64.mov r14, r12
+    x64.jmp try_1.merge
+  try_1.ok:
+    x64.mov r14, r8
   try_1.merge:
     x64.lea r8, [rip+__data_counters]
     x64.mov r9, [r8+0] (8b)
@@ -145,22 +150,16 @@ module {
     x64.xor r9d, r9d
   inline_cont_total_2:
     x64.test r9, r9
-    x64.je try_2.merge
-  try_2.otherwise:
-    x64.xor r8d, r8d
+    x64.je try_2.ok
+    x64.jmp try_2.merge
+  try_2.ok:
+    x64.mov r12, r8
   try_2.merge:
-    x64.add rbx, r12
-    x64.mov r9, rbx
-    x64.add r9, r8
-    x64.mov r8, r9
+    x64.add r13, r14
+    x64.mov r8, r13
+    x64.add r8, r12
     x64.epilogue
     x64.ret
-  __phi_trampoline_13_0:
-    x64.mov rbx, r8
-    x64.jmp try_0.merge
-  __phi_trampoline_17_0:
-    x64.mov r12, r8
-    x64.jmp try_1.merge
   }
   func @main() -> u8 {
   entry:

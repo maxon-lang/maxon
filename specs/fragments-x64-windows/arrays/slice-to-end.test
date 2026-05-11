@@ -65,52 +65,47 @@ module {
   inlined_Array.slice_0:
     x64.mov rcx, [r12+0] (8b)
     x64.call __managed_mem_slice
-    x64.mov rbx, r8
+    x64.mov r12, r8
+    x64.xor r14d, r14d
     x64.test rdx, rdx
     x64.je inlined_Array.slice_2
   inlined_Array.slice_1:
-    x64.xor r8d, r8d
-    x64.mov r9d, 1
+    x64.mov r8d, 1
     x64.jmp inline_cont_main_0
   inlined_Array.slice_2:
     x64.mov ecx, 8
     x64.call mrt_alloc
-    x64.mov r12, r8
+    x64.mov r15, r8
     x64.mov ecx, 40
     x64.call mrt_alloc
-    x64.xor r9d, r9d
-    x64.mov [r8+0], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+8], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+16], r9 (8b)
+    x64.mov [r8+0], r14 (8b)
+    x64.mov [r8+8], r14 (8b)
+    x64.mov [r8+16], r14 (8b)
     x64.mov r9d, 8
     x64.mov [r8+24], r9 (8b)
-    x64.xor r9d, r9d
-    x64.mov [r8+32], r9 (8b)
-    x64.mov [r12+0], r8 (8b)
-    x64.mov [r12+0], rbx (8b)
-    x64.xor r8d, r8d
-    x64.mov r9, r8
-    x64.mov r8, r12
+    x64.mov [r8+32], r14 (8b)
+    x64.mov [r15+0], r8 (8b)
+    x64.mov [r15+0], r12 (8b)
+    x64.mov r8, r14
+    x64.mov r14, r15
   inline_cont_main_0:
-    x64.test r9, r9
-    x64.je __phi_trampoline_13_0
+    x64.test r8, r8
+    x64.je try_0.merge
   try_0.otherwise:
     x64.mov edx, 8
     x64.mov ecx, 1
     x64.call __managed_mem_create
     x64.mov r12, r8
     x64.mov eax, 1
-    x64.xor edx, edx
     x64.mov rcx, r12
+    x64.mov rdx, r13
     x64.call __managed_mem_set
     x64.mov edx, 1
     x64.mov rcx, r12
     x64.call __managed_mem_set_length
     x64.mov ecx, 8
     x64.call mrt_alloc
-    x64.mov r13, r8
+    x64.mov r14, r8
     x64.mov ecx, 40
     x64.call mrt_alloc
     x64.xor r9d, r9d
@@ -123,13 +118,12 @@ module {
     x64.mov [r8+24], r9 (8b)
     x64.xor r9d, r9d
     x64.mov [r8+32], r9 (8b)
-    x64.mov [r13+0], r8 (8b)
-    x64.mov [r13+0], r12 (8b)
-    x64.mov rbx, r13
+    x64.mov [r14+0], r8 (8b)
+    x64.mov [r14+0], r12 (8b)
   try_0.merge:
-    x64.xor edx, edx
   inlined_Array.get_0:
-    x64.mov rcx, [rbx+0] (8b)
+    x64.mov rcx, [r14+0] (8b)
+    x64.mov rdx, r13
     x64.call __managed_mem_get
     x64.test rdx, rdx
     x64.je inlined_Array.get_2
@@ -141,14 +135,15 @@ module {
     x64.xor r9d, r9d
   inline_cont_main_1:
     x64.test r9, r9
-    x64.je __phi_trampoline_17_0
-  try_1.otherwise:
-    x64.xor r8d, r8d
+    x64.je try_1.ok
+    x64.mov r12, r13
+    x64.jmp try_1.merge
+  try_1.ok:
     x64.mov r12, r8
   try_1.merge:
     x64.mov edx, 1
   inlined_Array.get_0:
-    x64.mov rcx, [rbx+0] (8b)
+    x64.mov rcx, [r14+0] (8b)
     x64.call __managed_mem_get
     x64.test rdx, rdx
     x64.je inlined_Array.get_2
@@ -160,27 +155,21 @@ module {
     x64.xor r9d, r9d
   inline_cont_main_2:
     x64.test r9, r9
-    x64.je try_2.merge
-  try_2.otherwise:
-    x64.xor r8d, r8d
+    x64.je try_2.ok
+    x64.jmp try_2.merge
+  try_2.ok:
+    x64.mov r13, r8
   try_2.merge:
-    x64.mov r9, r12
-    x64.add r9, r8
-    x64.cmp r9, 125
+    x64.mov r8, r12
+    x64.add r8, r13
+    x64.cmp r8, 125
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_39]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r9
     x64.epilogue
     x64.ret
-  __phi_trampoline_13_0:
-    x64.mov rbx, r8
-    x64.jmp try_0.merge
-  __phi_trampoline_17_0:
-    x64.mov r12, r8
-    x64.jmp try_1.merge
   }
 }
 ---

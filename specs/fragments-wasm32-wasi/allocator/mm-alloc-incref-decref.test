@@ -37,8 +37,7 @@ module {
   entry:
     %0 = mir.mov_imm 64 : i64
     %1 = mir.mov_imm 0 : i64
-    %2 = mir.mov_imm 0 : i64
-    %3 = mir.call @mm_alloc(%0, %1, %2)
+    %3 = mir.call @mm_alloc(%0, %1, %1)
     %5 = mir.call @mm_incref(%3)
     %7 = mir.call @mm_incref(%3)
     %9 = mir.call @mm_incref(%3)
@@ -50,28 +49,24 @@ module {
     %19 = mir.call @mm_decref(%3)
     %20 = mir.global_addr @__mm_alloc_count
     %21 = mir.load %20, 0
-    %22 = mir.mov_imm 0 : i64
     %24 = mir.mov_imm 1 : i64
     %25 = mir.cmp ne, %17, %24
-    mir.cond_br %25 [then: a_0(), else: a_0.after(%22)]
+    mir.cond_br %25 [then: a_0(), else: a_0.after(%1)]
   a_0:
     %26 = mir.mov_imm 1 : i64
     mir.br a_0.after(%26)
   a_0.after:
-    %28 = mir.mov_imm 0 : i64
-    %29 = mir.cmp ne, %21, %28
+    %29 = mir.cmp ne, %21, %1
     mir.cond_br %29 [then: b_0(), else: b_0.after(%47)]
   b_0:
     %31 = mir.mov_imm 2 : i64
     %32 = mir.add.i64 %47, %31
     mir.br b_0.after(%32)
   b_0.after:
-    %34 = mir.mov_imm 0 : i64
-    %35 = mir.cmp eq, %46, %34
+    %35 = mir.cmp eq, %46, %1
     mir.cond_br %35 [then: ok_0(), else: ok_0.after()]
   ok_0:
-    %36 = mir.mov_imm 0 : i64
-    mir.ret %36
+    mir.ret %1
   ok_0.after:
     %38 = mir.mov_imm 1 : i64
     %39 = mir.cmp eq, %46, %38

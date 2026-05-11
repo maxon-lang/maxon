@@ -37,25 +37,30 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov edx, 8
-    x64.mov ecx, 4
+    x64.mov r12d, 4
+    x64.mov rcx, r12
     x64.call __managed_mem_create
-    x64.mov rbx, r8
+    x64.mov r13, r8
+    x64.xor r14d, r14d
+    x64.mov r15d, 2
+    x64.mov r8d, 1
+    x64.mov [rbp+-16], r8
   try_0.merge:
-    x64.mov edx, 2
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, r15
     x64.call __managed_mem_set_length
     x64.test rdx, rdx
     x64.je try_1.merge
   try_1.otherwise:
-    x64.mov r8d, 2
+    x64.mov r8, r15
     x64.epilogue
     x64.ret
   try_1.merge:
-    x64.mov eax, 1
-    x64.xor edx, edx
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, r14
+    x64.mov rax, [rbp+-16]
     x64.call __managed_mem_set
     x64.test rdx, rdx
     x64.je try_2.merge
@@ -64,9 +69,9 @@ module {
     x64.epilogue
     x64.ret
   try_2.merge:
-    x64.mov eax, 2
-    x64.mov edx, 1
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, [rbp+-16]
+    x64.mov rax, r15
     x64.call __managed_mem_set
     x64.test rdx, rdx
     x64.je try_3.merge
@@ -76,12 +81,12 @@ module {
     x64.ret
   try_3.merge:
     x64.mov edx, 8
-    x64.mov ecx, 4
-    x64.call __managed_mem_create
-    x64.mov r12, r8
-  try_4.merge:
-    x64.mov edx, 2
     x64.mov rcx, r12
+    x64.call __managed_mem_create
+    x64.mov [rbp+-8], r8
+  try_4.merge:
+    x64.mov rcx, [rbp+-8]
+    x64.mov rdx, r15
     x64.call __managed_mem_set_length
     x64.test rdx, rdx
     x64.je try_5.merge
@@ -91,8 +96,8 @@ module {
     x64.ret
   try_5.merge:
     x64.mov eax, 3
-    x64.xor edx, edx
-    x64.mov rcx, r12
+    x64.mov rcx, [rbp+-8]
+    x64.mov rdx, r14
     x64.call __managed_mem_set
     x64.test rdx, rdx
     x64.je try_6.merge
@@ -101,9 +106,9 @@ module {
     x64.epilogue
     x64.ret
   try_6.merge:
-    x64.mov eax, 4
-    x64.mov edx, 1
-    x64.mov rcx, r12
+    x64.mov rcx, [rbp+-8]
+    x64.mov rdx, [rbp+-16]
+    x64.mov rax, r12
     x64.call __managed_mem_set
     x64.test rdx, rdx
     x64.je try_7.merge
@@ -112,11 +117,11 @@ module {
     x64.epilogue
     x64.ret
   try_7.merge:
-    x64.mov rcx, rbx
-    x64.mov rdx, r12
+    x64.mov rcx, r13
+    x64.mov rdx, [rbp+-8]
     x64.call __managed_mem_append
   try_8.merge:
-    x64.mov r8, [rbx+8] (8b)
+    x64.mov r8, [r13+8] (8b)
     x64.cmp r8, 4
     x64.je badLen_0.after
   badLen_0:
@@ -124,8 +129,8 @@ module {
     x64.epilogue
     x64.ret
   badLen_0.after:
-    x64.xor edx, edx
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, r14
     x64.call __managed_mem_get
     x64.mov r12, r8
     x64.test rdx, rdx
@@ -135,10 +140,10 @@ module {
     x64.epilogue
     x64.ret
   try_9.merge:
-    x64.mov edx, 1
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, [rbp+-16]
     x64.call __managed_mem_get
-    x64.mov r13, r8
+    x64.mov [rbp+-8], r8
     x64.test rdx, rdx
     x64.je try_10.merge
   try_10.otherwise:
@@ -146,10 +151,10 @@ module {
     x64.epilogue
     x64.ret
   try_10.merge:
-    x64.mov edx, 2
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
+    x64.mov rdx, r15
     x64.call __managed_mem_get
-    x64.mov r14, r8
+    x64.mov r15, r8
     x64.test rdx, rdx
     x64.je try_11.merge
   try_11.otherwise:
@@ -158,7 +163,7 @@ module {
     x64.ret
   try_11.merge:
     x64.mov edx, 3
-    x64.mov rcx, rbx
+    x64.mov rcx, r13
     x64.call __managed_mem_get
     x64.mov r9, r8
     x64.test rdx, rdx
@@ -175,14 +180,15 @@ module {
     x64.epilogue
     x64.ret
   badV0_0.after:
-    x64.cmp r13, 2
+    x64.mov r8, [rbp+-8]
+    x64.cmp r8, 2
     x64.je badV1_0.after
   badV1_0:
     x64.mov r8d, 11
     x64.epilogue
     x64.ret
   badV1_0.after:
-    x64.cmp r14, 3
+    x64.cmp r15, 3
     x64.je badV2_0.after
   badV2_0:
     x64.mov r8d, 12
@@ -196,7 +202,7 @@ module {
     x64.epilogue
     x64.ret
   badV3_0.after:
-    x64.xor r8d, r8d
+    x64.mov r8, r14
     x64.epilogue
     x64.ret
   }

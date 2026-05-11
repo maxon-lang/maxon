@@ -14,14 +14,12 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %1 = mir.mov_imm 0 : i64
     %2 = mir.mov_imm 2 : i64
     %3 = mir.mov_imm 8 : i64
     %4 = mir.call @__managed_mem_create(%2, %3)
-    %6 = mir.mov_imm 0 : i64
-    %7, %8 = mir.try_call @__managed_mem_set(%4, %6, %0)
+    %7, %8 = mir.try_call @__managed_mem_set(%4, %0, %0)
     %9 = mir.mov_imm 1 : i64
-    %10, %11 = mir.try_call @__managed_mem_set(%4, %9, %1)
+    %10, %11 = mir.try_call @__managed_mem_set(%4, %9, %0)
     %12 = mir.mov_imm 2 : i64
     %13, %14 = mir.try_call @__managed_mem_set_length(%4, %12)
     %39 = mir.mov_imm 8 : i64
@@ -62,12 +60,10 @@ module {
     %55 = mir.mov_imm 0 : i64
     mir.br inline_cont_main_0(%49, %55)
   inline_cont_main_0:
-    %33 = mir.mov_imm 0 : i64
-    %34 = mir.cmp ne, %57, %33
-    mir.cond_br %34 [then: try_0.otherwise(), else: try_0.merge(%56)]
-  try_0.otherwise:
-    %36 = mir.mov_imm 0 : i64
-    mir.br try_0.merge(%36)
+    %34 = mir.cmp ne, %57, %0
+    mir.cond_br %34 [then: try_0.merge(%0), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%56)
   try_0.merge:
     %58 = mir.mov_imm 125 : i64
     %59 = mir.cmp ugt, %38, %58

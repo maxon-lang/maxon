@@ -189,9 +189,21 @@ function colorClass(ranges LiveRangeArray, pool RegIntArray, callerSaved RegIntA
 				markRegUsed(usedRegs, regOrd: nbrColor, poolIndexOf: poolIndexOf)
 			end 'colored' else 'uncoloredNbr'
 				let nbrRange = try ranges.get(nbrIdx) otherwise panic("invariant: nbrIdx from ig.neighbors out of bounds in ranges")
-				if nbrRange.hint != RM_NONE 'hasHint'
-					markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
-				end 'hasHint'
+				// A fixed-reg neighbor will inevitably take its fixed register
+				// when it's colored — that decision isn't optional. Treat
+				// that reg as already taken even while the neighbor is
+				// uncolored; otherwise a virtual that interferes with the
+				// neighbor can grab the same color and the two ranges share
+				// a register, with the downstream codegen silently
+				// overwriting one. Hints are still soft (hintReservedRegs)
+				// and fall through to the picker's tiered fallback.
+				if nbrRange.fixedReg != RM_NONE 'hasFixed'
+					markRegUsed(usedRegs, regOrd: nbrRange.fixedReg, poolIndexOf: poolIndexOf)
+				end 'hasFixed' else 'noFixed'
+					if nbrRange.hint != RM_NONE 'hasHint'
+						markRegUsed(hintReservedRegs, regOrd: nbrRange.hint, poolIndexOf: poolIndexOf)
+					end 'hasHint'
+				end 'noFixed'
 			end 'uncoloredNbr'
 		end 'eachNbr'
 

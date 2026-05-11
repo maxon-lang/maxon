@@ -22,8 +22,8 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
+    %0 = mir.mov_imm 0 : i64
     %1 = mir.mov_imm 2 : i64
-    %3 = mir.mov_imm 0 : i64
     mir.br check_0.next0()
   check_0.merge:
     %16 = mir.mov_imm 125 : i64
@@ -32,14 +32,11 @@ module {
   check_0.next0:
     %9 = mir.mov_imm 1 : i64
     %10 = mir.cmp eq, %1, %9
-    mir.cond_br %10 [then: check_0.case1(), else: check_0.next1()]
-  check_0.case1:
-    %11 = mir.mov_imm 0 : i64
-    mir.br check_0.merge(%11)
+    mir.cond_br %10 [then: check_0.merge(%0), else: check_0.next1()]
   check_0.next1:
     %12 = mir.mov_imm 2 : i64
     %13 = mir.cmp eq, %1, %12
-    mir.cond_br %13 [then: check_0.case2(), else: check_0.merge(%3)]
+    mir.cond_br %13 [then: check_0.case2(), else: check_0.merge(%0)]
   check_0.case2:
     %14 = mir.mov_imm 1 : i64
     mir.br check_0.merge(%14)
