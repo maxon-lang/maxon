@@ -273,33 +273,23 @@ end 'buildCallerSavedMask'
 // in priority order:
 //   Tier 1 (best): preferred class AND not reserved by an uncolored hinted neighbor
 //   Tier 2:        preferred class but reserved (give up the hint)
-//   Tier 3:        wrong class — safe only when the preferred class would merely
-//                  be a pessimization. For preferCallerSaved=true (non-crossing
-//                  range), a callee-saved fallback is fine (one extra prologue
-//                  save). For preferCallerSaved=false (call-crossing range), a
-//                  caller-saved fallback silently clobbers the value across the
-//                  call. We only fall through to tier 3 if the register pool
-//                  contains NO callee-saved options at all — in that case the
-//                  range will have to spill regardless and this coloring will
-//                  get rejected by the spill-and-retry loop. When some
-//                  callee-saved exist but are all occupied, we return RM_NONE
-//                  so the spill phase picks which range to displace.
+//   Tier 3:        wrong class — only safe for preferCallerSaved=true (non-
+//                  call-crossing range); a callee-saved fallback there costs
+//                  one extra prologue save. For preferCallerSaved=false (call-
+//                  crossing range) a caller-saved fallback would be silently
+//                  clobbered by the intervening call, so we return RM_NONE
+//                  and let the spill-and-retry loop materialize the value to
+//                  a stack slot across the call.
 function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs BoolArray, hintReservedRegs BoolArray, preferCallerSaved bool) returns RegOrdinal
 	let poolSize = pool.count()
 	var bestTier1 = RM_NONE
 	var bestTier2 = RM_NONE
 	var bestTier3 = RM_NONE
-	// Track whether the pool has any register of the preferred class at all.
-	// If not, tier-3 fallback is the only option and we must take it.
-	var preferredClassExists = false
 	var pi = 0
 	while pi < poolSize 'scan'
 		let reg = try pool.get(pi) otherwise panic("pickColor: pi < poolSize just succeeded but pool.get({pi}) failed (poolSize={poolSize})")
 		let isCallerSaved = try callerSavedMask.get(pi) otherwise panic("pickColor: callerSavedMask must be parallel to pool but get({pi}) failed (poolSize={poolSize}, mask.count={callerSavedMask.count()})")
 		let matchesClass = isCallerSaved == preferCallerSaved
-		if matchesClass 'matches'
-			preferredClassExists = true
-		end 'matches'
 
 		let poolUsed = try usedRegs.get(pi) otherwise panic("pickColor: usedRegs must be parallel to pool but get({pi}) failed (poolSize={poolSize}, usedRegs.count={usedRegs.count()})")
 		if poolUsed 'inUse'
@@ -332,10 +322,14 @@ function pickRegFromPool(pool RegIntArray, callerSavedMask BoolArray, usedRegs B
 	if bestTier2 != RM_NONE 'haveTier2'
 		return bestTier2
 	end 'haveTier2'
-	// Tier 3 (wrong class) is unsafe for call-crossing ranges in the general
-	// case. Only fall through if the pool has no preferred-class option at
-	// all — the caller then has no better move than to accept the clobber.
-	if preferCallerSaved or not preferredClassExists 'tier3OK'
+	// Tier 3 (wrong class) is only safe for non-call-crossing ranges. A
+	// call-crossing range placed in a caller-saved register would be silently
+	// clobbered by the intervening call (precisely the bug that
+	// `mrt_f64_to_string` exposes when the f64 pool contains no callee-saved
+	// option: pow's xmm result evaporates across an intervening mrt_alloc).
+	// Returning RM_NONE forces the spill-and-retry loop to materialize the
+	// value to a stack slot across the call instead.
+	if preferCallerSaved 'tier3OK'
 		return bestTier3
 	end 'tier3OK'
 	return RM_NONE

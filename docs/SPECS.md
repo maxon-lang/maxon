@@ -318,6 +318,15 @@ Tests in the **Tests** section are always extracted. Each test needs:
 - **Maxon code block**: The source code
 - **Output block**: Expected results
 
+Optional per-test directives go between the test marker and the maxon block:
+
+| Directive | Effect |
+|-----------|--------|
+| `<!-- Args: ... -->` | Pass the listed arguments to the test executable |
+| `<!-- MmTrace -->` | Enable memory-manager trace output |
+| `<!-- AsyncTrace -->` | Enable async-runtime trace output |
+| `<!-- IncludeStdlibIr -->` | Include reachable stdlib functions in the captured CompiledIR snapshot |
+
 ```markdown
 <!-- test: basic-example -->
 ```maxon
@@ -421,6 +430,7 @@ A fragment has four parts separated by `---` lines:
 | `ExitCode: N` | Expected process exit code |
 | `Args: ...` | Command-line arguments to pass to the test executable |
 | `MmTrace: true` / `AsyncTrace: true` | Enable runtime trace output |
+| `IncludeStdlibIr: true` | Include reachable stdlib functions in the captured CompiledIR snapshot |
 | `` Stdout: ``` `` / `` Stderr: ``` `` | Expected runtime stdout/stderr (fenced multiline block) |
 | `` RequiredIR: ``` `` | Expected compiler IR to verify, pinned (fenced multiline block) |
 | `` RequiredRdata: ``` `` / `` RequiredData: ``` `` | Expected .rdata / .data section contents |

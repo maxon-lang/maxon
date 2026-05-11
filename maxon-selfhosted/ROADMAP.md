@@ -508,7 +508,7 @@ C# bootstrap.
 
 **Inputs the analyzer uses**:
 - **Callee size**: op count of the lowered Std-level body (cheap, exact, not source LOC).
-- **Call-site count**: number of static call sites for the callee across the whole module — a single-call-site callee is always inlined (it's a clean refactor with zero size cost).
+- **Call-site count**: number of static call sites for the callee across the whole module — informational only. A former "always inline single-call-site callees" rule was removed because it ignored body size; `dceFunctions` still drops callees whose every call site got inlined via the cost gate below.
 - **Recursion**: callees that are part of a recursion SCC in the call graph are never inlined.
 - **Indirect calls**: `indirectCall` ops aren't inlinable (no static target). The fat-pointer ABI from 11.3 means interface dispatch falls into this bucket unless devirtualized first.
 - **Generic-arg concreteness**: when a call site passes a fully concrete layout descriptor, the inliner can constant-fold descriptor loads inside the inlined body. This is what closes the gap with monomorphized output on `Array<Int>.push` etc.
@@ -517,10 +517,9 @@ C# bootstrap.
 
 **Decision rule** (in priority order):
 1. Never inline if recursive or indirect.
-2. Always inline if the callee has exactly one static call site. Bodies with one caller are functionally a paste-in.
-3. Always inline tiny callees (≤ ~10 Std ops) — accessor-shaped methods like `Array.length`, `Array.get`, `Optional.unwrap`.
-4. Inline medium callees (≤ ~50 ops) if any of: call site is in a loop; the callee receives a concrete layout descriptor that unlocks descriptor folding; the callee receives a closure literal.
-5. Otherwise don't inline.
+2. Always inline tiny callees (≤ ~10 Std ops) — accessor-shaped methods like `Array.length`, `Array.get`, `Optional.unwrap`.
+3. Inline medium callees (≤ ~50 ops) if any of: call site is in a loop; the callee receives a concrete layout descriptor that unlocks descriptor folding; the callee receives a closure literal.
+4. Otherwise don't inline.
 
 These thresholds are starting points to be tuned in 11.7 against the perf targets — not a contract.
 

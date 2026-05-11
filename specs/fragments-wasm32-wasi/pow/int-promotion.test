@@ -1,0 +1,29 @@
+// Test: int-promotion
+function main() returns ExitCode
+	let result = Math.pow(3, exponent: 2)  // Ints promoted to float
+	return trunc(result)
+end 'main'
+---
+ExitCode: 9
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.sitofp.f64 %0
+    %3 = mir.sitofp.f64 %1
+    %4 = mir.call @Math.pow(%2, %3)
+    %6 = mir.fptosi.i64 %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_3
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

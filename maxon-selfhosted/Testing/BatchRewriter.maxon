@@ -43,6 +43,14 @@ export function isBatchable(specName String, test SpecTest) returns bool
 		return false
 	end 'hasAsyncTrace'
 
+	// IncludeStdlibIr tests assert a per-test IR snapshot that includes
+	// stdlib functions. Batching would emit a shared IR snapshot covering
+	// every batched test's stdlib reach, so per-test stdlib-IR assertions
+	// can't be sliced back out — force them onto the per-test path.
+	if test.includeStdlibIr or test.expectation.includeStdlibIr 'hasIncludeStdlibIr'
+		return false
+	end 'hasIncludeStdlibIr'
+
 	// Tests that assert runtime stderr (panics, stack traces, runtime errors)
 	// are sensitive to: the source file's virtual name, the test's `main`
 	// symbol name, and the dispatcher frame appearing in the stack trace.

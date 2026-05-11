@@ -15,6 +15,23 @@ export function stdModuleToString(module StdModule, skipStdlib bool) returns Str
 	return formatModuleWrapper(body)
 end 'stdModuleToString'
 
+// Variant that emits only functions whose name appears in `allowedNames`.
+// Used by `finalIrString` when a spec test sets `IncludeStdlibIr: true` so the
+// snapshot is limited to stdlib functions transitively called from the user's
+// `main`. Without this, the snapshot includes every stdlib function ever
+// compiled into the cache (thousands of lines), which buries the few entries
+// the test actually exercises.
+export function stdModuleToStringFiltered(module StdModule, allowedNames StdlibFuncNameSet) returns String
+	var body = ""
+	for func in module.functions 'eachFunc'
+		if not allowedNames.contains(func.name) 'notAllowed'
+			continue
+		end 'notAllowed'
+		body = "{body}{stdFunctionToString(module, func: func)}"
+	end 'eachFunc'
+	return formatModuleWrapper(body)
+end 'stdModuleToStringFiltered'
+
 function stdFunctionToString(module StdModule, func IrFunction) returns String
 	let rb = "\}"
 	var sb = formatStdFuncHeader(func)

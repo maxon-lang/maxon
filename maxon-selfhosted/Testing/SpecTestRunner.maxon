@@ -38,6 +38,7 @@ let whitelist = ["basics",
 	"namespaces",
 	"stdlib-basic",
 	"stdlib-autodiscovery",
+	"pow",
 	"enums-simple",
 	"match-simple",
 	"module-keyword",
@@ -814,7 +815,7 @@ end 'sliceFromBytePos'
 function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath) returns CompileWithIrResult throws CompileError
 	let covMapPath = outputExe.changeExtension(".covmap")
 	if not fragment.hasMultiFile 'isSingle'
-		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath)
+		return try compileSourceWithIr(fragment.source, virtualPath: virtualSourcePath, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr)
 	end 'isSingle'
 
 	// Anchor virtual paths in the fragment's directory so module-visibility
@@ -832,7 +833,7 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 		let normalizedSource = pair.source if pair.source.endsWith("\n") else "{pair.source}\n"
 		virtualFiles.push(VirtualSourceFile.create(path, source: normalizedSource))
 	end 'eachFile'
-	return try compileMultiFileSourceWithIr(virtualFiles, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath)
+	return try compileMultiFileSourceWithIr(virtualFiles, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr)
 end 'compileFragmentInMemory'
 
 // Run a single test from a parsed fragment. Returns TestResult.

@@ -3214,13 +3214,13 @@ function interpKindForType(project Project, t MaxonType, fallback InterpExprKind
 		integer gives InterpExprKind.i64
 		float gives InterpExprKind.f64
 		string gives InterpExprKind.string
-		named(id) gives interpKindForNamedTypeName(project.typeNames.get(id), fallback: fallback)
+		named(id) gives interpKindForNamedTypeName(project, name: project.typeNames.get(id), fallback: fallback)
 		function to unresolved gives fallback
 		typeParameter to interface gives fallback
 	end 'k'
 end 'interpKindForType'
 
-function interpKindForNamedTypeName(name String, fallback InterpExprKind) returns InterpExprKind
+function interpKindForNamedTypeName(project Project, name String, fallback InterpExprKind) returns InterpExprKind
 	if name == "String" 'isString'
 		return InterpExprKind.string
 	end 'isString'
@@ -3230,6 +3230,17 @@ function interpKindForNamedTypeName(name String, fallback InterpExprKind) return
 	if name == "bool" 'isBool'
 		return InterpExprKind.bool
 	end 'isBool'
+	// Resolve user-defined typealiases (e.g. `typealias Real = float`) so
+	// `print("{x}")` picks `mrt_f64_to_string` instead of falling back to the
+	// i64 path. Without this, any aliased numeric return type (Math.pow
+	// returns `Real`) gets stringified as an i64 and the runtime hangs /
+	// produces garbage.
+	if let stdType = try project.typealiases.get(name) 'hasAlias'
+		if stdTypeIsFloat(stdType) 'isFloat'
+			return InterpExprKind.f64
+		end 'isFloat'
+		return InterpExprKind.i64
+	end 'hasAlias'
 	return fallback
 end 'interpKindForNamedTypeName'
 

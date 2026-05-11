@@ -110,3 +110,16 @@ end 'main'
 9
 ```
 
+
+<!-- test: basic-with-stdlib-ir -->
+<!-- IncludeStdlibIr -->
+```maxon
+function main() returns ExitCode
+	let result = Math.pow(2.0, exponent: 3.0)
+	return trunc(result)
+end 'main'
+```
+```exitcode
+8
+```
+

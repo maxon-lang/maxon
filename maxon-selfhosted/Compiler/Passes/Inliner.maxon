@@ -27,11 +27,17 @@
 //      indirect / tail are out of scope at this phase.
 //   3. Skip if the splice precondition fails (single-block + single-return).
 //   4. Always inline tiny callees (op-count ≤ TINY_OP_THRESHOLD).
-//   5. Always inline single-call-site callees (cg.inDegree[callee] == 1).
-//   6. Inline medium callees (op-count ≤ MEDIUM_OP_THRESHOLD) when budget
+//   5. Inline medium callees (op-count ≤ MEDIUM_OP_THRESHOLD) when budget
 //      multipliers (loop depth, concrete-descriptor arg, closure-literal
 //      arg) compose above the callee's op count.
-//   7. Otherwise skip.
+//   6. Otherwise skip.
+//
+// Note: a former "always inline single-call-site callees" rule was removed
+// because it ignored body size — a single caller of a 70+ op function (e.g.
+// `Math.pow`) would unconditionally pull in the entire body and then cascade
+// into nested helpers (`Math.log`, `Math.exp`) on the next fixpoint round.
+// Single-caller cleanup is now subject to the same cost gate as everything
+// else; `dceFunctions` still drops callees whose every call site got inlined.
 //
 // All thresholds are conservative starting points per the 11.6 plan; 11.7
 // tunes them based on benchmark output.
@@ -74,7 +80,7 @@ export function inlineModule(module StdModule, project Project, skipCallerNames 
 		let cg = buildCallGraph(module)
 		let sccs = computeSccs(cg)
 		let recursive = collectRecursive(sccs, cg: cg)
-		let roundCounts = inlineOneRound(module, project: project, cg: cg, recursive: recursive, skipCallers: skipSet)
+		let roundCounts = inlineOneRound(module, project: project, recursive: recursive, skipCallers: skipSet)
 		totalSplices = totalSplices + roundCounts.splices
 		totalLoopBonus = totalLoopBonus + roundCounts.loopBonus
 		if roundCounts.splices == 0 'noChange'
@@ -110,7 +116,7 @@ type RoundCounts
 	end 'zero'
 end 'RoundCounts'
 
-function inlineOneRound(module StdModule, project Project, cg CallGraph, recursive CallGraphStringSet, skipCallers CallerSkipSet) returns RoundCounts
+function inlineOneRound(module StdModule, project Project, recursive CallGraphStringSet, skipCallers CallerSkipSet) returns RoundCounts
 	var funcMap = StdFuncByNameForInliner.create()
 	for func in module.functions 'index'
 		funcMap.upsert(func.name, value: func)
@@ -126,7 +132,7 @@ function inlineOneRound(module StdModule, project Project, cg CallGraph, recursi
 				continue
 			end 'skipThisCaller'
 		end 'maybeSkip'
-		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, cg: cg, recursive: recursive)
+		let counts = processOneCaller(module, project: project, caller: caller, funcMap: funcMap, recursive: recursive)
 		splices = splices + counts.splices
 		loopBonus = loopBonus + counts.loopBonus
 	end 'eachCaller'
@@ -135,7 +141,7 @@ end 'inlineOneRound'
 
 typealias StdFuncByNameForInliner = Map with(String, IrFunction)
 
-function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, cg CallGraph, recursive CallGraphStringSet) returns RoundCounts
+function processOneCaller(module StdModule, project Project, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet) returns RoundCounts
 	var splices = 0
 	var loopBonus = 0
 	// Snapshot the caller's block list — multi-block splices append fresh
@@ -161,7 +167,7 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 		// place), and the iteration must not observe its own mutations.
 		let snapshot = block.opRefs.clone()
 		for opIdx in snapshot 'eachOp'
-			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, cg: cg, recursive: recursive, loopDepth: blockDepth)
+			let decision = decideInline(module, project: project, opIdx: opIdx, caller: caller, funcMap: funcMap, recursive: recursive, loopDepth: blockDepth)
 			if decision.inline 'wantInline'
 				if performInline(module, project: project, caller: caller, block: block, opIdx: opIdx, funcMap: funcMap) 'didInline'
 					splices = splices + 1
@@ -198,7 +204,7 @@ end 'InlineDecision'
 // top of this file. The `loopBonus` flag in accept() reports whether the
 // call site was inlined only because the loop-depth bonus pushed budget
 // past calleeOps — used for the inliner-debug telemetry counter.
-function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, cg CallGraph, recursive CallGraphStringSet, loopDepth ParsedInt) returns InlineDecision
+function decideInline(module StdModule, project Project, opIdx OpIndex, caller IrFunction, funcMap StdFuncByNameForInliner, recursive CallGraphStringSet, loopDepth ParsedInt) returns InlineDecision
 	let callShape = extractCallShape(module, opIdx: opIdx)
 	if callShape.kind != CallShapeKind.staticCall 'notInlinable'
 		return InlineDecision.skip()
@@ -240,10 +246,6 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	if calleeOps <= TINY_OP_THRESHOLD 'tiny'
 		return InlineDecision.accept(loopBonus: false)
 	end 'tiny'
-	let inDegree = try cg.inDegree.get(calleeName) otherwise 0
-	if inDegree == 1 'singleCallSite'
-		return InlineDecision.accept(loopBonus: false)
-	end 'singleCallSite'
 	// Hard cap: even with every multiplier composed (×LOOP_DEPTH_2_MULT ×
 	// CONCRETE_DESC_MULT × CLOSURE_LITERAL_MULT) the budget can't exceed
 	// MEDIUM_OP_THRESHOLD × that product. Skip anything bigger up front so
@@ -252,11 +254,11 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	if calleeOps > maxBudget 'tooBig'
 		return InlineDecision.skip()
 	end 'tooBig'
-	let budget = computeInliningBudget(module, project: project, callShape: callShape, loopDepth: loopDepth)
+	let budget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, loopDepth: loopDepth)
 	if calleeOps > budget 'overBudget'
 		return InlineDecision.skip()
 	end 'overBudget'
-	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, loopDepth: 0)
+	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, loopDepth: 0)
 	let viaBonus = calleeOps > baseBudget
 	return InlineDecision.accept(loopBonus: viaBonus)
 end 'decideInline'
@@ -269,7 +271,7 @@ end 'decideInline'
 // capped at LOOP_DEPTH_2_MULT (depth ≥ 2 doesn't increase further) because
 // deeper nesting amplifies binary-size cost without proportional
 // hot-path-frequency gain.
-function computeInliningBudget(module StdModule, project Project, callShape CallShape, loopDepth ParsedInt) returns ParsedInt
+function computeInliningBudget(module StdModule, project Project, callShape CallShape, caller IrFunction, loopDepth ParsedInt) returns ParsedInt
 	var budget = MEDIUM_OP_THRESHOLD as ParsedInt
 	if loopDepth >= 2 'depthDeep'
 		budget = budget * LOOP_DEPTH_2_MULT
@@ -278,10 +280,10 @@ function computeInliningBudget(module StdModule, project Project, callShape Call
 			budget = budget * LOOP_DEPTH_1_MULT
 		end 'depthOne'
 	end 'depthShallow'
-	if callSiteHasConcreteDescriptorArg(module, project: project, argIds: callShape.argIds) 'concreteDesc'
+	if callSiteHasConcreteDescriptorArg(module, project: project, caller: caller, argIds: callShape.argIds) 'concreteDesc'
 		budget = budget * CONCRETE_DESC_MULT
 	end 'concreteDesc'
-	if callSiteHasClosureLiteralArg(module, argIds: callShape.argIds) 'closureLit'
+	if callSiteHasClosureLiteralArg(module, caller: caller, argIds: callShape.argIds) 'closureLit'
 		budget = budget * CLOSURE_LITERAL_MULT
 	end 'closureLit'
 	return budget
@@ -293,29 +295,37 @@ end 'computeInliningBudget'
 // whose producer isn't in this module (e.g. a function param from
 // outside) returns false. Used only for budget multiplication, so a
 // false negative just means "don't apply the bonus" — never wrong.
-function callSiteHasConcreteDescriptorArg(module StdModule, project Project, argIds ValueIdArray) returns bool
+function callSiteHasConcreteDescriptorArg(module StdModule, project Project, caller IrFunction, argIds ValueIdArray) returns bool
 	for argId in argIds 'each'
-		if argDefinedAsConcreteDescriptor(module, project: project, argId: argId) 'hit'
+		if argDefinedAsConcreteDescriptor(module, project: project, caller: caller, argId: argId) 'hit'
 			return true
 		end 'hit'
 	end 'each'
 	return false
 end 'callSiteHasConcreteDescriptorArg'
 
-function argDefinedAsConcreteDescriptor(module StdModule, project Project, argId ValueId) returns bool
-	if let label = try findLoadLayoutDescriptorLabel(module, valueId: argId) 'haveLabel'
+function argDefinedAsConcreteDescriptor(module StdModule, project Project, caller IrFunction, argId ValueId) returns bool
+	if let label = try findLoadLayoutDescriptorLabel(module, caller: caller, valueId: argId) 'haveLabel'
 		return project.staticRdataValues.contains(label)
 	end 'haveLabel'
 	return false
 end 'argDefinedAsConcreteDescriptor'
 
-function findLoadLayoutDescriptorLabel(module StdModule, valueId ValueId) returns String throws DescriptorLabelError
-	for opIdx in 0 upto module.ops.count() 'each'
-		let op = try module.ops.get(opIdx) otherwise continue
-		if let label = try matchLayoutLoad(op, valueId: valueId) 'hit'
-			return label
-		end 'hit'
-	end 'each'
+// Scope the descriptor-load search to the *caller's* op set. ValueIds are
+// function-local (allocValueId is per-IrFunction), so scanning the entire
+// module produces spurious matches whenever some unrelated function happens
+// to have a `loadLayoutDescriptor` whose resultId collides with this call's
+// argId. Restricting to the caller's blocks is both correct and faster.
+function findLoadLayoutDescriptorLabel(module StdModule, caller IrFunction, valueId ValueId) returns String throws DescriptorLabelError
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			if let label = try matchLayoutLoad(op, valueId: valueId) 'hit'
+				return label
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
 	throw DescriptorLabelError.notFound
 end 'findLoadLayoutDescriptorLabel'
 
@@ -342,29 +352,36 @@ end 'matchLayoutLoad'
 // any arg ValueId is the resultId of a `funcRef` op. The plan calls this
 // "closure literal" because phase 10 lifts closures into named functions
 // and emits a funcRef at the call site to bind the env.
-function callSiteHasClosureLiteralArg(module StdModule, argIds ValueIdArray) returns bool
+function callSiteHasClosureLiteralArg(module StdModule, caller IrFunction, argIds ValueIdArray) returns bool
 	for argId in argIds 'each'
-		if argDefinedAsFuncRef(module, valueId: argId) 'hit'
+		if argDefinedAsFuncRef(module, caller: caller, valueId: argId) 'hit'
 			return true
 		end 'hit'
 	end 'each'
 	return false
 end 'callSiteHasClosureLiteralArg'
 
-function argDefinedAsFuncRef(module StdModule, valueId ValueId) returns bool
-	for opIdx in 0 upto module.ops.count() 'each'
-		let op = try module.ops.get(opIdx) otherwise continue
-		let isMatch = match op 'shape'
-			arith gives false
-			control gives false
-			call(c) gives matchFuncRef(c, valueId: valueId)
-			memory gives false
-			system gives false
-		end 'shape'
-		if isMatch 'hit'
-			return true
-		end 'hit'
-	end 'each'
+// Same scoping rationale as findLoadLayoutDescriptorLabel above: ValueIds
+// are function-local, so the funcRef-producer search must be limited to the
+// caller's own blocks. Without this, an unrelated funcRef anywhere in the
+// module can spuriously trigger the closure-literal budget multiplier.
+function argDefinedAsFuncRef(module StdModule, caller IrFunction, valueId ValueId) returns bool
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let isMatch = match op 'shape'
+				arith gives false
+				control gives false
+				call(c) gives matchFuncRef(c, valueId: valueId)
+				memory gives false
+				system gives false
+			end 'shape'
+			if isMatch 'hit'
+				return true
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
 	return false
 end 'argDefinedAsFuncRef'
 

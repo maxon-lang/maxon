@@ -25,12 +25,137 @@ end 'compile'
 // Pick the IR string appropriate for `--emit-ir` / the CompiledIR section of
 // spec fragments. Native targets print the fully-lowered TargetModule;
 // WASM bypasses target lowering so we fall back to the MIR.
+//
+// When `skipStdlib` is false, append the stdlib's post-DCE StdModule
+// snapshot so spec tests with `IncludeStdlibIr: true` can inspect how
+// optimization passes shaped the stdlib functions called from user code.
+// Stdlib functions live in a separate cached StdModule (compiled once and
+// linked from the on-disk cache) and aren't carried in the user pipeline's
+// targetModule/mirModule, so they have to be rendered from the loader's
+// snapshot rather than the user's final IR.
 export function finalIrString(project Project, codeResult CodeResult, skipStdlib bool) returns String
+	var ir = ""
 	if project.target.cpu == CpuArch.wasm32 'isWasm'
-		return mirModuleToString(codeResult.mirModule, skipStdlib: skipStdlib)
-	end 'isWasm'
-	return targetModuleToString(codeResult.targetModule, skipStdlib: skipStdlib, cpu: project.target.cpu)
+		ir = mirModuleToString(codeResult.mirModule, skipStdlib: skipStdlib)
+	end 'isWasm' else 'isNative'
+		ir = targetModuleToString(codeResult.targetModule, skipStdlib: skipStdlib, cpu: project.target.cpu)
+	end 'isNative'
+	if not skipStdlib 'appendStdlib'
+		let stdlibModule = getCachedStdlibStdModule()
+		if stdlibModule.functions.count() > 0 'haveStdlib'
+			let reachable = collectReachableStdlibFunctions(codeResult: codeResult, stdlibModule: stdlibModule)
+			if reachable.count() > 0 'haveReachable'
+				ir = "{ir}\n// Stdlib StdModule (post-dce, post-inliner — pre-MIR-lowering, reachable from main only)\n{stdModuleToStringFiltered(stdlibModule, allowedNames: reachable)}"
+			end 'haveReachable'
+		end 'haveStdlib'
+	end 'appendStdlib'
+	return ir
 end 'finalIrString'
+
+// Walk the user pipeline's final IR (MIR for wasm, TargetModule for native)
+// to collect statically-called stdlib function names, then close over the
+// stdlib StdModule's own call ops so transitive callees show up too. The
+// returned set is the input to `stdModuleToStringFiltered` so the
+// IncludeStdlibIr snapshot stays focused on what the test actually exercises
+// rather than dumping every stdlib function the cache happens to hold.
+function collectReachableStdlibFunctions(codeResult CodeResult, stdlibModule StdModule) returns StdlibFuncNameSet
+	var stdlibNames = StdlibFuncNameSet.create()
+	for func in stdlibModule.functions 'index'
+		stdlibNames.insert(element: func.name)
+	end 'index'
+
+	// MIR is populated for both wasm and native pipelines (the native flow
+	// holds it on `codeResult.mirModule` alongside the target module), so
+	// walking MIR gives us a single seeding path that works for either CPU.
+	let seeds = collectUserCallNamesFromMir(codeResult.mirModule)
+
+	var reachable = StdlibFuncNameSet.create()
+	var worklist = StringArray.create()
+	for name in seeds 'seedWorklist'
+		if stdlibNames.contains(name) and not reachable.contains(name) 'isNew'
+			reachable.insert(element: name)
+			worklist.push(name)
+		end 'isNew'
+	end 'seedWorklist'
+
+	var nameToFunc = StdlibFuncByName.create()
+	for func in stdlibModule.functions 'buildIndex'
+		nameToFunc.upsert(func.name, value: func)
+	end 'buildIndex'
+
+	var wi = 0
+	while wi < worklist.count() 'walk'
+		let name = try worklist.get(wi) otherwise 'skip'
+			wi = wi + 1
+			continue
+		end 'skip'
+		wi = wi + 1
+		let func = try nameToFunc.get(name) otherwise continue
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try stdlibModule.blocks.get(blockRef) otherwise continue
+			for opIdx in block.opRefs 'eachOp'
+				let op = try stdlibModule.ops.get(opIdx) otherwise continue
+				let calleeName = match op 'extract'
+					call(c) gives extractStaticCalleeName(c)
+					arith gives ""
+					control gives ""
+					memory gives ""
+					system gives ""
+				end 'extract'
+				if not calleeName.isEmpty() and stdlibNames.contains(calleeName) and not reachable.contains(calleeName) 'newCallee'
+					reachable.insert(element: calleeName)
+					worklist.push(calleeName)
+				end 'newCallee'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'walk'
+
+	return reachable
+end 'collectReachableStdlibFunctions'
+
+typealias StdlibFuncByName = Map with(String, IrFunction)
+
+function extractStaticCalleeName(op StdCallOp) returns String
+	return match op 'shape'
+		call(_, callee, _) gives callee
+		tryCall(_, callee, _, _) gives callee
+		tailCall(callee, _) gives callee
+		ret gives ""
+		indirectCall gives ""
+		witnessCall gives ""
+		funcRef gives ""
+		param gives ""
+		errorReturn gives ""
+	end 'shape'
+end 'extractStaticCalleeName'
+
+function mirCallCalleeName(op MirOp) returns String
+	return match op 'shape'
+		call(_, callee, _) gives callee
+		tryCall(_, callee, _, _) gives callee
+		movImm to branch gives ""
+		indirectCall to loadFramePtr gives ""
+		syscall to osLockRelease gives ""
+		errorReturn gives ""
+	end 'shape'
+end 'mirCallCalleeName'
+
+function collectUserCallNamesFromMir(module MirModule) returns StringArray
+	var seeds = StringArray.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise continue
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise continue
+				let name = mirCallCalleeName(op)
+				if not name.isEmpty() 'haveName'
+					seeds.push(name)
+				end 'haveName'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return seeds
+end 'collectUserCallNamesFromMir'
 
 // Emit the companion .covmap so the aggregator can join per-site counters
 // to source lines. Non-coverage builds stay byte-for-byte identical to
@@ -51,14 +176,14 @@ end 'writeCovMapTo'
 // next to the exe (outputPath.changeExtension(".covmap")); the spec runner
 // redirects it into its per-suite .coverage directory. When coverage is off
 // the path is ignored — no file is written.
-export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath) returns CompileWithIrResult throws CompileError
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	let setupStart = passTimerStart()
 	var project = createProject(outputPath, target: target)
 	project.coverageEnabled = coverage
 	fileChanged(project, path: virtualPath, content: source)
 	recordPassSince("__compile-setup", startMs: setupStart)
 
-	return try finishInMemoryCompile(project, outputPath: outputPath, covMapPath: covMapPath)
+	return try finishInMemoryCompile(project, outputPath: outputPath, covMapPath: covMapPath, includeStdlibIr: includeStdlibIr)
 end 'compileSourceWithIr'
 
 // One in-memory file passed to the multi-file compile entry point. Defined
@@ -83,7 +208,7 @@ export typealias VirtualSourceFileArray = Array with VirtualSourceFile
 // resolve the same way they would in a real on-disk project. The caller is
 // responsible for choosing virtual paths whose layout matches the test's
 // intent (e.g. siblings under one dir vs. nested subdirectories).
-export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, target Target, outputPath FilePath, coverage bool, covMapPath FilePath) returns CompileWithIrResult throws CompileError
+export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	if files.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(outputPath)
 	end 'noFiles'
@@ -94,12 +219,12 @@ export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, targe
 		fileChanged(project, path: file.path, content: file.source)
 	end 'eachFile'
 
-	return try finishInMemoryCompile(project, outputPath: outputPath, covMapPath: covMapPath)
+	return try finishInMemoryCompile(project, outputPath: outputPath, covMapPath: covMapPath, includeStdlibIr: includeStdlibIr)
 end 'compileMultiFileSourceWithIr'
 
 // Shared tail for the in-memory compile entry points: run the code query,
 // write the executable, emit the covmap, and capture IR.
-function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath FilePath) returns CompileWithIrResult throws CompileError
+function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
 	let codeStart = passTimerStart()
 	let codeResult = try queryCodeResult(project)
@@ -113,7 +238,7 @@ function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath 
 	writeCovMapTo(project, covMapPath: covMapPath)
 
 	let irStart = passTimerStart()
-	let ir = finalIrString(project, codeResult: codeResult, skipStdlib: true)
+	let ir = finalIrString(project, codeResult: codeResult, skipStdlib: not includeStdlibIr)
 	recordPassSince("__finalIrString", startMs: irStart)
 	return CompileWithIrResult.create(outputPath, ir: ir)
 end 'finishInMemoryCompile'

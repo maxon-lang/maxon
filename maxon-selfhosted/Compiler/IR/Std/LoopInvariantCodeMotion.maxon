@@ -3,8 +3,9 @@
 // iterations and hoists them to the loop's preheader block.
 //
 // Operates on arith/cf/func dialect IR (Phase 4, after mem2reg).
-// Only hoists arith.binary and arith.unary ops — constants are cheap to
-// rematerialize and hoisting them wastes a register.
+// Only hoists arith.binary and arith.unary ops — constants are skipped both
+// as hoist candidates and as invariant operands (see isOperandInvariant for
+// the SSA-correctness rationale).
 // Uses CFG and dominator analysis from CfgAnalysis.maxon.
 //
 // Algorithm:
@@ -206,11 +207,8 @@ function createOpRefListMap(size BlockId) returns OpRefListArray
 end 'createOpRefListMap'
 
 function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hoistedOps OpRefListArray)
-	// Build the set of all ValueIds defined inside the loop, and separately
-	// track which are constants (cheap to rematerialize, not worth hoisting,
-	// but should count as invariant operands for hoisting their consumers).
+	// Build the set of all ValueIds defined inside the loop.
 	var definedInLoop = BoolArray.create()
-	var constInLoop = BoolArray.create()
 
 	for bodyBlockId in loop.bodyBlocks 'scanDefs'
 		let block = licmFindBlock(module, func: func, blockId: bodyBlockId)
@@ -220,12 +218,6 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 			if resultId != LICM_NO_BLOCK 'hasDef'
 				licmGrowBoolArray(definedInLoop, size: resultId + 1)
 				try definedInLoop.set(resultId, value: true) otherwise panic("invariant: definedInLoop.set OOB")
-
-				let constResultId = licmGetPackedConstResultId(module, opIdx: packed)
-				if constResultId != LICM_NO_BLOCK 'isConst'
-					licmGrowBoolArray(constInLoop, size: constResultId + 1)
-					try constInLoop.set(constResultId, value: true) otherwise panic("invariant: constInLoop.set OOB")
-				end 'isConst'
 			end 'hasDef'
 
 			// tryCall has a SECOND def — the errorFlagId — that must also be
@@ -248,7 +240,9 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 
 	// Fixed-point iteration: mark ops as invariant.
 	// An op is invariant if it is a hoistable computation and all operands are
-	// defined outside the loop, are constants, or are themselves invariant.
+	// defined outside the loop or are themselves invariant (i.e. queued for
+	// hoisting). In-loop constants are NOT treated as invariant operands —
+	// see isOperandInvariant for the SSA-correctness rationale.
 	// No dominance-of-exits check needed: we only hoist pure ops (no side effects),
 	// and the preheader dominates the entire loop, so hoisted results are always available.
 	var invariant = BoolArray.create()
@@ -278,7 +272,7 @@ function hoistFromLoop(module StdModule, func IrFunction, loop NaturalLoop, hois
 				end 'notHoistable'
 
 				// All operands must be loop-invariant
-				if not allPackedOperandsInvariant(module, opIdx: packed, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) 'notInvariant'
+				if not allPackedOperandsInvariant(module, opIdx: packed, definedInLoop: definedInLoop, invariant: invariant) 'notInvariant'
 					continue
 				end 'notInvariant'
 
@@ -342,13 +336,12 @@ end 'isHoistableArithOp'
 // ============================================================
 
 // An op's operands are all invariant if each operand is either:
-//   (a) defined outside the loop,
-//   (b) a constant (cheap to rematerialize, not hoisted), or
-//   (c) already marked as invariant (will be hoisted)
-function allPackedOperandsInvariant(module StdModule, opIdx OpIndex, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+//   (a) defined outside the loop, or
+//   (b) already marked as invariant (will be hoisted)
+function allPackedOperandsInvariant(module StdModule, opIdx OpIndex, definedInLoop BoolArray, invariant BoolArray) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
-		arith(op) gives allArithOperandsInvariant(op, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+		arith(op) gives allArithOperandsInvariant(op, definedInLoop: definedInLoop, invariant: invariant)
 		control gives false
 		call gives false
 		memory gives false
@@ -356,24 +349,32 @@ function allPackedOperandsInvariant(module StdModule, opIdx OpIndex, definedInLo
 	end 'dispatch'
 end 'allPackedOperandsInvariant'
 
-function allArithOperandsInvariant(op StdArithOp, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+function allArithOperandsInvariant(op StdArithOp, definedInLoop BoolArray, invariant BoolArray) returns bool
 	return match op 'check'
 		const gives true
-		unary(u) gives isOperandInvariant(u.operandId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
-		binary(b) gives isOperandInvariant(b.leftId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop) and isOperandInvariant(b.rightId, definedInLoop: definedInLoop, invariant: invariant, constInLoop: constInLoop)
+		unary(u) gives isOperandInvariant(u.operandId, definedInLoop: definedInLoop, invariant: invariant)
+		binary(b) gives isOperandInvariant(b.leftId, definedInLoop: definedInLoop, invariant: invariant) and isOperandInvariant(b.rightId, definedInLoop: definedInLoop, invariant: invariant)
 	end 'check'
 end 'allArithOperandsInvariant'
 
-function isOperandInvariant(valueId ValueId, definedInLoop BoolArray, invariant BoolArray, constInLoop BoolArray) returns bool
+function isOperandInvariant(valueId ValueId, definedInLoop BoolArray, invariant BoolArray) returns bool
 	// If not defined in the loop, it's invariant by definition
 	if not licmGetBool(definedInLoop, index: valueId) 'outsideLoop'
 		return true
 	end 'outsideLoop'
 
-	// Constants in the loop are inherently invariant (cheap to rematerialize)
-	if licmGetBool(constInLoop, index: valueId) 'isConst'
-		return true
-	end 'isConst'
+	// Note: a previous version returned `true` for any in-loop `arith.const`
+	// on the rationale that consts are "cheap to rematerialize." That broke
+	// SSA — the const itself stayed in the loop body while its consumers
+	// were hoisted to the preheader, so the hoisted consumers referenced a
+	// value that wasn't yet defined on the preheader's path. Surfaced by
+	// `Math.exp`'s Taylor-series loop: `k = k + 1` became `addf k, sitofp 1`
+	// where `sitofp` got hoisted but its int-const `1` operand did not.
+	// True rematerialization would require copying the const op into the
+	// preheader or rewriting the hoisted consumer's operand id — neither
+	// happens today. Until rematerialization is implemented, treat in-loop
+	// constants the same as any other in-loop def: only invariant once they
+	// themselves are queued for hoisting.
 
 	// If defined in the loop but marked as invariant (will be hoisted)
 	return licmGetBool(invariant, index: valueId)
@@ -442,25 +443,6 @@ function licmFindBlock(module StdModule, func IrFunction, blockId BlockId) retur
 	end 'search'
 	panic("licm: block {blockId} not found")
 end 'licmFindBlock'
-
-// Extract the result ValueId from an arith.const packed op, or LICM_NO_BLOCK if not a constant.
-function licmGetPackedConstResultId(module StdModule, opIdx OpIndex) returns ValueId
-	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
-	return match stdOp 'dispatch'
-		arith(op) gives licmGetArithConstResultId(op)
-		control gives LICM_NO_BLOCK
-		call gives LICM_NO_BLOCK
-		memory gives LICM_NO_BLOCK
-		system gives LICM_NO_BLOCK
-	end 'dispatch'
-end 'licmGetPackedConstResultId'
-
-function licmGetArithConstResultId(op StdArithOp) returns ValueId
-	return match op 'get'
-		const(c) gives c.resultId
-		unary to binary gives LICM_NO_BLOCK
-	end 'get'
-end 'licmGetArithConstResultId'
 
 // Extract the result ValueId from a packed op, or LICM_NO_BLOCK if the op has no result.
 //

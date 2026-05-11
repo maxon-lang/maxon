@@ -37,9 +37,14 @@ export type TestExpectation
 	export var hasRequiredData bool
 	export var mmTrace bool
 	export var asyncTrace bool
+	// When true, the captured CompiledIR snapshot includes stdlib functions
+	// reachable from `main` (dceFunctions has already pruned unreachable ones).
+	// Opt-in via the `<!-- IncludeStdlibIr -->` spec directive; defaults to
+	// false so existing tests are unaffected.
+	export var includeStdlibIr bool
 
 	export static function create() returns TestExpectation
-		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false}
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, hasAnyRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false, includeStdlibIr: false}
 	end 'create'
 end 'TestExpectation'
 
@@ -63,9 +68,10 @@ export type SpecTest
 	export var hasMultiFile bool
 	export var mmTrace bool
 	export var asyncTrace bool
+	export var includeStdlibIr bool
 
-	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
+	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr}
 	end 'create'
 end 'SpecTest'
 
@@ -91,9 +97,10 @@ export type Fragment
 	export var hasMultiFile bool
 	export var mmTrace bool
 	export var asyncTrace bool
+	export var includeStdlibIr bool
 
-	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns Fragment
-		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
+	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedIR String, hasGeneratedIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool, includeStdlibIr bool = false) returns Fragment
+		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace, includeStdlibIr: includeStdlibIr}
 	end 'create'
 end 'Fragment'
 
@@ -407,6 +414,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 			var testArgs = ""
 			var testMmTrace = false
 			var testAsyncTrace = false
+			var testIncludeStdlibIr = false
 			i = i + 1
 
 			while i < lineCount 'blocks'
@@ -458,6 +466,16 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					i = i + 1
 					continue
 				end 'isAsyncTrace'
+
+				// Parse IncludeStdlibIr directive — opt-in for surfacing stdlib
+				// function bodies inside the CompiledIR snapshot. Reachable-only
+				// (dceFunctions has already pruned unused stdlib functions by
+				// the time the IR is rendered).
+				if blockLine.contains("<!-- IncludeStdlibIr") 'isIncludeStdlibIr'
+					testIncludeStdlibIr = true
+					i = i + 1
+					continue
+				end 'isIncludeStdlibIr'
 
 				// Check maxoncstderr before maxon since "```maxoncstderr" also startsWith "```maxon"
 				if blockLine.startsWith("```maxoncstderr") 'isCompilerStderr'
@@ -562,12 +580,13 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 			if not source.isEmpty() 'hasSource'
 				expectation.mmTrace = testMmTrace
 				expectation.asyncTrace = testAsyncTrace
+				expectation.includeStdlibIr = testIncludeStdlibIr
 
 				// Split multi-file source
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace)
+				let test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace, includeStdlibIr: testIncludeStdlibIr)
 				tests.push(test)
 			end 'hasSource'
 			continue

@@ -2,8 +2,7 @@
 //
 // Built on demand by the Inliner pass. Edges are statically-resolvable
 // `func.call` ops only; `indirectCall`, `tryCall`, and tail calls don't
-// participate. We record per-callee in-degrees so the inliner can recognize
-// the universal "single static call site → always inline" pattern in O(1).
+// participate.
 //
 // SCC computation finds recursive cycles. Anything in a non-trivial SCC
 // (size ≥ 2) is recursive and must never be inlined; size-1 SCCs are also
@@ -11,7 +10,6 @@
 // recursive callee would either loop the inliner forever or produce code
 // that grows unboundedly with each pass.
 
-export typealias CallGraphInDegreeMap = Map with(String, ParsedInt)
 export typealias CallGraphEdgeMap = Map with(String, StringArray)
 
 export type CallGraph
@@ -19,16 +17,9 @@ export type CallGraph
 	// preserved); the inliner cares about both unique callees and total
 	// arity when seeded.
 	export var edges CallGraphEdgeMap
-	// callee → number of static call sites referencing it (sum across all
-	// callers' `edges` lists). Used by the "single call site → always
-	// inline" rule without needing a graph traversal.
-	export var inDegree CallGraphInDegreeMap
 
 	export static function create() returns CallGraph
-		return Self{
-			edges: CallGraphEdgeMap.create(),
-			inDegree: CallGraphInDegreeMap.create()
-		}
+		return Self{edges: CallGraphEdgeMap.create()}
 	end 'create'
 end 'CallGraph'
 
@@ -54,10 +45,6 @@ export function buildCallGraph(module StdModule) returns CallGraph
 			end 'hasTerm'
 		end 'eachBlock'
 		cg.edges.upsert(func.name, value: callees)
-		for callee in callees 'bumpInDegree'
-			let prior = try cg.inDegree.get(callee) otherwise 0
-			cg.inDegree.upsert(callee, value: prior + 1)
-		end 'bumpInDegree'
 	end 'eachFunc'
 	return cg
 end 'buildCallGraph'
@@ -66,7 +53,7 @@ end 'buildCallGraph'
 // the op has no statically-resolvable callee. The set of recognized op
 // shapes mirrors the "directly inlinable" decision in `Inliner.makeDecision`
 // — call shapes the inliner can never inline (indirect / try / tail) are
-// invisible here so they don't inflate inDegree counts.
+// invisible here.
 function collectCalleeFromOp(module StdModule, opIdx OpIndex, calleeOut StringArray)
 	let stdOp = try module.ops.get(opIdx) otherwise panic("collectCalleeFromOp: opIdx {opIdx} not in module.ops")
 	match stdOp 'op'
