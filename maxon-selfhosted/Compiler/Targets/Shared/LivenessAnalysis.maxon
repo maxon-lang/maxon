@@ -141,7 +141,7 @@ function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, reg
 
 		// Block arguments are definitions at block entry
 		for blockArg in block.blockArgs 'eachArg'
-			boolVectorSet(defSet, index: blockArg.valueId)
+			try defSet.set(blockArg.valueId, value: true) otherwise panic("scanUseDef: defSet.set({blockArg.valueId}) OOB; defSet sized to maxValueId")
 		end 'eachArg'
 
 		// Scan ops forward: a value is in use[B] if read before defined in B
@@ -175,9 +175,9 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 	while ui < counts.count() 'eachUse'
 		let cnt = try counts.get(ui) otherwise panic("scanOpUseDefPacked.eachUse: ui < counts.count() by loop guard but get({ui}) failed")
 		if cnt > 0 'isUsed'
-			let alreadyDef = boolVectorGet(defSet, index: ui)
+			let alreadyDef = try defSet.get(ui) otherwise panic("scanOpUseDefPacked: defSet.get({ui}) OOB; defSet sized to maxValueId")
 			if not alreadyDef 'notDef'
-				boolVectorSet(useSet, index: ui)
+				try useSet.set(ui, value: true) otherwise panic("scanOpUseDefPacked: useSet.set({ui}) OOB; useSet sized to maxValueId")
 			end 'notDef'
 		end 'isUsed'
 		ui = ui + 1
@@ -191,7 +191,7 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 	while di < defs.count() 'eachDef'
 		let defBlock = try defs.get(di) otherwise panic("scanOpUseDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
 		if defBlock == 1 'isDef'
-			boolVectorSet(defSet, index: di)
+			try defSet.set(di, value: true) otherwise panic("scanOpUseDefPacked: defSet.set({di}) OOB; defSet sized to maxValueId")
 		end 'isDef'
 		di = di + 1
 	end 'eachDef'
@@ -199,9 +199,9 @@ end 'scanOpUseDefPacked'
 
 function markArgIdsAsUses(argIds ValueIdArray, useSet BoolArray, defSet BoolArray)
 	for argId in argIds 'eachArg'
-		let alreadyDef = boolVectorGet(defSet, index: argId)
+		let alreadyDef = try defSet.get(argId) otherwise panic("markArgIdsAsUses: defSet.get({argId}) OOB; defSet sized to maxValueId")
 		if not alreadyDef 'notDef'
-			boolVectorSet(useSet, index: argId)
+			try useSet.set(argId, value: true) otherwise panic("markArgIdsAsUses: useSet.set({argId}) OOB; useSet sized to maxValueId")
 		end 'notDef'
 	end 'eachArg'
 end 'markArgIdsAsUses'
@@ -309,20 +309,6 @@ export function createBoolVector(size RegInt) returns BoolArray
 	return arr
 end 'createBoolVector'
 
-export function boolVectorGet(arr BoolArray, index RegInt) returns bool
-	if index < 0 or index >= arr.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-	return try arr.get(index) otherwise panic("boolVectorGet: 0 <= index < arr.count() just checked but get({index}) failed")
-end 'boolVectorGet'
-
-export function boolVectorSet(arr BoolArray, index RegInt)
-	if index < 0 or index >= arr.count() 'outOfBounds'
-		return
-	end 'outOfBounds'
-	try arr.set(index, value: true) otherwise panic("invariant: arr.set OOB")
-end 'boolVectorSet'
-
 // Union `from` into `target`. Returns true if target changed.
 export function boolVectorUnionInto(target BoolArray, from BoolArray) returns bool
 	var changed = false
@@ -353,9 +339,9 @@ export function computeLiveIn(liveIn BoolArray, liveOut BoolArray, useSet BoolAr
 
 	var i = 0
 	while i < count 'each'
-		let inUse = boolVectorGet(useSet, index: i)
-		let inLiveOut = boolVectorGet(liveOut, index: i)
-		let inDef = boolVectorGet(defSet, index: i)
+		let inUse = try useSet.get(i) otherwise panic("computeLiveIn: useSet.get({i}) OOB; useSet and liveIn must share size")
+		let inLiveOut = try liveOut.get(i) otherwise panic("computeLiveIn: liveOut.get({i}) OOB; liveOut and liveIn must share size")
+		let inDef = try defSet.get(i) otherwise panic("computeLiveIn: defSet.get({i}) OOB; defSet and liveIn must share size")
 
 		// liveIn[i] = use[i] or (liveOut[i] and not def[i])
 		let newVal = inUse or (inLiveOut and not inDef)

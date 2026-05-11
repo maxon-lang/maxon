@@ -22,10 +22,8 @@ function incrementUse(table ValueIdArray, valueId ValueId)
 end 'incrementUse'
 
 function getUseCount(table ValueIdArray, valueId ValueId) returns ValueId
-	if valueId >= table.count() 'outOfBounds'
-		return 0
-	end 'outOfBounds'
-	return try table.get(valueId) otherwise panic("getUseCount: valueId < table.count() just checked but get({valueId}) failed")
+	// Table grows lazily — OOB means "no uses recorded for valueId".
+	return try table.get(valueId) otherwise 0
 end 'getUseCount'
 
 export function eliminateDeadCode(module StdModule) returns StdModule

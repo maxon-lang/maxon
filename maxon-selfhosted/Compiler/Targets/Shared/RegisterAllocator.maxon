@@ -272,10 +272,13 @@ function growSigned(arr RegIntArray, index RegInt, sentinel RegInt)
 	end 'grow'
 end 'growSigned'
 
+// Lazy-map lookup with explicit fallback. The negative-index guard exists
+// because `Array.get` panics on negatives (vs. returning try-failure for
+// past-the-end), and callers may legitimately pass a sentinel index of -1.
 export function getOr(arr RegIntArray, index RegInt, fallback RegInt) returns RegInt
-	if index < 0 or index >= arr.count() 'outOfBounds'
+	if index < 0 'negative'
 		return fallback
-	end 'outOfBounds'
+	end 'negative'
 	return try arr.get(index) otherwise fallback
 end 'getOr'
 

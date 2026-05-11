@@ -987,12 +987,13 @@ function appendAll(dst ValueIdArray, from ValueIdArray)
 end 'appendAll'
 
 // Look up a value in a SchedIntArray, returning SCHED_NONE if out of bounds.
-// Used for defMap where SCHED_NONE means "no defining op".
+// Used for defMap where SCHED_NONE means "no defining op" — the map grows
+// lazily so OOB is a real "no entry yet" answer, not a bug.
 function schedLookup(arr SchedIntArray, index SchedInt) returns SchedInt
-	if index < 0 or index >= arr.count() 'outOfBounds'
+	if index < 0 'negative'
 		return SCHED_NONE
-	end 'outOfBounds'
-	return try arr.get(index) otherwise panic("schedLookup: 0 <= index < arr.count() just checked but get({index}) failed")
+	end 'negative'
+	return try arr.get(index) otherwise SCHED_NONE
 end 'schedLookup'
 
 // Grow a SchedIntArray to at least the given size, filling with SCHED_NONE.
@@ -1004,12 +1005,13 @@ function schedGrow(arr SchedIntArray, size SchedInt)
 end 'schedGrow'
 
 // Look up a value in a SchedIntArray, returning 0 if out of bounds.
-// Used for liveVregs where 0 means "not live".
+// Used for liveVregs where 0 means "not live" — the map grows lazily so
+// OOB is a real "not seen yet" answer, not a bug.
 function schedLookupZero(arr SchedIntArray, index SchedInt) returns SchedInt
-	if index < 0 or index >= arr.count() 'outOfBounds'
+	if index < 0 'negative'
 		return 0
-	end 'outOfBounds'
-	return try arr.get(index) otherwise panic("schedLookupZero: 0 <= index < arr.count() just checked but get({index}) failed")
+	end 'negative'
+	return try arr.get(index) otherwise 0
 end 'schedLookupZero'
 
 // Grow a SchedIntArray to at least the given size, filling with 0.

@@ -2381,9 +2381,8 @@ function buildFuncTypeEntry(paramCount ParamCount, paramTypes StdTypeArray, retu
 	return funcType
 end 'buildFuncTypeEntry'
 
+// `floatSet` is sized to `findMaxValueId()+1`, covering every valueId in
+// the function. Callers pass live valueIds from MIR ops, so OOB is a bug.
 function isFloatLocal(floatSet BoolArray, localIdx MachineWord) returns bool
-	if localIdx >= floatSet.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-	return try floatSet.get(localIdx) otherwise panic("isFloatLocal: localIdx < floatSet.count() just checked but get({localIdx}) failed")
+	return try floatSet.get(localIdx) otherwise panic("isFloatLocal: floatSet.get({localIdx}) OOB; sized to maxValueId+1")
 end 'isFloatLocal'

@@ -642,26 +642,29 @@ function hintConflictsWithFixedNeighbor(hint RegOrdinal, nbrs RegIntArray, range
 	return false
 end 'hintConflictsWithFixedNeighbor'
 
+// `regOrd` may be RM_NONE (=-1) for unhinted ranges, or a register from a
+// different class than the active pool. Treat both as "not in pool" no-ops.
 function markRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray)
-	if regOrd < 0 or regOrd >= poolIndexOf.count() 'outOfBounds'
+	if regOrd < 0 'negative'
 		return
-	end 'outOfBounds'
+	end 'negative'
 	let pi = try poolIndexOf.get(regOrd) otherwise RM_NONE
-	if pi != RM_NONE and pi < usedRegs.count() 'inBounds'
-		try usedRegs.set(pi, value: true) otherwise panic("invariant: usedRegs.set OOB")
-	end 'inBounds'
+	if pi != RM_NONE 'inPool'
+		try usedRegs.set(pi, value: true) otherwise panic("markRegUsed: usedRegs.set({pi}) OOB; usedRegs must be parallel to pool")
+	end 'inPool'
 end 'markRegUsed'
 
-// Check if a register ordinal is marked as used
+// Check if a register ordinal is marked as used. See `markRegUsed` for why
+// the negative / out-of-pool inputs are valid.
 function isRegUsed(usedRegs BoolArray, regOrd RegInt, poolIndexOf RegIntArray) returns bool
-	if regOrd < 0 or regOrd >= poolIndexOf.count() 'outOfBounds'
+	if regOrd < 0 'negative'
 		return false
-	end 'outOfBounds'
+	end 'negative'
 	let pi = try poolIndexOf.get(regOrd) otherwise RM_NONE
 	if pi == RM_NONE 'notInPool'
 		return false
 	end 'notInPool'
-	return try usedRegs.get(pi) otherwise panic("isRegUsed: usedRegs must be parallel to pool but get({pi}) failed (usedRegs.count={usedRegs.count()})")
+	return try usedRegs.get(pi) otherwise panic("isRegUsed: usedRegs.get({pi}) OOB; usedRegs must be parallel to pool")
 end 'isRegUsed'
 
 // Check if a register ordinal is caller-saved. Used by the hint path to

@@ -478,16 +478,13 @@ function buildIntervalsForValue(module TargetModule, range LiveRange, liveness L
 	end 'eachBlock'
 end 'buildIntervalsForValue'
 
-// Helper to safely read from BoolArrayArray liveness sets
+// Helper to read from BoolArrayArray liveness sets. `sets` is
+// `liveness.liveIn` or `liveness.liveOut`; the outer array is sized to
+// numBlocks, and every inner BoolArray is sized to `liveness.maxValueId`.
+// All callers iterate `valueId` over `[0, maxValueId)`, so OOB is a bug.
 function liveGetBool(sets BoolArrayArray, blockId BlockId, valueId ValueId) returns bool
-	// `sets` is liveness.liveIn or liveness.liveOut, sized to numBlocks.
-	let blockSet = try sets.get(blockId) otherwise panic("invariant: liveness sets sized to numBlocks but get({blockId}) failed")
-
-	if valueId >= blockSet.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-
-	return try blockSet.get(valueId) otherwise panic("liveGetBool: valueId < blockSet.count() just checked but get({valueId}) failed")
+	let blockSet = try sets.get(blockId) otherwise panic("liveGetBool: sets.get({blockId}) OOB; liveness sets sized to numBlocks")
+	return try blockSet.get(valueId) otherwise panic("liveGetBool: blockSet.get({valueId}) OOB; inner sized to maxValueId")
 end 'liveGetBool'
 
 // ============================================================

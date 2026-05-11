@@ -170,21 +170,22 @@ function scanOpSlots(module TargetModule, packed OpIndex, projection SlotProject
 	let reads = VarSlotArray.create()
 	projection.collectReads(module, packed: packed, reads: reads)
 	for s in reads 'eachR'
-		if not boolVectorGet(defSet, index: s) 'notDef'
-			boolVectorSet(useSet, index: s)
+		let alreadyDef = try defSet.get(s) otherwise panic("scanOpSlots: defSet.get({s}) OOB; defSet sized to maxSlotIdx")
+		if not alreadyDef 'notDef'
+			try useSet.set(s, value: true) otherwise panic("scanOpSlots: useSet.set({s}) OOB; useSet sized to maxSlotIdx")
 		end 'notDef'
 	end 'eachR'
 
 	let writes = VarSlotArray.create()
 	projection.collectWrites(module, packed: packed, writes: writes)
 	for s in writes 'eachW'
-		boolVectorSet(defSet, index: s)
+		try defSet.set(s, value: true) otherwise panic("scanOpSlots: defSet.set({s}) OOB; defSet sized to maxSlotIdx")
 	end 'eachW'
 
 	let escapes = VarSlotArray.create()
 	projection.collectEscapes(module, packed: packed, escapes: escapes)
 	for s in escapes 'eachE'
-		boolVectorSet(escaped, index: s)
+		try escaped.set(s, value: true) otherwise panic("scanOpSlots: escaped.set({s}) OOB; escaped sized to maxSlotIdx")
 	end 'eachE'
 end 'scanOpSlots'
 
@@ -241,14 +242,14 @@ function computeSlotLiveness(cfg CfgInfo, rpo RpoInfo, ud SlotUseDef) returns Li
 	// indirection statically.
 	var si = 0
 	while si < maxSlotIdx 'eachSlot'
-		let isEsc = boolVectorGet(ud.escaped, index: si)
+		let isEsc = try ud.escaped.get(si) otherwise panic("computeSlotLiveness: escaped.get({si}) OOB; escaped sized to maxSlotIdx")
 		if isEsc 'esc'
 			var bi2 = 0
 			while bi2 < numBlocks 'eachBlk'
 				var inVec = try liveIn.get(bi2) otherwise panic("invariant: liveIn sized to numBlocks but get({bi2}) failed")
 				var outVec = try liveOut.get(bi2) otherwise panic("invariant: liveOut sized to numBlocks but get({bi2}) failed")
-				boolVectorSet(inVec, index: si)
-				boolVectorSet(outVec, index: si)
+				try inVec.set(si, value: true) otherwise panic("computeSlotLiveness: inVec.set({si}) OOB; vectors sized to maxSlotIdx")
+				try outVec.set(si, value: true) otherwise panic("computeSlotLiveness: outVec.set({si}) OOB; vectors sized to maxSlotIdx")
 				bi2 = bi2 + 1
 			end 'eachBlk'
 		end 'esc'
@@ -269,7 +270,7 @@ function buildSlotRanges(module TargetModule, func IrFunction, liveness Liveness
 	var s = 0
 	while s < maxSlotIdx 'eachSlot'
 		var range = SlotRange.create(s)
-		range.escaped = boolVectorGet(ud.escaped, index: s)
+		range.escaped = try ud.escaped.get(s) otherwise panic("buildSlotRanges: escaped.get({s}) OOB; escaped sized to maxSlotIdx")
 		ranges.push(range)
 		s = s + 1
 	end 'eachSlot'
@@ -301,8 +302,8 @@ function buildSlotRanges(module TargetModule, func IrFunction, liveness Liveness
 
 		var t = 0
 		while t < maxSlotIdx 'buildPerSlot'
-			let liveIn = boolVectorGet(blockLiveIn, index: t)
-			let liveOut = boolVectorGet(blockLiveOut, index: t)
+			let liveIn = try blockLiveIn.get(t) otherwise panic("buildSlotRanges: blockLiveIn.get({t}) OOB; liveIn sized to maxSlotIdx")
+			let liveOut = try blockLiveOut.get(t) otherwise panic("buildSlotRanges: blockLiveOut.get({t}) OOB; liveOut sized to maxSlotIdx")
 			let fw = try firstWrite.get(t) otherwise panic("invariant: firstWrite sized to maxSlotIdx but get({t}) failed")
 			let lu = try lastUse.get(t) otherwise panic("invariant: lastUse sized to maxSlotIdx but get({t}) failed")
 
@@ -523,7 +524,8 @@ end 'colorSlots'
 function anyEscaped(escaped BoolArray, maxSlotIdx VarSlot) returns bool
 	var i = 0
 	while i < maxSlotIdx 'each'
-		if boolVectorGet(escaped, index: i) 'esc'
+		let isEsc = try escaped.get(i) otherwise panic("anyEscaped: escaped.get({i}) OOB; escaped sized to maxSlotIdx")
+		if isEsc 'esc'
 			return true
 		end 'esc'
 		i = i + 1

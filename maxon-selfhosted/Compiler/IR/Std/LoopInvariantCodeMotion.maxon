@@ -586,8 +586,6 @@ function licmGrowBoolArray(arr BoolArray, size ValueId)
 end 'licmGrowBoolArray'
 
 function licmGetBool(arr BoolArray, index ValueId) returns bool
-	if index >= arr.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-	return try arr.get(index) otherwise panic("licmGetBool: index < arr.count() just checked but get({index}) failed")
+	// Map grows lazily — OOB means "no entry recorded", which we treat as false.
+	return try arr.get(index) otherwise false
 end 'licmGetBool'

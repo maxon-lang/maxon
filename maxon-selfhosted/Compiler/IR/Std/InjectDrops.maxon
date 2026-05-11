@@ -32,9 +32,7 @@ function createSlotValueMap() returns SlotValueMap
 end 'createSlotValueMap'
 
 function slotValueGet(m SlotValueMap, slotId VarSlot) returns ValueId
-	if slotId >= m.values.count() 'outOfBounds'
-		return DROP_SLOT_EMPTY
-	end 'outOfBounds'
+	// Map grows lazily — OOB means "no value recorded for slotId".
 	return try m.values.get(slotId) otherwise DROP_SLOT_EMPTY
 end 'slotValueGet'
 
@@ -70,10 +68,8 @@ function markHeapAllocated(set HeapValueSet, valueId ValueId)
 end 'markHeapAllocated'
 
 function isHeapAllocated(set HeapValueSet, valueId ValueId) returns bool
-	if valueId >= set.flags.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-	return try set.flags.get(valueId) otherwise panic("isHeapAllocated: valueId < flags.count() just checked but get({valueId}) failed")
+	// Map grows lazily — OOB means "not heap-allocated".
+	return try set.flags.get(valueId) otherwise false
 end 'isHeapAllocated'
 
 // ============================================================

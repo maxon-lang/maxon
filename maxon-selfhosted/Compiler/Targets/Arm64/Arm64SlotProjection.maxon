@@ -1,0 +1,239 @@
+// ARM64-specific slot read/write/escape projection and op rewriting for the
+// shared SlotLivenessRenumber pass. Mirrors X64SlotProjection — see that file
+// for the design rationale around the explicit per-variant catch-alls.
+
+// Build the CFG + RPO for `func` and invoke the shared slot-renumber pass.
+// Encapsulating the CFG construction here (rather than inside the shared
+// pass) avoids a bootstrap-compiler bug where two callers both monomorphize
+// `buildIrFunctionCfg` for the same target's OpQuery and trip a
+// duplicate-key in the interface-alias specializer.
+export function renumberArm64SlotsForFunction(module TargetModule, func IrFunction)
+	let opQuery = Arm64OpQuery.create()
+	let cfg = buildIrFunctionCfg(func, module: module, opQuery: opQuery)
+	let entryBlockId = arm64GetEntryBlockId(module, func: func)
+	let rpo = computeReversePostorder(entryBlockId, numBlocks: cfg.numBlocks, cfg: cfg)
+	renumberSlotsForFunction(module, func: func, cfg: cfg, rpo: rpo, projection: Arm64SlotProjection.create())
+end 'renumberArm64SlotsForFunction'
+
+function arm64GetEntryBlockId(module TargetModule, func IrFunction) returns BlockId
+	if func.blockRefs.count() == 0 'noBlocks'
+		return 0
+	end 'noBlocks'
+	let blockRef = try func.blockRefs.get(0) otherwise panic("invariant: blockRefs.count() > 0 just checked but get(0) failed")
+	let entry = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+	return entry.id
+end 'arm64GetEntryBlockId'
+
+export type Arm64SlotProjection implements SlotProjection
+	export let tag RegInt
+
+	// --- Slot projection ---
+
+	function collectReads(module TargetModule, packed OpIndex, reads VarSlotArray)
+		let op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		arm64CollectSlotReads(op, reads: reads)
+	end 'collectReads'
+
+	function collectWrites(module TargetModule, packed OpIndex, writes VarSlotArray)
+		let op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		arm64CollectSlotWrites(op, writes: writes)
+	end 'collectWrites'
+
+	function collectEscapes(module TargetModule, packed OpIndex, escapes VarSlotArray)
+		let op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		arm64CollectSlotEscapes(op, escapes: escapes)
+	end 'collectEscapes'
+
+	function rewriteOp(module TargetModule, packed OpIndex, remap RegIntArray)
+		let op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+		let rewritten = rewriteArm64OpSlots(op, remap: remap)
+		try module.arm64Ops.set(packed, value: rewritten) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
+	end 'rewriteOp'
+
+	// --- Factory ---
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+end 'Arm64SlotProjection'
+
+// ============================================================
+// Top-level helpers — pure functions over Arm64Op variants
+// ============================================================
+
+function pushArm64VarSlotArrayInto(src VarSlotArray, dst VarSlotArray)
+	for s in src 'each'
+		dst.push(s)
+	end 'each'
+end 'pushArm64VarSlotArrayInto'
+
+function arm64CollectSlotReads(op Arm64Op, reads VarSlotArray)
+	match op 'check'
+		strToSlot(slotIndex, _) then reads.push(slotIndex)
+		syscall(_, _, argSlots) then pushArm64VarSlotArrayInto(argSlots, dst: reads)
+		iatCall(_, _, argSlots) then pushArm64VarSlotArrayInto(argSlots, dst: reads)
+		storeByteOp(baseSlot, offsetSlot, byteSlot) then collectArm64StoreByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
+		loadByteOp(_, baseSlot, offsetSlot) then collectArm64LoadByteReads(reads, baseSlot: baseSlot, offsetSlot: offsetSlot)
+		memcpyOp(dstSlot, srcSlot, lenSlot) then collectArm64MemcpyReads(reads, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+		// Catch-all: every Arm64Op variant not matched above reads zero slots.
+		// Listed as disjoint ranges around the matched arms.
+		prologue to movImm then break 'check'
+		ldrFromSlot then break 'check'
+		addRegs to ret then break 'check'
+		globalAddr to stackAddrOp then break 'check'
+		movRegReg to atomicXaddMem then break 'check'
+	end 'check'
+end 'arm64CollectSlotReads'
+
+function collectArm64StoreByteReads(reads VarSlotArray, baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot)
+	reads.push(baseSlot)
+	reads.push(offsetSlot)
+	reads.push(byteSlot)
+end 'collectArm64StoreByteReads'
+
+function collectArm64LoadByteReads(reads VarSlotArray, baseSlot VarSlot, offsetSlot VarSlot)
+	reads.push(baseSlot)
+	reads.push(offsetSlot)
+end 'collectArm64LoadByteReads'
+
+function collectArm64MemcpyReads(reads VarSlotArray, dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
+	reads.push(dstSlot)
+	reads.push(srcSlot)
+	reads.push(lenSlot)
+end 'collectArm64MemcpyReads'
+
+function arm64CollectSlotWrites(op Arm64Op, writes VarSlotArray)
+	match op 'check'
+		ldrFromSlot(_, slotIndex) then writes.push(slotIndex)
+		syscall(resultSlot, _, _) then writes.push(resultSlot)
+		iatCall(resultSlot, _, _) then writes.push(resultSlot)
+		globalAddr(resultSlot, _) then writes.push(resultSlot)
+		stackAddrOp(resultSlot, _) then writes.push(resultSlot)
+		loadByteOp(resultSlot, _, _) then writes.push(resultSlot)
+		prologue to strToSlot then break 'check'
+		addRegs to ret then break 'check'
+		storeByteOp then break 'check'
+		memcpyOp to atomicXaddMem then break 'check'
+	end 'check'
+end 'arm64CollectSlotWrites'
+
+function arm64CollectSlotEscapes(op Arm64Op, escapes VarSlotArray)
+	match op 'check'
+		stackAddrOp(_, targetSlot) then escapes.push(targetSlot)
+		prologue to globalAddr then break 'check'
+		storeByteOp to atomicXaddMem then break 'check'
+	end 'check'
+end 'arm64CollectSlotEscapes'
+
+function remapArm64Slot(slot VarSlot, remap RegIntArray) returns VarSlot
+	let mapped = try remap.get(slot) otherwise return slot
+	if mapped < 0 'unused'
+		return slot
+	end 'unused'
+	return mapped
+end 'remapArm64Slot'
+
+function remapArm64VarSlotArray(arr VarSlotArray, remap RegIntArray) returns VarSlotArray
+	var out = VarSlotArray.create()
+	for s in arr 'each'
+		out.push(remapArm64Slot(s, remap: remap))
+	end 'each'
+	return out
+end 'remapArm64VarSlotArray'
+
+// Rewrite op slot indices via `remap`. Returns a fresh op for slot-bearing
+// variants; returns the input op for everything else.
+//
+// IMPORTANT: We do NOT use a `prologue to ... gives op` range catch-all for
+// the non-slot variants. Empirically that produces a "default-valued" op
+// (the union discriminant survives but payload fields are zeroed) — see the
+// same note in X64SlotProjection.rewriteX64OpSlots. Every catch-all variant
+// is enumerated by name with `gives op` so Maxon binds `op` as the original
+// value for that specific pattern, not as a discriminant-only reconstruction.
+function rewriteArm64OpSlots(op Arm64Op, remap RegIntArray) returns Arm64Op
+	return match op 'check'
+		strToSlot(slotIndex, src) gives Arm64Op.strToSlot(remapArm64Slot(slotIndex, remap: remap), src: src)
+		ldrFromSlot(dest, slotIndex) gives Arm64Op.ldrFromSlot(dest, slotIndex: remapArm64Slot(slotIndex, remap: remap))
+		syscall(resultSlot, number, argSlots) gives Arm64Op.syscall(remapArm64Slot(resultSlot, remap: remap), number: number, argSlots: remapArm64VarSlotArray(argSlots, remap: remap))
+		iatCall(resultSlot, slotIndex, argSlots) gives Arm64Op.iatCall(remapArm64Slot(resultSlot, remap: remap), slotIndex: slotIndex, argSlots: remapArm64VarSlotArray(argSlots, remap: remap))
+		globalAddr(resultSlot, name) gives Arm64Op.globalAddr(remapArm64Slot(resultSlot, remap: remap), name: name)
+		stackAddrOp(resultSlot, targetSlot) gives Arm64Op.stackAddrOp(remapArm64Slot(resultSlot, remap: remap), targetSlot: remapArm64Slot(targetSlot, remap: remap))
+		storeByteOp(baseSlot, offsetSlot, byteSlot) gives Arm64Op.storeByteOp(remapArm64Slot(baseSlot, remap: remap), offsetSlot: remapArm64Slot(offsetSlot, remap: remap), byteSlot: remapArm64Slot(byteSlot, remap: remap))
+		loadByteOp(resultSlot, baseSlot, offsetSlot) gives Arm64Op.loadByteOp(remapArm64Slot(resultSlot, remap: remap), baseSlot: remapArm64Slot(baseSlot, remap: remap), offsetSlot: remapArm64Slot(offsetSlot, remap: remap))
+		memcpyOp(dstSlot, srcSlot, lenSlot) gives Arm64Op.memcpyOp(remapArm64Slot(dstSlot, remap: remap), srcSlot: remapArm64Slot(srcSlot, remap: remap), lenSlot: remapArm64Slot(lenSlot, remap: remap))
+		// Non-slot variants: return the input op unchanged. Per-variant arms
+		// so payload bindings are introduced fresh and `op` evaluates to the
+		// same Op value with its original payload preserved.
+		prologue gives op
+		epilogue gives op
+		movImm gives op
+		addRegs gives op
+		addsRegs gives op
+		subRegs gives op
+		subsRegs gives op
+		mulRegs gives op
+		sdivRegs gives op
+		remRegs gives op
+		negReg gives op
+		mvnReg gives op
+		andRegs gives op
+		andsRegs gives op
+		orrRegs gives op
+		eorRegs gives op
+		lslRegs gives op
+		asrRegs gives op
+		lsrRegs gives op
+		cmpRegs gives op
+		cmpRegZero gives op
+		condBranch gives op
+		branch gives op
+		branchLink gives op
+		ret gives op
+		movRegReg gives op
+		spillToStack gives op
+		reloadFromStack gives op
+		branchLinkReg gives op
+		subSpImm gives op
+		addSpImm gives op
+		strToSpOffset gives op
+		fmovRegReg gives op
+		spillFpToStack gives op
+		reloadFpFromStack gives op
+		fmovToFloat gives op
+		fmovToGpr gives op
+		fpLoadRdata gives op
+		fadd gives op
+		fsub gives op
+		fmul gives op
+		fdiv gives op
+		fsqrt gives op
+		fabs gives op
+		fneg gives op
+		fcmp gives op
+		scvtf gives op
+		fcvtzs gives op
+		fcvt gives op
+		frintm gives op
+		frintp gives op
+		frintz gives op
+		frintn gives op
+		fpStoreIndirect gives op
+		fpLoadIndirect gives op
+		storeIndirect gives op
+		loadIndirect gives op
+		globalLoad gives op
+		globalStore gives op
+		globalLoadFloat gives op
+		globalStoreFloat gives op
+		leaFromStack gives op
+		leaRdata gives op
+		leaFuncAddr gives op
+		cset gives op
+		csel gives op
+		sxtw gives op
+		nullSafeLoad gives op
+		atomicIncMem gives op
+		atomicDecMem gives op
+		atomicXaddMem gives op
+	end 'check'
+end 'rewriteArm64OpSlots'

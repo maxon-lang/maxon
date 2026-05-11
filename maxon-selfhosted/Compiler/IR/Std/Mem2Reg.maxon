@@ -1851,10 +1851,8 @@ function getEntryBlockId(func IrFunction, module StdModule) returns BlockId
 end 'getEntryBlockId'
 
 function getSlotBool(arr BoolArray, slotId VarSlot) returns bool
-	if slotId >= arr.count() 'outOfBounds'
-		return false
-	end 'outOfBounds'
-	return try arr.get(slotId) otherwise panic("getSlotBool: slotId < arr.count() just succeeded but arr.get({slotId}) failed (count={arr.count()})")
+	// Map grows lazily — OOB means "no entry recorded", which we treat as false.
+	return try arr.get(slotId) otherwise false
 end 'getSlotBool'
 
 function growBoolArray(arr BoolArray, size VarSlot)
