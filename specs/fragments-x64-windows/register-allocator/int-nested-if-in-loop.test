@@ -33,15 +33,15 @@ module {
     %5 = maxon.literal {value = 5 : i64}
     %6 = maxon.var_ref {var = i} {type = i64}
     %7 = maxon.binop %6, %5 {op = le}
-    maxon.cond_br %7 [then: first_1, else: second_2]
-  first_1:
+    maxon.cond_br %7 [then: first_0, else: second_0]
+  first_0:
     %8 = maxon.var_ref {var = result} {type = i64}
     %9 = maxon.var_ref {var = i} {type = i64}
     %10 = maxon.binop %8, %9 {op = add}
     maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br first_1.merge
-  second_2:
+    maxon.br first_0.merge
+  second_0:
     %11 = maxon.literal {value = 2 : i64}
     %12 = maxon.var_ref {var = i} {type = i64}
     %13 = maxon.binop %12, %11 {op = mul}
@@ -49,8 +49,8 @@ module {
     %15 = maxon.binop %14, %13 {op = add}
     maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br first_1.merge
-  first_1.merge:
+    maxon.br first_0.merge
+  first_0.merge:
     %16 = maxon.literal {value = 1 : i64}
     %17 = maxon.var_ref {var = i} {type = i64}
     %18 = maxon.binop %17, %16 {op = add}
@@ -66,10 +66,10 @@ module {
     %24 = maxon.literal {value = 4294967295 : i64}
     %25 = maxon.binop %21, %24 {op = gt}
     %26 = maxon.binop %23, %25 {op = or}
-    maxon.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    maxon.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-nested-if-in-loop.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_3:
+  __range_ok_0:
     maxon.scope_end [result, i]
     maxon.return %21
   }
@@ -92,22 +92,22 @@ module {
     %5 = arith.constant {value = 5 : i64}
     %6 = memref.load i : i64
     %7 = arith.cmpi le %6, %5
-    cf.cond_br %7 [then: first_1, else: second_2]
-  first_1:
+    cf.cond_br %7 [then: first_0, else: second_0]
+  first_0:
     %8 = memref.load result : i64
     %9 = memref.load i : i64
     %10 = arith.addi %8, %9
     memref.store %10, result
-    cf.br first_1.merge
-  second_2:
+    cf.br first_0.merge
+  second_0:
     %11 = arith.constant {value = 2 : i64}
     %12 = memref.load i : i64
     %13 = arith.muli %12, %11
     %14 = memref.load result : i64
     %15 = arith.addi %14, %13
     memref.store %15, result
-    cf.br first_1.merge
-  first_1.merge:
+    cf.br first_0.merge
+  first_0.merge:
     %16 = arith.constant {value = 1 : i64}
     %17 = memref.load i : i64
     %18 = arith.addi %17, %16
@@ -122,12 +122,12 @@ module {
     %24 = arith.constant {value = 4294967295 : i64}
     %25 = arith.cmpi gt %21, %24
     %26 = arith.ori1 %23, %25
-    cf.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
-  __range_panic_3:
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @mrt_panic %28
-  __range_ok_3:
+  __range_ok_0:
     func.return %21
   }
 }
@@ -150,22 +150,22 @@ module {
     x64.mov rax, 5
     x64.mov rcx, [rbp-16]
     x64.cmp rcx, rax
-    x64.jg main.second_2
-  first_1:
+    x64.jg main.second_0
+  first_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-16]
     x64.add rax, rcx
     x64.mov [rbp-8], rax
-    x64.jmp main.first_1.merge
-  second_2:
+    x64.jmp main.first_0.merge
+  second_0:
     x64.mov rax, 2
     x64.mov rcx, [rbp-16]
     x64.imul rcx, rax
     x64.mov rdx, [rbp-8]
     x64.add rdx, rcx
     x64.mov [rbp-8], rdx
-    x64.jmp main.first_1.merge
-  first_1.merge:
+    x64.jmp main.first_0.merge
+  first_0.merge:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -181,15 +181,15 @@ module {
     x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
-    x64.jg main.__range_panic_3
+    x64.jg main.__range_panic_0
     x64.cmp rdx, rax
-    x64.jl main.__range_panic_3
-    x64.jmp main.__range_ok_3
-  __range_panic_3:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_3:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret

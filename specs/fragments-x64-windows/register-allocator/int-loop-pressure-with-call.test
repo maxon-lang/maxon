@@ -94,10 +94,10 @@ module {
     %39 = maxon.literal {value = 4294967295 : i64}
     %40 = maxon.binop %36, %39 {op = gt}
     %41 = maxon.binop %38, %40 {op = or}
-    maxon.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-loop-pressure-with-call.test:23: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [a, b, c, d, e, f, i]
     maxon.return %36
   }
@@ -169,12 +169,12 @@ module {
     %39 = arith.constant {value = 4294967295 : i64}
     %40 = arith.cmpi gt %36, %39
     %41 = arith.ori1 %38, %40
-    cf.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %42 = memref.lea_symdata __panic_msg_0
     %43 = std.ptr_to_i64 %42
     std.call_runtime @mrt_panic %43
-  __range_ok_1:
+  __range_ok_0:
     func.return %36
   }
 }
@@ -249,15 +249,15 @@ module {
     x64.xor r8d, r8d
     x64.mov r9, 4294967295
     x64.cmp rdx, r9
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rdx, r8
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret

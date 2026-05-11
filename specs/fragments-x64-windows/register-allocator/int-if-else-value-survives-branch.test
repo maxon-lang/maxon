@@ -25,13 +25,13 @@ module {
     maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.binop %1, %3 {op = eq}
-    maxon.cond_br %4 [then: check_0, else: other_1]
+    maxon.cond_br %4 [then: check_0, else: other_0]
   check_0:
     %5 = maxon.literal {value = 2 : i64}
     maxon.assign %5 {var = extra} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br check_0.merge
-  other_1:
+  other_0:
     %6 = maxon.literal {value = 100 : i64}
     maxon.assign %6 {var = extra} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
@@ -45,10 +45,10 @@ module {
     %12 = maxon.literal {value = 4294967295 : i64}
     %13 = maxon.binop %9, %12 {op = gt}
     %14 = maxon.binop %11, %13 {op = or}
-    maxon.cond_br %14 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-if-else-value-survives-branch.test:11: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [base, cond, extra]
     maxon.return %9
   }
@@ -62,12 +62,12 @@ module {
     %1 = arith.constant {value = 1 : i64}
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.cmpi eq %1, %3
-    cf.cond_br %4 [then: check_0, else: other_1]
+    cf.cond_br %4 [then: check_0, else: other_0]
   check_0:
     %5 = arith.constant {value = 2 : i64}
     memref.store %5, extra
     cf.br check_0.merge
-  other_1:
+  other_0:
     %6 = arith.constant {value = 100 : i64}
     memref.store %6, extra
     cf.br check_0.merge
@@ -80,12 +80,12 @@ module {
     %12 = arith.constant {value = 4294967295 : i64}
     %13 = arith.cmpi gt %9, %12
     %14 = arith.ori1 %11, %13
-    cf.cond_br %14 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %15 = memref.lea_symdata __panic_msg_0
     %16 = std.ptr_to_i64 %15
     std.call_runtime @mrt_panic %16
-  __range_ok_2:
+  __range_ok_0:
     func.return %9
   }
 }
@@ -99,12 +99,12 @@ module {
     x64.mov rcx, 1
     x64.mov rdx, 1
     x64.cmp rcx, rdx
-    x64.jne main.other_1
+    x64.jne main.other_0
   check_0:
     x64.mov rax, 2
     x64.mov [rbp-16], rax
     x64.jmp main.check_0.merge
-  other_1:
+  other_0:
     x64.mov rax, 100
     x64.mov [rbp-16], rax
     x64.jmp main.check_0.merge
@@ -115,15 +115,15 @@ module {
     x64.xor edx, edx
     x64.mov ebx, 4294967295
     x64.cmp rax, rbx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rdx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

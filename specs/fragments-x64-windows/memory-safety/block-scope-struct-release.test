@@ -41,7 +41,7 @@ module {
     %19 = maxon.literal {value = 10 : i64}
     %20 = maxon.literal {value = 20 : i64}
     %21 = maxon.call @Point.create %19, %20
-    maxon.assign %21 {var = __call_tmp_21} {decl = 1 : i1}
+    maxon.assign %21 {var = __call_tmp_0} {decl = 1 : i1}
     maxon.assign %21 {var = p} {decl = 1 : i1}
     %22 = maxon.struct_var_ref p
     %23 = maxon.field_access .x %22
@@ -55,10 +55,10 @@ module {
     %27 = maxon.literal {value = 4294967295 : i64}
     %28 = maxon.binop %24, %27 {op = gt}
     %29 = maxon.binop %26, %28 {op = or}
-    maxon.cond_br %29 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at block-scope-struct-release.test:19: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [result]
     maxon.return %24
   }
@@ -73,14 +73,14 @@ module {
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.constant {value = 1 : i64}
     %5 = std.call_runtime @mm_alloc %2, %3, %4
-    memref.store %5, __struct_2
-    %6 = memref.load __struct_2 : i64
+    memref.store %5, __struct_0
+    %6 = memref.load __struct_0 : i64
     memref.store_indirect %0, %6+0
-    %7 = memref.load __struct_2 : i64
+    %7 = memref.load __struct_0 : i64
     memref.store_indirect %1, %7+8
-    %8 = memref.load __struct_2 : i64
+    %8 = memref.load __struct_0 : i64
     std.call_runtime @mm_incref %8
-    %9 = memref.load __struct_2 : i64
+    %9 = memref.load __struct_0 : i64
     func.return %9
   }
   func @main() -> u32 {
@@ -107,12 +107,12 @@ module {
     %24 = arith.constant {value = 4294967295 : i64}
     %25 = arith.cmpi gt %21, %24
     %26 = arith.ori1 %23, %25
-    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @mrt_panic %28
-  __range_ok_1:
+  __range_ok_0:
     func.return %21
   }
   func @__destruct_Point(ptr: i64) {
@@ -176,15 +176,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

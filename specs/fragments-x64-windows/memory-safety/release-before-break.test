@@ -49,20 +49,20 @@ module {
   loop_0:
     %16 = maxon.var_ref {var = i} {type = i64}
     %17 = maxon.call @Counter.create %16
-    maxon.assign %17 {var = __call_tmp_17} {decl = 1 : i1}
+    maxon.assign %17 {var = __call_tmp_0} {decl = 1 : i1}
     maxon.assign %17 {var = c} {decl = 1 : i1}
     %18 = maxon.struct_var_ref c
     %19 = maxon.field_access .n %18
     %20 = maxon.literal {value = 1 : i64}
     %21 = maxon.binop %19, %20 {op = eq}
-    maxon.cond_br %21 [then: check_1, else: check_1.after]
-  check_1:
+    maxon.cond_br %21 [then: check_0, else: check_0.after]
+  check_0:
     %22 = maxon.struct_var_ref c
     %23 = maxon.field_access .n %22
     maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [c]
     maxon.br loop_0.exit
-  check_1.after:
+  check_0.after:
     %24 = maxon.literal {value = 1 : i64}
     %25 = maxon.var_ref {var = i} {type = i64}
     %26 = maxon.binop %25, %24 {op = add}
@@ -76,10 +76,10 @@ module {
     %30 = maxon.literal {value = 4294967295 : i64}
     %31 = maxon.binop %27, %30 {op = gt}
     %32 = maxon.binop %29, %31 {op = or}
-    maxon.cond_br %32 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %32 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at release-before-break.test:23: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [result, i]
     maxon.return %27
   }
@@ -93,12 +93,12 @@ module {
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.constant {value = 1 : i64}
     %4 = std.call_runtime @mm_alloc %1, %2, %3
-    memref.store %4, __struct_1
-    %5 = memref.load __struct_1 : i64
+    memref.store %4, __struct_0
+    %5 = memref.load __struct_0 : i64
     memref.store_indirect %0, %5+0
-    %6 = memref.load __struct_1 : i64
+    %6 = memref.load __struct_0 : i64
     std.call_runtime @mm_incref %6
-    %7 = memref.load __struct_1 : i64
+    %7 = memref.load __struct_0 : i64
     func.return %7
   }
   func @main() -> u32 {
@@ -121,15 +121,15 @@ module {
     %18 = memref.load_indirect %17+0
     %19 = arith.constant {value = 1 : i64}
     %20 = arith.cmpi eq %18, %19
-    cf.cond_br %20 [then: check_1, else: check_1.after]
-  check_1:
+    cf.cond_br %20 [then: check_0, else: check_0.after]
+  check_0:
     %21 = memref.load c : i64
     %22 = memref.load_indirect %21+0
     memref.store %22, result
     %23 = memref.load c : i64
     std.call_runtime_if_nonnull @mm_decref %23
     cf.br loop_0.exit
-  check_1.after:
+  check_0.after:
     %25 = arith.constant {value = 1 : i64}
     %26 = memref.load i : i64
     %27 = arith.addi %26, %25
@@ -144,12 +144,12 @@ module {
     %33 = arith.constant {value = 4294967295 : i64}
     %34 = arith.cmpi gt %30, %33
     %35 = arith.ori1 %32, %34
-    cf.cond_br %35 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %36 = memref.lea_symdata __panic_msg_0
     %37 = std.ptr_to_i64 %36
     std.call_runtime @mrt_panic %37
-  __range_ok_2:
+  __range_ok_0:
     func.return %30
   }
   func @__destruct_Counter(ptr: i64) {
@@ -203,8 +203,8 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rbx, 1
     x64.cmp rdx, rbx
-    x64.jne main.check_1.after
-  check_1:
+    x64.jne main.check_0.after
+  check_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-8], rcx
@@ -215,7 +215,7 @@ module {
     x64.call mm_decref
     x64.label __nonnull_skip_0
     x64.jmp main.loop_0.exit
-  check_1.after:
+  check_0.after:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -232,15 +232,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

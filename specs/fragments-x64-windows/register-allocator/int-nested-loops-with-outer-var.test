@@ -32,13 +32,13 @@ module {
   outer_0:
     %5 = maxon.literal {value = 1 : i64}
     maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br inner_1.header
-  inner_1.header:
+    maxon.br inner_0.header
+  inner_0.header:
     %6 = maxon.var_ref {var = j} {type = i64}
     %7 = maxon.var_ref {var = i} {type = i64}
     %8 = maxon.binop %6, %7 {op = le}
-    maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    maxon.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = maxon.literal {value = 1 : i64}
     %10 = maxon.var_ref {var = total} {type = i64}
     %11 = maxon.binop %10, %9 {op = add}
@@ -48,8 +48,8 @@ module {
     %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
-    maxon.br inner_1.header
-  inner_1.exit:
+    maxon.br inner_0.header
+  inner_0.exit:
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = i} {type = i64}
     %17 = maxon.binop %16, %15 {op = add}
@@ -63,10 +63,10 @@ module {
     %21 = maxon.literal {value = 4294967295 : i64}
     %22 = maxon.binop %18, %21 {op = gt}
     %23 = maxon.binop %20, %22 {op = or}
-    maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-nested-loops-with-outer-var.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_2:
+  __range_ok_0:
     maxon.scope_end [total, i]
     maxon.return %18
   }
@@ -88,13 +88,13 @@ module {
   outer_0:
     %5 = arith.constant {value = 1 : i64}
     memref.store %5, j
-    cf.br inner_1.header
-  inner_1.header:
+    cf.br inner_0.header
+  inner_0.header:
     %6 = memref.load j : i64
     %7 = memref.load i : i64
     %8 = arith.cmpi le %6, %7
-    cf.cond_br %8 [then: inner_1, else: inner_1.exit]
-  inner_1:
+    cf.cond_br %8 [then: inner_0, else: inner_0.exit]
+  inner_0:
     %9 = arith.constant {value = 1 : i64}
     %10 = memref.load total : i64
     %11 = arith.addi %10, %9
@@ -103,8 +103,8 @@ module {
     %13 = memref.load j : i64
     %14 = arith.addi %13, %12
     memref.store %14, j
-    cf.br inner_1.header
-  inner_1.exit:
+    cf.br inner_0.header
+  inner_0.exit:
     %15 = arith.constant {value = 1 : i64}
     %16 = memref.load i : i64
     %17 = arith.addi %16, %15
@@ -117,12 +117,12 @@ module {
     %21 = arith.constant {value = 4294967295 : i64}
     %22 = arith.cmpi gt %18, %21
     %23 = arith.ori1 %20, %22
-    cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
-  __range_panic_2:
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @mrt_panic %25
-  __range_ok_2:
+  __range_ok_0:
     func.return %18
   }
 }
@@ -144,13 +144,13 @@ module {
   outer_0:
     x64.mov rax, 1
     x64.mov [rbp-24], rax
-    x64.jmp main.inner_1.header
-  inner_1.header:
+    x64.jmp main.inner_0.header
+  inner_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-16]
     x64.cmp rax, rcx
-    x64.jg main.inner_1.exit
-  inner_1:
+    x64.jg main.inner_0.exit
+  inner_0:
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
@@ -159,8 +159,8 @@ module {
     x64.mov rbx, [rbp-24]
     x64.add rbx, rdx
     x64.mov [rbp-24], rbx
-    x64.jmp main.inner_1.header
-  inner_1.exit:
+    x64.jmp main.inner_0.header
+  inner_0.exit:
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.add rcx, rax
@@ -171,15 +171,15 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg main.__range_panic_2
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl main.__range_panic_2
-    x64.jmp main.__range_ok_2
-  __range_panic_2:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

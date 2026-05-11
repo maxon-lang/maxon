@@ -45,10 +45,10 @@ module {
     %16 = maxon.literal {value = 4294967295 : i64}
     %17 = maxon.binop %13, %16 {op = gt}
     %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     maxon.panic "panic at int-while-loop-accumulator.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_1:
+  __range_ok_0:
     maxon.scope_end [sum, i]
     maxon.return %13
   }
@@ -86,12 +86,12 @@ module {
     %16 = arith.constant {value = 4294967295 : i64}
     %17 = arith.cmpi gt %13, %16
     %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
-  __range_panic_1:
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
     %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @mrt_panic %20
-  __range_ok_1:
+  __range_ok_0:
     func.return %13
   }
 }
@@ -130,15 +130,15 @@ module {
     x64.xor eax, eax
     x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
-    x64.jg main.__range_panic_1
+    x64.jg main.__range_panic_0
     x64.cmp rdx, rax
-    x64.jl main.__range_panic_1
-    x64.jmp main.__range_ok_1
-  __range_panic_1:
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x64.mov rax, rdx
     x64.epilogue
     x64.ret
