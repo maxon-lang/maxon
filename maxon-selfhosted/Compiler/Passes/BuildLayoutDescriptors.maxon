@@ -302,8 +302,9 @@ end 'instanceArgsHaveHeapRefs'
 // Pick a representative heap-ref-bearing MaxonType from the gid's args.
 // Used when synthesizing a destroy thunk for the single-word case so the
 // loaded value's slot can be typed appropriately for C1.b's injectDrops
-// to release. When no arg is heap-bearing, returns MaxonType.integer
-// (caller will short-circuit to ret 0 instead).
+// Caller must have already confirmed `instanceArgsHaveHeapRefs(gid)`; if
+// the loop here found nothing heap-bearing the caller's precondition is
+// already broken, so panic rather than returning a sentinel type.
 function representativeHeapType(project Project, gid GenericInstanceId) returns MaxonType
 	let (_, args) = project.genericInstances.get(gid)
 	for i in 0 upto args.count() 'eachArg'
@@ -312,7 +313,7 @@ function representativeHeapType(project Project, gid GenericInstanceId) returns 
 			return a
 		end 'hit'
 	end 'eachArg'
-	return MaxonType.integer
+	panic("representativeHeapType: no heap-managed arg found in generic instance {gid} — caller must guard with instanceArgsHaveHeapRefs")
 end 'representativeHeapType'
 
 // Boilerplate: create an IrFunction shell for a thunk, register one

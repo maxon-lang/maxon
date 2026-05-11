@@ -375,6 +375,7 @@ function matchFuncRef(op StdCallOp, valueId ValueId) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		tailCall gives false
 		param gives false
 		errorReturn gives false
@@ -455,6 +456,7 @@ function callOpInvokesPanic(op StdCallOp) returns bool
 		ret gives false
 		tryCall(_, callee, _, _) gives callee == "mrt_panic"
 		indirectCall gives false
+		witnessCall gives false
 		funcRef(_, funcName) gives funcName == "mrt_panic"
 		tailCall(callee, _) gives callee == "mrt_panic"
 		param gives false
@@ -504,6 +506,7 @@ function isStdRetOrErrorReturn(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -563,6 +566,7 @@ function isAllowedCallTerm(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -599,6 +603,9 @@ function isUnsupportedCallBody(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives true
+		// witnessCall is the fused witness-table-load + indirect call;
+		// inlining can't statically resolve the callee, same as indirectCall.
+		witnessCall gives true
 		funcRef gives false
 		tailCall gives true
 		param gives false
@@ -614,6 +621,7 @@ function isStdRet(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -703,6 +711,7 @@ function extractFromCallOp(op StdCallOp) returns CallShape
 		// the lowerings just established).
 		tryCall(resultId, callee, argIds, errorFlagId) gives CallShape.fromTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
 		indirectCall gives CallShape.notInlinable()
+		witnessCall gives CallShape.notInlinable()
 		funcRef gives CallShape.notInlinable()
 		tailCall gives CallShape.notInlinable()
 		param gives CallShape.notInlinable()
@@ -1165,6 +1174,7 @@ function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuati
 		call then panic("rewriteCallTerminator: bare call op as terminator (multi-block gate should have rejected)")
 		tryCall then panic("rewriteCallTerminator: tryCall terminator (multi-block gate should have rejected)")
 		indirectCall then panic("rewriteCallTerminator: indirectCall terminator (multi-block gate should have rejected)")
+		witnessCall then panic("rewriteCallTerminator: witnessCall terminator (multi-block gate should have rejected)")
 		funcRef then panic("rewriteCallTerminator: funcRef as terminator")
 		tailCall then panic("rewriteCallTerminator: tailCall terminator (multi-block gate should have rejected)")
 		param then panic("rewriteCallTerminator: param as terminator")
@@ -1246,6 +1256,7 @@ function retValueIdFromCallOp(op StdCallOp) returns ValueId
 		call gives REMAP_INVALID
 		tryCall gives REMAP_INVALID
 		indirectCall gives REMAP_INVALID
+		witnessCall gives REMAP_INVALID
 		funcRef gives REMAP_INVALID
 		tailCall gives REMAP_INVALID
 		param gives REMAP_INVALID
@@ -1274,6 +1285,7 @@ function errorFlagIdFromCallOp(op StdCallOp) returns ValueId
 		call gives REMAP_INVALID
 		tryCall gives REMAP_INVALID
 		indirectCall gives REMAP_INVALID
+		witnessCall gives REMAP_INVALID
 		funcRef gives REMAP_INVALID
 		tailCall gives REMAP_INVALID
 		param gives REMAP_INVALID
@@ -1298,6 +1310,7 @@ function isErrorReturnCallOp(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -1423,6 +1436,7 @@ function paramInfoFromCall(op StdCallOp) returns ParamInfo
 		call gives ParamInfo.notParam()
 		tryCall gives ParamInfo.notParam()
 		indirectCall gives ParamInfo.notParam()
+		witnessCall gives ParamInfo.notParam()
 		funcRef gives ParamInfo.notParam()
 		tailCall gives ParamInfo.notParam()
 		errorReturn gives ParamInfo.notParam()
@@ -1467,6 +1481,7 @@ function isParamCallOpStd(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		errorReturn gives false
@@ -1489,6 +1504,7 @@ function isRetCallOp(op StdCallOp) returns bool
 		call gives false
 		tryCall gives false
 		indirectCall gives false
+		witnessCall gives false
 		funcRef gives false
 		tailCall gives false
 		param gives false
@@ -1523,6 +1539,7 @@ function bindCallDefine(op StdCallOp, remap ValueIdArray, nextId ValueId) return
 		call(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		tryCall(resultId, _, _, errorFlagId) gives bindTwoDefines(remap, keyA: resultId, keyB: errorFlagId, nextId: nextId)
 		indirectCall(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		witnessCall(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		funcRef(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		tailCall gives nextId
 		param(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -1689,6 +1706,7 @@ function rewriteCall(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		call(resultId, callee, argIds) gives StdCallOp.call(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap))
 		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(lookupRemap(remap, key: resultId), callee: callee, argIds: rewriteValueIds(argIds, remap: remap), errorFlagId: lookupRemap(remap, key: errorFlagId))
 		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(lookupRemap(remap, key: resultId), calleeId: lookupRemap(remap, key: calleeId), argIds: rewriteValueIds(argIds, remap: remap))
+		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives StdCallOp.witnessCall(lookupRemap(remap, key: resultId), witnessAddrId: lookupRemap(remap, key: witnessAddrId), methodIndex: methodIndex, argIds: rewriteValueIds(argIds, remap: remap))
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(lookupRemap(remap, key: resultId), funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: rewriteValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(lookupRemap(remap, key: resultId), paramIndex: paramIndex, paramType: paramType)

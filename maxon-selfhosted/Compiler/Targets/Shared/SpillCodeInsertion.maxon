@@ -9,13 +9,21 @@ type SpillInsertState
 	export var spillRegClass RegIntArray
 	export var nextValueId RegInt
 	export var varSlotCount RegInt
+	// Dense flag bitmap, indexed by valueId. True means this vreg was
+	// minted by freshValueId() as a reload destination — i.e. it is a
+	// short-lived def→use copy of a spilled value, not a user-code or
+	// ISel temp. The register allocator marks such ranges with infinite
+	// spill weight so the spill loop is guaranteed to terminate (see
+	// runSpillColorLoop in RegisterAllocator.maxon).
+	export var reloadIds BoolArray
 
 	static function create(varSlotCount RegInt) returns SpillInsertState
 		return Self{
 			spillSlots: RegIntArray.create(),
 			spillRegClass: RegIntArray.create(),
 			nextValueId: 0,
-			varSlotCount: varSlotCount
+			varSlotCount: varSlotCount,
+			reloadIds: BoolArray.create()
 		}
 	end 'create'
 end 'SpillInsertState'
@@ -91,7 +99,12 @@ export function insertSpillCode(module TargetModule, func IrFunction, spillDecis
 	// Bump the running stack-size tally for the spill area.
 	func.stackSize = func.stackSize + spillDecision.totalSpillSize
 
-	logTrace(LogCategory.ir, message: () gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId}")
+	// Hand off the reload bitmap so the allocator can union it into its
+	// cumulative reload set and mark the corresponding ranges with
+	// infinite spill weight on the next liveness rebuild.
+	spillDecision.reloadIds = state.reloadIds.clone()
+
+	logTrace(LogCategory.ir, message: () gives "insertSpillCode: spilled={spillDecision.spilledRanges.count()} totalSpillSize={spillDecision.totalSpillSize} nextValueId={state.nextValueId} newReloads={state.reloadIds.count()}")
 end 'insertSpillCode'
 
 // Insert reload ops for spilled branch-arg sources and rewrite the
@@ -148,12 +161,23 @@ function computeStackOffset(state SpillInsertState, slotOffset RegInt) returns R
 	return 0 - varArea - slotOffset - 8
 end 'computeStackOffset'
 
-// Allocate a fresh value ID for a reload destination.
+// Allocate a fresh value ID for a reload destination. Both call sites
+// (per-use reloads in processOp and branch-edge-arg reloads in
+// remapBranchEdgeArgs) flow through here, so this is the single point
+// where every reload vreg is recorded into state.reloadIds.
 function freshValueId(state SpillInsertState) returns RegInt
 	let id = state.nextValueId
 	state.nextValueId = state.nextValueId + 1
+	growReloadBitmap(state.reloadIds, size: id + 1)
+	try state.reloadIds.set(id, value: true) otherwise panic("invariant: reloadIds.set OOB after grow id={id}")
 	return id
 end 'freshValueId'
+
+function growReloadBitmap(arr BoolArray, size RegInt)
+	while arr.count() < size 'grow'
+		arr.push(false)
+	end 'grow'
+end 'growReloadBitmap'
 
 // Process a single non-terminator op: insert reloads before uses and spill stores after defs.
 function processOp(module TargetModule, state SpillInsertState, packed OpIndex, dstOps OpIndexList, regTarget RegAllocTarget)

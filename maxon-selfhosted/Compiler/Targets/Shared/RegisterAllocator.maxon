@@ -287,6 +287,26 @@ export function set(arr RegIntArray, index RegInt, value RegInt, sentinel RegInt
 	try arr.set(index, value: value) otherwise panic("invariant: arr.set OOB")
 end 'set'
 
+// Union `source` into `dest` (both indexed by valueId; `false` is the
+// "absent" default). Used by runSpillColorLoop to accumulate every spill
+// iteration's freshly-minted reload vregs into the allocator's cumulative
+// reload set, which buildLiveRanges then consults to assign
+// SPILL_WEIGHT_INFINITE to those ranges.
+export function unionReloadIds(dest BoolArray, source BoolArray)
+	let n = source.count()
+	while dest.count() < n 'grow'
+		dest.push(false)
+	end 'grow'
+	var i = 0
+	while i < n 'each'
+		let bit = try source.get(i) otherwise false
+		if bit 'set'
+			try dest.set(i, value: true) otherwise panic("invariant: unionReloadIds.dest.set OOB i={i} count={dest.count()}")
+		end 'set'
+		i = i + 1
+	end 'each'
+end 'unionReloadIds'
+
 // --- Core state operations ---
 
 export function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
@@ -629,6 +649,14 @@ type FunctionRegAllocator
 	export var state RegState
 	export var ranges LiveRangeArray
 	export var coloring ColoringResult
+	// Cumulative bitmap of reload vregs seen across every spill iteration.
+	// Indexed by valueId. Each pass through runSpillColorLoop unions in
+	// the new reload ids minted by insertSpillCode (carried back via
+	// SpillDecision.reloadIds). buildLiveRanges reads this to assign
+	// SPILL_WEIGHT_INFINITE to reload ranges, which is what guarantees
+	// the spill loop terminates: an uncolorable reload triggers a hard
+	// panic instead of being chain-respilled forever.
+	export var reloadIds BoolArray
 
 	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
@@ -647,7 +675,8 @@ type FunctionRegAllocator
 			entryBlockId: 0,
 			state: createRegState(desc),
 			ranges: LiveRangeArray.create(),
-			coloring: ColoringResult.create(0)
+			coloring: ColoringResult.create(0),
+			reloadIds: BoolArray.create()
 		}
 	end 'create'
 
@@ -665,7 +694,7 @@ type FunctionRegAllocator
 	// Run once initially and again after every spill iteration.
 	function runLivenessAndRanges()
 		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
-		ranges = buildLiveRanges(module, func: func, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery)
+		ranges = buildLiveRanges(module, func: func, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds)
 		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
 		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, opQuery: opQuery)
 	end 'runLivenessAndRanges'
@@ -674,8 +703,15 @@ type FunctionRegAllocator
 		coloring = colorSSA(ranges, domPreorder: domPreorder, gprPool: state.desc.gprPool, callerSavedGprs: state.desc.callerSavedGprs, fpPool: state.desc.fpPool, callerSavedFps: state.desc.callerSavedFps)
 	end 'runColoring'
 
-	// Phases 4-5: iterate spill/re-color until every virtual range is colored,
-	// capped at 5 iterations to prevent pathological thrashing.
+	// Phases 4-5: iterate spill/re-color until every virtual range is colored.
+	//
+	// Termination is guaranteed by the SPILL_WEIGHT_INFINITE marker on reload
+	// vregs (set in buildLiveRanges via the cumulative `reloadIds` bitmap):
+	// every iteration strictly simplifies the interference graph because a
+	// spilled value's range collapses to def→store + load→use, and reloads
+	// can never be re-spilled. If a reload itself fails to color, the spill
+	// picker panics rather than looping. The iteration cap is therefore a
+	// safety belt; a handful of passes is enough in practice.
 	function runSpillColorLoop()
 		var iteration = 0
 		while iteration < 5 'spillColorLoop'
@@ -689,12 +725,20 @@ type FunctionRegAllocator
 
 			var spillDec = SpillDecision.create()
 			for ur in uncoloredSpills 'addSpills'
+				if ur.spillWeight == SPILL_WEIGHT_INFINITE 'cannotRespill'
+					panic("regalloc: reload vreg %{ur.valueId} cannot be respilled in {state.funcName} — register pressure unresolvable, need live-range splitting or IR-level pressure reduction (class={ur.regClass.name}, iteration={iteration})")
+				end 'cannotRespill'
 				logTrace(LogCategory.ir, message: () gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
 				spillDec.spilledRanges.push(ur)
 			end 'addSpills'
 			allocateSpillSlots(spillDec)
 
 			insertSpillCode(module, func: func, spillDecision: spillDec, regTarget: regTarget)
+
+			// Union this iteration's reload bitmap into the cumulative set
+			// before rebuilding ranges, so the new reload vregs get
+			// SPILL_WEIGHT_INFINITE on the next pass.
+			unionReloadIds(reloadIds, source: spillDec.reloadIds)
 
 			self.runLivenessAndRanges()
 			self.runColoring()

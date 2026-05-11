@@ -598,6 +598,7 @@ function extractMirDef(op MirOp) returns SchedInt
 		branch gives SCHED_NONE
 		call(resultId, _, _) gives resultId
 		indirectCall(resultId, _, _) gives resultId
+		witnessCall(resultId, _, _, _) gives resultId
 		ret gives SCHED_NONE
 		param(resultId, _, _) gives resultId
 		load(resultId, _, _, _) gives resultId
@@ -656,6 +657,7 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		branch(_, args) then appendAll(result, from: args)
 		call(_, _, argIds) then appendAll(result, from: argIds)
 		indirectCall(_, calleeId, argIds) then extractMirIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
+		witnessCall(_, witnessAddrId, _, argIds) then extractMirIndirectCallUses(result, calleeId: witnessAddrId, argIds: argIds)
 		ret(retValId) then result.push(retValId)
 		param then break 'uses'
 		load(_, baseId, _, _) then result.push(baseId)
@@ -722,6 +724,7 @@ function isMirMemoryOp(op MirOp) returns bool
 		storeSlot gives true
 		call gives true
 		indirectCall gives true
+		witnessCall gives true
 		syscall gives true
 		iatCall gives true
 		osExit gives true
@@ -812,6 +815,7 @@ function isMirCallOp(op MirOp) returns bool
 	return match op 'check'
 		call gives true
 		indirectCall gives true
+		witnessCall gives true
 		syscall gives true
 		iatCall gives true
 		osExit gives true
@@ -875,6 +879,7 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		branch gives false
 		call gives false
 		indirectCall gives false
+		witnessCall gives false
 		ret gives false
 		param gives false
 		load gives false

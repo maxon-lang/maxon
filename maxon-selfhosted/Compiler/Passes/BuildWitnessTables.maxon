@@ -9,6 +9,19 @@
 // whose `withArgs` reference unbound type-parameters) are skipped here —
 // 11.4 emits them lazily at the call site once the args are concrete.
 //
+// **Generic conformer special case.** A conformance `Array: Equatable` is
+// interned with empty `withArgs` (Equatable has no `uses`-params), so it
+// would land on the unconditional path. But the impl `Array.equals` is
+// declared inside an extension whose `where Element: ...` clauses cause
+// `transferFuncs` to append implicit `(layout, hashWit, eqWit)` slots to
+// its body — a signature the witness call site can't satisfy because the
+// call site only passes `(self, other)`. We detect generic conformers
+// here, bypass the shared-blob emission, and instead emit one
+// `__witness_<mangledInstance>_<iface>` per concrete instantiation of the
+// conforming type, with method slots pointing at synthesized thunks. The
+// thunks themselves are emitted at the Std level by lowerMaxonToStd
+// driven from the same `gidEntries` we populate below.
+//
 // Phase 11.3 alone unlocks no specs. The witness blobs land in rdata with
 // their method slots zero-filled and `funcAbs64InRdata` relocs queued for
 // the link-time patcher; 11.4 wires up the dispatch sites that read them.
@@ -32,6 +45,13 @@ export function buildWitnessTables(project Project, maxonModule MaxonModule, glo
 	for cid in 0 upto count 'eachConformance'
 		emitWitnessForConformance(project, globalData: globalData, cid: cid)
 	end 'eachConformance'
+
+	// Per-instance witness tables for generic conformers. Walks every
+	// interned `genericInstance` and pairs it with each conformance whose
+	// conforming type matches the gid's base. Skips conditional gids (any
+	// arg still a typeParameter); skips conformances whose conforming type
+	// is non-generic (handled by the loop above).
+	emitPerInstanceWitnessTables(project, globalData: globalData)
 end 'buildWitnessTables'
 
 function emitWitnessForConformance(project Project, globalData GlobalDataTable, cid ConformanceId)
@@ -44,6 +64,17 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 	if anyMaxonTypeIsConditional(withArgs) 'conditional'
 		return
 	end 'conditional'
+
+	// Generic conforming type (`type Array uses Element ...`) — the shared
+	// `__witness_<TypeName>_<Iface>` blob would point at the impl method
+	// whose lowered body takes implicit `(layout, witness...)` args, a
+	// signature that doesn't match the interface-method dispatch shape on
+	// the wasm32-wasi side and silently corrupts on x64. Skip here;
+	// `emitPerInstanceWitnessTables` produces one blob per concrete
+	// `genericInstance(Array, [Byte])` etc. instead.
+	if project.typeParameters.getParamNames(typeName).count() > 0 'genericConformer'
+		return
+	end 'genericConformer'
 
 	let iface = try project.interfaces.get(interfaceName) otherwise 'noIface'
 		// Interface couldn't be resolved (typo / missing stdlib import). The
@@ -116,6 +147,125 @@ function pickParentWitnessLabel(project Project, iface IrInterface, typeName Str
 	end 'eachParent'
 	return ParentWitnessLabel.none
 end 'pickParentWitnessLabel'
+
+// Phase 11.4 follow-up: emit one witness table blob per concrete
+// `genericInstance` of a generic conformer, with method slots referencing
+// synthesized thunks rather than the generic impl methods directly. Walks
+// every interned `genericInstance`, pairs it with each conformance whose
+// `typeName` matches the gid's base, and emits + interns the per-instance
+// entry. The actual thunk IR functions are synthesized later, in
+// lowerMaxonToStd, driven from the `gidEntries` we record on
+// `project.witnessTables`.
+function emitPerInstanceWitnessTables(project Project, globalData GlobalDataTable)
+	let gidCount = project.genericInstances.count()
+	if gidCount == 0 'noGids'
+		return
+	end 'noGids'
+	let conformanceCount = project.conformances.count()
+	if conformanceCount == 0 'noConformances'
+		return
+	end 'noConformances'
+
+	for gid in 0 upto gidCount 'eachGid'
+		// Skip conditional gids — any arg still a typeParameter means the
+		// instantiation is parametric and a concrete witness table would
+		// alias across distinct conditional instances of the same shape.
+		if gidIsConditional(project, gid: gid) 'conditional'
+			continue
+		end 'conditional'
+		let (baseId, _) = project.genericInstances.get(gid)
+		let baseName = project.typeNames.get(baseId)
+		// Pair this gid with every conformance whose conforming type matches
+		// the base — `Array: Equatable` and `Array: Hashable` both fire for
+		// a gid whose base is `Array`.
+		for cid in 0 upto conformanceCount 'eachConformance'
+			let typeName = try project.conformances.typeNames.get(cid) otherwise panic("emitPerInstanceWitnessTables: typeNames.get OOB at {cid}")
+			if typeName != baseName 'baseMismatch'
+				continue
+			end 'baseMismatch'
+			// Skip non-generic conformers — they're handled by the
+			// unconditional emitter above and don't need per-instance tables.
+			if project.typeParameters.getParamNames(typeName).count() == 0 'nonGenericConformer'
+				continue
+			end 'nonGenericConformer'
+			let interfaceName = try project.conformances.interfaceNames.get(cid) otherwise panic("emitPerInstanceWitnessTables: interfaceNames.get OOB at {cid}")
+			emitPerInstanceWitnessForConformance(project, globalData: globalData, gid: gid, interfaceName: interfaceName)
+		end 'eachConformance'
+	end 'eachGid'
+end 'emitPerInstanceWitnessTables'
+
+function emitPerInstanceWitnessForConformance(project Project, globalData GlobalDataTable, gid GenericInstanceId, interfaceName String)
+	// Cache-restored entries (e.g. stdlib's own `Array<Byte>: Equatable`)
+	// already have their rdata blob and thunk function compiled into the
+	// stdlib object code. Skip everything for them — re-emitting would
+	// duplicate the symbol at link time. Mirrors `BuildLayoutDescriptors.
+	// emitDescriptorForInstance`'s early-return.
+	if project.witnessTables.containsForGid(gid, interfaceName: interfaceName) 'alreadyEmitted'
+		return
+	end 'alreadyEmitted'
+
+	let iface = try project.interfaces.get(interfaceName) otherwise 'noIface'
+		return
+	end 'noIface'
+
+	let mangledInstance = mangleInstanceForWitness(project, gid: gid)
+	let mangledIface = sanitizeIdentifier(interfaceName)
+	let label = "__witness_{mangledInstance}_{mangledIface}"
+
+	var methodImplNames = StringArray.create()
+	for m in iface.methods 'eachMethod'
+		let thunkName = "__witness_thunk_{mangledInstance}_{mangledIface}_{m.name}"
+		methodImplNames.push(thunkName)
+		// DFE roots so the synthesized thunk survives the dead-function
+		// elimination pass that runs over the Std module. Each pipeline run
+		// re-pushes its own root list, mirroring the unconditional path.
+		project.livenessRoots.push(thunkName)
+	end 'eachMethod'
+
+	let isFatBoxed = maxonTypeWidthBytes(project, t: MaxonType.genericInstance(gid)) > 8
+
+	var table = WitnessTable.create(mangledInstance, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: ParentWitnessLabel.none, isFatBoxed: isFatBoxed)
+	let bytes = encodeWitnessTable(table)
+	addNamedGlobalData(globalData, name: label, data: bytes)
+	project.staticRdataValues.upsert(label, value: bytes)
+	project.witnessTables.internForGid(gid, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, isFatBoxed: isFatBoxed)
+	// Pending thunk-synthesis list — read by `lowerMaxonToStd.
+	// synthesizeWitnessThunks` so the bodies for these labels get emitted
+	// in this pipeline run rather than relying on the stdlib cache.
+	project.pendingWitnessThunkGids.push(gid)
+	project.pendingWitnessThunkInterfaces.push(interfaceName)
+
+	// Queue funcAbs64 relocs for each method slot. The link-time patcher
+	// fills these with the thunk function's absolute address once Std
+	// lowering has produced the thunk bodies (see `synthesizeWitnessThunks`
+	// in lowerMaxonToStd).
+	for i in 0 upto methodImplNames.count() 'eachReloc'
+		let implName = try methodImplNames.get(i) otherwise panic("emitPerInstanceWitnessForConformance: methodImplNames.get OOB at {i}")
+		let slotOffset = WITNESS_OFFSET_METHODS + 8 * i
+		pushFuncAbs64Reloc(globalData, rdataLabel: label, funcName: implName, offsetInLabel: slotOffset)
+	end 'eachReloc'
+end 'emitPerInstanceWitnessForConformance'
+
+// Sanitize the printable form of a `genericInstance` to a valid C
+// identifier suffix. `genericInstanceIdToString` yields e.g.
+// `Array<Byte>` or `Map<String, Int>`; we collapse anything non-alphanumeric
+// into a single underscore so the label round-trips through every linker.
+// Exported so `LowerMaxonToStd`'s thunk synthesizer can produce the same
+// mangling for the corresponding `__layout_<mangle>` label without
+// importing private helpers.
+export function mangleInstanceForWitness(project Project, gid GenericInstanceId) returns String
+	let printable = genericInstanceIdToString(project, id: gid)
+	return sanitizeIdentifier(printable)
+end 'mangleInstanceForWitness'
+
+// True iff any type-arg of `gid` is still parametric (a typeParameter or
+// a generic-instance whose args are themselves parametric). Used to gate
+// per-gid witness emission: conditional shapes get resolved at the
+// caller's call site rather than statically here.
+function gidIsConditional(project Project, gid GenericInstanceId) returns bool
+	let (_, args) = project.genericInstances.get(gid)
+	return anyMaxonTypeIsConditional(args)
+end 'gidIsConditional'
 
 // Resolve a bare type name to a representative MaxonType for sizing. Falls
 // back to `MaxonType.named` for any name that isn't a primitive — that's a

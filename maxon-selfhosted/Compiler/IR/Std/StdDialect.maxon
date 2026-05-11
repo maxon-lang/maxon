@@ -268,6 +268,15 @@ export union StdCallOp
 	call(resultId ValueId, callee String, argIds ValueIdArray)
 	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
 	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	// Fused witness-table dispatch: equivalent to
+	//   %fnPtr = sys.witnessMethod %witnessAddrId, [methodIndex]
+	//   %resultId = func.indirectCall %fnPtr(args...)
+	// emitted as a single op so the loaded function pointer never gets a
+	// virtual register. Reduces register pressure across the call site for
+	// generic code with `where T is SomeInterface` constraints (e.g. the
+	// `existing == key` comparison in stdlib Map.findSlot's probe loop).
+	// Backends lower this directly to a memory-indirect call instruction.
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
 	funcRef(resultId ValueId, funcName String)
 	tailCall(callee String, argIds ValueIdArray)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
@@ -556,6 +565,7 @@ export function funcOpToString(op StdCallOp) returns String
 		call(resultId, callee, argIds) gives "%{resultId} = func.call @{callee}({formatArgIds(argIds)})"
 		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{callee}({formatArgIds(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
+		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives "%{resultId} = func.witness_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"
 		tailCall(callee, argIds) gives "func.tail_call @{callee}({formatArgIds(argIds)})"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {paramType.name}"

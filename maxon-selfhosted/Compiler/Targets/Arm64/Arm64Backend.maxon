@@ -292,7 +292,7 @@ export type Arm64Backend implements TargetBackend
 			branch(targetBlockId, _) then lowerBrWithArgsArm64(targetBlockId, dstBlock: dstBlock)
 			ret(retValId) then lowerReturnArm64(retValId, dstBlock: dstBlock, returnType: returnType)
 			movImm to cmp then break 'lower'
-			call to indirectCall then break 'lower'
+			call to witnessCall then break 'lower'
 			param to loadByte then break 'lower'
 			osAllocPages to osLockRelease then break 'lower'
 			// tryCall as a terminator: lower the same way as a body op.
@@ -428,6 +428,7 @@ export type Arm64Backend implements TargetBackend
 			branch then result = nextTempSlot  // handled as terminator
 			call(resultId, callee, argIds) then lowerCallArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
 			indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCallArm64(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then result = nextTempSlot  // handled as terminator
 			param(resultId, paramIndex, paramType) then lowerParamArm64(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
 			load(resultId, baseId, offset, isFloat) then lowerLoadIndirectArm64(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
@@ -811,6 +812,33 @@ export type Arm64Backend implements TargetBackend
 		// Move return value from X0
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 	end 'lowerIndirectCallArm64'
+
+	// witnessCall = fused (load fn-ptr from witness table) + (call). Loads
+	// the pointer straight into X16 (IP0, the AAPCS intra-procedure-call
+	// scratch register, which is outside the regalloc pool by design) and
+	// branches through it. No virtual register for the loaded fn-ptr, same
+	// pressure-reduction motive as the X64 lowering — see lowerWitnessCall
+	// in MirToX64Conversion.
+	function lowerWitnessCallArm64(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
+		var argIdx = 0
+		while argIdx < argIds.count() and argIdx < 8 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			let ccReg = getArm64CallConvGpr(argIdx)
+			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(arm64PhysReg(ccReg), src: Arm64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+		if argIds.count() > 8 'tooManyArgs'
+			panic("lowerWitnessCallArm64: more than 8 arguments not yet supported (got {argIds.count()})")
+		end 'tooManyArgs'
+
+		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(arm64PhysReg(Arm64Register.x16), baseReg: Arm64VReg.virtual(witnessAddrId), offset: offset, size: 8))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLinkReg(arm64PhysReg(Arm64Register.x16)))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
+	end 'lowerWitnessCallArm64'
 
 	// Move from calling convention register to virtual register.
 	// Float params arrive in D registers, int params in X registers.

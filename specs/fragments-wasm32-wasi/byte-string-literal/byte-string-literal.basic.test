@@ -1,0 +1,40 @@
+// Test: byte-string-literal.basic
+function main() returns ExitCode
+		let bytes = b"hello"
+		return bytes.count()
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0
+    %3 = mir.mov_imm 5 : i64
+    mir.store %3, %2, 8
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0
+    %10 = mir.global_addr @__layout_Array_Int
+    %11 = mir.call @Array.count(%8, %10)
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

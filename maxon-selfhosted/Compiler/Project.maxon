@@ -350,6 +350,16 @@ export type Project
 	// so the create- and init-resolution paths each get an O(1) lookup.
 	export var arrayLiteralProducers ArrayLiteralProducerMap
 
+	// Parallel sidecar for map literals (`[k: v, ...]`). The parser emits two
+	// __ManagedMemory.create + setLength sequences (one per axis) and then a
+	// `<mapType>.init(keyMm, valueMm)` call. The per-axis __mm names also live
+	// in arrayLiteralProducers so the key/value-axis types resolve through the
+	// same single-arg `genericInstance(__ManagedMemory, [...])` path used by
+	// array literals; this map only carries the final init-result entry so
+	// the user-visible map value gets the matching `genericInstance(<mapType>,
+	// [Key, Value])` type binding.
+	export var mapLiteralProducers MapLiteralProducerMap
+
 	// Phase 11.0 step 2: project-wide table of resolved generic typealiases.
 	// Generic aliases (`typealias E = Base with(...)`) cannot live in
 	// `typealiases TypealiasMap` (StdType-typed) because their resolved form
@@ -454,6 +464,16 @@ export type Project
 	// monomorphization-quality codegen.
 	export var staticRdataValues StaticRdataValueMap
 
+	// Phase 11.4 follow-up: per-instance witness-method thunks that
+	// `BuildWitnessTables` recorded for this pipeline run.
+	// `lowerMaxonToStd.synthesizeWitnessThunks` reads this list to know
+	// which `(gid, interfaceName)` pairs the run owns vs. which ones came
+	// out of the stdlib cache (already compiled into stdlib's object code).
+	// Not cache-persisted: the next pipeline run rebuilds it from its own
+	// gid/conformance walk.
+	export var pendingWitnessThunkGids GenericInstanceIdArray
+	export var pendingWitnessThunkInterfaces StringArray
+
 	// Phase 11.7: deferred where-clause checks for generic typealias
 	// instantiations. Populated during typealias drain (when conformances
 	// haven't been recorded yet) and drained after `validateConformances`
@@ -518,6 +538,7 @@ export type Project
 			genericInstances: GenericInstanceRegistry.create(),
 			conformances: ConformanceRegistry.create(),
 			arrayLiteralProducers: ArrayLiteralProducerMap.create(),
+			mapLiteralProducers: MapLiteralProducerMap.create(),
 			genericTypealiases: GenericTypealiasMap.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
@@ -534,6 +555,8 @@ export type Project
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
+			pendingWitnessThunkGids: GenericInstanceIdArray.create(),
+			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create()
 		}
@@ -662,6 +685,32 @@ end 'ArrayLiteralProducer'
 // have e.g. `__module_init_0`'s `$t5` shadow `main`'s `$t5`).
 export typealias ArrayLiteralProducerMap = Map with(String, ArrayLiteralProducer)
 
+// Sidecar entry recorded by the parser for each map literal (`[k: v, ...]`).
+// Carries the chosen Map type name and the init-call's result name; the
+// key-axis and value-axis `__mm` allocations have their own ArrayLiteralProducer
+// entries so single-axis resolution stays uniform. TypeResolution uses this to
+// pin the user-visible result's type to `genericInstance(<mapType>, [Key,
+// Value])` after the keys/values axes finish unifying.
+export type MapLiteralProducer
+	export var mapTypeName String
+	export var initResultName ByteArray
+	// Per-axis __mm result names so TypeResolution can recover the unified
+	// key/value element types from the existing array-literal pipeline.
+	export var keyMmResultName ByteArray
+	export var valueMmResultName ByteArray
+	export var sourceRange SourceRange
+	export var sourceFilePath FilePath
+
+	export static function create(mapTypeName String, initResultName ByteArray, keyMmResultName ByteArray, valueMmResultName ByteArray, sourceRange SourceRange, sourceFilePath FilePath) returns MapLiteralProducer
+		return Self{mapTypeName: mapTypeName, initResultName: initResultName, keyMmResultName: keyMmResultName, valueMmResultName: valueMmResultName, sourceRange: sourceRange, sourceFilePath: sourceFilePath}
+	end 'create'
+end 'MapLiteralProducer'
+
+// Keyed by `"<funcName>|<initResultName>"`. The init-result name is the only
+// user-visible value (the two `__mm` allocations are resolved through their
+// own arrayLiteralProducers entries), so a single-key registry suffices.
+export typealias MapLiteralProducerMap = Map with(String, MapLiteralProducer)
+
 // Phase 11.7: a single deferred where-clause check, captured during
 // typealias drain.
 export type PendingConstraintCheck
@@ -744,19 +793,33 @@ end 'FunctionTypeRegistry'
 
 export typealias TypeParamConstraintArray = Array with StringArray
 
+export typealias DeclaringTypeParamListMap = Map with(String, StringArray)
+
 // Phase 11.0: captured (declaringTypeName, paramName) entries for every
 // `T` / `Element` the parser sees in a `uses` clause. `constraints[i]` is
 // the list of required interface names for entry `i` (initially empty;
 // Phase 11.0 step 1g writes into it from `where` clauses). The display
 // name returned by `getName` is just the bare param name — the
 // declaringTypeName context isn't part of the printed form.
+//
+// `declaringTypeParamLists` carries each declaringTypeName's parameter
+// names in **source-declaration order**. Required because the registry's
+// id space is filled in whatever order callers first encounter each
+// (declaringTypeName, paramName) pair — which is NOT always source order
+// once the stdlib cache restore path is involved. Substitution callers
+// (resolveCalleeParamToConcreteType) MUST pair declaring-type param
+// names against a `genericInstance`'s `gidArgs` in source order so
+// `Map.Key` maps to gidArgs[0] (the Key arg) and not gidArgs[1] (Value);
+// otherwise the witness lookup demands the wrong type's interface.
+// Mirrors what `IrInterface.usesParams` does for interfaces.
 export type TypeParamRegistry
 	export var declaringTypeNames StringArray
 	export var paramNames StringArray
 	export var constraints TypeParamConstraintArray
+	export var declaringTypeParamLists DeclaringTypeParamListMap
 
 	export static function create() returns TypeParamRegistry
-		return Self{declaringTypeNames: StringArray.create(), paramNames: StringArray.create(), constraints: TypeParamConstraintArray.create()}
+		return Self{declaringTypeNames: StringArray.create(), paramNames: StringArray.create(), constraints: TypeParamConstraintArray.create(), declaringTypeParamLists: DeclaringTypeParamListMap.create()}
 	end 'create'
 
 	// Number of distinct (declaringTypeName, paramName) pairs interned. Doubles
@@ -764,6 +827,18 @@ export type TypeParamRegistry
 	export function count() returns TypeParamId
 		return paramNames.count()
 	end 'count'
+
+	// Record the source-declaration order of param names for a declaring
+	// type. Called by the parser (and by stdlib-cache restore for cached
+	// struct types) at the point the `uses Key, Value` clause is parsed —
+	// `paramOrder` MUST be in source order. Once recorded, `getParamNames`
+	// returns this list verbatim instead of falling back to registry-id
+	// order, which isn't reliable when entries are added through routes
+	// other than the parser (e.g. cache restore reaches a typeParameter
+	// reference before walking the type's declaration).
+	export function recordParamOrder(declaringTypeName String, paramOrder StringArray)
+		declaringTypeParamLists.upsert(declaringTypeName, value: paramOrder)
+	end 'recordParamOrder'
 
 	// Intern a type-parameter binding. Returns an existing id when the same
 	// (declaringTypeName, paramName) pair has already been recorded. Linear
@@ -833,7 +908,20 @@ export type TypeParamRegistry
 	// `Substitution.buildSubstitution` to pair a generic type's
 	// `usesParams` with a concrete `args` list. Empty array on miss
 	// (the caller `buildSubstitution` then returns an empty substitution).
+	//
+	// Prefers the parser-recorded list (via `recordParamOrder`) when
+	// available — that's the only source of truth for source-declaration
+	// order. Falls back to a registry-id-order scan only when no list
+	// was recorded (older code paths, runtime synthetic types like
+	// `__ManagedMemory` which intern their params directly through
+	// LowerMaxonToStd without going through the parser). The registry
+	// order matches source order in single-parse builds but can scramble
+	// once cache restoration / re-resolution introduces interns out of
+	// the original source sequence — see Map.findSlot.
 	export function getParamNames(declaringTypeName String) returns StringArray
+		if let recorded = try declaringTypeParamLists.get(declaringTypeName) 'hasRecorded'
+			return recorded
+		end 'hasRecorded'
 		var result = StringArray.create()
 		for i in 0 upto paramNames.count() 'scan'
 			let d = try declaringTypeNames.get(i) otherwise panic("TypeParamRegistry.getParamNames: declaringTypeNames.get OOB at {i}")

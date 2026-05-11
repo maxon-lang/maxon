@@ -1280,6 +1280,16 @@ type MaxonToStdLowering
 			end 'eachBlock'
 		end 'eachFunc'
 
+		// Phase 11.3 follow-up: synthesize per-instance witness-method
+		// thunks. `BuildWitnessTables` recorded one entry on
+		// `project.witnessTables.gidEntries` per `(gid, interfaceName)` it
+		// emitted a blob for; each entry names one thunk per interface
+		// method. The thunk's body materializes the impl method's implicit
+		// `(layout, witness...)` args from the instance's concrete
+		// substitution and tail-calls the impl. The thunk is itself
+		// non-generic so wasm's call_indirect sees a fixed type signature.
+		self.synthesizeWitnessThunks()
+
 		return self.stdModule
 	end 'lower'
 
@@ -1796,10 +1806,15 @@ type MaxonToStdLowering
 	end 'lowerVarStore'
 
 	function lookupSlotMaxonType(slotId VarSlot) returns MaxonType
+		// slotMaxonTypes is populated for every slot the parser declared, so
+		// an out-of-bounds read here means the lowering pass is querying a
+		// slot the parser never registered — a compiler-internal invariant
+		// violation. Silently returning `integer` used to corrupt the
+		// downstream interface-fat-pointer detection.
 		if slotId >= self.currentMaxonFunc.slotMaxonTypes.count() 'oob'
-			return MaxonType.integer
+			panic("lookupSlotMaxonType: slotId {slotId} >= slotMaxonTypes.count() ({self.currentMaxonFunc.slotMaxonTypes.count()}) in func '{self.currentMaxonFunc.name}'")
 		end 'oob'
-		return try self.currentMaxonFunc.slotMaxonTypes.get(slotId) otherwise MaxonType.integer
+		return try self.currentMaxonFunc.slotMaxonTypes.get(slotId) otherwise panic("lookupSlotMaxonType: slotMaxonTypes.get({slotId}) failed despite the in-bounds check in func '{self.currentMaxonFunc.name}'")
 	end 'lookupSlotMaxonType'
 
 	// C1.c: emit a fat-pointer store for an interface-typed slot. Two
@@ -2565,6 +2580,7 @@ type MaxonToStdLowering
 		let bound = self.resolveCalleeParamToConcreteType(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, paramName: constraint.paramName)
 		match bound 'pick'
 			concrete(typeName) then return self.emitLoadWitnessTable(typeName, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
+			concreteGid(_, gid) then return self.emitLoadWitnessTableForGid(gid, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
 			forwardFromCaller then return self.forwardCallerWitness(qualifiedCallee: qualifiedCallee, constraint: constraint)
 		end 'pick'
 	end 'materializeWitnessArg'
@@ -2579,6 +2595,189 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return resultId
 	end 'emitLoadWitnessTable'
+
+	// Load the per-instance witness table for a generic conformer (e.g.
+	// `__witness_Array_Byte_Equatable` for `Array<Byte>: Equatable`). The
+	// per-instance blob's method slots reference thunks synthesized by
+	// `BuildWitnessTables` that capture the instance's implicit-arg
+	// substitution, so the call site's `(self, other)` shape matches the
+	// thunk's signature and the underlying generic method-impl receives
+	// the correct `(layout, hashWit, eqWit)` args.
+	function emitLoadWitnessTableForGid(gid GenericInstanceId, interfaceName String, dstBlock IrBlock) returns ValueId
+		if not self.project.witnessTables.containsForGid(gid, interfaceName: interfaceName) 'missing'
+			let shape = genericInstanceIdToString(self.project, id: gid)
+			panic("emitLoadWitnessTableForGid: no per-instance witness table for (gid={gid} ({shape}), {interfaceName}) — BuildWitnessTables missed a transitive case")
+		end 'missing'
+		let label = self.project.witnessTables.labelForGid(gid, interfaceName: interfaceName)
+		let resultId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return resultId
+	end 'emitLoadWitnessTableForGid'
+
+	// Synthesize one Std-level IrFunction per `(gid, interfaceName, method)`
+	// triple recorded by BuildWitnessTables. Each thunk's body:
+	//   - Receives the interface-declared params (e.g. `(self, other)` for
+	//     `Equatable.equals`) — no implicit slots, so wasm's call_indirect
+	//     sees a fixed signature.
+	//   - Materializes the impl's implicit `(layout, witness...)` args from
+	//     the gid's concrete substitution: a `loadLayoutDescriptor` against
+	//     the gid's layout label, and one `loadWitnessTable` per
+	//     where-clause constraint resolved through the gid's
+	//     usesParams → args pairing.
+	//   - Tail-forwards to the impl method (`Array.equals`, `Array.hash`,
+	//     ...) with all args including the implicit tail.
+	//   - Returns the impl's result.
+	function synthesizeWitnessThunks()
+		// Only emit thunks for `(gid, interfaceName)` entries that
+		// `BuildWitnessTables` queued during THIS pipeline run. Entries
+		// restored from the stdlib cache already have their thunk
+		// function compiled into stdlib's object code — re-synthesizing
+		// would duplicate the symbol at link time.
+		let count = self.project.pendingWitnessThunkGids.count()
+		if count == 0 'noWork'
+			return
+		end 'noWork'
+		for i in 0 upto count 'eachPending'
+			let gid = try self.project.pendingWitnessThunkGids.get(i) otherwise panic("synthesizeWitnessThunks: pendingWitnessThunkGids.get OOB at {i}")
+			let interfaceName = try self.project.pendingWitnessThunkInterfaces.get(i) otherwise panic("synthesizeWitnessThunks: pendingWitnessThunkInterfaces desync at {i}")
+			let iface = try self.project.interfaces.get(interfaceName) otherwise 'noIface'
+				continue
+			end 'noIface'
+			let thunkNames = self.project.witnessTables.gidMethodImplNamesFor(gid, interfaceName: interfaceName)
+			self.synthesizeWitnessThunksForEntry(gid: gid, iface: iface, thunkNames: thunkNames)
+		end 'eachPending'
+	end 'synthesizeWitnessThunks'
+
+	function synthesizeWitnessThunksForEntry(gid GenericInstanceId, iface IrInterface, thunkNames StringArray)
+		let (baseId, _) = self.project.genericInstances.get(gid)
+		let baseName = self.project.typeNames.get(baseId)
+		// Each thunk corresponds to one interface method in declaration
+		// order, so the StringArray's indexing must align with
+		// `iface.methods`.
+		let methodCount = iface.methods.count()
+		if methodCount != thunkNames.count() 'arityMismatch'
+			panic("synthesizeWitnessThunksForEntry: iface.methods.count() ({methodCount}) != thunkNames.count() ({thunkNames.count()}) for interface '{iface.name}' on gid {gid} — BuildWitnessTables and lowerMaxonToStd disagree on method count")
+		end 'arityMismatch'
+		for mi in 0 upto methodCount 'eachMethod'
+			let method = try iface.methods.get(mi) otherwise panic("synthesizeWitnessThunksForEntry: iface.methods.get OOB at {mi}")
+			let thunkName = try thunkNames.get(mi) otherwise panic("synthesizeWitnessThunksForEntry: thunkNames.get OOB at {mi}")
+			self.synthesizeOneWitnessThunk(gid: gid, baseName: baseName, method: method, thunkName: thunkName)
+		end 'eachMethod'
+	end 'synthesizeWitnessThunksForEntry'
+
+	function synthesizeOneWitnessThunk(gid GenericInstanceId, baseName String, method InterfaceMethodSig, thunkName String)
+		let implName = "{baseName}.{method.name}"
+		// The user-visible param count for the thunk is
+		// `1 (receiver) + method.paramNames.count()`. Stage-zero
+		// (closures/witness-receiver pairing) isn't relevant for a thunk
+		// — these params are plain pointer-shaped values.
+		let userParamCount = 1 + method.paramNames.count()
+		var paramTypes = StdTypeArray.create()
+		for _ in 0 upto userParamCount 'fillParams'
+			paramTypes.push(StdType.i64)
+		end 'fillParams'
+		let returnType = match method.returnType 'mapRet'
+			void gives StdReturnType.void
+			value gives StdReturnType.value(inner: StdType.i64)
+		end 'mapRet'
+		var func = IrFunction.createFromStd(thunkName, returnType: returnType, paramCount: userParamCount, paramTypes: paramTypes, returnLine: 0)
+		// `funcIdRef` reserves ValueIds 0..userParamCount-1 for the
+		// declared params; SSA numbering for ops appended below picks up
+		// at that index.
+		var idRef = ValueIdRef.create(userParamCount)
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+
+		// Emit `param` ops for every declared slot so backends have an
+		// anchor for register-class allocation (mirrors what `lower()`
+		// does for hasImplicitLayoutParam functions earlier in this pass).
+		for pIdx in 0 upto userParamCount 'eachParam'
+			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(pIdx as ValueId, paramIndex: pIdx as VarSlot, paramType: StdType.i64)))
+		end 'eachParam'
+
+		// Build the implicit-arg tail. `Array.equals` is registered with
+		// `hasLayout=true` and the parent type's where-clause constraints
+		// (`Element is Hashable, Element is Equatable`); a non-generic
+		// conformer's impl wouldn't have implicit args, so `none()` is the
+		// natural fallback for that case.
+		let implicits = try self.project.genericFunctionImplicitArity.get(implName) otherwise GenericFunctionImplicits.none()
+		var implicitArgIds = ValueIdArray.create()
+		if implicits.hasLayout 'addLayout'
+			let layoutId = allocValueId(idRef)
+			let layoutLabel = self.project.layoutDescriptors.labelFor(gid)
+			self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadLayoutDescriptor(layoutId, label: layoutLabel)))
+			implicitArgIds.push(layoutId)
+			for wc in implicits.witnessConstraints 'eachConstraint'
+				let witnessId = self.materializeThunkWitnessArg(gid: gid, baseName: baseName, constraint: wc, dstBlock: entryBlock, idRef: idRef)
+				implicitArgIds.push(witnessId)
+			end 'eachConstraint'
+		end 'addLayout'
+
+		// Compose the tail call's full arg list: declared params followed
+		// by implicit-arg ValueIds in source-of-truth order.
+		var allArgIds = ValueIdArray.create()
+		for pIdx in 0 upto userParamCount 'fwdParams'
+			allArgIds.push(pIdx as ValueId)
+		end 'fwdParams'
+		for argId in implicitArgIds 'fwdImplicits'
+			allArgIds.push(argId)
+		end 'fwdImplicits'
+
+		// Emit the tail call and return its result. Void-returning methods
+		// don't carry a primary value — Std's `ret` still names a ValueId
+		// so we allocate one and let the backend treat it as unused (the
+		// existing void-return pattern in transferFuncs).
+		let resultId = allocValueId(idRef)
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.call(resultId, callee: implName, argIds: allArgIds)))
+		self.stdModule.setTerminator(entryBlock, op: StdOp.call(StdCallOp.ret(resultId)))
+
+		// Stamp the function-level slot count so the backend's register
+		// allocator and spill-slot accounting see the right number of
+		// reserved value ids. `paramCount` was set at construction; the
+		// post-op id-frontier is the running idRef.
+		func.varSlotCount = idRef.nextId as VarSlot
+
+		self.stdModule.functions.push(func)
+	end 'synthesizeOneWitnessThunk'
+
+	function materializeThunkWitnessArg(gid GenericInstanceId, baseName String, constraint WhereClause, dstBlock IrBlock, idRef ValueIdRef) returns ValueId
+		// Resolve `constraint.paramName` against the gid's usesParams →
+		// args pairing. The substitution is fully concrete here (we
+		// skipped conditional gids in BuildWitnessTables), so the result
+		// is either a primitive name, a non-generic struct name, or
+		// another generic instance — each routes to a witness label that
+		// either already exists (primitive / non-generic conformer
+		// emitted by the unconditional path) or was emitted by the same
+		// BuildWitnessTables pass that produced this thunk's table (for
+		// nested generic conformers).
+		let usesParams = self.project.typeParameters.getParamNames(baseName)
+		let (_, gidArgs) = self.project.genericInstances.get(gid)
+		if usesParams.count() != gidArgs.count() 'arityMismatch'
+			panic("materializeThunkWitnessArg: usesParams.count() ({usesParams.count()}) != gidArgs.count() ({gidArgs.count()}) for '{baseName}' (gid={gid}) — generic instantiation arity bug")
+		end 'arityMismatch'
+		var bound = MaxonType.unresolved
+		var foundBinding = false
+		for i in 0 upto usesParams.count() 'scan'
+			let p = try usesParams.get(i) otherwise panic("materializeThunkWitnessArg: usesParams.get OOB at {i}")
+			if p == constraint.paramName 'hit'
+				bound = try gidArgs.get(i) otherwise panic("materializeThunkWitnessArg: gidArgs.get OOB at {i}")
+				foundBinding = true
+				break
+			end 'hit'
+		end 'scan'
+		if not foundBinding 'noBinding'
+			panic("materializeThunkWitnessArg: constraint paramName '{constraint.paramName}' not in usesParams of '{baseName}' — TypeResolution miscarried the where-clause scope")
+		end 'noBinding'
+		return self.emitThunkWitnessLoadForBoundType(bound, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock, idRef: idRef)
+	end 'materializeThunkWitnessArg'
+
+	function emitThunkWitnessLoadForBoundType(bound MaxonType, interfaceName String, dstBlock IrBlock, idRef ValueIdRef) returns ValueId
+		let mangledIface = sanitizeIdentifier(interfaceName)
+		let label = thunkWitnessLabelForBound(self.project, bound: bound, mangledIface: mangledIface, interfaceName: interfaceName)
+		let resultId = allocValueId(idRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
+		return resultId
+	end 'emitThunkWitnessLoadForBoundType'
 
 	function forwardCallerWitness(qualifiedCallee String, constraint WhereClause) returns ValueId
 		// The caller must have an implicit witness slot for the same
@@ -3554,10 +3753,13 @@ type MaxonToStdLowering
 	//      leave the integer default (the result slot is unused).
 	function emitWitnessDispatch(resultId ValueId, witnessAddrId ValueId, interfaceName String, methodName String, argIds ValueIdArray, dstBlock IrBlock)
 		let methodIdx = methodIndexInInterface(self.project, interfaceName: interfaceName, methodName: methodName)
-		let fnPtrId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.witnessMethod(fnPtrId, witnessAddrId: witnessAddrId, methodIndex: methodIdx)))
-		self.setValueType(fnPtrId, t: MaxonType.integer)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: fnPtrId, argIds: argIds)))
+		// Fused: witness-table load and call become a single op so the
+		// loaded function pointer never gets its own virtual register.
+		// Backends lower this directly to a memory-indirect call. Drops
+		// pressure across the call site enough that hot witness loops
+		// (e.g. stdlib Map.findSlot's `existing == key`) compile without
+		// chain-spilling. See StdCallOp.witnessCall.
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIdx, argIds: argIds)))
 		let returnType = interfaceMethodReturnType(self.project, interfaceName: interfaceName, methodName: methodName)
 		match returnType 'stamp'
 			void then break 'stamp'
@@ -4757,11 +4959,16 @@ end 'maxonTypeMentionsTypeParam'
 
 // Phase 11.4: result of mapping a callee's bare type-parameter name to its
 // concrete binding at a specific call site. `concrete(name)` carries the
-// pinned struct/primitive type name (e.g. "int", "Map"); `forwardFromCaller`
-// means the binding is itself a type-parameter from the caller's scope —
-// the witness should ride the caller's own implicit witness slot.
+// pinned struct/primitive type name (e.g. "int", "Map"); `concreteGid`
+// additionally pins a generic instance id (e.g. `Array<Byte>`) so the
+// witness loader can pick the per-instance table whose method slots
+// reference the thunks BuildWitnessTables synthesized for this exact
+// instantiation; `forwardFromCaller` means the binding is itself a
+// type-parameter from the caller's scope — the witness should ride the
+// caller's own implicit witness slot.
 union ResolvedCalleeParam
 	concrete(typeName String)
+	concreteGid(typeName String, gid GenericInstanceId)
 	forwardFromCaller
 end 'ResolvedCalleeParam'
 
@@ -4804,10 +5011,46 @@ function resolvedCalleeParamFromMaxonType(project Project, t MaxonType) returns 
 	end 'pick'
 end 'resolvedCalleeParamFromMaxonType'
 
+// A `genericInstance(gid)` binding is preserved as `concreteGid` so the
+// witness loader can pick the per-instance table for this exact
+// instantiation. The bare-name `concrete` arm stays in service for
+// primitives and non-generic struct conformers (which share a single
+// `__witness_<TypeName>_<InterfaceName>` blob across the project).
 function resolvedCalleeParamFromGenericInstance(project Project, gid GenericInstanceId) returns ResolvedCalleeParam
 	let (baseId, _) = project.genericInstances.get(gid)
-	return ResolvedCalleeParam.concrete(project.typeNames.get(baseId))
+	return ResolvedCalleeParam.concreteGid(project.typeNames.get(baseId), gid: gid)
 end 'resolvedCalleeParamFromGenericInstance'
+
+// Compute the witness-table label for a per-instance thunk's implicit
+// witness arg. The bound type is the conformer's type-parameter resolved
+// against its concrete substitution (e.g. `Element=Byte` for
+// `Array<Byte>`). Each arm picks the matching `__witness_<typeMangle>_<iface>`
+// label. The unconditional-path label scheme for primitives (`bool`,
+// `int`, ...) matches what `BuildWitnessTables` produces for the
+// primitives' own conformances. The conditional arms are unreachable
+// because `BuildWitnessTables` skips conditional gids before emission;
+// any reachable invocation here means a phase-ordering bug.
+function thunkWitnessLabelForBound(project Project, bound MaxonType, mangledIface String, interfaceName String) returns String
+	return match bound 'pick'
+		boolean gives "__witness_bool_{mangledIface}"
+		integer gives "__witness_int_{mangledIface}"
+		float gives "__witness_float_{mangledIface}"
+		string gives "__witness_String_{mangledIface}"
+		named(id) gives "__witness_{sanitizeIdentifier(project.typeNames.get(id))}_{mangledIface}"
+		genericInstance(innerGid) gives "__witness_{sanitizeIdentifier(genericInstanceIdToString(project, id: innerGid))}_{mangledIface}"
+		typeParameter gives thunkBoundFatal("typeParameter", interfaceName: interfaceName)
+		interface gives thunkBoundFatal("interface", interfaceName: interfaceName)
+		unresolved gives thunkBoundFatal("unresolved", interfaceName: interfaceName)
+		function gives thunkBoundFatal("function", interfaceName: interfaceName)
+	end 'pick'
+end 'thunkWitnessLabelForBound'
+
+// Wrap `panic` as a value-returning function so the unreachable match
+// arms above can be expressed as `gives thunkBoundFatal(...)`. The
+// returned String value is never observed — `panic` aborts the process.
+function thunkBoundFatal(kind String, interfaceName String) returns String
+	panic("emitThunkWitnessLoadForBoundType: thunk witness arg for interface '{interfaceName}' resolved to unsupported MaxonType arm '{kind}' — BuildWitnessTables emitted a thunk for a shape it shouldn't have")
+end 'thunkBoundFatal'
 
 // Phase 11.4: walk the enclosing type's interned type-parameters and emit a
 // `WhereClause` per `(paramName, requiredTraitName)` pair in declaration

@@ -16,10 +16,19 @@
 //   +16  flags            u64    (bit 0 = isFatBoxed)
 //   +24  methods[N]       u64 each (zero on disk; patched by funcAbs64InRdata)
 //
-// Witness identity is keyed by `(typeName, interfaceName)`. Only
-// unconditional conformances land here. Conditional ones (e.g. `Array
-// implements Hashable where Element: Hashable`) get emitted lazily by
-// 11.4 at the call site once the type-args are concrete.
+// Witness identity is keyed by `(typeName, interfaceName)` for the
+// non-generic conformer case (e.g. `Byte: Hashable`). For generic
+// conformers (`Array implements Equatable where Element: Equatable`) the
+// shared blob would point at the generic method-impl whose body takes
+// implicit `layout`/`witness` args — a signature the witness call site
+// can't satisfy. We instead emit one blob per `genericInstance` of the
+// conforming type (`Array<Byte>: Equatable`, `Array<Int>: Equatable`,
+// ...). Each per-instance blob's method slots point at a synthesized
+// thunk with the interface-declared signature; the thunk's body forwards
+// to the generic method-impl, materializing the implicit args from
+// the instance's concrete substitution. Per-instance entries are keyed
+// by `(GenericInstanceId, interfaceName)` and live in `gidEntries`
+// alongside the pair-keyed `entries`.
 
 let WITNESS_HEADER_BYTE_SIZE = 24
 let WITNESS_FLAG_IS_FAT_BOXED = 1
@@ -69,6 +78,40 @@ end 'WitnessTable'
 export typealias WitnessTableArray = Array with WitnessTable
 export typealias WitnessTableId = int(0 to u64.max)
 
+// Per-instance witness-table entry. Keyed by `(gid, interfaceName)` so two
+// instantiations of the same generic conformer (e.g. `Array<Byte>` and
+// `Array<Int>` both conforming to `Equatable`) get distinct labels and
+// distinct method-slot thunks. The `methodImplNames` here are the
+// synthesized thunk names rather than the generic method-impl names — the
+// thunk's body forwards to the impl with the instance's implicit-arg
+// substitution baked in.
+export type GidWitnessTable
+	export var gid GenericInstanceId
+	export var interfaceName String
+	export var label String
+	export var methodImplNames StringArray
+	export var isFatBoxed bool
+
+	export static function create(gid GenericInstanceId, interfaceName String, label String, methodImplNames StringArray, isFatBoxed bool) returns GidWitnessTable
+		return Self{
+			gid: gid,
+			interfaceName: interfaceName,
+			label: label,
+			methodImplNames: methodImplNames,
+			isFatBoxed: isFatBoxed
+		}
+	end 'create'
+end 'GidWitnessTable'
+
+export typealias GidWitnessTableArray = Array with GidWitnessTable
+
+// Sidecar index keyed by the composite `(typeName, interfaceName)` or
+// `(gid, interfaceName)` lookup string. Maps to the entry's position in
+// the parallel array so cache-restore and iteration code paths that read
+// by index keep working unchanged. Without this, every contains/labelFor
+// call would scan the full registry — O(N²) once across the whole pass.
+export typealias WitnessTableIndexMap = Map with(String, WitnessTableId)
+
 // Encode a WitnessTable into its rdata image. The method slots (offset +24
 // onward) and the parent slot (+8) are zero on disk; the writer patches
 // the method slots at link time via funcAbs64InRdata. The parent slot
@@ -91,12 +134,29 @@ export function encodeWitnessTable(t WitnessTable) returns ByteArray
 end 'encodeWitnessTable'
 
 // Phase 11.3 registry: per-`(typeName, interfaceName)` mangled label,
-// idempotent. Parallel-array layout mirrors LayoutDescriptorRegistry.
+// idempotent. The parallel `entries`/`gidEntries` arrays preserve insertion
+// order for the cache codec's index-driven iteration; `entryIndex`/
+// `gidEntryIndex` give O(1) `(key, interface) → array index` lookups so
+// repeated `contains`/`labelFor` calls during the lowering pass don't
+// degenerate to O(N²). The map keys are composite strings; the cache
+// codec rebuilds both indexes from the array on read.
+//
+// `gidEntries` is the parallel per-instance store for conformances whose
+// conforming type is generic — keyed by `(gid, interfaceName)` so each
+// instantiation gets its own label and its own thunk-bearing method slots.
 export type WitnessTableRegistry
 	export var entries WitnessTableArray
+	export var entryIndex WitnessTableIndexMap
+	export var gidEntries GidWitnessTableArray
+	export var gidEntryIndex WitnessTableIndexMap
 
 	export static function create() returns WitnessTableRegistry
-		return Self{entries: WitnessTableArray.create()}
+		return Self{
+			entries: WitnessTableArray.create(),
+			entryIndex: WitnessTableIndexMap.create(),
+			gidEntries: GidWitnessTableArray.create(),
+			gidEntryIndex: WitnessTableIndexMap.create()
+		}
 	end 'create'
 
 	export function count() returns WitnessTableId
@@ -108,35 +168,75 @@ export type WitnessTableRegistry
 	end 'get'
 
 	export function contains(typeName String, interfaceName String) returns bool
-		for i in 0 upto entries.count() 'scan'
-			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.contains: entries.get OOB at {i}")
-			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
-				return true
-			end 'hit'
-		end 'scan'
-		return false
+		return entryIndex.contains(witnessTableKey(typeName, interfaceName: interfaceName))
 	end 'contains'
 
 	// Idempotent: a second call with the same (typeName, interfaceName) returns
 	// without modifying state. Callers that want to know whether the entry was
 	// fresh should gate on `contains` first.
 	export function intern(typeName String, interfaceName String, label String, methodImplNames StringArray, parentWitnessLabel ParentWitnessLabel, isFatBoxed bool)
-		for i in 0 upto entries.count() 'scan'
-			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.intern: entries.get OOB at {i}")
-			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
-				return
-			end 'hit'
-		end 'scan'
+		let key = witnessTableKey(typeName, interfaceName: interfaceName)
+		if entryIndex.contains(key) 'hit'
+			return
+		end 'hit'
+		entryIndex.upsert(key, value: entries.count())
 		entries.push(WitnessTable.create(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentWitnessLabel, isFatBoxed: isFatBoxed))
 	end 'intern'
 
 	export function labelFor(typeName String, interfaceName String) returns String
-		for i in 0 upto entries.count() 'scan'
-			let e = try entries.get(i) otherwise panic("WitnessTableRegistry.labelFor: entries.get OOB at {i}")
-			if e.typeName == typeName and e.interfaceName == interfaceName 'hit'
-				return e.label
-			end 'hit'
-		end 'scan'
-		panic("WitnessTableRegistry.labelFor: no entry for ({typeName}, {interfaceName})")
+		let key = witnessTableKey(typeName, interfaceName: interfaceName)
+		let idx = try entryIndex.get(key) otherwise panic("WitnessTableRegistry.labelFor: no entry for ({typeName}, {interfaceName})")
+		let e = try entries.get(idx) otherwise panic("WitnessTableRegistry.labelFor: entryIndex points to OOB idx {idx} for ({typeName}, {interfaceName})")
+		return e.label
 	end 'labelFor'
+
+	export function gidCount() returns WitnessTableId
+		return gidEntries.count()
+	end 'gidCount'
+
+	export function getGid(idx WitnessTableId) returns GidWitnessTable
+		return try gidEntries.get(idx) otherwise panic("WitnessTableRegistry.getGid: invalid idx {idx}")
+	end 'getGid'
+
+	export function containsForGid(gid GenericInstanceId, interfaceName String) returns bool
+		return gidEntryIndex.contains(gidWitnessTableKey(gid, interfaceName: interfaceName))
+	end 'containsForGid'
+
+	export function internForGid(gid GenericInstanceId, interfaceName String, label String, methodImplNames StringArray, isFatBoxed bool)
+		let key = gidWitnessTableKey(gid, interfaceName: interfaceName)
+		if gidEntryIndex.contains(key) 'hit'
+			return
+		end 'hit'
+		gidEntryIndex.upsert(key, value: gidEntries.count())
+		gidEntries.push(GidWitnessTable.create(gid, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, isFatBoxed: isFatBoxed))
+	end 'internForGid'
+
+	export function labelForGid(gid GenericInstanceId, interfaceName String) returns String
+		let key = gidWitnessTableKey(gid, interfaceName: interfaceName)
+		let idx = try gidEntryIndex.get(key) otherwise panic("WitnessTableRegistry.labelForGid: no entry for (gid={gid}, {interfaceName})")
+		let e = try gidEntries.get(idx) otherwise panic("WitnessTableRegistry.labelForGid: gidEntryIndex points to OOB idx {idx} for (gid={gid}, {interfaceName})")
+		return e.label
+	end 'labelForGid'
+
+	// Method-impl names recorded for a `(gid, interfaceName)` entry, in
+	// interface declaration order. Used by `lowerMaxonToStd.
+	// synthesizeWitnessThunks` to pick thunk symbol names for the bodies
+	// it emits.
+	export function gidMethodImplNamesFor(gid GenericInstanceId, interfaceName String) returns StringArray
+		let key = gidWitnessTableKey(gid, interfaceName: interfaceName)
+		let idx = try gidEntryIndex.get(key) otherwise panic("WitnessTableRegistry.gidMethodImplNamesFor: no entry for (gid={gid}, {interfaceName})")
+		let e = try gidEntries.get(idx) otherwise panic("WitnessTableRegistry.gidMethodImplNamesFor: gidEntryIndex points to OOB idx {idx} for (gid={gid}, {interfaceName})")
+		return e.methodImplNames
+	end 'gidMethodImplNamesFor'
 end 'WitnessTableRegistry'
+
+// Composite key for the (typeName, interfaceName) entry lookup. The pipe
+// separator can't appear in either component (both are identifier-derived).
+function witnessTableKey(typeName String, interfaceName String) returns String
+	return "{typeName}|{interfaceName}"
+end 'witnessTableKey'
+
+// Composite key for the (gid, interfaceName) per-instance entry lookup.
+function gidWitnessTableKey(gid GenericInstanceId, interfaceName String) returns String
+	return "{gid}|{interfaceName}"
+end 'gidWitnessTableKey'

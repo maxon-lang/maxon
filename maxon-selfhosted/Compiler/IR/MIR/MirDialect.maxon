@@ -63,6 +63,13 @@ export union MirOp
 	// Functions
 	call(resultId ValueId, callee String, argIds ValueIdArray)
 	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	// Fused witness-table dispatch: load function pointer from
+	// witnessAddr at WITNESS_OFFSET_METHODS + 8*methodIndex, then call
+	// it with argIds. Backends lower this to a memory-indirect call
+	// (`call qword ptr [witnessAddr + offset]` on x64) so the loaded
+	// pointer never occupies a virtual GPR. Reduces register pressure
+	// at hot witness call sites — see StdCallOp.witnessCall.
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
 	ret(retValId ValueId)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
 	// Memory. `isFloat` on `load`/`store` selects between a GP `mov reg,
@@ -146,6 +153,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		// Functions
 		call(resultId, callee, argIds) gives "%{resultId} = mir.call @{callee}({formatMirArgs(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = mir.indirect_call %{calleeId}({formatMirArgs(argIds)})"
+		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives "%{resultId} = mir.witness_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
 		ret(retValId) gives "mir.ret %{retValId}"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = mir.param local{paramIndex} : {paramType.name}"
 		// Memory

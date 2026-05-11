@@ -1,0 +1,40 @@
+// Test: byte-string-literal.field-access
+function main() returns ExitCode
+		let len = b"test".count()
+		return len
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_6
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0
+    %3 = mir.mov_imm 4 : i64
+    mir.store %3, %2, 8
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0
+    %9 = mir.global_addr @__layout_Array_Int
+    %10 = mir.call @Array.count(%8, %9)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_3(), else: __range_ok_3()]
+  __range_panic_3:
+    %13 = mir.global_addr @__panic_msg_3
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_3:
+    mir.ret %10
+  }
+}
+---

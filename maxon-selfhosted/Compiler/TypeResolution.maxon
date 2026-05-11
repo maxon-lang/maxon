@@ -771,6 +771,16 @@ function resolveAllStructTypes(project Project)
 		// structs reusing a name) are silently ignored here so cache restore
 		// continues to win.
 		try project.structTypes.insert(name, value: st) otherwise ignore
+		// Persist source-declaration order so `getParamNames` returns the
+		// right pairing for `resolveCalleeParamToConcreteType` regardless
+		// of what order the registry's id space got populated.
+		if entry.typeParams.count() > 0 'hasTypeParams'
+			var paramOrderCopy = StringArray.create()
+			for n in entry.typeParams 'copyTypeParams'
+				paramOrderCopy.push(n)
+			end 'copyTypeParams'
+			project.typeParameters.recordParamOrder(entry.name, paramOrder: paramOrderCopy)
+		end 'hasTypeParams'
 		resolvedNames.push(name)
 	end 'sweep'
 
@@ -2567,9 +2577,17 @@ end 'byteStringLiteralResultType'
 // through its element value names; substituting the binding here keeps
 // the parser out of the type system while still letting the downstream
 // `__mm.set(...)` and `arr.get(...)` resolutions find the concrete
-// element type. Falls through to `callResultType` for every call whose
-// result name isn't tracked in `arrayLiteralProducers`.
+// element type. Map literals follow the same pattern but bind two type
+// args (Key, Value); the dictionary-shape lookup runs first because a
+// map's init-call result is keyed in `mapLiteralProducers`, which the
+// `arrayLiteralProducers` lookup wouldn't find. Falls through to
+// `callResultType` for every call whose result name isn't tracked in
+// either map.
 function callOrArrayLiteralResultType(project Project, funcName String, name ByteArray, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns MaxonType
+	let pinnedMap = mapLiteralResultType(project, funcName: funcName, name: name, producerTypes: producerTypes)
+	if not isUnresolvedType(pinnedMap) 'gotMapPin'
+		return pinnedMap
+	end 'gotMapPin'
 	let pinned = arrayLiteralResultType(project, funcName: funcName, name: name, producerTypes: producerTypes)
 	if not isUnresolvedType(pinned) 'gotPin'
 		return pinned
@@ -2687,6 +2705,56 @@ function internSingleArgGenericInstance(project Project, baseTypeName String, el
 	return MaxonType.genericInstance(giId)
 end 'internSingleArgGenericInstance'
 
+// Build (or look up) `genericInstance(<baseTypeName>, [keyType, valueType])`.
+// Map-literal-shaped counterpart to `internSingleArgGenericInstance`.
+function internTwoArgGenericInstance(project Project, baseTypeName String, keyType MaxonType, valueType MaxonType) returns MaxonType
+	let baseId = project.typeNames.intern(baseTypeName)
+	var giArgs = MaxonTypeArray.create()
+	giArgs.push(keyType)
+	giArgs.push(valueType)
+	let giId = project.genericInstances.intern(baseId, args: giArgs)
+	return MaxonType.genericInstance(giId)
+end 'internTwoArgGenericInstance'
+
+// Mirror of `arrayLiteralResultType` for map literals. The parser only
+// keys map-literal entries under the init-call result name (the two
+// per-axis __mm allocations are resolved through their own
+// arrayLiteralProducers entries), so a single-key lookup suffices. Both
+// axes' element types must unify before we can pin a concrete
+// `genericInstance(<mapType>, [Key, Value])` — if either is still
+// `unresolved`, the caller falls through to `callResultType` and a
+// later resolution pass retries.
+function mapLiteralResultType(project Project, funcName String, name ByteArray, producerTypes ProducerTypeMap) returns MaxonType
+	let key = mapLiteralProducerKey(funcName: funcName, valueName: name)
+	let entry = try project.mapLiteralProducers.get(key) otherwise return MaxonType.unresolved
+	let keyType = unifyMapLiteralAxisFromProducer(project, funcName: funcName, mmResultName: entry.keyMmResultName, producerTypes: producerTypes)
+	if isUnresolvedType(keyType) 'noKey'
+		return MaxonType.unresolved
+	end 'noKey'
+	let valueType = unifyMapLiteralAxisFromProducer(project, funcName: funcName, mmResultName: entry.valueMmResultName, producerTypes: producerTypes)
+	if isUnresolvedType(valueType) 'noVal'
+		return MaxonType.unresolved
+	end 'noVal'
+	return internTwoArgGenericInstance(project, baseTypeName: entry.mapTypeName, keyType: keyType, valueType: valueType)
+end 'mapLiteralResultType'
+
+// Resolve a single map-literal axis's element type by deferring to the
+// already-registered `arrayLiteralProducers` entry keyed under the
+// axis's `__mm` result name. Returns `unresolved` when the entry is
+// missing or its elements haven't unified yet.
+function unifyMapLiteralAxisFromProducer(project Project, funcName String, mmResultName ByteArray, producerTypes ProducerTypeMap) returns MaxonType
+	let key = arrayLiteralProducerKey(funcName: funcName, valueName: mmResultName)
+	let entry = try project.arrayLiteralProducers.get(key) otherwise return MaxonType.unresolved
+	return unifyArrayLiteralElementTypes(project, entry: entry, producerTypes: producerTypes)
+end 'unifyMapLiteralAxisFromProducer'
+
+// Compose the `mapLiteralProducers` key. Mirrors `arrayLiteralProducerKey`:
+// the composite `(funcName, valueName)` keeps per-function
+// `freshSynthName` resets from colliding across functions.
+export function mapLiteralProducerKey(funcName String, valueName ByteArray) returns String
+	return "{funcName}|{String.from(valueName)}"
+end 'mapLiteralProducerKey'
+
 // Compose the `arrayLiteralProducers` key. Same shape used at the parser
 // site (writer) and the TypeResolution site (reader); centralised so the
 // byte representation can change without scattering touch-ups. Top-level
@@ -2715,6 +2783,26 @@ end 'ArrayLiteralLookupError'
 function lookupArrayLiteralProducer(project Project, funcName String, name ByteArray) returns ArrayLiteralProducer throws ArrayLiteralLookupError
 	return try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
 end 'lookupArrayLiteralProducer'
+
+// Map-literal counterpart of `lookupArrayLiteralProducer`. Map literals are
+// keyed only under their init-call result name (the per-axis __mm
+// allocations live in `arrayLiteralProducers`), so a single-name lookup
+// suffices.
+function lookupMapLiteralProducer(project Project, funcName String, name ByteArray) returns MapLiteralProducer throws ArrayLiteralLookupError
+	return try project.mapLiteralProducers.get(mapLiteralProducerKey(funcName: funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
+end 'lookupMapLiteralProducer'
+
+// Mirror of `unifyArrayLiteralElementsFromModule` for map literals: read
+// the unified element types of each axis via that helper (each axis is
+// registered as an ArrayLiteralProducer under its `__mm` name) and pin a
+// `genericInstance(<mapType>, [Key, Value])` shape when both axes resolve.
+function unifyMapLiteralFromModule(project Project, module MaxonModule, func IrFunction, entry MapLiteralProducer) returns MaxonType throws ArrayLiteralLookupError
+	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let keyType = try unifyArrayLiteralElementsFromModule(project, module: module, func: func, entry: keyEntry)
+	let valueType = try unifyArrayLiteralElementsFromModule(project, module: module, func: func, entry: valueEntry)
+	return internTwoArgGenericInstance(project, baseTypeName: entry.mapTypeName, keyType: keyType, valueType: valueType)
+end 'unifyMapLiteralFromModule'
 
 // Unify an array literal's element types by walking the module ops
 // directly — used when the regular per-function producer-type map
@@ -2794,6 +2882,32 @@ function staticTypedResult(name ByteArray, result ByteArray, t MaxonType) return
 	throw ArrayLiteralLookupError.notFound
 end 'staticTypedResult'
 
+// Derive a binop's result type, falling back to its operands' recorded
+// producer types when the parser left `operandType` as unresolved. This
+// happens whenever a binop's operand is itself the result of an earlier op
+// (typically a `call` or another `binop`) whose type the parser couldn't
+// see at parse time. Without the fallback, downstream consumers of the
+// binop's result observe `unresolved` and `fillBinop` can't recover the
+// operandType either.
+function deriveBinopResultType(producerTypes ProducerTypeMap, operandType MaxonType, left ByteArray, right ByteArray) returns MaxonType
+	if not isUnresolvedType(operandType) 'concrete'
+		return operandType
+	end 'concrete'
+	let leftT = lookupProducerType(producerTypes, name: left)
+	if not isUnresolvedType(leftT) 'fromLeft'
+		return leftT
+	end 'fromLeft'
+	return lookupProducerType(producerTypes, name: right)
+end 'deriveBinopResultType'
+
+// Mirror of `deriveBinopResultType` for the single-operand case.
+function deriveUnopResultType(producerTypes ProducerTypeMap, operandType MaxonType, operand ByteArray) returns MaxonType
+	if not isUnresolvedType(operandType) 'concrete'
+		return operandType
+	end 'concrete'
+	return lookupProducerType(producerTypes, name: operand)
+end 'deriveUnopResultType'
+
 function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, funcName String, op MaxonOp)
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
@@ -2806,8 +2920,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		varStore(slotId, value, _) then recordVarStore(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value)
 		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
 		globalStore then return
-		binop(result, _, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
-		unop(result, _, _, operandType, _) then recordResultType(producerTypes, name: result, t: operandType)
+		binop(result, left, right, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveBinopResultType(producerTypes, operandType: operandType, left: left, right: right))
+		unop(result, operand, _, operandType, _) then recordResultType(producerTypes, name: result, t: deriveUnopResultType(producerTypes, operandType: operandType, operand: operand))
 		convert(result, _, _, toType, _, _) then recordResultType(producerTypes, name: result, t: toType)
 		cmp(result, _, _, _, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
 		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
@@ -3197,22 +3311,23 @@ function pickOperandType(left MaxonType, right MaxonType, current MaxonType) ret
 	if not isUnresolvedType(left) 'useLeft'
 		return left
 	end 'useLeft'
-	return right
+	if not isUnresolvedType(right) 'useRight'
+		return right
+	end 'useRight'
+	panic("pickOperandType: cmp op has unresolved operandType after fillCmp and both filled operand types are unresolved — buildProducerTypes left a real producer untyped or the cmp predates its operands' producers")
 end 'pickOperandType'
 
 function fillBinop(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
 	if not isUnresolvedType(operandType) 'noChange'
 		return
 	end 'noChange'
-	let filledLeft = lookupProducerType(producerTypes, name: left)
-	if not isUnresolvedType(filledLeft) 'useLeft'
-		try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filledLeft, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
-		return
-	end 'useLeft'
-	let filledRight = lookupProducerType(producerTypes, name: right)
-	if not isUnresolvedType(filledRight) 'useRight'
-		try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filledRight, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
-	end 'useRight'
+
+	let filled = deriveBinopResultType(producerTypes, operandType: operandType, left: left, right: right)
+	if isUnresolvedType(filled) 'stillUnresolved'
+		panic("fillBinop: binop op '{String.from(result)}' has unresolved operandType after fillUnresolvedTypes and neither operand resolves through the producer-type map — left='{String.from(left)}' right='{String.from(right)}'. Likely a missing producer entry for a synthesized operand.")
+	end 'stillUnresolved'
+
+	try module.ops.set(opIdx, value: MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: filled, range: range)) otherwise panic("fillBinop: ops.set OOB at idx={opIdx}")
 end 'fillBinop'
 
 function fillUnop(module MaxonModule, opIdx OpIndex, result ByteArray, operand ByteArray, opKind UnaryOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
@@ -3949,6 +4064,16 @@ function preResolveSlotFromGlobalStore(project Project, module MaxonModule, func
 			return
 		end 'gotElement'
 	end 'isArrayLit'
+	// Map-literal initializers: same parser-side sidecar pattern as
+	// arrays, except the literal carries two axes. Both axes' element
+	// types must unify before we can pin a concrete
+	// `genericInstance(<mapType>, [Key, Value])` shape.
+	if let entry = try lookupMapLiteralProducer(project, funcName: func.name, name: value) 'isMapLit'
+		if let pinned = try unifyMapLiteralFromModule(project, module: module, func: func, entry: entry) 'gotMap'
+			patchTopLevelVarSlotType(project, name: name, slotType: pinned)
+			return
+		end 'gotMap'
+	end 'isMapLit'
 	// The value's producer is the `T.init(mm)` call op the parser
 	// emitted just before the globalStore. Walk every op in the module
 	// looking for a `call` whose result name matches `value`.
@@ -4039,8 +4164,25 @@ function refineTopLevelArrayLiteralSlotType(project Project, module MaxonModule,
 			return
 		end 'gotElement'
 	end 'isArrayLit'
+	if let entry = try lookupMapLiteralProducer(project, funcName: func.name, name: value) 'isMapLit'
+		if let pinned = try unifyMapLiteralFromTypedOps(project, module: module, func: func, entry: entry) 'gotMap'
+			patchTopLevelVarSlotType(project, name: name, slotType: pinned)
+			return
+		end 'gotMap'
+	end 'isMapLit'
 	patchTopLevelVarSlotType(project, name: name, slotType: fallbackSlotType)
 end 'refineTopLevelArrayLiteralSlotType'
+
+// Mirror of `unifyArrayLiteralElementsFromTypedOps` for map literals.
+// Reads each axis's already-registered ArrayLiteralProducer entry and
+// re-unifies its elements against the post-fillUnresolvedTypes op stamps.
+function unifyMapLiteralFromTypedOps(project Project, module MaxonModule, func IrFunction, entry MapLiteralProducer) returns MaxonType throws ArrayLiteralLookupError
+	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let keyType = try unifyArrayLiteralElementsFromTypedOps(project, module: module, func: func, entry: keyEntry)
+	let valueType = try unifyArrayLiteralElementsFromTypedOps(project, module: module, func: func, entry: valueEntry)
+	return internTwoArgGenericInstance(project, baseTypeName: entry.mapTypeName, keyType: keyType, valueType: valueType)
+end 'unifyMapLiteralFromTypedOps'
 
 // Re-unify an array literal's element types against the module's
 // post-fillUnresolvedTypes ops. Mirrors `unifyArrayLiteralElementsFromModule`

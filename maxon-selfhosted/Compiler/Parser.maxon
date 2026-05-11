@@ -2576,6 +2576,14 @@ export type Parser
 					break
 				end 'doneUses'
 			end 'usesLoop'
+			// Persist source-declaration order so getParamNames returns
+			// the right pairing even when the registry's id-order gets
+			// scrambled by out-of-order intern calls during cache restore.
+			var paramCopy = StringArray.create()
+			for n in usesParams 'copyUsesParams'
+				paramCopy.push(n)
+			end 'copyUsesParams'
+			project.typeParameters.recordParamOrder(currentTypeName, paramOrder: paramCopy)
 		end 'hasUses'
 		currentTypeParams = usesParams
 
@@ -2710,24 +2718,27 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
-		// Eager BuiltinArrayLiteral discovery. Walking conformances at type-
-		// registration time means the static cache is populated by the time
-		// stdlib parsing finishes — which is critical because user code's
-		// array literals trigger after stdlib's `unresolvedStructTypes` has
-		// been drained by `resolveAllStructTypes`. User types may also
-		// declare conformance to `BuiltinArrayLiteral` without conflict —
-		// stdlib's `Array` is registered first (the cache-set short-circuits
-		// on a non-empty prior) and remains the canonical desugaring target
-		// for `[...]` literals; user implementations are valid declarations
-		// but don't displace the stdlib entry.
-		for conf in conformances 'discoverBal'
-			if conf.interfaceName != "BuiltinArrayLiteral" 'notBal'
-				continue
-			end 'notBal'
-			if getCachedBuiltinArrayLiteralTypeName().isEmpty() 'firstImpl'
-				setCachedBuiltinArrayLiteralTypeName(currentTypeName)
-			end 'firstImpl'
-		end 'discoverBal'
+		// Eager BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery.
+		// Walking conformances at type-registration time means each static
+		// cache is populated by the time stdlib parsing finishes — which is
+		// critical because user code's array/map literals trigger after stdlib's
+		// `unresolvedStructTypes` has been drained by `resolveAllStructTypes`.
+		// User types may also declare conformance to either protocol without
+		// conflict — stdlib's `Array`/`Map` is registered first (each cache-set
+		// short-circuits on a non-empty prior) and remains the canonical
+		// desugaring target; user implementations are valid declarations but
+		// don't displace the stdlib entry.
+		for conf in conformances 'discoverBuiltins'
+			if conf.interfaceName == "BuiltinArrayLiteral" 'isBal'
+				if getCachedBuiltinArrayLiteralTypeName().isEmpty() 'firstImpl'
+					setCachedBuiltinArrayLiteralTypeName(currentTypeName)
+				end 'firstImpl'
+			end 'isBal' else if conf.interfaceName == "BuiltinDictionaryLiteral" 'isBdl'
+				if getCachedBuiltinDictionaryLiteralTypeName().isEmpty() 'firstImpl'
+					setCachedBuiltinDictionaryLiteralTypeName(currentTypeName)
+				end 'firstImpl'
+			end 'isBdl'
+		end 'discoverBuiltins'
 
 		currentTypeName = ""
 		currentTypeVisibility = Visibility.file
@@ -5255,14 +5266,45 @@ export type Parser
 		if maxonTypeIsFloat(leftType) or maxonTypeIsFloat(rightType) 'anyFloat'
 			return MaxonType.float
 		end 'anyFloat'
-		if isNamedMaxonType(leftType) 'leftNamed'
+		// Non-numeric operand types that lowering must see preserved into the
+		// op's operandType slot. `named(...)` flows the receiver type through
+		// to user-defined operator dispatch; `typeParameter(...)` is the
+		// trigger for witness-based `Equatable.equals` desugaring inside
+		// generic function bodies (see lowerCmp). Either side wins so a
+		// mixed `Key == namedValue` carries the more-specific type.
+		if shouldCarryAsBinopOperandType(leftType) 'leftCarry'
 			return leftType
-		end 'leftNamed'
-		if isNamedMaxonType(rightType) 'rightNamed'
+		end 'leftCarry'
+		if shouldCarryAsBinopOperandType(rightType) 'rightCarry'
 			return rightType
-		end 'rightNamed'
+		end 'rightCarry'
+		// If either side is still unresolved at parse time (e.g. a fieldLoad
+		// result feeding into `==`), leave the op's operandType as
+		// `unresolved` so `fillUnresolvedTypes` rewrites it from the
+		// producer-type map. Without this hook a downstream
+		// `existing == key` on a type-parameter operand would lose the
+		// dispatch trigger.
+		if isUnresolvedMaxonType(leftType) or isUnresolvedMaxonType(rightType) 'eitherUnresolved'
+			return MaxonType.unresolved
+		end 'eitherUnresolved'
+		// Both sides are primitive (integer / boolean) — integer is the
+		// correct ABI representation for both since `bool` lowers to i1 but
+		// arithmetic / comparison ops on bool widen through the integer
+		// path.
 		return MaxonType.integer
 	end 'binOpOperandType'
+
+	function shouldCarryAsBinopOperandType(t MaxonType) returns bool
+		return match t 'check'
+			named gives true
+			typeParameter gives true
+			boolean to string gives false
+			function gives false
+			unresolved gives false
+			genericInstance gives false
+			interface gives false
+		end 'check'
+	end 'shouldCarryAsBinopOperandType'
 
 	function isNamedMaxonType(t MaxonType) returns bool
 		return match t 'check'
@@ -5792,9 +5834,13 @@ export type Parser
 
 	// Pick a literal type for the synthetic store the `ignore` arm emits.
 	// We want the store to type-match the success arm's call result so the
-	// slot's resolved type stays consistent. Falls back to integer when
-	// the call result type is itself unresolved at parse time —
-	// TypeResolution will rebind on the success store anyway.
+	// slot's resolved type stays consistent. The slot's value on the
+	// ignore arm has documented-undefined semantics, so when we don't know
+	// the call's result type at parse time we fall back to `integer` (any
+	// 8-byte value is fine here — the user has been told the read is
+	// undefined). Literals are typed at parser emission and have no
+	// backfill pass, so leaving this `unresolved` would survive past
+	// TypeResolution and trip the lowering invariant.
 	function defaultIgnoreLiteralType(callResultType MaxonType) returns MaxonType
 		if isUnresolvedMaxonType(callResultType) 'unresolved'
 			return MaxonType.integer
@@ -5995,7 +6041,11 @@ export type Parser
 			return internMaxonType(project, name: typeToken.value)
 		end 'isIdent'
 		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected type name after 'as'", line: typeToken.line, column: typeToken.column, filePath: filePath)
-		return MaxonType.integer
+		// Error-recovery placeholder: callers continue parsing so a single bad
+		// cast doesn't cascade. `unresolved` propagates as an explicit "no
+		// concrete type known" through TypeResolution rather than mistyping
+		// the cast's output as an int.
+		return MaxonType.unresolved
 	end 'parseCastTargetType'
 
 	// --- Postfix expression chain ---
@@ -6624,55 +6674,185 @@ export type Parser
 		let bracketToken = cursor.current()
 		try eat(TokenKind.leftBracket)
 
-		// Phase 1: collect element expressions and per-element ranges so we
-		// know N (capacity) before we emit `__ManagedMemory.create`. Stuck-
-		// guard mirrors parseCallArgsRaw: an inner expression's recovery may
-		// park the cursor without advancing — break out so the trailing
-		// `expect(rightBracket)` reports the cascade instead of looping.
-		// The parser collects only IR-shape information here (value names
-		// and source ranges); per-element MaxonTypes are TypeResolution's
-		// problem to compute and unify later.
+		// Phase 1: peek for the empty-literal shape. `[]` always desugars to
+		// an empty array (a `Map.init` call with two empty managed-memory
+		// buffers requires named key/value type info the parser doesn't
+		// have at literal-emission time).
+		if at(TokenKind.rightBracket) 'emptyLit'
+			try eat(TokenKind.rightBracket)
+			let literalRange = SourceRange.between(bracketToken, last: previousToken())
+			return try emitArrayLiteralResult(block, elemNames: ByteArrayArray.create(), elemRanges: SourceRangeArray.create(), literalRange: literalRange, bracketToken: bracketToken)
+		end 'emptyLit'
+
+		// Phase 2: parse the first element. After parsing we peek for `:`
+		// to decide between array-literal (`[v0, v1, ...]`) and map-literal
+		// (`[k0: v0, k1: v1, ...]`) parsing paths.
+		let firstStartPos = cursor.index()
+		let firstFirstToken = cursor.current()
+		let firstParsed = try parseExpression(block)
+		let firstLastToken = previousToken()
+		let firstRange = SourceRange.between(firstFirstToken, last: firstLastToken)
+		let firstMaterialized = materializeStringConstIfNeeded(block, expr: firstParsed, range: firstRange)
+
+		if at(TokenKind.colon) 'mapLit'
+			return try parseMapLiteralBodyAfterFirstKey(block, bracketToken: bracketToken, firstKeyName: exprName(firstMaterialized), firstKeyRange: firstRange)
+		end 'mapLit'
+
+		// Array-literal path: first element already parsed.
 		var elemNames = ByteArrayArray.create()
 		var elemRanges = SourceRangeArray.create()
-		if not at(TokenKind.rightBracket) 'hasElements'
-			while true 'elemLoop'
-				let elemStartPos = cursor.index()
-				let elemFirstToken = cursor.current()
-				let parsedElem = try parseExpression(block)
-				let elemLastToken = previousToken()
-				let elemRange = SourceRange.between(elemFirstToken, last: elemLastToken)
-
-				// String literals are returned as `stringConst` ExprResults
-				// without a backing IR op; materialize one before threading the
-				// name into a method-call argument list, mirroring other
-				// call-emission sites.
-				let elemResult = materializeStringConstIfNeeded(block, expr: parsedElem, range: elemRange)
-				elemNames.push(exprName(elemResult))
-				elemRanges.push(elemRange)
-
-				if at(TokenKind.rightBracket) 'doneList'
-					break
-				end 'doneList'
-				if cursor.index() <= elemStartPos 'stuckElem'
-					break
-				end 'stuckElem'
-				try expect(TokenKind.comma)
-			end 'elemLoop'
-		end 'hasElements'
+		elemNames.push(exprName(firstMaterialized))
+		elemRanges.push(firstRange)
+		try parseRemainingArrayElements(block, elemNames: elemNames, elemRanges: elemRanges, firstStartPos: firstStartPos)
 		try expect(TokenKind.rightBracket)
+		let literalRange = SourceRange.between(bracketToken, last: previousToken())
+		return try emitArrayLiteralResult(block, elemNames: elemNames, elemRanges: elemRanges, literalRange: literalRange, bracketToken: bracketToken)
+	end 'parseArrayLiteralExpr'
 
+	// Parse the trailing `, e1, e2, ..., eN` of an array literal (the leading
+	// `[e0` has already been consumed). Stuck-guard mirrors parseCallArgsRaw:
+	// an inner expression's recovery may park the cursor without advancing —
+	// break out so the trailing `expect(rightBracket)` reports the cascade
+	// instead of looping.
+	function parseRemainingArrayElements(block IrBlock, elemNames ByteArrayArray, elemRanges SourceRangeArray, firstStartPos ParsedInt) throws ParserError
+		if at(TokenKind.rightBracket) 'doneAfterFirst'
+			return
+		end 'doneAfterFirst'
+		if cursor.index() <= firstStartPos 'stuckOnFirst'
+			return
+		end 'stuckOnFirst'
+		try expect(TokenKind.comma)
+		while true 'elemLoop'
+			if at(TokenKind.rightBracket) 'trailingComma'
+				return
+			end 'trailingComma'
+			let elemStartPos = cursor.index()
+			let elemFirstToken = cursor.current()
+			let parsedElem = try parseExpression(block)
+			let elemLastToken = previousToken()
+			let elemRange = SourceRange.between(elemFirstToken, last: elemLastToken)
+			let elemResult = materializeStringConstIfNeeded(block, expr: parsedElem, range: elemRange)
+			elemNames.push(exprName(elemResult))
+			elemRanges.push(elemRange)
+			if at(TokenKind.rightBracket) 'doneList'
+				break
+			end 'doneList'
+			if cursor.index() <= elemStartPos 'stuckElem'
+				break
+			end 'stuckElem'
+			try expect(TokenKind.comma)
+		end 'elemLoop'
+	end 'parseRemainingArrayElements'
+
+	// Parse the rest of a map literal once the first key has been parsed.
+	// Tokens consumed so far: `[ <firstKey>` — the cursor is parked on `:`.
+	// Reads `: <firstValue> ( , <key> : <value> )* ]` and emits the matching
+	// IR sequence.
+	function parseMapLiteralBodyAfterFirstKey(block IrBlock, bracketToken Token, firstKeyName ByteArray, firstKeyRange SourceRange) returns ExprResult throws ParserError
+		var keyNames = ByteArrayArray.create()
+		var keyRanges = SourceRangeArray.create()
+		var valueNames = ByteArrayArray.create()
+		var valueRanges = SourceRangeArray.create()
+
+		keyNames.push(firstKeyName)
+		keyRanges.push(firstKeyRange)
+
+		try expect(TokenKind.colon)
+		let firstValueFirst = cursor.current()
+		let firstValueExpr = try parseExpression(block)
+		let firstValueRange = SourceRange.between(firstValueFirst, last: previousToken())
+		let firstValueResult = materializeStringConstIfNeeded(block, expr: firstValueExpr, range: firstValueRange)
+		valueNames.push(exprName(firstValueResult))
+		valueRanges.push(firstValueRange)
+
+		while at(TokenKind.comma) 'morePairs'
+			try eat(TokenKind.comma)
+			if at(TokenKind.rightBracket) 'trailing'
+				break
+			end 'trailing'
+			let pairStartPos = cursor.index()
+
+			let keyFirst = cursor.current()
+			let keyExpr = try parseExpression(block)
+			let keyRange = SourceRange.between(keyFirst, last: previousToken())
+			let keyResult = materializeStringConstIfNeeded(block, expr: keyExpr, range: keyRange)
+			keyNames.push(exprName(keyResult))
+			keyRanges.push(keyRange)
+
+			try expect(TokenKind.colon)
+
+			let valFirst = cursor.current()
+			let valExpr = try parseExpression(block)
+			let valRange = SourceRange.between(valFirst, last: previousToken())
+			let valResult = materializeStringConstIfNeeded(block, expr: valExpr, range: valRange)
+			valueNames.push(exprName(valResult))
+			valueRanges.push(valRange)
+
+			if cursor.index() <= pairStartPos 'stuckPair'
+				break
+			end 'stuckPair'
+		end 'morePairs'
+
+		try expect(TokenKind.rightBracket)
 		let literalRange = SourceRange.between(bracketToken, last: previousToken())
 
-		// Phase 2: discover the stdlib type implementing BuiltinArrayLiteral.
-		// Throws on missing or ambiguous → trip a parser-time diagnostic and
-		// fall back to a dummy ExprResult so downstream parsing stays well-formed.
-		let arrayTypeName = try discoverBuiltinArrayLiteralType() otherwise 'noArrayType'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "array literal: no stdlib type implements BuiltinArrayLiteral (or multiple do)", line: bracketToken.line, column: bracketToken.column, filePath: filePath)
+		// Discover the stdlib type implementing BuiltinDictionaryLiteral.
+		// Throws on missing → trip a parser-time diagnostic and fall back to
+		// a dummy ExprResult so downstream parsing stays well-formed.
+		let mapTypeName = getCachedBuiltinDictionaryLiteralTypeName()
+		if mapTypeName.isEmpty() 'noMapType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "map literal: no stdlib type implements BuiltinDictionaryLiteral", line: bracketToken.line, column: bracketToken.column, filePath: filePath)
 			let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: literalRange)
 			return ExprResult.direct(zeroName, valueType: MaxonType.unresolved)
-		end 'noArrayType'
+		end 'noMapType'
 
-		// Phase 3: allocate __ManagedMemory with capacity = element count.
+		// Emit two __ManagedMemory.create + set + setLength sequences (one
+		// per axis). Each axis registers an ArrayLiteralProducer under its
+		// __mm name so the existing single-axis type-resolution path
+		// pins the key/value element type.
+		let keyMmName = emitManagedMemoryFromElements(block, elemNames: keyNames, elemRanges: keyRanges, literalRange: literalRange)
+		registerArrayLiteralAxis(mmResultName: keyMmName, elemNames: keyNames, elemRanges: keyRanges)
+		let valueMmName = emitManagedMemoryFromElements(block, elemNames: valueNames, elemRanges: valueRanges, literalRange: literalRange)
+		registerArrayLiteralAxis(mmResultName: valueMmName, elemNames: valueNames, elemRanges: valueRanges)
+
+		// Emit `<mapType>.init(keyMm, valueMm)`. The first arg goes positional
+		// (label="") per Maxon's calling convention; the second carries the
+		// `initValues` label to satisfy `validateQualifiedCallArgLabels`'
+		// "second-and-subsequent must be named" check. The label matches the
+		// stdlib's Map.init signature so signature-driven slot assignment
+		// resolves it back to the right parameter.
+		let initResultName = freshSynthName()
+		var initArgs = ByteArrayArray.create()
+		initArgs.push(keyMmName)
+		initArgs.push(valueMmName)
+		var initLabels = StringArray.create()
+		initLabels.push("")
+		initLabels.push("initValues")
+		var initArgTypes = MaxonTypeArray.create()
+		initArgTypes.push(MaxonType.unresolved)
+		initArgTypes.push(MaxonType.unresolved)
+		var initArgRanges = SourceRangeArray.create()
+		initArgRanges.push(literalRange)
+		initArgRanges.push(literalRange)
+		let initCallee = "{mapTypeName}.init"
+		module.appendOp(block, op: MaxonOp.call(initResultName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+
+		let producer = MapLiteralProducer.create(mapTypeName, initResultName: initResultName, keyMmResultName: keyMmName, valueMmResultName: valueMmName, sourceRange: literalRange, sourceFilePath: filePath)
+		try project.mapLiteralProducers.insert(mapLiteralProducerKey(funcName: currentFunc.name, valueName: initResultName), value: producer) otherwise ignore
+
+		return ExprResult.direct(initResultName, valueType: MaxonType.unresolved)
+	end 'parseMapLiteralBodyAfterFirstKey'
+
+	// Emit Phase 3-5 of the array-literal lowering: allocate a
+	// `__ManagedMemory` sized to elemCount, write each element via
+	// `__mm.set(i, value: elem)`, then `__mm.setLength(elemCount)`. Each
+	// throwing call's error flag is drained because capacity = elemCount and
+	// `set`/`setLength`'s bounds checks are against capacity — OOB is
+	// statically impossible. Returns the `__mm` result name.
+	//
+	// Shared between array-literal lowering (`[v0, ..., vN]`) and per-axis
+	// map-literal lowering (`[k0: v0, ...]` emits two of these).
+	function emitManagedMemoryFromElements(block IrBlock, elemNames ByteArrayArray, elemRanges SourceRangeArray, literalRange SourceRange) returns ByteArray
 		// TODO(elementSize): all current callers store 8-byte values, so the
 		// stride is hardcoded. Generalizing requires either (a) propagating
 		// the per-element MaxonType through TypeResolution to a real
@@ -6703,19 +6883,15 @@ export type Parser
 		// stdlib's `Array.create` already behaves.
 		emitErrorFlagDrain(range: literalRange)
 
-		// Phase 4: per-element `__mm.set(i, value: elem)`, each followed by
-		// an error-flag drain. set's bounds-check is against capacity (which
-		// we just sized to elemCount), so OOB is statically impossible — the
-		// drain reads zero on every iteration. argTypes default to
-		// `unresolved` — `fillArgTypes` in TypeResolution backfills both
-		// slots from producerTypes.
+		// Per-element `__mm.set(i, value: elem)`, each followed by an
+		// error-flag drain. argTypes default to `unresolved` —
+		// `fillArgTypes` in TypeResolution backfills both slots from
+		// producerTypes.
 		let setMethodName = "set".toByteArray()
 		for i in 0 upto elemNames.count() 'eachElem'
 			let elemName = try elemNames.get(i) otherwise panic("array literal: elemNames.get OOB at {i} (count={elemNames.count()})")
 			let elemRange = try elemRanges.get(i) otherwise panic("array literal: elemRanges.get OOB at {i}")
-
 			let indexLitName = emitLiteral(block, value: i as ParsedInt, valueType: MaxonType.integer, range: elemRange)
-
 			let setResultName = freshSynthName()
 			var setArgs = ByteArrayArray.create()
 			setArgs.push(indexLitName)
@@ -6733,8 +6909,7 @@ export type Parser
 			emitErrorFlagDrain(range: elemRange)
 		end 'eachElem'
 
-		// Phase 5: `__mm.setLength(elemCount)`. Same drain rationale as
-		// per-element set: setLength's check is against capacity.
+		// `__mm.setLength(elemCount)`. Same drain rationale as per-element set.
 		let lengthLitName = emitLiteral(block, value: elemCount, valueType: MaxonType.integer, range: literalRange)
 		let setLenResultName = freshSynthName()
 		var setLenArgs = ByteArrayArray.create()
@@ -6749,10 +6924,30 @@ export type Parser
 		module.appendOp(block, op: MaxonOp.methodCall(setLenResultName, receiver: mmName, methodName: setLenMethodName, args: setLenArgs, argLabels: setLenLabels, argTypes: setLenArgTypes, argRanges: setLenArgRanges, range: literalRange))
 		emitErrorFlagDrain(range: literalRange)
 
-		// Phase 6: wrap via `T.init(__mm)`. The single user param is
-		// positional (label="") so the lowering's slot resolver matches by
-		// position rather than by name — keeping the parser ignorant of the
-		// stdlib's chosen parameter spelling.
+		return mmName
+	end 'emitManagedMemoryFromElements'
+
+	// Phase 6 of the array-literal lowering: wrap the populated __ManagedMemory
+	// via `<arrayType>.init(__mm)` and register the literal's structural
+	// pieces in `arrayLiteralProducers` so TypeResolution can pin its
+	// element type. Also handles the empty-literal case where the caller
+	// passed in zero-length element arrays.
+	function emitArrayLiteralResult(block IrBlock, elemNames ByteArrayArray, elemRanges SourceRangeArray, literalRange SourceRange, bracketToken Token) returns ExprResult throws ParserError
+		// Discover the stdlib type implementing BuiltinArrayLiteral. Throws on
+		// missing or ambiguous → trip a parser-time diagnostic and fall back
+		// to a dummy ExprResult so downstream parsing stays well-formed.
+		let arrayTypeName = try discoverBuiltinArrayLiteralType() otherwise 'noArrayType'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "array literal: no stdlib type implements BuiltinArrayLiteral (or multiple do)", line: bracketToken.line, column: bracketToken.column, filePath: filePath)
+			let zeroName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: literalRange)
+			return ExprResult.direct(zeroName, valueType: MaxonType.unresolved)
+		end 'noArrayType'
+
+		let mmName = emitManagedMemoryFromElements(block, elemNames: elemNames, elemRanges: elemRanges, literalRange: literalRange)
+
+		// Wrap via `T.init(__mm)`. The single user param is positional
+		// (label="") so the lowering's slot resolver matches by position
+		// rather than by name — keeping the parser ignorant of the stdlib's
+		// chosen parameter spelling.
 		let arrName = freshSynthName()
 		var initArgs = ByteArrayArray.create()
 		initArgs.push(mmName)
@@ -6778,7 +6973,20 @@ export type Parser
 		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName), value: producer) otherwise ignore
 
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
-	end 'parseArrayLiteralExpr'
+	end 'emitArrayLiteralResult'
+
+	// Register a single map-literal axis (keys or values) as a synthetic
+	// array-literal producer keyed on the axis's `__mm` result name only.
+	// `arrayTypeName` is "" because the axis has no init-call result name —
+	// only the `__ManagedMemory` allocation is user-addressable. The
+	// `initResultName` is intentionally left empty so `arrayLiteralBaseTypeName`
+	// rejects an `initResultName == name` match (an empty ByteArray cannot
+	// equal a `freshSynthName`-minted name) and falls through to the
+	// `mmResultName == name` branch.
+	function registerArrayLiteralAxis(mmResultName ByteArray, elemNames ByteArrayArray, elemRanges SourceRangeArray)
+		let producer = ArrayLiteralProducer.create("", mmResultName: mmResultName, initResultName: ByteArray.create(), elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: filePath)
+		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmResultName), value: producer) otherwise ignore
+	end 'registerArrayLiteralAxis'
 
 	// The preceding op publishes its error flag via the multi-value-return
 	// ABI (RDX/X1). Rewrite that preceding op in place to its `try*` form,

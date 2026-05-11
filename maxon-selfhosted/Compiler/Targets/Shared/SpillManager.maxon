@@ -126,13 +126,21 @@ export type SpillDecision
 	export var nonSpilledRanges LiveRangeArray
 	export var spillSlotAssignment RegIntArray
 	export var totalSpillSize RegInt
+	// Bitmap of vregs minted by this round of insertSpillCode as reload
+	// destinations. Indexed by valueId. Populated by insertSpillCode (via
+	// SpillInsertState.reloadIds) and consumed by FunctionRegAllocator,
+	// which unions every iteration's reloads into a cumulative set so
+	// reload ranges get infinite spill weight on every subsequent
+	// rebuild of liveness/ranges.
+	export var reloadIds BoolArray
 
 	export static function create() returns SpillDecision
 		return Self{
 			spilledRanges: LiveRangeArray.create(),
 			nonSpilledRanges: LiveRangeArray.create(),
 			spillSlotAssignment: RegIntArray.create(),
-			totalSpillSize: 0
+			totalSpillSize: 0,
+			reloadIds: BoolArray.create()
 		}
 	end 'create'
 end 'SpillDecision'

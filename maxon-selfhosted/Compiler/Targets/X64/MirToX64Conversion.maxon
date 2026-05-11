@@ -148,6 +148,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
+		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
 		load(_, baseId, _, _) then ucIncrement(uc, valueId: baseId)
@@ -301,6 +302,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
+		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
 		load(_, baseId, _, _) then ucIncrement(uc, valueId: baseId)
@@ -829,6 +831,7 @@ type X64FunctionLowering
 			branch then break 'dispatch'
 			call(resultId, callee, argIds) then lowerCall(resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
 			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
 			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
 			load(resultId, baseId, offset, isFloat) then lowerLoadIndirect(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
@@ -1182,6 +1185,42 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
 	end 'lowerIndirectCall'
 
+	// witnessCall = the fused (load fn-ptr from witness table) + (call) op.
+	// The loaded fn-ptr never gets a virtual register: it goes straight into
+	// physReg(R10) — a caller-saved scratch outside the param-pass set
+	// (RCX/RDX/R8/R9) and outside RAX (return). This avoids the +1 GPR
+	// pressure that the witnessMethod+indirectCall pair would otherwise add
+	// across the call site, which is what was making stdlib Map.findSlot
+	// uncolorable.
+	function lowerWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
+		// Move args to calling convention registers FIRST. Doing the load
+		// after (right before the call) keeps R10's live range as short as
+		// possible — it's only live across the single callIndirect op.
+		var argIdx = 0
+		while argIdx < argIds.count() and argIdx < 8 'moveArgs'
+			let argId = try argIds.get(argIdx) otherwise 'skipArg'
+				argIdx = argIdx + 1
+				continue
+			end 'skipArg'
+			let ccReg = getCallConvGpr(argIdx)
+			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
+			argIdx = argIdx + 1
+		end 'moveArgs'
+		if argIds.count() > 8 'tooManyArgs'
+			panic("lowerWitnessCall: more than 8 arguments not yet supported (got {argIds.count()})")
+		end 'tooManyArgs'
+
+		// Load fn-ptr from witness table directly into R10. No virtual reg.
+		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(physReg(X64Register.r10), baseReg: X64VReg.virtual(witnessAddrId), offset: offset, size: 8))
+
+		// Indirect call through the physical R10.
+		appendX64Op(target, block: dstBlock, op: X64Op.callIndirect(physReg(X64Register.r10)))
+
+		// Move return value from R8.
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.r8)))
+	end 'lowerWitnessCall'
+
 	// ============================================================
 	// Param
 	// ============================================================
@@ -1219,7 +1258,7 @@ type X64FunctionLowering
 			branch(branchTarget, _) then lowerBrWithArgs(targetBlockId: branchTarget, dstBlock: dstBlock)
 			ret(retValId) then lowerReturn(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
 			movImm to cmp then break 'lower'
-			call to indirectCall then break 'lower'
+			call to witnessCall then break 'lower'
 			param to loadByte then break 'lower'
 			osAllocPages to osLockRelease then break 'lower'
 			// tryCall as a terminator is unusual but possible (e.g. when the call

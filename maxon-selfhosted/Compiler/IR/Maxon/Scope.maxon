@@ -110,12 +110,12 @@ export type Scope
 		return info.isSelfField
 	end 'isSelfField'
 
-	// Get the declared MaxonType for a variable. Unknown names default to
-	// MaxonType.integer so callers that probe without first checking `contains`
-	// get a sensible fallback.
+	// Get the declared MaxonType for a variable. Every caller checks
+	// `contains(name)` (or has just gone through `lookupVariable`, which
+	// panics on miss) before reaching this path, so a missing entry is an
+	// invariant violation rather than a recoverable case.
 	export function getType(name String) returns MaxonType
-		// vars is sparse; missing names return the documented MaxonType.integer default per the function comment above.
-		let info = try vars.get(name) otherwise return MaxonType.integer
+		let info = try vars.get(name) otherwise panic("Scope.getType: name '{name}' not in scope — callers must check `contains` first")
 		return info.varType
 	end 'getType'
 

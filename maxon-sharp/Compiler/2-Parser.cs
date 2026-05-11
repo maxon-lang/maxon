@@ -16836,15 +16836,32 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var names = new HashSet<string>();
     var savedPos = _pos;
 
+    // Track every nesting form that can carry `<ident>: <expr>` pairs so
+    // we only collect names at the call's own top level. Without this:
+    //   - nested calls: `outer(inner(x, named: y))` attributes `named` to outer
+    //   - map literals: `foo([key: v])` attributes `key` to foo
+    //   - struct literals: `foo(Point{x: 1, y: 2})` attributes `x`/`y` to foo
+    // The opening token of the call (`(`) was consumed before this peek
+    // runs, so `parenDepth` starts at 1; bracket/brace depths start at 0
+    // and only fire once we descend into a literal.
     int parenDepth = 1;
+    int bracketDepth = 0;
+    int braceDepth = 0;
     while (_pos < _tokens.Count && parenDepth > 0) {
-      if (Current().Type == TokenType.LeftParen) parenDepth++;
-      if (Current().Type == TokenType.RightParen) {
+      var t = Current().Type;
+      if (t == TokenType.LeftParen) parenDepth++;
+      else if (t == TokenType.RightParen) {
         parenDepth--;
         if (parenDepth == 0) break;
       }
+      else if (t == TokenType.LeftBracket) bracketDepth++;
+      else if (t == TokenType.RightBracket) bracketDepth--;
+      else if (t == TokenType.LeftBrace) braceDepth++;
+      else if (t == TokenType.RightBrace) braceDepth--;
 
-      if ((Current().Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value))
+      bool atTopLevel = parenDepth == 1 && bracketDepth == 0 && braceDepth == 0;
+      if (atTopLevel
+          && (t == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value))
           && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.Colon) {
         names.Add(Current().Value);
       }

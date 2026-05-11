@@ -93,6 +93,10 @@ function markFromStdCallOp(op StdCallOp, worklist StringArray, seen StdDfeString
 		// already rooted by whatever produced the funcRef / closureCreate
 		// upstream, so this op alone needs no fresh marking.
 		indirectCall then return
+		// witnessCall flows through a witness table; the callee was rooted
+		// when the table was built (BuildWitnessTables emits funcRef for
+		// every method address), so no fresh marking is needed here either.
+		witnessCall then return
 		param then return
 		// errorReturn names no callee — both operands are local virtuals.
 		errorReturn then return

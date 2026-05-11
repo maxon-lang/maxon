@@ -6,6 +6,16 @@ export typealias IntervalArray = Array with Interval
 
 let LR_NO_DEF = i64.max
 
+// Sentinel weight assigned to ranges whose vreg is a reload destination
+// (def→use copy of a spilled value, minted by SpillCodeInsertion's
+// freshValueId). The spill picker treats this as an unspillable marker:
+// if such a range fails to color, the allocator panics with a clear
+// "pressure unresolvable" message instead of silently chain-respilling.
+// Matches LLVM Greedy's "infinite spill weight on reload ranges" and the
+// "single-use bundle has minimum weight, can't be evicted" invariant in
+// Cranelift regalloc2 — both guarantee spill-loop termination.
+export let SPILL_WEIGHT_INFINITE = i64.max
+
 export union RegClass
 	gpr
 	fp
@@ -71,7 +81,7 @@ end 'LiveRange'
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module TargetModule, func IrFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery) returns LiveRangeArray
+export function buildLiveRanges(module TargetModule, func IrFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery, reloadIds BoolArray) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -129,8 +139,14 @@ export function buildLiveRanges(module TargetModule, func IrFunction, liveness L
 		// Mark whether the range survives across any call
 		range.crossesCall = intervalsCrossCall(range.intervals, callPositionsPerBlock: callPositionsPerBlock)
 
-		// Compute spill weight
-		range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
+		// Compute spill weight. Reload destinations get a sentinel
+		// infinite weight so the spill picker refuses to spill them.
+		let isReload = try reloadIds.get(vid) otherwise false
+		if isReload 'reloadInfWeight'
+			range.spillWeight = SPILL_WEIGHT_INFINITE
+		end 'reloadInfWeight' else 'normalWeight'
+			range.spillWeight = computeSpillWeight(range, loopDepth: loopDepth)
+		end 'normalWeight'
 
 		ranges.push(range)
 		vid = vid + 1

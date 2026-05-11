@@ -79,7 +79,14 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // runtime callees automatically — they're keyed by name like every other
 // ObjectFunction. Old caches are incompatible because they exclude
 // runtime bodies; the version bump forces a rebuild.
-let CACHE_FORMAT_VERSION = 26
+// v27: persist BuiltinDictionaryLiteral discovery alongside
+// BuiltinArrayLiteral so map-literal (`[k: v, ...]`) desugaring survives a
+// cache hit. Old caches don't carry the dictionary field; the version bump
+// forces a rebuild.
+// v28: persist TypeParamRegistry.declaringTypeParamLists so getParamNames
+// returns source-declaration order (Map.Key before Map.Value) regardless of
+// what order interns happened in.
+let CACHE_FORMAT_VERSION = 28
 
 // ============================================================
 // Types
@@ -141,6 +148,14 @@ export union BuiltinArrayLiteralName
 	found(name String)
 end 'BuiltinArrayLiteralName'
 
+// Discovery cache for the BuiltinDictionaryLiteral protocol — same shape as
+// BuiltinArrayLiteralName, see `cachedBuiltinDictionaryLiteralTypeName` in
+// StdlibLoader for the parser-side static this mirrors.
+export union BuiltinDictionaryLiteralName
+	none
+	found(name String)
+end 'BuiltinDictionaryLiteralName'
+
 // All data needed to link pre-compiled stdlib into a user program.
 export type StdlibCacheData
 	export var functions ObjectFunctionArray
@@ -179,6 +194,9 @@ export type StdlibCacheData
 	// no implementing type was observed in this stdlib build; `found(name)`
 	// carries the discovered name.
 	export var builtinArrayLiteralTypeName BuiltinArrayLiteralName
+	// Mirror of `builtinArrayLiteralTypeName` for the BuiltinDictionaryLiteral
+	// protocol. Persisted so map literals (`[k: v, ...]`) survive a cache hit.
+	export var builtinDictionaryLiteralTypeName BuiltinDictionaryLiteralName
 	// Phase 11.4 (cache v8): per-registry snapshots so cached-stdlib user
 	// builds see the same `project.*` state a fresh-from-source build would.
 	// Without these the user-code pipeline can't dispatch through
@@ -225,6 +243,7 @@ export type StdlibCacheData
 			topLevelConstants: ConstantMap.create(),
 			typeNameTable: StringArray.create(),
 			builtinArrayLiteralTypeName: BuiltinArrayLiteralName.none,
+			builtinDictionaryLiteralTypeName: BuiltinDictionaryLiteralName.none,
 			interfaces: IrInterfaceMap.create(),
 			conformances: ConformanceRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
@@ -384,6 +403,25 @@ function readBuiltinArrayLiteralNameField(buf ByteArray, offset ByteOffset) retu
 	let (name, nextPos) = result
 	return (BuiltinArrayLiteralName.found(name), nextPos)
 end 'readBuiltinArrayLiteralNameField'
+
+// Mirrors writeBuiltinArrayLiteralNameField for the dictionary literal cache.
+function writeBuiltinDictionaryLiteralNameField(buf ByteArray, value BuiltinDictionaryLiteralName) throws CacheCorruption
+	match value 'enc'
+		none then try writeOptionalString(buf, present: false, value: "")
+		found(n) then try writeOptionalString(buf, present: true, value: n)
+	end 'enc'
+end 'writeBuiltinDictionaryLiteralNameField'
+
+function readBuiltinDictionaryLiteralNameField(buf ByteArray, offset ByteOffset) returns (BuiltinDictionaryLiteralName, ByteOffset) throws CacheCorruption
+	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+		match e 'kind'
+			absent then return (BuiltinDictionaryLiteralName.none, offset + 1)
+			invalidEncoding then throw CacheCorruption.invalidEncoding
+		end 'kind'
+	end 'pickArm'
+	let (name, nextPos) = result
+	return (BuiltinDictionaryLiteralName.found(name), nextPos)
+end 'readBuiltinDictionaryLiteralNameField'
 
 // ============================================================
 // Write cache
@@ -626,12 +664,13 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		try writeConstantValue(project, buf: buf, cv: entry.value)
 	end 'eachConst'
 
-	// BuiltinArrayLiteral discovery. The `none` arm means no implementing type
-	// was observed in this stdlib build. Persisted so the parser can resolve
-	// `[a, b, c]` after a cache hit, where the `unresolvedStructTypes`
-	// registry has been drained and the conformance metadata is otherwise
-	// gone.
+	// BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery. The `none` arm
+	// means no implementing type was observed in this stdlib build. Persisted
+	// so the parser can resolve `[a, b, c]` and `[k: v, ...]` after a cache
+	// hit, where the `unresolvedStructTypes` registry has been drained and the
+	// conformance metadata is otherwise gone.
 	try writeBuiltinArrayLiteralNameField(buf, value: data.builtinArrayLiteralTypeName)
+	try writeBuiltinDictionaryLiteralNameField(buf, value: data.builtinDictionaryLiteralTypeName)
 
 	// Cache v8: Phase 11 conformance + registry state. Order matters on the
 	// read side — typeParameters / interfaceRegistry / genericInstances are
@@ -1090,10 +1129,13 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'eachConst'
 
-	// BuiltinArrayLiteral discovery.
+	// BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery.
 	let (builtinArrayLiteralName, pBal) = try readBuiltinArrayLiteralNameField(buf, offset: pos)
 	pos = pBal
 	data.builtinArrayLiteralTypeName = builtinArrayLiteralName
+	let (builtinDictionaryLiteralName, pBdl) = try readBuiltinDictionaryLiteralNameField(buf, offset: pos)
+	pos = pBdl
+	data.builtinDictionaryLiteralTypeName = builtinDictionaryLiteralName
 
 	// Cache v8: read Phase 11 conformance + registry state in the same order
 	// the writer emitted it. The MaxonType helpers (`readMaxonType` etc.)
@@ -1173,6 +1215,13 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		let (baseId, args) = project.genericInstances.get(i)
 		_ = data.genericInstances.intern(baseId, args: args)
 	end 'mirrorGenericInstances'
+	// Preserve the source-declaration-ordered param-name lists that
+	// `readTypeParamRegistry` populated. The id-space rebuild below reuses
+	// the registry's existing intern map (intern is idempotent for an
+	// existing key); creating a fresh registry would discard the lists
+	// because the destination project hasn't re-parsed the stdlib yet and
+	// has nothing to mirror back from. Keep the cache-side lists intact.
+	let savedParamLists = data.typeParameters.declaringTypeParamLists
 	data.typeParameters = TypeParamRegistry.create()
 	for i in 0 upto project.typeParameters.count() 'mirrorTypeParams'
 		let declName = project.typeParameters.getDeclaringTypeName(i)
@@ -1183,6 +1232,13 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			data.typeParameters.addConstraint(destId, traitName: c)
 		end 'eachConstraint'
 	end 'mirrorTypeParams'
+	for (declName, paramNames) in savedParamLists 'restoreParamLists'
+		var copy = StringArray.create()
+		for n in paramNames 'eachName'
+			copy.push(n)
+		end 'eachName'
+		data.typeParameters.recordParamOrder(declName, paramOrder: copy)
+	end 'restoreParamLists'
 	data.interfaceRegistry = InterfaceTypeRegistry.create()
 	for i in 0 upto project.interfaceRegistry.count() 'mirrorInterfaces'
 		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
@@ -1479,19 +1535,25 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'copyConsts'
 
-	// BuiltinArrayLiteral discovery — sourced from the parser's static via the
-	// loader-side accessor. Populated during the cache-miss parse, then carried
-	// here so cache-hit runs in the same process (and the on-disk cache write
-	// below) see the discovered name without re-parsing stdlib. The loader-side
-	// helper still returns a String (it manages an in-memory cache, separate
-	// from the on-disk encoding); we adapt at the boundary into the sum-typed
-	// field.
+	// BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery — sourced from
+	// the parser's statics via the loader-side accessors. Populated during the
+	// cache-miss parse, then carried here so cache-hit runs in the same process
+	// (and the on-disk cache write below) see the discovered names without
+	// re-parsing stdlib. The loader-side helpers still return Strings (they
+	// manage an in-memory cache, separate from the on-disk encoding); we adapt
+	// at the boundary into the sum-typed fields.
 	let raw = getCachedBuiltinArrayLiteralTypeName()
 	if raw.isEmpty() 'noLit'
 		data.builtinArrayLiteralTypeName = BuiltinArrayLiteralName.none
 	end 'noLit' else 'haveLit'
 		data.builtinArrayLiteralTypeName = BuiltinArrayLiteralName.found(raw)
 	end 'haveLit'
+	let rawDict = getCachedBuiltinDictionaryLiteralTypeName()
+	if rawDict.isEmpty() 'noDictLit'
+		data.builtinDictionaryLiteralTypeName = BuiltinDictionaryLiteralName.none
+	end 'noDictLit' else 'haveDictLit'
+		data.builtinDictionaryLiteralTypeName = BuiltinDictionaryLiteralName.found(rawDict)
+	end 'haveDictLit'
 
 	// Cache v8: snapshot Phase 11 conformance + registry state. These
 	// registries are populated during the cache-build pipeline's
@@ -1524,6 +1586,17 @@ function captureRegistries(project Project, data StdlibCacheData)
 			data.typeParameters.addConstraint(i, traitName: c)
 		end 'eachConstraint'
 	end 'eachTp'
+	// Carry the source-declaration-ordered param-name lists across the
+	// cache boundary. Mirrors the structure of the typeParameters
+	// registry but indexed by declaring-type name so getParamNames hits
+	// it before falling back to registry-id-order scanning.
+	for (declName, paramNames) in project.typeParameters.declaringTypeParamLists 'eachList'
+		var copy = StringArray.create()
+		for n in paramNames 'eachName'
+			copy.push(n)
+		end 'eachName'
+		data.typeParameters.recordParamOrder(declName, paramOrder: copy)
+	end 'eachList'
 
 	for i in 0 upto project.interfaceRegistry.count() 'eachIface'
 		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
@@ -1557,6 +1630,10 @@ function captureRegistries(project Project, data StdlibCacheData)
 		let e = project.witnessTables.get(i)
 		data.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
 	end 'eachWt'
+	for i in 0 upto project.witnessTables.gidCount() 'eachGidWt'
+		let g = project.witnessTables.getGid(i)
+		data.witnessTables.internForGid(g.gid, interfaceName: g.interfaceName, label: g.label, methodImplNames: g.methodImplNames, isFatBoxed: g.isFatBoxed)
+	end 'eachGidWt'
 
 	for r in project.livenessRoots 'eachRoot'
 		data.livenessRoots.push(r)
@@ -1643,16 +1720,21 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.topLevelConstants.insert(name, value: entry) otherwise ignore
 	end 'restoreConsts'
 
-	// Republish BuiltinArrayLiteral discovery so the parser-side cache is live
-	// for the user-code parse that follows. The `none` arm means stdlib didn't
-	// declare an implementing type (or this cache predates v6); the parser
-	// will emit a diagnostic on the first array literal in that case. The
-	// loader-side cache is still a String, so we only call the setter on the
-	// `found` arm — the loader's static defaults to "" (its own absent marker).
-	match data.builtinArrayLiteralTypeName 'restore'
-		none then break 'restore'
+	// Republish BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery so the
+	// parser-side cache is live for the user-code parse that follows. The
+	// `none` arm means stdlib didn't declare an implementing type; the parser
+	// will emit a diagnostic on the first literal of that kind in that case.
+	// The loader-side cache is still a String, so we only call the setter on
+	// the `found` arm — the loader's static defaults to "" (its own absent
+	// marker).
+	match data.builtinArrayLiteralTypeName 'restoreArr'
+		none then break 'restoreArr'
 		found(n) then setCachedBuiltinArrayLiteralTypeName(n)
-	end 'restore'
+	end 'restoreArr'
+	match data.builtinDictionaryLiteralTypeName 'restoreDict'
+		none then break 'restoreDict'
+		found(n) then setCachedBuiltinDictionaryLiteralTypeName(n)
+	end 'restoreDict'
 
 	// Cache v8: replay Phase 11 conformance + registry state. The on-disk
 	// codec re-interns named/typeParameter/genericInstance/interface arms
@@ -1722,6 +1804,17 @@ function restoreRegistries(project Project, data StdlibCacheData)
 			project.typeParameters.addConstraint(destId, traitName: c)
 		end 'eachConstraint'
 	end 'eachTp'
+	// Copy the source-declaration-ordered param-name lists into the
+	// destination registry. Without this, the destination's id space
+	// could end up in a different order than the original parse, and
+	// getParamNames would return the wrong pairing.
+	for (declName, paramNames) in data.typeParameters.declaringTypeParamLists 'eachList'
+		var copy = StringArray.create()
+		for n in paramNames 'eachName'
+			copy.push(n)
+		end 'eachName'
+		project.typeParameters.recordParamOrder(declName, paramOrder: copy)
+	end 'eachList'
 
 	for i in 0 upto data.interfaceRegistry.count() 'eachIface'
 		_ = project.interfaceRegistry.intern(data.interfaceRegistry.getName(i))
@@ -1771,6 +1864,14 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		let e = data.witnessTables.get(i)
 		project.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
 	end 'eachWt'
+	// Per-instance gid-keyed entries. Translate the captured gid through
+	// the gid remapping table so the user pipeline's witness loader can
+	// resolve labels for stdlib-emitted instances (e.g. `Array<Byte>`).
+	for i in 0 upto data.witnessTables.gidCount() 'eachGidWt'
+		let g = data.witnessTables.getGid(i)
+		let destGid = translateCapturedGenericInstanceId(project, data: data, id: g.gid)
+		project.witnessTables.internForGid(destGid, interfaceName: g.interfaceName, label: g.label, methodImplNames: g.methodImplNames, isFatBoxed: g.isFatBoxed)
+	end 'eachGidWt'
 
 	for r in data.livenessRoots 'eachRoot'
 		project.livenessRoots.push(r)
@@ -1932,6 +2033,16 @@ function writeTypeParamRegistry(buf ByteArray, registry TypeParamRegistry) throw
 		let cs = registry.getConstraints(i)
 		try writeStringArray(buf, arr: cs)
 	end 'eachEntry'
+	// Cache v28: persist the source-declaration-ordered param-name list
+	// per declaring type. Required because the (declaringTypeName,
+	// paramName) pairs above are recorded in intern-call order, which
+	// isn't always source order once cache-restore / re-resolution paths
+	// touch the registry. See `getParamNames` for the read side.
+	writeDword(buf, value: registry.declaringTypeParamLists.count())
+	for (declName, paramNames) in registry.declaringTypeParamLists 'eachList'
+		try writeString(buf, s: declName)
+		try writeStringArray(buf, arr: paramNames)
+	end 'eachList'
 end 'writeTypeParamRegistry'
 
 function readTypeParamRegistry(buf ByteArray, offset ByteOffset) returns (TypeParamRegistry, ByteOffset) throws CacheCorruption
@@ -1950,6 +2061,16 @@ function readTypeParamRegistry(buf ByteArray, offset ByteOffset) returns (TypePa
 			registry.addConstraint(id, traitName: c)
 		end 'eachConstraint'
 	end 'eachEntry'
+	// Cache v28: read the per-type ordered param-name lists.
+	let listCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto listCount 'eachList'
+		let (declName, p4) = try readString(buf, offset: pos)
+		pos = p4
+		let (paramNames, p5) = try readStringArray(buf, offset: pos)
+		pos = p5
+		registry.recordParamOrder(declName, paramOrder: paramNames)
+	end 'eachList'
 	return (registry, pos)
 end 'readTypeParamRegistry'
 
@@ -2176,6 +2297,24 @@ function writeWitnessTableRegistry(buf ByteArray, registry WitnessTableRegistry)
 		end 'isFat'
 		writeDword(buf, value: fatRaw)
 	end 'eachWt'
+	// Per-instance (gid-keyed) entries, used for generic conformers like
+	// `Array: Equatable`. The user pipeline replays these on cache restore
+	// so the on-demand path can find labels for stdlib-emitted instances
+	// (e.g. `Array<Byte>: Equatable` produced when the stdlib parse
+	// interned ByteArray).
+	writeDword(buf, value: registry.gidCount())
+	for i in 0 upto registry.gidCount() 'eachGidEntry'
+		let g = registry.getGid(i)
+		writeDword(buf, value: g.gid as MachineWord)
+		try writeString(buf, s: g.interfaceName)
+		try writeString(buf, s: g.label)
+		try writeStringArray(buf, arr: g.methodImplNames)
+		var fatRaw = 0 as MachineWord
+		if g.isFatBoxed 'isFat'
+			fatRaw = 1
+		end 'isFat'
+		writeDword(buf, value: fatRaw)
+	end 'eachGidEntry'
 end 'writeWitnessTableRegistry'
 
 function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (WitnessTableRegistry, ByteOffset) throws CacheCorruption
@@ -2198,6 +2337,22 @@ function readWitnessTableRegistry(buf ByteArray, offset ByteOffset) returns (Wit
 		let isFatBoxed = isFatRaw != 0
 		registry.intern(typeName, interfaceName: ifaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
 	end 'eachWt'
+	let gidCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto gidCount 'eachGidEntry'
+		let gidRaw = readDword(buf, offset: pos)
+		pos = pos + 4
+		let (gIfaceName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (gLabel, p2) = try readString(buf, offset: pos)
+		pos = p2
+		let (gMethodImpls, p3) = try readStringArray(buf, offset: pos)
+		pos = p3
+		let gIsFatRaw = readDword(buf, offset: pos)
+		pos = pos + 4
+		let gIsFat = gIsFatRaw != 0
+		registry.internForGid(gidRaw as GenericInstanceId, interfaceName: gIfaceName, label: gLabel, methodImplNames: gMethodImpls, isFatBoxed: gIsFat)
+	end 'eachGidEntry'
 	return (registry, pos)
 end 'readWitnessTableRegistry'
 
@@ -2526,6 +2681,7 @@ function writeStdCallOp(buf ByteArray, op StdCallOp) throws CacheCorruption
 		call(resultId, callee, argIds) then try writeStdCallCall(buf, resultId: resultId, callee: callee, argIds: argIds)
 		tryCall(resultId, callee, argIds, errorFlagId) then try writeStdCallTryCall(buf, resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) then writeStdCallIndirect(buf, resultId: resultId, calleeId: calleeId, argIds: argIds)
+		witnessCall(resultId, witnessAddrId, methodIndex, argIds) then writeStdCallWitness(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds)
 		funcRef(resultId, funcName) then try writeStdCallFuncRef(buf, resultId: resultId, funcName: funcName)
 		tailCall(callee, argIds) then try writeStdCallTail(buf, callee: callee, argIds: argIds)
 		param(resultId, paramIndex, paramType) then writeStdCallParam(buf, resultId: resultId, paramIndex: paramIndex, paramType: paramType)
@@ -2551,6 +2707,13 @@ function writeStdCallIndirect(buf ByteArray, resultId ValueId, calleeId ValueId,
 	writeQword(buf, value: calleeId)
 	writeValueIdArrayCodec(buf, arr: argIds)
 end 'writeStdCallIndirect'
+
+function writeStdCallWitness(buf ByteArray, resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: witnessAddrId)
+	writeQword(buf, value: methodIndex)
+	writeValueIdArrayCodec(buf, arr: argIds)
+end 'writeStdCallWitness'
 
 function writeStdCallFuncRef(buf ByteArray, resultId ValueId, funcName String) throws CacheCorruption
 	writeQword(buf, value: resultId)
@@ -2581,6 +2744,7 @@ function readStdCallOp(buf ByteArray, offset ByteOffset) returns (StdCallOp, Byt
 		call gives try readStdCallCall(buf, offset: offset + 4)
 		tryCall gives try readStdCallTryCall(buf, offset: offset + 4)
 		indirectCall gives readStdCallIndirect(buf, offset: offset + 4)
+		witnessCall gives readStdCallWitness(buf, offset: offset + 4)
 		funcRef gives try readStdCallFuncRef(buf, offset: offset + 4)
 		tailCall gives try readStdCallTail(buf, offset: offset + 4)
 		param gives readStdCallParam(buf, offset: offset + 4)
@@ -2614,6 +2778,14 @@ function readStdCallIndirect(buf ByteArray, offset ByteOffset) returns (StdCallO
 	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 16)
 	return (StdCallOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds), p)
 end 'readStdCallIndirect'
+
+function readStdCallWitness(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let witnessAddrId = readQword(buf, offset: offset + 8)
+	let methodIndex = readQword(buf, offset: offset + 16)
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 24)
+	return (StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds), p)
+end 'readStdCallWitness'
 
 function readStdCallFuncRef(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption
 	let resultId = readQword(buf, offset: offset)

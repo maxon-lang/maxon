@@ -989,6 +989,7 @@ function recordExistingParam(callOp StdCallOp, paramCount ParamCount, ids ValueI
 		tryCall then break 'kind'
 		funcRef then break 'kind'
 		indirectCall then break 'kind'
+		witnessCall then break 'kind'
 		tailCall then break 'kind'
 		errorReturn then break 'kind'
 	end 'kind'
@@ -1601,6 +1602,7 @@ function maxValueIdInFunc(op StdCallOp) returns ValueId
 		call(resultId, _, argIds) gives maxOfIdAndArray(resultId, arr: argIds)
 		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThree(resultId, b: maxOfArray(argIds), c: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives maxOfThree(resultId, b: calleeId, c: maxOfArray(argIds))
+		witnessCall(resultId, witnessAddrId, _, argIds) gives maxOfThree(resultId, b: witnessAddrId, c: maxOfArray(argIds))
 		funcRef(resultId, _) gives resultId
 		tailCall(_, argIds) gives maxOfArray(argIds)
 		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId, b: errorFlagId)
@@ -1753,6 +1755,7 @@ function substituteFuncOp(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		call(resultId, callee, argIds) gives StdCallOp.call(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap))
 		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(resultId, calleeId: remapValue(calleeId, remap: remap), argIds: remapValueIds(argIds, remap: remap))
+		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives StdCallOp.witnessCall(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex, argIds: remapValueIds(argIds, remap: remap))
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(resultId, funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: remapValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)

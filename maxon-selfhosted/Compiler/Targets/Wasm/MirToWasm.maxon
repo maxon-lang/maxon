@@ -1028,7 +1028,7 @@ type WasmFunctionLowering
 			branch(targetBlock, args) then emitWasmBranch(targetBlock: targetBlock, args: args)
 			ret(retValId) then emitWasmRet(retValId: retValId)
 			movImm to cmp then emitMirOp(op: op)
-			call to indirectCall then emitMirOp(op: op)
+			call to witnessCall then emitMirOp(op: op)
 			param to loadByte then emitMirOp(op: op)
 			osAllocPages to osLockRelease then emitMirOp(op: op)
 			// tryCall and errorReturn dispatch to the same emitters as the
@@ -1166,6 +1166,7 @@ type WasmFunctionLowering
 			branch then nop()
 			call(resultId, callee, argIds) then emitCall(resultId: resultId, callee: callee, argIds: argIds)
 			indirectCall(resultId, calleeId, argIds) then emitIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds)
+			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then emitWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds)
 			ret(retValId) then emitRet(retValId: retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
 			load(resultId, baseId, offset, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat)
@@ -1775,6 +1776,50 @@ type WasmFunctionLowering
 		return funcType
 	end 'buildIndirectCallTypeBytes'
 
+	// witnessCall = fused (load fn-ptr from witness table) + (call_indirect).
+	// The loaded function table-index never lands in a local: we leave it on
+	// the Wasm stack between the load and the call_indirect, taking
+	// advantage of the stack-machine model. Pressure-reduction motive
+	// inherited from the X64 lowering, even though Wasm itself doesn't have
+	// a register pressure problem.
+	function emitWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+		// Push args first (matches call_indirect stack order: args before
+		// callee index).
+		for argId in argIds 'pushArgs'
+			body.push(opLocalGet)
+			writeUleb128(body, value: argId as Wasm32Index)
+		end 'pushArgs'
+
+		// Load fn-ptr from witness table directly onto the Wasm stack
+		// (no intermediate local). The closure ABI carries function
+		// pointers as i64 (table index extended); narrow to the i32 that
+		// call_indirect expects.
+		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
+		body.push(opLocalGet)
+		writeUleb128(body, value: witnessAddrId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI64Load)
+		body.push(0x03)
+		writeUleb128(body, value: offset)
+		body.push(opI32WrapI64)
+
+		// Look up the type-section index for this call signature. Same
+		// shape resolution as emitIndirectCall.
+		let typeBytes = buildIndirectCallTypeBytes(resultId, argIds: argIds)
+		body.push(opCallIndirect)
+		if fixedCalls 'useFixed'
+			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
+			writeUleb128Fixed5(body, value: 0)
+		end 'useFixed' else 'useVariable'
+			let typeIdx = try typeIndices.get(typeBytes) otherwise panic("emitWitnessCall: type not pre-registered for indirect call in '{func.name}' (resultId={resultId} argCount={argIds.count()} shape={describeIndirectCallShape(resultId, argIds: argIds)}); emitWasmModule must walk every MirOp.witnessCall in advance and seed typeIndices for the (params,result) shape. See `collectIndirectCallTypes`")
+			writeUleb128(body, value: typeIdx)
+		end 'useVariable'
+		writeUleb128(body, value: 0)
+
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitWitnessCall'
+
 	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
 		// Push args first (matches the wasm call_indirect stack order:
 		// args before callee index). This mirrors emitCall's arg push.
@@ -1915,6 +1960,7 @@ type WasmFunctionLowering
 			movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
 			cmp to branch then break 'dispatch'
 			indirectCall then break 'dispatch'
+			witnessCall then break 'dispatch'
 			ret then break 'dispatch'
 			load(resultId, _, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
 			store to loadByte then break 'dispatch'
@@ -2074,6 +2120,7 @@ function getMirOpMaxValueId(op MirOp) returns MachineWord
 		branch gives 0
 		call(resultId, _, _) gives resultId as MachineWord
 		indirectCall(resultId, calleeId, _) gives maxOfTwo(resultId as MachineWord, b: calleeId as MachineWord)
+		witnessCall(resultId, witnessAddrId, _, _) gives maxOfTwo(resultId as MachineWord, b: witnessAddrId as MachineWord)
 		ret(retValId) gives retValId as MachineWord
 		param(resultId, _, _) gives resultId as MachineWord
 		load(resultId, baseId, _, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
@@ -2206,6 +2253,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 				match op 'check'
 					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					witnessCall(resultId, _, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
 					movImm to call then break 'check'
 					ret to loadByte then break 'check'
 					osAllocPages to osLockRelease then break 'check'
@@ -2216,6 +2264,7 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
 				match termOp 'checkTerm'
 					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					witnessCall(resultId, _, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
 					movImm to call then break 'checkTerm'
 					ret to loadByte then break 'checkTerm'
 					osAllocPages to osLockRelease then break 'checkTerm'
