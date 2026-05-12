@@ -9,3 +9,4 @@ spot regressions in build / test time as the codebase grows.
 | 2026-05-13 |   10.0s |   13.0s |             12.0s |                  9.0s |                  5.0s |
 | 2026-05-12 |   10.4s |   14.4s |             11.4s |                  9.8s |                  6.1s |
 | 2026-05-12 |    2.3s |   15.7s |             14.5s |                 13.0s |                  8.9s |
+| 2026-05-12 |   10.0s |   14.1s |             13.1s |                  9.9s |                  5.7s |

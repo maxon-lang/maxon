@@ -7,16 +7,45 @@
 // are populated by mem2reg during the Std phase and carried through MIR.
 // branchEdges are populated by lowerMirToTarget for register allocation.
 
+// Role tag for an IrBlockArg, used by the inliner to record that a
+// continuation-block arg stands in for what would otherwise be a value
+// captured from a multi-value-return register. The backend's coalescer
+// reads this and seeds a physical-register hint on the arg, replacing
+// the hint anchor the post-call capture mov used to provide before the
+// callee was inlined.
+//
+//   none           — normal phi (mem2reg, branch-arg, etc.). Default.
+//   primaryReturn  — primary return value: R8 (x64) / X0 (arm64).
+//   errorFlag      — multi-value-return error flag: RDX / X1.
+export enum BlockArgReturnRole
+	none
+	primaryReturn
+	errorFlag
+end 'BlockArgReturnRole'
+
 // A block argument (phi node): a value defined at block entry, bound by
 // the branch op that transfers control to this block. Introduced by
 // mem2reg at the Std phase and carried through MIR and Target phases.
 export type IrBlockArg
 	export var valueId ValueId
 	export var argType StdType
+	// Set to a non-`none` value only by the inliner on the continuation
+	// block it synthesizes for a multi-block splice. Every other producer
+	// of blockArgs (mem2reg, parser, MIR/target lowering) leaves it as
+	// `none`. Consumed by each backend's `coalesceRanges` to seed a
+	// physical-register hint via `setPhysHint`.
+	export var returnRole BlockArgReturnRole
 
-	export static function create(valueId ValueId, argType StdType) returns IrBlockArg
-		return Self{valueId: valueId, argType: argType}
+	export static function create(valueId ValueId, argType StdType, returnRole BlockArgReturnRole = BlockArgReturnRole.none) returns IrBlockArg
+		return Self{valueId: valueId, argType: argType, returnRole: returnRole}
 	end 'create'
+
+	// Clone an arg from another block (e.g. when copying blocks during
+	// target lowering). Preserves the source arg's returnRole so the
+	// backend coalescer can still seed an ABI-role hint after lowering.
+	export static function cloneOf(srcArg IrBlockArg) returns IrBlockArg
+		return Self{valueId: srcArg.valueId, argType: srcArg.argType, returnRole: srcArg.returnRole}
+	end 'cloneOf'
 end 'IrBlockArg'
 
 export typealias IrBlockArgArray = Array with IrBlockArg

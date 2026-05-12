@@ -1052,11 +1052,14 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 		// primary register's type — the throw-lowering writes a const i64
 		// zero into R8 and the caller's tryCall.resultId is dead-uses-only.
 		let argType = stdReturnTypeInnerOrI64(callee.returnType)
-		continuationBlock.blockArgs.push(IrBlockArg.create(phiValueId, argType: argType))
+		// Tag the primary-return phi with `primaryReturn` so the backend
+		// coalescer re-establishes the R8/X0 hint the post-call capture
+		// mov used to provide before the callee got spliced in.
+		continuationBlock.blockArgs.push(IrBlockArg.create(phiValueId, argType: argType, returnRole: BlockArgReturnRole.primaryReturn))
 	end 'phiArg'
 	if isTryCallSite 'errFlagPhiArg'
-		// The error flag rides RDX/X1 as i64.
-		continuationBlock.blockArgs.push(IrBlockArg.create(phiErrorFlagId, argType: StdType.i64))
+		// The error flag rides RDX/X1 as i64. Tag so the backend pre-hints it.
+		continuationBlock.blockArgs.push(IrBlockArg.create(phiErrorFlagId, argType: StdType.i64, returnRole: BlockArgReturnRole.errorFlag))
 	end 'errFlagPhiArg'
 
 	// Phase 4: emit each callee block as a fresh IrBlock in the caller.
@@ -1204,7 +1207,7 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 		// remap so the phi's ValueId becomes the caller-local one.
 		for srcArg in cBlock.blockArgs 'eachArg'
 			let mappedId = lookupRemap(valueRemap, key: srcArg.valueId)
-			newBlock.blockArgs.push(IrBlockArg.create(mappedId, argType: srcArg.argType))
+			newBlock.blockArgs.push(IrBlockArg.create(mappedId, argType: srcArg.argType, returnRole: srcArg.returnRole))
 		end 'eachArg'
 		// Body ops: remap defines+operands; rewrite control-flow targets
 		// via blockRemap.

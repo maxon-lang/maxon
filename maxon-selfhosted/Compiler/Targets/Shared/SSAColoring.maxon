@@ -705,7 +705,11 @@ end 'regIsCallerSaved'
 // hint on the value flowing into a trailing `mov retReg, vreg` right before
 // a `ret` terminator. The closest-to-death hint is the most valuable one
 // for a return value because it costs zero extra moves to honor.
-export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func IrFunction, returnGprOrd RegOrdinal, opQuery TargetOpQuery)
+//
+// errorFlagOrd is the target's error-flag return register ordinal (RDX on
+// x64, X1 on arm64), used to pin inlined-continuation error-flag phis to
+// the same register the multi-value-return ABI would have placed them in.
+export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func IrFunction, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, opQuery TargetOpQuery)
 	// Build valueId -> range index map for fast lookup
 	var vidToRangeIdx = RegIntArray.create()
 
@@ -750,7 +754,85 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 	if returnGprOrd != RM_NONE 'hasReturnReg'
 		applyReturnRegHintOverride(module, ranges: ranges, func: func, vidToRangeIdx: vidToRangeIdx, returnGprOrd: returnGprOrd, opQuery: opQuery)
 	end 'hasReturnReg'
+
+	// Final pass: fill in ABI-role hints on inlined-continuation phis that
+	// still have no hint after everything else. The role is what the
+	// post-call capture mov (`mov virtual(resultId), r8`) used to seed
+	// before the inliner replaced calls with continuations. We apply it
+	// LAST and only when no other pass has hinted the phi (and the
+	// phi's copy-link partner has no hint of its own + doesn't cross a
+	// call), so a downstream constraint wins over the role default.
+	applyContinuationRoleHints(module, ranges: ranges, func: func, vidToRangeIdx: vidToRangeIdx, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd)
 end 'coalesceRanges'
+
+// Walk every block's blockArgs and seed a physical-register hint on each
+// arg whose `returnRole` is non-`none`. These args are continuation phis
+// the inliner synthesizes when splicing a multi-block callee; before
+// inlining, the post-call capture mov (`mov virtual(resultId), r8`)
+// provided the R8 hint anchor and the bidirectional copy link in
+// setGprCopyHint propagated it to downstream phis. After inlining, no
+// such mov exists — this seed restores the anchor.
+//
+// Only fills in the hint when the phi has none and its copy-link partner
+// also has no hint — i.e. no downstream constraint has pinned this phi
+// chain to a different register. If downstream pinned the merge phi to
+// a callee-saved register (e.g. because the merge result crosses a
+// caller's call), let that constraint flow back through the copy-link
+// instead of forcing R8/RDX and synthesizing a save-call-return move
+// on every success edge.
+function applyContinuationRoleHints(module TargetModule, ranges LiveRangeArray, func IrFunction, vidToRangeIdx RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for blockArg in block.blockArgs 'eachArg'
+			let physOrd = match blockArg.returnRole 'role'
+				none gives RM_NONE
+				primaryReturn gives returnGprOrd
+				errorFlag gives errorFlagOrd
+			end 'role'
+			maybeSeedRoleHint(physOrd, virtualId: blockArg.valueId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		end 'eachArg'
+	end 'eachBlock'
+end 'applyContinuationRoleHints'
+
+// Set the role-derived phys hint only when no copy-link partner has a
+// stronger preference. Skips the seed when:
+//   * the partner already has a hint or fixed register of its own —
+//     resolveCopyLinkHint will surface it at coloring time; or
+//   * the partner crosses a call. The role hint is always a caller-
+//     saved register (R8/RDX), and forcing the inlined return value to
+//     a caller-saved register when its downstream merge phi must live
+//     in a callee-saved register manufactures a forced save-call-
+//     return copy on every success edge.
+function maybeSeedRoleHint(physOrd RegOrdinal, virtualId RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	if virtualId < 0 or physOrd == RM_NONE 'invalid'
+		return
+	end 'invalid'
+
+	let rangeIdx = getOr(vidToRangeIdx, index: virtualId, fallback: -1)
+	if rangeIdx < 0 'noRange'
+		return
+	end 'noRange'
+
+	var range = try ranges.get(rangeIdx) otherwise panic("invariant: rangeIdx from vidToRangeIdx out of bounds in ranges")
+	if range.hint != RM_NONE 'alreadyHinted'
+		return
+	end 'alreadyHinted'
+
+	if range.copyHintValueId >= 0 'hasPartner'
+		let partnerIdx = getOr(vidToRangeIdx, index: range.copyHintValueId, fallback: -1)
+		if partnerIdx >= 0 'partnerExists'
+			let partner = try ranges.get(partnerIdx) otherwise panic("invariant: partnerIdx from vidToRangeIdx out of bounds in ranges")
+			if partner.hint != RM_NONE or partner.fixedReg != RM_NONE 'partnerHinted'
+				return
+			end 'partnerHinted'
+			if partner.crossesCall 'partnerCrossesCall'
+				return
+			end 'partnerCrossesCall'
+		end 'partnerExists'
+	end 'hasPartner'
+
+	range.hint = physOrd
+end 'maybeSeedRoleHint'
 
 // (destOrd, srcId) describing a `movRegReg` op as decoded by a target-
 // specific helper. destOrd is the destination's physical-register ordinal
@@ -917,32 +999,42 @@ export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeAr
 	var destRange = try ranges.get(destRangeIdx) otherwise panic("invariant: destRangeIdx from vidToRangeIdx out of bounds in ranges")
 
 	// Only set hint if dest doesn't already have one
-	if destRange.hint == RM_NONE 'noHintYet'
+	// Always maintain the bidirectional copy-link, regardless of whether
+	// either side already has a phys hint set. The link is what lets
+	// `areCopyConnected` suppress interference at the 1-position copy
+	// boundary, so dropping it would prevent the two ranges from ever
+	// sharing a register even when their hint says they should.
+	if destRange.copyHintValueId < 0 'destNoLink'
+		destRange.copyHintValueId = srcReg
+	end 'destNoLink'
+	if srcRange.copyHintValueId < 0 'srcNoLink'
+		srcRange.copyHintValueId = destReg
+	end 'srcNoLink'
+
+	if destRange.hint == RM_NONE 'destNoHint'
 		if srcRange.fixedReg != RM_NONE 'srcFixed'
 			// Source is in a fixed physical register — that's where it
 			// inevitably lives, so the dest can prefer the same register
 			// directly. This is a strong hint we can never improve on.
 			destRange.hint = srcRange.fixedReg
-		end 'srcFixed' else 'noFixed'
-			// Record a copy-link in both directions so the coloring phase
-			// can resolve the hint dynamically. Phi destinations get hinted
-			// from every incoming edge — keep the FIRST link because that
-			// edge usually comes from the loop's pre-header (already-
-			// colored constants), while later back-edge sources are always
-			// uncolored at the time of the phi's color step. Overwriting
-			// would discard the edge that can actually pull a real color
-			// out of resolveCopyLinkHint. We never forward-propagate
-			// `srcRange.hint` because that hint may reflect a birth-side
-			// preference while the dest may have a stronger death-side
-			// preference.
-			if destRange.copyHintValueId < 0 'destNoLink'
-				destRange.copyHintValueId = srcReg
-			end 'destNoLink'
-			if srcRange.copyHintValueId < 0 'srcNoLink'
-				srcRange.copyHintValueId = destReg
-			end 'srcNoLink'
-		end 'noFixed'
-	end 'noHintYet'
+		end 'srcFixed'
+		// Note: we do NOT forward-propagate `srcRange.hint` here. A
+		// soft hint on src may reflect a birth-side preference, while
+		// dest may later acquire a stronger death-side preference via
+		// applyReturnRegHintOverride. Leave dest unhinted so
+		// resolveCopyLinkHint can lazily pull whichever color src
+		// settles on at coloring time.
+	end 'destNoHint' else 'destHasHint'
+		// Reverse-direction propagation: dest is already pinned (e.g. by
+		// applyContinuationRoleHints for an inlined-continuation phi, or
+		// by an earlier extractCopyHints physical-side anchor). If src
+		// has no hint of its own, push dest's into src directly so the
+		// inlined body's value computes into the destination register and
+		// the edge copy collapses to a no-op identity move.
+		if srcRange.hint == RM_NONE and srcRange.fixedReg == RM_NONE 'srcNoHint'
+			srcRange.hint = destRange.hint
+		end 'srcNoHint'
+	end 'destHasHint'
 end 'setGprCopyHint'
 
 export function setFpCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)

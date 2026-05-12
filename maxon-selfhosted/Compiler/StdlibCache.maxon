@@ -86,7 +86,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v28: persist TypeParamRegistry.declaringTypeParamLists so getParamNames
 // returns source-declaration order (Map.Key before Map.Value) regardless of
 // what order interns happened in.
-let CACHE_FORMAT_VERSION = 29
+let CACHE_FORMAT_VERSION = 30
 
 // ============================================================
 // Types
@@ -3429,13 +3429,33 @@ end 'readIrTerminatorOpIndex'
 function writeIrBlockArg(buf ByteArray, arg IrBlockArg)
 	writeQword(buf, value: arg.valueId)
 	writeStdTypeTag(buf, t: arg.argType)
+	writeDword(buf, value: blockArgReturnRoleTag(arg.returnRole))
 end 'writeIrBlockArg'
 
-function readIrBlockArg(buf ByteArray, offset ByteOffset) returns (IrBlockArg, ByteOffset)
+function readIrBlockArg(buf ByteArray, offset ByteOffset) returns (IrBlockArg, ByteOffset) throws CacheCorruption
 	let valueId = readQword(buf, offset: offset)
 	let (argType, p) = readStdTypeTag(buf, offset: offset + 8)
-	return (IrBlockArg.create(valueId, argType: argType), p)
+	let roleTag = readDword(buf, offset: p)
+	let role = try blockArgReturnRoleFromTag(roleTag)
+	return (IrBlockArg.create(valueId, argType: argType, returnRole: role), p + 4)
 end 'readIrBlockArg'
+
+function blockArgReturnRoleTag(role BlockArgReturnRole) returns MachineWord
+	return match role 'tag'
+		none gives 0
+		primaryReturn gives 1
+		errorFlag gives 2
+	end 'tag'
+end 'blockArgReturnRoleTag'
+
+function blockArgReturnRoleFromTag(tag MachineWord) returns BlockArgReturnRole throws CacheCorruption
+	match tag 'parse'
+		0 then return BlockArgReturnRole.none
+		1 then return BlockArgReturnRole.primaryReturn
+		2 then return BlockArgReturnRole.errorFlag
+		default throws CacheCorruption.invalidEncoding
+	end 'parse'
+end 'blockArgReturnRoleFromTag'
 
 // --- IrBlock ---
 
@@ -3475,7 +3495,7 @@ function readIrBlock(buf ByteArray, offset ByteOffset) returns (IrBlock, ByteOff
 	let argCount = readDword(buf, offset: pos)
 	pos = pos + 4
 	for _ in 0 upto argCount 'eachArg'
-		let (arg, p3) = readIrBlockArg(buf, offset: pos)
+		let (arg, p3) = try readIrBlockArg(buf, offset: pos)
 		pos = p3
 		block.blockArgs.push(arg)
 	end 'eachArg'
