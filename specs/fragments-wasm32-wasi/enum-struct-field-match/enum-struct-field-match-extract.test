@@ -1,0 +1,89 @@
+// Test: enum-struct-field-match-extract
+typealias SmallInt = int(0 to u8.max)
+
+export union Value
+		number(n SmallInt)
+		empty
+end 'Value'
+
+export type Container
+		export var item Value
+
+		static function create(item Value) returns Self
+			return Self{item: item}
+		end 'create'
+end 'Container'
+
+function getNumber(c Container) returns SmallInt
+		let v = c.item
+		match v 'mv'
+				number(n) then return n
+				empty then return 0
+		end 'mv'
+end 'getNumber'
+
+function main() returns ExitCode
+		let c = Container.create(item: Value.number(42))
+		return getNumber(c)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @getNumber(local0: i64) -> u8 {
+  entry:
+    %16 = mir.param local0 : i64
+    %2 = mir.load %16, 0
+    %4 = mir.load %2, 0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: mv_0.case0(), else: mv_0.next0()]
+  mv_0.case0:
+    %7 = mir.load %2, 8
+    %17 = mir.mov_imm 255 : i64
+    %18 = mir.cmp ugt, %7, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  mv_0.next0:
+    %9 = mir.load %2, 0
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp eq, %9, %10
+    mir.cond_br %11 [then: mv_0.case1(), else: mv_0.next1()]
+  mv_0.case1:
+    %12 = mir.mov_imm 0 : i64
+    mir.ret %12
+  mv_0.next1:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+    %15 = mir.mov_imm 0 : i64
+    mir.ret %15
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_1
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %7
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%5, %6, %7)
+    mir.store %7, %8, 0
+    mir.store %0, %8, 8
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %8, %10, 0
+    %4 = mir.call @getNumber(%10)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %4, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_2
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

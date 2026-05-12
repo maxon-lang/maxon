@@ -1,0 +1,44 @@
+// Test: nested-struct-backing-outer-field
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type TargetMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'TargetMeta'
+
+enum Op
+	add = TargetMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = TargetMeta.create(OpMeta.create(2), setsFlags: false)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.add
+	if op.rawValue.setsFlags 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    mir.ret %2
+  }
+}
+---

@@ -1,0 +1,91 @@
+// Test: union-backing-basic
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+union TestOp
+	add(dest ID, src ID) = OpMeta.create(latency: 1)
+	mul(dest ID, src ID) = OpMeta.create(latency: 3)
+	nop = OpMeta.create(latency: 0)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.add(10, src: 20)
+	match op 'handle'
+		add(d, s) then return d + s
+		mul(d, s) then return d * s
+		nop then return 0
+	end 'handle'
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %27 = mir.mov_imm 24 : i64
+    %28 = mir.mov_imm 0 : i64
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.call @stdlib.__mm_alloc(%27, %28, %29)
+    mir.store %29, %30, 0
+    mir.store %0, %30, 8
+    mir.store %1, %30, 16
+    %4 = mir.load %30, 0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: handle_0.case0(), else: handle_0.next0()]
+  handle_0.case0:
+    %7 = mir.load %30, 8
+    %8 = mir.load %30, 16
+    %11 = mir.add.i64 %7, %8
+    %31 = mir.mov_imm 125 : i64
+    %32 = mir.cmp ugt, %11, %31
+    mir.cond_br %32 [then: __range_panic_0(), else: __range_ok_0()]
+  handle_0.next0:
+    %12 = mir.load %30, 0
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.cmp eq, %12, %13
+    mir.cond_br %14 [then: handle_0.case1(), else: handle_0.next1()]
+  handle_0.case1:
+    %15 = mir.load %30, 8
+    %16 = mir.load %30, 16
+    %19 = mir.mul.i64 %15, %16
+    %35 = mir.mov_imm 125 : i64
+    %36 = mir.cmp ugt, %19, %35
+    mir.cond_br %36 [then: __range_panic_1(), else: __range_ok_1()]
+  handle_0.next1:
+    %20 = mir.load %30, 0
+    %21 = mir.mov_imm 2 : i64
+    %22 = mir.cmp eq, %20, %21
+    mir.cond_br %22 [then: handle_0.case2(), else: handle_0.next2()]
+  handle_0.case2:
+    %23 = mir.mov_imm 0 : i64
+    mir.ret %23
+  handle_0.next2:
+    %24 = mir.global_addr @__panic_msg_0
+    %25 = mir.call @mrt_panic(%24)
+    %26 = mir.mov_imm 0 : i64
+    mir.ret %26
+  __range_panic_0:
+    %33 = mir.global_addr @__panic_msg_1
+    %34 = mir.call @mrt_panic(%33)
+  __range_ok_0:
+    mir.ret %11
+  __range_panic_1:
+    %37 = mir.global_addr @__panic_msg_2
+    %38 = mir.call @mrt_panic(%37)
+  __range_ok_1:
+    mir.ret %19
+  }
+}
+---

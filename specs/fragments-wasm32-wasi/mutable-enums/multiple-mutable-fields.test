@@ -1,0 +1,101 @@
+// Test: multiple-mutable-fields
+typealias Integer = int(i64.min to i64.max)
+
+union Pair
+	empty
+	values(a Integer, b Integer)
+end 'Pair'
+
+function main() returns ExitCode
+	var p = Pair.values(1, b: 2)
+	match p 'update-a'
+		values(a, _) then a = 10
+		empty then return 0
+	end 'update-a'
+	match p 'update-b'
+		values(_, b) then b = 32
+		empty then return 0
+	end 'update-b'
+	match p 'read'
+		values(a, b) then return a + b
+		empty then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %39 = mir.mov_imm 0 : i64
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %40 = mir.mov_imm 24 : i64
+    %41 = mir.mov_imm 0 : i64
+    %42 = mir.mov_imm 1 : i64
+    %43 = mir.call @stdlib.__mm_alloc(%40, %41, %42)
+    mir.store %42, %43, 0
+    mir.store %0, %43, 8
+    mir.store %1, %43, 16
+    %4 = mir.load %43, 0
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: update-a_0.case0(), else: update-a_0.next0()]
+  update-a_0.merge:
+    %8 = mir.load %43, 0
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.cmp eq, %8, %9
+    mir.cond_br %10 [then: update-b_0.case0(), else: update-b_0.next0()]
+  update-a_0.case0:
+    %11 = mir.load %43, 8
+    %12 = mir.mov_imm 10 : i64
+    mir.store %12, %43, 8
+    mir.br update-a_0.merge()
+  update-a_0.next0:
+    %13 = mir.load %43, 0
+    %15 = mir.cmp eq, %13, %39
+    mir.cond_br %15 [then: update-a_0.case1(), else: update-a_0.merge()]
+  update-a_0.case1:
+    mir.ret %39
+  update-b_0.merge:
+    %18 = mir.load %43, 0
+    %19 = mir.mov_imm 1 : i64
+    %20 = mir.cmp eq, %18, %19
+    mir.cond_br %20 [then: read_0.case0(), else: read_0.next0()]
+  update-b_0.case0:
+    %21 = mir.load %43, 16
+    %22 = mir.mov_imm 32 : i64
+    mir.store %22, %43, 16
+    mir.br update-b_0.merge()
+  update-b_0.next0:
+    %23 = mir.load %43, 0
+    %25 = mir.cmp eq, %23, %39
+    mir.cond_br %25 [then: update-b_0.case1(), else: update-b_0.merge()]
+  update-b_0.case1:
+    mir.ret %39
+  read_0.case0:
+    %27 = mir.load %43, 8
+    %28 = mir.load %43, 16
+    %31 = mir.add.i64 %27, %28
+    %44 = mir.mov_imm 125 : i64
+    %45 = mir.cmp ugt, %31, %44
+    mir.cond_br %45 [then: __range_panic_0(), else: __range_ok_0()]
+  read_0.next0:
+    %32 = mir.load %43, 0
+    %34 = mir.cmp eq, %32, %39
+    mir.cond_br %34 [then: read_0.case1(), else: read_0.next1()]
+  read_0.case1:
+    mir.ret %39
+  read_0.next1:
+    %36 = mir.global_addr @__panic_msg_0
+    %37 = mir.call @mrt_panic(%36)
+    mir.ret %39
+  __range_panic_0:
+    %46 = mir.global_addr @__panic_msg_1
+    %47 = mir.call @mrt_panic(%46)
+  __range_ok_0:
+    mir.ret %31
+  }
+}
+---

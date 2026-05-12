@@ -1,0 +1,111 @@
+// Test: error.otherwise-return-managed-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: when a try call returns a heap-managed struct and the otherwise
+// branch returns early, the uninitialized __try_result_ slot must not be
+// decref'd on the error path (would crash mm_decref with garbage pointer).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+type Box
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(flag bool) returns Box throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return Box.create(value: 7)
+end 'makeBox'
+
+function getBoxValue(flag bool) returns Integer
+	let box = try makeBox(flag) otherwise return -1
+	return box.value
+end 'getBoxValue'
+
+function main() returns ExitCode
+	let good = getBoxValue(false)
+	if good == 7 'g'
+		let bad = getBoxValue(true)
+		if bad == -1 'b'
+			return 0
+		end 'b'
+	end 'g'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @error-handling.makeBox(local0: i1) -> i64 {
+  entry:
+    %7 = mir.param local0 : i1
+    mir.cond_br %7 [then: check_0(), else: check_0.after()]
+  check_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  check_0.after:
+    %4 = mir.mov_imm 7 : i64
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %4, %9, 0
+    %6 = mir.mov_imm 0 : i64
+    mir.error_return %9, %6
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_error-handling.getBoxValue_0()
+  inlined_error-handling.getBoxValue_0:
+    %13, %14 = mir.try_call @error-handling.makeBox(%0)
+    %15 = mir.mov_imm 0 : i64
+    %16 = mir.cmp ne, %14, %15
+    mir.cond_br %16 [then: inlined_error-handling.getBoxValue_1(), else: inlined_error-handling.getBoxValue_2()]
+  inlined_error-handling.getBoxValue_1:
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.neg.i64 %17
+    mir.br inline_cont_main_0(%18)
+  inlined_error-handling.getBoxValue_2:
+    %19 = mir.load %13, 0
+    mir.br inline_cont_main_0(%19)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 7 : i64
+    %4 = mir.cmp eq, %20, %3
+    mir.cond_br %4 [then: g_0(), else: g_0.after()]
+  g_0:
+    %5 = mir.mov_imm 1 : i64
+    mir.br inlined_error-handling.getBoxValue_0()
+  inlined_error-handling.getBoxValue_0:
+    %21, %22 = mir.try_call @error-handling.makeBox(%5)
+    %23 = mir.mov_imm 0 : i64
+    %24 = mir.cmp ne, %22, %23
+    mir.cond_br %24 [then: inlined_error-handling.getBoxValue_1(), else: inlined_error-handling.getBoxValue_2()]
+  inlined_error-handling.getBoxValue_1:
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.neg.i64 %25
+    mir.br inline_cont_main_1(%26)
+  inlined_error-handling.getBoxValue_2:
+    %27 = mir.load %21, 0
+    mir.br inline_cont_main_1(%27)
+  inline_cont_main_1:
+    %8 = mir.mov_imm 1 : i64
+    %9 = mir.neg.i64 %8
+    %10 = mir.cmp eq, %28, %9
+    mir.cond_br %10 [then: b_0(), else: g_0.after()]
+  b_0:
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  g_0.after:
+    %12 = mir.mov_imm 1 : i64
+    mir.ret %12
+  }
+}
+---

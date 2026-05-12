@@ -1,0 +1,29 @@
+// Test: ok.enum-multi-value-range
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.green
+	let result = match c 'eval'
+		red to blue gives 0
+		default panic("unreachable")
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %10 = mir.mov_imm 0 : i64
+    mir.br eval_0.merge()
+  eval_0.merge:
+    mir.ret %10
+  }
+}
+---

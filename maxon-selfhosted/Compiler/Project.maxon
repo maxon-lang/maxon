@@ -1334,14 +1334,33 @@ export type VarInfo
 	// are observed on return.
 	export var isSelfField bool
 	export var fieldOffset FieldOffset
+	// Phase 9 Stage 4: true when this name was introduced as a match-arm
+	// binding on a union payload (e.g. `match u 'a' full(value) then …`).
+	// Reads still go through the local slot — `emitUnionArmBindings`
+	// declares a slot and seeds it from `enumPayloadRead`. Writes (`value =
+	// expr`) are rewritten by `parseVarAssignment` to `enumPayloadStore`
+	// against `payloadScrutineeName + payloadFieldIndex` so the union's
+	// heap-resident payload slot updates in place. The `mutable` flag on the
+	// VarInfo follows the scrutinee's mutability so `let u = …` produces an
+	// E2013 on the assignment path.
+	export var isPayloadBinding bool
+	export var payloadScrutineeName String
+	export var payloadFieldIndex CaseOrdinal
 
 	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal}
 	end 'create'
 
 	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset}
+		return Self{name: name, varType: varType, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal}
 	end 'createSelfField'
+
+	// Phase 9 Stage 4: factory for a payload-binding alias. Mutability
+	// inherits from the scrutinee's `let`/`var` declaration (see
+	// `mutable-enums.md` test `error.assign-to-let-enum-binding`).
+	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex}
+	end 'createPayloadBinding'
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with(String, VarInfo)
@@ -1828,6 +1847,52 @@ end 'readConstantValue'
 // `export let` references resolve through the same id space.
 
 export typealias UnresolvedConstExprId = int(0 to u64.max)
+export typealias UnresolvedConstExprIdArray = Array with UnresolvedConstExprId
+
+// Phase 9 Stage 5 (struct-backing): result of folding a per-case struct
+// backing access chain at parse / type-resolution time. `found = true`
+// means the chain folded successfully and `intValue` / `floatBits` carry
+// the leaf constant; `kind` distinguishes int (or bool) from float so the
+// parser emits the right `MaxonOp.literal` valueType. `found = false`
+// signals "could not fold" — caller surfaces a clear diagnostic.
+export type StructBackingFoldResult
+	export var found bool
+	export var isFloat bool
+	export var intValue IntConstant
+	export var floatBits IntConstant
+
+	export static function notFound() returns StructBackingFoldResult
+		return Self{found: false, isFloat: false, intValue: 0, floatBits: 0}
+	end 'notFound'
+
+	export static function intHit(value IntConstant) returns StructBackingFoldResult
+		return Self{found: true, isFloat: false, intValue: value, floatBits: 0}
+	end 'intHit'
+
+	export static function floatHit(bits IntConstant) returns StructBackingFoldResult
+		return Self{found: true, isFloat: true, intValue: 0, floatBits: bits}
+	end 'floatHit'
+end 'StructBackingFoldResult'
+
+// Phase 9 Stage 5: single descend step in a struct-backing field chain.
+// `found = true` means the named field exists in the current `structLit`
+// arena entry and `exprId` is its sub-expression's id. `found = false`
+// means the current entry isn't a struct, or the field wasn't declared.
+// We need an explicit `found` flag because arena id 0 IS a valid entry —
+// using 0 as a sentinel would collide with the first int literal pushed
+// into the arena.
+export type StructBackingDescendResult
+	export var found bool
+	export var exprId UnresolvedConstExprId
+
+	export static function none() returns StructBackingDescendResult
+		return Self{found: false, exprId: 0}
+	end 'none'
+
+	export static function hit(exprId UnresolvedConstExprId) returns StructBackingDescendResult
+		return Self{found: true, exprId: exprId}
+	end 'hit'
+end 'StructBackingDescendResult'
 
 // Cases are grouped so the four "structurally type-pinning" arms
 // (`boolLit`, `floatLit`, `enumCase`, `asCast`) sit at the front as a
@@ -1898,6 +1963,14 @@ export union UnresolvedConstExpr
 	logicalAnd(left UnresolvedConstExprId, right UnresolvedConstExprId)
 	logicalXor(left UnresolvedConstExprId, right UnresolvedConstExprId)
 	logicalOr(left UnresolvedConstExprId, right UnresolvedConstExprId)
+
+	// Phase 9 Stage 5 (struct-backing): an enum-case `= StructType{...}` or
+	// `= StructType.create(...)` literal. `fieldNames` and `fieldExprs` are
+	// parallel arrays — `fieldExprs.get(i)` is the arena id of the i-th
+	// field's value subexpression. Nested struct literals reference more
+	// `structLit` arena entries through their field-expr ids, so the tree
+	// is heap-bounded but supports arbitrary nesting.
+	structLit(structTypeName String, fieldNames StringArray, fieldExprs UnresolvedConstExprIdArray)
 end 'UnresolvedConstExpr'
 
 export typealias UnresolvedConstExprArray = Array with UnresolvedConstExpr
@@ -2210,21 +2283,67 @@ export typealias ResolvedInnerAliasMap = Map with(String, MaxonType)
 // (the `EnumType.isFloatBacked` flag tells consumers how to interpret it).
 // Source location is captured to anchor parser-time diagnostics (E3030 / E3031
 // / E3032) at the case rather than the enum declaration.
+//
+// Phase 9 Stage 2 (associated-value unions): each case may carry zero or more
+// payload fields. Plain enums (and bare-case unions) always have an empty
+// `payloadFields`. The enclosing `EnumType.isUnion` flag captures whether the
+// declaration was a `union ...` (heap-pointer identity) or a plain `enum ...`
+// (value-typed alias). The two registries share storage because resolution
+// machinery is identical for both — only lowering diverges.
+export type EnumPayloadField
+	export var name String
+	export var fieldType MaxonType
+
+	export static function create(name String, fieldType MaxonType) returns EnumPayloadField
+		return Self{name: name, fieldType: fieldType}
+	end 'create'
+end 'EnumPayloadField'
+
+export typealias EnumPayloadFieldArray = Array with EnumPayloadField
+
 export type EnumCase
 	export var name String
 	export var ordinal CaseOrdinal
 	export var rawValue IntConstant
 	export var line LineNumber
 	export var column ColumnNumber
+	// Phase 9 Stage 2: associated-value payload fields for union cases.
+	// Empty for plain enum cases and for bare union cases. Each entry is a
+	// (name, MaxonType) pair captured at parse time; lowering (Stage 3)
+	// resolves the type and emits the appropriate alloc + store sequence.
+	export var payloadFields EnumPayloadFieldArray
+	// Phase 9 Stage 5 (struct-backing): when non-empty, the case carries a
+	// struct literal as its compile-time backing (e.g.
+	// `Instruction.add = OpMeta{latency: 1}`). `backingStructName` is the
+	// declared struct type name; `backingStructExprId` indexes
+	// `project.unresolvedConstExprs` at the root of a `structLit` arena
+	// entry whose fields hold the per-case constants. Empty string +
+	// sentinel `0` when the case has no struct backing.
+	export var backingStructName String
+	export var backingStructExprId UnresolvedConstExprId
 
-	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber) returns EnumCase
-		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column}
+	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0) returns EnumCase
+		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId}
 	end 'create'
 end 'EnumCase'
 
 export typealias CaseOrdinal = int(0 to 65535)
 export typealias EnumCaseArray = Array with EnumCase
 export typealias CaseIndexMap = Map with(String, CaseOrdinal)
+
+// Phase 9 Stage 2: derive `isUnion` from the case list. The invariant the
+// parser maintains is "any case with non-empty payloadFields => isUnion",
+// but bare-case unions (no payloads at all) must still flow through the
+// union codegen path, so the parser passes the flag explicitly rather than
+// re-deriving it here.
+export function enumCasesAnyPayload(cases EnumCaseArray) returns bool
+	for c in cases 'scan'
+		if c.payloadFields.count() > 0 'hasPayload'
+			return true
+		end 'hasPayload'
+	end 'scan'
+	return false
+end 'enumCasesAnyPayload'
 
 export type EnumType
 	export var name String
@@ -2248,14 +2367,23 @@ export type EnumType
 	// can declare regular `function` members in their body, so the
 	// conformance check in Phase 3b is identical to structs.
 	export var expectedMethods InterfaceMethodSigArray
+	// Phase 9 Stage 2: true when the declaration was `union ...` rather
+	// than `enum ...`. Union values are heap pointers with distinct type
+	// identity (typealias injection emits `MaxonType.named`, not a ranged
+	// int alias). Plain enums always have `isUnion: false`; the invariant
+	// `enumCasesAnyPayload(cases) implies isUnion` is enforced in `create`.
+	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
 			try caseByName.insert(c.name, value: i as CaseOrdinal) otherwise panic("EnumType.create: duplicate case '{c.name}' on enum '{name}' (parser should reject earlier)")
 		end 'buildIndex'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods}
+		if enumCasesAnyPayload(cases) and not isUnion 'invariant'
+			panic("EnumType.create: enum '{name}' has payload cases but isUnion is false")
+		end 'invariant'
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, isUnion: isUnion}
 	end 'create'
 end 'EnumType'
 
@@ -2277,9 +2405,17 @@ export type UnresolvedEnumType
 	// bare interface and type-parameter names. Empty when no clause was
 	// present. Phase 3 will validate conformance — currently metadata only.
 	export var implementedInterfaces ConformanceArray
+	// Phase 9 Stage 2: mirror of `EnumType.isUnion`. The pre-register
+	// stage and post-body promotion (TypeResolution) carry the flag through
+	// so consumers branching on union-vs-plain semantics see the right
+	// answer at both stages.
+	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray) returns UnresolvedEnumType
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces}
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false) returns UnresolvedEnumType
+		if enumCasesAnyPayload(cases) and not isUnion 'invariant'
+			panic("UnresolvedEnumType.create: enum '{name}' has payload cases but isUnion is false")
+		end 'invariant'
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, isUnion: isUnion}
 	end 'create'
 end 'UnresolvedEnumType'
 

@@ -1,0 +1,61 @@
+// Test: nested-struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Inner
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner Inner
+	export let fast bool
+
+	static function create(inner Inner, fast bool) returns Self
+		return Self{inner: inner, fast: fast}
+	end 'create'
+end 'Outer'
+
+enum Op
+	add = Outer.create(inner: Inner.create(latency: 1), fast: true)
+	div = Outer.create(inner: Inner.create(latency: 40), fast: false)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.div
+	return match op 'dispatch'
+		add gives 10
+		div gives 20
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br dispatch_0.next0()
+  dispatch_0.merge:
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  dispatch_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: dispatch_0.case1(), else: dispatch_0.merge(%2)]
+  dispatch_0.case1:
+    %9 = mir.mov_imm 20 : i64
+    mir.br dispatch_0.merge(%9)
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

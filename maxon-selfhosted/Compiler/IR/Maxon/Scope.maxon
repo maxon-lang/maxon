@@ -68,6 +68,20 @@ export type Scope
 		return slot
 	end 'declareSelfField'
 
+	// Phase 9 Stage 4: declare a match-arm payload binding. Reads work like a
+	// normal local (the parser seeds the slot from `enumPayloadRead` at the
+	// arm body's head), but writes go through `enumPayloadStore` against the
+	// scrutinee + field index. `mutable` reflects the scrutinee's `let`/`var`
+	// declaration; assignment to an immutable binding emits E2013.
+	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal) returns VarSlot
+		let slot = nextSlot
+		nextSlot = nextSlot + 1
+		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex)
+		vars.upsert(name, value: info)
+		self.recordInCurrentFrame(name)
+		return slot
+	end 'declarePayloadBinding'
+
 	function recordInCurrentFrame(name String)
 		let depth = frameStack.count()
 		if depth == 0 'noFrame'

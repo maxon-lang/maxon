@@ -800,7 +800,7 @@ function resolveAllEnumTypes(project Project)
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
 		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
-		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected)
+		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion)
 		try project.enumTypes.insert(name, value: et) otherwise ignore
 		resolvedNames.push(name)
 	end 'sweep'
@@ -1537,6 +1537,14 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 			return
 		end 'visible'
 	end 'isConst'
+	// Phase 9 Stage 3: a qualified read `UnionName.caseName` on a union
+	// case (bare or payload-bearing) rewrites to a no-arg call to the
+	// synthesized constructor `__construct_UnionName_caseName`. This keeps
+	// union values uniformly heap-boxed at the producer site even when
+	// the user writes `Op.mul` without explicit parens.
+	if tryRewriteUnresolvedUnionCaseRead(project, module: module, opIdx: opIdx, result: result, name: name, range: range, filePath: filePath) 'wasUnionCase'
+		return
+	end 'wasUnionCase'
 	// Enum-case lookup: a qualified name `EnumName.case` whose case isn't a
 	// known top-level constant might still name a known enum — that means the
 	// enum exists but the case spelling is wrong (E3034). Distinguish so the
@@ -1547,6 +1555,56 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	end 'wasEnumCase'
 	reportUnknownName(project, name: name, range: range, filePath: filePath)
 end 'rewriteUnresolvedRead'
+
+// Phase 9 Stage 3: rewrite a bare-case union read `UnionName.caseName` to
+// a no-arg call against the synthesized constructor. Returns true when
+// the rewrite fired; false leaves the caller to fall through to the
+// enum-case / unknown-name diagnostic path. Payload cases are matched
+// alongside bare cases — a stand-alone `Shape.circle` (no parens) does
+// fail TR's existing arity check via the constructor's signature, which
+// surfaces E3005 ("wrong arg count") rather than the union-case path.
+function tryRewriteUnresolvedUnionCaseRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, name String, range SourceRange, filePath FilePath) returns bool
+	// The visibility check happens through the constructor's existing
+	// FuncVisibilityInfo entry once the call is dispatched; `filePath`
+	// kept on the signature for parity with the surrounding rewrite
+	// helpers (`tryRewriteDottedRead` / `reportEnumUnknownCaseIfApplicable`)
+	// so future visibility tightening can reuse it. Discard via the
+	// emptiness probe so the unused-variable check sees an observation.
+	let pathStr = filePath.toString()
+	if pathStr.byteLength() < 0 'never'
+		return false
+	end 'never'
+	let bytes = name.toByteArray()
+	let count = bytes.count()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= count 'noDot'
+		return false
+	end 'noDot'
+	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	let tail = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: count)
+	let info = lookupUnionCasePayloadArity(project, unionName: head, caseName: tail)
+	if not info.isUnion 'notUnion'
+		return false
+	end 'notUnion'
+	if info.payloadArity > 0 'needsParens'
+		// Payload-bearing case referenced without parens — let the
+		// existing diagnostic flow (callable referenced as value) catch
+		// this; returning false routes us to the unknown-name path which
+		// produces a cleaner diagnostic.
+		return false
+	end 'needsParens'
+	let ctorName = unionConstructorSymbolName(head, caseName: tail)
+	if not project.funcReturnTypes.contains(ctorName) 'noCtor'
+		return false
+	end 'noCtor'
+	let calleeBytes = project.calleeNames.intern(ctorName)
+	let emptyArgs = ByteArrayArray.create()
+	let emptyArgLabels = StringArray.create()
+	let emptyArgTypes = MaxonTypeArray.create()
+	let emptyArgRanges = SourceRangeArray.create()
+	try module.ops.set(opIdx, value: MaxonOp.call(result, callee: calleeBytes, callContext: CallContext.qualified, args: emptyArgs, argLabels: emptyArgLabels, argTypes: emptyArgTypes, argRanges: emptyArgRanges, range: range)) otherwise panic("tryRewriteUnresolvedUnionCaseRead: ops.set OOB at idx={opIdx}")
+	return true
+end 'tryRewriteUnresolvedUnionCaseRead'
 
 // If `name` looks like `EnumName.case` and `EnumName` is a registered enum
 // visible from `filePath`, emit E3034 for the unknown case and return true
@@ -1559,6 +1617,14 @@ function reportEnumUnknownCaseIfApplicable(project Project, name String, range S
 	if not split.isEnum 'notEnum'
 		return false
 	end 'notEnum'
+	// Phase 9 Stage 4: the full dotted name `Shape.unionCases` IS itself a
+	// registered companion enum / typealias — treat it as a known name and
+	// let the rest of the resolver handle it (the `Shape.unionCases` value
+	// is the enum type, not a case lookup, so the caller's misspelled-case
+	// diagnostic would be wrong).
+	if project.enumTypes.contains(name) or project.unresolvedEnums.contains(name) or project.typealiases.contains(name) or project.unresolvedTypealiases.contains(name) 'isCompanionType'
+		return false
+	end 'isCompanionType'
 	if let enumType = try project.enumTypes.get(split.prefix) 'haveEnum'
 		if not isVisibleFrom(enumType.visibility, declFilePath: enumType.sourceFilePath, readerFilePath: filePath) 'hidden'
 			return false
@@ -1643,14 +1709,14 @@ function resolveEnumMatchArms(project Project, module MaxonModule, filePath File
 		let op = try module.ops.get(opIdx) otherwise panic("resolveEnumMatchArms: opIdx OOB")
 		if op.name == "enumMatchArm" 'isArm'
 			match op 'extract'
-				enumMatchArm(scrutineeName, caseName, scrutineeType, _, _, resolved, thenTarget, elseTarget, range) then resolveOneEnumMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, alreadyResolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, range: range, filePath: filePath)
+				enumMatchArm(scrutineeName, caseName, scrutineeType, _, _, resolved, thenTarget, elseTarget, bindingNames, range) then resolveOneEnumMatchArm(project, module: module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, alreadyResolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, filePath: filePath)
 				default panic("unreachable: already checked op.name == enumMatchArm")
 			end 'extract'
 		end 'isArm'
 	end 'each'
 end 'resolveEnumMatchArms'
 
-function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, alreadyResolved bool, thenTarget BlockId, elseTarget BlockId, range SourceRange, filePath FilePath)
+function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, alreadyResolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange, filePath FilePath)
 	if alreadyResolved 'skip'
 		return
 	end 'skip'
@@ -1662,12 +1728,62 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 	let qualifiedName = "{enumName}.{caseName}"
 	if let entry = try project.topLevelConstants.get(qualifiedName) 'isCase'
 		let resolvedHit = matchCaseFromConstantValue(entry.value)
-		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: resolvedHit.rawValue, isFloat: resolvedHit.isFloat, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: resolvedHit.rawValue, isFloat: resolvedHit.isFloat, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isCase'
+	// Phase 9 Stage 2: payload union cases never reach `topLevelConstants`
+	// because the parser routes them to constructor synthesis. Resolve the
+	// case ordinal directly from the union's case table — match arms on
+	// a `value(n)` payload case use the tag value as their raw comparison.
+	let unionCaseHit = resolveUnionCaseRawValue(project, enumName: enumName, caseName: caseName)
+	if unionCaseHit.hit 'isUnionCase'
+		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
+		return
+	end 'isUnionCase'
 	reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
 	try module.ops.set(opIdx, value: MaxonOp.br(elseTarget, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 end 'resolveOneEnumMatchArm'
+
+// Phase 9 Stage 2: look up a union case's tag value (ordinal) from the
+// resolved enum registry. Returns hit=false when the name isn't found or
+// the entry isn't a union — caller falls through to the generic
+// "unknown case" diagnostic. Bare cases on plain enums are reached via
+// `topLevelConstants` and never enter this helper.
+type UnionCaseMatchHit
+	export var hit bool
+	export var rawValue IntConstant
+
+	export static function miss() returns UnionCaseMatchHit
+		return Self{hit: false, rawValue: 0}
+	end 'miss'
+
+	export static function found(rawValue IntConstant) returns UnionCaseMatchHit
+		return Self{hit: true, rawValue: rawValue}
+	end 'found'
+end 'UnionCaseMatchHit'
+
+function resolveUnionCaseRawValue(project Project, enumName String, caseName String) returns UnionCaseMatchHit
+	if let et = try project.enumTypes.get(enumName) 'resolved'
+		if not et.isUnion 'notUnion'
+			return UnionCaseMatchHit.miss()
+		end 'notUnion'
+		if let idx = try et.caseByName.get(caseName) 'haveCase'
+			let c = try et.cases.get(idx) otherwise return UnionCaseMatchHit.miss()
+			return UnionCaseMatchHit.found(c.rawValue)
+		end 'haveCase'
+	end 'resolved'
+	if let ut = try project.unresolvedEnums.get(enumName) 'unresolved'
+		if not ut.isUnion 'notUnion2'
+			return UnionCaseMatchHit.miss()
+		end 'notUnion2'
+		for c in ut.cases 'eachCase'
+			if c.name == caseName 'hit'
+				return UnionCaseMatchHit.found(c.rawValue)
+			end 'hit'
+		end 'eachCase'
+	end 'unresolved'
+	return UnionCaseMatchHit.miss()
+end 'resolveUnionCaseRawValue'
 
 // Walk the (possibly chained) typealias from a MaxonType.named back to its
 // originating enum name. Throws `NotEnumError.notEnum` when the named type
@@ -2312,6 +2428,19 @@ end 'callResultType'
 // own short-circuit on isEmpty.
 function fieldLoadResultType(project Project, receiverType MaxonType, fieldName ByteArray) returns MaxonType
 	let structName = try maxonTypeStructName(project, t: receiverType) otherwise return MaxonType.unresolved
+	// Phase 9 Stage 1: enum builtin accessors are not real struct fields —
+	// they're synthesized by `lowerFieldLoad`. Pin their result types here
+	// so producer-type tracking (and downstream string-interp kind inference)
+	// see the right answer.
+	if project.enumTypes.contains(structName) 'maybeEnumAccessor'
+		let fieldNameStr = String.from(fieldName)
+		if fieldNameStr == "name" 'isName'
+			return MaxonType.named(project.typeNames.intern("String"))
+		end 'isName'
+		if fieldNameStr == "rawValue" or fieldNameStr == "ordinal" 'isInt'
+			return MaxonType.integer
+		end 'isInt'
+	end 'maybeEnumAccessor'
 	let structType = try project.structTypes.get(structName) otherwise return MaxonType.unresolved
 	let fieldIdx = try structType.fieldByName.get(String.from(fieldName)) otherwise return MaxonType.unresolved
 	let field = try structType.fields.get(fieldIdx) otherwise return MaxonType.unresolved
@@ -2951,6 +3080,17 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		unresolvedRead then return
 		unresolvedAssign then return
 		enumMatchArm then return
+		rangeMatchArm then return
+		// Phase 9 Stage 2: union ops carry concrete types on the op itself.
+		// `enumConstruct` produces a union value (named-type pointer);
+		// `enumTag` produces an integer; `enumPayloadRead` produces the
+		// declared field type. Stage 3 wires the concrete `recordResultType`
+		// calls — Stage 2 leaves the producer-type map unmodified because
+		// no consumer reads these results yet.
+		enumConstruct then return
+		enumTag then return
+		enumPayloadRead then return
+		enumPayloadStore then return
 		error then return
 		throw then return
 		tryCall(result, callee, callContext, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: callOrArrayLiteralResultType(project, funcName: funcName, name: result, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
@@ -3071,6 +3211,11 @@ function retValueTypeFromProducers(op MaxonOp, producerTypes ProducerTypeMap) re
 		unresolvedRead gives MaxonType.unresolved
 		unresolvedAssign gives MaxonType.unresolved
 		enumMatchArm gives MaxonType.unresolved
+		rangeMatchArm gives MaxonType.unresolved
+		enumConstruct gives MaxonType.unresolved
+		enumTag gives MaxonType.unresolved
+		enumPayloadRead gives MaxonType.unresolved
+		enumPayloadStore gives MaxonType.unresolved
 		error gives MaxonType.unresolved
 		throw gives MaxonType.unresolved
 		tryCall gives MaxonType.unresolved
@@ -3138,7 +3283,15 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		selfFieldStore then return
 		unresolvedRead then return
 		unresolvedAssign then return
-		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, range: range, producerTypes: producerTypes)
+		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, producerTypes: producerTypes)
+		rangeMatchArm then return
+		// Phase 9 Stage 2 plumbing: union ops carry concrete payload types
+		// from parse-time on. Nothing to fill here — Stage 3 may extend if
+		// type-flow drives any field-type inference.
+		enumConstruct then return
+		enumTag then return
+		enumPayloadRead then return
+		enumPayloadStore then return
 		error then return
 		throw then return
 		tryCall then return
@@ -3167,12 +3320,12 @@ end 'fillUnresolvedTypesForOp'
 // map. Resolution of the case name itself happens later in
 // `resolveEnumMatchArms` once the scrutinee's type is concrete across all
 // arm sites in the module.
-function fillEnumMatchArmType(module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, range SourceRange, producerTypes ProducerTypeMap)
+function fillEnumMatchArmType(module MaxonModule, opIdx OpIndex, scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange, producerTypes ProducerTypeMap)
 	let filled = fillType(producerTypes, t: scrutineeType, source: scrutineeName)
 	if isUnresolvedType(filled) == isUnresolvedType(scrutineeType) and not isUnresolvedType(scrutineeType) 'noChange'
 		return
 	end 'noChange'
-	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
+	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
 end 'fillEnumMatchArmType'
 
 function fillVarDecl(module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
@@ -3501,6 +3654,14 @@ function specializeOp(module MaxonModule, opIdx OpIndex, op MaxonOp, nameStringI
 		unresolvedRead then return
 		unresolvedAssign then return
 		enumMatchArm then return
+		rangeMatchArm then return
+		// Phase 9 Stage 2: union ops never carry a stringConst operand; the
+		// specializer skips them. Stage 3+ may revisit if payload types
+		// drive a string-fold opportunity.
+		enumConstruct then return
+		enumTag then return
+		enumPayloadRead then return
+		enumPayloadStore then return
 		error then return
 		throw then return
 		tryCall then return
@@ -3879,6 +4040,13 @@ function evaluateUnresolvedConstExpr(project Project, exprId UnresolvedConstExpr
 		logicalAnd(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) and evalChildAsInt(project, exprId: right, evaluating: evaluating))
 		logicalXor(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) xor evalChildAsInt(project, exprId: right, evaluating: evaluating))
 		logicalOr(left, right) then return ConstantValue.intValue(evalChildAsInt(project, exprId: left, evaluating: evaluating) or evalChildAsInt(project, exprId: right, evaluating: evaluating))
+		// Phase 9 Stage 5: `structLit` arena entries only appear as the
+		// root (or recursive sub-expression) of an enum-case struct-backing
+		// literal. Top-level let/var initializers can't construct struct
+		// literals — they go through the regular runtime parser
+		// (`parseStructLiteral`) — so reaching this arm in the const-fold
+		// walk is a parser-side invariant violation.
+		structLit then panic("evaluateUnresolvedConstExpr: structLit reached the top-level constant evaluator — struct-backing literals are walked through the per-case struct accessor path instead")
 	end 'eval'
 end 'evaluateUnresolvedConstExpr'
 
@@ -3976,6 +4144,11 @@ function inferSlotTypeFromExpr(project Project, exprId UnresolvedConstExprId, va
 		floatLit then return MaxonType.float
 		enumCase(enumName, _) then return internMaxonType(project, name: enumName)
 		intLit to logicalOr then return slotTypeFromConstantValue(value)
+		// Phase 9 Stage 5: `structLit` arena entries are reserved for
+		// enum-case struct backing literals and never appear at the root
+		// of a top-level `let` / `var` initializer (caller path). Reach
+		// this arm and we have a parser-side invariant violation.
+		structLit then panic("inferSlotTypeFromExpr: structLit reached top-level slot-type inference — struct backings are not top-level constants")
 	end 'pick'
 end 'inferSlotTypeFromExpr'
 

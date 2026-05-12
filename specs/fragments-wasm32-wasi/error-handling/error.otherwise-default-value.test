@@ -1,0 +1,38 @@
+// Test: error.otherwise-default-value
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test try otherwise with default value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = try mayFail() otherwise 42
+	return val
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.mov_imm 42 : i64
+    mir.br try_0.merge(%5)
+  try_0.merge:
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

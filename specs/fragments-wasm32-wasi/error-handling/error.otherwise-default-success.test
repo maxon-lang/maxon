@@ -1,0 +1,58 @@
+// Test: error.otherwise-default-success
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test try otherwise when no error occurs
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+	if shouldFail 'check'
+		throw MyError.failed
+	end 'check'
+	return 100
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = try mayFail(false) otherwise 42
+	return val
+end 'main'
+---
+ExitCode: 100
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_error-handling.mayFail_0()
+  inlined_error-handling.mayFail_0:
+    mir.cond_br %0 [then: inlined_error-handling.mayFail_1(), else: inlined_error-handling.mayFail_2()]
+  inlined_error-handling.mayFail_1:
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%10, %11)
+  inlined_error-handling.mayFail_2:
+    %12 = mir.mov_imm 100 : i64
+    %13 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%12, %13)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %15, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%14)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 42 : i64
+    mir.br try_0.merge(%6)
+  try_0.merge:
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %9, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_0
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

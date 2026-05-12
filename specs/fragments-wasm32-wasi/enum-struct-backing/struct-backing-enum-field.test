@@ -1,0 +1,36 @@
+// Test: struct-backing-enum-field
+typealias Cost = int(0 to 100)
+
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
+type TaskInfo
+	export let priority Priority
+	export let cost Cost
+end 'TaskInfo'
+
+enum Task
+	quick = TaskInfo{priority: Priority.low, cost: 1}
+	normal = TaskInfo{priority: Priority.medium, cost: 5}
+	heavy = TaskInfo{priority: Priority.high, cost: 10}
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.heavy
+	return t.rawValue.priority.ordinal
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 2 : i64
+    mir.ret %1
+  }
+}
+---

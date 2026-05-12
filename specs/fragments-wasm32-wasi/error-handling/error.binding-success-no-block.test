@@ -1,0 +1,74 @@
+// Test: error.binding-success-no-block
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test that error binding block is skipped on success
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+	counter = counter + 1
+	if shouldFail 'check'
+		throw MyError.failed
+	end 'check'
+	return 100
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail(false) otherwise (e) 'handler'
+		result = 99
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @error-handling.mayFail(local0: i1) -> i64 {
+  entry:
+    %11 = mir.param local0 : i1
+    %1 = mir.global_addr @__data_counter
+    %2 = mir.load %1, 0
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.add.i64 %2, %3
+    %5 = mir.global_addr @__data_counter
+    mir.store %4, %5, 0
+    mir.cond_br %11 [then: check_0(), else: check_0.after()]
+  check_0:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 1 : i64
+    mir.error_return %7, %8
+  check_0.after:
+    %9 = mir.mov_imm 100 : i64
+    %10 = mir.mov_imm 0 : i64
+    mir.error_return %9, %10
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2, %3 = mir.try_call @error-handling.mayFail(%1)
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp ne, %3, %4
+    mir.cond_br %5 [then: try_0.otherwise(), else: try_0.merge(%0, %2)]
+  try_0.otherwise:
+    %9 = mir.mov_imm 99 : i64
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%9, %10)
+  try_0.merge:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

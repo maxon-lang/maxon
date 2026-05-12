@@ -114,7 +114,27 @@ let stdlibWhitelist = [
 // itself — that file uses extensions and `Array with Element` machinery the
 // self-hosted compiler doesn't yet support. We omit the extension blocks
 // (those bring in `Array with Element` machinery that's not yet supported).
-let stdlibBootstrapSource = "export typealias ExitCode = int(0 to 125)\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\nexport type __Tuple2 uses _T0, _T1\n\tvar _0 _T0\n\tvar _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\tvar _0 _T0\n\tvar _1 _T1\n\tvar _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\n"
+//
+// ExitCode is target-specific: the real stdlib (`stdlib/Process.maxon`) gates
+// its range on `#if os(...)` — Windows gets the widest range (32-bit DWORD
+// from GetExitCodeProcess), wasi caps at 125 (POSIX-style truncated exit),
+// other Unix-likes get 0..255 (the standard `wait`-status byte). We mirror
+// that here so spec tests with exit codes > 125 (e.g. ExitCode: 200) pass on
+// Windows like they do under the C# bootstrap. `bootstrapPrelude` returns
+// the rest of the synthesized declarations unchanged.
+function exitCodeRangeForOs(os Os) returns String
+	return match os 'select'
+		windows gives "0 to u32.max"
+		linux gives "0 to 255"
+		macos gives "0 to 255"
+		wasi gives "0 to 125"
+	end 'select'
+end 'exitCodeRangeForOs'
+
+function stdlibBootstrapSourceForTarget(target Target) returns String
+	return "export typealias ExitCode = int({exitCodeRangeForOs(target.os)})\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\nexport type __Tuple2 uses _T0, _T1\n\tvar _0 _T0\n\tvar _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\tvar _0 _T0\n\tvar _1 _T1\n\tvar _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\n"
+end 'stdlibBootstrapSourceForTarget'
+
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
 
 export function findStdlibPath() returns FilePath
@@ -156,8 +176,8 @@ end 'collectStdlibFiles'
 // Cache key for the currently-discoverable stdlib: whitelist file contents,
 // the synthesized bootstrap, and runtime.std (the latter affects compiled
 // output, so the on-disk cache must invalidate when runtime.std changes).
-function currentStdlibChecksum() returns CacheChecksum
-	return computeStdlibChecksum(collectStdlibFiles(), bootstrap: stdlibBootstrapSource, runtimePath: findRuntimePath())
+function currentStdlibChecksum(target Target) returns CacheChecksum
+	return computeStdlibChecksum(collectStdlibFiles(), bootstrap: stdlibBootstrapSourceForTarget(target), runtimePath: findRuntimePath())
 end 'currentStdlibChecksum'
 
 // Parse a single stdlib source string and merge its module into `allModule`.
@@ -179,7 +199,7 @@ end 'parseStdlibSource'
 // module is discarded — the bootstrap exists purely to seed parser registries.
 function parseStdlibBootstrap(project Project)
 	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected")
-	parseStdlibSource(project, allModule: MaxonModule.create(), filePath: bootstrapFp, content: stdlibBootstrapSource)
+	parseStdlibSource(project, allModule: MaxonModule.create(), filePath: bootstrapFp, content: stdlibBootstrapSourceForTarget(project.target))
 end 'parseStdlibBootstrap'
 
 export function getStdlibModule(project Project) returns MaxonModule
@@ -278,7 +298,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'firstSet'
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let contentChecksum = currentStdlibChecksum()
+	let contentChecksum = currentStdlibChecksum(project.target)
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
@@ -311,7 +331,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let stdlibFiles = collectStdlibFiles()
 
 	var allModule = MaxonModule.create()
-	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSource)
+	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -574,7 +594,7 @@ function loadCacheForTarget(project Project)
 	let projectDir = try stdlibCacheProjectDirs.get(0) otherwise return
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
-	let contentChecksum = currentStdlibChecksum()
+	let contentChecksum = currentStdlibChecksum(project.target)
 
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
@@ -589,7 +609,7 @@ function loadCacheForTarget(project Project)
 		// First load was from cache, so we never parsed. Parse now.
 		let stdlibFiles = collectStdlibFiles()
 		var allModule = MaxonModule.create()
-		parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSource)
+		parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
 		for fp in stdlibFiles 'iter'
 			if File.exists(fp) 'exists'
 				let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")

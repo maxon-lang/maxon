@@ -77,20 +77,23 @@ let whitelist = ["basics",
 	"byte-enum-comparison",
 	// "char-literal-to-int", — 7/8 pass; codepoint-iteration test hits an
 	//                          unresolved-name parser bug
-	// "error-handling", — 30/33 pass (2026-05-09); the remaining 3 fragments
-	//                     (`assoc-value-throw-catch{,-2}`,
-	//                     `otherwise-block-reused-binding`) need Phase 9
-	//                     union types for associated-value error enums.
-	//                     Re-enable once unions land.
+	"error-handling",
+	"interface-dispatch-throws-match",
 	"initablefromarrayliteral",
 	"array-managed-elements",
 	// "array-realloc-dangling-ref", — needs E3070 borrow-check diagnostics
 	"array-return-element-from-loop",
-	// "array-slice-managed-elements", — uses union types (Phase 9)
-	// "array-append-managed-elements", — uses union types (Phase 9)
-	// "array-managed-field-reassign", — uses union types (Phase 9) + cross-type-resolution bug
-	// "array-managed-multi-call-lifecycle", — uses union types (Phase 9)
-	// "array-enum-element-size", — uses union types (Phase 9)
+	"array-slice-managed-elements",
+	"array-append-managed-elements",
+	// "array-managed-field-reassign", — pre-existing cross-type-resolution
+	// gap on `struct.arrayField = newArray` field reassignment, not
+	// related to Phase 9 unions (revisited at Stage 5 audit 2026-05-12).
+	// "array-managed-multi-call-lifecycle", — same field-reassign gap.
+	"array-enum-element-size",
+	// "repro-array-union-field-reassign", — pre-existing E3070
+	// self-field-shadowing diagnostic gaps; orthogonal to unions.
+	// "struct-enum-array-grow", — backend panic on large returned
+	// struct with many arrays; orthogonal to unions.
 	// "init-from-literal",
 	// "interfaces",
 	// "interface-extensions", — 5/9 pass after the extension-callee redirect
@@ -114,7 +117,46 @@ let whitelist = ["basics",
 	// "stdlib-set",
 	// "enums",
 	// "top-level-let",
-	// "match-statements",
+	// Partial-pass specs are kept OFF the whitelist so a green run is fully
+	// green. Each is listed with its current pass count and the gating
+	// feature; re-enable when the residual fragment(s) are addressable.
+	// "match-statements" (11/12) — 1 residual fragment uses non-enum
+	//                              scrutinee patterns (string-literal match).
+	// "match-expr-arm-divergent" (1/2) — `arm-panic.interpolated-message`
+	//                              needs Phase-7 panic-string interpolation.
+	// "match-exhaustive-default-panic" (9/10) — `default-panic.enum-range-statement`
+	//                              hits an unexpected-op panic in lowering;
+	//                              separate range-arm cleanup.
+	// "enum-allcases" (5/8) — `error-enum` needs Phase-11 Hashable witness;
+	//                              `string-backed` / `char-backed` need the
+	//                              non-numeric-raw-value parser feature.
+	// "enum-allcasenames" (7/8) — `string-backed` (same parser gap).
+	// "enum-ordinal" (7/9) — `string-backed` / `char-backed` (same parser gap).
+	"match-range-single-value",
+	// "enum-match-exhaustive" — 17/17 on x64-windows but 16/17 on wasm32-wasi:
+	// `enum-exhaustive.float-backed-range` hits a pre-existing wasm-backend
+	// float-backed-enum codegen bug (i64/f64 type mismatch in wasm validator).
+	// Phase 9 Stage 4: union destructors landed, so the previously-leaking
+	// associated-value specs no longer hit exit-code-101. `enum-match-only`
+	// stays off — `enum-map-key-still-works.test` panics on a Hashable
+	// witness lookup for a bare enum nested in a `Map with (Color, Int)`
+	// typealias, which is a Phase-5 (witness-table registration) gap
+	// orthogonal to Stage 4's destructor work. `enum-full` stays off —
+	// several E-code diagnostic strings need to match the C# bootstrap
+	// wording (E3036/E3034/E3081/E3032) and `Container.fromName` lowering
+	// panics in the X64 backend; both are Stage 5 follow-ups.
+	"match-enum-typed-binding",
+	"enum-struct-field-match",
+	"mutable-enums",
+	"union-cases",
+	"enum-struct-backing",
+	"enum-nested-struct-backing",
+	"union-struct-backing",
+	// `enum-hashable` panics on `simple-enum-as-map-key` — `Map with
+	// (Color, Int)` needs a Hashable witness for the bare-enum element
+	// type, and BuildWitnessTables doesn't emit one. Same gap blocks
+	// `enum-match-only.enum-map-key-still-works`. Phase-5 (witness-table
+	// registration for primitive-conforming enums) territory.
 	// "safe-ffi",
 	// "challenge-struct-ownership",
 	// "challenge-struct-lifetime",

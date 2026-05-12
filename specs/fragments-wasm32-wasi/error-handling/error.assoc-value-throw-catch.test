@@ -1,0 +1,88 @@
+// Test: error.assoc-value-throw-catch
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test error enum with associated value - throw and catch
+union MyError implements Error
+	notFound(code Integer)
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	throw MyError.notFound(42)
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'check'
+			notFound(code) then result = code
+			failed then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @error-handling.mayFail() -> i64 {
+  entry:
+    %0 = mir.global_addr @__data_counter
+    %1 = mir.load %0, 0
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.add.i64 %1, %2
+    %4 = mir.global_addr @__data_counter
+    mir.store %3, %4, 0
+    %5 = mir.mov_imm 42 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
+    mir.store %10, %11, 0
+    mir.store %5, %11, 8
+    %7 = mir.mov_imm 0 : i64
+    mir.error_return %7, %11
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1, %2 = mir.try_call @error-handling.mayFail()
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %2, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%0, %1)]
+  try_0.otherwise:
+    %7 = mir.load %2, 0
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.cmp eq, %7, %8
+    mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
+  check_0.merge:
+    %10 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%19, %10)
+  check_0.case0:
+    %11 = mir.load %2, 8
+    mir.br check_0.merge(%11)
+  check_0.next0:
+    %13 = mir.load %2, 0
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.cmp eq, %13, %14
+    mir.cond_br %15 [then: check_0.case1(), else: check_0.merge(%0)]
+  check_0.case1:
+    %16 = mir.mov_imm 1 : i64
+    mir.br check_0.merge(%16)
+  try_0.merge:
+    %22 = mir.mov_imm 125 : i64
+    %23 = mir.cmp ugt, %20, %22
+    mir.cond_br %23 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %24 = mir.global_addr @__panic_msg_0
+    %25 = mir.call @mrt_panic(%24)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+---

@@ -1,0 +1,93 @@
+// Test: enum-struct-field-match-let
+typealias SmallInt = int(0 to u8.max)
+
+export union Color
+		red(intensity SmallInt)
+		blue
+end 'Color'
+
+export type Palette
+		export var primary Color
+		export var secondary Color
+
+		static function create(primary Color, secondary Color) returns Self
+			return Self{primary: primary, secondary: secondary}
+		end 'create'
+end 'Palette'
+
+function checkPrimary(p Palette) returns bool
+		let c = p.primary
+		match c 'mc'
+				red then return true
+				blue then return false
+		end 'mc'
+end 'checkPrimary'
+
+function main() returns ExitCode
+		let p = Palette.create(primary: Color.red(255), secondary: Color.blue)
+		if checkPrimary(p) 'ok'
+				return 1
+		end 'ok'
+		return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @checkPrimary(local0: i64) -> i1 {
+  entry:
+    %15 = mir.param local0 : i64
+    %2 = mir.load %15, 0
+    %4 = mir.load %2, 0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.cmp eq, %4, %5
+    mir.cond_br %6 [then: mc_0.case0(), else: mc_0.next0()]
+  mc_0.case0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  mc_0.next0:
+    %8 = mir.load %2, 0
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.cmp eq, %8, %9
+    mir.cond_br %10 [then: mc_0.case1(), else: mc_0.next1()]
+  mc_0.case1:
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  mc_0.next1:
+    %12 = mir.global_addr @__panic_msg_0
+    %13 = mir.call @mrt_panic(%12)
+    %14 = mir.mov_imm 0 : i64
+    mir.ret %14
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 255 : i64
+    %8 = mir.mov_imm 16 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
+    mir.store %10, %11, 0
+    mir.store %0, %11, 8
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.call @stdlib.__mm_alloc(%12, %13, %14)
+    mir.store %14, %15, 0
+    %16 = mir.mov_imm 0 : i64
+    mir.store %16, %15, 8
+    %17 = mir.mov_imm 16 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %11, %18, 0
+    mir.store %15, %18, 8
+    %5 = mir.call @checkPrimary(%18)
+    mir.cond_br %5 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  ok_0.after:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+}
+---

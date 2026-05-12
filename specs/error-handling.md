@@ -717,7 +717,7 @@ var counter = 0 as Integer
 
 function mayFail() returns Integer throws MyError
 	counter = counter + 1
-	throw MyError.notFound(404)
+	throw MyError.notFound(42)
 end 'mayFail'
 
 function main() returns ExitCode
@@ -732,7 +732,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-404
+42
 ```
 
 <!-- test: error.assoc-value-throw-catch-2 -->

@@ -21,7 +21,7 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @double(rcx: u8) -> u8 {
+  func @double(rcx: u32) -> u32 {
   entry:
     x64.mov r9d, 2
     x64.mov r8, rcx
@@ -29,7 +29,7 @@ module {
     x64.xor edx, edx
     x64.ret
   }
-  func @wrap() -> u8 {
+  func @wrap() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.mov ecx, 5
@@ -47,7 +47,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @main() -> u8 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.call wrap
@@ -56,7 +56,8 @@ module {
   try_0.otherwise:
     x64.mov r8d, 99
   try_0.merge:
-    x64.cmp r8, 125
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:
     x64.lea rcx, [rip+__panic_msg_0]

@@ -1,0 +1,30 @@
+// Test: ok.int-upto-two-apart
+function main() returns ExitCode
+	let x = 5
+	let result = match x 'eval'
+		5 upto 7 gives 0
+		default gives 1
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %10 = mir.mov_imm 0 : i64
+    mir.br eval_0.merge(%10)
+  eval_0.merge:
+    %13 = mir.mov_imm 125 : i64
+    %14 = mir.cmp ugt, %12, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_0
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %12
+  }
+}
+---

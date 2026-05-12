@@ -1,0 +1,34 @@
+// Test: struct-backing-second-field
+typealias Latency = int(0 to 100)
+typealias Throughput = int(0 to 10)
+
+type OpInfo
+	export let latency Latency
+	export let throughput Throughput
+
+	static function create(latency Latency, throughput Throughput) returns Self
+		return Self{latency: latency, throughput: throughput}
+	end 'create'
+end 'OpInfo'
+
+enum Instruction
+	add = OpInfo.create(latency: 1, throughput: 2)
+	mul = OpInfo.create(latency: 3, throughput: 1)
+end 'Instruction'
+
+function main() returns ExitCode
+	let op = Instruction.add
+	return op.rawValue.throughput
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 2 : i64
+    mir.ret %1
+  }
+}
+---

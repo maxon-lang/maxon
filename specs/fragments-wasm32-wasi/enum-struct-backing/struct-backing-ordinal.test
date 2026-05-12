@@ -1,0 +1,33 @@
+// Test: struct-backing-ordinal
+typealias Weight = int(0 to 100)
+
+type Info
+	export let weight Weight
+
+	static function create(weight Weight) returns Self
+		return Self{weight: weight}
+	end 'create'
+end 'Info'
+
+enum Priority
+	low = Info.create(weight: 1)
+	medium = Info.create(weight: 5)
+	high = Info.create(weight: 10)
+end 'Priority'
+
+function main() returns ExitCode
+	let p = Priority.high
+	return p.ordinal
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.ret %0
+  }
+}
+---

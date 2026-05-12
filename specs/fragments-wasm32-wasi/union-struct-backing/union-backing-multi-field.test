@@ -1,0 +1,37 @@
+// Test: union-backing-multi-field
+typealias Flag = int(0 to 1)
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type DetailMeta
+	export let latency Latency
+	export let isMemory Flag
+
+	static function create(latency Latency, isMemory Flag) returns Self
+		return Self{latency: latency, isMemory: isMemory}
+	end 'create'
+end 'DetailMeta'
+
+union MemOp
+	load(dest ID, offset ID) = DetailMeta.create(latency: 4, isMemory: 1)
+	store(src ID, offset ID) = DetailMeta.create(latency: 3, isMemory: 1)
+	add(dest ID, src ID) = DetailMeta.create(latency: 1, isMemory: 0)
+end 'MemOp'
+
+function main() returns ExitCode
+	let memFlag = MemOp.load.isMemory
+	let aluFlag = MemOp.add.isMemory
+	return memFlag + aluFlag
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  }
+}
+---

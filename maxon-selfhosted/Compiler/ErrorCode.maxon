@@ -29,6 +29,12 @@ export union ErrorCode
 	parserMatchMismatchedBlockId = 2043
 	parserNonConstantInitializer = 2045
 	parserMatchDefaultEnumMustThrow = 2046
+	// Phase 9 Stage 0: a match arm body cannot be a block-opening
+	// statement (`if` / `while` / `for` / `match` / block-form `try`).
+	// Each arm body is a single statement; block-form constructs would
+	// allocate persistent slots that leak on every error path through
+	// the match.
+	parserMatchBlockStatementNotAllowed = 2049
 	parserReservedIdentifier = 2051
 	semanticNoMain = 3001
 	semanticMainWrongReturnType = 3002
@@ -48,12 +54,22 @@ export union ErrorCode
 	semanticEnumDuplicateRawValue = 3031
 	semanticEnumRawValueTypeMismatch = 3032
 	semanticEnumUnknownCase = 3034
+	// E3035: a match-arm payload-binding pattern (`case(x, y)`) supplies
+	// the wrong number of bindings for the case's declared payload. Emitted
+	// by `parseCaseBindingPattern` when an arity check can be performed at
+	// parse time, or deferred to TypeResolution when the case's owning
+	// union isn't yet known.
+	semanticMatchPayloadArityMismatch = 3035
 	semanticWrongArgCount = 3036
 	semanticMatchDiscardedBindings = 3081
 	semanticSymbolNotInModuleScope = 3088
 	semanticTypeResolutionLeak = 3089
 	semanticMainCannotThrow = 3054
 	semanticTryRequiresThrowingFunction = 3055
+	// E3075: qualified enum case names (`Color.red`) aren't allowed in
+	// match arms — the scrutinee's enum is known so the bare case name
+	// suffices.
+	semanticMatchQualifiedCaseName = 3075
 	semanticThrowingFunctionRequiresTry = 3057
 	semanticOtherwiseRequiresTry = 3058
 	semanticOtherwiseTypeMismatch = 3059

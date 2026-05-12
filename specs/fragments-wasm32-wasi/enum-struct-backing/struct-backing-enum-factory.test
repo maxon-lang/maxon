@@ -1,0 +1,38 @@
+// Test: struct-backing-enum-factory
+typealias Level = int(0 to 100)
+
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+type Config
+	export let mode Mode
+	export let level Level
+
+	static function create(mode Mode, level Level) returns Self
+		return Self{mode: mode, level: level}
+	end 'create'
+end 'Config'
+
+enum Setting
+	turbo = Config.create(mode: Mode.fast, level: 10)
+	eco = Config.create(mode: Mode.slow, level: 3)
+end 'Setting'
+
+function main() returns ExitCode
+	let s = Setting.turbo
+	return s.rawValue.mode.ordinal
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+}
+---

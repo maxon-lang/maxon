@@ -1,0 +1,31 @@
+// Test: error.throw-and-return-success
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test that throwing function can return success value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+	if shouldFail 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    mir.ret %0
+  }
+}
+---

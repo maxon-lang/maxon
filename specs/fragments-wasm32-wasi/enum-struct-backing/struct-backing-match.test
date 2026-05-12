@@ -1,0 +1,61 @@
+// Test: struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(latency: 1)
+	sub = Meta.create(latency: 1)
+	mul = Meta.create(latency: 3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.sub
+	return match op 'dispatch'
+		add gives 10
+		sub gives 20
+		mul gives 30
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br dispatch_0.next0()
+  dispatch_0.merge:
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  dispatch_0.next0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: dispatch_0.case1(), else: dispatch_0.next1()]
+  dispatch_0.case1:
+    %9 = mir.mov_imm 20 : i64
+    mir.br dispatch_0.merge(%9)
+  dispatch_0.next1:
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.cmp eq, %0, %10
+    mir.cond_br %11 [then: dispatch_0.case2(), else: dispatch_0.merge(%2)]
+  dispatch_0.case2:
+    %12 = mir.mov_imm 30 : i64
+    mir.br dispatch_0.merge(%12)
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_0
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

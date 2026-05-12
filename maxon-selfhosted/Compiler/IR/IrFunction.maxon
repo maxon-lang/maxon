@@ -15,6 +15,24 @@ export union ThrowsClause
 	throwing(name String)
 end 'ThrowsClause'
 
+// Error thrown by `throwsClauseName` when the clause is `none` (the
+// function doesn't throw). Callers use `try … otherwise` to fall through
+// to the no-throws-name path explicitly.
+export enum ThrowsClauseNameError implements Error
+	noThrowsClause
+end 'ThrowsClauseNameError'
+
+// Extract the throws-type name from a clause. Throws
+// `ThrowsClauseNameError.noThrowsClause` for `none`. Callers that only
+// need the name (parser dispatch on throws-type properties) avoid
+// repeating the `match`/`break` boilerplate at every use site.
+export function throwsClauseName(clause ThrowsClause) returns String throws ThrowsClauseNameError
+	match clause 'k'
+		none then throw ThrowsClauseNameError.noThrowsClause
+		throwing(name) then return name
+	end 'k'
+end 'throwsClauseName'
+
 export typealias ThrowsClauseArray = Array with ThrowsClause
 
 export type IrFunction

@@ -51,6 +51,11 @@
 // failing, etc. Those are parser bugs, not user errors.
 
 export typealias BoolArray = Array with bool
+// Phase 9 Stage 5 (struct-backing): per-function let bindings whose
+// initializer is a known struct-backed enum-case literal. Keyed on the
+// let's bare local name; value is the qualified `EnumName.caseName` of
+// the case. Reset by `resetSymbolTable` between functions.
+export typealias StructBackedEnumCaseBindingMap = Map with(String, String)
 
 typealias TokenIter = ArrayIterator with Token
 
@@ -229,6 +234,16 @@ export type Parser
 	// only literal `Name`-token references do, matching the C# bootstrap.
 	var localTypealiases LocalTypealiasArray
 	var usedTypeAliases ReferencedVarSet
+	// Phase 9 Stage 5 (struct-backing): per-function let bindings whose
+	// initializer is a known struct-backed enum-case literal. The map keyed
+	// on the let's bare name; value is the qualified `EnumName.caseName`.
+	// `parseVarDecl` records the entry when the initializer's tokens are
+	// `EnumName.caseName` and `caseHasStructBacking` returns true; the
+	// identifier-read path consults it to fold `local.rawValue.field`
+	// chains to the leaf constant the same way direct
+	// `EnumName.caseName.field` chains do. Cleared by `resetSymbolTable` so
+	// a fresh function starts with no stale bindings.
+	var letStructBackedEnumCases StructBackedEnumCaseBindingMap
 
 	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
@@ -239,7 +254,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -461,6 +476,26 @@ export type Parser
 		if typeToken.kind == TokenKind.identifier 'trackUse'
 			usedTypeAliases.insert(element: typeToken.value)
 		end 'trackUse'
+
+		// Phase 9 Stage 4: accept dotted type names like `Shape.unionCases`
+		// for the union-cases companion enum. The companion is registered as
+		// a typealias under the dotted name, so the regular `internMaxonType`
+		// path resolves it once we glue the segments back together. Only
+		// applied when the dotted name is a known type/alias/enum —
+		// otherwise we leave the `.` for the surrounding caller (typealias
+		// args, type-resolution placeholders) to handle.
+		if typeToken.kind == TokenKind.identifier and at(TokenKind.dot) 'maybeDottedType'
+			let dotPeek = try cursor.peek(1) otherwise Token.eof()
+			if dotPeek.kind == TokenKind.identifier 'haveDottedMember'
+				let dottedName = "{typeToken.value}.{dotPeek.value}"
+				if project.unresolvedTypealiases.contains(dottedName) or project.typealiases.contains(dottedName) or project.unresolvedEnums.contains(dottedName) or project.enumTypes.contains(dottedName) 'isDottedType'
+					try eat(TokenKind.dot)
+					_ = try consume()
+					usedTypeAliases.insert(element: dottedName)
+					return internMaxonType(project, name: dottedName)
+				end 'isDottedType'
+			end 'haveDottedMember'
+		end 'maybeDottedType'
 
 		// Phase 11.0: extend `Base with Args`. After consuming the base name,
 		// peek for `with`; if present, parse a comma-separated arg list (or a
@@ -2106,6 +2141,464 @@ export type Parser
 		throw ParserError.unhandledToken
 	end 'parseConstPrimary'
 
+	// Parse a struct literal in const-expression context — either the
+	// `StructType{field: value, ...}` brace form or the
+	// `StructType.create([fieldLabel:] value, ...)` constructor form. The
+	// leading identifier (the struct type name) is consumed inside this
+	// helper. Returns the arena id of the synthesized `structLit` node, or
+	// throws on a malformed sub-expression. Caller guarantees `cursor` is
+	// already positioned at the `StructType` identifier.
+	//
+	// Positional args in the `.create(...)` form are mapped to field names
+	// via the struct's declared field order (looked up through
+	// `unresolvedStructTypes`). The number of positional args must not
+	// exceed the declared field count; named args bind to their label
+	// verbatim. We don't enforce coverage / duplicates here — TypeResolution
+	// already validates struct-field completeness on the resolved tree.
+	function parseConstStructLiteralRoot() returns UnresolvedConstExprId throws ParserError
+		let typeNameToken = try consume()
+		if typeNameToken.kind != TokenKind.identifier 'badTypeName'
+			reportTokenMismatch(typeNameToken, expectedDisplay: "struct type name")
+			throw ParserError.unhandledToken
+		end 'badTypeName'
+		let structTypeName = typeNameToken.value
+
+		var fieldNames = StringArray.create()
+		var fieldExprs = UnresolvedConstExprIdArray.create()
+
+		if accept(TokenKind.leftBrace) 'isBraceForm'
+			try parseConstStructLiteralBraceBody(fieldNamesOut: fieldNames, fieldExprsOut: fieldExprs)
+		end 'isBraceForm' else if accept(TokenKind.dot) 'isDotForm'
+			let methodToken = try consumeExpecting("identifier")
+			if methodToken.value != "create" 'notCreate'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum struct backing: only '{structTypeName}.create(...)' factory call is supported, got '{structTypeName}.{methodToken.value}'", line: methodToken.line, column: methodToken.column, filePath: filePath)
+				throw ParserError.unhandledToken
+			end 'notCreate'
+			try expect(TokenKind.leftParen)
+			try parseConstStructLiteralCreateBody(structTypeName: structTypeName, fieldNamesOut: fieldNames, fieldExprsOut: fieldExprs)
+		end 'isDotForm' else 'badForm'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum struct backing: expected '\{' or '.create(' after '{structTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
+			throw ParserError.unhandledToken
+		end 'badForm'
+
+		return appendConstExpr(UnresolvedConstExpr.structLit(structTypeName: structTypeName, fieldNames: fieldNames, fieldExprs: fieldExprs))
+	end 'parseConstStructLiteralRoot'
+
+	// Parse the body of `{field: value, ...}` after the `{` has been
+	// consumed, populating the parallel `fieldNames` / `fieldExprs` arrays.
+	function parseConstStructLiteralBraceBody(fieldNamesOut StringArray, fieldExprsOut UnresolvedConstExprIdArray) throws ParserError
+		try skipNewlines()
+		while not at(TokenKind.rightBrace) 'fields'
+			let fieldNameToken = try consumeExpecting("identifier")
+			try expect(TokenKind.colon)
+			let valueId = try parseConstStructFieldValue()
+			fieldNamesOut.push(fieldNameToken.value)
+			fieldExprsOut.push(valueId)
+			_ = accept(TokenKind.comma)
+			try skipNewlines()
+		end 'fields'
+		try expect(TokenKind.rightBrace)
+	end 'parseConstStructLiteralBraceBody'
+
+	// Parse the body of `.create(arg, ...)` after the `(` has been consumed.
+	// Each arg is either `label: value` (named) or just `value` (positional);
+	// positional args are bound to field names from the struct's declared
+	// field order via `unresolvedStructTypes` lookup. The struct's `.create`
+	// signature is assumed to mirror its field order — the standard pattern
+	// generated by the language idiom and seen across the spec fragments.
+	function parseConstStructLiteralCreateBody(structTypeName String, fieldNamesOut StringArray, fieldExprsOut UnresolvedConstExprIdArray) throws ParserError
+		try skipNewlines()
+		var positionalIndex = 0
+		while not at(TokenKind.rightParen) 'args'
+			let fieldNameToken = cursor.current()
+			let afterName = try cursor.peek(1) otherwise Token.eof()
+			var resolvedFieldName = ""
+			if fieldNameToken.kind == TokenKind.identifier and afterName.kind == TokenKind.colon 'isNamed'
+				_ = try consume()
+				try expect(TokenKind.colon)
+				resolvedFieldName = fieldNameToken.value
+			end 'isNamed' else 'isPositional'
+				resolvedFieldName = try lookupStructFieldNameByIndex(structTypeName: structTypeName, index: positionalIndex) otherwise 'unknownField'
+					let posToken = cursor.current()
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum struct backing: positional arg #{positionalIndex} cannot be resolved against struct '{structTypeName}' (declare named: 'fieldName: value')", line: posToken.line, column: posToken.column, filePath: filePath)
+					throw ParserError.unhandledToken
+				end 'unknownField'
+			end 'isPositional'
+			let valueId = try parseConstStructFieldValue()
+			fieldNamesOut.push(resolvedFieldName)
+			fieldExprsOut.push(valueId)
+			positionalIndex = positionalIndex + 1
+			_ = accept(TokenKind.comma)
+			try skipNewlines()
+		end 'args'
+		try expect(TokenKind.rightParen)
+	end 'parseConstStructLiteralCreateBody'
+
+	// Parse one field-value expression inside a struct backing literal. A
+	// nested struct (`StructType{...}` or `StructType.create(...)`) is
+	// captured as another arena `structLit` entry; anything else flows
+	// through `parseConstExpr` so int / float / bool / nameRef / enum-case /
+	// arithmetic-fold cases share their existing implementations.
+	function parseConstStructFieldValue() returns UnresolvedConstExprId throws ParserError
+		let token = cursor.current()
+		if token.kind == TokenKind.identifier 'isIdent'
+			let next = try cursor.peek(1) otherwise Token.eof()
+			if next.kind == TokenKind.leftBrace 'isBraceLit'
+				return try parseConstStructLiteralRoot()
+			end 'isBraceLit'
+			if next.kind == TokenKind.dot 'isDotted'
+				let memberToken = try cursor.peek(2) otherwise Token.eof()
+				let afterMember = try cursor.peek(3) otherwise Token.eof()
+				if memberToken.kind == TokenKind.identifier and memberToken.value == "create" and afterMember.kind == TokenKind.leftParen 'isCreateCall'
+					return try parseConstStructLiteralRoot()
+				end 'isCreateCall'
+				// Otherwise fall through — parseConstExpr handles
+				// `EnumName.caseName` via parseConstPrimary's enum-case arm.
+			end 'isDotted'
+		end 'isIdent'
+		return try parseConstExpr()
+	end 'parseConstStructFieldValue'
+
+	// Look up the i-th declared field name on `structTypeName`. Throws
+	// `StructFieldProbeError.notFound` when the struct isn't registered yet
+	// (forward reference) or when the index is out of range. Callers handle
+	// the throw by emitting an E2003 / E3032-adjacent diagnostic.
+	function lookupStructFieldNameByIndex(structTypeName String, index UnresolvedConstExprId) returns String throws StructFieldProbeError
+		let unresolved = try project.unresolvedStructTypes.get(structTypeName) otherwise throw StructFieldProbeError.notFound
+		if index >= unresolved.fields.count() 'outOfRange'
+			throw StructFieldProbeError.notFound
+		end 'outOfRange'
+		let structFieldEntry = try unresolved.fields.get(index) otherwise throw StructFieldProbeError.notFound
+		return structFieldEntry.name
+	end 'lookupStructFieldNameByIndex'
+
+	// Phase 9 Stage 5 (struct-backing): true when `EnumName.caseName` carries
+	// a `= StructType{...}` / `= StructType.create(...)` backing literal.
+	// Drives parser-side compile-time resolution of `EnumName.caseName.field`
+	// chains and `local.rawValue.field` chains where `local` is bound to the
+	// case. Looks up `unresolvedEnums` (parse-time) and `enumTypes` (resolved)
+	// — only one will be populated at any given parser observation, but the
+	// helper handles both for forward / cross-file safety.
+	function caseHasStructBacking(enumName String, caseName String) returns bool
+		if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'inUnresolved'
+			for c in unresolvedEnum.cases 'scan'
+				if c.name == caseName 'hit'
+					return not c.backingStructName.isEmpty()
+				end 'hit'
+			end 'scan'
+		end 'inUnresolved'
+		if let resolvedEnum = try project.enumTypes.get(enumName) 'inResolved'
+			for c in resolvedEnum.cases 'scan2'
+				if c.name == caseName 'hit2'
+					return not c.backingStructName.isEmpty()
+				end 'hit2'
+			end 'scan2'
+		end 'inResolved'
+		return false
+	end 'caseHasStructBacking'
+
+	// Phase 9 Stage 5 (struct-backing): non-consuming peek for the
+	// `EnumName.caseName` shape at the cursor's current position. Returns
+	// the qualified `EnumName.caseName` string when the prefix is a known
+	// struct-backed enum AND the named case carries a backing literal.
+	// Throws `EnumCaseProbeError.notFound` otherwise — callers handle the
+	// miss with `try … otherwise ignore` (parse-time probe; no diagnostic).
+	// Used by `parseVarDecl` so a `let op = TestOp.mul` records `op` as
+	// an alias for `TestOp.mul` without consuming any tokens — the actual
+	// expression parse runs immediately after this peek and emits the
+	// regular IR.
+	function peekStructBackedEnumCaseQualifiedName() returns String throws EnumCaseProbeError
+		let prefixToken = cursor.current()
+		if prefixToken.kind != TokenKind.identifier 'notIdent'
+			throw EnumCaseProbeError.notFound
+		end 'notIdent'
+		let dotToken = try cursor.peek(1) otherwise Token.eof()
+		if dotToken.kind != TokenKind.dot 'noDot'
+			throw EnumCaseProbeError.notFound
+		end 'noDot'
+		let memberToken = try cursor.peek(2) otherwise Token.eof()
+		if memberToken.kind != TokenKind.identifier 'noMember'
+			throw EnumCaseProbeError.notFound
+		end 'noMember'
+		// Reject deeper postfix chains: `EnumName.case.field` shouldn't be
+		// recorded as a simple alias — the chain itself folds via the
+		// direct-access path in `parseIdentifierExpr`. We only want bare
+		// `let op = EnumName.case` here.
+		let afterMember = try cursor.peek(3) otherwise Token.eof()
+		if afterMember.kind == TokenKind.dot 'hasChain'
+			throw EnumCaseProbeError.notFound
+		end 'hasChain'
+		if not caseHasStructBacking(enumName: prefixToken.value, caseName: memberToken.value) 'noBacking'
+			throw EnumCaseProbeError.notFound
+		end 'noBacking'
+		return "{prefixToken.value}.{memberToken.value}"
+	end 'peekStructBackedEnumCaseQualifiedName'
+
+	// Companion lookup returning the per-case struct-backing arena id when
+	// the case is struct-backed. Throws `EnumCaseProbeError.notFound` when
+	// no matching backed case exists — id 0 IS a valid arena entry, so we
+	// can't fold "missing" into a sentinel here. Callers should normally
+	// guard with `caseHasStructBacking` first, in which case `otherwise
+	// panic` is appropriate.
+	function lookupCaseStructBackingExprId(enumName String, caseName String) returns UnresolvedConstExprId throws EnumCaseProbeError
+		if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'inUnresolved'
+			for c in unresolvedEnum.cases 'scan'
+				if c.name == caseName 'hit'
+					if c.backingStructName.isEmpty() 'noBacking'
+						throw EnumCaseProbeError.notFound
+					end 'noBacking'
+					return c.backingStructExprId
+				end 'hit'
+			end 'scan'
+		end 'inUnresolved'
+		if let resolvedEnum = try project.enumTypes.get(enumName) 'inResolved'
+			for c in resolvedEnum.cases 'scan2'
+				if c.name == caseName 'hit2'
+					if c.backingStructName.isEmpty() 'noBacking2'
+						throw EnumCaseProbeError.notFound
+					end 'noBacking2'
+					return c.backingStructExprId
+				end 'hit2'
+			end 'scan2'
+		end 'inResolved'
+		throw EnumCaseProbeError.notFound
+	end 'lookupCaseStructBackingExprId'
+
+	// Phase 9 Stage 5: descend a `structLit` arena tree, following
+	// `fieldChain` field names, and return the resulting ConstantValue. The
+	// chain is consumed left-to-right; once a leaf (`intLit`, `floatLit`,
+	// `boolLit`, `enumCase`) is reached, the remaining chain must be empty
+	// (no further `.field`) — non-empty surfaces as a parse-time error at
+	// the caller. Returns ConstantValue.intValue(0) plus `found = false` on
+	// any unresolved field reference.
+	// Walk a struct-backing arena tree following `fieldChain`. Returns a
+	// `StructBackingFoldResult` carrying the leaf constant on success; the
+	// `notFound` shape signals "couldn't fold" (chain reached a non-struct
+	// mid-descent, field name doesn't exist on the current `structLit`, or
+	// the leaf isn't a scalar literal). `.ordinal` / `.rawValue` on an
+	// `enumCase` leaf is a no-op alias to the case's folded integer —
+	// matches the existing bare-enum `.ordinal` accessor semantics.
+	function resolveStructBackingFieldChain(rootExprId UnresolvedConstExprId, fieldChain StringArray) returns StructBackingFoldResult
+		var currentExprId = rootExprId
+		var idx = 0
+		while idx < fieldChain.count() 'descend'
+			let fieldName = try fieldChain.get(idx) otherwise return StructBackingFoldResult.notFound()
+			if isEnumCaseLeaf(currentExprId) and isEnumOrdinalLikeAccessor(fieldName) and idx == fieldChain.count() - 1 'enumCaseOrdinalLeaf'
+				return evaluateStructBackingLeaf(currentExprId)
+			end 'enumCaseOrdinalLeaf'
+			let descendResult = descendStructBackingLevel(currentExprId, fieldName: fieldName)
+			if not descendResult.found 'noField'
+				return StructBackingFoldResult.notFound()
+			end 'noField'
+			currentExprId = descendResult.exprId
+			idx = idx + 1
+		end 'descend'
+		return evaluateStructBackingLeaf(currentExprId)
+	end 'resolveStructBackingFieldChain'
+
+	function isEnumCaseLeaf(exprId UnresolvedConstExprId) returns bool
+		let node = try project.unresolvedConstExprs.get(exprId) otherwise return false
+		return isStructBackingLeafEnumKindCheck(node)
+	end 'isEnumCaseLeaf'
+
+	function isStructBackingLeafEnumKindCheck(node UnresolvedConstExpr) returns bool
+		match node 'k'
+			enumCase then return true
+			boolLit then return false
+			floatLit then return false
+			intLit then return false
+			stringLit then return false
+			structLit then return false
+			asCast then return false
+			nameRef then return false
+			negate then return false
+			notOp then return false
+			add then return false
+			sub then return false
+			mul then return false
+			compareEq then return false
+			compareNeq then return false
+			compareLt then return false
+			compareLte then return false
+			compareGt then return false
+			compareGte then return false
+			logicalAnd then return false
+			logicalXor then return false
+			logicalOr then return false
+		end 'k'
+	end 'isStructBackingLeafEnumKindCheck'
+
+	function isEnumOrdinalLikeAccessor(name String) returns bool
+		return name == "ordinal" or name == "rawValue"
+	end 'isEnumOrdinalLikeAccessor'
+
+	// Look up `fieldName` inside the `structLit` arena node at `exprId` and
+	// return the named field's sub-expression id. `found = false` when the
+	// node is not a struct literal, the field name isn't declared on it, or
+	// the arena lookup fails. We use an explicit `found` flag instead of a
+	// 0 sentinel because arena id 0 IS a valid entry — the first int literal
+	// pushed gets id 0, and the first user-pushed entry depends on whether
+	// stdlib added any const exprs before user code.
+	function descendStructBackingLevel(exprId UnresolvedConstExprId, fieldName String) returns StructBackingDescendResult
+		let node = try project.unresolvedConstExprs.get(exprId) otherwise return StructBackingDescendResult.none()
+		return structLitFieldExprId(node, fieldName: fieldName)
+	end 'descendStructBackingLevel'
+
+	// Pattern-match a single arena node looking for the `structLit` arm; if
+	// found, walk its field arrays for `fieldName` and return the matched
+	// sub-expr id. All non-`structLit` arms return `none()`. The match must
+	// enumerate every arm because the language requires exhaustive matches
+	// on enums.
+	function structLitFieldExprId(node UnresolvedConstExpr, fieldName String) returns StructBackingDescendResult
+		match node 'matchNode'
+			structLit(_, fieldNames, fieldExprs) then return findStructLitFieldExprIdInArrays(fieldNames, fieldExprs: fieldExprs, fieldName: fieldName)
+			boolLit then return StructBackingDescendResult.none()
+			floatLit then return StructBackingDescendResult.none()
+			enumCase then return StructBackingDescendResult.none()
+			asCast then return StructBackingDescendResult.none()
+			intLit then return StructBackingDescendResult.none()
+			stringLit then return StructBackingDescendResult.none()
+			nameRef then return StructBackingDescendResult.none()
+			negate then return StructBackingDescendResult.none()
+			notOp then return StructBackingDescendResult.none()
+			add then return StructBackingDescendResult.none()
+			sub then return StructBackingDescendResult.none()
+			mul then return StructBackingDescendResult.none()
+			compareEq then return StructBackingDescendResult.none()
+			compareNeq then return StructBackingDescendResult.none()
+			compareLt then return StructBackingDescendResult.none()
+			compareLte then return StructBackingDescendResult.none()
+			compareGt then return StructBackingDescendResult.none()
+			compareGte then return StructBackingDescendResult.none()
+			logicalAnd then return StructBackingDescendResult.none()
+			logicalXor then return StructBackingDescendResult.none()
+			logicalOr then return StructBackingDescendResult.none()
+		end 'matchNode'
+	end 'structLitFieldExprId'
+
+	function findStructLitFieldExprIdInArrays(fieldNames StringArray, fieldExprs UnresolvedConstExprIdArray, fieldName String) returns StructBackingDescendResult
+		for i in 0 upto fieldNames.count() 'eachField'
+			let nm = try fieldNames.get(i) otherwise continue
+			if nm == fieldName 'matched'
+				let resolvedId = try fieldExprs.get(i) otherwise return StructBackingDescendResult.none()
+				return StructBackingDescendResult.hit(resolvedId)
+			end 'matched'
+		end 'eachField'
+		return StructBackingDescendResult.none()
+	end 'findStructLitFieldExprIdInArrays'
+
+	// Evaluate a struct-backing arena node that is expected to be a scalar
+	// leaf (int / float / bool / enumCase). Nested struct literals reached at
+	// this position are not foldable through `.field` access alone (caller's
+	// fieldChain has been fully consumed) — surface as notFound so the
+	// caller emits a diagnostic. Unsupported arms (`nameRef`, `negate`,
+	// arithmetic ops, …) similarly surface as notFound; the parser only
+	// stores leaves the struct-backing surface accepts, so reaching them
+	// here would indicate a forward reference or `parseConstExpr` returning
+	// a richer expression than this fold path knows how to descend.
+	function evaluateStructBackingLeaf(exprId UnresolvedConstExprId) returns StructBackingFoldResult
+		let node = try project.unresolvedConstExprs.get(exprId) otherwise return StructBackingFoldResult.notFound()
+		match node 'leaf'
+			intLit(value) then return StructBackingFoldResult.intHit(value)
+			boolLit(value) then return structBackingFoldFromBool(value)
+			floatLit(bits) then return StructBackingFoldResult.floatHit(bits)
+			enumCase(enumName, caseName) then return evaluateStructBackingEnumCaseLeaf(enumName, caseName: caseName)
+			structLit then return StructBackingFoldResult.notFound()
+			asCast then return StructBackingFoldResult.notFound()
+			stringLit then return StructBackingFoldResult.notFound()
+			nameRef then return StructBackingFoldResult.notFound()
+			negate then return StructBackingFoldResult.notFound()
+			notOp then return StructBackingFoldResult.notFound()
+			add then return StructBackingFoldResult.notFound()
+			sub then return StructBackingFoldResult.notFound()
+			mul then return StructBackingFoldResult.notFound()
+			compareEq then return StructBackingFoldResult.notFound()
+			compareNeq then return StructBackingFoldResult.notFound()
+			compareLt then return StructBackingFoldResult.notFound()
+			compareLte then return StructBackingFoldResult.notFound()
+			compareGt then return StructBackingFoldResult.notFound()
+			compareGte then return StructBackingFoldResult.notFound()
+			logicalAnd then return StructBackingFoldResult.notFound()
+			logicalXor then return StructBackingFoldResult.notFound()
+			logicalOr then return StructBackingFoldResult.notFound()
+		end 'leaf'
+	end 'evaluateStructBackingLeaf'
+
+	function structBackingFoldFromBool(value bool) returns StructBackingFoldResult
+		if value 'asTrue'
+			return StructBackingFoldResult.intHit(1)
+		end 'asTrue'
+		return StructBackingFoldResult.intHit(0)
+	end 'structBackingFoldFromBool'
+
+	function evaluateStructBackingEnumCaseLeaf(enumName String, caseName String) returns StructBackingFoldResult
+		let qualified = "{enumName}.{caseName}"
+		if let entry = try project.topLevelConstants.get(qualified) 'found'
+			return match entry.value 'cv'
+				intValue(v) gives StructBackingFoldResult.intHit(v)
+				floatValue(bits) gives StructBackingFoldResult.floatHit(bits)
+				stringValue gives StructBackingFoldResult.notFound()
+			end 'cv'
+		end 'found'
+		return StructBackingFoldResult.notFound()
+	end 'evaluateStructBackingEnumCaseLeaf'
+
+	// Phase 9 Stage 5: consume the `.field[.field]*` tail of a struct-backing
+	// access chain after `EnumName.caseName` (or `local.rawValue`) has been
+	// recognized. Caller has already validated `cursor` is positioned at the
+	// first `.` and the case carries a `structLit` arena entry at
+	// `rootExprId`. Emits a `MaxonOp.literal` for the folded leaf constant.
+	// The caller's responsibility for `prefixToken` / `memberToken` is purely
+	// diagnostic-source-range plumbing.
+	function parseStructBackingAccessChain(rootExprId UnresolvedConstExprId, prefixToken Token, memberToken Token, block IrBlock) returns ExprResult throws ParserError
+		// Consume `.caseName` so cursor lands on the first chain `.fieldName`.
+		try eat(TokenKind.dot)
+		_ = try consume()
+		// Collect the trailing `.field` chain into a StringArray. `.rawValue`
+		// on a struct-backed enum is reinterpreted as "the struct itself" —
+		// we silently drop it from the lookup chain so `op.rawValue.value`
+		// folds the same way as `Op.case.value` would on a union.
+		var fieldChain = StringArray.create()
+		var lastFieldToken = memberToken
+		while at(TokenKind.dot) 'chain'
+			let chainDot = try cursor.peek(0) otherwise Token.eof()
+			if chainDot.kind != TokenKind.dot 'sanity'
+				break
+			end 'sanity'
+			let chainFieldToken = try cursor.peek(1) otherwise Token.eof()
+			if chainFieldToken.kind != TokenKind.identifier 'noChainField'
+				break
+			end 'noChainField'
+			try eat(TokenKind.dot)
+			_ = try consume()
+			lastFieldToken = chainFieldToken
+			// `.rawValue` is the "open the struct" accessor — never appears
+			// as a field on the user-declared struct. Skip it so subsequent
+			// `.realField` accesses lookup against the struct's own fields.
+			if chainFieldToken.value == "rawValue" 'skipRaw'
+				continue
+			end 'skipRaw'
+			fieldChain.push(chainFieldToken.value)
+		end 'chain'
+		usedTypeAliases.insert(element: prefixToken.value)
+		let foldResult = resolveStructBackingFieldChain(rootExprId: rootExprId, fieldChain: fieldChain)
+		if not foldResult.found 'foldFailed'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum struct backing: could not resolve field chain on '{prefixToken.value}.{memberToken.value}' — verify field names match the struct's declared layout", line: lastFieldToken.line, column: lastFieldToken.column, filePath: filePath)
+			let placeholderName = emitLiteral(block, value: 0, valueType: MaxonType.integer, range: SourceRange.between(prefixToken, last: lastFieldToken))
+			return ExprResult.direct(placeholderName, valueType: MaxonType.integer)
+		end 'foldFailed'
+		// Float vs int leaves emit different valueTypes so downstream
+		// producer-type tracking sees the right answer for chained reads
+		// (`op.rawValue.float.fineFactor` would propagate as float through
+		// the resulting literal).
+		if foldResult.isFloat 'isFloatLeaf'
+			let litName = emitLiteral(block, value: foldResult.floatBits, valueType: MaxonType.float, range: SourceRange.between(prefixToken, last: lastFieldToken))
+			return ExprResult.direct(litName, valueType: MaxonType.float)
+		end 'isFloatLeaf'
+		let litName = emitLiteral(block, value: foldResult.intValue, valueType: MaxonType.integer, range: SourceRange.between(prefixToken, last: lastFieldToken))
+		return ExprResult.direct(litName, valueType: MaxonType.integer)
+	end 'parseStructBackingAccessChain'
+
 	// --- Export dispatch ---
 
 	// True when `kind` opens a top-level declaration — used by error-recovery
@@ -2212,6 +2705,7 @@ export type Parser
 			function then try parseFunction("", isInstance: false, fields: StructFieldArray.create(), visibility: visibility)
 			type then try parseTypeDecl(visibility)
 			enum then try parseEnumDecl(visibility)
+			union then try parseUnionDecl(visibility)
 			interface then try parseInterfaceDecl(visibility)
 			extension then try parseExtension(visibility)
 			let then try parseTopLevelDecl(typeName: "", mutable: false, visibility: visibility)
@@ -2814,6 +3308,12 @@ export type Parser
 		// union since the resolution rules are simple enough to compute inline.
 		var hasExplicitBacking = false
 		var isFloatBacked = false
+		// Phase 9 Stage 5 (struct-backing): when a case carries
+		// `= StructType{...}`, the struct type fixes the backing for every
+		// case in the enum. Empty means no struct backing has been seen yet;
+		// the first such case populates this, and subsequent cases must
+		// match (E3032 on mismatch).
+		var enumStructBackingTypeName = ""
 		var nextOrdinal = 0 as IntConstant
 		// Methods are emitted inline as the body is walked. The pre-registered
 		// (empty-cases) UnresolvedEnumType above lets a method's `match self`
@@ -2862,6 +3362,8 @@ export type Parser
 
 			var rawValue = nextOrdinal
 			var rawIsFloat = false
+			var caseBackingTypeName = ""
+			var caseBackingExprId = 0 as UnresolvedConstExprId
 
 			if accept(TokenKind.equals) 'hasRawValue'
 				let valueToken = cursor.current()
@@ -2873,6 +3375,9 @@ export type Parser
 					if hasExplicitBacking and isFloatBacked 'mismatch'
 						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected float, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					end 'mismatch'
+					if not enumStructBackingTypeName.isEmpty() 'structVsIntMix'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'structVsIntMix'
 					hasExplicitBacking = true
 					nextOrdinal = parsed + 1
 				end 'isInt' else if valueToken.kind == TokenKind.floatLiteral 'isFloat'
@@ -2883,11 +3388,39 @@ export type Parser
 					if hasExplicitBacking and not isFloatBacked 'intMismatch'
 						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected int, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					end 'intMismatch'
+					if not enumStructBackingTypeName.isEmpty() 'structVsFloatMix'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got float'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'structVsFloatMix'
 					hasExplicitBacking = true
 					isFloatBacked = true
-					// Float-backed cases don't auto-increment — every case
-					// must specify its raw value explicitly.
-				end 'isFloat' else 'badRawValue'
+				end 'isFloat' else if valueToken.kind == TokenKind.identifier 'isStructBacking'
+					// Phase 9 Stage 5: `caseName = StructType{...}` /
+					// `caseName = StructType.create(...)` — capture the per-case
+					// struct backing literal. The struct type is fixed by the
+					// first such case; subsequent cases must use the same type.
+					// The cases keep their auto-assigned ordinal as the rawValue
+					// (the runtime representation is the ordinal i64).
+					let structTypeNameForCase = valueToken.value
+					if not enumStructBackingTypeName.isEmpty() and structTypeNameForCase != enumStructBackingTypeName 'wrongStructType'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'wrongStructType'
+					if hasExplicitBacking 'numericVsStruct'
+						var priorBacking = "int"
+						if isFloatBacked 'asFloat'
+							priorBacking = "float"
+						end 'asFloat'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'numericVsStruct'
+					let exprId = try parseConstStructLiteralRoot()
+					caseBackingTypeName = structTypeNameForCase
+					caseBackingExprId = exprId
+					if enumStructBackingTypeName.isEmpty() 'firstStruct'
+						enumStructBackingTypeName = structTypeNameForCase
+					end 'firstStruct'
+					rawValue = nextOrdinal
+					rawIsFloat = false
+					nextOrdinal = nextOrdinal + 1
+				end 'isStructBacking' else 'badRawValue'
 					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int or float literal, got '{tokenValueToString(valueToken.value)}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
 					try cursor.advance() otherwise break
 				end 'badRawValue'
@@ -2895,6 +3428,9 @@ export type Parser
 				if hasExplicitBacking and isFloatBacked 'floatRequiresExplicit'
 					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "float-backed enum case '{caseName}' requires an explicit raw value", line: caseToken.line, column: caseToken.column, filePath: filePath)
 				end 'floatRequiresExplicit'
+				if not enumStructBackingTypeName.isEmpty() 'structRequiresExplicit'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'structRequiresExplicit'
 				rawValue = nextOrdinal
 				rawIsFloat = false
 				nextOrdinal = nextOrdinal + 1
@@ -2924,7 +3460,7 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column))
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
@@ -2963,10 +3499,636 @@ export type Parser
 		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 
+		// Phase 9 Stage 5: synthesize the per-enum `.fromRawValue` /
+		// `.fromName` lookup helpers. The parser-side call-site rewrite
+		// (in parseIdentifierExpr's static-call arm) targets these names
+		// directly, so they must exist before any call sites get parsed
+		// — but bodies emitted here go through the regular call-resolution
+		// pipeline along with every other user-written function. Struct-
+		// backed enums skip the `.fromRawValue` synthesis: the raw value
+		// is a struct literal, not an int, so the lookup form
+		// `EnumName.fromRawValue(intLit)` is rejected per
+		// `enum-struct-backing.md`'s `error.struct-backing-fromRawValue`
+		// test (E3034 unknown enum case). `.fromName` stays synthesized so
+		// the user-facing `Name → Case` mapping still works on struct-
+		// backed enums (the spec doesn't forbid it).
+		synthesizeEnumLookupHelpers(enumName: currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: not enumStructBackingTypeName.isEmpty())
+
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
 		try skipEndAndLabel()
 	end 'parseEnumDecl'
+
+	// --- Union declaration parsing (Phase 9 Stage 2) ---
+	//
+	// Parse: union Name [implements I1, I2]
+	//            caseName                          # bare case (no payload)
+	//            caseName(field1 T1, field2 T2)    # payload case
+	//            function method() ...             # method
+	//        end 'Name'
+	//
+	// Unions share `project.unresolvedEnums` storage with enums (the
+	// `isUnion` flag distinguishes them); resolution machinery is identical
+	// except for the typealias-injection step. A union value is a heap
+	// pointer with distinct type identity — `internMaxonType` returns
+	// `MaxonType.named(unionName)` and lowering keeps it 8 bytes wide. No
+	// ranged-int alias is registered.
+	//
+	// Bare cases register a `TopLevelConstant` keyed `UnionName.caseName`
+	// so existing `Type.case` reads work unchanged. Payload cases skip the
+	// constant registration and synthesise a constructor function
+	// (`__construct_{UnionName}_{caseName}`) so `Type.case(args)` lowers
+	// through TypeResolution's normal call path.
+	function parseUnionDecl(visibility Visibility) throws ParserError
+		let unionNameToken = try consume()
+		checkReservedDeclName(unionNameToken)
+
+		currentTypeName = unionNameToken.value
+		currentEnumVisibility = visibility
+		logTrace(LogCategory.parser, message: () gives "parser: union '{currentTypeName}'")
+
+		let conformances = try parseImplementsClause()
+
+		// Pre-register with an empty case list so method bodies parsed below
+		// resolve `match self` against the union's named MaxonType. Patched
+		// once the body has been walked.
+		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true)
+		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupUnionPre'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate union '{currentTypeName}'", line: unionNameToken.line, column: unionNameToken.column, filePath: filePath)
+			currentTypeName = ""
+			synchronize()
+			return
+		end 'dupUnionPre'
+
+		try skipNewlines()
+
+		var cases = EnumCaseArray.create()
+		var caseNames = ReferencedVarSet.create()
+		// Phase 9 Stage 5 (struct-backing): the first case carrying
+		// `= StructType{...}` fixes the union's backing struct type. Later
+		// cases must use the same type — mismatch raises E3032.
+		var unionStructBackingTypeName = ""
+
+		while true 'body'
+			let bodyPrevPos = cursor.index()
+			let memberToken = cursor.current()
+
+			if memberToken.kind == TokenKind.end and lookaheadIsBlockEnd() 'isEnd'
+				break
+			end 'isEnd'
+
+			// `function` as method-keyword vs `function` as a keyword-named
+			// union case mirrors the enum rule: method form is always followed
+			// by an identifier (the method name); case form is followed by `(`
+			// or a newline / block end.
+			if memberToken.kind == TokenKind.function and lookaheadIsMethodSignature() 'isMethod'
+				try eat(TokenKind.function)
+				try parseEnumMethod(currentTypeName)
+				try skipNewlines()
+				if cursor.index() <= bodyPrevPos 'methodStuck'
+					try cursor.advance() otherwise break
+				end 'methodStuck'
+				continue
+			end 'isMethod'
+
+			let caseToken = try consume()
+			let caseName = caseToken.value
+			checkReservedDeclName(caseToken)
+
+			let isDuplicateCase = caseNames.contains(caseName)
+			if isDuplicateCase 'duplicateCase'
+				reportCompileError(project, code: ErrorCode.semanticEnumDuplicateCase, message: "duplicate union case: '{caseName}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'duplicateCase' else 'recordCase'
+				caseNames.insert(element: caseName)
+			end 'recordCase'
+
+			var payloadFields = EnumPayloadFieldArray.create()
+			if accept(TokenKind.leftParen) 'hasPayload'
+				try parseUnionCasePayload(payloadFields)
+			end 'hasPayload'
+
+			// Phase 9 Stage 5 (struct-backing): optional
+			// `= StructType{...}` / `= StructType.create(...)` after the
+			// optional payload list. Cross-case consistency is required: every
+			// case must use the same struct type.
+			var caseBackingTypeName = ""
+			var caseBackingExprId = 0 as UnresolvedConstExprId
+			if accept(TokenKind.equals) 'hasBacking'
+				let valueToken = cursor.current()
+				if valueToken.kind != TokenKind.identifier 'badBacking'
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "union case backing must be 'StructType\{...\}' or 'StructType.create(...)', got '{tokenValueToString(valueToken.value)}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
+					try cursor.advance() otherwise break
+				end 'badBacking' else 'isStructBacking'
+					let structTypeNameForCase = valueToken.value
+					if not unionStructBackingTypeName.isEmpty() and structTypeNameForCase != unionStructBackingTypeName 'wrongStructType'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {unionStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'wrongStructType'
+					let exprId = try parseConstStructLiteralRoot()
+					caseBackingTypeName = structTypeNameForCase
+					caseBackingExprId = exprId
+					if unionStructBackingTypeName.isEmpty() 'firstStruct'
+						unionStructBackingTypeName = structTypeNameForCase
+					end 'firstStruct'
+				end 'isStructBacking'
+			end 'hasBacking'
+
+			if isDuplicateCase 'skipDup'
+				try skipNewlines()
+				continue
+			end 'skipDup'
+
+			let ordinalSlot = cases.count() as CaseOrdinal
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: ordinalSlot as IntConstant, line: caseToken.line, column: caseToken.column, payloadFields: payloadFields, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
+
+			// Phase 9 Stage 3: every union case — bare or payload-bearing —
+			// is heap-boxed so all values of the union type share a uniform
+			// `i64 tag + maxArity*8 payload` shape. The match-side tag
+			// dispatch then unconditionally loads the tag from offset 0
+			// without needing to distinguish bare vs payload cases at
+			// lowering time. Bare cases get a no-arg constructor
+			// `__construct_Union_Bare()` returning the boxed union value.
+			synthesizeUnionConstructor(unionName: currentTypeName, caseName: caseName, payloadFields: payloadFields, line: caseToken.line, column: caseToken.column, visibility: visibility)
+
+			try skipNewlines()
+
+			if cursor.index() <= bodyPrevPos 'caseStuck'
+				try cursor.advance() otherwise break
+			end 'caseStuck'
+		end 'body'
+
+		// Patch the pre-registered placeholder with the full case list. Union
+		// names do NOT get an int/float-ranged typealias — `internMaxonType`
+		// hands out `MaxonType.named(currentTypeName)` and lowering treats
+		// the value as an 8-byte heap pointer. The duplicate-name diagnostic
+		// was already issued above when the placeholder insert failed.
+		let unresolvedUnion = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: false, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true)
+		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedUnion)
+
+		// Phase 9 Stage 4: synthesize the `.unionCases` companion bare-enum
+		// per `specs/union-cases.md`. One bare case per variant of the
+		// union, ordinals matching the parent union's tag values. The
+		// companion has its own MaxonType identity + typealias + per-case
+		// TopLevelConstant entries, so `Shape.unionCases.circle` resolves
+		// through the same plumbing as `Color.red` — and `.allCases` /
+		// `.allCaseNames` reuse the Stage 1 emitters automatically. Only
+		// emitted when the union has at least one payload-bearing case;
+		// plain enums already expose `.allCases` directly.
+		registerUnionCasesCompanion(unionName: currentTypeName, cases: cases, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column)
+
+		currentTypeName = ""
+		currentEnumVisibility = Visibility.file
+		try skipEndAndLabel()
+	end 'parseUnionDecl'
+
+	// Phase 9 Stage 4: register the `<UnionName>.unionCases` companion enum.
+	// One bare case per variant of the parent union; ordinals match the
+	// parent's tag values; rawValue defaults to ordinal so `.rawValue` and
+	// `.fromRawValue` round-trip cleanly. Skipped when no case carries a
+	// payload — plain enums already provide the same surface natively, and
+	// the spec only mandates the companion for unions with associated values.
+	function registerUnionCasesCompanion(unionName String, cases EnumCaseArray, visibility Visibility, line LineNumber, column ColumnNumber)
+		var hasPayload = false
+		for c in cases 'scanPayload'
+			if c.payloadFields.count() > 0 'isPayloadCase'
+				hasPayload = true
+				break
+			end 'isPayloadCase'
+		end 'scanPayload'
+		if not hasPayload 'noCompanion'
+			return
+		end 'noCompanion'
+		let companionName = "{unionName}.unionCases"
+		// Avoid duplicate registration when a union is re-parsed (e.g. fragment
+		// regeneration with `--update-required`).
+		if project.unresolvedEnums.contains(companionName) or project.enumTypes.contains(companionName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		var companionCases = EnumCaseArray.create()
+		for i in 0 upto cases.count() 'eachCase'
+			let c = try cases.get(i) otherwise panic("registerUnionCasesCompanion: cases.get OOB at {i}")
+			// Mirror the parent case's ordinal so `.rawValue` agrees with the
+			// union's tag value (the natural pairing for de/serialization).
+			companionCases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.ordinal as IntConstant, line: c.line, column: c.column, payloadFields: EnumPayloadFieldArray.create()))
+		end 'eachCase'
+		let companionUnresolved = UnresolvedEnumType.create(companionName, cases: companionCases, isFloatBacked: false, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: ConformanceArray.create(), isUnion: false)
+		try project.unresolvedEnums.insert(companionName, value: companionUnresolved) otherwise ignore
+		// Register each case as a top-level integer constant so the lookup
+		// path in `parseIdentifierExpr` finds `Shape.unionCases.circle`.
+		for i in 0 upto companionCases.count() 'eachConst'
+			let c = try companionCases.get(i) otherwise panic("registerUnionCasesCompanion: companionCases.get OOB at {i}")
+			let qualifiedName = "{companionName}.{c.name}"
+			let caseEntry = TopLevelConstant.create(ConstantValue.intValue(c.rawValue), visibility: visibility, sourceFilePath: filePath)
+			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise ignore
+		end 'eachConst'
+		// Register a typealias `companionName → int(0 to N)` so a value of
+		// the companion enum can flow through let/var/param slots the same
+		// way bare enum values do.
+		let aliasExpr = UnresolvedTypeExpr.rangedInt(0, upper: enumIntUpperBound(companionCases))
+		if not project.typealiases.contains(companionName) and not project.unresolvedTypealiases.contains(companionName) 'registerAlias'
+			project.unresolvedTypealiases.upsert(companionName, value: UnresolvedTypealias.create(companionName, expr: aliasExpr, visibility: visibility, line: line, column: column, filePath: filePath))
+		end 'registerAlias'
+
+		// Phase 9 Stage 5: the companion is itself a bare enum, so it gets
+		// the same `.fromRawValue` / `.fromName` lookup helpers a
+		// standalone enum would. `Shape.unionCases.fromRawValue(0)` then
+		// dispatches through `__enum_Shape.unionCases_fromRawValue`.
+		synthesizeEnumLookupHelpers(enumName: companionName, cases: companionCases, isFloatBacked: false, visibility: visibility, line: line, column: column)
+	end 'registerUnionCasesCompanion'
+
+	// Parse the parenthesized payload-field list for a union case after the
+	// opening `(` has been consumed. Each field is `name Type`, separated by
+	// commas. On a malformed entry we synchronize past the `)` so the outer
+	// case loop can advance to the next case without losing state.
+	function parseUnionCasePayload(payloadFields EnumPayloadFieldArray) throws ParserError
+		if at(TokenKind.rightParen) 'emptyPayload'
+			try eat(TokenKind.rightParen)
+			return
+		end 'emptyPayload'
+
+		while true 'fieldLoop'
+			let fieldNameToken = try consumeExpecting("identifier")
+			if not tokenIsIdentifierLike(fieldNameToken) 'badName'
+				reportTokenMismatch(fieldNameToken, expectedDisplay: "identifier")
+				synchronize()
+				return
+			end 'badName'
+
+			checkReservedDeclName(fieldNameToken)
+
+			let fieldType = try parseTypeRef()
+			if at(TokenKind.rightParen) and isUnresolvedMaxonType(fieldType) 'recovered'
+				try eat(TokenKind.rightParen)
+				return
+			end 'recovered'
+
+			payloadFields.push(EnumPayloadField.create(fieldNameToken.value, fieldType: fieldType))
+
+			if at(TokenKind.rightParen) 'doneList'
+				try eat(TokenKind.rightParen)
+				return
+			end 'doneList'
+			try expect(TokenKind.comma)
+		end 'fieldLoop'
+	end 'parseUnionCasePayload'
+
+	// Register a synthetic constructor function for a payload union case.
+	// Each `caseName(field1 T1, field2 T2)` payload variant gets a function
+	// `__construct_{UnionName}_{caseName}(field1 T1, field2 T2) returns {UnionName}`
+	// so `EnumName.caseName(args)` resolves through TypeResolution's call
+	// path. Stage 2 leaves the body as a single `MaxonOp.error` placeholder
+	// — Stage 3 will emit the actual alloc + per-field store sequence.
+	function synthesizeUnionConstructor(unionName String, caseName String, payloadFields EnumPayloadFieldArray, line LineNumber, column ColumnNumber, visibility Visibility)
+		let funcName = unionConstructorSymbolName(unionName, caseName: caseName)
+		if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+			// Duplicate-case detection already reported E3030 — the parser
+			// suppresses the second case push but may still reach this
+			// synthesis path. Skip silently rather than overwriting.
+			return
+		end 'alreadyRegistered'
+
+		var paramNames = StringArray.create()
+		var paramTypes = MaxonTypeArray.create()
+		var paramDefaults = ParamDefaultArray.create()
+		for i in 0 upto payloadFields.count() 'eachField'
+			let field = try payloadFields.get(i) otherwise panic("synthesizeUnionConstructor: payloadFields.get OOB at {i}")
+			paramNames.push(field.name)
+			paramTypes.push(field.fieldType)
+			paramDefaults.push(ParamDefault.none)
+		end 'eachField'
+
+		let returnMaxonType = internMaxonType(project, name: unionName)
+		let returnType = MaxonReturnType.value(returnMaxonType)
+
+		// Register signature + return type so call-site argument reordering
+		// and named-arg defaults pick the synthetic function up exactly like
+		// a user-written `static function`.
+		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeUnionConstructor: funcReturnTypes collision on '{funcName}'")
+		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeUnionConstructor: funcSignatures collision on '{funcName}'")
+		project.methodNameIndex.record(funcName)
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
+		try project.funcThrowsTypes.insert(funcName, value: ThrowsClause.none) otherwise ignore
+
+		// Build the synthetic body: declare a slot per payload field,
+		// `varLoad` each (so the resulting name is bound for the
+		// `enumConstruct` operand list), `enumConstruct` the union value,
+		// and return it. Slot indices match the param positions by
+		// construction — `func.scope` starts empty and `declare` hands out
+		// slots in declaration order, so slot 0 = first param, etc.
+		// Mirrors how a user-written `function name(args) ...` body
+		// observes its parameters.
+		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: ThrowsClause.none)
+		func.namespace = namespace
+		func.visibility = visibility
+		func.sourceFilePath = filePath
+		func.nameLine = line
+		func.nameColumn = column
+		var bodyBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+		var payloadValueNames = ByteArrayArray.create()
+		for i in 0 upto payloadFields.count() 'eachField'
+			let field = try payloadFields.get(i) otherwise panic("synthesizeUnionConstructor: payloadFields.get OOB at {i}")
+			let slot = func.scope.declare(field.name, varType: field.fieldType, mutable: false)
+			let loadedName = "__ctor_arg_{i}".toByteArray()
+			module.appendOp(bodyBlock, op: MaxonOp.varLoad(loadedName, slotId: slot, slotType: field.fieldType, range: SourceRange.none()))
+			payloadValueNames.push(loadedName)
+		end 'eachField'
+		let resultName = "__ctor_result".toByteArray()
+		module.appendOp(bodyBlock, op: MaxonOp.enumConstruct(resultName, enumName: unionName, caseName: caseName, payloadValues: payloadValueNames, range: SourceRange.none()))
+		module.setTerminator(bodyBlock, op: MaxonOp.ret(resultName, range: SourceRange.none()))
+		module.functions.push(func)
+	end 'synthesizeUnionConstructor'
+
+	// Phase 9 Stage 5: returns true when `enumName` resolves to a union
+	// type (one with any case carrying associated values). The parser
+	// uses this to decide whether `<Name>.fromRawValue(...)` and
+	// `<Name>.fromName(...)` calls should be redirected to a synthesized
+	// lookup helper. Pure unions (associated-value cases) are excluded
+	// because their `.fromRawValue` is explicitly rejected by the spec
+	// (E3034 from TypeResolution) and their `.fromName` needs a
+	// payload-routing path not yet synthesized. The `.unionCases`
+	// companion enums are bare enums (their cases have no payload fields),
+	// so they take the regular helper path.
+	function enumIsAssociatedValueUnion(enumName String) returns bool
+		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
+			return resolved.isUnion
+		end 'isResolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			return unresolved.isUnion
+		end 'isUnresolved'
+		return false
+	end 'enumIsAssociatedValueUnion'
+
+	// Phase 9 Stage 5: true when at least one case on `enumName` carries a
+	// `= StructType{...}` / `= StructType.create(...)` backing literal. Used
+	// to suppress `.fromRawValue(...)` rewrite (the struct rawValue can't
+	// be reconstructed from an int) per `error.struct-backing-fromRawValue`.
+	function enumIsStructBacked(enumName String) returns bool
+		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
+			for c in resolved.cases 'scan'
+				if not c.backingStructName.isEmpty() 'hit'
+					return true
+				end 'hit'
+			end 'scan'
+		end 'isResolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			for c in unresolved.cases 'scan2'
+				if not c.backingStructName.isEmpty() 'hit2'
+					return true
+				end 'hit2'
+			end 'scan2'
+		end 'isUnresolved'
+		return false
+	end 'enumIsStructBacked'
+
+	// Phase 9 Stage 5: synthesize the `__enum_<EnumName>_fromRawValue(raw)`
+	// and `__enum_<EnumName>_fromName(name)` lookup helpers for a bare-enum
+	// type (or a union's `.unionCases` companion, which is itself a bare
+	// enum). Both helpers throw the enum's own type on a miss — `try /
+	// otherwise` doesn't bind the error value in any of today's specs, so
+	// reusing the enum as the throws type avoids inventing a dedicated
+	// `__EnumLookupFailure` enum and keeps lowering's `errorReturn(0, flag)`
+	// shape unchanged.
+	//
+	// `fromRawValue` compares the receiver against each case's rawValue and
+	// returns the matched rawValue. For float-backed enums the comparisons
+	// use f64-eq; the return slot also lowers as f64. `fromName` compares
+	// against the case-name strings via `String.equals(...)`.
+	//
+	// Skipped for unions with associated values — the spec rejects
+	// `Union.fromRawValue(...)` outright (E3034), and `Union.fromName(...)`
+	// for associated-value unions needs a heap-allocating construction path
+	// that mirrors `synthesizeUnionConstructor` plus payload-arg routing.
+	// That richer form is deferred until a downstream spec demands it; the
+	// 3 enum-full `fromName-associated-*` fragments stay non-whitelisted
+	// for the same reason.
+	function synthesizeEnumLookupHelpers(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, skipFromRawValue bool = false)
+		if cases.count() == 0 'noCases'
+			// Degenerate enum: skip helper synthesis. The empty-case enum is
+			// already an E3030 / E2004 violation surfaced upstream; emitting
+			// helpers here would create a one-block function with a single
+			// `throw` and no return, which Verifier flags as unreachable.
+			return
+		end 'noCases'
+		if not skipFromRawValue 'emitFromRaw'
+			synthesizeEnumFromRawValueHelper(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+		end 'emitFromRaw'
+		synthesizeEnumFromNameHelper(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column)
+	end 'synthesizeEnumLookupHelpers'
+
+	// Synthesize `__enum_<EnumName>_fromRawValue(raw <RawType>) returns
+	// <EnumName> throws <EnumName>`. The body is a linear chain of cmp +
+	// condBr blocks, one per case. On a hit, return the matched rawValue
+	// (which for bare enums IS the runtime representation). On full
+	// fall-through, throw the enum's first case as a sentinel.
+	function synthesizeEnumFromRawValueHelper(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+		let funcName = enumFromRawValueSymbolName(enumName)
+		if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+
+		let rawType = MaxonType.float if isFloatBacked else MaxonType.integer
+		let enumMaxonType = internMaxonType(project, name: enumName)
+		var paramNames = StringArray.create()
+		paramNames.push("raw")
+		var paramTypes = MaxonTypeArray.create()
+		paramTypes.push(rawType)
+		var paramDefaults = ParamDefaultArray.create()
+		paramDefaults.push(ParamDefault.none)
+
+		let returnType = MaxonReturnType.value(enumMaxonType)
+		let throwsClause = ThrowsClause.throwing(enumName)
+
+		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromRawValueHelper: funcReturnTypes collision on '{funcName}'")
+		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromRawValueHelper: funcSignatures collision on '{funcName}'")
+		project.methodNameIndex.record(funcName)
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
+		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise ignore
+
+		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+		func.namespace = namespace
+		func.visibility = visibility
+		func.sourceFilePath = filePath
+		func.nameLine = line
+		func.nameColumn = column
+
+		// Swap in a clean synth-counter so names minted for this helper
+		// don't collide with the caller's parser state. The helper has no
+		// user-written body so the saved counter restores back to the
+		// caller's stream unchanged.
+		let savedFunc = currentFunc
+		let savedBlock = currentBlock
+		let savedSynth = synthNameCounter
+		currentFunc = func
+		synthNameCounter = 0
+
+		// Declare the `raw` parameter as the function's first slot. The
+		// `varLoad` that follows reads its value into an SSA name we can
+		// compare against each case's raw value.
+		let rawSlot = func.scope.declare("raw", varType: rawType, mutable: false)
+		var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+		currentBlock = entryBlock
+		let rawName = freshSynthName()
+		module.appendOp(entryBlock, op: MaxonOp.varLoad(rawName, slotId: rawSlot, slotType: rawType, range: SourceRange.none()))
+
+		// Chain of comparisons: for each case, emit a cmp + condBr to the
+		// per-case return block, threading the else-target through the next
+		// check block. The final miss falls through to a throw block.
+		// The throw-on-miss block is created once and shared by every
+		// per-case `else` target on the last iteration. The remaining
+		// non-last iterations branch into a fresh `check_{i+1}` block.
+		var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+		var currentCheck = entryBlock
+		let caseCount = cases.count()
+		for i in 0 upto caseCount 'eachCase'
+			let c = try cases.get(i) otherwise panic("synthesizeEnumFromRawValueHelper: cases.get OOB at {i}")
+			var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+			let isLast = i == caseCount - 1
+			// Pre-allocate the next-check block for non-last iterations. On the
+			// last iteration the miss falls into `throwBlock` directly, so no
+			// further check block is needed.
+			var nextCheck = currentCheck
+			if not isLast 'allocNext'
+				nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+			end 'allocNext'
+
+			// cmp raw == case.rawValue
+			let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
+			let litName = freshSynthName()
+			module.appendOp(currentCheck, op: MaxonOp.literal(litName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+			let cmpName = freshSynthName()
+			module.appendOp(currentCheck, op: MaxonOp.cmp(cmpName, left: rawName, right: litName, predicate: CmpPredicate.eq, leftType: rawType, rightType: rawType, operandType: rawType, range: SourceRange.none()))
+			let elseTarget = throwBlock.id if isLast else nextCheck.id
+			module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+
+			// Per-case return body: emit the case's rawValue and return it.
+			currentBlock = returnBlock
+			let resultLitName = freshSynthName()
+			module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+			module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
+
+			currentCheck = nextCheck
+		end 'eachCase'
+
+		// Final miss: throw the enum's first case as a sentinel value. The
+		// throws ABI carries (value: 0, flag: ordinal+1); callers' `try /
+		// otherwise` only inspect the flag's nonzeroness in today's specs,
+		// so the variant choice is purely a placeholder. Using the first
+		// case (ordinal 0) keeps the flag a stable `1` across every helper.
+		let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromRawValueHelper: cases.get(0) failed despite count check")
+		// Empty payload-value name: `fromRawValue` is only synthesized for
+		// bare-case enums (Phase 9 Stage 5 gates struct-backed / union enums
+		// out), so the throw never needs to carry a union pointer.
+		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+
+		module.functions.push(func)
+		project.livenessRoots.push(funcName)
+
+		currentFunc = savedFunc
+		currentBlock = savedBlock
+		synthNameCounter = savedSynth
+	end 'synthesizeEnumFromRawValueHelper'
+
+	// Synthesize `__enum_<EnumName>_fromName(name String) returns <EnumName>
+	// throws <EnumName>`. Body shape mirrors `fromRawValue` but the
+	// per-case comparison is `name.equals("<caseName>")` (a methodCall the
+	// String extension intercepts at lowering) instead of a primitive cmp.
+	// Returns the case's rawValue on a hit.
+	function synthesizeEnumFromNameHelper(enumName String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber)
+		let funcName = enumFromNameSymbolName(enumName)
+		if project.funcReturnTypes.contains(funcName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+
+		let stringMaxonType = MaxonType.named(project.typeNames.intern("String"))
+		let enumMaxonType = internMaxonType(project, name: enumName)
+		var paramNames = StringArray.create()
+		paramNames.push("name")
+		var paramTypes = MaxonTypeArray.create()
+		paramTypes.push(stringMaxonType)
+		var paramDefaults = ParamDefaultArray.create()
+		paramDefaults.push(ParamDefault.none)
+
+		let returnType = MaxonReturnType.value(enumMaxonType)
+		let throwsClause = ThrowsClause.throwing(enumName)
+
+		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromNameHelper: funcReturnTypes collision on '{funcName}'")
+		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromNameHelper: funcSignatures collision on '{funcName}'")
+		project.methodNameIndex.record(funcName)
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
+		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise ignore
+
+		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
+		func.namespace = namespace
+		func.visibility = visibility
+		func.sourceFilePath = filePath
+		func.nameLine = line
+		func.nameColumn = column
+
+		let savedFunc = currentFunc
+		let savedBlock = currentBlock
+		let savedSynth = synthNameCounter
+		currentFunc = func
+		synthNameCounter = 0
+
+		let nameSlot = func.scope.declare("name", varType: stringMaxonType, mutable: false)
+		var entryBlock = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: line)
+		currentBlock = entryBlock
+		let receiverName = freshSynthName()
+		module.appendOp(entryBlock, op: MaxonOp.varLoad(receiverName, slotId: nameSlot, slotType: stringMaxonType, range: SourceRange.none()))
+
+		let litValueType = MaxonType.float if isFloatBacked else MaxonType.integer
+		// Shared throw-on-miss block — see the fromRawValue helper for the
+		// rationale on a single shared sink.
+		var throwBlock = module.addBlockAt(func, label: "no_match_throw", filePath: filePath.toString(), firstLine: line)
+		var currentCheck = entryBlock
+		let caseCount = cases.count()
+		for i in 0 upto caseCount 'eachCase'
+			let c = try cases.get(i) otherwise panic("synthesizeEnumFromNameHelper: cases.get OOB at {i}")
+			var returnBlock = module.addBlockAt(func, label: "case_{i}_return", filePath: filePath.toString(), firstLine: line)
+			let isLast = i == caseCount - 1
+			var nextCheck = currentCheck
+			if not isLast 'allocNext'
+				nextCheck = module.addBlockAt(func, label: "check_{i + 1}", filePath: filePath.toString(), firstLine: line)
+			end 'allocNext'
+
+			// Build a string literal for the case name and call
+			// `name.equals(<caseName>)`. The methodCall result type is
+			// pinned by TypeResolution from the receiver's String type.
+			let caseNameStringId = project.strings.intern(c.name)
+			let caseNameLitName = freshSynthName()
+			module.appendOp(currentCheck, op: MaxonOp.stringConst(caseNameLitName, stringId: caseNameStringId, range: SourceRange.none()))
+			var equalsArgs = ByteArrayArray.create()
+			equalsArgs.push(caseNameLitName)
+			var equalsArgLabels = StringArray.create()
+			equalsArgLabels.push("")
+			var equalsArgTypes = MaxonTypeArray.create()
+			equalsArgTypes.push(stringMaxonType)
+			var equalsArgRanges = SourceRangeArray.create()
+			equalsArgRanges.push(SourceRange.none())
+			let cmpName = freshSynthName()
+			module.appendOp(currentCheck, op: MaxonOp.methodCall(cmpName, receiver: receiverName, methodName: "equals".toByteArray(), args: equalsArgs, argLabels: equalsArgLabels, argTypes: equalsArgTypes, argRanges: equalsArgRanges, range: SourceRange.none()))
+			let elseTarget = throwBlock.id if isLast else nextCheck.id
+			module.setTerminator(currentCheck, op: MaxonOp.condBr(cmpName, thenTarget: returnBlock.id, elseTarget: elseTarget, range: SourceRange.none()))
+
+			currentBlock = returnBlock
+			let resultLitName = freshSynthName()
+			module.appendOp(returnBlock, op: MaxonOp.literal(resultLitName, value: c.rawValue, valueType: litValueType, range: SourceRange.none()))
+			module.setTerminator(returnBlock, op: MaxonOp.ret(resultLitName, range: SourceRange.none()))
+
+			currentCheck = nextCheck
+		end 'eachCase'
+
+		let firstCase = try cases.get(0) otherwise panic("synthesizeEnumFromNameHelper: cases.get(0) failed despite count check")
+		// Empty payload-value name: `fromName` is only synthesized for
+		// bare-case enums; the throw carries no union pointer.
+		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
+
+		module.functions.push(func)
+		project.livenessRoots.push(funcName)
+
+		currentFunc = savedFunc
+		currentBlock = savedBlock
+		synthNameCounter = savedSynth
+	end 'synthesizeEnumFromNameHelper'
 
 	// --- Interface declaration parsing ---
 	//
@@ -3683,7 +4845,7 @@ export type Parser
 		module.appendOp(block, op: MaxonOp.panic(stringId, range: SourceRange.between(panicToken, last: rparenToken)))
 	end 'parsePanicStatement'
 
-	// Parse: throw EnumName.variantName
+	// Parse: throw EnumName.variantName [(arg, ...)]
 	// Lowering: emit MaxonOp.throw, which lowers to a single
 	// `StdCallOp.errorReturn` op that places the variant ordinal+1 in the
 	// secondary error register (RDX/X1) alongside a default primary value
@@ -3694,13 +4856,51 @@ export type Parser
 	// terminator: setTerminator places it as the block's tail op so the
 	// caller marks `lastWasReturn = true` and stops emitting into this
 	// block.
+	//
+	// Phase 9 Stage 5c: `throw EnumName.case(args)` on an associated-value
+	// union error enum lowers to a call to the synthesized
+	// `__construct_EnumName_case` constructor followed by a throw that
+	// threads the constructor result through the multi-value-return value
+	// slot. The flag remains `ordinal + 1`; the value slot's meaning flips
+	// from "default placeholder" to "union pointer" at the caller's
+	// `try ... otherwise (e)` site.
 	function parseThrowStatement(block IrBlock) throws ParserError
 		let throwToken = try consume()  // caller has already dispatched on 'throw'
 		let typeNameToken = try consumeExpecting("error type name")
 		try expect(TokenKind.dot)
 		let variantToken = try consumeExpecting("error variant name")
-		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, range: SourceRange.between(throwToken, last: variantToken)))
+		if at(TokenKind.leftParen) 'hasPayload'
+			let ctorCall = try emitUnionThrowConstruction(block, typeNameToken: typeNameToken, variantToken: variantToken)
+			module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ctorCall.resultName, range: SourceRange.between(throwToken, last: ctorCall.lastToken)))
+			return
+		end 'hasPayload'
+		module.setTerminator(block, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ByteArray.create(), range: SourceRange.between(throwToken, last: variantToken)))
 	end 'parseThrowStatement'
+
+	// Phase 9 Stage 5c: emit the constructor call for `throw EnumName.case(args)`
+	// and return both the SSA name binding the constructed union pointer and
+	// the closing paren token (for caller's source-range diagnostics).
+	// Caller has already consumed `EnumName.case` and is positioned at `(`.
+	// Calls `parseCallArgsRaw` to parse the argument list, then routes through
+	// `emitCallAndResult` against the synthesized `__construct_EnumName_case`
+	// symbol — exactly the same lowering path `EnumName.case(args)` takes as
+	// a value expression. The throw op consumes this result through its
+	// `payloadValueName` slot.
+	function emitUnionThrowConstruction(block IrBlock, typeNameToken Token, variantToken Token) returns ThrowConstructionResult throws ParserError
+		let lparen = cursor.current()
+		// Consume the `(` so parseCallArgsRaw enters with cursor on the
+		// first arg's first token (mirroring every other Foo.bar(args) site).
+		try eat(TokenKind.leftParen)
+		let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+		let rparenToken = previousToken()
+		// Route through the synthesized constructor symbol so TypeResolution
+		// arity-checks and arg-reorders against the registered signature.
+		// `emitCallAndResult` emits a regular `MaxonOp.call`, returns the
+		// fresh result name, and leaves `currentBlock` unchanged.
+		let ctorName = unionConstructorSymbolName(typeNameToken.value, caseName: variantToken.value)
+		let result = emitCallAndResult(block, calleeName: ctorName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(lparen, last: rparenToken))
+		return ThrowConstructionResult.create(resultName: exprName(result), lastToken: rparenToken)
+	end 'emitUnionThrowConstruction'
 
 	// --- If statement ---
 
@@ -4009,6 +5209,20 @@ export type Parser
 	// the result's `failed` flag is set.
 	function parseMatchHeader() returns MatchHeader throws ParserError
 		try eat(TokenKind.match)
+		// Phase 9 Stage 4: probe for a bare-identifier scrutinee BEFORE
+		// `parseExpression` consumes the token. When the scrutinee is a bare
+		// identifier referring to a mutable scope local, payload bindings
+		// inherit that mutability — they can be assigned to via
+		// `enumPayloadStore`. For anything more complex (struct fields,
+		// computed expressions, immutable locals) bindings stay read-only
+		// and assignment-to-binding fires E2013.
+		var scrutineeMutable = false
+		let cur = cursor.current()
+		let nxt = try cursor.peek(1) otherwise Token.eof()
+		if cur.kind == TokenKind.identifier and nxt.kind == TokenKind.charLiteral and scope.contains(cur.value) 'isBareLocal'
+			let info = scope.getInfo(cur.value)
+			scrutineeMutable = info.mutable
+		end 'isBareLocal'
 		let scrutineeResult = try parseExpression(currentBlock)
 		if not at(TokenKind.charLiteral) 'noLabel'
 			let tok = cursor.current()
@@ -4024,7 +5238,7 @@ export type Parser
 		_ = skipOptionalNewlines()
 		let baseLabel = "{userLabel}_{currentFunc.nextBlockId}"
 		let mergeBlock = module.addBlockAt(currentFunc, label: "{baseLabel}.merge", filePath: filePath.toString(), firstLine: cursor.current().line)
-		return MatchHeader.create(scrutineeName: exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock)
+		return MatchHeader.create(scrutineeName: exprName(scrutineeResult), scrutineeType: exprType(scrutineeResult), userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, scrutineeMutable: scrutineeMutable)
 	end 'parseMatchHeader'
 
 	// Consume `'label'` after `end`, validating it matches the expected label.
@@ -4046,11 +5260,27 @@ export type Parser
 		end 'hasLabel'
 	end 'consumeMatchEndLabel'
 
+	// Decode a single-byte character literal to its byte value. Multi-byte
+	// char literals (escaped Unicode, multi-codepoint forms) are rejected
+	// because match arms compare against the scrutinee's single-byte
+	// integer representation. Reports E3005-style with a clear message;
+	// returns 0 as a fallback so downstream wiring stays well-formed.
+	function decodeCharLiteralToByte(charToken Token) returns ParsedInt
+		let decoded = decodeStringEscapes(charToken.value)
+		if decoded.count() != 1 'badLen'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "multi-byte character literal '{tokenValueToString(charToken.value)}' is not allowed in a match pattern; use a single-byte char or an integer literal", line: charToken.line, column: charToken.column, filePath: filePath)
+			return 0
+		end 'badLen'
+		let byteVal = try decoded.get(0) otherwise panic("decodeCharLiteralToByte: count==1 but get(0) failed")
+		return byteVal as ParsedInt
+	end 'decodeCharLiteralToByte'
+
 	// Parse one pattern token: an integer literal (with optional leading `-`),
-	// the `default` keyword, or an identifier (treated as an enum case name).
-	// Returns the spec; reports overflow/error and returns a fallback default
-	// when the token can't be classified. Caller handles `or` chaining and
-	// duplicate detection.
+	// the `default` keyword, an identifier (treated as an enum case name), a
+	// range form `X to|upto Y` on integer literals (with `min` / `max`
+	// sentinels for open-ended bounds). Returns the spec; reports
+	// overflow/error and returns a fallback default when the token can't
+	// be classified. Caller handles `or` chaining and duplicate detection.
 	function parseOneMatchPattern() returns MatchPatternSpec throws ParserError
 		if at(TokenKind.default) 'isDefault'
 			let tok = try consume()
@@ -4058,6 +5288,15 @@ export type Parser
 		end 'isDefault'
 
 		let firstToken = cursor.current()
+
+		// `min to|upto X` — open-ended lower bound on a range pattern. The
+		// lexer emits `min` as an identifier; check the value rather than
+		// a dedicated TokenKind so the keyword stays contextual.
+		if firstToken.kind == TokenKind.identifier and firstToken.value == "min" and isFollowedByRangeKeyword(offset: 1 as ElementCount) 'minRange'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+			return try parseRangePattern(loValue: 0, loDisplay: "min", loToken: firstToken, hasMinSentinel: true)
+		end 'minRange'
+
 		var negate = false
 		if at(TokenKind.minus) 'isNegated'
 			negate = true
@@ -4073,8 +5312,29 @@ export type Parser
 			if negate 'applyNeg'
 				value = 0 - value
 			end 'applyNeg'
+			// Range pattern: `INT to|upto (INT | max)`. Lookahead on the
+			// next token; if it isn't `to` / `upto` this stays a bare int
+			// literal.
+			if at(TokenKind.to) or at(TokenKind.upto) 'isRange'
+				return try parseRangePattern(loValue: value, loDisplay: "{value}", loToken: litToken, hasMinSentinel: false)
+			end 'isRange'
 			return MatchPatternSpec.intLiteral(litToken, value: value, displayName: "{value}")
 		end 'isInt'
+
+		// Character literal patterns lower to integer comparisons against the
+		// scrutinee's byte value. Match machinery treats them as plain
+		// integer-valued patterns — multi-byte literals (which would
+		// require Character-struct equality, not byte equality) are
+		// rejected as out-of-scope for match arms today.
+		if at(TokenKind.charLiteral) 'isChar'
+			let charToken = try consume()
+			let value = decodeCharLiteralToByte(charToken)
+			let displayName = "'{tokenValueToString(charToken.value)}'"
+			if at(TokenKind.to) or at(TokenKind.upto) 'isRange'
+				return try parseRangePattern(loValue: value, loDisplay: displayName, loToken: charToken, hasMinSentinel: false)
+			end 'isRange'
+			return MatchPatternSpec.intLiteral(charToken, value: value, displayName: displayName)
+		end 'isChar'
 
 		// Anything else is treated as an enum case name. The lexer emits the
 		// case identifier as either `TokenKind.identifier` or — when the
@@ -4088,8 +5348,316 @@ export type Parser
 			return MatchPatternSpec.defaultPattern(firstToken)
 		end 'noValue'
 		let caseToken = try consume()
+		// Reject qualified case names (E3075): `Color.red` in a match arm
+		// is a style error — the scrutinee already pins the enum, so the
+		// bare `red` suffices. We bail out of the entire match via
+		// ParserError.typeError after the first emit so the user sees one
+		// canonical diagnostic per match instead of N (one per qualified
+		// arm), matching the bootstrap compiler's fail-fast behavior.
+		if at(TokenKind.dot) 'isQualified'
+			let nextTok = try cursor.peek(1) otherwise return MatchPatternSpec.enumCase(caseToken, caseName: caseToken.value)
+			if nextTok.kind == TokenKind.identifier 'bareCase'
+				try cursor.advance() otherwise return MatchPatternSpec.enumCase(caseToken, caseName: caseToken.value)
+				let qualifiedTok = try consume()
+				reportCompileError(project, code: ErrorCode.semanticMatchQualifiedCaseName, message: "use '{qualifiedTok.value}' instead of '{caseToken.value}.{qualifiedTok.value}' in match", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				throw ParserError.typeError
+			end 'bareCase'
+		end 'isQualified'
+		// Enum-case range: `caseName to|upto caseName`. We resolve both
+		// case ordinals here against `unresolvedEnums` / `enumTypes` (the
+		// parser already knows the scrutinee's enum from the first arm's
+		// caseName, but range patterns can appear before any bare-case arm).
+		// On miss the case-name lookup fails; we emit a fallback bare-case
+		// pattern so TypeResolution can surface the proper diagnostic.
+		if at(TokenKind.to) or at(TokenKind.upto) 'isEnumRange'
+			return try parseEnumRangePattern(loCaseName: caseToken.value, loToken: caseToken)
+		end 'isEnumRange'
+		// Phase 9 Stage 2: payload-binding pattern `caseName(x, _, var y)`.
+		// We parse the binding list here so the resulting MatchPatternSpec
+		// carries the destructure plan; arity / all-discard validation
+		// runs against the case's payload arity. The lookup uses the same
+		// best-effort scan as `parseEnumRangePattern` — when the case is
+		// unknown at parse time, TypeResolution fires E3005 / unknown-case
+		// once the scrutinee's type is known.
+		if at(TokenKind.leftParen) 'isPayloadPattern'
+			return try parseCaseBindingPattern(caseToken)
+		end 'isPayloadPattern'
 		return MatchPatternSpec.enumCase(caseToken, caseName: caseToken.value)
 	end 'parseOneMatchPattern'
+
+	// Parse a payload-binding pattern `caseName(b1, b2, ...)` after the
+	// caseName token has already been consumed. The cursor sits on the
+	// opening `(`. Each binding is `identifier`, `_`, or `var identifier`.
+	// Arity is validated against any union case the parser already knows
+	// about (best-effort — TR finishes the job for unknown cases).
+	function parseCaseBindingPattern(caseToken Token) returns MatchPatternSpec throws ParserError
+		try eat(TokenKind.leftParen)
+		var bindings = MatchPatternBindingArray.create()
+		var bindingNames = ByteArrayArray.create()
+		var allDiscard = true
+
+		if not at(TokenKind.rightParen) 'hasBindings'
+			while true 'bindingLoop'
+				var isVar = false
+				if at(TokenKind.var) 'consumeVar'
+					try eat(TokenKind.var)
+					isVar = true
+				end 'consumeVar'
+
+				let bindingToken = try consume()
+				let isDiscard = bindingToken.value == "_"
+				let bindingName = "" if isDiscard else bindingToken.value
+				bindings.push(MatchPatternBinding.create(bindingName, isDiscard: isDiscard, isVar: isVar, line: bindingToken.line, column: bindingToken.column))
+				bindingNames.push(bindingName.toByteArray())
+				if not isDiscard 'realBinding'
+					allDiscard = false
+				end 'realBinding'
+
+				if at(TokenKind.rightParen) 'doneList'
+					break
+				end 'doneList'
+				try expect(TokenKind.comma)
+			end 'bindingLoop'
+		end 'hasBindings'
+		try eat(TokenKind.rightParen)
+
+		// Best-effort arity check against the owning union case. The
+		// parser already maintains both registries; same lookup
+		// strategy as `parseEnumRangePattern`. On miss we leave validation
+		// to TypeResolution so the user sees one canonical diagnostic.
+		if let expectedArity = try lookupCasePayloadArity(caseToken.value) 'haveArity'
+			if expectedArity != bindings.count() as ParsedInt 'arityMismatch'
+				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "case '{caseToken.value}' takes {expectedArity} payload(s), got {bindings.count()}", line: caseToken.line, column: caseToken.column, filePath: filePath)
+			end 'arityMismatch'
+		end 'haveArity'
+
+		// E3081: an all-discard pattern (`case(_, _)`) provides no usable
+		// bindings; the bare-case form covers the same source intent more
+		// clearly. Only fires when at least one binding was present —
+		// `case()` with zero parens is already arity-checked above.
+		if bindings.count() > 0 and allDiscard 'allDiscarded'
+			reportCompileError(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "all bindings in pattern '{caseToken.value}(...)' are discards; use the bare case name instead", line: caseToken.line, column: caseToken.column, filePath: filePath)
+		end 'allDiscarded'
+
+		return MatchPatternSpec.enumCaseWithBindings(caseToken, caseName: caseToken.value, bindings: bindings, bindingNames: bindingNames)
+	end 'parseCaseBindingPattern'
+
+	// Look up the payload arity for a case name across both enum
+	// registries. Throws `EnumCaseProbeError.notFound` when the case is
+	// unknown — caller routes the miss to TypeResolution for the canonical
+	// diagnostic. Walks resolved enums first, then unresolved — the two
+	// are disjoint by construction (resolved drains unresolved) so the
+	// first hit is canonical.
+	function lookupCasePayloadArity(caseName String) returns ParsedInt throws EnumCaseProbeError
+		// Phase 9 Stage 4: scan unions first and only fall back to bare
+		// enums after exhausting them. The `.unionCases` companion enum
+		// duplicates the parent union's case spellings with zero payload
+		// fields; matching `walk(dir)` against `Move.walk` (1 payload)
+		// must NOT see the companion's zero-arity `Move.unionCases.walk`
+		// first. Companion enums are recognisable by a dot in their name —
+		// no user-declared enum can collide with that shape.
+		for (_, enumType) in project.enumTypes 'searchResolved'
+			if not enumType.isUnion 'notUnionR'
+				continue
+			end 'notUnionR'
+			if let idx = try enumType.caseByName.get(caseName) 'hit'
+				let c = try enumType.cases.get(idx) otherwise panic("lookupCasePayloadArity: caseByName.get returned in-range index {idx} but cases.get failed for '{caseName}' on union '{enumType.name}'")
+				return c.payloadFields.count() as ParsedInt
+			end 'hit'
+		end 'searchResolved'
+		for (_, enumType) in project.unresolvedEnums 'searchUnresolvedUnion'
+			if not enumType.isUnion 'notUnionU'
+				continue
+			end 'notUnionU'
+			for c in enumType.cases 'casesUnion'
+				if c.name == caseName 'unionHit'
+					return c.payloadFields.count() as ParsedInt
+				end 'unionHit'
+			end 'casesUnion'
+		end 'searchUnresolvedUnion'
+		for (_, enumType) in project.enumTypes 'searchResolvedBare'
+			if let idx = try enumType.caseByName.get(caseName) 'hit'
+				let c = try enumType.cases.get(idx) otherwise panic("lookupCasePayloadArity: caseByName.get returned in-range index {idx} but cases.get failed for '{caseName}' on enum '{enumType.name}'")
+				return c.payloadFields.count() as ParsedInt
+			end 'hit'
+		end 'searchResolvedBare'
+		for (_, enumType) in project.unresolvedEnums 'searchUnresolved'
+			for c in enumType.cases 'cases'
+				if c.name == caseName 'hit'
+					return c.payloadFields.count() as ParsedInt
+				end 'hit'
+			end 'cases'
+		end 'searchUnresolved'
+		throw EnumCaseProbeError.notFound
+	end 'lookupCasePayloadArity'
+
+	// Parse `caseName to|upto (caseName | max)`. Resolves both case
+	// ordinals against the enum registry so the range op carries integer
+	// bounds for lowering. On an unknown case name returns the bare-case
+	// fallback so TypeResolution can produce the canonical diagnostic.
+	function parseEnumRangePattern(loCaseName String, loToken Token) returns MatchPatternSpec throws ParserError
+		let rangeTok = try consume()
+		let isUpto = rangeTok.kind == TokenKind.upto
+		let rangeKeyword = "upto" if isUpto else "to"
+
+		let upperTok = cursor.current()
+		var hasMaxSentinel = false
+		var hiCaseName = ""
+		var hiDisplay = ""
+		if upperTok.kind == TokenKind.identifier and upperTok.value == "max" 'maxSentinel'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+			hasMaxSentinel = true
+			hiDisplay = "max"
+		end 'maxSentinel' else 'caseUpper'
+			if upperTok.value.isEmpty() 'noUpper'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected upper-bound case name after '{rangeKeyword}', got '{tokenValueToString(upperTok.value)}'", line: upperTok.line, column: upperTok.column, filePath: filePath)
+				return MatchPatternSpec.enumCase(loToken, caseName: loCaseName)
+			end 'noUpper'
+			let hiToken = try consume()
+			hiCaseName = hiToken.value
+			hiDisplay = hiCaseName
+		end 'caseUpper'
+
+		let displayName = "{loCaseName} {rangeKeyword} {hiDisplay}"
+
+		// Look up both case ordinals. The first match (resolved or unresolved)
+		// wins — same lookup strategy as `enumScrutineeDisplayNameFromCase`.
+		var loOrdinal = -1
+		var hiOrdinal = -1
+		var foundEnum = false
+		var ownerEnumName = ""
+		for (name, enumType) in project.enumTypes 'searchResolved'
+			if enumType.caseByName.contains(loCaseName) and (hasMaxSentinel or enumType.caseByName.contains(hiCaseName)) 'isHit'
+				loOrdinal = (try enumType.caseByName.get(loCaseName) otherwise -1) as int
+				if hasMaxSentinel 'maxHi'
+					hiOrdinal = enumType.cases.count() as int - 1
+				end 'maxHi' else 'lookupHi'
+					hiOrdinal = (try enumType.caseByName.get(hiCaseName) otherwise -1) as int
+				end 'lookupHi'
+				ownerEnumName = name
+				foundEnum = true
+				break
+			end 'isHit'
+		end 'searchResolved'
+		if not foundEnum 'tryUnresolved'
+			for (name, enumType) in project.unresolvedEnums 'searchUnresolved'
+				var foundLo = -1
+				var foundHi = -1
+				for i in 0 upto enumType.cases.count() 'cases'
+					let c = try enumType.cases.get(i) otherwise panic("parseEnumRangePattern: cases OOB at {i}")
+					if c.name == loCaseName 'loHit'
+						foundLo = i as int
+					end 'loHit'
+					if not hasMaxSentinel and c.name == hiCaseName 'hiHit'
+						foundHi = i as int
+					end 'hiHit'
+				end 'cases'
+				if foundLo >= 0 and (hasMaxSentinel or foundHi >= 0) 'matchedEnum'
+					loOrdinal = foundLo
+					hiOrdinal = (enumType.cases.count() as int - 1) if hasMaxSentinel else foundHi
+					ownerEnumName = name
+					foundEnum = true
+					break
+				end 'matchedEnum'
+			end 'searchUnresolved'
+		end 'tryUnresolved'
+
+		if not foundEnum 'unknownCase'
+			// Defer to TypeResolution: emit a fallback bare-case arm. TR
+			// will report E3005 / unknown-case when it resolves the
+			// scrutinee.
+			return MatchPatternSpec.enumCase(loToken, caseName: loCaseName)
+		end 'unknownCase'
+
+		// Single-value rejection: `red to red` or `red upto green` where
+		// green is the next ordinal. Mirrors the integer-range check.
+		let isToSame = not isUpto and hiOrdinal == loOrdinal
+		let isUptoAdjacent = isUpto and hiOrdinal == loOrdinal + 1
+		if isToSame or isUptoAdjacent 'singleValue'
+			reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "range pattern '{displayName}' covers a single value; use the bare value instead", line: loToken.line, column: loToken.column, filePath: filePath)
+		end 'singleValue'
+
+		return MatchPatternSpec.enumRange(loToken, loOrdinal: loOrdinal as ParsedInt, hiOrdinal: hiOrdinal as ParsedInt, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: ownerEnumName)
+	end 'parseEnumRangePattern'
+
+	// True when `cursor.peek(offset)` is the `to` or `upto` keyword. Used
+	// by the `min` lookahead — without this gate, a bare `min` identifier
+	// elsewhere (e.g. a top-level constant named `min`) would be
+	// misinterpreted as a range-pattern sentinel.
+	function isFollowedByRangeKeyword(offset ElementCount) returns bool
+		let tok = try cursor.peek(offset) otherwise return false
+		return tok.kind == TokenKind.to or tok.kind == TokenKind.upto
+	end 'isFollowedByRangeKeyword'
+
+	// Parse the `to|upto (INT | char | max)` tail of a range pattern.
+	// Caller has already consumed the lower bound (an int literal, a char
+	// literal, or the `min` keyword) and provides its computed `loValue`
+	// and source-form `loDisplay`. The cursor sits on `to` / `upto`. Emits
+	// E2027 on a single-value range (`X to X`, `X upto X+1`) and returns
+	// a fallback int literal so downstream arm wiring stays well-formed.
+	function parseRangePattern(loValue ParsedInt, loDisplay String, loToken Token, hasMinSentinel bool) returns MatchPatternSpec throws ParserError
+		let rangeTok = try consume()
+		let isUpto = rangeTok.kind == TokenKind.upto
+		let rangeKeyword = "upto" if isUpto else "to"
+
+		// Open upper bound: `X to|upto max`. `max` is a contextual keyword
+		// (an identifier whose spelling matches "max").
+		let upperTok = cursor.current()
+		if upperTok.kind == TokenKind.identifier and upperTok.value == "max" 'maxSentinel'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+			let displayName = "{loDisplay} {rangeKeyword} max"
+			return MatchPatternSpec.rangeLiteral(loToken, loValue: loValue, hiValue: 0, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: true, displayName: displayName)
+		end 'maxSentinel'
+
+		// Character literal upper bound: decode the literal bytes
+		// identically to `decodeCharLiteralToByte` on the lower bound.
+		var hiValue = 0 as ParsedInt
+		var hiDisplay = ""
+		if upperTok.kind == TokenKind.charLiteral 'isCharUpper'
+			let hiToken = try consume()
+			hiValue = decodeCharLiteralToByte(hiToken)
+			hiDisplay = "'{tokenValueToString(hiToken.value)}'"
+		end 'isCharUpper' else 'isIntUpper'
+			var negateUpper = false
+			if at(TokenKind.minus) 'isNegUpper'
+				negateUpper = true
+				try cursor.advance() otherwise throw ParserError.unexpectedEof
+			end 'isNegUpper'
+
+			if not at(TokenKind.intLiteral) 'noUpperLit'
+				let badTok = cursor.current()
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected upper-bound integer literal (or 'max') after '{rangeKeyword}', got '{tokenValueToString(badTok.value)}'", line: badTok.line, column: badTok.column, filePath: filePath)
+				return MatchPatternSpec.intLiteral(loToken, value: loValue, displayName: loDisplay)
+			end 'noUpperLit'
+			let hiToken = try consume()
+			hiValue = try parseInt(hiToken.value) otherwise 'overflow'
+				reportLiteralOverflow(token: hiToken, message: "Integer literal '{tokenValueToString(hiToken.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)")
+				return MatchPatternSpec.intLiteral(loToken, value: loValue, displayName: loDisplay)
+			end 'overflow'
+			if negateUpper 'applyNegU'
+				hiValue = 0 - hiValue
+			end 'applyNegU'
+			hiDisplay = "{hiValue}"
+		end 'isIntUpper'
+		let displayName = "{loDisplay} {rangeKeyword} {hiDisplay}"
+
+		// Single-value range rejection (E2027). `X to X` covers exactly one
+		// value; `X upto X+1` covers exactly one value too. Open-bound forms
+		// are skipped — a `min`/`max` sentinel always spans more than one
+		// value. Don't reject on `X upto X` (empty range) — that's a
+		// distinct degenerate case the spec doesn't currently call out;
+		// downstream lowering still produces a never-true cmp so behaviour
+		// is harmless even if odd-looking.
+		if not hasMinSentinel 'checkSingleValue'
+			let isToSame = not isUpto and hiValue == loValue
+			let isUptoAdjacent = isUpto and hiValue == loValue + 1
+			if isToSame or isUptoAdjacent 'singleValue'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "range pattern '{displayName}' covers a single value; use the bare value instead", line: loToken.line, column: loToken.column, filePath: filePath)
+			end 'singleValue'
+		end 'checkSingleValue'
+
+		return MatchPatternSpec.rangeLiteral(loToken, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: false, displayName: displayName)
+	end 'parseRangePattern'
 
 	// Parse one arm's pattern list (either a single `default`, a single enum
 	// case identifier, or one or more integer literals separated by `or`).
@@ -4110,11 +5678,28 @@ export type Parser
 			if defaultSeen 'afterDefault'
 				reportCompileError(project, code: ErrorCode.parserMatchDefaultNotLast, message: "'default' case must be the last case in match", line: firstLine, column: firstCol, filePath: filePath)
 			end 'afterDefault'
-			if seenKeys.contains(pattern.displayName) 'isDup'
-				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "duplicate pattern in match: '{pattern.displayName}'", line: firstLine, column: firstCol, filePath: filePath)
-			end 'isDup' else 'recordKey'
-				seenKeys.insert(element: pattern.displayName)
-			end 'recordKey'
+			let isPlainEnumCase = match pattern.kind 'k'
+				enumCase gives true
+				defaultArm gives false
+				intLiteral gives false
+				rangeLiteral gives false
+			end 'k'
+			// Detect overlap-via-range before the generic-duplicate path
+			// so the diagnostic uses the "overlapping pattern" wording
+			// expected by enum-match-exhaustive. A prior range arm
+			// inserted every case name it covered into `seenKeys`.
+			if isPlainEnumCase and seenKeys.contains(pattern.caseName) 'overlapsRange'
+				reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "overlapping pattern in match: '{pattern.caseName}' is already covered", line: firstLine, column: firstCol, filePath: filePath)
+			end 'overlapsRange' else 'normalDupCheck'
+				if seenKeys.contains(pattern.displayName) 'isDup'
+					reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "duplicate pattern in match: '{pattern.displayName}'", line: firstLine, column: firstCol, filePath: filePath)
+				end 'isDup' else 'recordKey'
+					seenKeys.insert(element: pattern.displayName)
+					if isPlainEnumCase 'addCaseName'
+						seenKeys.insert(element: pattern.caseName)
+					end 'addCaseName'
+				end 'recordKey'
+			end 'normalDupCheck'
 			patterns.push(pattern)
 
 			if not at(TokenKind.or) 'noOr'
@@ -4146,6 +5731,48 @@ export type Parser
 		end 'searchUnresolved'
 		return "<unknown>"
 	end 'enumScrutineeDisplayNameFromCase'
+
+	// Type-driven enum-scrutinee predicate, used to gate E2046 (`default`
+	// without `throws`/`panic`). Returns true only when the scrutinee's
+	// `MaxonType` is statically known to be a non-enum primitive at parse
+	// time — `bool` / `int` / `float` / `String` / known struct names.
+	// When the scrutinee type is `unresolved` (the common case for local
+	// variable references whose types haven't propagated yet) we defer to
+	// pattern-shape inference, which the caller combines with this result.
+	function matchScrutineeIsKnownNonEnum(t MaxonType) returns bool
+		return match t 'check'
+			boolean gives true
+			integer gives true
+			float gives true
+			string gives true
+			function gives true
+			named(id) gives namedTypeIsKnownNonEnum(project.typeNames.get(id))
+			unresolved gives false
+			typeParameter gives false
+			genericInstance gives true
+			interface gives true
+		end 'check'
+	end 'matchScrutineeIsKnownNonEnum'
+
+	// Companion to `matchScrutineeIsKnownNonEnum`: a `named` reference is
+	// non-enum iff it resolves to a registered struct/typealias and not an
+	// enum. Returns false when the name is unknown (could be an unresolved
+	// enum we haven't seen yet — caller treats this as ambiguous).
+	function namedTypeIsKnownNonEnum(name String) returns bool
+		if name.isEmpty() 'noName'
+			return false
+		end 'noName'
+		if project.enumTypes.contains(name) or project.unresolvedEnums.contains(name) 'isEnum'
+			return false
+		end 'isEnum'
+		if project.structTypes.contains(name) or project.unresolvedStructTypes.contains(name) 'isStruct'
+			return true
+		end 'isStruct'
+		if project.typealiases.contains(name) or project.unresolvedTypealiases.contains(name) 'isAlias'
+			return true
+		end 'isAlias'
+		return false
+	end 'namedTypeIsKnownNonEnum'
 
 	// Match-expression arms forbid `and fallthrough`. The Pratt parser stops
 	// at the boundary because of the `inMatchArmBody` gate, but we still need
@@ -4185,6 +5812,45 @@ export type Parser
 		end 'allCovered'
 		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
 	end 'validateEnumExhaustiveness'
+
+	// Resolve `enumName.ordinal` to a case name. Throws
+	// `EnumCaseProbeError.notFound` when the enum isn't registered or the
+	// ordinal is out of range — the parser has already emitted a fallback
+	// at that point, or TR will surface the canonical diagnostic.
+	function enumCaseNameAtOrdinal(enumName String, ordinal ParsedInt) returns String throws EnumCaseProbeError
+		if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
+			if ordinal >= 0 and ordinal < resolvedEnum.cases.count() 'inRange'
+				let c = try resolvedEnum.cases.get(ordinal as ElementCount) otherwise panic("enumCaseNameAtOrdinal: in-range ordinal {ordinal} but cases.get failed for enum '{enumName}'")
+				return c.name
+			end 'inRange'
+		end 'isResolved'
+		if let unresolvedEnum = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			if ordinal >= 0 and ordinal < unresolvedEnum.cases.count() 'inRange2'
+				let c = try unresolvedEnum.cases.get(ordinal as ElementCount) otherwise panic("enumCaseNameAtOrdinal: in-range ordinal {ordinal} but cases.get failed for enum '{enumName}'")
+				return c.name
+			end 'inRange2'
+		end 'isUnresolved'
+		throw EnumCaseProbeError.notFound
+	end 'enumCaseNameAtOrdinal'
+
+	// Mark every case name in [loValue..hiValue] (inclusive of lo; upper
+	// inclusive for `to`, exclusive for `upto`) as covered. Used after
+	// detecting an enum-case range arm so exhaustiveness sees the
+	// ordinals the range spans.
+	function markEnumRangeCases(seenKeys ReferencedVarSet, pattern MatchPatternSpec)
+		let upperInclusive = pattern.hiValue if not pattern.isUpto else pattern.hiValue - 1
+		var i = pattern.loValue
+		while i <= upperInclusive 'each'
+			if let name = try enumCaseNameAtOrdinal(enumName: pattern.enumOwnerName, ordinal: i) 'hit'
+				if seenKeys.contains(name) 'isDup'
+					reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "overlapping pattern in match: '{name}' is already covered", line: pattern.token.line, column: pattern.token.column, filePath: filePath)
+				end 'isDup' else 'newName'
+					seenKeys.insert(element: name)
+				end 'newName'
+			end 'hit'
+			i = i + 1
+		end 'each'
+	end 'markEnumRangeCases'
 
 	// Comma-separated list of case names not present in `seenKeys`. Returns
 	// an empty string when every case is covered. Used by E2026 messages.
@@ -4257,6 +5923,21 @@ export type Parser
 	function parseMatchStatementArmBodyInner(block IrBlock) returns MatchStmtArmBodyResult throws ParserError
 		currentBlock = block
 		let stmtToken = cursor.current()
+		// Reject block-opening statements as arm bodies (E2049). The single-
+		// statement arm shape forbids `if`/`while`/`for`/`match`; block-form
+		// `try` (`try 'label' ... end 'label'` and `try ... otherwise 'l' ... end 'l'`)
+		// is also rejected because it would allocate persistent error-flag
+		// slots in the enclosing scope.
+		if isBlockOpeningArmBodyToken(stmtToken) 'block'
+			reportMatchArmBlockStatement(stmtToken)
+			synchronize()
+			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
+		end 'block'
+		if stmtToken.kind == TokenKind.try and isTryBlockForm() 'tryBlock'
+			reportMatchArmTryBlockForm(stmtToken)
+			synchronize()
+			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
+		end 'tryBlock'
 		if stmtToken.kind == TokenKind.return 'isReturn'
 			try parseReturnStatement(block)
 			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: true)
@@ -4278,9 +5959,41 @@ export type Parser
 				return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
 			end 'isAssign'
 		end 'maybeAssign'
+		// Statement-form `try EXPR [otherwise FALLBACK]` in a match arm:
+		// route through parseTryExpression with isStatementContext=true so
+		// the void-return guard (E3059) is skipped — the call result is
+		// discarded at statement position. parseExpression's default path
+		// would call parseTryExpression(isStatementContext=false) and
+		// mis-flag a void-returning callee.
+		if stmtToken.kind == TokenKind.try 'isTryStmt'
+			_ = try parseTryExpression(currentBlock, isStatementContext: true)
+			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
+		end 'isTryStmt'
 		_ = try parseExpression(block)
 		return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: false)
 	end 'parseMatchStatementArmBodyInner'
+
+	// Token kinds that open a multi-statement block construct. Rejected
+	// as match-arm bodies (E2049).
+	function isBlockOpeningArmBodyToken(tok Token) returns bool
+		return tok.kind == TokenKind.if or tok.kind == TokenKind.while or tok.kind == TokenKind.for or tok.kind == TokenKind.match
+	end 'isBlockOpeningArmBodyToken'
+
+	// True when the cursor sits at `try 'label'` (block form). The
+	// single-statement form is `try callee()` — the next token is an
+	// identifier, not a char literal.
+	function isTryBlockForm() returns bool
+		let next = try cursor.peek(1) otherwise return false
+		return next.kind == TokenKind.charLiteral
+	end 'isTryBlockForm'
+
+	function reportMatchArmBlockStatement(tok Token)
+		reportCompileError(project, code: ErrorCode.parserMatchBlockStatementNotAllowed, message: "block-opening statement '{tokenValueToString(tok.value)}' is not allowed in a match arm; use a function call instead", line: tok.line, column: tok.column, filePath: filePath)
+	end 'reportMatchArmBlockStatement'
+
+	function reportMatchArmTryBlockForm(tok Token)
+		reportCompileError(project, code: ErrorCode.parserMatchBlockStatementNotAllowed, message: "block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead", line: tok.line, column: tok.column, filePath: filePath)
+	end 'reportMatchArmTryBlockForm'
 
 	// Emit a `panic` op + synthetic `ret 0` so the static verifier sees the
 	// block terminated. The runtime never reaches these — they only fire on
@@ -4310,8 +6023,26 @@ export type Parser
 	// literal+cmp+(or)+condBr inline. Default arms get only a body block; the
 	// caller wires them after all non-default arms are placed.
 	function buildMatchArmBlocks(header MatchHeader, armIndex IntConstant, patterns MatchPatternList, separator TokenKind) returns MatchArmBlocks throws ParserError
-		try expect(separator)
 		let firstPattern = patterns.first()
+		// Diverging arm body: `panic(...)` / `throws Err.case` in place of
+		// the then/gives separator. Supported on both `default` and bare
+		// patterns (per match-expr-arm-divergent / match-exhaustive-default-
+		// panic). The arm body is terminated in-place and contributes no
+		// value to a match-expression result-type unifier.
+		if at(TokenKind.panic) or at(TokenKind.throws) 'diverging'
+			var armBodyBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.case{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
+			if patterns.isDefault() 'isDefaultDiverging'
+				try emitDivergingDefaultArm(armBodyBlock)
+				return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: armBodyBlock, bodyAlreadyTerminated: true)
+			end 'isDefaultDiverging'
+			// Non-default diverging arm: dispatch into armBodyBlock on
+			// pattern match, fall through to nextArmBlock otherwise.
+			let nextArmBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.next{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
+			emitArmDispatch(header, patterns: patterns, armBodyId: armBodyBlock.id, nextArmId: nextArmBlock.id)
+			try emitDivergingDefaultArm(armBodyBlock)
+			return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock, bodyAlreadyTerminated: true)
+		end 'diverging'
+		try expect(separator)
 		let armBodyBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.case{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
 		if patterns.isDefault() 'isDefault'
 			// Default arms are bodies only; the caller wires entry once it
@@ -4319,18 +6050,234 @@ export type Parser
 			return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: armBodyBlock)
 		end 'isDefault'
 		let nextArmBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.next{armIndex}", filePath: filePath.toString(), firstLine: firstPattern.token.line)
+		emitArmDispatch(header, patterns: patterns, armBodyId: armBodyBlock.id, nextArmId: nextArmBlock.id)
+		return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock)
+	end 'buildMatchArmBlocks'
+
+	// Shared dispatch emission for any non-default arm. Routes to:
+	//   - `enumMatchArm` for enum-case patterns (TR fills the raw value)
+	//   - chained `emitMixedPatternDispatch` for any arm containing a
+	//     range pattern (handles `1 to 5 or 8 to 10` and friends)
+	//   - direct `cmp + condBr` for plain integer-literal patterns
+	function emitArmDispatch(header MatchHeader, patterns MatchPatternList, armBodyId BlockId, nextArmId BlockId)
+		let firstPattern = patterns.first()
 		if patterns.isEnumCase() 'isEnum'
 			// Enum case names need TR to resolve the raw value. Reuse the
 			// existing enumMatchArm op. or-patterns of enum cases aren't
 			// reached today (no spec test exercises them) but the placeholder
 			// op family permits one arm = one case name.
-			module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: firstPattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(firstPattern.token)))
-			return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock)
+			module.setTerminator(currentBlock, op: MaxonOp.enumMatchArm(header.scrutineeName, caseName: firstPattern.caseName, scrutineeType: MaxonType.unresolved, rawValue: 0, isFloat: false, resolved: false, thenTarget: armBodyId, elseTarget: nextArmId, bindingNames: firstPattern.bindingNames, range: SourceRange.ofToken(firstPattern.token)))
+			return
 		end 'isEnum'
+		// Range patterns OR-chained with bare int literals are emitted as a
+		// sequence of branches into the arm body: each pattern gets its own
+		// comparison block, and they fall through to the next pattern on a
+		// miss. This handles `1 or 3 to 5 then ...` and `1 to 5 or 8 to 10`
+		// uniformly. A single pattern degenerates to either a `rangeMatchArm`
+		// (range case) or the legacy `condBr` (int-literal case).
+		if patternsContainRange(patterns) 'hasRange'
+			emitMixedPatternDispatch(header, patterns: patterns, armBodyId: armBodyId, nextArmId: nextArmId)
+			return
+		end 'hasRange'
 		let combinedCmp = emitIntPatternComparisons(currentBlock, scrutineeName: header.scrutineeName, patterns: patterns.patterns)
-		module.setTerminator(currentBlock, op: MaxonOp.condBr(combinedCmp, thenTarget: armBodyBlock.id, elseTarget: nextArmBlock.id, range: SourceRange.ofToken(firstPattern.token)))
-		return MatchArmBlocks.create(caseToken: firstPattern.token, body: armBodyBlock, next: nextArmBlock)
-	end 'buildMatchArmBlocks'
+		module.setTerminator(currentBlock, op: MaxonOp.condBr(combinedCmp, thenTarget: armBodyId, elseTarget: nextArmId, range: SourceRange.ofToken(firstPattern.token)))
+	end 'emitArmDispatch'
+
+	// Phase 9 Stage 3: declare scope variables and emit payload-read +
+	// varStore ops at the head of the parser's `currentBlock` for each
+	// non-discard binding in an enum-case arm whose scrutinee is a union.
+	// Bindings become regular locals so user code like
+	// `value(n) then return n` reaches `n` via the standard varLoad path.
+	// Discard (`_`) bindings produce no slot and no read. Bare-enum
+	// (non-union) scrutinees and arms without bindings skip silently. The
+	// case's payload field types are recovered from the union registry;
+	// an unknown union/case path returns `false` so the caller can leave
+	// TR to surface the canonical diagnostic. The caller must position
+	// `currentBlock` on the arm body block before invoking — same shape
+	// as `parseMatchStatementArmBody`.
+	function emitUnionArmBindings(scrutineeName ByteArray, scrutineeType MaxonType, pattern MatchPatternSpec, scrutineeMutable bool) returns bool
+		if pattern.bindings.count() == 0 'noBindings'
+			return false
+		end 'noBindings'
+		let payloadFields = lookupCasePayloadFields(scrutineeType, caseName: pattern.caseName)
+		if not payloadFields.hit 'unknownCase'
+			// TR will surface E3034/E3035 for arity/case errors; emit nothing.
+			return false
+		end 'unknownCase'
+		if pattern.bindings.count() != payloadFields.fields.count() 'arityMismatch'
+			// Parser's `parseCaseBindingPattern` already reported E3035 on
+			// mismatch — but the bindings array still carries whatever the
+			// user wrote. Skip emission to avoid out-of-range slot
+			// allocation; the existing diagnostic stays the user-visible
+			// message.
+			return false
+		end 'arityMismatch'
+		for i in 0 upto pattern.bindings.count() 'eachBinding'
+			let binding = try pattern.bindings.get(i) otherwise panic("emitUnionArmBindings: bindings.get OOB at {i}")
+			if binding.isDiscard 'discardBinding'
+				continue
+			end 'discardBinding'
+			let field = try payloadFields.fields.get(i) otherwise panic("emitUnionArmBindings: payloadFields.get OOB at {i}")
+			// Phase 9 Stage 4: payload bindings inherit the scrutinee's
+			// mutability per `mutable-enums.md`: a `var u` scrutinee yields
+			// writable bindings (assignment rewrites to `enumPayloadStore`);
+			// a `let u` scrutinee yields read-only bindings (assignment
+			// fires E2013). The per-binding `var` keyword on the pattern
+			// (`full(var v)`) is explicit syntax for "I plan to write this"
+			// but does NOT override the scrutinee's immutability — `let u`
+			// + `var v = …` still surfaces E2013.
+			let bindingMutable = scrutineeMutable
+			let bindingSlot = scope.declarePayloadBinding(binding.name, varType: field.fieldType, mutable: bindingMutable, scrutineeName: String.from(scrutineeName), fieldIndex: i as CaseOrdinal)
+			let readName = "__match_payload_{binding.name}_{i}".toByteArray()
+			module.appendOp(currentBlock, op: MaxonOp.enumPayloadRead(readName, enumValName: scrutineeName, fieldIndex: i as IntConstant, fieldType: field.fieldType, range: SourceRange.none()))
+			module.appendOp(currentBlock, op: MaxonOp.varDecl(bindingSlot, value: readName, slotType: field.fieldType, range: SourceRange.none()))
+		end 'eachBinding'
+		return true
+	end 'emitUnionArmBindings'
+
+	// Best-effort lookup of `(union, case).payloadFields` against both the
+	// resolved and unresolved enum registries. Mirrors
+	// `lookupCasePayloadArity` but returns the full field list so callers
+	// can index by field type. Resolved enums hit first by construction
+	// (TypeResolution drains unresolved into resolved); the unresolved
+	// pass is the fallback for cases where the match arm parses before
+	// the union's body has been fully resolved.
+	function lookupCasePayloadFields(scrutineeType MaxonType, caseName String) returns CasePayloadFieldsLookup
+		let unionName = scrutineeType.nameOrEmpty(project)
+		if not unionName.isEmpty() 'haveName'
+			if let et = try project.enumTypes.get(unionName) 'haveResolved'
+				if let idx = try et.caseByName.get(caseName) 'haveCaseR'
+					let c = try et.cases.get(idx) otherwise return CasePayloadFieldsLookup.miss()
+					return CasePayloadFieldsLookup.found(c.payloadFields)
+				end 'haveCaseR'
+			end 'haveResolved'
+			if let ut = try project.unresolvedEnums.get(unionName) 'haveUnresolved'
+				for c in ut.cases 'eachCase'
+					if c.name == caseName 'hit'
+						return CasePayloadFieldsLookup.found(c.payloadFields)
+					end 'hit'
+				end 'eachCase'
+			end 'haveUnresolved'
+		end 'haveName'
+		// Fallback: scan every union case across both registries by case
+		// name only. Used when the scrutinee's type hasn't been resolved
+		// yet (typealias chain, or pre-TR pattern parsing); the case-
+		// name space is union-typed so a single hit identifies the
+		// payload shape uniquely.
+		for (_, et) in project.enumTypes 'scanResolved'
+			if not et.isUnion 'notUnion'
+				continue
+			end 'notUnion'
+			if let idx = try et.caseByName.get(caseName) 'haveCase'
+				let c = try et.cases.get(idx) otherwise continue
+				return CasePayloadFieldsLookup.found(c.payloadFields)
+			end 'haveCase'
+		end 'scanResolved'
+		for (_, ut) in project.unresolvedEnums 'scanUnresolved'
+			if not ut.isUnion 'notUnion2'
+				continue
+			end 'notUnion2'
+			for c in ut.cases 'eachCase2'
+				if c.name == caseName 'hit2'
+					return CasePayloadFieldsLookup.found(c.payloadFields)
+				end 'hit2'
+			end 'eachCase2'
+		end 'scanUnresolved'
+		return CasePayloadFieldsLookup.miss()
+	end 'lookupCasePayloadFields'
+
+	// Emit the body of a `default panic(...)` or `default throws Err.case`
+	// arm into `armBodyBlock`. The arm body terminates the block directly:
+	// `panic` appends a panic op then emits a synthetic `ret 0` so the
+	// verifier sees a terminated block; `throws` sets a throw terminator.
+	// Caller has positioned the cursor at the `panic` / `throws` keyword.
+	function emitDivergingDefaultArm(armBodyBlock IrBlock) throws ParserError
+		if at(TokenKind.panic) 'isPanic'
+			try parsePanicStatement(armBodyBlock)
+			// `panic` is a regular op, not a terminator — finish the
+			// block with a synthetic `ret 0` so the verifier sees a
+			// terminated CFG. The runtime never reaches the ret because
+			// `panic` aborts.
+			let zero = emitLiteral(armBodyBlock, value: 0, valueType: MaxonType.integer)
+			module.setTerminator(armBodyBlock, op: MaxonOp.ret(zero, range: SourceRange.none()))
+			return
+		end 'isPanic'
+		// `default throws Err.case [(args)]` — same source shape as a
+		// `throw` statement but uses the `throws` keyword (which elsewhere
+		// appears on function signatures). Consume it and reuse the
+		// `EnumName.variantName` parse path; associated-value payloads
+		// (Phase 9 Stage 5c) thread the constructed union pointer through
+		// the throw op's `payloadValueName` slot.
+		let throwsToken = try consume()
+		let typeNameToken = try consumeExpecting("error type name")
+		try expect(TokenKind.dot)
+		let variantToken = try consumeExpecting("error variant name")
+		if at(TokenKind.leftParen) 'hasPayload'
+			let ctorCall = try emitUnionThrowConstruction(armBodyBlock, typeNameToken: typeNameToken, variantToken: variantToken)
+			module.setTerminator(armBodyBlock, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ctorCall.resultName, range: SourceRange.between(throwsToken, last: ctorCall.lastToken)))
+			return
+		end 'hasPayload'
+		module.setTerminator(armBodyBlock, op: MaxonOp.throw(typeNameToken.value, variantName: variantToken.value, payloadValueName: ByteArray.create(), range: SourceRange.between(throwsToken, last: variantToken)))
+	end 'emitDivergingDefaultArm'
+
+	// True if any pattern in the list is a range literal. Used by
+	// `buildMatchArmBlocks` to pick the chained-dispatch lowering when the
+	// arm mixes range and/or bare-int patterns.
+	function patternsContainRange(patterns MatchPatternList) returns bool
+		for p in patterns.patterns 'each'
+			if p.isRange() 'isRange'
+				return true
+			end 'isRange'
+		end 'each'
+		return false
+	end 'patternsContainRange'
+
+	// Emit a chain of one-pattern-per-block dispatchers for an arm whose
+	// pattern list contains at least one range. Each pattern's success
+	// branches to `armBodyId`; a miss flows to the next pattern's block.
+	// The final miss flows to `nextArmId` (the caller's "no match" target).
+	function emitMixedPatternDispatch(header MatchHeader, patterns MatchPatternList, armBodyId BlockId, nextArmId BlockId)
+		let count = patterns.patterns.count()
+		var cur = currentBlock
+		for i in 0 upto count 'each'
+			let pat = try patterns.patterns.get(i) otherwise panic("emitMixedPatternDispatch: patterns OOB at {i}")
+			var elseBlock = cur
+			var elseId = nextArmId
+			if i + 1 < count 'hasNext'
+				elseBlock = module.addBlockAt(currentFunc, label: "{header.baseLabel}.cmp{i + 1}", filePath: filePath.toString(), firstLine: pat.token.line)
+				elseId = elseBlock.id
+			end 'hasNext'
+			emitOnePatternDispatch(header, cur: cur, pattern: pat, thenId: armBodyId, elseId: elseId)
+			if i + 1 < count 'advance'
+				cur = elseBlock
+			end 'advance'
+		end 'each'
+	end 'emitMixedPatternDispatch'
+
+	// Emit a single pattern's dispatch terminator into `block`. Bare int
+	// literals lower to `cmp + condBr`; range literals lower to a
+	// `rangeMatchArm` terminator. Enum / default never reach this helper —
+	// they take dedicated paths in `buildMatchArmBlocks`.
+	function emitOnePatternDispatch(header MatchHeader, cur IrBlock, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
+		let patRange = SourceRange.ofToken(pattern.token)
+		match pattern.kind 'kind'
+			rangeLiteral then module.setTerminator(cur, op: MaxonOp.rangeMatchArm(header.scrutineeName, loValue: pattern.loValue, hiValue: pattern.hiValue, isUpto: pattern.isUpto, hasMinSentinel: pattern.hasMinSentinel, hasMaxSentinel: pattern.hasMaxSentinel, enumOwnerName: pattern.enumOwnerName if pattern.isEnumRange else "", thenTarget: thenId, elseTarget: elseId, range: patRange))
+			intLiteral then emitIntPatternCondBr(cur, scrutineeName: header.scrutineeName, pattern: pattern, thenId: thenId, elseId: elseId)
+			defaultArm then panic("emitOnePatternDispatch: default arm should be handled by buildMatchArmBlocks")
+			enumCase then panic("emitOnePatternDispatch: enum-case arm should be handled by buildMatchArmBlocks")
+		end 'kind'
+	end 'emitOnePatternDispatch'
+
+	// Emit `const + cmp + condBr` for a single bare-int literal pattern.
+	// Mirrors a one-iteration body of `emitIntPatternComparisons` but
+	// terminates the block directly rather than threading a combined OR.
+	function emitIntPatternCondBr(block IrBlock, scrutineeName ByteArray, pattern MatchPatternSpec, thenId BlockId, elseId BlockId)
+		let litRange = SourceRange.ofToken(pattern.token)
+		let litName = emitLiteral(block, value: pattern.intValue, valueType: MaxonType.integer, range: litRange)
+		let cmpName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.cmp(cmpName, left: scrutineeName, right: litName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: litRange))
+		module.setTerminator(block, op: MaxonOp.condBr(cmpName, thenTarget: thenId, elseTarget: elseId, range: litRange))
+	end 'emitIntPatternCondBr'
 
 	// Parse: match <expr> 'label' <arms> end 'label' — statement form. Each
 	// arm is `<patterns> then <statement>`. Patterns are integer literals
@@ -4362,6 +6309,11 @@ export type Parser
 		var defaultSeen = false
 		var hasEnumArm = false
 		var lastEnumCaseName = ""
+		// E2046 must gate on the scrutinee type, not on pattern shape:
+		// `parseOneMatchPattern`'s catch-all synthesizes an `enumCase` pattern
+		// for any non-int/non-char/non-default token (string / float literals
+		// included), so `hasEnumArm` over-fires on non-enum scrutinees.
+		let scrutineeIsKnownNonEnum = matchScrutineeIsKnownNonEnum(header.scrutineeType)
 
 		while not isMatchArmsEnd() 'arms'
 			let armPrevPos = cursor.index()
@@ -4373,13 +6325,34 @@ export type Parser
 			// `buildMatchArmBlocks` so a default-arm dispatch can be wired
 			// after the loop without losing the entry block.
 			let dispatchBlock = currentBlock
-			if patterns.isDefault() and hasEnumArm 'defaultOnEnum'
+			// E2046 fires on `default then ...` for enum scrutinees — but
+			// `default panic(...)` / `default throws Err.x` are exactly
+			// the satisfying forms it directs the user to. Defer the
+			// check past those diverging shapes.
+			let isDivergingDefault = at(TokenKind.panic) or at(TokenKind.throws)
+			if patterns.isDefault() and hasEnumArm and not scrutineeIsKnownNonEnum and not isDivergingDefault 'defaultOnEnum'
 				reportDefaultOnEnumMatch(patterns, lastEnumCaseName: lastEnumCaseName)
 			end 'defaultOnEnum'
 			if patterns.isEnumCase() 'recordEnum'
 				hasEnumArm = true
 				lastEnumCaseName = patterns.first().caseName
 			end 'recordEnum'
+			// An enum-case range arm (`red to blue`) counts as an enum
+			// arm for exhaustiveness / E2046 purposes even though the
+			// pattern kind is `rangeLiteral`.
+			if patterns.first().isEnumRange 'recordEnumRange'
+				hasEnumArm = true
+				// Use any case from the range to identify the owning
+				// enum for diagnostics. The first ordinal's case name is
+				// recovered via the enum registry; if missing we skip
+				// (TR will surface the canonical diagnostic).
+				if let rangeCaseName = try enumCaseNameAtOrdinal(enumName: patterns.first().enumOwnerName, ordinal: patterns.first().loValue) 'updateLast'
+					lastEnumCaseName = rangeCaseName
+				end 'updateLast'
+				// Mark every covered ordinal's case name in seenKeys so
+				// enum exhaustiveness sees the range's contribution.
+				markEnumRangeCases(seenKeys, pattern: patterns.first())
+			end 'recordEnumRange'
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.then)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -4389,7 +6362,39 @@ export type Parser
 			end 'recordDefault'
 
 			currentBlock = arm.body
+			// Diverging arm bodies (`panic(...)` / `throws Err.x`) — for
+			// `default` and bare patterns alike — are fully constructed
+			// by `buildMatchArmBlocks`: the body block is sealed with a
+			// terminator and the cursor has moved past the diverging
+			// keyword's payload. Skip arm-body parsing for these and
+			// advance `currentBlock` to the arm's next-block so the
+			// outer dispatch chain continues to flow.
+			if arm.bodyAlreadyTerminated 'preTerminated'
+				bodies.push(arm.body)
+				fallthroughs.push(false)
+				if not patterns.isDefault() 'advanceCursorEarly'
+					currentBlock = arm.next
+				end 'advanceCursorEarly'
+				armIndex = armIndex + 1
+				try skipNewlines()
+				if cursor.index() <= armPrevPos 'stuckEarly'
+					break
+				end 'stuckEarly'
+				continue
+			end 'preTerminated'
+
+			// Phase 9 Stage 3: emit payload-binding reads at the head of
+			// the arm body before parsing the user's statements, so that
+			// user code observes each binding as a normal scope-local. The
+			// helper is a no-op on bindings-free arms and non-union
+			// scrutinees. Position `currentBlock` on the arm body first so
+			// the helper can append ops via the parser's normal block
+			// pointer (avoiding the `let arm = …` immutability friction).
+			scope.pushScope()
+			currentBlock = arm.body
+			_ = emitUnionArmBindings(header.scrutineeName, scrutineeType: header.scrutineeType, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
 			let bodyExit = try parseMatchStatementArmBody(arm.body)
+			scope.popScope()
 			let armHasFallthrough = checkAndConsumeFallthrough(hadReturn: bodyExit.hadReturn)
 
 			bodies.push(arm.body)
@@ -4441,6 +6446,13 @@ export type Parser
 		// Enum match exhaustiveness (E2026): if the match was on an enum and
 		// no `default` arm was given, every enum case must be covered.
 		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		// Non-enum match: every match needs an explicit `default` arm
+		// because integer / string / float / char scrutinees can't be
+		// enumerated.
+		if not hasEnumArm and not hasDefault 'needsDefault'
+			let endTok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match is not exhaustive: add a 'default' arm", line: endTok.line, column: endTok.column, filePath: filePath)
+		end 'needsDefault'
 
 		// The merge block may be unreachable — when every arm body terminates
 		// via return/throw and no fallthrough reaches a non-terminating tail.
@@ -4538,18 +6550,43 @@ export type Parser
 		var defaultSeen = false
 		var hasEnumArm = false
 		var lastEnumCaseName = ""
+		// E2046 must gate on the scrutinee type, not on pattern shape: the
+		// pattern parser's catch-all wraps non-int/non-char/non-default tokens
+		// as `enumCase`, which would otherwise mis-fire on string scrutinees.
+		let scrutineeIsKnownNonEnum = matchScrutineeIsKnownNonEnum(header.scrutineeType)
 
 		while not isMatchArmsEnd() 'arms'
 			let armPrevPos = cursor.index()
 			let patterns = try parseMatchArmPatterns(seenKeys, defaultSeen: defaultSeen)
 			let dispatchBlock = currentBlock
-			if patterns.isDefault() and hasEnumArm 'defaultOnEnum'
+			// E2046 fires on `default then ...` for enum scrutinees — but
+			// `default panic(...)` / `default throws Err.x` are exactly
+			// the satisfying forms it directs the user to. Defer the
+			// check past those diverging shapes.
+			let isDivergingDefault = at(TokenKind.panic) or at(TokenKind.throws)
+			if patterns.isDefault() and hasEnumArm and not scrutineeIsKnownNonEnum and not isDivergingDefault 'defaultOnEnum'
 				reportDefaultOnEnumMatch(patterns, lastEnumCaseName: lastEnumCaseName)
 			end 'defaultOnEnum'
 			if patterns.isEnumCase() 'recordEnum'
 				hasEnumArm = true
 				lastEnumCaseName = patterns.first().caseName
 			end 'recordEnum'
+			// An enum-case range arm (`red to blue`) counts as an enum
+			// arm for exhaustiveness / E2046 purposes even though the
+			// pattern kind is `rangeLiteral`.
+			if patterns.first().isEnumRange 'recordEnumRange'
+				hasEnumArm = true
+				// Use any case from the range to identify the owning
+				// enum for diagnostics. The first ordinal's case name is
+				// recovered via the enum registry; if missing we skip
+				// (TR will surface the canonical diagnostic).
+				if let rangeCaseName = try enumCaseNameAtOrdinal(enumName: patterns.first().enumOwnerName, ordinal: patterns.first().loValue) 'updateLast'
+					lastEnumCaseName = rangeCaseName
+				end 'updateLast'
+				// Mark every covered ordinal's case name in seenKeys so
+				// enum exhaustiveness sees the range's contribution.
+				markEnumRangeCases(seenKeys, pattern: patterns.first())
+			end 'recordEnumRange'
 			let arm = try buildMatchArmBlocks(header, armIndex: armIndex, patterns: patterns, separator: TokenKind.gives)
 			if patterns.isDefault() 'recordDefault'
 				hasDefault = true
@@ -4559,7 +6596,33 @@ export type Parser
 			end 'recordDefault'
 
 			currentBlock = arm.body
+			// `default panic(...)` / `default throws Err.x` arms (and
+			// per-arm `panic` / `throws` shapes added in Stage 0): the
+			// arm body is already terminated and contributes no value to
+			// the unified result type. Skip the gives expression and
+			// don't unify against this arm.
+			if arm.bodyAlreadyTerminated 'preTerminated'
+				if not patterns.isDefault() 'advanceCursorEarly'
+					currentBlock = arm.next
+				end 'advanceCursorEarly'
+				armIndex = armIndex + 1
+				try skipNewlines()
+				if cursor.index() <= armPrevPos 'stuckEarly'
+					break
+				end 'stuckEarly'
+				continue
+			end 'preTerminated'
+
+			// Phase 9 Stage 3: same payload-binding emission as the
+			// match-statement path — bindings become scope locals so
+			// `gives n` reads through varLoad. Position `currentBlock`
+			// on the arm body before invoking so the helper appends ops
+			// via the parser's mutable block pointer.
+			scope.pushScope()
+			currentBlock = arm.body
+			_ = emitUnionArmBindings(header.scrutineeName, scrutineeType: header.scrutineeType, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
 			let armResult = try parseMatchExpressionArmBody(arm.body)
+			scope.popScope()
 			rejectFallthroughInMatchExpression()
 			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(armResult), range: SourceRange.ofToken(arm.caseToken)))
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
@@ -4593,6 +6656,14 @@ export type Parser
 		end 'noDefault'
 
 		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		// Non-enum match expression: requires an explicit `default` arm
+		// because integer / string / float / char scrutinees can't be
+		// enumerated and the expression must produce a value on every
+		// path.
+		if not hasEnumArm and not hasDefault 'needsDefault'
+			let endTok = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match expression is not exhaustive: add a 'default' arm", line: endTok.line, column: endTok.column, filePath: filePath)
+		end 'needsDefault'
 
 		try consumeMatchEndLabel(expectedLabel: header.userLabel)
 
@@ -5119,6 +7190,24 @@ export type Parser
 			return
 		end 'maybeGlobalWrite'
 		let slot = lookupVariable(nameToken.value, token: nameToken)
+		// Phase 9 Stage 4: union match-arm payload bindings rewrite
+		// assignment-to-binding into a write-back to the union's heap-
+		// resident payload slot. The binding's VarInfo carries the
+		// scrutinee SSA name + field index; the lowering emits the
+		// `decref-old + incref-new + storeIndirect` triple for managed
+		// payloads. When the scrutinee is `let`-bound, `bindingMutable`
+		// captured at scope-declare time is `false`, so we surface E2013
+		// here rather than emitting a write-back that would silently
+		// succeed at the IR level.
+		let bindingInfo = scope.getInfo(nameToken.value)
+		if bindingInfo.isPayloadBinding 'payloadWrite'
+			if not bindingInfo.mutable 'immutableBinding'
+				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				return
+			end 'immutableBinding'
+			module.appendOp(emitBlock, op: MaxonOp.enumPayloadStore(bindingInfo.payloadScrutineeName.toByteArray(), fieldIndex: bindingInfo.payloadFieldIndex as IntConstant, fieldType: bindingInfo.varType, newValueName: exprName(materializedResult), range: stmtRange))
+			return
+		end 'payloadWrite'
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
 			// Implicit self-load and field-store share the statement's range —
 			// the user wrote `field = value`, not a separate self-load op.
@@ -5153,6 +7242,20 @@ export type Parser
 
 		try expect(TokenKind.equals)
 		currentBlock = block
+		// Phase 9 Stage 5 (struct-backing): peek before consuming the
+		// initializer expression to detect `let LOCAL = EnumName.caseName`
+		// where the case has struct backing. The peek is non-consuming;
+		// the actual expression parse below still runs and emits the
+		// regular IR. The alias is registered *after* the expression parse
+		// (where mutability and discard checks are visible) — we store
+		// the peek result here in a flag + value pair so missing isn't
+		// distinguished from a real value by a magic empty string.
+		var initBackedCaseFound = false
+		var initBackedCaseQualified = ""
+		if let qualified = try peekStructBackedEnumCaseQualifiedName() 'haveBackedCase'
+			initBackedCaseFound = true
+			initBackedCaseQualified = qualified
+		end 'haveBackedCase'
 		let exprResult = try parseExpression(block)
 		// Emit the varDecl into the block control flow landed on — bool
 		// short-circuit may have moved it off `block` to a merge block.
@@ -5172,11 +7275,30 @@ export type Parser
 			end 'dupConst3'
 		end 'registerLetConst'
 
+		// Phase 9 Stage 5 (struct-backing): record the struct-backed
+		// enum-case alias if `peekStructBackedEnumCaseQualifiedName` found
+		// one. `var` bindings shadow the alias on reassignment, but since
+		// the parser doesn't do flow-sensitive analysis we conservatively
+		// record only `let` bindings. Reassigning a `var` later would
+		// invalidate the alias; not registering it here keeps the fold
+		// soundly compile-time-only.
+		if isLet and initBackedCaseFound and nameToken.value != "_" 'recordCaseAlias'
+			try letStructBackedEnumCases.insert(nameToken.value, value: initBackedCaseQualified) otherwise ignore
+		end 'recordCaseAlias'
+
 		// Materialize any deferred string literal so the producer op exists
 		// before we reference its name in the varDecl below. No-op when the
 		// initializer isn't a string literal.
 		let materializedResult = materializeStringConstIfNeeded(emitBlock, expr: exprResult, range: stmtRange)
-		let slot = defineVariableWithType(nameToken.value, varType: exprType(materializedResult))
+		// Phase 9 Stage 4: thread `let`-vs-`var` through Scope so downstream
+		// consumers (today: match-arm payload-binding mutability, per
+		// `mutable-enums.md`) can distinguish writable from read-only
+		// locals. Existing local-let assignments still slip through without
+		// E2013 — `parseVarAssignment` doesn't check `mutable` for regular
+		// slot stores — but the payload-binding path now consults the
+		// recorded mutability and surfaces E2013 on `value = …` against a
+		// `let b` scrutinee.
+		let slot = scope.declare(nameToken.value, varType: exprType(materializedResult), mutable: not isLet)
 		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(materializedResult), slotType: exprType(materializedResult), range: stmtRange))
 	end 'parseVarDecl'
 
@@ -5924,28 +8046,63 @@ export type Parser
 			return TryFallbackOutcome.merges(fallbackBlock)
 		end 'isIgnore'
 
+		// E2049: block-form fallbacks (`otherwise (e) 'label' ... end` and
+		// `otherwise 'label' ... end`) are statements that span multiple
+		// lines; they cannot appear inside a single-statement match arm
+		// body. Reject before parsing the handler body so we surface the
+		// diagnostic at the dispatch token, matching the spec's expected
+		// column. Diverging forms (`return` / `throw` / `panic` / `ignore`
+		// / `break` / `continue`) plus expression forms remain allowed.
+		if inMatchArmBody and (dispatchToken.kind == TokenKind.leftParen or dispatchToken.kind == TokenKind.charLiteral) 'matchArmBlockForm'
+			reportCompileError(project, code: ErrorCode.parserMatchBlockStatementNotAllowed, message: "block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic(\"...\")', 'otherwise ignore', or 'otherwise return/throw/...' instead", line: dispatchToken.line, column: dispatchToken.column, filePath: filePath)
+			throw ParserError.typeError
+		end 'matchArmBlockForm'
+
 		// Binding form: `otherwise (e) 'label' ... end 'label'`
 		// Binds the typed error value to a name for inspection (e.g., match).
-		// The error flag is `ordinal + 1`; subtract 1 to recover the enum ordinal.
+		// For bare-case enums the flag is `ordinal + 1`; subtract 1 to recover
+		// the enum ordinal. For associated-value unions (Phase 9 Stage 5c) the
+		// flag slot IS the union pointer — bind `e` directly to the flag SSA
+		// name so `match e` sees the heap-boxed union with the right tag at
+		// offset 0 and the existing union-match lowering applies unchanged.
 		if dispatchToken.kind == TokenKind.leftParen 'isBinding'
 			try eat(TokenKind.leftParen)
 			let bindingToken = try consume()  // identifier: the binding name
 			try eat(TokenKind.rightParen)
 			_ = try consume()  // charLiteral: the block label
-			// Convert error flag to enum ordinal: ordinal = flag - 1.
-			let oneName = emitLiteral(fallbackBlock, value: 1, valueType: MaxonType.integer)
-			let enumOrdinalName = freshSynthName()
-			module.appendOp(fallbackBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
-			// Determine the binding type: named enum type if known, else integer.
+			// Resolve the throws-clause type up front so we can decide
+			// between the bare-enum (flag-1) and union-pointer paths.
+			// `throwsClauseName` throws when the callee is non-throwing,
+			// in which case the binding defaults to int (the bare-enum /
+			// flag path).
 			var bindingType = MaxonType.integer
-			match calleeThrowsTypeName 'hasThrowsType'
-				none then break 'hasThrowsType'
-				throwing(throwsName) then bindingType = internMaxonType(project, name: throwsName)
-			end 'hasThrowsType'
-			// Declare the binding in a new scope so it's visible throughout the handler body.
+			var throwsIsUnion = false
+			if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
+				bindingType = internMaxonType(project, name: throwsName)
+				throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
+			end 'haveThrowsName'
+			// Declare the binding in a fresh scope so sibling `otherwise (e)`
+			// blocks with different error types don't share the slot — the
+			// `error.otherwise-block-reused-binding` regression. The scope
+			// pops at handler-end before InjectDrops sees the slot.
 			scope.pushScope()
 			let bindingSlot = scope.declare(bindingToken.value, varType: bindingType, mutable: false)
-			module.appendOp(fallbackBlock, op: MaxonOp.varDecl(bindingSlot, value: enumOrdinalName, slotType: bindingType, range: SourceRange.ofToken(tryToken)))
+			var bindingValueName = ByteArray.create()
+			if throwsIsUnion 'isUnion'
+				// Union throws: the runtime-bound `errorFlagName` IS the
+				// union pointer (option-1 ABI). Bind `e` directly to it so
+				// `match e` lowers against the union scrutinee and managed-
+				// payload decrefs flow through the standard scope-exit drops.
+				bindingValueName = errorFlagName
+			end 'isUnion' else 'isBare'
+				// Bare enum: recover the ordinal via `flag - 1`. The binding
+				// is an integer in the enum's domain.
+				let oneName = emitLiteral(fallbackBlock, value: 1, valueType: MaxonType.integer)
+				let enumOrdinalName = freshSynthName()
+				module.appendOp(fallbackBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+				bindingValueName = enumOrdinalName
+			end 'isBare'
+			module.appendOp(fallbackBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: SourceRange.ofToken(tryToken)))
 			var handlerExitBlock = try parseStatements(currentFunc, block: fallbackBlock, lastWasReturn: false)
 			scope.popScope()
 			try skipEndAndLabel()
@@ -6382,7 +8539,41 @@ export type Parser
 				// most common explicit use of an `Array with X` typealias
 				// (`IntArray.create()`).
 				usedTypeAliases.insert(element: token.value)
-				let calleeName = "{token.value}.{memberToken.value}"
+				// Phase 9 Stage 5: redirect `<EnumName>.fromRawValue(...)` /
+				// `<EnumName>.fromName(...)` to the per-enum synthesized lookup
+				// helpers. The synthesis runs during `parseEnumDecl` /
+				// `registerUnionCasesCompanion`, so any reachable enum or
+				// `.unionCases` companion already has these helpers registered
+				// in `funcSignatures` by the time a call site is parsed —
+				// preserving forward-reference resolution (cross-file calls hit
+				// the helpers once their declaration file finishes parsing).
+				// Unions themselves are excluded from `.fromRawValue` per the
+				// spec (E3034 surfaces in TypeResolution); `.fromName` on
+				// associated-value unions is not yet supported and falls
+				// through to the regular dispatch, where it will fail to
+				// resolve until Stage 5's union-`fromName` work lands.
+				var calleeName = "{token.value}.{memberToken.value}"
+				let memberStr = memberToken.value
+				let prefixIsEnumName = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
+				if prefixIsEnumName and memberStr == "fromRawValue" 'redirectFromRawValue'
+					if enumIsStructBacked(token.value) 'isStructBacked'
+						// Struct-backed enums can't reconstruct their raw
+						// value from an integer (`= StructType{...}`); per
+						// `enum-struct-backing.md`'s
+						// `error.struct-backing-fromRawValue` test we
+						// surface E3034 at the call site rather than letting
+						// the call fall through to an unresolved callee.
+						reportCompileError(project, code: ErrorCode.semanticEnumUnknownCase, message: "unknown enum case: 'fromRawValue'", line: memberToken.line, column: memberToken.column, filePath: filePath)
+					end 'isStructBacked'
+					if not enumIsAssociatedValueUnion(token.value) and not enumIsStructBacked(token.value) 'notAssocUnion'
+						calleeName = enumFromRawValueSymbolName(token.value)
+					end 'notAssocUnion'
+				end 'redirectFromRawValue'
+				if prefixIsEnumName and memberStr == "fromName" 'redirectFromName'
+					if not enumIsAssociatedValueUnion(token.value) 'notAssocUnionFn'
+						calleeName = enumFromNameSymbolName(token.value)
+					end 'notAssocUnionFn'
+				end 'redirectFromName'
 				try eat(TokenKind.dot)
 				try eat(TokenKind.identifier)
 				try eat(TokenKind.leftParen)
@@ -6407,6 +8598,40 @@ export type Parser
 			end 'isTypeBoundExpr'
 		end 'maybeTypeBoundExpr'
 
+		// Phase 9 Stage 5 (struct-backing): `local.rawValue.field[.field]+`
+		// where `local` was bound via `let local = EnumName.case` and the
+		// enum case carries a struct-backing literal — fold the access
+		// chain at parse time. `letStructBackedEnumCases` was populated by
+		// `parseVarDecl`'s pre-expression peek. The expected access shape
+		// is `local.rawValue.<field>...`; we only fold when `.rawValue`
+		// follows the local (so `.ordinal` / `.name` still flow through
+		// the enum-builtin-accessor path), AND when at least one chained
+		// `.field` follows `.rawValue` (so a bare `.rawValue` access still
+		// flows through the standard fieldLoad path that aliases the
+		// integer-typed value).
+		if at(TokenKind.dot) and scope.contains(token.value) 'maybeLocalStructBacking'
+			let nextMember = try cursor.peek(1) otherwise Token.eof()
+			let afterMember = try cursor.peek(2) otherwise Token.eof()
+			let afterMember2 = try cursor.peek(3) otherwise Token.eof()
+			let isRawValueChain = nextMember.kind == TokenKind.identifier and nextMember.value == "rawValue" and afterMember.kind == TokenKind.dot and afterMember2.kind == TokenKind.identifier
+			if isRawValueChain 'isChain'
+				if let qualifiedCase = try letStructBackedEnumCases.get(token.value) 'haveCaseAlias'
+					let dotIdx = lastIndexOfDotByte(qualifiedCase.toByteArray())
+					if dotIdx < qualifiedCase.toByteArray().count() 'haveDot'
+						let bytes = qualifiedCase.toByteArray()
+						let enumNameStr = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+						let caseNameStr = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: bytes.count())
+						// Mark `op` as referenced so E3012 (unused variable)
+						// doesn't trip on `let op = TestOp.mul; return op.rawValue.value`.
+						referencedVars.insert(element: token.value)
+						let backingExprId = try lookupCaseStructBackingExprId(enumName: enumNameStr, caseName: caseNameStr) otherwise panic("parseIdentifierExpr: caseHasStructBacking('{enumNameStr}.{caseNameStr}') guarded the call but lookup failed")
+						let foldResult = try parseStructBackingAccessChain(rootExprId: backingExprId, prefixToken: token, memberToken: token, block: block) otherwise return ExprResult.direct(freshSynthName(), valueType: MaxonType.unresolved)
+						return foldResult
+					end 'haveDot'
+				end 'haveCaseAlias'
+			end 'isChain'
+		end 'maybeLocalStructBacking'
+
 		// Qualified static-field read: TypeName.field, where the qualified name
 		// names a registered static var (.data slot) or static let
 		// (compile-time integer constant). Methods take precedence above;
@@ -6430,6 +8655,119 @@ export type Parser
 			let prefixIsEnum = project.unresolvedEnums.contains(token.value) or project.enumTypes.contains(token.value)
 			let memberIsIdent = memberToken.kind == TokenKind.identifier
 			let memberIsEnumCaseKeyword = prefixIsEnum and not memberToken.value.isEmpty()
+			// Phase 9 Stage 1: `EnumName.allCases` / `EnumName.allCaseNames`
+			// expand to inline array literals before the catch-all qualified-
+			// read path tries (and fails) to look the dotted name up as a
+			// top-level constant. Mirrors the C# bootstrap dispatch at
+			// 2-Parser.cs:14113-14128.
+			if prefixIsEnum and memberIsIdent and afterMember.kind != TokenKind.leftParen 'maybeEnumStatic'
+				if memberToken.value == "allCases" 'isAllCases'
+					usedTypeAliases.insert(element: token.value)
+					try eat(TokenKind.dot)
+					_ = try consume()
+					let accessRange = SourceRange.between(token, last: memberToken)
+					return try emitEnumAllCases(token.value, accessRange: accessRange)
+				end 'isAllCases'
+				if memberToken.value == "allCaseNames" 'isAllCaseNames'
+					usedTypeAliases.insert(element: token.value)
+					try eat(TokenKind.dot)
+					_ = try consume()
+					let accessRange = SourceRange.between(token, last: memberToken)
+					return try emitEnumAllCaseNames(token.value, accessRange: accessRange)
+				end 'isAllCaseNames'
+				// Phase 9 Stage 4: `UnionName.unionCases.<member>` re-dispatches
+				// against the synthesized companion enum named
+				// `UnionName.unionCases`. The companion is registered at
+				// parse time of the union itself (see `parseUnionDecl`), so
+				// the lookup succeeds before TypeResolution runs.
+				//   `.allCases` / `.allCaseNames` reuse the Stage 1 emitters
+				//   `.<caseName>` resolves to the case's `TopLevelConstant`
+				if memberToken.value == "unionCases" and afterMember.kind == TokenKind.dot 'isUnionCases'
+					let companionName = "{token.value}.unionCases"
+					if project.unresolvedEnums.contains(companionName) or project.enumTypes.contains(companionName) 'companionExists'
+						let innerToken = try cursor.peek(3) otherwise Token.eof()
+						let afterInner = try cursor.peek(4) otherwise Token.eof()
+						if not innerToken.value.isEmpty() 'haveInner'
+							// Phase 9 Stage 5: `Shape.unionCases.fromRawValue(...)`
+							// / `Shape.unionCases.fromName(...)` — redirect to the
+							// per-companion synthesized lookup helpers. The
+							// companion is a bare enum so the same helper
+							// machinery used for `Color.fromRawValue` applies.
+							// Unknown methods on the companion fall through to
+							// the regular qualified-callee path, which surfaces
+							// the unresolved-callee diagnostic at TR time.
+							if afterInner.kind == TokenKind.leftParen 'isCompanionCall'
+								usedTypeAliases.insert(element: token.value)
+								try eat(TokenKind.dot)
+								_ = try consume()
+								try eat(TokenKind.dot)
+								_ = try consume()
+								try eat(TokenKind.leftParen)
+								let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+								let rparenToken = previousToken()
+								var calleeStr = "{companionName}.{innerToken.value}"
+								if innerToken.value == "fromRawValue" 'redirectCompanionFRV'
+									calleeStr = enumFromRawValueSymbolName(companionName)
+								end 'redirectCompanionFRV'
+								if innerToken.value == "fromName" 'redirectCompanionFN'
+									calleeStr = enumFromNameSymbolName(companionName)
+								end 'redirectCompanionFN'
+								let calleeName = project.calleeNames.intern(calleeStr)
+								let callResultName = freshSynthName()
+								module.appendOp(block, op: MaxonOp.call(callResultName, callee: calleeName, callContext: CallContext.qualified, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+								return ExprResult.direct(callResultName, valueType: MaxonType.unresolved)
+							end 'isCompanionCall'
+							// Static member: allCases / allCaseNames / caseName
+							if innerToken.value == "allCases" 'companionAllCases'
+								usedTypeAliases.insert(element: token.value)
+								try eat(TokenKind.dot)
+								_ = try consume()
+								try eat(TokenKind.dot)
+								_ = try consume()
+								let accessRange = SourceRange.between(token, last: innerToken)
+								return try emitEnumAllCases(companionName, accessRange: accessRange)
+							end 'companionAllCases'
+							if innerToken.value == "allCaseNames" 'companionAllCaseNames'
+								usedTypeAliases.insert(element: token.value)
+								try eat(TokenKind.dot)
+								_ = try consume()
+								try eat(TokenKind.dot)
+								_ = try consume()
+								let accessRange = SourceRange.between(token, last: innerToken)
+								return try emitEnumAllCaseNames(companionName, accessRange: accessRange)
+							end 'companionAllCaseNames'
+							let companionCaseQualified = "{companionName}.{innerToken.value}"
+							if project.topLevelConstants.contains(companionCaseQualified) 'companionCaseHit'
+								usedTypeAliases.insert(element: token.value)
+								try eat(TokenKind.dot)
+								_ = try consume()
+								try eat(TokenKind.dot)
+								_ = try consume()
+								let resultName = freshSynthName()
+								module.appendOp(block, op: MaxonOp.unresolvedRead(resultName, name: companionCaseQualified, range: SourceRange.between(token, last: innerToken)))
+								return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
+							end 'companionCaseHit'
+						end 'haveInner'
+					end 'companionExists'
+				end 'isUnionCases'
+			end 'maybeEnumStatic'
+			// Phase 9 Stage 5 (struct-backing): `EnumName.caseName.field[.field]+`
+			// where `EnumName.caseName` carries a `= StructType{...}` /
+			// `= StructType.create(...)` backing literal — fold the whole
+			// chain to the leaf field's constant at parse time. The runtime
+			// never observes the struct value; access is pure compile-time
+			// metadata. Bare `EnumName.caseName` (no follow-up `.`) falls
+			// through to the existing isFieldRead path so the case literal
+			// still routes through `topLevelConstants`. Union-case names of
+			// payload-bearing variants are skipped — they're constructor
+			// dispatchers, not constant cases.
+			if prefixIsEnum and (memberIsIdent or memberIsEnumCaseKeyword) and afterMember.kind == TokenKind.dot 'maybeStructBacking'
+				if caseHasStructBacking(enumName: token.value, caseName: memberToken.value) 'haveBacking'
+					let backingExprId = try lookupCaseStructBackingExprId(enumName: token.value, caseName: memberToken.value) otherwise panic("parseIdentifierExpr: caseHasStructBacking('{token.value}.{memberToken.value}') guarded the call but lookup failed")
+					let foldResult = try parseStructBackingAccessChain(rootExprId: backingExprId, prefixToken: token, memberToken: memberToken, block: block) otherwise return ExprResult.direct(freshSynthName(), valueType: MaxonType.unresolved)
+					return foldResult
+				end 'haveBacking'
+			end 'maybeStructBacking'
 			if (memberIsIdent or memberIsEnumCaseKeyword) and afterMember.kind != TokenKind.leftParen 'isFieldRead'
 				// E3062 use-tracking: `Foo.field` and `Foo.case` count as
 				// explicit references to `Foo`.
@@ -7142,6 +9480,82 @@ export type Parser
 
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
 	end 'emitArrayLiteralResult'
+
+	// Phase 9 Stage 1: emit `EnumName.allCases` as an inline array literal of
+	// enum-typed case literals in declaration order. Mirrors the C# bootstrap's
+	// `EmitEnumAllCases` (2-Parser.cs:5482). The receiver `enumName` must name
+	// a registered (resolved or unresolved) bare enum. Each case literal
+	// carries the enum's named type so downstream for-in / index access
+	// typechecks against the enum rather than the bare backing scalar.
+	// Note on float-backed enums: their `rawValue` is the IEEE-754 bit
+	// pattern stored as an `IntConstant` in the EnumCase. We emit the
+	// literal as `MaxonType.named(EnumName)` (which lowers to an i64-shaped
+	// SSA value carrying the same bit pattern) rather than `MaxonType.float`
+	// — the array slot is 8 bytes and the existing `__mm.set` /
+	// loadIndirect path moves i64-shaped values. The receiver type metadata
+	// is what downstream `.rawValue` access uses to recover the f64 nature
+	// (via stdTypeIsFloat on the named alias).
+	function emitEnumAllCases(enumName String, accessRange SourceRange) returns ExprResult throws ParserError
+		let elemType = MaxonType.named(project.typeNames.intern(enumName))
+		var elemNames = ByteArrayArray.create()
+		var elemRanges = SourceRangeArray.create()
+		let cases = try enumCasesOrEmpty(enumName) otherwise EnumCaseArray.create()
+		for i in 0 upto cases.count() 'eachCase'
+			let c = try cases.get(i) otherwise panic("emitEnumAllCases: cases.get OOB at {i}")
+			let litName = emitLiteral(currentBlock, value: c.rawValue, valueType: elemType, range: accessRange)
+			elemNames.push(litName)
+			elemRanges.push(accessRange)
+		end 'eachCase'
+		return try emitArrayLiteralResult(currentBlock, elemNames: elemNames, elemRanges: elemRanges, literalRange: accessRange, bracketToken: cursor.current())
+	end 'emitEnumAllCases'
+
+	// Phase 9 Stage 1: emit `EnumName.allCaseNames` as an inline array literal
+	// of case-name string constants in declaration order. Mirrors the C#
+	// bootstrap's `EmitEnumAllCaseNames` (2-Parser.cs:5522). Works for both
+	// resolved and pre-registered enums.
+	function emitEnumAllCaseNames(enumName String, accessRange SourceRange) returns ExprResult throws ParserError
+		var elemNames = ByteArrayArray.create()
+		var elemRanges = SourceRangeArray.create()
+		let cases = try enumCasesOrEmpty(enumName) otherwise EnumCaseArray.create()
+		for i in 0 upto cases.count() 'eachCase'
+			let c = try cases.get(i) otherwise panic("emitEnumAllCaseNames: cases.get OOB at {i}")
+			let stringId = project.strings.intern(c.name)
+			let name = freshSynthName()
+			module.appendOp(currentBlock, op: MaxonOp.stringConst(name, stringId: stringId, range: accessRange))
+			elemNames.push(name)
+			elemRanges.push(accessRange)
+		end 'eachCase'
+		return try emitArrayLiteralResult(currentBlock, elemNames: elemNames, elemRanges: elemRanges, literalRange: accessRange, bracketToken: cursor.current())
+	end 'emitEnumAllCaseNames'
+
+	// Look up an enum's case list across both the resolved-enum map (post-
+	// TypeResolution) and the pre-registered unresolvedEnums map (set at
+	// parse time before the body finishes). Used by .allCases / .allCaseNames
+	// synthesis to fetch declaration-ordered cases regardless of whether the
+	// enum body has fully landed by the time the access is parsed.
+	function enumCasesOrEmpty(enumName String) returns EnumCaseArray throws ParserError
+		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
+			return resolved.cases
+		end 'isResolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			return unresolved.cases
+		end 'isUnresolved'
+		throw ParserError.unhandledToken
+	end 'enumCasesOrEmpty'
+
+	// Returns true iff `enumName` names a float-backed enum (raw values come
+	// from `floatLiteral` tokens). Falls back to false for any non-enum or
+	// unknown name — the caller is expected to have validated `enumName`
+	// against `enumTypes` / `unresolvedEnums` already.
+	function enumIsFloatBacked(enumName String) returns bool
+		if let resolved = try project.enumTypes.get(enumName) 'isResolved'
+			return resolved.isFloatBacked
+		end 'isResolved'
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'isUnresolved'
+			return unresolved.isFloatBacked
+		end 'isUnresolved'
+		return false
+	end 'enumIsFloatBacked'
 
 	// Register a single map-literal axis (keys or values) as a synthetic
 	// array-literal producer keyed on the axis's `__mm` result name only.
@@ -8247,6 +10661,10 @@ export type Parser
 		localVarLocations = ParamLocationArray.create()
 		referencedVars = ReferencedVarSet.create()
 		synthNameCounter = 0
+		// Phase 9 Stage 5: reset the per-function struct-backed enum-case
+		// bindings so a fresh function doesn't see stale `let op = Op.mul`
+		// entries from the previous body.
+		letStructBackedEnumCases = StructBackedEnumCaseBindingMap.create()
 	end 'resetSymbolTable'
 
 	// Defer this function's unused-variable check (E3012) onto Project so
@@ -8446,6 +10864,18 @@ end 'MaxonTypeStructNameError'
 enum BuiltinArrayLiteralError implements Error
 	unresolved
 end 'BuiltinArrayLiteralError'
+
+// Probe-style lookup misses for parser-side helpers that walk the enum /
+// struct registries without an authoritative single owner. Probes throw
+// `notFound` so callers must consciously handle the miss instead of
+// distinguishing it from a valid value via a magic sentinel.
+enum EnumCaseProbeError implements Error
+	notFound
+end 'EnumCaseProbeError'
+
+enum StructFieldProbeError implements Error
+	notFound
+end 'StructFieldProbeError'
 
 // Return the underlying struct-type name for a named MaxonType. Throws
 // `MaxonTypeStructNameError.notAStruct` when the type is not currently
@@ -8854,13 +11284,22 @@ type MatchHeader
 	export var baseLabel String
 	export var mergeBlock IrBlock
 	export var failed bool
+	// Phase 9 Stage 4: source-level mutability of the match scrutinee, used
+	// only when the scrutinee is a union value and the match introduces
+	// payload bindings. True when the scrutinee was a bare identifier
+	// referring to a `var` local (or other mutable origin). For non-bare
+	// scrutinees (computed expressions, struct-field reads, etc.) this stays
+	// false — the binding can still be matched against but `value = …` is
+	// rejected with E2013 because there's no source-level slot to write back
+	// to. For bare-let scrutinees the same E2013 fires.
+	export var scrutineeMutable bool
 
-	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock) returns MatchHeader
-		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false}
+	export static function create(scrutineeName ByteArray, scrutineeType MaxonType, userLabel String, baseLabel String, mergeBlock IrBlock, scrutineeMutable bool) returns MatchHeader
+		return Self{scrutineeName: scrutineeName, scrutineeType: scrutineeType, userLabel: userLabel, baseLabel: baseLabel, mergeBlock: mergeBlock, failed: false, scrutineeMutable: scrutineeMutable}
 	end 'create'
 
 	export static function failed() returns MatchHeader
-		return Self{scrutineeName: ByteArray.create(), scrutineeType: MaxonType.unresolved, userLabel: "", baseLabel: "", mergeBlock: IrBlock.create(0 as BlockId, label: ""), failed: true}
+		return Self{scrutineeName: ByteArray.create(), scrutineeType: MaxonType.unresolved, userLabel: "", baseLabel: "", mergeBlock: IrBlock.create(0 as BlockId, label: ""), failed: true, scrutineeMutable: false}
 	end 'failed'
 end 'MatchHeader'
 
@@ -8872,23 +11311,76 @@ type MatchArmBlocks
 	export var caseToken Token
 	export var body IrBlock
 	export var next IrBlock
+	// True when `buildMatchArmBlocks` already populated the body's
+	// terminator (e.g. for `default panic(...)` / `default throws Err.x`).
+	// The outer loop must NOT call `parseMatchStatementArmBody` /
+	// `parseMatchExpressionArmBody` for these arms because the cursor has
+	// already advanced past the diverging keyword's body.
+	export var bodyAlreadyTerminated bool
 
-	export static function create(caseToken Token, body IrBlock, next IrBlock) returns MatchArmBlocks
-		return Self{caseToken: caseToken, body: body, next: next}
+	export static function create(caseToken Token, body IrBlock, next IrBlock, bodyAlreadyTerminated bool = false) returns MatchArmBlocks
+		return Self{caseToken: caseToken, body: body, next: next, bodyAlreadyTerminated: bodyAlreadyTerminated}
 	end 'create'
 end 'MatchArmBlocks'
 
 // One parsed pattern within a match-arm pattern list. `kind` discriminates
 // between the catch-all default (`defaultArm`), an integer-literal pattern
-// (`intValue` populated), and an enum-case pattern (`caseName` populated).
+// (`intValue` populated), an enum-case pattern (`caseName` populated), and
+// a range-literal pattern (`loValue`/`hiValue`/sentinels populated).
 // `displayName` is the duplicate-detection / E2027 message string. The
 // `defaultArm` variant is named with a suffix because `default` is a
 // reserved keyword.
+//
+// Phase 9 Stage 2: an enum-case pattern may carry payload bindings
+// (`caseName(x, _, var y)`); they live alongside `caseName` in the same
+// kind so existing `.isEnumCase()` predicates continue to fire for bare
+// and bound forms alike. `bindingNames` holds the source-level binding
+// names (with `_` for discards) and parallels `bindingIsVar` / `bindingIsDiscard`.
 export union MatchPatternKind
 	defaultArm
 	intLiteral
 	enumCase
+	rangeLiteral
 end 'MatchPatternKind'
+
+// Phase 9 Stage 2: parsed payload-binding descriptor. Each entry in
+// `MatchPatternSpec.bindings` records one position in the source
+// `caseName(b1, b2, ...)` list. `name` is the source-level binding name
+// (or empty when the binding is `_`); `isDiscard` distinguishes `_` from
+// a named binding so downstream consumers don't trip over an empty name;
+// `isVar` distinguishes `var name` (mutable) from `name` (immutable).
+// Location captured for E3035 / E3081 anchoring.
+export type MatchPatternBinding
+	export var name String
+	export var isDiscard bool
+	export var isVar bool
+	export var line LineNumber
+	export var column ColumnNumber
+
+	export static function create(name String, isDiscard bool, isVar bool, line LineNumber, column ColumnNumber) returns MatchPatternBinding
+		return Self{name: name, isDiscard: isDiscard, isVar: isVar, line: line, column: column}
+	end 'create'
+end 'MatchPatternBinding'
+
+export typealias MatchPatternBindingArray = Array with MatchPatternBinding
+
+// Phase 9 Stage 3: result of looking up a (union, case) pair's payload-
+// field list. `hit` is false when the case is unknown or the type isn't
+// a union — callers fall back to silent skip (TR surfaces the canonical
+// diagnostic). Lives outside the Parser type because Maxon doesn't allow
+// nested type declarations.
+export type CasePayloadFieldsLookup
+	export var hit bool
+	export var fields EnumPayloadFieldArray
+
+	export static function miss() returns CasePayloadFieldsLookup
+		return Self{hit: false, fields: EnumPayloadFieldArray.create()}
+	end 'miss'
+
+	export static function found(fields EnumPayloadFieldArray) returns CasePayloadFieldsLookup
+		return Self{hit: true, fields: fields}
+	end 'found'
+end 'CasePayloadFieldsLookup'
 
 export type MatchPatternSpec
 	export var kind MatchPatternKind
@@ -8896,26 +11388,82 @@ export type MatchPatternSpec
 	export var intValue ParsedInt
 	export var caseName String
 	export var displayName String
+	// Range-pattern fields (only meaningful when kind == rangeLiteral).
+	// `loValue` is 0 when `hasMinSentinel` is true; `hiValue` is 0 when
+	// `hasMaxSentinel` is true. `isUpto` selects exclusive upper bound.
+	export var loValue ParsedInt
+	export var hiValue ParsedInt
+	export var isUpto bool
+	export var hasMinSentinel bool
+	export var hasMaxSentinel bool
+	// True when this pattern is a range whose bounds are enum case names
+	// (e.g. `red to blue`). Bound ordinals live in `loValue` / `hiValue`.
+	// Used by exhaustiveness validation to track ordinal coverage and by
+	// the enum-default check to treat the arm as an enum-case arm.
+	export var isEnumRange bool
+	// Owning enum name when `isEnumRange` is true. Empty otherwise.
+	export var enumOwnerName String
+	// Phase 9 Stage 2: parsed payload bindings for an enum-case pattern
+	// (`caseName(x, _, var y)`). Empty for bare-case arms and for every
+	// non-enum-case kind. `bindingNames` mirrors the same list as
+	// `ByteArrayArray` so the dialect-level enumMatchArm op (which lives
+	// outside the parser's String/ByteArray boundary) sees the names
+	// in the form its slot expects without a per-arm conversion.
+	export var bindings MatchPatternBindingArray
+	export var bindingNames ByteArrayArray
 
 	export static function defaultPattern(token Token) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default"}
+		return Self{kind: MatchPatternKind.defaultArm, token: token, intValue: 0, caseName: "", displayName: "default", loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'defaultPattern'
 
 	export static function intLiteral(token Token, value ParsedInt, displayName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName}
+		return Self{kind: MatchPatternKind.intLiteral, token: token, intValue: value, caseName: "", displayName: displayName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'intLiteral'
 
 	export static function enumCase(token Token, caseName String) returns MatchPatternSpec
-		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName}
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
 	end 'enumCase'
+
+	// Phase 9 Stage 2: enum-case pattern with payload bindings.
+	// `bindings` is the parser's structured view; `bindingNames` is the
+	// flat ByteArrayArray slot consumed by the dialect-level
+	// enumMatchArm op. Both arrays are parallel and the same length.
+	export static function enumCaseWithBindings(token Token, caseName String, bindings MatchPatternBindingArray, bindingNames ByteArrayArray) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.enumCase, token: token, intValue: 0, caseName: caseName, displayName: caseName, loValue: 0, hiValue: 0, isUpto: false, hasMinSentinel: false, hasMaxSentinel: false, isEnumRange: false, enumOwnerName: "", bindings: bindings, bindingNames: bindingNames}
+	end 'enumCaseWithBindings'
+
+	// Range pattern: `loValue to|upto hiValue`. Either bound may be a
+	// `min` / `max` sentinel (open-ended), but never both. `displayName`
+	// is the source form used in duplicate / single-value diagnostics.
+	export static function rangeLiteral(token Token, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, displayName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, isEnumRange: false, enumOwnerName: "", bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	end 'rangeLiteral'
+
+	// Enum-case range: `caseName to|upto caseName`. The `loValue`/`hiValue`
+	// fields hold the case ordinals so lowering can compare against the
+	// integer-backed scrutinee. `enumOwnerName` identifies the enum for
+	// exhaustiveness coverage tracking.
+	export static function enumRange(token Token, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMaxSentinel bool, displayName String, enumOwnerName String) returns MatchPatternSpec
+		return Self{kind: MatchPatternKind.rangeLiteral, token: token, intValue: 0, caseName: "", displayName: displayName, loValue: loOrdinal, hiValue: hiOrdinal, isUpto: isUpto, hasMinSentinel: false, hasMaxSentinel: hasMaxSentinel, isEnumRange: true, enumOwnerName: enumOwnerName, bindings: MatchPatternBindingArray.create(), bindingNames: ByteArrayArray.create()}
+	end 'enumRange'
 
 	export function isDefault() returns bool
 		return match self.kind 'check'
 			defaultArm gives true
 			intLiteral gives false
 			enumCase gives false
+			rangeLiteral gives false
 		end 'check'
 	end 'isDefault'
+
+	export function isRange() returns bool
+		return match self.kind 'check'
+			defaultArm gives false
+			intLiteral gives false
+			enumCase gives false
+			rangeLiteral gives true
+		end 'check'
+	end 'isRange'
 end 'MatchPatternSpec'
 
 export typealias MatchPatternSpecArray = Array with MatchPatternSpec
@@ -8947,8 +11495,13 @@ export type MatchPatternList
 			defaultArm gives false
 			intLiteral gives false
 			enumCase gives true
+			rangeLiteral gives false
 		end 'check'
 	end 'isEnumCase'
+
+	export function isRange() returns bool
+		return self.first().isRange()
+	end 'isRange'
 end 'MatchPatternList'
 
 // Outcome of parsing one match-statement arm body: the block control flow
@@ -8997,6 +11550,20 @@ type TryFallbackOutcome
 		return Self{mergesIntoSuccess: true, fallbackExitBlock: fallbackExitBlock, hasFallbackType: true, fallbackType: fallbackType}
 	end 'mergesWithType'
 end 'TryFallbackOutcome'
+
+// Phase 9 Stage 5c: result of constructing an associated-value union payload
+// inside a `throw EnumName.case(args)` statement. `resultName` is the SSA
+// name bound to the synthesized constructor's return value (a union pointer);
+// `lastToken` is the closing `)` so the caller can attach the throw op's
+// source range to the full `throw … (…)` span.
+type ThrowConstructionResult
+	export let resultName ByteArray
+	export let lastToken Token
+
+	export static function create(resultName ByteArray, lastToken Token) returns ThrowConstructionResult
+		return Self{resultName: resultName, lastToken: lastToken}
+	end 'create'
+end 'ThrowConstructionResult'
 
 // Tracks the source location of a parameter so CheckUnusedVariables can pin
 // an E3012 error back to the declaration site rather than the function header.

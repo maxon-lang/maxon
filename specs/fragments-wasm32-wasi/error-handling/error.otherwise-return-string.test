@@ -1,0 +1,143 @@
+// Test: error.otherwise-return-string
+
+// Regression: try returning String + otherwise return <string literal>.
+// Mirrors the shape of the original maxonOpIdxToString segfault in the
+// self-hosted compiler.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function wrap(flag bool) returns String
+	let s = try tryIt(flag) otherwise return "??"
+	return s
+end 'wrap'
+
+function main() returns ExitCode
+	let a = wrap(false)
+	let b = wrap(true)
+	if a == "ok" 'x'
+		if b == "??" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @error-handling.tryIt(local0: i1) -> i64 {
+  entry:
+    %15 = mir.param local0 : i1
+    mir.cond_br %15 [then: c_0(), else: c_0.after()]
+  c_0:
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 1 : i64
+    mir.error_return %2, %3
+  c_0.after:
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %4, %6, 0
+    %7 = mir.mov_imm 2 : i64
+    mir.store %7, %6, 8
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %6, 16
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %6, 24
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %6, 32
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %6, %12, 0
+    %13 = mir.mov_imm 1 : i64
+    mir.store %13, %12, 8
+    %14 = mir.mov_imm 0 : i64
+    mir.error_return %12, %14
+  }
+  func @error-handling.wrap(local0: i1) -> i64 {
+  entry:
+    %19 = mir.param local0 : i1
+    %2, %3 = mir.try_call @error-handling.tryIt(%19)
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp ne, %3, %4
+    mir.cond_br %5 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %7 = mir.global_addr @__istr_1
+    %8 = mir.mov_imm 40 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    mir.store %7, %9, 0
+    %10 = mir.mov_imm 2 : i64
+    mir.store %10, %9, 8
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %9, 16
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %9, 24
+    %13 = mir.mov_imm 0 : i64
+    mir.store %13, %9, 32
+    %14 = mir.mov_imm 16 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %9, %15, 0
+    %16 = mir.mov_imm 1 : i64
+    mir.store %16, %15, 8
+    mir.ret %15
+  try_0.merge:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.call @error-handling.wrap(%0)
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.call @error-handling.wrap(%2)
+    %5 = mir.global_addr @__istr_0
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %5, %7, 0
+    %8 = mir.mov_imm 2 : i64
+    mir.store %8, %7, 8
+    %9 = mir.mov_imm -2 : i64
+    mir.store %9, %7, 16
+    mir.store %2, %7, 24
+    %11 = mir.mov_imm 0 : i64
+    mir.store %11, %7, 32
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %7, %13, 0
+    mir.store %2, %13, 8
+    %15 = mir.call @String.equals(%1, %13)
+    mir.cond_br %15 [then: x_0(), else: x_0.after()]
+  x_0:
+    %17 = mir.global_addr @__istr_1
+    %18 = mir.mov_imm 40 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %17, %19, 0
+    %20 = mir.mov_imm 2 : i64
+    mir.store %20, %19, 8
+    %21 = mir.mov_imm -2 : i64
+    mir.store %21, %19, 16
+    mir.store %2, %19, 24
+    %23 = mir.mov_imm 0 : i64
+    mir.store %23, %19, 32
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %19, %25, 0
+    mir.store %2, %25, 8
+    %27 = mir.call @String.equals(%3, %25)
+    mir.cond_br %27 [then: y_0(), else: x_0.after()]
+  y_0:
+    %28 = mir.mov_imm 0 : i64
+    mir.ret %28
+  x_0.after:
+    mir.ret %2
+  }
+}
+---

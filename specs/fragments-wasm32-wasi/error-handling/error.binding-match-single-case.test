@@ -1,0 +1,65 @@
+// Test: error.binding-match-single-case
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test matching on typed error binding
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'check'
+			failed then result = 42
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %18 = mir.global_addr @__data_counter
+    %19 = mir.load %18, 0
+    %20 = mir.mov_imm 1 : i64
+    %21 = mir.add.i64 %19, %20
+    %22 = mir.global_addr @__data_counter
+    mir.store %21, %22, 0
+    %24 = mir.mov_imm 1 : i64
+    mir.br try_0.otherwise()
+  try_0.otherwise:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.sub.i64 %24, %6
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.cmp eq, %7, %9
+    mir.cond_br %10 [then: check_0.case0(), else: check_0.merge(%0)]
+  check_0.merge:
+    %11 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%15, %11)
+  check_0.case0:
+    %12 = mir.mov_imm 42 : i64
+    mir.br check_0.merge(%12)
+  try_0.merge:
+    %25 = mir.mov_imm 125 : i64
+    %26 = mir.cmp ugt, %16, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %27 = mir.global_addr @__panic_msg_0
+    %28 = mir.call @mrt_panic(%27)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

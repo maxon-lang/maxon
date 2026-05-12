@@ -1,0 +1,107 @@
+// Test: mutate-string-payload
+union Named
+	anonymous
+	named(name String)
+end 'Named'
+
+function main() returns ExitCode
+	var n = Named.named("hello")
+	match n 'update'
+		named(name) then name = "world"
+		anonymous then return 0
+	end 'update'
+	match n 'read'
+		named(name) then return name.byteLength()
+		anonymous then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0
+    %3 = mir.mov_imm 5 : i64
+    mir.store %3, %2, 8
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0
+    mir.store %5, %8, 8
+    %10 = mir.call @__construct_Named_named(%8)
+    %12 = mir.load %10, 0
+    %14 = mir.cmp eq, %12, %5
+    mir.cond_br %14 [then: update_0.case0(), else: update_0.next0()]
+  update_0.merge:
+    %16 = mir.load %10, 0
+    %18 = mir.cmp eq, %16, %5
+    mir.cond_br %18 [then: read_0.case0(), else: read_0.next0()]
+  update_0.case0:
+    %19 = mir.load %10, 8
+    %48 = mir.mov_imm 8 : i64
+    %49 = mir.sub.i64 %19, %48
+    mir.atomic_inc %49
+    %21 = mir.global_addr @__istr_1
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %21, %23, 0
+    %24 = mir.mov_imm 5 : i64
+    mir.store %24, %23, 8
+    %25 = mir.mov_imm -2 : i64
+    mir.store %25, %23, 16
+    mir.store %5, %23, 24
+    mir.store %6, %23, 32
+    %28 = mir.mov_imm 16 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    mir.store %23, %29, 0
+    mir.store %5, %29, 8
+    %31 = mir.load %10, 8
+    %50 = mir.mov_imm 8 : i64
+    %51 = mir.sub.i64 %29, %50
+    mir.atomic_inc %51
+    mir.store %29, %10, 8
+    %33 = mir.call @stdlib.__mm_decref(%31)
+    mir.br update_0.merge()
+  update_0.next0:
+    %34 = mir.load %10, 0
+    %36 = mir.cmp eq, %34, %6
+    mir.cond_br %36 [then: update_0.case1(), else: update_0.merge()]
+  update_0.case1:
+    mir.ret %6
+  read_0.case0:
+    %38 = mir.load %10, 8
+    %52 = mir.mov_imm 8 : i64
+    %53 = mir.sub.i64 %38, %52
+    mir.atomic_inc %53
+    %41 = mir.call @String.byteLength(%38)
+    %54 = mir.mov_imm 125 : i64
+    %55 = mir.cmp ugt, %41, %54
+    mir.cond_br %55 [then: __range_panic_0(), else: __range_ok_0()]
+  read_0.next0:
+    %42 = mir.load %10, 0
+    %44 = mir.cmp eq, %42, %6
+    mir.cond_br %44 [then: read_0.case1(), else: read_0.next1()]
+  read_0.case1:
+    mir.ret %6
+  read_0.next1:
+    %46 = mir.global_addr @__panic_msg_0
+    %47 = mir.call @mrt_panic(%46)
+    mir.ret %6
+  __range_panic_0:
+    %56 = mir.global_addr @__panic_msg_1
+    %57 = mir.call @mrt_panic(%56)
+  __range_ok_0:
+    mir.ret %41
+  }
+}
+---

@@ -1,0 +1,140 @@
+// Test: enum-array-push-get-last
+typealias Integer = int(i64.min to i64.max)
+
+export union Op
+		add(value Integer)
+		sub(value Integer)
+		nop
+end 'Op'
+
+typealias OpArray = Array with Op
+
+function main() returns ExitCode
+		var ops = OpArray.create()
+		ops.push(Op.add(10))
+		ops.push(Op.sub(20))
+		ops.push(Op.add(42))
+
+		let last = try ops.get(2) otherwise Op.nop
+		match last 'check'
+				add(v) then return v
+				sub then return 99
+				nop then return 98
+		end 'check'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %45 = mir.mov_imm 8 : i64
+    %46 = mir.call @mrt_alloc(%45)
+    %47 = mir.mov_imm 40 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    %49 = mir.mov_imm 0 : i64
+    mir.store %49, %48, 0
+    %50 = mir.mov_imm 0 : i64
+    mir.store %50, %48, 8
+    %51 = mir.mov_imm 0 : i64
+    mir.store %51, %48, 16
+    %52 = mir.mov_imm 8 : i64
+    mir.store %52, %48, 24
+    %53 = mir.mov_imm 0 : i64
+    mir.store %53, %48, 32
+    mir.store %48, %46, 0
+    %3 = mir.mov_imm 10 : i64
+    %54 = mir.mov_imm 16 : i64
+    %55 = mir.mov_imm 0 : i64
+    %56 = mir.mov_imm 0 : i64
+    %57 = mir.call @stdlib.__mm_alloc(%54, %55, %56)
+    mir.store %56, %57, 0
+    mir.store %3, %57, 8
+    %5 = mir.global_addr @__layout_Array_Op
+    %6 = mir.call @Array.push(%46, %57, %5)
+    %8 = mir.mov_imm 20 : i64
+    %58 = mir.mov_imm 16 : i64
+    %59 = mir.mov_imm 0 : i64
+    %60 = mir.mov_imm 1 : i64
+    %61 = mir.call @stdlib.__mm_alloc(%58, %59, %60)
+    mir.store %60, %61, 0
+    mir.store %8, %61, 8
+    %10 = mir.global_addr @__layout_Array_Op
+    %11 = mir.call @Array.push(%46, %61, %10)
+    %13 = mir.mov_imm 42 : i64
+    %62 = mir.mov_imm 16 : i64
+    %63 = mir.mov_imm 0 : i64
+    %64 = mir.mov_imm 0 : i64
+    %65 = mir.call @stdlib.__mm_alloc(%62, %63, %64)
+    mir.store %64, %65, 0
+    mir.store %13, %65, 8
+    %15 = mir.global_addr @__layout_Array_Op
+    %16 = mir.call @Array.push(%46, %65, %15)
+    %18 = mir.mov_imm 2 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %66 = mir.load %46, 0
+    %67, %68 = mir.try_call @stdlib.__managed_mem_get(%66, %18)
+    %69 = mir.mov_imm 0 : i64
+    %70 = mir.cmp ne, %68, %69
+    mir.cond_br %70 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %71 = mir.mov_imm 0 : i64
+    %72 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%71, %72)
+  inlined_Array.get_2:
+    %73 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%67, %73)
+  inline_cont_main_0:
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.cmp ne, %75, %22
+    mir.cond_br %23 [then: try_0.otherwise(), else: try_0.merge(%74)]
+  try_0.otherwise:
+    %76 = mir.mov_imm 16 : i64
+    %77 = mir.mov_imm 0 : i64
+    %78 = mir.mov_imm 2 : i64
+    %79 = mir.call @stdlib.__mm_alloc(%76, %77, %78)
+    mir.store %78, %79, 0
+    %80 = mir.mov_imm 0 : i64
+    mir.store %80, %79, 8
+    mir.br try_0.merge(%79)
+  try_0.merge:
+    %28 = mir.load %44, 0
+    %29 = mir.mov_imm 0 : i64
+    %30 = mir.cmp eq, %28, %29
+    mir.cond_br %30 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %31 = mir.load %44, 8
+    %81 = mir.mov_imm 125 : i64
+    %82 = mir.cmp ugt, %31, %81
+    mir.cond_br %82 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.next0:
+    %33 = mir.load %44, 0
+    %34 = mir.mov_imm 1 : i64
+    %35 = mir.cmp eq, %33, %34
+    mir.cond_br %35 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %36 = mir.mov_imm 99 : i64
+    mir.ret %36
+  check_0.next1:
+    %37 = mir.load %44, 0
+    %38 = mir.mov_imm 2 : i64
+    %39 = mir.cmp eq, %37, %38
+    mir.cond_br %39 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %40 = mir.mov_imm 98 : i64
+    mir.ret %40
+  check_0.next2:
+    %41 = mir.global_addr @__panic_msg_0
+    %42 = mir.call @mrt_panic(%41)
+    %43 = mir.mov_imm 0 : i64
+    mir.ret %43
+  __range_panic_0:
+    %83 = mir.global_addr @__panic_msg_1
+    %84 = mir.call @mrt_panic(%83)
+  __range_ok_0:
+    mir.ret %31
+  }
+}
+---

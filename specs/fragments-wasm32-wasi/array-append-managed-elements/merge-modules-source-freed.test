@@ -1,0 +1,232 @@
+// Test: merge-modules-source-freed
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export type Func
+		export var name String
+		export var body IntArray
+
+		static function create(name String, body IntArray) returns Self
+			return Self{name: name, body: body}
+		end 'create'
+end 'Func'
+
+typealias FuncArray = Array with Func
+
+export type Module
+		export var functions FuncArray
+
+		static function create(functions FuncArray) returns Self
+			return Self{functions: functions}
+		end 'create'
+end 'Module'
+
+function createModule() returns Module
+		return Module.create(functions: FuncArray.create())
+end 'createModule'
+
+function parseAndMerge(dest Module, name String)
+		var source = createModule()
+		source.functions.push(Func.create(name: name, body: IntArray.create()))
+		dest.functions.append(source.functions)
+		// source is freed when this function returns
+end 'parseAndMerge'
+
+function main() returns ExitCode
+		var allModule = createModule()
+		parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
+		parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
+
+		if allModule.functions.count() != 2 'badCount'
+				return 99
+		end 'badCount'
+
+		let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.create())
+		if first.name == "func_a_with_long_name_for_heap" 'correct'
+				return 0
+		end 'correct'
+		return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @createModule() -> i64 {
+  entry:
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.mov_imm 0 : i64
+    mir.store %7, %6, 0
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %6, 8
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %6, 16
+    %10 = mir.mov_imm 8 : i64
+    mir.store %10, %6, 24
+    %11 = mir.mov_imm 0 : i64
+    mir.store %11, %6, 32
+    mir.store %6, %4, 0
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %4, %13, 0
+    mir.ret %13
+  }
+  func @parseAndMerge(local0: i64, local1: i64) {
+  entry:
+    %18 = mir.param local0 : i64
+    %19 = mir.param local1 : i64
+    %2 = mir.call @createModule()
+    %4 = mir.load %2, 0
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %23, 0
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %23, 8
+    %26 = mir.mov_imm 0 : i64
+    mir.store %26, %23, 16
+    %27 = mir.mov_imm 8 : i64
+    mir.store %27, %23, 24
+    %28 = mir.mov_imm 0 : i64
+    mir.store %28, %23, 32
+    mir.store %23, %21, 0
+    %29 = mir.mov_imm 16 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    mir.store %19, %30, 0
+    mir.store %21, %30, 8
+    %9 = mir.global_addr @__layout_Array_Func
+    %10 = mir.call @Array.push(%4, %30, %9)
+    %12 = mir.load %18, 0
+    %14 = mir.load %2, 0
+    %31 = mir.load %12, 0
+    %32 = mir.load %14, 0
+    %33 = mir.call @stdlib.__managed_mem_append(%31, %32)
+    mir.ret %17
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @createModule()
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0
+    %5 = mir.mov_imm 30 : i64
+    mir.store %5, %4, 8
+    %6 = mir.mov_imm -2 : i64
+    mir.store %6, %4, 16
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %4, 24
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 32
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0
+    mir.store %7, %10, 8
+    %12 = mir.call @parseAndMerge(%0, %10)
+    %14 = mir.global_addr @__istr_1
+    %15 = mir.mov_imm 40 : i64
+    %16 = mir.call @mrt_alloc(%15)
+    mir.store %14, %16, 0
+    %17 = mir.mov_imm 30 : i64
+    mir.store %17, %16, 8
+    %18 = mir.mov_imm -2 : i64
+    mir.store %18, %16, 16
+    mir.store %7, %16, 24
+    mir.store %8, %16, 32
+    %21 = mir.mov_imm 16 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %16, %22, 0
+    mir.store %7, %22, 8
+    %24 = mir.call @parseAndMerge(%0, %22)
+    %26 = mir.load %0, 0
+    %27 = mir.global_addr @__layout_Array_Func
+    %28 = mir.call @Array.count(%26, %27)
+    %29 = mir.mov_imm 2 : i64
+    %30 = mir.cmp ne, %28, %29
+    mir.cond_br %30 [then: badCount_0(), else: badCount_0.after()]
+  badCount_0:
+    %31 = mir.mov_imm 99 : i64
+    mir.ret %31
+  badCount_0.after:
+    %33 = mir.load %0, 0
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %71 = mir.load %33, 0
+    %72, %73 = mir.try_call @stdlib.__managed_mem_get(%71, %8)
+    %74 = mir.mov_imm 0 : i64
+    %75 = mir.cmp ne, %73, %74
+    mir.cond_br %75 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %76 = mir.mov_imm 0 : i64
+    %77 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%76, %77)
+  inlined_Array.get_2:
+    %78 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%72, %78)
+  inline_cont_main_0:
+    %39 = mir.cmp ne, %80, %8
+    mir.cond_br %39 [then: try_0.otherwise(), else: try_0.merge(%79)]
+  try_0.otherwise:
+    %41 = mir.global_addr @__istr_2
+    %42 = mir.mov_imm 40 : i64
+    %43 = mir.call @mrt_alloc(%42)
+    mir.store %41, %43, 0
+    mir.store %8, %43, 8
+    %45 = mir.mov_imm -2 : i64
+    mir.store %45, %43, 16
+    mir.store %7, %43, 24
+    mir.store %8, %43, 32
+    %48 = mir.mov_imm 16 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %43, %49, 0
+    mir.store %7, %49, 8
+    %81 = mir.mov_imm 8 : i64
+    %82 = mir.call @mrt_alloc(%81)
+    %83 = mir.mov_imm 40 : i64
+    %84 = mir.call @mrt_alloc(%83)
+    %85 = mir.mov_imm 0 : i64
+    mir.store %85, %84, 0
+    %86 = mir.mov_imm 0 : i64
+    mir.store %86, %84, 8
+    %87 = mir.mov_imm 0 : i64
+    mir.store %87, %84, 16
+    %88 = mir.mov_imm 8 : i64
+    mir.store %88, %84, 24
+    %89 = mir.mov_imm 0 : i64
+    mir.store %89, %84, 32
+    mir.store %84, %82, 0
+    %90 = mir.mov_imm 16 : i64
+    %91 = mir.call @mrt_alloc(%90)
+    mir.store %49, %91, 0
+    mir.store %82, %91, 8
+    mir.br try_0.merge(%91)
+  try_0.merge:
+    %56 = mir.load %70, 0
+    %57 = mir.global_addr @__istr_0
+    %58 = mir.mov_imm 40 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    mir.store %57, %59, 0
+    %60 = mir.mov_imm 30 : i64
+    mir.store %60, %59, 8
+    %61 = mir.mov_imm -2 : i64
+    mir.store %61, %59, 16
+    mir.store %7, %59, 24
+    mir.store %8, %59, 32
+    %64 = mir.mov_imm 16 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %59, %65, 0
+    mir.store %7, %65, 8
+    %67 = mir.call @String.equals(%56, %65)
+    mir.cond_br %67 [then: correct_0(), else: correct_0.after()]
+  correct_0:
+    mir.ret %8
+  correct_0.after:
+    mir.ret %7
+  }
+}
+---

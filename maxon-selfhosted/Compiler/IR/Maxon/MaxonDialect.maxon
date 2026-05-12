@@ -1044,7 +1044,51 @@ export union MaxonOp
 	// On a TR-detected miss (unknown case, non-enum scrutinee) TR
 	// rewrites the op to `br(elseTarget, ...)` after reporting the
 	// diagnostic, so the block still has a valid terminator.
-	enumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, range SourceRange)
+	// Phase 9 Stage 2: `bindingNames` carries the destructured payload names
+	// emitted by `caseName(x, _, var y) then ...`. Empty for bare-case match
+	// arms (which is every arm parsed before Stage 2). When non-empty,
+	// Stage 3 lowering emits an `enumPayloadRead` for each non-discard
+	// binding before the user body executes. The slot is `ByteArrayArray`
+	// rather than a richer struct so this stays a pure plumbing extension;
+	// the parser writes empty for discards and the binding's varDecl owns
+	// the type info on the read side.
+	enumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, bindingNames ByteArrayArray, range SourceRange)
+	// Phase 9 Stage 2: union value construction. Emitted inside the body
+	// of each synthesized `__construct_{UnionName}_{caseName}` function.
+	// Stage 3 lowers to `mm_alloc(size, destructorPtr, tag) + tag-store +
+	// per-field stores`. Stage 2 leaves the constructor bodies empty
+	// (single `error` placeholder), so no production site emits this op
+	// yet — it's reserved here as part of the dialect skeleton.
+	enumConstruct(result ByteArray, enumName String, caseName String, payloadValues ByteArrayArray, range SourceRange)
+	// Phase 9 Stage 2: load the tag (case ordinal) from a union value.
+	// Stage 3 lowers to `loadIndirect i64 [enumValName + 0]`. Used by the
+	// match-arm dispatch path and by `__destruct_{UnionName}` (Stage 4)
+	// to branch on the live variant.
+	enumTag(result ByteArray, enumValName ByteArray, range SourceRange)
+	// Phase 9 Stage 2: read one payload field from a union value. Stage 3
+	// lowers to `loadIndirect <fieldType> [enumValName + 8 + fieldIndex*8]`
+	// plus a refcount-bump for managed types. `fieldType` carries the
+	// concrete field type so lowering picks the right load width and
+	// managed-aware bump. Float fields bit-cast i64->f64 inside the lowering.
+	enumPayloadRead(result ByteArray, enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, range SourceRange)
+	// Phase 9 Stage 2: write one payload field of a union value.
+	// Reserved for Stage 4 (match-binding write-back): an assignment
+	// `value = 42` inside an arm body on a `var` scrutinee rewrites
+	// to this op. Stage 2 declares it but never emits it; lowering
+	// panics on a stray sighting to surface a misordered pipeline early.
+	enumPayloadStore(enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange)
+	// Phase 9 Stage 0: range match-arm terminator. Lowers to
+	// `scrutinee >= lo AND scrutinee <= hi (or < hi for upto)` plus
+	// `cond_br thenTarget elseTarget`. `loValue` / `hiValue` are
+	// integer literals; when `hasMinSentinel` is true the lower
+	// comparison is skipped (matches any value <= hi); when
+	// `hasMaxSentinel` is true the upper comparison is skipped
+	// (matches any value >= lo). `isUpto` selects `<` over `<=` on the
+	// upper bound. When `enumOwnerName` is non-empty the bounds are
+	// case ordinals against that enum (float-backed enums need a raw→
+	// ordinal lookup at lowering since the scrutinee is the f64 raw
+	// value, not the ordinal); empty means a numeric-scrutinee range.
+	rangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, thenTarget BlockId, elseTarget BlockId, range SourceRange)
 	// Error anchor. The parser emits this when it cannot produce a well-formed
 	// op for a given source span (expected a type and got nothing, expected an
 	// expression and got a stray keyword, etc.). Batch compile already routes
@@ -1062,7 +1106,17 @@ export union MaxonOp
 	// for "no error in flight") in the secondary error register (RDX/X1)
 	// alongside a default primary value of the enclosing function's primary
 	// return type — the multi-value-return error ABI.
-	throw(enumName String, variantName String, range SourceRange)
+	//
+	// Phase 9 Stage 5c: `payloadValueName` is the SSA name of a pre-emitted
+	// union constructor result for associated-value error enums (empty
+	// ByteArray when the enum is a bare-case enum and the value slot is a
+	// throw-time default). When non-empty, lowering threads that value into
+	// the primary return register so the caller's `try ... otherwise (e)`
+	// binding sees the union pointer through the existing multi-value-return
+	// ABI — the value slot's MEANING flips from "default placeholder" to
+	// "union pointer" while the slot count stays at two (option-1 ABI from
+	// the Phase 9 plan).
+	throw(enumName String, variantName String, payloadValueName ByteArray, range SourceRange)
 	// Phase 4: throwing call. Same shape as `call` plus an `errorBoundName`
 	// — the synthetic name the parser allocated to receive the post-call
 	// error flag. LowerMaxonToStd emits a single `StdCallOp.tryCall` whose
@@ -1190,9 +1244,14 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		selfFieldStore(fieldName, value, _) gives "maxon.self_field_store .{String.from(fieldName)}, %{String.from(value)}"
 		unresolvedRead(result, name, _) gives "%{String.from(result)} = maxon.unresolved_read @{name}"
 		unresolvedAssign(name, value, _) gives "maxon.unresolved_assign @{name}, %{String.from(value)}"
-		enumMatchArm(scrutineeName, caseName, _, _, _, _, thenTarget, elseTarget, _) gives maxonEnumMatchArmToString(scrutineeName, caseName: caseName, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		enumMatchArm(scrutineeName, caseName, _, _, _, _, thenTarget, elseTarget, bindingNames, _) gives maxonEnumMatchArmToString(scrutineeName, caseName: caseName, bindingNames: bindingNames, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		enumConstruct(result, enumName, caseName, payloadValues, _) gives "%{String.from(result)} = maxon.enum_construct {enumName}.{caseName}({formatArgNames(payloadValues)})"
+		enumTag(result, enumValName, _) gives "%{String.from(result)} = maxon.enum_tag %{String.from(enumValName)}"
+		enumPayloadRead(result, enumValName, fieldIndex, fieldType, _) gives "%{String.from(result)} = maxon.enum_payload_read %{String.from(enumValName)}[{fieldIndex}] : {fieldType.toString(project)}"
+		enumPayloadStore(enumValName, fieldIndex, fieldType, newValueName, _) gives "maxon.enum_payload_store %{String.from(enumValName)}[{fieldIndex}] = %{String.from(newValueName)} : {fieldType.toString(project)}"
+		rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, _, thenTarget, elseTarget, _) gives maxonRangeMatchArmToString(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
-		throw(enumName, variantName, _) gives "maxon.throw {enumName}.{variantName}"
+		throw(enumName, variantName, payloadValueName, _) gives maxonThrowToString(enumName, variantName: variantName, payloadValueName: payloadValueName)
 		tryCall(result, callee, callContext, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_call @{String.from(callee)} {lb}ctx = {callContextToString(callContext)}{rb}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
 		tryMethodCall(result, receiver, methodName, args, argLabels, _, _, errorBoundName, _) gives "%{String.from(result)} = maxon.try_method_call %{String.from(receiver)}.{String.from(methodName)}({formatArgNamesWithLabels(args, argLabels: argLabels)}) -> err %{String.from(errorBoundName)}"
 		rethrow(flagName, _) gives "maxon.rethrow %{String.from(flagName)}"
@@ -1204,17 +1263,41 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 	end 'print'
 end 'maxonOpToString'
 
+// Phase 9 Stage 5c: pretty-print `MaxonOp.throw`. Bare-enum throws (empty
+// `payloadValueName`) keep the original `maxon.throw EnumName.case` form;
+// associated-value throws emit `maxon.throw EnumName.case via %ssaName` so IR
+// dumps reveal the union pointer being threaded through the value-return slot.
+function maxonThrowToString(enumName String, variantName String, payloadValueName ByteArray) returns String
+	if payloadValueName.isEmpty() 'noPayload'
+		return "maxon.throw {enumName}.{variantName}"
+	end 'noPayload'
+	return "maxon.throw {enumName}.{variantName} via %{String.from(payloadValueName)}"
+end 'maxonThrowToString'
+
 function maxonCondBrToString(cond ByteArray, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
 	return "maxon.cond_br %{String.from(cond)} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonCondBrToString'
 
-function maxonEnumMatchArmToString(scrutineeName ByteArray, caseName String, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+function maxonEnumMatchArmToString(scrutineeName ByteArray, caseName String, bindingNames ByteArrayArray, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
-	return "maxon.enum_match_arm %{String.from(scrutineeName)} == .{caseName} [then: {thenLabel}, else: {elseLabel}]"
+	var bindingSuffix = ""
+	if bindingNames.count() > 0 'hasBindings'
+		bindingSuffix = "({formatArgNames(bindingNames)})"
+	end 'hasBindings'
+	return "maxon.enum_match_arm %{String.from(scrutineeName)} == .{caseName}{bindingSuffix} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxonEnumMatchArmToString'
+
+function maxonRangeMatchArmToString(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, thenTarget BlockId, elseTarget BlockId, blocks IrBlockArray) returns String
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+	let loDisplay = "min" if hasMinSentinel else "{loValue}"
+	let hiDisplay = "max" if hasMaxSentinel else "{hiValue}"
+	let opName = "upto" if isUpto else "to"
+	return "maxon.range_match_arm %{String.from(scrutineeName)} in {loDisplay} {opName} {hiDisplay} [then: {thenLabel}, else: {elseLabel}]"
+end 'maxonRangeMatchArmToString'
 
 function maxonBrToString(target BlockId, blocks IrBlockArray) returns String
 	let label = resolveBlockLabel(target, blocks: blocks)
@@ -1490,6 +1573,17 @@ export function chaseTypealiasInQualifiedCalleeWithType(project Project, callee 
 		return (callee, MaxonType.unresolved)
 	end 'noDot'
 	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+	// Phase 9 Stage 2: a qualified call `UnionName.caseName` on a union case
+	// with non-empty payload fields rewrites to the synthesized constructor
+	// `__construct_UnionName_caseName`. Bare cases (payloadFields empty)
+	// stay routed through the TopLevelConstant path and never reach a
+	// `call` op. The receiver type lands as the union's named identity so
+	// the call's result type propagates correctly through producer flow.
+	let tail = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: count)
+	let unionRewrite = tryRewriteUnionCaseCall(project, unionName: head, caseName: tail)
+	if unionRewrite.hit 'unionConstructor'
+		return (unionRewrite.calleeName, unionRewrite.receiverType)
+	end 'unionConstructor'
 	if project.structTypes.contains(head) 'alreadyResolved'
 		return (callee, MaxonType.named(project.typeNames.intern(head)))
 	end 'alreadyResolved'
@@ -1498,11 +1592,112 @@ export function chaseTypealiasInQualifiedCalleeWithType(project Project, callee 
 		if resolvedName.isEmpty() or resolvedName == head 'sameName'
 			return (callee, resolvedType)
 		end 'sameName'
-		let tail = byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: count)
 		return ("{resolvedName}.{tail}", resolvedType)
 	end 'didResolve'
 	return (callee, MaxonType.unresolved)
 end 'chaseTypealiasInQualifiedCalleeWithType'
+
+// Phase 9 Stage 2: when `head.tail` names a union case with a non-empty
+// payload, rewrite the call to the parser-synthesized constructor name.
+// `hit=false` on miss; consumers fall back to the unrewritten callee.
+// Helper kept here so both TR's call-result resolution and lowering's
+// callee-qualification step share one source of truth for the union →
+// constructor name mangling.
+export type UnionCaseRewriteResult
+	export var hit bool
+	export var calleeName String
+	export var receiverType MaxonType
+
+	export static function miss() returns UnionCaseRewriteResult
+		return Self{hit: false, calleeName: "", receiverType: MaxonType.unresolved}
+	end 'miss'
+
+	export static function found(calleeName String, receiverType MaxonType) returns UnionCaseRewriteResult
+		return Self{hit: true, calleeName: calleeName, receiverType: receiverType}
+	end 'found'
+end 'UnionCaseRewriteResult'
+
+// Mangled name for the synthesized constructor function backing a
+// payload-bearing union case. Centralized here so the parser, the call-
+// rewrite path, and the lowering pass all mint identical names.
+export function unionConstructorSymbolName(unionName String, caseName String) returns String
+	return "__construct_{unionName}_{caseName}"
+end 'unionConstructorSymbolName'
+
+// Phase 9 Stage 5: mangled names for the per-enum `.fromRawValue` /
+// `.fromName` lookup helpers. The parser synthesizes one helper per
+// enum (and per union companion) and rewrites `EnumName.fromRawValue(x)`
+// / `EnumName.fromName(s)` calls to these names. Centralized so the
+// parser-side synthesis and the parser-side call-site rewrite mint
+// identical symbols.
+export function enumFromRawValueSymbolName(enumName String) returns String
+	return "__enum_{enumName}_fromRawValue"
+end 'enumFromRawValueSymbolName'
+
+export function enumFromNameSymbolName(enumName String) returns String
+	return "__enum_{enumName}_fromName"
+end 'enumFromNameSymbolName'
+
+export function tryRewriteUnionCaseCall(project Project, unionName String, caseName String) returns UnionCaseRewriteResult
+	let info = lookupUnionCasePayloadArity(project, unionName: unionName, caseName: caseName)
+	// Phase 9 Stage 3: every union case (including bare cases with
+	// payloadArity == 0) routes through its synthesized constructor so
+	// values share a uniform heap-boxed shape. The earlier `payloadArity
+	// <= 0` short-circuit applied while bare cases still lived in
+	// `topLevelConstants`; that registration is gone now, so the only
+	// non-call cases left are plain (non-union) enums.
+	if not info.isUnion 'notUnion'
+		return UnionCaseRewriteResult.miss()
+	end 'notUnion'
+	let ctorName = unionConstructorSymbolName(unionName, caseName: caseName)
+	if not project.funcReturnTypes.contains(ctorName) 'noCtor'
+		// Constructor synthesis should have run at parse time; if we reach
+		// here the union was registered without its constructor — caller
+		// falls back to the original name so the downstream "unknown name"
+		// diagnostic fires at the original source location.
+		return UnionCaseRewriteResult.miss()
+	end 'noCtor'
+	let recvType = MaxonType.named(project.typeNames.intern(unionName))
+	return UnionCaseRewriteResult.found(ctorName, receiverType: recvType)
+end 'tryRewriteUnionCaseCall'
+
+export type UnionCaseInfo
+	export var isUnion bool
+	export var payloadArity ParsedInt
+
+	export static function notUnion() returns UnionCaseInfo
+		return Self{isUnion: false, payloadArity: 0}
+	end 'notUnion'
+
+	export static function union(payloadArity ParsedInt) returns UnionCaseInfo
+		return Self{isUnion: true, payloadArity: payloadArity}
+	end 'union'
+end 'UnionCaseInfo'
+
+export function lookupUnionCasePayloadArity(project Project, unionName String, caseName String) returns UnionCaseInfo
+	if let et = try project.enumTypes.get(unionName) 'resolved'
+		if not et.isUnion 'notUnion'
+			return UnionCaseInfo.notUnion()
+		end 'notUnion'
+		if let idx = try et.caseByName.get(caseName) 'haveCase'
+			let c = try et.cases.get(idx) otherwise return UnionCaseInfo.union(0)
+			return UnionCaseInfo.union(c.payloadFields.count() as ParsedInt)
+		end 'haveCase'
+		return UnionCaseInfo.union(0)
+	end 'resolved'
+	if let ut = try project.unresolvedEnums.get(unionName) 'unresolved'
+		if not ut.isUnion 'notUnion2'
+			return UnionCaseInfo.notUnion()
+		end 'notUnion2'
+		for c in ut.cases 'eachCase'
+			if c.name == caseName 'hit'
+				return UnionCaseInfo.union(c.payloadFields.count() as ParsedInt)
+			end 'hit'
+		end 'eachCase'
+		return UnionCaseInfo.union(0)
+	end 'unresolved'
+	return UnionCaseInfo.notUnion()
+end 'lookupUnionCasePayloadArity'
 
 // Return the resolved MaxonType behind a typealias `name`. Mirrors
 // `chaseTypealiasNameToStruct` but stops at the MaxonType layer rather

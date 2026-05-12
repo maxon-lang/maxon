@@ -1,0 +1,41 @@
+// Test: nested-struct-backing-basic
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	add = X64OpMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = X64OpMeta.create(OpMeta.create(3), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.add
+	return op.rawValue.meta.latency
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    mir.ret %1
+  }
+}
+---

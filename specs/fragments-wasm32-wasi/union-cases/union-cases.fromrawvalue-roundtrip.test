@@ -1,0 +1,147 @@
+// Test: union-cases.fromrawvalue-roundtrip
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+function main() returns ExitCode
+	let k0 = try Shape.unionCases.fromRawValue(0) otherwise return 1
+	let k1 = try Shape.unionCases.fromRawValue(1) otherwise return 2
+	let k2 = try Shape.unionCases.fromRawValue(2) otherwise return 3
+	print("{k0.name}\n")
+	print("{k1.name}\n")
+	print("{k2.name}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+circle
+square
+point
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %106 = mir.mov_imm 1 : i64
+    %0 = mir.mov_imm 0 : i64
+    %1, %2 = mir.try_call @__enum_Shape.unionCases_fromRawValue(%0)
+    %4 = mir.cmp ne, %2, %0
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    mir.ret %106
+  try_0.merge:
+    %9, %10 = mir.try_call @__enum_Shape.unionCases_fromRawValue(%106)
+    %12 = mir.cmp ne, %10, %0
+    mir.cond_br %12 [then: try_1.otherwise(), else: try_1.merge()]
+  try_1.otherwise:
+    %14 = mir.mov_imm 2 : i64
+    mir.ret %14
+  try_1.merge:
+    %16 = mir.mov_imm 2 : i64
+    %17, %18 = mir.try_call @__enum_Shape.unionCases_fromRawValue(%16)
+    %20 = mir.cmp ne, %18, %0
+    mir.cond_br %20 [then: try_2.otherwise(), else: try_2.merge()]
+  try_2.otherwise:
+    %22 = mir.mov_imm 3 : i64
+    mir.ret %22
+  try_2.merge:
+    %25 = mir.call @__enum_Shape.unionCases_name(%1)
+    %26 = mir.global_addr @__istr_0
+    %28 = mir.load %25, 0
+    %29 = mir.load %28, 0
+    %30 = mir.load %28, 8
+    %31 = mir.global_addr @__istr_1
+    %35 = mir.add.i64 %0, %30
+    %36 = mir.add.i64 %35, %106
+    %38 = mir.add.i64 %36, %106
+    %39 = mir.call @mrt_alloc(%38)
+    mir.memcpy %39, %26, %0
+    %40 = mir.add.i64 %39, %0
+    mir.memcpy %40, %29, %30
+    %41 = mir.add.i64 %40, %30
+    mir.memcpy %41, %31, %106
+    %43 = mir.mov_imm 40 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    mir.store %39, %44, 0
+    mir.store %36, %44, 8
+    mir.store %36, %44, 16
+    mir.store %106, %44, 24
+    mir.store %0, %44, 32
+    %47 = mir.mov_imm 16 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    mir.store %44, %48, 0
+    mir.store %0, %48, 8
+    %107 = mir.load %48, 0
+    %108 = mir.load %107, 0
+    %109 = mir.load %107, 8
+    %110 = mir.call @mrt_write_stdout(%108, %109)
+    %52 = mir.call @__enum_Shape.unionCases_name(%9)
+    %53 = mir.global_addr @__istr_0
+    %55 = mir.load %52, 0
+    %56 = mir.load %55, 0
+    %57 = mir.load %55, 8
+    %58 = mir.global_addr @__istr_1
+    %62 = mir.add.i64 %0, %57
+    %63 = mir.add.i64 %62, %106
+    %65 = mir.add.i64 %63, %106
+    %66 = mir.call @mrt_alloc(%65)
+    mir.memcpy %66, %53, %0
+    %67 = mir.add.i64 %66, %0
+    mir.memcpy %67, %56, %57
+    %68 = mir.add.i64 %67, %57
+    mir.memcpy %68, %58, %106
+    %70 = mir.mov_imm 40 : i64
+    %71 = mir.call @mrt_alloc(%70)
+    mir.store %66, %71, 0
+    mir.store %63, %71, 8
+    mir.store %63, %71, 16
+    mir.store %106, %71, 24
+    mir.store %0, %71, 32
+    %74 = mir.mov_imm 16 : i64
+    %75 = mir.call @mrt_alloc(%74)
+    mir.store %71, %75, 0
+    mir.store %0, %75, 8
+    %111 = mir.load %75, 0
+    %112 = mir.load %111, 0
+    %113 = mir.load %111, 8
+    %114 = mir.call @mrt_write_stdout(%112, %113)
+    %79 = mir.call @__enum_Shape.unionCases_name(%17)
+    %80 = mir.global_addr @__istr_0
+    %82 = mir.load %79, 0
+    %83 = mir.load %82, 0
+    %84 = mir.load %82, 8
+    %85 = mir.global_addr @__istr_1
+    %89 = mir.add.i64 %0, %84
+    %90 = mir.add.i64 %89, %106
+    %92 = mir.add.i64 %90, %106
+    %93 = mir.call @mrt_alloc(%92)
+    mir.memcpy %93, %80, %0
+    %94 = mir.add.i64 %93, %0
+    mir.memcpy %94, %83, %84
+    %95 = mir.add.i64 %94, %84
+    mir.memcpy %95, %85, %106
+    %97 = mir.mov_imm 40 : i64
+    %98 = mir.call @mrt_alloc(%97)
+    mir.store %93, %98, 0
+    mir.store %90, %98, 8
+    mir.store %90, %98, 16
+    mir.store %106, %98, 24
+    mir.store %0, %98, 32
+    %101 = mir.mov_imm 16 : i64
+    %102 = mir.call @mrt_alloc(%101)
+    mir.store %98, %102, 0
+    mir.store %0, %102, 8
+    %115 = mir.load %102, 0
+    %116 = mir.load %115, 0
+    %117 = mir.load %115, 8
+    %118 = mir.call @mrt_write_stdout(%116, %117)
+    mir.ret %0
+  }
+}
+---

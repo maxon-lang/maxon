@@ -1,0 +1,227 @@
+// Test: append-struct-source-freed
+typealias Integer = int(i64.min to i64.max)
+
+export type Item
+		export var name String
+		export var value Integer
+
+		static function create(name String, value Integer) returns Self
+			return Self{name: name, value: value}
+		end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function appendFromHelper(dest ItemArray)
+		var src = ItemArray.create()
+		src.push(Item.create(name: "hello from source that is long enough", value: 10))
+		src.push(Item.create(name: "second item from source long enough", value: 20))
+		src.push(Item.create(name: "third item from source long enough", value: 30))
+		dest.append(src)
+		// src is freed when this function returns
+end 'appendFromHelper'
+
+function main() returns ExitCode
+		var dest = ItemArray.create()
+		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
+		appendFromHelper(dest)
+
+		// Source array is freed. dest should still have valid elements.
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
+
+		let item = try dest.get(1) otherwise Item.create(name: "", value: 0)
+		return item.value
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @appendFromHelper(local0: i64) {
+  entry:
+    %53 = mir.param local0 : i64
+    %54 = mir.mov_imm 8 : i64
+    %55 = mir.call @mrt_alloc(%54)
+    %56 = mir.mov_imm 40 : i64
+    %57 = mir.call @mrt_alloc(%56)
+    %58 = mir.mov_imm 0 : i64
+    mir.store %58, %57, 0
+    %59 = mir.mov_imm 0 : i64
+    mir.store %59, %57, 8
+    %60 = mir.mov_imm 0 : i64
+    mir.store %60, %57, 16
+    %61 = mir.mov_imm 8 : i64
+    mir.store %61, %57, 24
+    %62 = mir.mov_imm 0 : i64
+    mir.store %62, %57, 32
+    mir.store %57, %55, 0
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %4, %6, 0
+    %7 = mir.mov_imm 37 : i64
+    mir.store %7, %6, 8
+    %8 = mir.mov_imm -2 : i64
+    mir.store %8, %6, 16
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %6, 24
+    %10 = mir.mov_imm 0 : i64
+    mir.store %10, %6, 32
+    %11 = mir.mov_imm 16 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %6, %12, 0
+    mir.store %9, %12, 8
+    %14 = mir.mov_imm 10 : i64
+    %63 = mir.mov_imm 16 : i64
+    %64 = mir.call @mrt_alloc(%63)
+    mir.store %12, %64, 0
+    mir.store %14, %64, 8
+    %16 = mir.global_addr @__layout_Array_Item
+    %17 = mir.call @Array.push(%55, %64, %16)
+    %19 = mir.global_addr @__istr_1
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %19, %21, 0
+    %22 = mir.mov_imm 35 : i64
+    mir.store %22, %21, 8
+    %23 = mir.mov_imm -2 : i64
+    mir.store %23, %21, 16
+    mir.store %9, %21, 24
+    %25 = mir.mov_imm 0 : i64
+    mir.store %25, %21, 32
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %21, %27, 0
+    mir.store %9, %27, 8
+    %29 = mir.mov_imm 20 : i64
+    %65 = mir.mov_imm 16 : i64
+    %66 = mir.call @mrt_alloc(%65)
+    mir.store %27, %66, 0
+    mir.store %29, %66, 8
+    %31 = mir.global_addr @__layout_Array_Item
+    %32 = mir.call @Array.push(%55, %66, %31)
+    %34 = mir.global_addr @__istr_2
+    %35 = mir.mov_imm 40 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    mir.store %34, %36, 0
+    %37 = mir.mov_imm 34 : i64
+    mir.store %37, %36, 8
+    %38 = mir.mov_imm -2 : i64
+    mir.store %38, %36, 16
+    mir.store %9, %36, 24
+    %40 = mir.mov_imm 0 : i64
+    mir.store %40, %36, 32
+    %41 = mir.mov_imm 16 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %36, %42, 0
+    mir.store %9, %42, 8
+    %44 = mir.mov_imm 30 : i64
+    %67 = mir.mov_imm 16 : i64
+    %68 = mir.call @mrt_alloc(%67)
+    mir.store %42, %68, 0
+    mir.store %44, %68, 8
+    %46 = mir.global_addr @__layout_Array_Item
+    %47 = mir.call @Array.push(%55, %68, %46)
+    %69 = mir.load %53, 0
+    %70 = mir.load %55, 0
+    %71 = mir.call @stdlib.__managed_mem_append(%69, %70)
+    mir.ret %52
+  }
+  func @main() -> u8 {
+  entry:
+    %49 = mir.mov_imm 8 : i64
+    %50 = mir.call @mrt_alloc(%49)
+    %51 = mir.mov_imm 40 : i64
+    %52 = mir.call @mrt_alloc(%51)
+    %53 = mir.mov_imm 0 : i64
+    mir.store %53, %52, 0
+    %54 = mir.mov_imm 0 : i64
+    mir.store %54, %52, 8
+    %55 = mir.mov_imm 0 : i64
+    mir.store %55, %52, 16
+    %56 = mir.mov_imm 8 : i64
+    mir.store %56, %52, 24
+    %57 = mir.mov_imm 0 : i64
+    mir.store %57, %52, 32
+    mir.store %52, %50, 0
+    %3 = mir.global_addr @__istr_3
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0
+    %6 = mir.mov_imm 38 : i64
+    mir.store %6, %5, 8
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0
+    mir.store %8, %11, 8
+    %58 = mir.mov_imm 16 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    mir.store %11, %59, 0
+    mir.store %8, %59, 8
+    %15 = mir.global_addr @__layout_Array_Item
+    %16 = mir.call @Array.push(%50, %59, %15)
+    %18 = mir.call @appendFromHelper(%50)
+    %20 = mir.global_addr @__layout_Array_Item
+    %21 = mir.call @Array.count(%50, %20)
+    %22 = mir.mov_imm 4 : i64
+    %23 = mir.cmp ne, %21, %22
+    mir.cond_br %23 [then: badCount_0(), else: inlined_Array.get_0()]
+  badCount_0:
+    %24 = mir.mov_imm 99 : i64
+    mir.ret %24
+  inlined_Array.get_0:
+    %60 = mir.load %50, 0
+    %61, %62 = mir.try_call @stdlib.__managed_mem_get(%60, %8)
+    %63 = mir.mov_imm 0 : i64
+    %64 = mir.cmp ne, %62, %63
+    mir.cond_br %64 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %65 = mir.mov_imm 0 : i64
+    %66 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%65, %66)
+  inlined_Array.get_2:
+    %67 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%61, %67)
+  inline_cont_main_0:
+    %31 = mir.cmp ne, %69, %9
+    mir.cond_br %31 [then: try_0.otherwise(), else: try_0.merge(%68)]
+  try_0.otherwise:
+    %33 = mir.global_addr @__istr_4
+    %34 = mir.mov_imm 40 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %33, %35, 0
+    mir.store %9, %35, 8
+    %37 = mir.mov_imm -2 : i64
+    mir.store %37, %35, 16
+    mir.store %8, %35, 24
+    mir.store %9, %35, 32
+    %40 = mir.mov_imm 16 : i64
+    %41 = mir.call @mrt_alloc(%40)
+    mir.store %35, %41, 0
+    mir.store %8, %41, 8
+    %70 = mir.mov_imm 16 : i64
+    %71 = mir.call @mrt_alloc(%70)
+    mir.store %41, %71, 0
+    mir.store %9, %71, 8
+    mir.br try_0.merge(%71)
+  try_0.merge:
+    %47 = mir.load %48, 8
+    %72 = mir.mov_imm 125 : i64
+    %73 = mir.cmp ugt, %47, %72
+    mir.cond_br %73 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %74 = mir.global_addr @__panic_msg_0
+    %75 = mir.call @mrt_panic(%74)
+  __range_ok_0:
+    mir.ret %47
+  }
+}
+---

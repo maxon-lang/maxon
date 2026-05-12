@@ -181,6 +181,8 @@ end 'extractTopLevelFuncName'
 //   - `then: NAME` / `else: NAME` — cond_br arms in MIR/Standard dialects.
 //   - `lea_symdata <reg>, [NAME]` / `lea_rdata <reg>, [NAME]` — module-scoped
 //     data labels (real symdata/rdata symbols).
+//   - `mir.global_addr @NAME` — module-scoped data label reference in the MIR
+//     dialect (string literals, layout descriptors, etc.).
 //
 // Each registered identifier that has a `<base>_<digits>` shape becomes a
 // renumbering candidate. Sub-label suffixes are stripped (`k_15.cmp0` →
@@ -355,6 +357,16 @@ function classifyAndRegister(token String, precedingWindow String, bracketDepth 
 		registerCandidate(token, currentFunc: currentFunc, renames: renames, nextNum: nextNum)
 		return
 	end 'isScopeEnd'
+
+	// `mir.global_addr @NAME` — module-scoped data label in the MIR dialect.
+	// `@` is a delimiter so `bracketDepth` stays 0; since ident chars of
+	// the current token are appended to the window as they accumulate, the
+	// window at flush time ends with the token itself, not the `@`. Use
+	// `contains` so the marker is still found within the trimmed window.
+	if precedingWindow.contains("global_addr @") 'isGlobalAddr'
+		registerCandidateInScope(token, scope: MODULE_SCOPE, renames: renames, nextNum: nextNum)
+		return
+	end 'isGlobalAddr'
 end 'classifyAndRegister'
 
 function endsWithBranchMarker(window String) returns bool

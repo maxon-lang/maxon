@@ -1,0 +1,109 @@
+// Test: mutate-struct-payload
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+union Shape
+	nothing
+	located(pos Point)
+end 'Shape'
+
+function main() returns ExitCode
+	var s = Shape.located(Point.create(x: 1, y: 2))
+	match s 'update'
+		located(pos) then pos = Point.create(x: 10, y: 32)
+		nothing then return 0
+	end 'update'
+	match s 'read'
+		located(pos) then return pos.x + pos.y
+		nothing then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %38 = mir.mov_imm 16 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    mir.store %0, %39, 0
+    mir.store %1, %39, 8
+    %3 = mir.call @__construct_Shape_located(%39)
+    %5 = mir.load %3, 0
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.cmp eq, %5, %6
+    mir.cond_br %7 [then: update_0.case0(), else: update_0.next0()]
+  update_0.merge:
+    %9 = mir.load %3, 0
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.cmp eq, %9, %10
+    mir.cond_br %11 [then: read_0.case0(), else: read_0.next0()]
+  update_0.case0:
+    %12 = mir.load %3, 8
+    %40 = mir.mov_imm 8 : i64
+    %41 = mir.sub.i64 %12, %40
+    mir.atomic_inc %41
+    %14 = mir.mov_imm 10 : i64
+    %15 = mir.mov_imm 32 : i64
+    %42 = mir.mov_imm 16 : i64
+    %43 = mir.call @mrt_alloc(%42)
+    mir.store %14, %43, 0
+    mir.store %15, %43, 8
+    %17 = mir.load %3, 8
+    %44 = mir.mov_imm 8 : i64
+    %45 = mir.sub.i64 %43, %44
+    mir.atomic_inc %45
+    mir.store %43, %3, 8
+    %19 = mir.call @stdlib.__mm_decref(%17)
+    mir.br update_0.merge()
+  update_0.next0:
+    %20 = mir.load %3, 0
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.cmp eq, %20, %21
+    mir.cond_br %22 [then: update_0.case1(), else: update_0.merge()]
+  update_0.case1:
+    %23 = mir.mov_imm 0 : i64
+    mir.ret %23
+  read_0.case0:
+    %24 = mir.load %3, 8
+    %46 = mir.mov_imm 8 : i64
+    %47 = mir.sub.i64 %24, %46
+    mir.atomic_inc %47
+    %27 = mir.load %24, 0
+    %29 = mir.load %24, 8
+    %30 = mir.add.i64 %27, %29
+    %48 = mir.mov_imm 125 : i64
+    %49 = mir.cmp ugt, %30, %48
+    mir.cond_br %49 [then: __range_panic_0(), else: __range_ok_0()]
+  read_0.next0:
+    %31 = mir.load %3, 0
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.cmp eq, %31, %32
+    mir.cond_br %33 [then: read_0.case1(), else: read_0.next1()]
+  read_0.case1:
+    %34 = mir.mov_imm 0 : i64
+    mir.ret %34
+  read_0.next1:
+    %35 = mir.global_addr @__panic_msg_0
+    %36 = mir.call @mrt_panic(%35)
+    %37 = mir.mov_imm 0 : i64
+    mir.ret %37
+  __range_panic_0:
+    %50 = mir.global_addr @__panic_msg_1
+    %51 = mir.call @mrt_panic(%50)
+  __range_ok_0:
+    mir.ret %30
+  }
+}
+---

@@ -1,0 +1,52 @@
+// Test: error.otherwise-return
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: return on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function runIt() returns Integer
+	let value = try mayFail() otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let v = runIt()
+	if v == -1 'check'
+		return 99
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %7 = mir.mov_imm 0 : i64
+    mir.br inlined_error-handling.runIt_0()
+  inlined_error-handling.runIt_0:
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.neg.i64 %11
+    mir.br inline_cont_main_0(%12)
+  inline_cont_main_0:
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.neg.i64 %2
+    %4 = mir.cmp eq, %13, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 99 : i64
+    mir.ret %5
+  check_0.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

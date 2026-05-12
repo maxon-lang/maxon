@@ -1,0 +1,47 @@
+// Test: nested-struct-backing-multi
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+	export let isMemory bool
+	export let isCall bool
+
+	static function create(latency Latency, isMemory bool, isCall bool) returns Self
+		return Self{latency: latency, isMemory: isMemory, isCall: isCall}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	load = X64OpMeta.create(meta: OpMeta.create(latency: 4, isMemory: true, isCall: false), setsFlags: false)
+	add = X64OpMeta.create(meta: OpMeta.create(latency: 1, isMemory: false, isCall: false), setsFlags: true)
+	call = X64OpMeta.create(meta: OpMeta.create(latency: 5, isMemory: true, isCall: true), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.load
+	if op.rawValue.meta.isMemory 'check'
+		return op.rawValue.meta.latency
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 4 : i64
+    mir.ret %2
+  }
+}
+---

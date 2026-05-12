@@ -49,6 +49,70 @@ export function lowerMaxonToStd(pipeline PassPipeline, maxonModule MaxonModule, 
 	return MaxonToStdLowering.create(pipeline, maxonModule: maxonModule, project: project, globalData: globalData).lower()
 end 'lowerMaxonToStd'
 
+// Phase 9 Stage 1: backing set for `pendingEnumNameHelpers`. A plain string
+// set; the lowering pass writes one entry per enum that participates in a
+// `.name` field-load. Synthesis at the tail of `lower()` walks the set and
+// emits one helper per enum.
+typealias EnumNameHelperSet = Set with String
+
+// Phase 9 Stage 4: parallel arrays of (tag-value, target-block-id) pairs
+// consumed by `emitTagSwitch`. Tag values are `IntConstant` because the
+// caller (destructor synthesizer) reads them out of `EnumCase.ordinal`,
+// which is range-typed in the same domain.
+typealias TagValueArray = Array with IntConstant
+
+// Phase 9 Stage 1: linker symbol for the synthesized `.name` helper. The
+// `__enum_<EnumName>_name` prefix avoids collision with any user-declared
+// `<EnumName>.method` symbol (which would dot-qualify) and matches the
+// `__field_init_*` naming convention used for other parser-synthesized
+// helpers.
+function enumNameHelperSymbol(enumName String) returns String
+	return "__enum_{enumName}_name"
+end 'enumNameHelperSymbol'
+
+// Phase 9 Stage 4: linker symbol for a synthesized union destructor. Matches
+// the convention used by the runtime's `__destruct___ManagedMemory` so wasm
+// `funcAddr` fixups and the X64/Arm64 backends find a uniform name shape
+// for every destructor that may end up referenced by `mm_alloc`.
+function unionDestructorSymbol(unionName String) returns String
+	return "__destruct_{unionName}"
+end 'unionDestructorSymbol'
+
+// Phase 9 Stage 4: true when at least one case of `unionType` carries a
+// managed payload field that must be `mm_decref`'d when the union value
+// dies. Drives both the destructor-synthesis decision (skip emission for
+// scalar-only unions) and `lowerEnumConstruct`'s funcRef-vs-null choice
+// for the `mm_alloc(size, dtor, tag)` destructor argument.
+function unionHasManagedPayload(project Project, unionType EnumType) returns bool
+	for c in unionType.cases 'scanCases'
+		for f in c.payloadFields 'scanFields'
+			if maxonTypeIsManagedRef(project, t: f.fieldType) 'isManaged'
+				return true
+			end 'isManaged'
+		end 'scanFields'
+	end 'scanCases'
+	return false
+end 'unionHasManagedPayload'
+
+// Phase 9 Stage 1: true when every case's rawValue equals its declaration
+// ordinal — the receiver's SSA value carries the rawValue, so on such an
+// enum the `.ordinal` accessor is a value-level no-op. Int-backed enums
+// with explicit raw values that happen to match ordinals (e.g. `red=0`)
+// still get folded onto the no-op path here. Float-backed enums always
+// require the lookup since their rawValue is a bit pattern, not the ordinal.
+function enumIsOrdinalBacked(enumType EnumType) returns bool
+	if enumType.isFloatBacked 'isFloat'
+		return false
+	end 'isFloat'
+	for i in 0 upto enumType.cases.count() 'each'
+		let c = try enumType.cases.get(i) otherwise panic("enumIsOrdinalBacked: cases.get OOB at {i}")
+		if c.rawValue != i as IntConstant 'mismatch'
+			return false
+		end 'mismatch'
+	end 'each'
+	return true
+end 'enumIsOrdinalBacked'
+
 // Convert a source-level qualified name into the linker symbol that backs the
 // global in the writable .data section. The `__data_` prefix is what the x64
 // and arm64 backends pattern-match on to pick the dataSection relocation kind
@@ -799,6 +863,91 @@ function maxonReturnTypeLowersToFloat(project Project, ref MaxonReturnType) retu
 	end 'pick'
 end 'maxonReturnTypeLowersToFloat'
 
+// Phase 9 Stage 3: lookup result for a match-arm scrutinee's union type.
+// Carries both a "hit" flag and the resolved EnumType so callers don't
+// have to issue two project lookups. Misses correspond to bare-enum and
+// non-enum scrutinees, which take the existing direct-cmp lowering path.
+type UnionTypeLookup
+	export var hasType bool
+	export var value EnumType
+
+	export static function miss() returns UnionTypeLookup
+		// `value` is unread on miss; supply a zeroed EnumType so the
+		// struct stays well-formed. Calling `value` on a miss is a caller
+		// bug — the only consumer guards on `hasType` first.
+		return Self{hasType: false, value: EnumType.create("", cases: EnumCaseArray.create(), isFloatBacked: false, visibility: Visibility.file, sourceFilePath: FilePath from "", nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), isUnion: false)}
+	end 'miss'
+
+	export static function hit(t EnumType) returns UnionTypeLookup
+		return Self{hasType: true, value: t}
+	end 'hit'
+end 'UnionTypeLookup'
+
+// Phase 9 Stage 3: max payload arity across all cases of a union. Drives
+// the per-allocation size (`8 + maxArity*8`). All cases of the same union
+// share an allocation size so the destructor (Stage 4) can iterate slots
+// uniformly without consulting the per-case payload count at runtime.
+function unionMaxPayloadArity(unionType EnumType) returns ParsedInt
+	var maxArity = 0
+	for c in unionType.cases 'scan'
+		let arity = c.payloadFields.count() as ParsedInt
+		if arity > maxArity 'wider'
+			maxArity = arity
+		end 'wider'
+	end 'scan'
+	return maxArity
+end 'unionMaxPayloadArity'
+
+// Phase 9 Stage 3: true when a MaxonType lowers to a heap-allocated
+// managed reference that participates in refcount discipline. Covers
+// struct types (incl. the stdlib `String`), generic-instance struct
+// values, and union types (heap-boxed tagged values). Bare enums,
+// primitives, and function values are NOT managed: they pass by value.
+// Used by union construct/read paths to decide where to insert
+// `__mm_incref` calls.
+function maxonTypeIsManagedRef(project Project, t MaxonType) returns bool
+	return match t 'classify'
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		function gives false
+		unresolved gives false
+		typeParameter gives false
+		interface gives false
+		// Named types: struct → managed, union (payload-bearing enum
+		// tagged as isUnion) → managed, bare enum / typealias → not
+		// managed. `genericInstance` follows the struct path because
+		// every generic instance currently materializes as a struct
+		// (e.g. `Array<Element>`).
+		named(id) gives namedTypeIsManagedRef(project, id: id)
+		genericInstance gives true
+	end 'classify'
+end 'maxonTypeIsManagedRef'
+
+function namedTypeIsManagedRef(project Project, id TypeNameId) returns bool
+	let name = project.typeNames.get(id)
+	if project.structTypes.contains(name) 'isStruct'
+		return true
+	end 'isStruct'
+	if let enumType = try project.enumTypes.get(name) 'isEnum'
+		return enumType.isUnion
+	end 'isEnum'
+	if let unresolvedEnum = try project.unresolvedEnums.get(name) 'isUnresolvedEnum'
+		return unresolvedEnum.isUnion
+	end 'isUnresolvedEnum'
+	// `project.typealiases` only maps to `StdType` (the ABI-level
+	// representation), so it cannot carry through to managed-ness here —
+	// every entry there is a primitive (i64/f64/i1). Numeric aliases
+	// like `typealias ID = int(0 to 100)` therefore correctly return
+	// false. Generic typealiases (`typealias ByteArray = Array with Byte`)
+	// always resolve to a struct-shaped value, so they're managed.
+	if project.genericTypealiases.contains(name) 'isGenericAlias'
+		return true
+	end 'isGenericAlias'
+	return false
+end 'namedTypeIsManagedRef'
+
 // Stage E (closures): per-function map keyed on a function-pointer
 // ValueId, returning the matching env-pointer ValueId (or 0 for "no env"
 // — the indirectCall lowering still emits the env arg, with 0 standing in
@@ -868,6 +1017,19 @@ end 'UcdReady'
 enum UcdLoadError implements Error
 	failed
 end 'UcdLoadError'
+
+// Snapshot of the per-function lowering state. Synthesizers swap this in
+// for the duration of a helper body, then restore it so any future caller
+// sees the original outer-function state.
+type LoweringFuncStateSnapshot
+	export var funcIdRef ValueIdRef
+	export var nameToId NameToValueIdMap
+	export var valueType MaxonTypeArray
+
+	export static function create(funcIdRef ValueIdRef, nameToId NameToValueIdMap, valueType MaxonTypeArray) returns LoweringFuncStateSnapshot
+		return Self{funcIdRef: funcIdRef, nameToId: nameToId, valueType: valueType}
+	end 'create'
+end 'LoweringFuncStateSnapshot'
 
 // Thrown by `recoverStringLiteral` when the SSA name passed in didn't come
 // from a parser-emitted string-literal `stringConst` op (the operand was a
@@ -983,6 +1145,12 @@ type MaxonToStdLowering
 	// `__Builtins.ucdByteAt("__ucd_bmp", offset)`). Populated by
 	// `lowerStringConst`; queried by `recoverStringLiteral`.
 	var stringLiteralProvenance StringLiteralProvenanceMap
+	// Phase 9 Stage 1: set of enum names whose `__name` helper has been
+	// requested by at least one `.name` field-load. Synthesized at the tail
+	// of `lower()` (one helper per enum) — same lazy-synthesis pattern as
+	// `synthesizeWitnessThunks`. Plain string set; duplicates are deduped by
+	// insertion so the synthesis pass walks each enum exactly once.
+	var pendingEnumNameHelpers EnumNameHelperSet
 
 	export static function create(pipeline PassPipeline, maxonModule MaxonModule, project Project, globalData GlobalDataTable) returns MaxonToStdLowering
 		return Self{
@@ -1008,7 +1176,8 @@ type MaxonToStdLowering
 			currentMaxonFunc: IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0),
 			interfaceWitnessSlots: InterfaceWitnessSlotMap.create(),
 			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create(),
-			stringLiteralProvenance: StringLiteralProvenanceMap.create()
+			stringLiteralProvenance: StringLiteralProvenanceMap.create(),
+			pendingEnumNameHelpers: EnumNameHelperSet.create()
 		}
 	end 'create'
 
@@ -1387,6 +1556,23 @@ type MaxonToStdLowering
 		// non-generic so wasm's call_indirect sees a fixed type signature.
 		self.synthesizeWitnessThunks()
 
+		// Phase 9 Stage 1: emit one `__enum_<EnumName>_name` helper per enum
+		// that participated in a `.name` field-load earlier in this pass.
+		// Same lazy-synthesis pattern as `synthesizeWitnessThunks`, just for
+		// enum reflection instead of generic dispatch.
+		self.synthesizeEnumNameHelpers()
+
+		// Phase 9 Stage 4: emit one `__destruct_<UnionName>(self i64) returns i64`
+		// per union type with at least one managed payload field. Synthesized
+		// after every user-side `enumConstruct` op has already been lowered —
+		// `lowerEnumConstruct` references the destructor by symbol via a
+		// `funcRef` op so the destructor body must merely exist in the std
+		// module by link time. Eager synthesis (one per union, no
+		// "pending-set" lazy gate) is fine because the linker's reachability
+		// pass drops any destructor for a union whose constructors are also
+		// unreached.
+		self.synthesizeUnionDestructors()
+
 		return self.stdModule
 	end 'lower'
 
@@ -1426,6 +1612,18 @@ type MaxonToStdLowering
 			unresolvedRead(_, name, _) then panic("lowerMaxonToStd: unresolvedRead '{name}' survived past TypeResolution")
 			unresolvedAssign(name, _, _) then panic("lowerMaxonToStd: unresolvedAssign '{name}' survived past TypeResolution")
 			enumMatchArm then panic("lowerMaxonToStd: enumMatchArm seen as a regular op (parser bug — should always be a terminator)")
+			rangeMatchArm then panic("lowerMaxonToStd: rangeMatchArm seen as a regular op (parser bug — should always be a terminator)")
+			// Phase 9 Stage 3: heap-boxed union construction + tag/payload
+			// reads. enumConstruct expands to `__mm_alloc(size, null, tag)
+			// + storeIndirect tag + per-field storeIndirect`; enumTag and
+			// enumPayloadRead are plain loadIndirects at offsets 0 and
+			// `8 + fieldIndex*8` respectively. enumPayloadStore is Stage 4
+			// territory (write-back from match-arm assignment); a sighting
+			// pre-Stage-4 surfaces the unimplemented edge loudly.
+			enumConstruct(result, enumName, caseName, payloadValues, _) then self.lowerEnumConstruct(result, enumName: enumName, caseName: caseName, payloadValues: payloadValues, dstBlock: dstBlock)
+			enumTag(result, enumValName, _) then self.lowerEnumTag(result, enumValName: enumValName, dstBlock: dstBlock)
+			enumPayloadRead(result, enumValName, fieldIndex, fieldType, _) then self.lowerEnumPayloadRead(result, enumValName: enumValName, fieldIndex: fieldIndex, fieldType: fieldType, dstBlock: dstBlock)
+			enumPayloadStore(enumValName, fieldIndex, fieldType, newValueName, _) then self.lowerEnumPayloadStore(enumValName: enumValName, fieldIndex: fieldIndex, fieldType: fieldType, newValueName: newValueName, dstBlock: dstBlock)
 			// Error anchor: the parser already reported a diagnostic at this span,
 			// so we emit no Std op. `hasErrors(project)` will short-circuit the
 			// batch compile before codegen; the LSP consumes the op directly
@@ -4598,22 +4796,33 @@ type MaxonToStdLowering
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
-		// Enum builtin accessors: `.rawValue` and `.ordinal` are value-level
-		// no-ops on int/float-backed enums — the SSA value already carries
-		// the raw value (or, for ordinal-only enums, the ordinal == raw).
-		// Alias the result name to the receiver's ValueId; the std-level
-		// type (i64 or f64) is unchanged, and the recorded MaxonType is the
-		// enum's named type which downstream readers treat as i64-shaped
-		// storage for arithmetic. `.name` (case-name string) needs runtime
-		// support and is deferred — it'll mirror the bootstrap's
-		// MaxonEnumNameOp once String-based enum reflection lands.
+		// Enum builtin accessors:
+		//   `.rawValue` is always a value-level no-op — the receiver's SSA
+		//     value already carries the raw bits (int or float).
+		//   `.ordinal` on an ordinal-backed enum (no explicit raw values, so
+		//     rawValue == ordinal by construction) is also a no-op.
+		//   `.ordinal` on an int/float-backed enum needs a runtime lookup
+		//     from raw value back to declaration position — emitted as a
+		//     branchless arithmetic chain (one cmp+mul per case, all summed).
 		let enumName = receiverType.namedAliasNameOrEmpty(self.project)
 		if not enumName.isEmpty() 'maybeEnum'
-			if self.project.enumTypes.contains(enumName) 'isEnum'
-				if fieldNameStr == "rawValue" or fieldNameStr == "ordinal" 'isEnumAccessor'
+			if let enumType = try self.project.enumTypes.get(enumName) 'isEnum'
+				if fieldNameStr == "rawValue" 'isRaw'
 					self.aliasName(result, toId: receiverId)
 					return
-				end 'isEnumAccessor'
+				end 'isRaw'
+				if fieldNameStr == "ordinal" 'isOrdinal'
+					if enumIsOrdinalBacked(enumType) 'ordinalEqRaw'
+						self.aliasName(result, toId: receiverId)
+						return
+					end 'ordinalEqRaw'
+					self.lowerEnumOrdinalLookup(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+					return
+				end 'isOrdinal'
+				if fieldNameStr == "name" 'isName'
+					self.lowerEnumNameLookup(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+					return
+				end 'isName'
 			end 'isEnum'
 		end 'maybeEnum'
 		let resultId = self.defineName(result)
@@ -4626,6 +4835,322 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: hit.offset, isFloat: isFloat)))
 		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerFieldLoad'
+
+	// Snapshot + reset the per-function lowering state for a synthesized
+	// helper whose parameter count is `paramCount` (param ValueIds 0..N-1
+	// are reserved by ValueIdRef.create). Pair every call with
+	// `endSynthesizedFunc` once the helper is fully emitted.
+	function beginSynthesizedFunc(paramCount VarSlot) returns LoweringFuncStateSnapshot
+		let snapshot = LoweringFuncStateSnapshot.create(self.funcIdRef, nameToId: self.nameToId, valueType: self.valueType)
+		self.funcIdRef = ValueIdRef.create(paramCount)
+		self.nameToId = NameToValueIdMap.create()
+		self.valueType = MaxonTypeArray.create()
+		return snapshot
+	end 'beginSynthesizedFunc'
+
+	// Finalize a synthesized helper: record its slot count, push it onto
+	// the std module, and restore the outer-function state captured by
+	// `beginSynthesizedFunc`.
+	function endSynthesizedFunc(func IrFunction, snapshot LoweringFuncStateSnapshot)
+		func.varSlotCount = self.funcIdRef.nextId as VarSlot
+		self.stdModule.functions.push(func)
+		self.funcIdRef = snapshot.funcIdRef
+		self.nameToId = snapshot.nameToId
+		self.valueType = snapshot.valueType
+	end 'endSynthesizedFunc'
+
+	// Bind `result` to a fresh int-typed placeholder ValueId. Used by ops
+	// whose own lowering failed (TR ought to have caught the upstream error
+	// already); the placeholder keeps the SSA dag well-formed so downstream
+	// passes don't re-trip on the dangling name.
+	function definePlaceholderInt(result ByteArray)
+		let placeholderId = self.defineName(result)
+		self.setValueType(placeholderId, t: MaxonType.integer)
+	end 'definePlaceholderInt'
+
+	// Phase 9 Stage 1: synthesize one `__enum_<EnumName>_name(rawValue) returns
+	// String` helper per enum recorded in `pendingEnumNameHelpers`. The body
+	// is a chain of cmp+condBr blocks: each leaf allocates a String for the
+	// matching case name (via the same lowerStringConst layout used for user
+	// string literals) and returns it. Only the matching branch executes its
+	// allocation at runtime — so a `.name` call costs exactly one String +
+	// __ManagedMemory pair, no leak.
+	function synthesizeEnumNameHelpers()
+		for enumName in self.pendingEnumNameHelpers 'eachEnum'
+			let enumType = try self.project.enumTypes.get(enumName) otherwise panic("synthesizeEnumNameHelpers: enumTypes lookup failed for registered enum '{enumName}'")
+			self.synthesizeOneEnumNameHelper(enumType)
+		end 'eachEnum'
+	end 'synthesizeEnumNameHelpers'
+
+	// Emit the body for one enum's `.name` helper. The function takes a
+	// single i64 param (the receiver's rawValue) and returns a String. For
+	// each case i, the entry → next_1 → ... → next_{N-1} chain compares the
+	// param against `case_i.rawValue` and branches into a per-case block
+	// that emits the lowerStringConst layout for `case_i.name` and rets.
+	// The final tail block runs unconditionally for the last case — equivalent
+	// to "if all earlier cases missed, it must be the last one" — so there
+	// is no panic-on-no-match path. Invariant: any caller has already
+	// validated the receiver as a real enum value (the type system guarantees
+	// this; out-of-band raw values are undefined behavior).
+	function synthesizeOneEnumNameHelper(enumType EnumType)
+		let helperName = enumNameHelperSymbol(enumType.name)
+		let returnType = StdReturnType.value(inner: StdType.i64)
+		var paramTypes = StdTypeArray.create()
+		paramTypes.push(StdType.i64)
+		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
+		let snapshot = self.beginSynthesizedFunc(1)
+
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+		// Param op anchors the receiver-rawValue slot for the backend's
+		// register allocator. The param's ValueId is 0 by construction
+		// (ValueIdRef.create(1) reserves id 0 for the single param).
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.setValueType(0 as ValueId, t: MaxonType.integer)
+
+		let caseCount = enumType.cases.count()
+		let constOpcode = StdArithConstOpcode.constF64 if enumType.isFloatBacked else StdArithConstOpcode.constI64
+		let cmpOpcode = StdArithBinaryOpcode.cmpF64Eq if enumType.isFloatBacked else StdArithBinaryOpcode.cmpI64Eq
+
+		var currentEntry = entryBlock
+		for i in 0 upto caseCount 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("synthesizeOneEnumNameHelper: cases.get OOB at {i}")
+			var caseBlock = self.stdModule.addBlock(func, label: "case_{i}")
+			let isLast = i == caseCount - 1
+			if isLast 'noMoreCmps'
+				// Last case: unconditionally branch into its body. The
+				// preceding cmp chain has already eliminated every other case
+				// value, so this is equivalent to the "no match" fallthrough.
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.br(caseBlock.id, argIds: ValueIdArray.create())))
+			end 'noMoreCmps' else 'emitCmp'
+				let caseLitId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(currentEntry, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: caseLitId, value: c.rawValue))))
+				self.setIsFloat(caseLitId, isFloat: enumType.isFloatBacked)
+				let cmpId = self.emitBinaryI64(cmpOpcode, leftId: 0 as ValueId, rightId: caseLitId, dstBlock: currentEntry)
+				let nextEntry = self.stdModule.addBlock(func, label: "name_check_{i + 1}")
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: caseBlock.id, thenArgIds: ValueIdArray.create(), elseTarget: nextEntry.id, elseArgIds: ValueIdArray.create())))
+				currentEntry = nextEntry
+			end 'emitCmp'
+			// Per-case block emits the lowerStringConst layout for the case
+			// name, then returns. `lowerStringConst` writes its result into
+			// `nameToId` under the synthetic result-name we hand it; we
+			// resolve back through `nameToId` to feed the ret op.
+			let resultName = "__name_result_{i}".toByteArray()
+			self.lowerStringConst(resultName, stringId: self.project.strings.intern(c.name), dstBlock: caseBlock)
+			let resultId = self.resolveName(resultName)
+			self.stdModule.setTerminator(caseBlock, op: StdOp.call(StdCallOp.ret(resultId)))
+		end 'eachCase'
+
+		self.endSynthesizedFunc(func, snapshot: snapshot)
+	end 'synthesizeOneEnumNameHelper'
+
+	// Phase 9 Stage 4: walk every resolved enum type and synthesize a
+	// `__destruct_<UnionName>(self i64) returns i64` per union with managed
+	// payloads. Unions with only scalar payloads (and bare-enum types) skip
+	// emission entirely — `lowerEnumConstruct` passes a null destructor for
+	// those allocations and the slab path on `mm_decref → mm_free` handles
+	// the box without per-payload teardown.
+	function synthesizeUnionDestructors()
+		for (_, enumType) in self.project.enumTypes 'eachEnum'
+			if not enumType.isUnion 'notUnion'
+				continue
+			end 'notUnion'
+			if not unionHasManagedPayload(self.project, unionType: enumType) 'scalarOnly'
+				continue
+			end 'scalarOnly'
+			self.synthesizeOneUnionDestructor(enumType)
+		end 'eachEnum'
+	end 'synthesizeUnionDestructors'
+
+	// Emit a single union's destructor. Shape:
+	//
+	//   func __destruct_<UnionName> 1 i64
+	//     block entry:
+	//       v0 = std param 0 i64           // self
+	//       v_tag = std loadIndirect v0 0  // tag at offset 0
+	//       (tag-switch chain — case_i blocks)
+	//     ...
+	//     block case_i:
+	//       (for each managed payload field at offset 8+j*8:
+	//          v_load = std loadIndirect v0 (8+j*8)
+	//          _ = std call mm_decref v_load)
+	//       std br done
+	//     ...
+	//     block default:
+	//       std br done                    // unreachable in practice — every
+	//                                       // tag corresponds to a real case;
+	//                                       // emit a no-op br rather than panic
+	//                                       // so out-of-band reads (e.g. a
+	//                                       // future debug tool inspecting a
+	//                                       // half-initialized box) don't crash
+	//                                       // the destructor.
+	//     block done:
+	//       v_zero = std constI64 0
+	//       std ret v_zero
+	//
+	// Return type is `i64 = 0` rather than void: `mm_alloc`'s indirect-call
+	// ABI (see runtime.std `__destruct___ManagedMemory`) requires the
+	// destructor signature to be `(i64) -> i64` so the wasm `call_indirect`
+	// type tag matches across every destructor. The X64/Arm64 backends
+	// silently discard the returned value.
+	function synthesizeOneUnionDestructor(unionType EnumType)
+		let helperName = unionDestructorSymbol(unionType.name)
+		let returnType = StdReturnType.value(inner: StdType.i64)
+		var paramTypes = StdTypeArray.create()
+		paramTypes.push(StdType.i64)
+		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
+		let snapshot = self.beginSynthesizedFunc(1)
+
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+		// Anchor the self pointer as the synthesized function's only param.
+		// ValueIdRef.create(1) reserves id 0 for it.
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.setValueType(0 as ValueId, t: MaxonType.named(self.project.typeNames.intern(unionType.name)))
+		let selfId = 0 as ValueId
+
+		// Load the tag once at the entry; every per-case block branches off
+		// the same SSA value.
+		let tagId = self.emitLoadFieldI64(selfId, offset: 0, dstBlock: entryBlock)
+
+		// Pre-create a `done` block; every case body and the default fall
+		// through to it so the ret happens exactly once.
+		var doneBlock = self.stdModule.addBlock(func, label: "done")
+
+		// One per-case decref block per union case. Cases with zero managed
+		// payload fields still get a block — the tag-switch fall-through path
+		// hits them and they immediately `br done`. Trying to merge those
+		// cases into the default block would require dynamic discovery of
+		// which tags are "scalar-only", which complicates the switch chain
+		// for no real win; the empty blocks DCE/simplify away in later
+		// passes.
+		var caseBlockIds = BlockIdArray.create()
+		for i in 0 upto unionType.cases.count() 'eachCase'
+			let c = try unionType.cases.get(i) otherwise panic("synthesizeOneUnionDestructor: cases.get OOB at {i}")
+			var caseBlock = self.stdModule.addBlock(func, label: "case_{i}")
+			for fi in 0 upto c.payloadFields.count() 'eachField'
+				let field = try c.payloadFields.get(fi) otherwise panic("synthesizeOneUnionDestructor: payloadFields.get OOB at {fi}")
+				if not maxonTypeIsManagedRef(self.project, t: field.fieldType) 'isScalar'
+					continue
+				end 'isScalar'
+				let payloadOffset = 8 + fi * 8
+				let payloadId = self.emitLoadFieldI64(selfId, offset: payloadOffset, dstBlock: caseBlock)
+				var decrefArgs = ValueIdArray.create()
+				decrefArgs.push(payloadId)
+				let decrefRetId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(caseBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "stdlib.__mm_decref", argIds: decrefArgs)))
+				self.setValueType(decrefRetId, t: MaxonType.integer)
+			end 'eachField'
+			self.stdModule.setTerminator(caseBlock, op: StdOp.control(StdControlOp.br(doneBlock.id, argIds: ValueIdArray.create())))
+			caseBlockIds.push(caseBlock.id)
+		end 'eachCase'
+
+		// Default block — never taken in well-formed code but the verifier
+		// requires every condBr's else target to point somewhere. Plain `br
+		// done` rather than panic: the destructor running on a malformed box
+		// would already have been preceded by an invalid `mm_alloc`/store
+		// sequence in user code, and surfacing that as a destructor panic is
+		// strictly less helpful than letting the rest of the teardown
+		// continue.
+		var defaultBlock = self.stdModule.addBlock(func, label: "default")
+		self.stdModule.setTerminator(defaultBlock, op: StdOp.control(StdControlOp.br(doneBlock.id, argIds: ValueIdArray.create())))
+
+		var ordinals = TagValueArray.create()
+		for i in 0 upto unionType.cases.count() 'collectOrdinals'
+			let c = try unionType.cases.get(i) otherwise panic("synthesizeOneUnionDestructor: ordinals.get OOB at {i}")
+			ordinals.push(c.ordinal as IntConstant)
+		end 'collectOrdinals'
+		self.emitTagSwitch(tagId, ordinals: ordinals, caseBlockIds: caseBlockIds, defaultBlockId: defaultBlock.id, entryBlock: entryBlock, func: func)
+
+		// Tail: ret 0. Every case + default block already branched here.
+		let zeroId = self.emitConstI64(0, dstBlock: doneBlock)
+		self.stdModule.setTerminator(doneBlock, op: StdOp.call(StdCallOp.ret(zeroId)))
+
+		self.endSynthesizedFunc(func, snapshot: snapshot)
+	end 'synthesizeOneUnionDestructor'
+
+	// Phase 9 Stage 4: emit a tag-dispatch chain.
+	//
+	// Given a tag SSA value, a parallel `(ordinals, caseBlockIds)` pair, and
+	// a fall-through `defaultBlockId`, emits `cmpI64Eq + condBr` per case
+	// across a chain of "tag_check_i" blocks linked off `entryBlock`. After
+	// the last cmp fails, control branches into `defaultBlockId`.
+	//
+	// Used by the union destructor synthesizer today; structured so the
+	// match-arm lowering path can adopt the same helper when range patterns
+	// over union tags land (Stage 0's int-tag chain is conceptually the same
+	// shape, factored along this seam).
+	function emitTagSwitch(tagId ValueId, ordinals TagValueArray, caseBlockIds BlockIdArray, defaultBlockId BlockId, entryBlock IrBlock, func IrFunction)
+		if ordinals.count() != caseBlockIds.count() 'lengthMismatch'
+			panic("emitTagSwitch: ordinals.count ({ordinals.count()}) != caseBlockIds.count ({caseBlockIds.count()})")
+		end 'lengthMismatch'
+		var currentEntry = entryBlock
+		let caseCount = ordinals.count()
+		for i in 0 upto caseCount 'eachCase'
+			let ord = try ordinals.get(i) otherwise panic("emitTagSwitch: ordinals.get OOB at {i}")
+			let caseBlockId = try caseBlockIds.get(i) otherwise panic("emitTagSwitch: caseBlockIds.get OOB at {i}")
+			let constId = self.emitConstI64(ord as ParsedInt, dstBlock: currentEntry)
+			let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: tagId, rightId: constId, dstBlock: currentEntry)
+			let isLast = i == caseCount - 1
+			if isLast 'tailToDefault'
+				// Last cmp routes the miss directly to the default block —
+				// no need to chain another "tag_check_N" block whose only op
+				// would be an unconditional br.
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: caseBlockId, thenArgIds: ValueIdArray.create(), elseTarget: defaultBlockId, elseArgIds: ValueIdArray.create())))
+			end 'tailToDefault' else 'chainNext'
+				let nextEntry = self.stdModule.addBlock(func, label: "tag_check_{i + 1}")
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: caseBlockId, thenArgIds: ValueIdArray.create(), elseTarget: nextEntry.id, elseArgIds: ValueIdArray.create())))
+				currentEntry = nextEntry
+			end 'chainNext'
+		end 'eachCase'
+	end 'emitTagSwitch'
+
+	// Phase 9 Stage 1: lower `enumValue.name` to a call to the per-enum
+	// `__enum_<EnumName>_name` helper synthesized at the tail of `lower()`.
+	// The helper takes the enum's rawValue (passed in receiverId verbatim —
+	// the SSA value is identical to .rawValue) and returns the matching
+	// case-name String. Registering the enum here adds it to
+	// `pendingEnumNameHelpers`; the actual function body is emitted once
+	// per enum in `synthesizeEnumNameHelpers`.
+	function lowerEnumNameLookup(result ByteArray, receiverId ValueId, enumType EnumType, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
+		let helperName = enumNameHelperSymbol(enumType.name)
+		self.pendingEnumNameHelpers.insert(element: enumType.name)
+		var argIds = ValueIdArray.create()
+		argIds.push(receiverId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+	end 'lowerEnumNameLookup'
+
+	// Phase 9 Stage 1: branchless `rawValue → ordinal` lookup for int/float-
+	// backed enums. Each case contributes `i * (receiverRaw == case_i.raw)` —
+	// at most one comparison is 1, so the running sum equals the matching
+	// ordinal. For float-backed enums we compare against the case's IEEE-754
+	// bit pattern (stored as the case's `rawValue`) using `cmpF64Eq`; the
+	// comparison result is already an i64-shaped 0/1, so the surrounding
+	// arithmetic stays in i64. Cases with ordinal 0 are skipped — they
+	// contribute nothing to the sum.
+	function lowerEnumOrdinalLookup(result ByteArray, receiverId ValueId, enumType EnumType, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		let cmpOpcode = StdArithBinaryOpcode.cmpF64Eq if enumType.isFloatBacked else StdArithBinaryOpcode.cmpI64Eq
+		let constOpcode = StdArithConstOpcode.constF64 if enumType.isFloatBacked else StdArithConstOpcode.constI64
+		var runningSumId = self.emitConstI64(0, dstBlock: dstBlock)
+		for i in 0 upto enumType.cases.count() 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("lowerEnumOrdinalLookup: cases.get OOB at {i}")
+			if i == 0 'firstCaseSkipped'
+				// Ordinal 0 contributes 0 regardless of the comparison — skip
+				// emitting the cmp+mul pair entirely.
+				continue
+			end 'firstCaseSkipped'
+			let caseLitId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: caseLitId, value: c.rawValue))))
+			self.setIsFloat(caseLitId, isFloat: enumType.isFloatBacked)
+			let cmpId = self.emitBinaryI64(cmpOpcode, leftId: receiverId, rightId: caseLitId, dstBlock: dstBlock)
+			let ordinalConstId = self.emitConstI64(i as ParsedInt, dstBlock: dstBlock)
+			let contribId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: cmpId, rightId: ordinalConstId, dstBlock: dstBlock)
+			runningSumId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: runningSumId, rightId: contribId, dstBlock: dstBlock)
+		end 'eachCase'
+		self.aliasName(result, toId: runningSumId)
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerEnumOrdinalLookup'
 
 	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
@@ -4726,7 +5251,8 @@ type MaxonToStdLowering
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 			ret(retVal, _) then self.lowerRet(retVal: retVal, dstBlock: dstBlock)
-			enumMatchArm(scrutineeName, caseName, _, rawValue, isFloat, resolved, thenTarget, elseTarget, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
+			enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, _, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
+			rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, thenTarget, elseTarget, _) then self.lowerRangeMatchArm(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			// An error op as a block terminator shouldn't come from the parser —
 			// errors replace single statements, not block-terminating constructs.
 			// If it ever does we drop it: a diagnostic was already reported at
@@ -4737,7 +5263,7 @@ type MaxonToStdLowering
 			// in R8/X0 and the error flag (`ordinal+1`, 0 reserved for "no
 			// error") in RDX/X1. The caller's `try` reads the flag from the
 			// post-call mov.
-			throw(enumName, variantName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, dstBlock: dstBlock)
+			throw(enumName, variantName, payloadValueName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, payloadValueName: payloadValueName, dstBlock: dstBlock)
 			rethrow(flagName, _) then self.lowerRethrow(flagName: flagName, dstBlock: dstBlock)
 			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
@@ -4748,20 +5274,39 @@ type MaxonToStdLowering
 	// into the dstBlock as regular ops; the cond_br is set as the
 	// terminator. TypeResolution must have resolved the case name before
 	// lowering — an unresolved op is a TR bug.
-	function lowerEnumMatchArm(scrutineeName ByteArray, caseName String, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+	//
+	// Phase 9 Stage 3: when the scrutineeType is a union (heap-boxed value
+	// with an i64 tag at offset 0), we compare against the tag rather than
+	// the heap-pointer itself, and emit `enumPayloadRead`-equivalent loads
+	// at the head of the thenTarget block for any non-discard binding
+	// names. Bare enum scrutinees (where the parser passed empty
+	// bindingNames) take the original direct-cmp path unchanged.
+	function lowerEnumMatchArm(scrutineeName ByteArray, caseName String, scrutineeType MaxonType, rawValue IntConstant, isFloat bool, resolved bool, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
 		if not resolved 'unresolved'
 			panic("lowerMaxonToStd: enumMatchArm '.{caseName}' survived past TypeResolution unresolved")
 		end 'unresolved'
+		// Stage 3 keeps `bindingNames` on the dialect for parity with the
+		// match-arm parser/TR contract, but lowering reads payloads via the
+		// dedicated `enumPayloadRead` ops the parser now emits at the head
+		// of the arm body — see `emitUnionArmBindings`. The field is kept
+		// for forward compatibility (Stage 4 write-back may consult it).
+		let unionType = self.unionTypeForScrutinee(scrutineeType: scrutineeType)
 		var caseLiteralType = MaxonType.integer
 		var constOpcode = StdArithConstOpcode.constI64
 		if isFloat 'asFloat'
 			caseLiteralType = MaxonType.float
 			constOpcode = StdArithConstOpcode.constF64
 		end 'asFloat'
+		// For union scrutinees, the comparison subject is the heap-boxed
+		// value's tag (loaded via loadIndirect at offset 0). Float-backed
+		// unions don't exist — payload-bearing unions are int-tagged.
+		var leftId = self.resolveName(scrutineeName)
+		if unionType.hasType 'loadTag'
+			leftId = self.emitLoadFieldI64(leftId, offset: 0, dstBlock: dstBlock)
+		end 'loadTag'
 		let caseLitId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(constOpcode, resultId: caseLitId, value: rawValue))))
 		self.setIsFloat(caseLitId, isFloat: isFloat)
-		var leftId = self.resolveName(scrutineeName)
 		var rightId = caseLitId
 		if isFloat 'promoteForFloatCmp'
 			leftId = self.promoteToFloat(leftId, dstBlock: dstBlock)
@@ -4773,6 +5318,296 @@ type MaxonToStdLowering
 		self.setIsFloat(cmpId, isFloat: false)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 	end 'lowerEnumMatchArm'
+
+	// Phase 9 Stage 3: detect union scrutinee. Returns the resolved
+	// `EnumType` so the binding-emission path can index its payloadFields.
+	// Plain enums (int/float-backed, no payloads on any case) and non-enum
+	// scrutinees return a no-hit so the bare-cmp lowering path stays
+	// unchanged.
+	function unionTypeForScrutinee(scrutineeType MaxonType) returns UnionTypeLookup
+		let nameStr = scrutineeType.nameOrEmpty(self.project)
+		if nameStr.isEmpty() 'notNamed'
+			return UnionTypeLookup.miss()
+		end 'notNamed'
+		let resolved = try self.project.enumTypes.get(nameStr) otherwise return UnionTypeLookup.miss()
+		if not resolved.isUnion 'notUnion'
+			return UnionTypeLookup.miss()
+		end 'notUnion'
+		return UnionTypeLookup.hit(resolved)
+	end 'unionTypeForScrutinee'
+
+	// Phase 9 Stage 3: lower `MaxonOp.enumConstruct(result, EnumName, caseName,
+	// payloadValues)` to the heap-boxed layout the bootstrap uses:
+	// `__mm_alloc(size, destructor=null, tag=ordinal)` followed by a
+	// `storeIndirect` for the tag word at offset 0 and one `storeIndirect`
+	// per payload field at offset 8 + i*8. Managed-pointer payloads
+	// (struct/string/array/other-union) get an `__mm_incref` so the union
+	// owns its own reference. The destructor pointer is null in Stage 3
+	// — leaks of payload-bearing unions are the expected signal that
+	// Stage 4's destructor synthesis still needs to land.
+	function lowerEnumConstruct(result ByteArray, enumName String, caseName String, payloadValues ByteArrayArray, dstBlock IrBlock)
+		let unionType = try self.project.enumTypes.get(enumName) otherwise 'unknownUnion'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "lowerEnumConstruct: unknown union type '{enumName}'")
+			self.definePlaceholderInt(result)
+			return
+		end 'unknownUnion'
+		let caseIdx = try unionType.caseByName.get(caseName) otherwise 'unknownCase'
+			self.reportLowerError(ErrorCode.semanticEnumUnknownCase, message: "lowerEnumConstruct: unknown case '{enumName}.{caseName}'")
+			self.definePlaceholderInt(result)
+			return
+		end 'unknownCase'
+		let theCase = try unionType.cases.get(caseIdx) otherwise panic("lowerEnumConstruct: cases.get OOB at {caseIdx} for '{enumName}'")
+		if payloadValues.count() != theCase.payloadFields.count() 'arityMismatch'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "lowerEnumConstruct: '{enumName}.{caseName}' expects {theCase.payloadFields.count()} payload(s), got {payloadValues.count()}")
+			self.definePlaceholderInt(result)
+			return
+		end 'arityMismatch'
+		let maxArity = unionMaxPayloadArity(unionType)
+		let allocBytes = 8 + maxArity * 8
+		let sizeId = self.emitConstI64(allocBytes as ParsedInt, dstBlock: dstBlock)
+		self.setValueType(sizeId, t: MaxonType.integer)
+		// Phase 9 Stage 4: pass `funcRef("__destruct_<UnionName>")` so that
+		// `mm_free` (invoked when refcount drops to zero) indirect-calls the
+		// per-union destructor, which `mm_decref`s each managed payload field
+		// of the live case. Unions whose payloads are all scalar (or which
+		// have no payload cases at all) keep the null destructor — the slab
+		// path frees the box and there's nothing managed to release. The
+		// helper symbol matches what `synthesizeUnionDestructors` will emit
+		// at the tail of this pass; `synthesizeUnionDestructors` skips
+		// scalar-only unions, so emitting `funcRef` here for those would
+		// dangle. Predicate must agree with the synthesizer on the same
+		// invariant — both consult `unionHasManagedPayload`.
+		var dtorId = self.emitConstI64(0, dstBlock: dstBlock)
+		if unionHasManagedPayload(self.project, unionType: unionType) 'hasManaged'
+			let dtorRefId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorRefId, funcName: unionDestructorSymbol(unionType.name))))
+			dtorId = dtorRefId
+		end 'hasManaged'
+		self.setValueType(dtorId, t: MaxonType.integer)
+		let tagOrdinalId = self.emitConstI64(theCase.ordinal as ParsedInt, dstBlock: dstBlock)
+		self.setValueType(tagOrdinalId, t: MaxonType.integer)
+		var allocArgIds = ValueIdArray.create()
+		allocArgIds.push(sizeId)
+		allocArgIds.push(dtorId)
+		allocArgIds.push(tagOrdinalId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__mm_alloc", argIds: allocArgIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern(unionType.name)))
+		// `__mm_alloc`'s `tag` parameter is a placeholder slot in the
+		// current runtime (see stdlib/Internals.maxon) — it does NOT
+		// populate the user region. Storing the tag explicitly here is
+		// what the match-side `enumTag` load reads back.
+		self.emitStoreFieldI64(resultId, offset: 0, valueId: tagOrdinalId, dstBlock: dstBlock)
+		for i in 0 upto theCase.payloadFields.count() 'eachField'
+			let field = try theCase.payloadFields.get(i) otherwise panic("lowerEnumConstruct: payloadFields.get OOB at {i}")
+			let payloadValueName = try payloadValues.get(i) otherwise panic("lowerEnumConstruct: payloadValues.get OOB at {i}")
+			let payloadValueId = self.resolveName(payloadValueName)
+			let offset = 8 + i * 8
+			let stdType = maxonTypeToStdType(self.project, ref: field.fieldType)
+			if stdTypeIsFloat(stdType) 'asFloat'
+				// Stage 3 supports int + managed-pointer payloads. Float
+				// payloads need a `bitcastF64ToI64` for the store and a
+				// matching `bitcastI64ToF64` for the read — the latter
+				// opcode doesn't exist in StdArithUnaryOpcode yet. Surface
+				// the gap explicitly rather than emit a half-correct store.
+				panic("lowerEnumConstruct: float-typed union payload field is not supported yet ('{unionType.name}.{theCase.name}.{field.name}' : {field.fieldType.toString(self.project)})")
+			end 'asFloat'
+			self.emitStoreFieldI64(resultId, offset: offset, valueId: payloadValueId, dstBlock: dstBlock)
+			if maxonTypeIsManagedRef(self.project, t: field.fieldType) 'managedBump'
+				var argIds = ValueIdArray.create()
+				argIds.push(payloadValueId)
+				let increfResultId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfResultId, callee: "stdlib.__mm_incref", argIds: argIds)))
+				self.setValueType(increfResultId, t: MaxonType.integer)
+			end 'managedBump'
+		end 'eachField'
+		// Zero-fill unused slots so destructor enumeration (Stage 4) and
+		// any debugging dump see a deterministic 0 rather than residual
+		// stack/heap garbage.
+		for j in theCase.payloadFields.count() upto maxArity 'zeroPad'
+			let zeroId = self.emitConstI64(0, dstBlock: dstBlock)
+			self.emitStoreFieldI64(resultId, offset: 8 + j * 8, valueId: zeroId, dstBlock: dstBlock)
+		end 'zeroPad'
+	end 'lowerEnumConstruct'
+
+	// Phase 9 Stage 3: lower `MaxonOp.enumTag(result, enumValName)` to a
+	// single `loadIndirect i64 [enumValName + 0]`. The match-side tag
+	// dispatch path uses `lowerEnumMatchArm`'s inline load — this op is
+	// only emitted explicitly when user code asks for the raw tag (no
+	// current source-level surface). Kept for parity with the dialect.
+	function lowerEnumTag(result ByteArray, enumValName ByteArray, dstBlock IrBlock)
+		let enumValId = self.resolveName(enumValName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+	end 'lowerEnumTag'
+
+	// Phase 9 Stage 3: lower `MaxonOp.enumPayloadRead(result, enumValName,
+	// fieldIndex, fieldType)` to `loadIndirect <fieldType>
+	// [enumValName + 8 + fieldIndex*8]`. Managed-pointer fields
+	// (struct/string/array/union) bump the refcount so the binding owns
+	// its own reference; the matching decref will be inserted by Stage 4's
+	// extension to the drop pipeline. Float-typed payloads are deferred
+	// until a `bitcastI64ToF64` arith op exists.
+	function lowerEnumPayloadRead(result ByteArray, enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, dstBlock IrBlock)
+		let stdType = maxonTypeToStdType(self.project, ref: fieldType)
+		if stdTypeIsFloat(stdType) 'asFloat'
+			panic("lowerEnumPayloadRead: float-typed payload is not supported yet (need StdArithUnaryOpcode.bitcastI64ToF64). Field type: {fieldType.toString(self.project)}")
+		end 'asFloat'
+		let enumValId = self.resolveName(enumValName)
+		let resultId = self.defineName(result)
+		let offset = 8 + fieldIndex * 8
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: offset, isFloat: false)))
+		self.setValueType(resultId, t: fieldType)
+		if maxonTypeIsManagedRef(self.project, t: fieldType) 'managedBump'
+			var argIds = ValueIdArray.create()
+			argIds.push(resultId)
+			let increfResultId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfResultId, callee: "stdlib.__mm_incref", argIds: argIds)))
+			self.setValueType(increfResultId, t: MaxonType.integer)
+		end 'managedBump'
+	end 'lowerEnumPayloadRead'
+
+	// Phase 9 Stage 4: lower `MaxonOp.enumPayloadStore(enumValName,
+	// fieldIndex, fieldType, newValueName)` — the match-arm write-back op
+	// emitted when a binding like `value = 42` is assigned inside an arm
+	// body on a `var` union scrutinee.
+	//
+	// For scalar payloads (int, bool, char, byte etc.), the store collapses
+	// to a single `storeIndirect [scrutinee + 8 + fieldIndex*8] = newValue`.
+	//
+	// For managed-pointer payloads (struct / String / Array / another union),
+	// the slot already holds a refcounted reference. Overwriting requires:
+	//   1. load the old payload ptr
+	//   2. mm_incref the new value (the slot now owns one reference to it)
+	//   3. storeIndirect the new value into the slot
+	//   4. mm_decref the old value (after the new value is safely stored,
+	//      so a self-assign `value = value` doesn't free the still-live
+	//      target between decref and store).
+	// This mirrors how struct-field stores handle managed fields and how
+	// `lowerEnumConstruct` bumps refcounts on each managed payload at
+	// construction time.
+	//
+	// Float payloads are not yet supported (Stage 3 also defers them) —
+	// surfacing the gap loudly keeps the unsupported edge visible.
+	function lowerEnumPayloadStore(enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, dstBlock IrBlock)
+		let stdType = maxonTypeToStdType(self.project, ref: fieldType)
+		if stdTypeIsFloat(stdType) 'asFloat'
+			panic("lowerEnumPayloadStore: float-typed payload is not supported yet (need StdArithUnaryOpcode.bitcastF64ToI64). Field type: {fieldType.toString(self.project)}")
+		end 'asFloat'
+		let enumValId = self.resolveName(enumValName)
+		let newValueId = self.resolveName(newValueName)
+		let offset = 8 + fieldIndex * 8
+		if maxonTypeIsManagedRef(self.project, t: fieldType) 'managedReplace'
+			// Pre-load old value before the store, then incref new and
+			// decref old AFTER the store — keeps `value = value` (which
+			// resolves the same SSA on both sides) from briefly observing
+			// refcount zero on the live target.
+			let oldValueId = self.emitLoadFieldI64(enumValId, offset: offset, dstBlock: dstBlock)
+			var increfArgs = ValueIdArray.create()
+			increfArgs.push(newValueId)
+			let increfRetId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(increfRetId, callee: "stdlib.__mm_incref", argIds: increfArgs)))
+			self.setValueType(increfRetId, t: MaxonType.integer)
+			self.emitStoreFieldI64(enumValId, offset: offset, valueId: newValueId, dstBlock: dstBlock)
+			var decrefArgs = ValueIdArray.create()
+			decrefArgs.push(oldValueId)
+			let decrefRetId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(decrefRetId, callee: "stdlib.__mm_decref", argIds: decrefArgs)))
+			self.setValueType(decrefRetId, t: MaxonType.integer)
+		end 'managedReplace' else 'scalarReplace'
+			self.emitStoreFieldI64(enumValId, offset: offset, valueId: newValueId, dstBlock: dstBlock)
+		end 'scalarReplace'
+	end 'lowerEnumPayloadStore'
+
+	// Phase 9 Stage 0: lower a range match-arm terminator. Emits up to two
+	// comparison ops (lower-bound + upper-bound), AND-combines them when
+	// both bounds are present, and terminates the block with a cond_br
+	// to thenTarget/elseTarget. Sentinel bounds (`min`/`max`) drop the
+	// corresponding comparison. The parser rejects the impossible
+	// "min ... max" form at parse time so we never reach the
+	// degenerate "always true" case here.
+	function lowerRangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+		let scrutineeId = self.resolveName(scrutineeName)
+		// Float-backed enum range arm: parser stored case ordinals as the
+		// bounds, but the scrutinee is the f64 raw value. Range semantics
+		// are ordinal-based, so an i64 ge/le directly against the f64
+		// scrutinee would (a) fail wasm type-validation and (b) mean
+		// raw-value comparison rather than ordinal-range coverage. Emit a
+		// disjunction of f64-eq checks against each in-range case's raw
+		// f64 instead — independent of raw-value monotonicity.
+		if not enumOwnerName.isEmpty() 'isEnumRange'
+			if let enumType = try self.project.enumTypes.get(enumOwnerName) 'isResolvedEnum'
+				if enumType.isFloatBacked 'isFloatBacked'
+					self.lowerFloatBackedEnumRangeArm(scrutineeId, enumType: enumType, loOrdinal: loValue, hiOrdinal: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
+					return
+				end 'isFloatBacked'
+			end 'isResolvedEnum'
+		end 'isEnumRange'
+		var combinedId = 0 as ValueId
+		var hasCombined = false
+		if not hasMinSentinel 'emitLow'
+			let loId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: loId, value: loValue))))
+			let loCmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Ge, leftId: scrutineeId, rightId: loId, dstBlock: dstBlock)
+			combinedId = loCmpId
+			hasCombined = true
+		end 'emitLow'
+		if not hasMaxSentinel 'emitHigh'
+			let hiId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: hiId, value: hiValue))))
+			let hiOpcode = StdArithBinaryOpcode.cmpI64Lt if isUpto else StdArithBinaryOpcode.cmpI64Le
+			let hiCmpId = self.emitBinaryI64(hiOpcode, leftId: scrutineeId, rightId: hiId, dstBlock: dstBlock)
+			if hasCombined 'foldBoth'
+				combinedId = self.emitBinaryI64(StdArithBinaryOpcode.andI64, leftId: combinedId, rightId: hiCmpId, dstBlock: dstBlock)
+			end 'foldBoth' else 'highOnly'
+				combinedId = hiCmpId
+				hasCombined = true
+			end 'highOnly'
+		end 'emitHigh'
+		if not hasCombined 'noBounds'
+			panic("lowerRangeMatchArm: both sentinels set — parser should have rejected this")
+		end 'noBounds'
+		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(combinedId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+	end 'lowerRangeMatchArm'
+
+	// Float-backed enum range arm: emit `(s == raw[lo]) | (s == raw[lo+1]) |
+	// ... | (s == raw[hi])` where `s` is the f64 scrutinee and `raw[i]` is
+	// the i-th case's raw value. `hi` is exclusive when `isUpto`. `min`/`max`
+	// sentinels expand to ordinal 0 / lastOrdinal respectively. Avoids any
+	// reliance on raw-value monotonicity — ordinal-range coverage is
+	// strictly by declared case order.
+	function lowerFloatBackedEnumRangeArm(scrutineeId ValueId, enumType EnumType, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
+		let caseCount = enumType.cases.count() as ParsedInt
+		let loBound = 0 as ParsedInt if hasMinSentinel else loOrdinal
+		var hiBound = (caseCount - 1) as ParsedInt if hasMaxSentinel else hiOrdinal
+		if isUpto and not hasMaxSentinel 'uptoAdjust'
+			hiBound = (hiBound - 1) as ParsedInt
+		end 'uptoAdjust'
+		var combinedId = 0 as ValueId
+		var hasCombined = false
+		var ord = loBound
+		while ord <= hiBound 'eachOrdinal'
+			let caseRec = try enumType.cases.get(ord) otherwise panic("lowerFloatBackedEnumRangeArm: case ordinal {ord} OOB for enum '{enumType.name}'")
+			let caseRawId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: caseRawId, value: caseRec.rawValue))))
+			self.setIsFloat(caseRawId, isFloat: true)
+			let eqId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.cmpF64Eq, resultId: eqId, leftId: scrutineeId, rightId: caseRawId))))
+			self.setIsFloat(eqId, isFloat: false)
+			if hasCombined 'foldOr'
+				combinedId = self.emitBinaryI64(StdArithBinaryOpcode.orI64, leftId: combinedId, rightId: eqId, dstBlock: dstBlock)
+			end 'foldOr' else 'firstEq'
+				combinedId = eqId
+				hasCombined = true
+			end 'firstEq'
+			ord = (ord + 1) as ParsedInt
+		end 'eachOrdinal'
+		if not hasCombined 'emptyRange'
+			panic("lowerFloatBackedEnumRangeArm: empty ordinal range [{loBound}, {hiBound}] for enum '{enumType.name}' (parser should have rejected single-value / inverted ranges earlier)")
+		end 'emptyRange'
+		self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(combinedId, thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
+	end 'lowerFloatBackedEnumRangeArm'
 
 	// Stage E (closures): emit a function-pointer-of-named-function op.
 	// Records (refId → 0) in `fnEnvVarNames` so a downstream `indirectCall`
@@ -5062,18 +5897,37 @@ type MaxonToStdLowering
 	// emitted because the multi-value ABI always writes both registers) —
 	// the caller's `try ... otherwise` branch ignores the primary value
 	// when the flag is non-zero. errorReturn is the block terminator.
-	function lowerThrow(enumName String, variantName String, dstBlock IrBlock)
+	//
+	// Phase 9 Stage 5c (option-1 union throws ABI): when `payloadValueName`
+	// is non-empty, the caller is throwing an associated-value union value.
+	// The constructed union pointer is non-null by construction (mm_alloc
+	// never returns 0), so we re-use the flag slot as the carrier: the
+	// caller's `flag != 0` test still recognises this as an error AND the
+	// same SSA value doubles as the union pointer for the `(e)` binding.
+	// The value slot stays a default zero. The variant tag is recoverable
+	// at `[union_ptr + 0]`, so `match e` lowers exactly the same way it
+	// does for any other union-typed scrutinee.
+	function lowerThrow(enumName String, variantName String, payloadValueName ByteArray, dstBlock IrBlock)
+		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
+		let zeroOpcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
+		let zeroId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(zeroOpcode, resultId: zeroId, value: 0))))
+		self.setIsFloat(zeroId, isFloat: isFloat)
+		if not payloadValueName.isEmpty() 'unionThrow'
+			// Union-typed error: the constructor result IS the flag. We
+			// preserve `lookupVariantOrdinalPlusOne` as a sanity-check call
+			// — if the variant is unresolved the helper reports E3034 and we
+			// fall through to the bare-enum lowering so the verifier still
+			// sees a well-formed terminator.
+			let unionPtrId = self.resolveName(payloadValueName)
+			self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.errorReturn(zeroId, errorFlagId: unionPtrId)))
+			return
+		end 'unionThrow'
 		let flag = self.lookupVariantOrdinalPlusOne(enumName: enumName, variantName: variantName)
 		// const flag
 		let flagId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: flag))))
 		self.setIsFloat(flagId, isFloat: false)
-		// Default primary return value of the enclosing return type.
-		let isFloat = maxonReturnTypeLowersToFloat(self.project, ref: self.currentReturnType)
-		let opcode = StdArithConstOpcode.constF64 if isFloat else StdArithConstOpcode.constI64
-		let zeroId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(opcode, resultId: zeroId, value: 0))))
-		self.setIsFloat(zeroId, isFloat: isFloat)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.errorReturn(zeroId, errorFlagId: flagId)))
 	end 'lowerThrow'
 
