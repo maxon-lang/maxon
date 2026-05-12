@@ -70,6 +70,7 @@ end 'formatStdFuncHeader'
 typealias StableLabelIndex = int(0 to u64.max)
 typealias LabelRenameMap = Map with(String, String)
 typealias NextIndexMap = Map with(String, StableLabelIndex)
+
 // Tracks `[...]` nesting depth inside a single IR line. Lines never reach
 // the wide range — a few levels at most — but we use the full range so a
 // malformed input can't trigger a range panic in a cosmetic pass.
@@ -304,10 +305,11 @@ end 'scanLineForContextualLabels'
 // holds the most recent ~32 characters consumed before this token began.
 function classifyAndRegister(token String, precedingWindow String, bracketDepth BracketDepth, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
 	// Data label context: identifier inside `[...]` brackets after a
-	// `lea_symdata`/`lea_rdata` op. The op + register precedes the `[`,
-	// so we check the window for those markers.
+	// `lea_symdata`/`lea_rdata` op (MIR dialect) or an `x64.lea` instruction
+	// (x64 dialect, e.g. `x64.lea rcx, [rip+__panic_msg_N]`). The op +
+	// register precedes the `[`, so we check the window for those markers.
 	if bracketDepth > 0 'inBrackets'
-		if precedingWindow.contains("lea_symdata") or precedingWindow.contains("lea_rdata") 'isDataLabel'
+		if precedingWindow.contains("lea_symdata") or precedingWindow.contains("lea_rdata") or precedingWindow.contains("x64.lea") 'isDataLabel'
 			registerCandidateInScope(token, scope: MODULE_SCOPE, renames: renames, nextNum: nextNum)
 			return
 		end 'isDataLabel'
