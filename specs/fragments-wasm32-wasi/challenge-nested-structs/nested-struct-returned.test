@@ -1,0 +1,56 @@
+// Test: nested-struct-returned
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function makeOuter() returns Outer
+	let i = Inner.create(value: 42)
+	return Outer.create(inner: i)
+end 'makeOuter'
+
+function main() returns ExitCode
+	let o = makeOuter()
+	return o.inner.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 42 : i64
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %4, %6, 0
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %6, %8, 0
+    %2 = mir.load %8, 0
+    %3 = mir.load %2, 0
+    %9 = mir.mov_imm 125 : i64
+    %10 = mir.cmp ugt, %3, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_1
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

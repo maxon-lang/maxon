@@ -1,0 +1,50 @@
+// Test: pass-struct-to-function-and-return
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function increment(c Counter) returns Counter
+	return Counter.create(value: c.value + 1)
+end 'increment'
+
+function main() returns ExitCode
+	let c1 = Counter.create(value: 10)
+	let c2 = increment(c1)
+	return c2.value
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %0, %7, 0
+    %8 = mir.load %7, 0
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %8, %9
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %10, %12, 0
+    %5 = mir.load %12, 0
+    %13 = mir.mov_imm 125 : i64
+    %14 = mir.cmp ugt, %5, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_1
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

@@ -7,7 +7,7 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 
 ## Building and testing
 
-After writing or modifying Maxon code, verify it compiles and passes tests:
+After writing or modifying Maxon code, verify it compiles and passes tests (see CLAUDE.md for full build commands and flags).
 
 **C# compiler** (after modifying `maxon-sharp/`):
 - Build: `dotnet build` (run from `maxon-sharp/`). Output binary: `./bin/maxon.exe`
@@ -16,9 +16,6 @@ After writing or modifying Maxon code, verify it compiles and passes tests:
 **Self-hosted compiler** (after modifying `maxon-selfhosted/`):
 - Build: `./bin/maxon.exe build maxon-selfhosted`. Output binary: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe`
 - Spec tests: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
-
-Use `--filter=PATTERN` to run a subset of tests, `--verbose` for detailed failure output, `--update-required` to regenerate RequiredIR blocks.
-Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
 
 ## Syntax that DOES NOT EXIST (most common mistakes)
 

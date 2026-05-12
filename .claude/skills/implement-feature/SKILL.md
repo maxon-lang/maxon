@@ -40,7 +40,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 Use an agent to implement the feature incrementally, test by test:
 
 8. Enable the first test by removing `disabled-` from its marker comment.
-9. Build the C# compiler: `dotnet build` (run from `maxon-sharp/`). The output binary is at `./bin/maxon.exe`.
+9. Build the C# compiler: `dotnet build` (run from `maxon-sharp/`). Output binary: `./bin/maxon.exe`.
 10. Run the spec tests: `./bin/maxon.exe spec-test --filter=<feature-name>`
 11. Analyze failures and implement the necessary compiler changes across the pipeline:
     - **Lexer** (`maxon-sharp/Compiler/Lexer/`) - New tokens if needed
@@ -58,30 +58,15 @@ Use an agent to implement the feature incrementally, test by test:
 
 14. Run the full spec test suite: `./bin/maxon.exe spec-test` to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
 15. If any tests from other specs broke, investigate and fix.
-16. Review all code changes:
-    - Eliminate duplicated code — refactor shared logic into helper methods.
-    - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
-    - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
-    - Ensure functions that handle multiple cases, for example a series of 'if' statements, but return 
-      a default value for unhandled cases, should be refactored to throw an error instead. This ensures that all cases are handled explicitly and prevents silent failures.
-    - Ensure comments explain "why" not "what".
-    - Fix any problems reported by the IDE
-    - Ensure you have not duplicated any helpers
-    - typealias should describe its purpose, not its type
-    - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
-    - Fix any compiler warnings
+16. Apply the standard code quality checklist from CLAUDE.md to all changed files.
 17. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 18. Write a git commit message
 
 ## Guidelines
 
 - Read existing spec files and compiler code for similar features to follow established patterns.
-- Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`).
 - Fix root causes, not symptoms. No workarounds.
 - When adding new operations or types to IR dialects, follow the existing naming conventions.
 - Test error cases too — the compiler should produce clear error messages for invalid usage.
-- Any old 3-digit error codes (e.g., E022) in spec files need to be updated to the new 4-digit error codes.
 - If the feature requires new runtime functions, add them in `X86CodeEmitter.Runtime.cs`.
 - Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).
-- If you find an issue, fix it properly. It doesn't matter if it is pre-existing.
-- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`

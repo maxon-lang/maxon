@@ -1,0 +1,116 @@
+// Test: struct-with-multiple-managed-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type MultiField
+	export var a String
+	export var b Integer
+	export var c String
+	export var d Integer
+	export var e String
+
+	static function create(a String, b Integer, c String, d Integer, e String) returns Self
+		return Self{a: a, b: b, c: c, d: d, e: e}
+	end 'create'
+end 'MultiField'
+
+typealias MultiArray = Array with MultiField
+
+function main() returns ExitCode
+	var items = MultiArray.create()
+	items.push(MultiField.create(a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"))
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @MultiField.create(local0: i64, local1: i64, local2: i64, local3: i64, local4: i64) -> i64 {
+  entry:
+    %12 = mir.param local0 : i64
+    %13 = mir.param local1 : i64
+    %14 = mir.param local2 : i64
+    %15 = mir.param local3 : i64
+    %16 = mir.param local4 : i64
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %12, %6, 0
+    mir.store %13, %6, 8
+    mir.store %14, %6, 16
+    mir.store %15, %6, 24
+    mir.store %16, %6, 32
+    mir.ret %6
+  }
+  func @main() -> u8 {
+  entry:
+    %39 = mir.mov_imm 8 : i64
+    %40 = mir.call @mrt_alloc(%39)
+    %41 = mir.mov_imm 40 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    %43 = mir.mov_imm 0 : i64
+    mir.store %43, %42, 0
+    %44 = mir.mov_imm 0 : i64
+    mir.store %44, %42, 8
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %42, 16
+    %46 = mir.mov_imm 8 : i64
+    mir.store %46, %42, 24
+    %47 = mir.mov_imm 0 : i64
+    mir.store %47, %42, 32
+    mir.store %42, %40, 0
+    %3 = mir.global_addr @__istr_6
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0
+    %6 = mir.mov_imm 37 : i64
+    mir.store %6, %5, 8
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0
+    mir.store %8, %11, 8
+    %14 = mir.global_addr @__istr_7
+    %15 = mir.mov_imm 40 : i64
+    %16 = mir.call @mrt_alloc(%15)
+    mir.store %14, %16, 0
+    %17 = mir.mov_imm 37 : i64
+    mir.store %17, %16, 8
+    %18 = mir.mov_imm -2 : i64
+    mir.store %18, %16, 16
+    mir.store %8, %16, 24
+    %20 = mir.mov_imm 0 : i64
+    mir.store %20, %16, 32
+    %21 = mir.mov_imm 16 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %16, %22, 0
+    mir.store %8, %22, 8
+    %24 = mir.mov_imm 2 : i64
+    %25 = mir.global_addr @__istr_8
+    %26 = mir.mov_imm 40 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %25, %27, 0
+    %28 = mir.mov_imm 37 : i64
+    mir.store %28, %27, 8
+    %29 = mir.mov_imm -2 : i64
+    mir.store %29, %27, 16
+    mir.store %8, %27, 24
+    %31 = mir.mov_imm 0 : i64
+    mir.store %31, %27, 32
+    %32 = mir.mov_imm 16 : i64
+    %33 = mir.call @mrt_alloc(%32)
+    mir.store %27, %33, 0
+    mir.store %8, %33, 8
+    %35 = mir.call @MultiField.create(%11, %8, %22, %24, %33)
+    %36 = mir.global_addr @__layout_Array_MultiField
+    %37 = mir.call @Array.push(%40, %35, %36)
+    %38 = mir.mov_imm 0 : i64
+    mir.ret %38
+  }
+}
+---

@@ -1,0 +1,84 @@
+// Test: array-of-structs-cleanup-order
+type Pair
+	export var first String
+	export var second String
+
+	static function create(first String, second String) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+typealias PairArray = Array with Pair
+
+function main() returns ExitCode
+	var pairs = PairArray.create()
+	pairs.push(Pair.create(first: "alpha string that is long for heap", second: "beta string that is long for heap"))
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %27 = mir.mov_imm 8 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    %29 = mir.mov_imm 40 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    %31 = mir.mov_imm 0 : i64
+    mir.store %31, %30, 0
+    %32 = mir.mov_imm 0 : i64
+    mir.store %32, %30, 8
+    %33 = mir.mov_imm 0 : i64
+    mir.store %33, %30, 16
+    %34 = mir.mov_imm 8 : i64
+    mir.store %34, %30, 24
+    %35 = mir.mov_imm 0 : i64
+    mir.store %35, %30, 32
+    mir.store %30, %28, 0
+    %3 = mir.global_addr @__istr_4
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0
+    %6 = mir.mov_imm 34 : i64
+    mir.store %6, %5, 8
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0
+    %12 = mir.mov_imm 1 : i64
+    mir.store %12, %11, 8
+    %13 = mir.global_addr @__istr_5
+    %14 = mir.mov_imm 40 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %13, %15, 0
+    %16 = mir.mov_imm 33 : i64
+    mir.store %16, %15, 8
+    %17 = mir.mov_imm -2 : i64
+    mir.store %17, %15, 16
+    %18 = mir.mov_imm 1 : i64
+    mir.store %18, %15, 24
+    %19 = mir.mov_imm 0 : i64
+    mir.store %19, %15, 32
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %15, %21, 0
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %21, 8
+    %36 = mir.mov_imm 16 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    mir.store %11, %37, 0
+    mir.store %21, %37, 8
+    %24 = mir.global_addr @__layout_Array_Pair
+    %25 = mir.call @Array.push(%28, %37, %24)
+    %26 = mir.mov_imm 0 : i64
+    mir.ret %26
+  }
+}
+---

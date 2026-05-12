@@ -1,0 +1,44 @@
+// Test: bool-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+function test_bool_param(flag bool) returns Integer
+	if flag 'check'
+		return 1
+	end 'check' else 'else_check'
+		return 0
+	end 'else_check'
+end 'test_bool_param'
+
+function main() returns ExitCode
+	return test_bool_param(true)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br inlined_test_bool_param_0()
+  inlined_test_bool_param_0:
+    mir.cond_br %0 [then: inlined_test_bool_param_1(), else: inlined_test_bool_param_2()]
+  inlined_test_bool_param_1:
+    %2 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%2)
+  inlined_test_bool_param_2:
+    %3 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%3)
+  inline_cont_main_0:
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

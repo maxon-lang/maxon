@@ -1,0 +1,73 @@
+// Test: struct-with-multiple-nested-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+type Line
+	export var start Point
+	export var finish Point
+
+	static function create(start Point, finish Point) returns Self
+		return Self{start: start, finish: finish}
+	end 'create'
+end 'Line'
+
+function main() returns ExitCode
+	let p1 = Point.create(x: 1, y: 2)
+	let p2 = Point.create(x: 10, y: 20)
+	let line = Line.create(start: p1, finish: p2)
+	return line.start.x + line.start.y + line.finish.x + line.finish.y
+end 'main'
+---
+ExitCode: 33
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %0, %25, 0
+    mir.store %1, %25, 8
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.mov_imm 20 : i64
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %3, %27, 0
+    mir.store %4, %27, 8
+    %28 = mir.mov_imm 16 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    mir.store %25, %29, 0
+    mir.store %27, %29, 8
+    %10 = mir.load %29, 0
+    %11 = mir.load %10, 0
+    %13 = mir.load %29, 0
+    %14 = mir.load %13, 8
+    %15 = mir.add.i64 %11, %14
+    %17 = mir.load %29, 8
+    %18 = mir.load %17, 0
+    %19 = mir.add.i64 %15, %18
+    %21 = mir.load %29, 8
+    %22 = mir.load %21, 8
+    %23 = mir.add.i64 %19, %22
+    %30 = mir.mov_imm 125 : i64
+    %31 = mir.cmp ugt, %23, %30
+    mir.cond_br %31 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %32 = mir.global_addr @__panic_msg_3
+    %33 = mir.call @mrt_panic(%32)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

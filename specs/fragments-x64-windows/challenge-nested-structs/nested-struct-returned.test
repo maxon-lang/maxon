@@ -32,117 +32,25 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Inner.create(value: i64) -> i64 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 3
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Outer.create(inner: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Outer]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 4
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @challenge-nested-structs.makeOuter() -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 42
-    x64.call Inner.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Outer.create
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @challenge-nested-structs.main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.call challenge-nested-structs.makeOuter
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.mov rdx, [rbp-16]
-    x64.mov rbx, [rdx+0]
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rbx, rdi
-    x64.jg challenge-nested-structs.main.__range_panic_0
-    x64.cmp rbx, rsi
-    x64.jl challenge-nested-structs.main.__range_panic_0
-    x64.jmp challenge-nested-structs.main.__range_ok_0
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 42
+    x64.mov [r12+0], r8 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov [r8+0], r12 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-24], rbx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Inner(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Inner.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Outer(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Outer.done
-  done:
     x64.epilogue
     x64.ret
   }

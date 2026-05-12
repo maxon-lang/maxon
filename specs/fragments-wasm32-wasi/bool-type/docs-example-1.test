@@ -1,0 +1,46 @@
+// Test: docs-example-1
+typealias Score = int(i64.min to i64.max)
+
+function isPositive(x Score) returns bool
+	if x > 0 'check'
+		return true
+	end 'check'
+	return false
+end 'isPositive'
+
+function main() returns ExitCode
+	if isPositive(5) 'test'
+		return 1
+	end 'test'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    mir.br inlined_isPositive_0()
+  inlined_isPositive_0:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp gt, %0, %4
+    mir.cond_br %5 [then: inlined_isPositive_1(), else: inlined_isPositive_2()]
+  inlined_isPositive_1:
+    %6 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%6)
+  inlined_isPositive_2:
+    %7 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%7)
+  inline_cont_main_0:
+    mir.cond_br %8 [then: test_0(), else: test_0.after()]
+  test_0:
+    %2 = mir.mov_imm 1 : i64
+    mir.ret %2
+  test_0.after:
+    %3 = mir.mov_imm 0 : i64
+    mir.ret %3
+  }
+}
+---

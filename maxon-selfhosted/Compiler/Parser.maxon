@@ -4261,6 +4261,16 @@ export type Parser
 			try parseReturnStatement(block)
 			return MatchStmtArmBodyResult.create(exitBlock: currentBlock, hadReturn: true)
 		end 'isReturn'
+		if stmtToken.kind == TokenKind.break 'isBreak'
+			let exitBlock = try parseBreakStatement(currentFunc, block: block)
+			currentBlock = exitBlock
+			return MatchStmtArmBodyResult.create(exitBlock: exitBlock, hadReturn: false)
+		end 'isBreak'
+		if stmtToken.kind == TokenKind.continue 'isContinue'
+			let exitBlock = try parseContinueStatement(currentFunc, block: block)
+			currentBlock = exitBlock
+			return MatchStmtArmBodyResult.create(exitBlock: exitBlock, hadReturn: false)
+		end 'isContinue'
 		if stmtToken.kind == TokenKind.identifier 'maybeAssign'
 			let peekTok = try cursor.peek(1) otherwise throw ParserError.unexpectedEof
 			if peekTok.kind == TokenKind.equals 'isAssign'
@@ -4334,6 +4344,13 @@ export type Parser
 			return currentBlock
 		end 'bailout'
 		let mergeBlockId = header.mergeBlock.id
+
+		// Push a match context so `break` inside an arm body exits the match
+		// (not an enclosing loop). Mirrors the bootstrap's _matchStack — an
+		// unlabeled break prefers match when one is on the stack; a labeled
+		// break searches both stacks by SourceLabel. Popped at the end of
+		// arm parsing.
+		matchStack.push(MatchContext.create(sourceLabel: header.userLabel, mergeBlockId: mergeBlockId))
 
 		var bodies = IrBlockArray.create()
 		var fallthroughs = BoolArray.create()
@@ -4434,6 +4451,7 @@ export type Parser
 		end 'mergeDead'
 
 		try consumeMatchEndLabel(expectedLabel: header.userLabel)
+		try matchStack.pop() otherwise panic("parseMatchStatement: matchStack underflow")
 		currentBlock = header.mergeBlock
 		return header.mergeBlock
 	end 'parseMatchStatement'
@@ -4960,17 +4978,62 @@ export type Parser
 	// Parse: break [label]  or  continue [label]
 	// Emits an unconditional branch to the loop exit or header block, then
 	// returns a fresh detached block so later statements are unreachable.
+	//
+	// Break semantics: an unlabeled `break` exits the innermost enclosing
+	// match (if any) — matching the bootstrap's switch-style behaviour where
+	// `break` inside a match arm only leaves the arm and the for/while loop
+	// continues. With no match active, it exits the innermost loop. A
+	// labeled `break 'foo'` searches both match and loop stacks by source
+	// label.
 	function parseBreakStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let breakToken = try consume()
-		if loopStack.count() == 0 'notInLoop'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'break' can only be used inside a loop", line: breakToken.line, column: breakToken.column, filePath: filePath)
+		if loopStack.count() == 0 and matchStack.count() == 0 'notInLoopOrMatch'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "'break' can only be used inside a loop or match", line: breakToken.line, column: breakToken.column, filePath: filePath)
 			return block
-		end 'notInLoop'
+		end 'notInLoopOrMatch'
 
-		let targetId = try resolveLoopTarget(useExit: true)
+		let targetId = try resolveBreakTarget()
 		module.setTerminator(block, op: MaxonOp.br(targetId, range: SourceRange.none()))
 		return newDetachedBlock(func)
 	end 'parseBreakStatement'
+
+	// Resolve the jump target for break: labeled forms search both match and
+	// loop stacks (match takes precedence on tie); unlabeled break prefers
+	// the innermost match, falling back to the innermost loop. Returns a
+	// BlockId of the merge/exit block. Caller has already verified that at
+	// least one of the two stacks is non-empty.
+	function resolveBreakTarget() returns BlockId throws ParserError
+		if cursor.current().kind != TokenKind.charLiteral 'unlabeled'
+			return try innermostBreakTarget()
+		end 'unlabeled'
+		let labelToken = try consume()
+		for i in 0 upto matchStack.count() 'matchSearch'
+			let mctx = try matchStack.get(matchStack.count() - 1 - i) otherwise panic("resolveBreakTarget: matchStack index OOB")
+			if mctx.sourceLabel == labelToken.value 'foundMatch'
+				return mctx.mergeBlockId
+			end 'foundMatch'
+		end 'matchSearch'
+		for i in 0 upto loopStack.count() 'loopSearch'
+			let lctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveBreakTarget: loopStack index OOB")
+			if lctx.sourceLabel == labelToken.value 'foundLoop'
+				return lctx.exitBlockId
+			end 'foundLoop'
+		end 'loopSearch'
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "No enclosing loop or match with label '{labelToken.value}'", line: labelToken.line, column: labelToken.column, filePath: filePath)
+		return try innermostBreakTarget()
+	end 'resolveBreakTarget'
+
+	// Innermost break target: prefer an active match (switch-style behaviour),
+	// otherwise fall back to the innermost loop exit. Caller guarantees one
+	// of the two stacks is non-empty.
+	function innermostBreakTarget() returns BlockId throws ParserError
+		if matchStack.count() > 0 'preferMatch'
+			let mctx = try matchStack.get(matchStack.count() - 1) otherwise panic("innermostBreakTarget: matchStack empty after count check")
+			return mctx.mergeBlockId
+		end 'preferMatch'
+		let lctx = try loopStack.get(loopStack.count() - 1) otherwise panic("innermostBreakTarget: loopStack empty after count check")
+		return lctx.exitBlockId
+	end 'innermostBreakTarget'
 
 	function parseContinueStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let continueToken = try consume()
@@ -4979,34 +5042,32 @@ export type Parser
 			return block
 		end 'notInLoop'
 
-		let targetId = try resolveLoopTarget(useExit: false)
+		let targetId = try resolveContinueTarget()
 		module.setTerminator(block, op: MaxonOp.br(targetId, range: SourceRange.none()))
 		return newDetachedBlock(func)
 	end 'parseContinueStatement'
 
-	// Resolve the jump target for break (useExit=true) or continue (useExit=false),
-	// consuming an optional label token when present.
-	// entry: cursor AT the token after `break`/`continue` (caller already consumed the keyword).
-	function resolveLoopTarget(useExit bool) returns BlockId throws ParserError
-		let innermostCtx = try loopStack.get(loopStack.count() - 1) otherwise panic("resolveLoopTarget: empty loopStack")
-		let target = innermostCtx.exitBlockId if useExit else innermostCtx.continueBlockId
-
+	// Resolve the jump target for continue, consuming an optional label token.
+	// Continue only searches the loop stack — match contexts have no header to
+	// branch back to. entry: cursor AT the token after `continue` (caller
+	// already consumed the keyword); loopStack is non-empty (caller checked).
+	function resolveContinueTarget() returns BlockId throws ParserError
+		let innermostCtx = try loopStack.get(loopStack.count() - 1) otherwise panic("resolveContinueTarget: empty loopStack")
 		if cursor.current().kind != TokenKind.charLiteral 'noLabel'
-			return target
+			return innermostCtx.continueBlockId
 		end 'noLabel'
 
 		let labelToken = try consume()
-
 		for i in 0 upto loopStack.count() 'search'
-			let ctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveLoopTarget: loop index out of bounds")
+			let ctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveContinueTarget: loop index out of bounds")
 			if ctx.sourceLabel == labelToken.value 'found'
-				return ctx.exitBlockId if useExit else ctx.continueBlockId
+				return ctx.continueBlockId
 			end 'found'
 		end 'search'
 
 		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "No enclosing loop with label '{labelToken.value}'", line: labelToken.line, column: labelToken.column, filePath: filePath)
-		return target
-	end 'resolveLoopTarget'
+		return innermostCtx.continueBlockId
+	end 'resolveContinueTarget'
 
 	// --- Discard assignment ---
 

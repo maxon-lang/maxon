@@ -1,0 +1,65 @@
+// Test: deeply-nested-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+type Level1
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Level1'
+
+type Level2
+	export var inner Level1
+
+	static function create(inner Level1) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Level2'
+
+type Level3
+	export var inner Level2
+
+	static function create(inner Level2) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Level3'
+
+function main() returns ExitCode
+	let l1 = Level1.create(value: 42)
+	let l2 = Level2.create(inner: l1)
+	let l3 = Level3.create(inner: l2)
+	return l3.inner.inner.value
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %11, %13, 0
+    %14 = mir.mov_imm 8 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    mir.store %13, %15, 0
+    %7 = mir.load %15, 0
+    %8 = mir.load %7, 0
+    %9 = mir.load %8, 0
+    %16 = mir.mov_imm 125 : i64
+    %17 = mir.cmp ugt, %9, %16
+    mir.cond_br %17 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %18 = mir.global_addr @__panic_msg_2
+    %19 = mir.call @mrt_panic(%18)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

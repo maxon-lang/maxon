@@ -37,157 +37,30 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Level1.create(value: i64) -> i64 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 5
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Level2.create(inner: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Level2]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @Level3.create(inner: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Level3]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 7
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @challenge-nested-structs.main() -> u32 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov rcx, 42
-    x64.call Level1.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Level2.create
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-16]
-    x64.call Level3.create
-    x64.mov [rbp-24], rax
-    x64.mov rdx, [rbp-24]
-    x64.mov rbx, [rdx+0]
-    x64.mov [rbp-32], rbx
-    x64.mov rsi, [rbp-32]
-    x64.mov rdi, [rsi+0]
-    x64.mov [rbp-40], rdi
-    x64.mov r8, [rbp-40]
-    x64.mov r9, [r8+0]
-    x64.xor eax, eax
-    x64.mov ecx, 4294967295
-    x64.cmp r9, rcx
-    x64.jg challenge-nested-structs.main.__range_panic_0
-    x64.cmp r9, rax
-    x64.jl challenge-nested-structs.main.__range_panic_0
-    x64.jmp challenge-nested-structs.main.__range_ok_0
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 42
+    x64.mov [r12+0], r8 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r12 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rsi, [r9+0] (8b)
+    x64.mov r8, [rsi+0] (8b)
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rdx, [rbp-24]
-    x64.mov [rbp-48], r9
-    x64.test rdx, rdx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-48]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Level1(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Level1.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Level2(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Level2.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Level3(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Level3.done
-  done:
     x64.epilogue
     x64.ret
   }

@@ -141,22 +141,11 @@ Flat list of every file path that needs changes, for easy reference.
 13. Once approved, use the `maxon-coder` skill for writing Maxon code and implement the plan:
     - Rebuild: `./bin/maxon.exe build maxon-selfhosted`
     - Verify: `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=<test>`
-    - Use `--verbose` for detailed failure messages
-    - Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 
 14. After all tests pass, run the full spec test suite to check for regressions:
     `./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test`
 
-15. Review all code changes:
-    - Ensure equivalent functionality across all targets (x64, arm64)
-    - Eliminate duplicated code — refactor shared logic into helper methods
-    - Ensure no `match` statements use `default` cases — all cases must be handled explicitly
-    - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs
-    - Ensure comments explain "why" not "what"
-    - typealias should describe its purpose, not its type
-    - typed ranges should be as specific as possible (e.g., `int(0 to 100)` not `int(0 to u64.max)`). Max range is fine if there is no clear limit.
-    - Look for comments implying something was skipped or deferred
-    - Fix any compiler warnings
+15. Apply the standard code quality checklist from CLAUDE.md to all changed files.
 
 ## Guidelines
 
@@ -167,5 +156,4 @@ Flat list of every file path that needs changes, for easy reference.
 - Fix root causes, not symptoms. No workarounds.
 - If you find a pre-existing issue during research, note it in the plan's Risk Areas and fix it during implementation.
 - For memory-related features, consider borrow checking and drop injection implications.
-- If any tests that use RequiredIR fail you can regenerate the required IR and MmTrace stderr by using `--update-required`.
 - It's possible that bugs encountered could be in the C# bootstrap compiler. If so, fix the C# compiler in `maxon-sharp/`.

@@ -97,12 +97,12 @@ function main() returns ExitCode
 	let item1 = try items.get(1) otherwise Item.create(color: Color.blue)
 	let item2 = try items.get(2) otherwise Item.create(color: Color.red)
 
-	// red=0, green=1, blue=2
-	return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
+	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
+	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25
 end 'main'
 ```
 ```exitcode
-210
+55
 ```
 
 <!-- test: array-of-structs-enum-for-in-loop -->

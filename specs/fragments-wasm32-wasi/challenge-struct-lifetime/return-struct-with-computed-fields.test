@@ -1,0 +1,48 @@
+// Test: return-struct-with-computed-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type Result
+	export var sum Integer
+	export var product Integer
+
+	static function create(sum Integer, product Integer) returns Self
+		return Self{sum: sum, product: product}
+	end 'create'
+end 'Result'
+
+function compute(a Integer, b Integer) returns Result
+	return Result.create(sum: a + b, product: a * b)
+end 'compute'
+
+function main() returns ExitCode
+	let r = compute(3, b: 4)
+	return r.sum + r.product
+end 'main'
+---
+ExitCode: 19
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %8 = mir.mov_imm 7 : i64
+    %9 = mir.mov_imm 12 : i64
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %8, %11, 0
+    mir.store %9, %11, 8
+    %4 = mir.load %11, 0
+    %6 = mir.load %11, 8
+    %7 = mir.add.i64 %4, %6
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %7, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

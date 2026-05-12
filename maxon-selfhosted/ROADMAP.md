@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **45 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **510 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **66 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **666 fragment tests passing** on x64-windows. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -10,10 +10,16 @@ Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity tog
 Phase 1:   Core Arithmetic        [x] arithmetic, comparison, unary, parentheses, expressions
 Phase 2:   Control Flow           [x] if/else, while, break/continue (with for-range step block), return, match (statement+expression), for-range over integers, for-range over ASCII char literals
 Phase 3:   Function Params        [x] parameters, parameter-labels, assignment, method calls
-Phase 4:   Basic Types            [~] byte/float/type-casting work; implicit-type-conversion edge cases pending
-Phase 5:   Structs                [~] struct literals, methods, self, type/static methods passing;
-                                      challenge-* and field-assign edge cases still pending
-Phase 6:   Managed Memory         [~] slab allocator + __ManagedMemory builtin done; arrays/for-in deferred to Phase 7+11
+Phase 4:   Basic Types            [x] byte/float/type-casting, implicit-type-conversion, bool-type,
+                                      byte-enum-comparison all pass; bool-bit-packing edge cases pending
+Phase 5:   Structs                [x] struct literals, methods, self, type/static methods,
+                                      all challenge-* specs (field-assign, nested-structs,
+                                      struct-lifetime, array-of-structs) pass; module-level-struct-var
+                                      parked under Phase 12
+Phase 6:   Managed Memory         [x] slab allocator + __ManagedMemory builtin done;
+                                      arrays / array-managed-elements / array-return-element-from-loop
+                                      whitelisted; remaining array specs blocked on union types (Phase 9)
+                                      or borrow checking (Phase 5+ followups)
 Phase 7:   Strings                [~] real String type, interpolation, byte/char literals all landed.
                                       primitive-stringable (5/5) whitelisted via PrimitiveExtensions + bootstrap String.equals.
                                       string-type / string-interpolation / character-type still need real String.maxon
@@ -142,33 +148,58 @@ Parser at [`Parser.maxon:181`](Compiler/Parser.maxon#L181) (`parseFunctionParame
 
 ---
 
-## Phase 4: Basic Types — IN PROGRESS
+## Phase 4: Basic Types — DONE
 
-**Specs passing**: `byte-type`, `float-type`, `type-casting`, `contextual-literal-typing`.
+**Specs passing (2026-05-12)**: `byte-type`, `float-type`, `type-casting`,
+`contextual-literal-typing`, `implicit-type-conversion` (9/9),
+`bool-type` (4/4), `byte-enum-comparison` (3/3).
 
-**Currently failing**: `implicit-type-conversion` — 13 fragment-level failures spanning int↔float/byte parameter coercion, math intrinsic int promotion, and three "should-error" cases (`no-string-to-int`, `no-bool-to-int`, `no-int-to-bool`) that are accepting bad code or producing the wrong diagnostic. One representative error:
+Implicit conversion in argument passing is wired through
+`emitImplicitConvert` in [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon),
+covering int↔float, parameter promotion, and the math-intrinsic int→float
+path. Type-checker now rejects bool↔int and string→int at call sites.
 
-```
-error E3013: lowerMaxonToStd:0:0: lowerMaxonToStd: unresolved value name '$t1'
-```
-
-This is the first concrete blocker before Phase 6 work can begin.
-
-**Action**: fix the implicit-conversion paths in [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon) (likely missing implicit-cast insertion in argument passing) and tighten the type-checker to reject the bool↔int and string→int cases.
+**Still pending in this area**:
+- `bool-bit-packing` (11/15 pass) — last 4 need bool/int implicit-cast
+  conversion in `Vector.push` plus Vector.insert/Vector.remove fixes for
+  the bool-bit-packed path.
+- `char-literal-to-int` (7/8 pass) — `char-literal-codepoint-iteration`
+  hits an unresolved-name parser bug.
 
 ---
 
-## Phase 5: Structs — MOSTLY DONE
+## Phase 5: Structs — DONE
 
-**Specs passing**: `method-calls`, `method-call-on-parameter`, `self-keyword`, `static-methods`, `type-methods`.
+**Specs passing**: `method-calls`, `method-call-on-parameter`, `self-keyword`,
+`static-methods`, `type-methods`, `challenge-struct-field-assign` (3/3),
+`challenge-nested-structs` (4/4), `challenge-struct-lifetime` (3/3),
+`challenge-array-of-structs` (4/4).
 
 Parser at [`Parser.maxon:2439`](Compiler/Parser.maxon#L2439) (`parseStructLiteral`), [`Parser.maxon:1056`](Compiler/Parser.maxon#L1056) (`parseTypeDecl`). Heap allocation via OS calls is wired through `OsDescriptor` and `BackendDispatch`.
 
-**Still pending in this area**:
-- `challenge-struct-field-assign` (commented in whitelist) — direct field assignment edge cases
-- `challenge-nested-structs` — nested struct ownership
-- `challenge-struct-ownership`, `challenge-struct-lifetime`, `challenge-array-of-structs` — interact with full ownership/borrow checking
-- `module-level-struct-var` — depends on Phase 12
+### Phase 5 finish (2026-05-12)
+
+Three small fixes unblocked the challenge specs:
+
+- **`enum.rawValue` / `enum.ordinal` accessors** in
+  [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon)'s
+  `lowerFieldLoad`: when the receiver is a registered enum, the accessor
+  is a value-level no-op (the SSA value already carries the raw
+  ordinal), so the result name is aliased to the receiver's `ValueId`.
+- **`break` / `continue` inside match arm bodies** in
+  [`Parser.maxon`](Compiler/Parser.maxon)'s
+  `parseMatchStatementArmBodyInner`: the parser now recognises both
+  keywords (previously failed with E2004 "expected expression"). Wired
+  up the previously-unused `matchStack` so unlabeled `break` inside an
+  arm exits the match (not an enclosing loop), mirroring the bootstrap's
+  switch-style semantics. A new `resolveBreakTarget` consults both
+  stacks; a labeled `break 'foo'` searches both and prefers the match
+  context on a tie.
+- **`challenge-array-of-structs` exit code**: adjusted the test's
+  base-10 packing to base-5 since the new `ExitCode` upper bound is 125.
+
+`challenge-struct-ownership` does not exist as a spec file (the ROADMAP
+reference was stale). `module-level-struct-var` is parked under Phase 12.
 
 ---
 
@@ -212,12 +243,32 @@ Plus two non-allocator infra fixes: [`PeWriter.maxon`](Compiler/Targets/Windows/
 
 ### What's deferred and why
 
-The user-facing `arrays` / `stdlib-array` / `collection` / `for-in over arrays` / `array-managed-elements` / `array-of-bytearray` / `array-hashable` specs all depend on [`stdlib/Array.maxon`](../stdlib/Array.maxon), which presupposes:
-- **Phase 7 (real Strings)** for `panic("...")` interpolated messages inside `Array.ensureCapacity` etc.
-- **Phase 8 (full throws/throw)** for `Array.get(i) throws ArrayError`, `try managed.get(...) otherwise throw ArrayError.indexOutOfBounds`, etc.
-- **Phase 11 (interfaces & generics)** for `Array uses Element`, `implements BuiltinArrayLiteral, Iterable with(Element, ArrayIter), Cloneable`, `extension Array where Element is Equatable`.
+After Phases 7 / 8 / 11 stabilised, `stdlib/Array.maxon` does parse, and
+the user-facing array specs unlocked progressively:
 
-Once those land, parsing `stdlib/Array.maxon` becomes possible and the deferred specs unlock automatically — the `__ManagedMemory` primitive completed in Phase 6 is the building block they all wrap.
+- **2026-05-09**: `arrays` (46/46) re-enabled.
+- **2026-05-11**: `byte-string-literal` re-enabled via per-instance
+  witness thunks (Phase 11.x).
+- **2026-05-12**: `array-managed-elements` (3/3) and
+  `array-return-element-from-loop` (1/1) added to the whitelist.
+
+Still deferred:
+
+- `array-realloc-dangling-ref` — needs the E3070 mutable-borrow-while-
+  read borrow-check diagnostic.
+- `array-slice-managed-elements` / `array-append-managed-elements` /
+  `array-managed-field-reassign` / `array-managed-multi-call-lifecycle`
+  / `array-enum-element-size` — every fragment uses `union` types
+  (Phase 9 associated-value enums) which the parser doesn't yet accept.
+  `array-managed-field-reassign/reassign-array-field-simple-managed`
+  also surfaces a separate TypeResolution gap (parameter-typed
+  `c.items` reports `unresolved` at fieldLoad time).
+- `array-of-bytearray` / `array-hashable` / `array-contains` / etc. —
+  Phase 11.x cleanup; revisit alongside the remaining
+  `where-clauses` / `associated-types` work.
+
+The `__ManagedMemory` primitive completed in this phase remains the
+shared building block for every collection (Array, Vector, Map, String).
 
 ---
 

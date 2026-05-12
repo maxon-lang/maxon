@@ -4597,8 +4597,26 @@ type MaxonToStdLowering
 	function lowerFieldLoad(result ByteArray, receiver ByteArray, fieldName ByteArray, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
-		let resultId = self.defineName(result)
 		let fieldNameStr = String.from(fieldName)
+		// Enum builtin accessors: `.rawValue` and `.ordinal` are value-level
+		// no-ops on int/float-backed enums — the SSA value already carries
+		// the raw value (or, for ordinal-only enums, the ordinal == raw).
+		// Alias the result name to the receiver's ValueId; the std-level
+		// type (i64 or f64) is unchanged, and the recorded MaxonType is the
+		// enum's named type which downstream readers treat as i64-shaped
+		// storage for arithmetic. `.name` (case-name string) needs runtime
+		// support and is deferred — it'll mirror the bootstrap's
+		// MaxonEnumNameOp once String-based enum reflection lands.
+		let enumName = receiverType.namedAliasNameOrEmpty(self.project)
+		if not enumName.isEmpty() 'maybeEnum'
+			if self.project.enumTypes.contains(enumName) 'isEnum'
+				if fieldNameStr == "rawValue" or fieldNameStr == "ordinal" 'isEnumAccessor'
+					self.aliasName(result, toId: receiverId)
+					return
+				end 'isEnumAccessor'
+			end 'isEnum'
+		end 'maybeEnum'
+		let resultId = self.defineName(result)
 		let hit = try self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			self.setValueType(resultId, t: MaxonType.integer)
