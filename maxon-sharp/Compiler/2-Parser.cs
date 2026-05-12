@@ -19167,6 +19167,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void CheckReservedDeclName(Token nameToken, bool isEnumCase = false) {
     if (_isStdlib && _sourceFilePath != null
         && Path.GetFileName(_sourceFilePath) == "Builtins.maxon") return;
+    if (_isStdlib && _sourceFilePath != null
+        && Path.GetFileName(_sourceFilePath) == "Internals.maxon") return;
     // `self` rejection applies to bindings in the value namespace (locals, params,
     // functions, types). Enum cases live in `EnumName.case` namespace and cannot
     // shadow the implicit receiver, so naming an enum case `self` is allowed.

@@ -358,26 +358,15 @@ export function registerSlabAndMmGlobalsForDataSection(globalData GlobalDataTabl
 	addDataSectionEntry(globalData, name: "__mm_alloc_count", initialBytes: zeroBytesOfSize(8))
 end 'registerSlabAndMmGlobalsForDataSection'
 
-// Register the user-callable allocator intrinsics in the project's
-// function registries so plain Maxon source like `__mm_alloc(64, 0, 0)`
-// parses, type-resolves, and arity-validates as a normal function call.
-// The actual lowering is intercepted in `lowerCall` — these signature
-// entries exist only to satisfy TypeResolution and the arity checker; no
-// function body is ever emitted under the registered `stdlib.__mm_*`
-// names. The corresponding interception in `lowerCall` short-circuits
-// before any `StdOp.call` is emitted under those names, so DFE marking
-// the registered name is harmless (the worklist lookup misses in the
-// function map and the entry is dropped).
-//
-// All take and return i64 (or void). The actual runtime-side helpers
-// (`mm_alloc`, `mm_decref`, `mm_incref`) plus the count-reader global
-// live in runtime.std.
+// Register the allocator-count reader as a callable signature. The
+// `__mm_alloc`, `__mm_decref`, `__mm_incref` functions are now real
+// stdlib bodies in `stdlib/Internals.maxon` (declared as `export
+// function __mm_*`), so the parser populates their signatures directly.
+// Only `__mm_alloc_count()` remains a synthetic intrinsic — it lowers
+// to a single `globalAddr + load` rather than a call, so there's no
+// matching parsed body.
 export function registerMmIntrinsicSignatures(project Project)
 	let intReturn = MaxonReturnType.value(MaxonType.integer)
-	let intType = MaxonType.integer
-	registerMmIntrinsicSignature(project, bareName: "__mm_alloc", paramNames: mmParamNames3("size", second: "destructor", third: "tag"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: intReturn)
-	registerMmIntrinsicSignature(project, bareName: "__mm_decref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
-	registerMmIntrinsicSignature(project, bareName: "__mm_incref", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
 	registerMmIntrinsicSignature(project, bareName: "__mm_alloc_count", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
 end 'registerMmIntrinsicSignatures'
 
@@ -405,6 +394,96 @@ function registerBuiltinsIntrinsicSignature(project Project, qualifiedName Strin
 	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
 	project.methodNameIndex.record(qualifiedName)
 end 'registerBuiltinsIntrinsicSignature'
+
+// `__Internals.*` is a file-path-gated namespace that exposes raw Std-level
+// system ops as callable methods. Only `stdlib/Internals.maxon` is allowed to
+// invoke these — every other file is rejected at lowering time. The point is
+// to let platform-neutral runtime helpers (refcount, slab allocator, managed
+// memory) be expressed in plain Maxon syntax so they participate in the full
+// stdlib optimization pipeline (canonicalize, cse, licm, dce, Stage A const
+// hoist, inliner) instead of living in runtime.std with only mem2reg applied.
+//
+// Mirrors `registerBuiltinsIntrinsicSignatures` exactly — TypeResolution
+// validates argument shape against these signatures and the lowering pass
+// (`lowerInternalsIntrinsic`) intercepts the call before any signature-driven
+// `StdOp.call` would emit.
+export function registerInternalsIntrinsicSignatures(project Project)
+	let intReturn = MaxonReturnType.value(MaxonType.integer)
+	let intType = MaxonType.integer
+	// Atomic ops
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.atomicInc", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.atomicDec", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.atomicXadd", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
+	// Memory load/store
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadIndirect", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeIndirect", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadByte", paramNames: mmParamNames2("addr", second: "offset"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeByte", paramNames: mmParamNames3("addr", second: "offset", third: "value"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.memcpy", paramNames: mmParamNames3("dst", second: "src", third: "size"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	// Address-of-named-global ops. Each maps to `globalAddr <bakedName>` in
+	// the Std IR. No string-literal args: passing a Maxon string would
+	// trigger a String allocation for the literal at runtime (mrt_alloc
+	// chain), defeating the purpose of having a raw address-of op. Each
+	// global the runtime helpers need has a dedicated intrinsic here.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmAllocCountAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaListHeadAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaLastBaseAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabInitDoneAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMetaFreeHeadAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMetaBumpPtrAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMetaBumpEndAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMcentralArrayAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMcacheBaseAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaMapL1Addr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabOsDirectCountAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabOsDirectCapacityAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabOsDirectArrayAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.dataCovCountersAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.dataCovNumSitesAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Address-of-named-function. Same rationale as globals: dedicated
+	// intrinsics avoid the string-literal allocation chain.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mrtStartAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.symtableAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.destructManagedMemoryAddr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadFramePtr", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Indirect call (one-arg variant, used by destructors)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.indirectCall1", paramNames: mmParamNames2("funcPtr", second: "arg"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
+	// Runtime-call bridges: invoke a still-in-runtime helper from a migrated
+	// Internals function. As each runtime helper migrates to Internals.maxon,
+	// its bridge becomes redundant and can be removed (the migrated function
+	// becomes directly callable as a regular stdlib function with the
+	// `stdlib.` qualified name).
+	//
+	// Each bridge maps `__Internals.<bridgeName>(args)` to an unqualified
+	// `call <runtime_name>(args)` Std op. No string literals — the runtime
+	// callee name is baked into the bridge's lowering case.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabAlloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabFree", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabInit", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaAllocChunks", paramNames: mmParamNames1("num"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaFreeChunks", paramNames: mmParamNames3("arenaBase", second: "chunkIndex", third: "numChunks"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMemzero", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabClassSize", paramNames: mmParamNames1("idx"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabObjsPerSpan", paramNames: mmParamNames1("idx"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMetaAlloc", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabMetaFree", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabRefillMcache", paramNames: mmParamNames1("classIdx"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabAllocClass", paramNames: mmParamNames1("classIdx"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabFreeClassWithMspan", paramNames: mmParamNames2("slot", second: "mspan"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaMapEnsure", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaMapSet", paramNames: mmParamNames3("addr", second: "endAddr", third: "mspan"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabArenaMapGet", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabOsDirectAlloc", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.slabOsDirectFree", paramNames: mmParamNames1("ptr"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.mmRealloc", paramNames: mmParamNames2("ptr", second: "newSize"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
+	// OS ops
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osAllocPages", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osAllocPagesLarge", paramNames: mmParamNames1("size"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osFreePages", paramNames: mmParamNames2("ptr", second: "size"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osWrite", paramNames: mmParamNames2("ptr", second: "len"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osWriteErr", paramNames: mmParamNames2("ptr", second: "len"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.osExit", paramNames: mmParamNames1("code"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+end 'registerInternalsIntrinsicSignatures'
 
 // Helper for registerMmIntrinsicSignatures: register a single intrinsic
 // under the qualified name `stdlib.{bareName}` so the second probe in
@@ -681,6 +760,24 @@ function mmParamTypes3(first MaxonType, second MaxonType, third MaxonType) retur
 	types.push(third)
 	return types
 end 'mmParamTypes3'
+
+function mmParamNames4(first String, second String, third String, fourth String) returns StringArray
+	var names = StringArray.create()
+	names.push(first)
+	names.push(second)
+	names.push(third)
+	names.push(fourth)
+	return names
+end 'mmParamNames4'
+
+function mmParamTypes4(first MaxonType, second MaxonType, third MaxonType, fourth MaxonType) returns MaxonTypeArray
+	var types = MaxonTypeArray.create()
+	types.push(first)
+	types.push(second)
+	types.push(third)
+	types.push(fourth)
+	return types
+end 'mmParamTypes4'
 
 // Stage E (closures): predicate distinguishing parser-lifted closure
 // bodies (`_$closure_N`) from ordinary user functions. The parser uses a
@@ -2179,6 +2276,16 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerBuiltins'
+		// File-path-gated raw Std-op access for `stdlib/Internals.maxon`. The
+		// gate fires inside `lowerInternalsIntrinsic` — any call from a file
+		// other than the designated internals file is rejected as a compile
+		// error there.
+		if bareCallee.startsWith("__Internals.") 'didLowerInternals'
+			let methodName = try stripPrefix(bareCallee, prefix: "__Internals.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerInternalsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'didLowerInternals'
 		// Resolved callee name (post typealias-chase + overload disambiguation)
 		// was stashed by `resolveAllCalls` during TypeResolution. The pass
 		// visits every `call` / `tryCall` op in the module, so a miss here
@@ -2204,6 +2311,12 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'reRouteBuiltins'
+		if qualifiedCallee.startsWith("__Internals.") 'reRouteInternals'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "__Internals.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerInternalsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
+				return
+			end 'handled'
+		end 'reRouteInternals'
 		let sigLookup = try self.project.funcSignatures.get(qualifiedCallee) otherwise 'noSig'
 			self.emitUnsignedCall(result, qualifiedCallee: qualifiedCallee, args: args, dstBlock: dstBlock, errorBoundName: errorBoundName)
 			return
@@ -2891,15 +3004,13 @@ type MaxonToStdLowering
 	// no body exists). Treat that fall-through as a bug: a known prefix that
 	// doesn't match here means a missing arm.
 	function lowerMmIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		if bareCallee == "__mm_alloc" 'alloc'
-			return self.lowerMmRuntimeCall3(result, callee: "mm_alloc", args: args, dstBlock: dstBlock)
-		end 'alloc'
-		if bareCallee == "__mm_decref" 'decref'
-			return self.lowerMmRuntimeCall1(result, callee: "mm_decref", args: args, dstBlock: dstBlock)
-		end 'decref'
-		if bareCallee == "__mm_incref" 'incref'
-			return self.lowerMmRuntimeCall1(result, callee: "mm_incref", args: args, dstBlock: dstBlock)
-		end 'incref'
+		// `__mm_alloc`, `__mm_decref`, `__mm_incref`, `__mm_free` are now
+		// regular stdlib functions in `stdlib/Internals.maxon` (file-visible
+		// — only the stdlib internals file can call them). Internal calls
+		// flow through the normal signature-driven emission to
+		// `stdlib.__mm_*`. The only synthetic intrinsic left here is
+		// `__mm_alloc_count`, which lowers to a `globalAddr + load` rather
+		// than a function call so there's no matching parsed body.
 		if bareCallee == "__mm_alloc_count" 'allocCount'
 			return self.lowerMmCountRead(result, globalName: "__mm_alloc_count", args: args, dstBlock: dstBlock)
 		end 'allocCount'
@@ -2931,6 +3042,357 @@ type MaxonToStdLowering
 		end 'isUcdI64At'
 		return false
 	end 'lowerBuiltinsIntrinsic'
+
+	// Lower a `__Internals.METHOD(...)` qualified static call. Each method
+	// expands to a single raw Std-level system op. The set is intentionally
+	// minimal — only ops needed by migrated runtime helpers — and grows as
+	// more helpers move out of runtime.std into stdlib/Internals.maxon.
+	//
+	// File-path gating: only `stdlib/Internals.maxon` may invoke these. Any
+	// other caller produces a compile error. `currentFilePath` is populated
+	// per-function by `processFunction`.
+	function lowerInternalsIntrinsic(result ByteArray, methodName String, args ByteArrayArray, dstBlock IrBlock) returns bool
+		let path = try FilePath.from(self.currentFilePath) otherwise FilePath from ""
+		if path.filename() != "Internals.maxon" 'gateRejected'
+			self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Internals.{methodName}: only stdlib/Internals.maxon may invoke __Internals.* intrinsics (caller: '{self.currentFilePath}')")
+			return true
+		end 'gateRejected'
+		// Atomic ops
+		if methodName == "atomicInc" 'isAtomicInc'
+			return self.lowerInternalsAtomicUnary(methodName: methodName, result: result, args: args, dstBlock: dstBlock, isInc: true)
+		end 'isAtomicInc'
+		if methodName == "atomicDec" 'isAtomicDec'
+			return self.lowerInternalsAtomicUnary(methodName: methodName, result: result, args: args, dstBlock: dstBlock, isInc: false)
+		end 'isAtomicDec'
+		if methodName == "atomicXadd" 'isAtomicXadd'
+			return self.lowerInternalsAtomicXadd(result: result, args: args, dstBlock: dstBlock)
+		end 'isAtomicXadd'
+		// Memory load/store
+		if methodName == "loadIndirect" 'isLoadIndirect'
+			return self.lowerInternalsLoadIndirect(result: result, args: args, dstBlock: dstBlock)
+		end 'isLoadIndirect'
+		if methodName == "storeIndirect" 'isStoreIndirect'
+			return self.lowerInternalsStoreIndirect(result: result, args: args, dstBlock: dstBlock)
+		end 'isStoreIndirect'
+		if methodName == "loadByte" 'isLoadByte'
+			return self.lowerInternalsLoadByte(result: result, args: args, dstBlock: dstBlock)
+		end 'isLoadByte'
+		if methodName == "storeByte" 'isStoreByte'
+			return self.lowerInternalsStoreByte(result: result, args: args, dstBlock: dstBlock)
+		end 'isStoreByte'
+		if methodName == "memcpy" 'isMemcpy'
+			return self.lowerInternalsMemcpy(result: result, args: args, dstBlock: dstBlock)
+		end 'isMemcpy'
+		// Address-of-named-global / address-of-named-function bridges
+		if let globalName = try lookupInternalsGlobalAddrTarget(methodName) 'isGlobalAddr'
+			return self.lowerInternalsNamedGlobalAddr(result: result, args: args, dstBlock: dstBlock, globalName: globalName)
+		end 'isGlobalAddr'
+		if let funcName = try lookupInternalsFuncAddrTarget(methodName) 'isFuncAddr'
+			return self.lowerInternalsNamedFuncAddr(result: result, args: args, dstBlock: dstBlock, funcName: funcName)
+		end 'isFuncAddr'
+		if methodName == "loadFramePtr" 'isLoadFramePtr'
+			return self.lowerInternalsLoadFramePtr(result: result, args: args, dstBlock: dstBlock)
+		end 'isLoadFramePtr'
+		if methodName == "indirectCall1" 'isIndirectCall1'
+			return self.lowerInternalsIndirectCall1(result: result, args: args, dstBlock: dstBlock)
+		end 'isIndirectCall1'
+		// Runtime-call bridges (each maps to a fixed runtime callee name)
+		if let runtimeHit = try lookupInternalsRuntimeCallTarget(methodName) 'isRuntimeBridge'
+			return self.lowerInternalsRuntimeCallN(result: result, args: args, dstBlock: dstBlock, callee: runtimeHit.callee, arity: runtimeHit.arity)
+		end 'isRuntimeBridge'
+		// OS ops
+		if methodName == "osAllocPages" 'isOsAllocPages'
+			return self.lowerInternalsOsAllocPages(result: result, args: args, dstBlock: dstBlock, large: false)
+		end 'isOsAllocPages'
+		if methodName == "osAllocPagesLarge" 'isOsAllocPagesLarge'
+			return self.lowerInternalsOsAllocPages(result: result, args: args, dstBlock: dstBlock, large: true)
+		end 'isOsAllocPagesLarge'
+		if methodName == "osFreePages" 'isOsFreePages'
+			return self.lowerInternalsOsFreePages(result: result, args: args, dstBlock: dstBlock)
+		end 'isOsFreePages'
+		if methodName == "osWrite" 'isOsWrite'
+			return self.lowerInternalsOsWriteAny(result: result, args: args, dstBlock: dstBlock, toStderr: false)
+		end 'isOsWrite'
+		if methodName == "osWriteErr" 'isOsWriteErr'
+			return self.lowerInternalsOsWriteAny(result: result, args: args, dstBlock: dstBlock, toStderr: true)
+		end 'isOsWriteErr'
+		if methodName == "osExit" 'isOsExit'
+			return self.lowerInternalsOsExit(result: result, args: args, dstBlock: dstBlock)
+		end 'isOsExit'
+		self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Internals.{methodName}: unrecognized internals intrinsic")
+		return true
+	end 'lowerInternalsIntrinsic'
+
+	// `__Internals.atomicInc(addr)` / `__Internals.atomicDec(addr)`: emit a
+	// single atomic increment/decrement against [addr]. Returns void; the
+	// caller's result ValueId is bound to a synthesized 0 const so any
+	// downstream read still resolves.
+	function lowerInternalsAtomicUnary(methodName String, result ByteArray, args ByteArrayArray, dstBlock IrBlock, isInc bool) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.{methodName}: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let addrId = self.resolveName(addrName)
+		if isInc 'inc'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.atomicInc(addrId)))
+		end 'inc' else 'dec'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.atomicDec(addrId)))
+		end 'dec'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsAtomicUnary'
+
+	// `__Internals.atomicXadd(addr, value)`: emit a single sys.atomic_xadd
+	// op that returns the prior value at [addr] and updates it to
+	// (prior + value). Used by `mm_decref` to detect transition to refcount
+	// zero atomically.
+	function lowerInternalsAtomicXadd(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.atomicXadd: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant: args.count() == 2 just checked (addr)")
+		let valueName = try args.get(1) otherwise panic("invariant: args.count() == 2 just checked (value)")
+		let addrId = self.resolveName(addrName)
+		let valId = self.resolveName(valueName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.atomicXadd(resultId, addrId: addrId, valId: valId)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsAtomicXadd'
+
+	// Bridge: `__Internals.X(arg)` → `call <callee>(arg)`. Emits a Std-level
+	// call to a still-in-runtime helper. The callee is the bare runtime
+	// function name (no namespace prefix) so the linker resolves it
+	// directly against runtime.std's symbol. Returns void semantically; we
+	// bind the result ValueId to a synthesized 0 const so downstream reads
+	// (if any) resolve.
+	// Runtime-call bridge: emits `call <callee>(args...)`. The arity is
+	// fixed at the dispatch site (`lookupInternalsRuntimeCallTarget`), so
+	// we just validate it matches and emit the Std call. The arity excludes
+	// any implicit receiver — these are free-function bridges.
+	function lowerInternalsRuntimeCallN(result ByteArray, args ByteArrayArray, dstBlock IrBlock, callee String, arity VarSlot) returns bool
+		if args.count() != arity 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals bridge for '{callee}': expected {arity} args, got {args.count()}")
+			return true
+		end 'badArity'
+		var argIds = ValueIdArray.create()
+		for i in 0 upto args.count() 'eachArg'
+			let argName = try args.get(i) otherwise panic("invariant: i < args.count()")
+			argIds.push(self.resolveName(argName))
+		end 'eachArg'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: callee, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsRuntimeCallN'
+
+	// Named-global address-of: emits `globalAddr <globalName>`. The
+	// globalName is baked in at the dispatch site, so there's no string
+	// argument and therefore no String-allocation chain at the call site.
+	function lowerInternalsNamedGlobalAddr(result ByteArray, args ByteArrayArray, dstBlock IrBlock, globalName String) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals address-of '{globalName}': expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(resultId, name: globalName)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsNamedGlobalAddr'
+
+	function lowerInternalsNamedFuncAddr(result ByteArray, args ByteArrayArray, dstBlock IrBlock, funcName String) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals funcAddr '{funcName}': expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.funcAddr(resultId, name: funcName)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsNamedFuncAddr'
+
+	// `__Internals.loadIndirect(addr)` -> i64. Offset is always 0 — for
+	// non-zero offsets, the Maxon caller computes `addr + n` first. This
+	// keeps the intrinsic shape simple and matches the runtime-helper style.
+	function lowerInternalsLoadIndirect(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.loadIndirect: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant")
+		let addrId = self.resolveName(addrName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsLoadIndirect'
+
+	function lowerInternalsStoreIndirect(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.storeIndirect: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant")
+		let valueName = try args.get(1) otherwise panic("invariant")
+		let addrId = self.resolveName(addrName)
+		let valId = self.resolveName(valueName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: valId, isFloat: false)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsStoreIndirect'
+
+	function lowerInternalsLoadByte(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.loadByte: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let baseName = try args.get(0) otherwise panic("invariant")
+		let offsetName = try args.get(1) otherwise panic("invariant")
+		let baseId = self.resolveName(baseName)
+		let offsetId = self.resolveName(offsetName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsLoadByte'
+
+	function lowerInternalsStoreByte(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 3 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.storeByte: expected 3 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let baseName = try args.get(0) otherwise panic("invariant")
+		let offsetName = try args.get(1) otherwise panic("invariant")
+		let valueName = try args.get(2) otherwise panic("invariant")
+		let baseId = self.resolveName(baseName)
+		let offsetId = self.resolveName(offsetName)
+		let valId = self.resolveName(valueName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeByte(baseId, offsetId: offsetId, byteId: valId)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsStoreByte'
+
+	function lowerInternalsMemcpy(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 3 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.memcpy: expected 3 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let dstName = try args.get(0) otherwise panic("invariant")
+		let srcName = try args.get(1) otherwise panic("invariant")
+		let sizeName = try args.get(2) otherwise panic("invariant")
+		let dstId = self.resolveName(dstName)
+		let srcId = self.resolveName(srcName)
+		let sizeId = self.resolveName(sizeName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.memcpy(dstId, srcId: srcId, lenId: sizeId)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsMemcpy'
+
+	function lowerInternalsLoadFramePtr(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.loadFramePtr: expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadFramePtr(resultId)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsLoadFramePtr'
+
+	function lowerInternalsIndirectCall1(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.indirectCall1: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let funcName = try args.get(0) otherwise panic("invariant")
+		let argName = try args.get(1) otherwise panic("invariant")
+		let funcId = self.resolveName(funcName)
+		let argId = self.resolveName(argName)
+		var argIds = ValueIdArray.create()
+		argIds.push(argId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.indirectCall(resultId, calleeId: funcId, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsIndirectCall1'
+
+	function lowerInternalsOsAllocPages(result ByteArray, args ByteArrayArray, dstBlock IrBlock, large bool) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.osAllocPages: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let sizeName = try args.get(0) otherwise panic("invariant")
+		let sizeId = self.resolveName(sizeName)
+		let resultId = self.defineName(result)
+		if large 'isLarge'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osAllocPagesLarge(resultId, sizeId: sizeId)))
+		end 'isLarge' else 'small'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osAllocPages(resultId, sizeId: sizeId)))
+		end 'small'
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsOsAllocPages'
+
+	function lowerInternalsOsFreePages(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.osFreePages: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let ptrName = try args.get(0) otherwise panic("invariant")
+		let sizeName = try args.get(1) otherwise panic("invariant")
+		let ptrId = self.resolveName(ptrName)
+		let sizeId = self.resolveName(sizeName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osFreePages(ptrId, sizeId: sizeId)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsOsFreePages'
+
+	function lowerInternalsOsWriteAny(result ByteArray, args ByteArrayArray, dstBlock IrBlock, toStderr bool) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.osWrite: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let ptrName = try args.get(0) otherwise panic("invariant")
+		let lenName = try args.get(1) otherwise panic("invariant")
+		let ptrId = self.resolveName(ptrName)
+		let lenId = self.resolveName(lenName)
+		if toStderr 'isErr'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osWriteErr(ptrId, lenId: lenId)))
+		end 'isErr' else 'isOut'
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osWrite(ptrId, lenId: lenId)))
+		end 'isOut'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsOsWriteAny'
+
+	function lowerInternalsOsExit(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.osExit: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let codeName = try args.get(0) otherwise panic("invariant")
+		let codeId = self.resolveName(codeName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.osExit(codeId)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsOsExit'
+
 
 	// Phase 7 / 11.4: lower `__Builtins.floatToBits(f float) returns int` to a
 	// single `bitcastF64ToI64` Std unary op. The op carries the standard
@@ -4793,6 +5255,165 @@ export function isMathIntrinsic(bare String) returns bool
 	return true
 end 'isMathIntrinsic'
 
+// `__Internals.*` per-method lookup tables. Each map a method-name suffix
+// to the runtime symbol it bakes into the emitted Std op. The mapping is
+// closed (every `__Internals.<bridgeName>` registered in
+// `registerInternalsIntrinsicSignatures` must have a corresponding entry
+// here, and every entry here must have a matching signature registration).
+// Throws on unknown name so callers can `try ... otherwise` to fall through
+// to the next matcher in `lowerInternalsIntrinsic`'s dispatch.
+
+export enum InternalsBridgeLookupError implements Error
+	notBridge
+end 'InternalsBridgeLookupError'
+
+export type InternalsRuntimeCallHit
+	export var callee String
+	export var arity VarSlot
+
+	export static function create(callee String, arity VarSlot) returns InternalsRuntimeCallHit
+		return Self{callee: callee, arity: arity}
+	end 'create'
+end 'InternalsRuntimeCallHit'
+
+// `__Internals.<globalAddrBridge>()` -> globalAddr <runtimeGlobalName>.
+export function lookupInternalsGlobalAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
+	if methodName == "mmAllocCountAddr" 'a'
+		return "__mm_alloc_count"
+	end 'a'
+	if methodName == "slabArenaListHeadAddr" 'a'
+		return "__slab_arena_list_head"
+	end 'a'
+	if methodName == "slabArenaLastBaseAddr" 'a'
+		return "__slab_arena_last_base"
+	end 'a'
+	if methodName == "slabInitDoneAddr" 'a'
+		return "__slab_init_done"
+	end 'a'
+	if methodName == "slabMetaFreeHeadAddr" 'a'
+		return "__slab_meta_free_head"
+	end 'a'
+	if methodName == "slabMetaBumpPtrAddr" 'a'
+		return "__slab_meta_bump_ptr"
+	end 'a'
+	if methodName == "slabMetaBumpEndAddr" 'a'
+		return "__slab_meta_bump_end"
+	end 'a'
+	if methodName == "slabMcentralArrayAddr" 'a'
+		return "__slab_mcentral_array"
+	end 'a'
+	if methodName == "slabMcacheBaseAddr" 'a'
+		return "__slab_mcache_base"
+	end 'a'
+	if methodName == "slabArenaMapL1Addr" 'a'
+		return "__slab_arena_map_l1"
+	end 'a'
+	if methodName == "slabOsDirectCountAddr" 'a'
+		return "__slab_os_direct_count"
+	end 'a'
+	if methodName == "slabOsDirectCapacityAddr" 'a'
+		return "__slab_os_direct_capacity"
+	end 'a'
+	if methodName == "slabOsDirectArrayAddr" 'a'
+		return "__slab_os_direct_array"
+	end 'a'
+	if methodName == "dataCovCountersAddr" 'a'
+		return "__data_cov_counters"
+	end 'a'
+	if methodName == "dataCovNumSitesAddr" 'a'
+		return "__data_cov_num_sites"
+	end 'a'
+	throw InternalsBridgeLookupError.notBridge
+end 'lookupInternalsGlobalAddrTarget'
+
+// `__Internals.<funcAddrBridge>()` -> funcAddr <runtimeFuncName>.
+export function lookupInternalsFuncAddrTarget(methodName String) returns String throws InternalsBridgeLookupError
+	if methodName == "mrtStartAddr" 'a'
+		return "mrt_start"
+	end 'a'
+	if methodName == "symtableAddr" 'a'
+		return "__symtable"
+	end 'a'
+	if methodName == "destructManagedMemoryAddr" 'a'
+		// Resolves to the stdlib-side destructor body (registered when
+		// stdlib/Internals.maxon's __destruct___ManagedMemory is loaded).
+		// The runtime.std body of the same name still exists for the C#
+		// bootstrap, but any caller routed through this intrinsic ends up
+		// pointing at the stdlib copy via the qualified linker name.
+		return "stdlib.__destruct___ManagedMemory"
+	end 'a'
+	throw InternalsBridgeLookupError.notBridge
+end 'lookupInternalsFuncAddrTarget'
+
+// `__Internals.<callBridge>(args...)` -> `call <runtimeFuncName>(args...)`.
+// Returns the callee name and arity (the latter is the number of args the
+// bridge accepts). TypeResolution validated the call shape against the
+// registered intrinsic signature, so the lowering helper just consumes that
+// many SSA names from the args array.
+export function lookupInternalsRuntimeCallTarget(methodName String) returns InternalsRuntimeCallHit throws InternalsBridgeLookupError
+	if methodName == "slabAlloc" 'a'
+		return InternalsRuntimeCallHit.create("__slab_alloc", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabFree" 'a'
+		return InternalsRuntimeCallHit.create("__slab_free", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabInit" 'a'
+		return InternalsRuntimeCallHit.create("__slab_init", arity: 0 as VarSlot)
+	end 'a'
+	if methodName == "slabArenaAllocChunks" 'a'
+		return InternalsRuntimeCallHit.create("__slab_arena_alloc_chunks", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabArenaFreeChunks" 'a'
+		return InternalsRuntimeCallHit.create("__slab_arena_free_chunks", arity: 3 as VarSlot)
+	end 'a'
+	if methodName == "slabMemzero" 'a'
+		return InternalsRuntimeCallHit.create("__slab_memzero", arity: 2 as VarSlot)
+	end 'a'
+	if methodName == "slabClassSize" 'a'
+		return InternalsRuntimeCallHit.create("__slab_class_size", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabObjsPerSpan" 'a'
+		return InternalsRuntimeCallHit.create("__slab_objs_per_span", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabMetaAlloc" 'a'
+		return InternalsRuntimeCallHit.create("__slab_meta_alloc", arity: 0 as VarSlot)
+	end 'a'
+	if methodName == "slabMetaFree" 'a'
+		return InternalsRuntimeCallHit.create("__slab_meta_free", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabRefillMcache" 'a'
+		return InternalsRuntimeCallHit.create("__slab_refill_mcache", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabAllocClass" 'a'
+		return InternalsRuntimeCallHit.create("__slab_alloc_class", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabFreeClassWithMspan" 'a'
+		return InternalsRuntimeCallHit.create("__slab_free_class_with_mspan", arity: 2 as VarSlot)
+	end 'a'
+	if methodName == "slabArenaMapEnsure" 'a'
+		return InternalsRuntimeCallHit.create("__slab_arena_map_ensure", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabArenaMapSet" 'a'
+		return InternalsRuntimeCallHit.create("__slab_arena_map_set", arity: 3 as VarSlot)
+	end 'a'
+	if methodName == "slabArenaMapGet" 'a'
+		return InternalsRuntimeCallHit.create("__slab_arena_map_get", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabOsDirectAlloc" 'a'
+		return InternalsRuntimeCallHit.create("__slab_os_direct_alloc", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "slabOsDirectFree" 'a'
+		return InternalsRuntimeCallHit.create("__slab_os_direct_free", arity: 1 as VarSlot)
+	end 'a'
+	if methodName == "mmRealloc" 'a'
+		// mm_realloc is still in runtime.std (Phase 4 migrated only
+		// __managed_mem_* + __destruct___ManagedMemory). Bridge it so
+		// __managed_mem_grow in stdlib/Internals.maxon can invoke it.
+		return InternalsRuntimeCallHit.create("mm_realloc", arity: 2 as VarSlot)
+	end 'a'
+	throw InternalsBridgeLookupError.notBridge
+end 'lookupInternalsRuntimeCallTarget'
+
 // True when `signature`'s first formal parameter is the implicit `__self`
 // — i.e. the callee is an instance method. Lifted out of the per-call
 // signature lookup so callers that already have a FuncSignature in hand
@@ -5117,41 +5738,47 @@ end 'enclosingTypeName'
 // canonicalization to qualified callee names.
 
 function managedMemHelperFor(methodName String) returns String throws ManagedMemHelperError
+	// Phase 4 migration: every __managed_mem_* body now lives in
+	// stdlib/Internals.maxon. We emit the qualified `stdlib.<name>` callee
+	// so the linker resolves to the new bodies. Runtime.std still contains
+	// the original copies (kept for C# bootstrap parity); both coexist
+	// harmlessly because no other code path references the unqualified
+	// runtime names anymore.
 	if methodName == "setLength" 'mSetLen'
-		return "__managed_mem_set_length"
+		return "stdlib.__managed_mem_set_length"
 	end 'mSetLen'
 	if methodName == "get" 'mGet'
-		return "__managed_mem_get"
+		return "stdlib.__managed_mem_get"
 	end 'mGet'
 	if methodName == "set" 'mSet'
-		return "__managed_mem_set"
+		return "stdlib.__managed_mem_set"
 	end 'mSet'
 	if methodName == "remove" 'mRemove'
-		return "__managed_mem_remove"
+		return "stdlib.__managed_mem_remove"
 	end 'mRemove'
 	if methodName == "grow" 'mGrow'
-		return "__managed_mem_grow"
+		return "stdlib.__managed_mem_grow"
 	end 'mGrow'
 	if methodName == "shiftRight" 'mSR'
-		return "__managed_mem_shift_right"
+		return "stdlib.__managed_mem_shift_right"
 	end 'mSR'
 	if methodName == "shiftLeft" 'mSL'
-		return "__managed_mem_shift_left"
+		return "stdlib.__managed_mem_shift_left"
 	end 'mSL'
 	if methodName == "byteAt" 'mBA'
-		return "__managed_mem_byte_at"
+		return "stdlib.__managed_mem_byte_at"
 	end 'mBA'
 	if methodName == "setByte" 'mSB'
-		return "__managed_mem_set_byte"
+		return "stdlib.__managed_mem_set_byte"
 	end 'mSB'
 	if methodName == "append" 'mApp'
-		return "__managed_mem_append"
+		return "stdlib.__managed_mem_append"
 	end 'mApp'
 	if methodName == "slice" 'mSlice'
-		return "__managed_mem_slice"
+		return "stdlib.__managed_mem_slice"
 	end 'mSlice'
 	if methodName == "create" 'mCreate'
-		return "__managed_mem_create"
+		return "stdlib.__managed_mem_create"
 	end 'mCreate'
 	throw ManagedMemHelperError.noHelper
 end 'managedMemHelperFor'

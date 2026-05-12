@@ -26,11 +26,12 @@
 //   2. Skip if the call op is anything other than `StdCallOp.call` — try /
 //      indirect / tail are out of scope at this phase.
 //   3. Skip if the splice precondition fails (single-block + single-return).
-//   4. Always inline tiny callees (op-count ≤ TINY_OP_THRESHOLD).
-//   5. Inline medium callees (op-count ≤ MEDIUM_OP_THRESHOLD) when budget
-//      multipliers (loop depth, concrete-descriptor arg, closure-literal
-//      arg) compose above the callee's op count.
-//   6. Otherwise skip.
+//   4. Inline when op-count ≤ budget, where budget = OP_THRESHOLD scaled by
+//      composing the call-site multipliers (loop depth, concrete-descriptor
+//      arg, closure-literal arg, all-const-args). A callee at exactly
+//      OP_THRESHOLD ops inlines with no multipliers; anything larger needs
+//      at least one multiplier to fire.
+//   5. Otherwise skip.
 //
 // Note: a former "always inline single-call-site callees" rule was removed
 // because it ignored body size — a single caller of a 70+ op function (e.g.
@@ -38,20 +39,31 @@
 // into nested helpers (`Math.log`, `Math.exp`) on the next fixpoint round.
 // Single-caller cleanup is now subject to the same cost gate as everything
 // else; `dceFunctions` still drops callees whose every call site got inlined.
-//
-// All thresholds are conservative starting points per the 11.6 plan; 11.7
-// tunes them based on benchmark output.
 
-let TINY_OP_THRESHOLD = 10
-// 40 keeps small accessor-style helpers eligible while gating out the larger
-// arithmetic library functions (Math.pow ~50 ops, Math.exp ~44 ops post-CSE-
-// const-hoist). Inlining Math.pow into every call site blew up code size and
-// caused regressions in regalloc pressure; calls win there.
-let MEDIUM_OP_THRESHOLD = 40
+// 10 is the floor at which trivial accessors (`Array.get`, `String.length`,
+// simple getters) still inline unconditionally — anything larger only inlines
+// when at least one call-site multiplier (loop depth, descriptor, closure,
+// const-args) raises the budget above the callee size. The previous two-tier
+// TINY/MEDIUM split was collapsed into a single threshold: regalloc still
+// scales worse than linearly with function size (the dense
+// `counts: RegIntArray` walk in `countOpReads` / `noteOpDefs` is the
+// remaining cost), so keeping the base low and letting the multipliers
+// promote only the call sites where inlining is justified produces faster
+// per-test compiles without losing the wins on the hot paths.
+let OP_THRESHOLD = 10
 let LOOP_DEPTH_1_MULT = 3
 let LOOP_DEPTH_2_MULT = 6
 let CONCRETE_DESC_MULT = 2
 let CLOSURE_LITERAL_MULT = 2
+// When every call-site arg is a literal constant the inlined body almost
+// always cascades to a single fold under the post-inliner Canonicalize+DCE
+// (constant operands feed through the entire forward slice). The inlined
+// code is then *smaller* than the call site itself, so the size budget
+// drastically understates the win. ×2 covers `manyVars`-shaped helpers
+// (~30 ops with 6 const args, folds to a single mov_imm). Gated on
+// `calleeBodyIsPure` so it can't fire on bodies whose fold cascade
+// dead-ends at an opaque call / memory / atomic op.
+let ALL_CONST_ARGS_MULT = 2
 let MAX_FIXPOINT_ROUNDS = 5
 
 // Run the inliner over `module`. Returns the rewritten module (in place
@@ -247,22 +259,20 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	if calleeOps == 0 'emptyBody'
 		return InlineDecision.skip()
 	end 'emptyBody'
-	if calleeOps <= TINY_OP_THRESHOLD 'tiny'
-		return InlineDecision.accept(loopBonus: false)
-	end 'tiny'
-	// Hard cap: even with every multiplier composed (×LOOP_DEPTH_2_MULT ×
-	// CONCRETE_DESC_MULT × CLOSURE_LITERAL_MULT) the budget can't exceed
-	// MEDIUM_OP_THRESHOLD × that product. Skip anything bigger up front so
-	// we don't waste time computing the budget for hopeless candidates.
-	let maxBudget = MEDIUM_OP_THRESHOLD * LOOP_DEPTH_2_MULT * CONCRETE_DESC_MULT * CLOSURE_LITERAL_MULT
+	// Hard cap: even with every multiplier composed the budget can't exceed
+	// OP_THRESHOLD × LOOP_DEPTH_2_MULT × CONCRETE_DESC_MULT ×
+	// CLOSURE_LITERAL_MULT × ALL_CONST_ARGS_MULT. Skip anything bigger up
+	// front so we don't waste time computing the budget for hopeless
+	// candidates.
+	let maxBudget = OP_THRESHOLD * LOOP_DEPTH_2_MULT * CONCRETE_DESC_MULT * CLOSURE_LITERAL_MULT * ALL_CONST_ARGS_MULT
 	if calleeOps > maxBudget 'tooBig'
 		return InlineDecision.skip()
 	end 'tooBig'
-	let budget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, loopDepth: loopDepth)
+	let budget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, funcMap: funcMap, loopDepth: loopDepth)
 	if calleeOps > budget 'overBudget'
 		return InlineDecision.skip()
 	end 'overBudget'
-	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, loopDepth: 0)
+	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, funcMap: funcMap, loopDepth: 0)
 	let viaBonus = calleeOps > baseBudget
 	return InlineDecision.accept(loopBonus: viaBonus)
 end 'decideInline'
@@ -275,8 +285,8 @@ end 'decideInline'
 // capped at LOOP_DEPTH_2_MULT (depth ≥ 2 doesn't increase further) because
 // deeper nesting amplifies binary-size cost without proportional
 // hot-path-frequency gain.
-function computeInliningBudget(module StdModule, project Project, callShape CallShape, caller IrFunction, loopDepth ParsedInt) returns ParsedInt
-	var budget = MEDIUM_OP_THRESHOLD as ParsedInt
+function computeInliningBudget(module StdModule, project Project, callShape CallShape, caller IrFunction, funcMap StdFuncByNameForInliner, loopDepth ParsedInt) returns ParsedInt
+	var budget = OP_THRESHOLD as ParsedInt
 	if loopDepth >= 2 'depthDeep'
 		budget = budget * LOOP_DEPTH_2_MULT
 	end 'depthDeep' else 'depthShallow'
@@ -290,6 +300,19 @@ function computeInliningBudget(module StdModule, project Project, callShape Call
 	if callSiteHasClosureLiteralArg(module, caller: caller, argIds: callShape.argIds) 'closureLit'
 		budget = budget * CLOSURE_LITERAL_MULT
 	end 'closureLit'
+	if callSiteAllArgsAreConstants(module, caller: caller, argIds: callShape.argIds) 'allConst'
+		// Bonus only sound when the body is pure arithmetic+control —
+		// the assumed "const args fold the body to a single value" cascade
+		// dead-ends at any opaque op (call, atomic, memcpy, OS, load/store,
+		// indirect call, etc.). `__managed_mem_create` shaped bodies have
+		// const args at every array-literal call site but contain
+		// `__slab_alloc` + `atomicInc` + struct stores — those don't fold,
+		// so inlining is pure code bloat. Gate the bonus on purity.
+		let callee = try funcMap.get(callShape.callee) otherwise return budget
+		if calleeBodyIsPure(module, callee: callee) 'pure'
+			budget = budget * ALL_CONST_ARGS_MULT
+		end 'pure'
+	end 'allConst'
 	return budget
 end 'computeInliningBudget'
 
@@ -402,6 +425,101 @@ function matchFuncRef(op StdCallOp, valueId ValueId) returns bool
 		errorReturn gives false
 	end 'shape'
 end 'matchFuncRef'
+
+// All-constant-args heuristic: every arg's defining op in the caller is a
+// `StdArithOp.const`. Empty arg lists return false (no win to be had from a
+// zero-arg call — the body's already free of arg-dependent shape).
+function callSiteAllArgsAreConstants(module StdModule, caller IrFunction, argIds ValueIdArray) returns bool
+	if argIds.count() == 0 'noArgs'
+		return false
+	end 'noArgs'
+	for argId in argIds 'each'
+		if not argDefinedAsConst(module, caller: caller, valueId: argId) 'miss'
+			return false
+		end 'miss'
+	end 'each'
+	return true
+end 'callSiteAllArgsAreConstants'
+
+// Same caller-scoped search as the descriptor / funcRef helpers above —
+// ValueIds are function-local, so a module-wide scan would alias unrelated
+// const producers from other functions onto this caller's argId.
+function argDefinedAsConst(module StdModule, caller IrFunction, valueId ValueId) returns bool
+	for blockRef in caller.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			let isMatch = match op 'shape'
+				arith(a) gives matchArithConst(a, valueId: valueId)
+				control gives false
+				call gives false
+				memory gives false
+				system gives false
+			end 'shape'
+			if isMatch 'hit'
+				return true
+			end 'hit'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'argDefinedAsConst'
+
+function matchArithConst(op StdArithOp, valueId ValueId) returns bool
+	return match op 'shape'
+		const(c) gives c.resultId == valueId
+		unary gives false
+		binary gives false
+	end 'shape'
+end 'matchArithConst'
+
+// "Pure" for the const-args bonus means: const args feeding the body produce
+// a forward-slice fold cascade that collapses to a single value. That holds
+// only when every op is foldable shape — arith ops (folded by Canonicalize),
+// control flow (branches on const fold; phis collapse), and `ret`. Anything
+// that returns an opaque address, calls external code, hits memory, or
+// performs an atomic / OS operation dead-ends the cascade and leaves the
+// inlined body as full-size code bloat.
+function calleeBodyIsPure(module StdModule, callee IrFunction) returns bool
+	for blockRef in callee.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise continue
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise continue
+			if not isPureOp(op) 'impure'
+				return false
+			end 'impure'
+		end 'eachOp'
+	end 'eachBlock'
+	return true
+end 'calleeBodyIsPure'
+
+function isPureOp(op StdOp) returns bool
+	return match op 'shape'
+		arith gives true
+		control gives true
+		call(c) gives isPureCallOp(c)
+		memory gives false
+		system gives false
+	end 'shape'
+end 'isPureOp'
+
+// Only `param` and `ret` count as foldable in the call-family — param values
+// become the call site's const args (folded at the splice), ret threads the
+// folded body result back. Every other shape (real call, indirect, witness,
+// tryCall, tailCall, funcRef, errorReturn) introduces an opaque value or
+// side-effect that breaks the fold cascade.
+function isPureCallOp(op StdCallOp) returns bool
+	return match op 'shape'
+		param gives true
+		ret gives true
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		witnessCall gives false
+		tailCall gives false
+		funcRef gives false
+		errorReturn gives false
+	end 'shape'
+end 'isPureCallOp'
 
 // Stack-trace preservation gate. The Maxon runtime stack trace lists
 // every function frame on the way down to the panic site; inlining a

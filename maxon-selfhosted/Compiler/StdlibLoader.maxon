@@ -81,6 +81,7 @@ end 'setCachedBuiltinDictionaryLiteralTypeName'
 // path relative to the project root (i.e. the directory that contains
 // `stdlib/`).
 let stdlibWhitelist = [
+	"stdlib/Internals.maxon",
 	"stdlib/Math.maxon",
 	"stdlib/Range.maxon",
 	"stdlib/Array.maxon",
@@ -203,6 +204,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// Lowering intercepts the call and emits a runtime call into
 	// `mrt_write_stdout` / `mrt_write_stderr`.
 	registerBuiltinsIntrinsicSignatures(project)
+	// Register `__Internals.*` intrinsic signatures so `stdlib/Internals.maxon`
+	// can call raw Std-level system ops (atomicInc, atomicXadd, ...) using a
+	// qualified-static call shape. File-path gating in `lowerInternalsIntrinsic`
+	// rejects callers outside the designated internals file.
+	registerInternalsIntrinsicSignatures(project)
 	if stdlibLoaded 'cached'
 		let bootstrapStart = passTimerStart()
 		// Parse the synthesized bootstrap first so unresolvedInterfaces

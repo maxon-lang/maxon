@@ -6,15 +6,64 @@
 //   2. Iterate to fixed point:
 //        liveOut[B] = union of liveIn[S] for each successor S of B
 //        liveIn[B]  = use[B] union (liveOut[B] - def[B])
+//
+// Storage shape: each per-block set is a `LiveSet` — a sparse list of set
+// valueIds plus a dense `BoolArray` for O(1) membership tests. The fixed-
+// point unions iterate the list, not the bitvector, so per-iteration work
+// scales with the actual live-set size (typically 5–50 vregs) instead of
+// `maxValueId` (often 1000+ on inlined main functions). Membership queries
+// from consumers (`LiveRangeBuilder.liveGetBool`) still hit the dense bool
+// array, so adding the sparse list is purely additive cost-wise.
 
+export typealias LiveSetArray = Array with LiveSet
 export typealias BoolArrayArray = Array with BoolArray
 
+// Sparse-set wrapper over a BoolArray: the `bits` field is the membership
+// oracle (sized to `maxValueId`); `members` is the append-only list of
+// valueIds present in the set, in insertion order. Anyone iterating live
+// values walks `members`; anyone testing membership reads `bits`.
+//
+// Membership and insertion are kept in sync by routing every mutation
+// through `add(value)`: it checks the bit, and only on a 0→1 transition
+// flips the bit AND pushes the id onto `members`. There's no remove
+// operation (liveness is monotonic across fixed-point iterations).
+export type LiveSet
+	export var bits BoolArray
+	export var members ValueIdArray
+
+	export static function create(maxVal RegInt) returns LiveSet
+		return Self{bits: createBoolVector(maxVal), members: ValueIdArray.create()}
+	end 'create'
+
+	export function contains(vid ValueId) returns bool
+		if vid < 0 'negative'
+			return false
+		end 'negative'
+		return try bits.get(vid) otherwise false
+	end 'contains'
+
+	// Mark `vid` as a member. Returns true if it wasn't already in the set
+	// (i.e. the set grew). No-op when `vid` is already present.
+	export function add(vid ValueId) returns bool
+		if vid < 0 'negative'
+			return false
+		end 'negative'
+		let prev = try bits.get(vid) otherwise panic("LiveSet.add: bits.get({vid}) OOB; bits sized to maxValueId")
+		if prev 'alreadyPresent'
+			return false
+		end 'alreadyPresent'
+		try bits.set(vid, value: true) otherwise panic("LiveSet.add: bits.set({vid}) OOB; bits sized to maxValueId")
+		members.push(vid)
+		return true
+	end 'add'
+end 'LiveSet'
+
 export type LivenessInfo
-	export var liveIn BoolArrayArray
-	export var liveOut BoolArrayArray
+	export var liveIn LiveSetArray
+	export var liveOut LiveSetArray
 	export var maxValueId RegInt
 
-	export static function create(liveIn BoolArrayArray, liveOut BoolArrayArray, maxValueId RegInt) returns LivenessInfo
+	export static function create(liveIn LiveSetArray, liveOut LiveSetArray, maxValueId RegInt) returns LivenessInfo
 		return Self{liveIn: liveIn, liveOut: liveOut, maxValueId: maxValueId}
 	end 'create'
 end 'LivenessInfo'
@@ -32,18 +81,22 @@ export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInf
 	let useSets = scan.useSets
 	let defSets = scan.defSets
 
-	// Phase 2: Initialize liveIn/liveOut arrays
-	var liveIn = BoolArrayArray.create()
-	var liveOut = BoolArrayArray.create()
+	// Phase 2: Initialize liveIn/liveOut arrays (empty LiveSets sized to maxVal)
+	var liveIn = LiveSetArray.create()
+	var liveOut = LiveSetArray.create()
 
 	var bi = 0
 	while bi < numBlocks 'initLive'
-		liveIn.push(createBoolVector(maxVal))
-		liveOut.push(createBoolVector(maxVal))
+		liveIn.push(LiveSet.create(maxVal))
+		liveOut.push(LiveSet.create(maxVal))
 		bi = bi + 1
 	end 'initLive'
 
-	// Phase 3: Fixed-point iteration in reverse RPO order
+	// Phase 3: Fixed-point iteration in reverse RPO order. Each per-block
+	// step iterates the SPARSE member lists of successors / use / liveOut
+	// rather than walking 0..maxValueId, so the inner-loop work scales with
+	// the actual live-set size — typically 5–50 vregs — instead of the
+	// dense vector length.
 	var changed = true
 	var iterCount = 0
 	while changed 'fixedPoint'
@@ -76,7 +129,7 @@ export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInf
 			for succ in succs 'eachSucc'
 				let succLiveIn = try liveIn.get(succ) otherwise panic("invariant: succ < numBlocks but liveIn.get failed")
 
-				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'changed'
+				if liveSetUnionInto(blockLiveOut, from: succLiveIn) 'changed'
 					changed = true
 				end 'changed'
 			end 'eachSucc'
@@ -92,7 +145,7 @@ export function computeLiveness(module TargetModule, func IrFunction, cfg CfgInf
 				continue
 			end 'noDef'
 
-			if computeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'changedIn'
+			if liveSetComputeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'changedIn'
 				changed = true
 			end 'changedIn'
 
@@ -109,11 +162,11 @@ end 'computeLiveness'
 // ============================================================
 
 type UseDefScan
-	export var useSets BoolArrayArray
-	export var defSets BoolArrayArray
+	export var useSets LiveSetArray
+	export var defSets LiveSetArray
 	export var maxValueId RegInt
 
-	static function create(useSets BoolArrayArray, defSets BoolArrayArray, maxValueId RegInt) returns UseDefScan
+	static function create(useSets LiveSetArray, defSets LiveSetArray, maxValueId RegInt) returns UseDefScan
 		return Self{useSets: useSets, defSets: defSets, maxValueId: maxValueId}
 	end 'create'
 end 'UseDefScan'
@@ -123,13 +176,13 @@ function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, reg
 	let maxVal = scanMaxValueIdForLiveness(module, func: func, regTarget: regTarget)
 
 	// Second pass: compute use/def sets per block
-	var useSets = BoolArrayArray.create()
-	var defSets = BoolArrayArray.create()
+	var useSets = LiveSetArray.create()
+	var defSets = LiveSetArray.create()
 
 	var bi = 0
 	while bi < numBlocks 'initSets'
-		useSets.push(createBoolVector(maxVal))
-		defSets.push(createBoolVector(maxVal))
+		useSets.push(LiveSet.create(maxVal))
+		defSets.push(LiveSet.create(maxVal))
 		bi = bi + 1
 	end 'initSets'
 
@@ -141,7 +194,7 @@ function scanUseDef(module TargetModule, func IrFunction, numBlocks BlockId, reg
 
 		// Block arguments are definitions at block entry
 		for blockArg in block.blockArgs 'eachArg'
-			try defSet.set(blockArg.valueId, value: true) otherwise panic("scanUseDef: defSet.set({blockArg.valueId}) OOB; defSet sized to maxValueId")
+			_ = defSet.add(blockArg.valueId)
 		end 'eachArg'
 
 		// Scan ops forward: a value is in use[B] if read before defined in B
@@ -166,7 +219,7 @@ end 'scanUseDef'
 // Scan a single op for use/def contributions.
 // A value is in use[B] if it is read AND not already in def[B] (not defined earlier in this block).
 // A value is in def[B] if it is defined by this op.
-function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArray, defSet BoolArray, regTarget RegAllocTarget)
+function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet LiveSet, defSet LiveSet, regTarget RegAllocTarget)
 	// Collect reads: use a temporary counts array
 	var counts = RegIntArray.create()
 	regTarget.countOpReads(module, counts: counts, packed: packed)
@@ -175,9 +228,8 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 	while ui < counts.count() 'eachUse'
 		let cnt = try counts.get(ui) otherwise panic("scanOpUseDefPacked.eachUse: ui < counts.count() by loop guard but get({ui}) failed")
 		if cnt > 0 'isUsed'
-			let alreadyDef = try defSet.get(ui) otherwise panic("scanOpUseDefPacked: defSet.get({ui}) OOB; defSet sized to maxValueId")
-			if not alreadyDef 'notDef'
-				try useSet.set(ui, value: true) otherwise panic("scanOpUseDefPacked: useSet.set({ui}) OOB; useSet sized to maxValueId")
+			if not defSet.contains(ui) 'notDef'
+				_ = useSet.add(ui)
 			end 'notDef'
 		end 'isUsed'
 		ui = ui + 1
@@ -191,17 +243,16 @@ function scanOpUseDefPacked(module TargetModule, packed OpIndex, useSet BoolArra
 	while di < defs.count() 'eachDef'
 		let defBlock = try defs.get(di) otherwise panic("scanOpUseDefPacked.eachDef: di < defs.count() by loop guard but get({di}) failed")
 		if defBlock == 1 'isDef'
-			try defSet.set(di, value: true) otherwise panic("scanOpUseDefPacked: defSet.set({di}) OOB; defSet sized to maxValueId")
+			_ = defSet.add(di)
 		end 'isDef'
 		di = di + 1
 	end 'eachDef'
 end 'scanOpUseDefPacked'
 
-function markArgIdsAsUses(argIds ValueIdArray, useSet BoolArray, defSet BoolArray)
+function markArgIdsAsUses(argIds ValueIdArray, useSet LiveSet, defSet LiveSet)
 	for argId in argIds 'eachArg'
-		let alreadyDef = try defSet.get(argId) otherwise panic("markArgIdsAsUses: defSet.get({argId}) OOB; defSet sized to maxValueId")
-		if not alreadyDef 'notDef'
-			try useSet.set(argId, value: true) otherwise panic("markArgIdsAsUses: useSet.set({argId}) OOB; useSet sized to maxValueId")
+		if not defSet.contains(argId) 'notDef'
+			_ = useSet.add(argId)
 		end 'notDef'
 	end 'eachArg'
 end 'markArgIdsAsUses'
@@ -309,7 +360,24 @@ export function createBoolVector(size RegInt) returns BoolArray
 	return arr
 end 'createBoolVector'
 
-// Union `from` into `target`. Returns true if target changed.
+// Union `from` into `target`. Returns true if target changed. Iterates
+// `from.members` (sparse) instead of walking `from.bits` index-by-index,
+// so per-call work is proportional to the live-set size, not maxValueId.
+export function liveSetUnionInto(target LiveSet, from LiveSet) returns bool
+	var changed = false
+	for vid in from.members 'each'
+		if target.add(vid) 'added'
+			changed = true
+		end 'added'
+	end 'each'
+	return changed
+end 'liveSetUnionInto'
+
+// Dense BoolArray union (kept for callers that still operate on raw bit
+// vectors — slot-liveness in `SlotLivenessRenumber.maxon` uses BoolArray
+// directly because its `maxSlotIdx` is typically small and the sparse-list
+// rewrite hasn't been ported there). Union `from` into `target`; returns
+// true if target changed.
 export function boolVectorUnionInto(target BoolArray, from BoolArray) returns bool
 	var changed = false
 	let count = from.count()
@@ -332,28 +400,28 @@ export function boolVectorUnionInto(target BoolArray, from BoolArray) returns bo
 	return changed
 end 'boolVectorUnionInto'
 
-// Compute liveIn = useSet union (liveOut - defSet). Returns true if liveIn changed.
-export function computeLiveIn(liveIn BoolArray, liveOut BoolArray, useSet BoolArray, defSet BoolArray) returns bool
+// Compute liveIn = useSet union (liveOut - defSet). Returns true if liveIn
+// changed. Both `useSet` and `liveOut - defSet` only grow across fixed-
+// point iterations, so liveIn only grows too — we walk the source members
+// and add to `liveIn` rather than rebuilding from scratch.
+export function liveSetComputeLiveIn(liveIn LiveSet, liveOut LiveSet, useSet LiveSet, defSet LiveSet) returns bool
 	var changed = false
-	let count = liveIn.count()
-
-	var i = 0
-	while i < count 'each'
-		let inUse = try useSet.get(i) otherwise panic("computeLiveIn: useSet.get({i}) OOB; useSet and liveIn must share size")
-		let inLiveOut = try liveOut.get(i) otherwise panic("computeLiveIn: liveOut.get({i}) OOB; liveOut and liveIn must share size")
-		let inDef = try defSet.get(i) otherwise panic("computeLiveIn: defSet.get({i}) OOB; defSet and liveIn must share size")
-
-		// liveIn[i] = use[i] or (liveOut[i] and not def[i])
-		let newVal = inUse or (inLiveOut and not inDef)
-		let oldVal = try liveIn.get(i) otherwise panic("computeLiveIn.each: i < count = liveIn.count() but get({i}) failed")
-
-		if newVal != oldVal 'changed'
-			try liveIn.set(i, value: newVal) otherwise panic("invariant: liveIn.set OOB")
+	// use[B] always flows in. Members of useSet are constant across the
+	// fixed-point loop, so on the first iteration this adds everything and
+	// subsequent iterations are no-ops on this branch.
+	for vid in useSet.members 'eachUse'
+		if liveIn.add(vid) 'addedUse'
 			changed = true
-		end 'changed'
-
-		i = i + 1
-	end 'each'
-
+		end 'addedUse'
+	end 'eachUse'
+	// liveOut[B] - def[B] = walk liveOut.members, skip those defined in B.
+	for vid in liveOut.members 'eachOut'
+		if defSet.contains(vid) 'skipDef'
+			continue
+		end 'skipDef'
+		if liveIn.add(vid) 'addedOut'
+			changed = true
+		end 'addedOut'
+	end 'eachOut'
 	return changed
-end 'computeLiveIn'
+end 'liveSetComputeLiveIn'

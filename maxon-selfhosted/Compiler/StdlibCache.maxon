@@ -86,7 +86,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v28: persist TypeParamRegistry.declaringTypeParamLists so getParamNames
 // returns source-declaration order (Map.Key before Map.Value) regardless of
 // what order interns happened in.
-let CACHE_FORMAT_VERSION = 28
+let CACHE_FORMAT_VERSION = 29
 
 // ============================================================
 // Types
@@ -555,6 +555,17 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			writeDword(buf, value: tyFix.signatureBytes.count())
 			buf.append(tyFix.signatureBytes)
 		end 'eachTyFix'
+
+		// Cache v29: WASM funcAddr table-index fixups. One entry per i32.const
+		// byte sequence emitted by `funcAddr` that targets a function whose
+		// final wasm table index isn't known until the user-build assembles
+		// the module (e.g. stdlib's `__managed_mem_create` taking the address
+		// of `stdlib.__destruct___ManagedMemory`).
+		writeDword(buf, value: func.funcAddrFixups.count())
+		for addrFix in func.funcAddrFixups 'eachAddrFix'
+			writeDword(buf, value: addrFix.bodyOffset)
+			try writeString(buf, s: addrFix.targetName)
+		end 'eachAddrFix'
 	end 'eachWasmFunc'
 
 	// GlobalData
@@ -940,6 +951,18 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			pos = copyBytesInto(sigBytes, buf: buf, offset: pos, len: sigLen)
 			wFunc.typeFixups.push(WasmTypeFixup.create(tyOffset, signatureBytes: sigBytes))
 		end 'eachTyFix'
+
+		// Cache v29: funcAddr fixups (targetName → final table index, patched
+		// at user-build link time). Mirrors the writer's layout.
+		let wAddrFixCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		for _ in 0 upto wAddrFixCount 'eachAddrFix'
+			let addrOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (addrTarget, ap1) = try readString(buf, offset: pos)
+			pos = ap1
+			wFunc.funcAddrFixups.push(WasmFuncAddrFixup.create(addrOffset, targetName: addrTarget))
+		end 'eachAddrFix'
 
 		data.wasmFunctions.push(wFunc)
 	end 'eachWasmFunc'

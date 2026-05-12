@@ -62,6 +62,47 @@ export function patchUleb128Fixed5(buf ByteArray, offset ByteOffset, value Wasm3
 	try buf.set(offset + 4, value: v and 0x7F) otherwise panic("invariant: buf.set OOB")
 end 'patchUleb128Fixed5'
 
+// Encode a signed integer as exactly 5-byte padded SLEB128. Used for
+// `i32.const <tableIdx>` byte sequences emitted by `funcAddr` ops whose
+// target wasn't in the stdlib-cache function table at lower time — the
+// user-build patches these with the resolved table index. A 5-byte
+// fixed-width sleb128 holds any signed 32-bit value, which comfortably
+// covers wasm function-table indices.
+//
+// Encoding choice: we sign-extend the value into a 35-bit field. For any
+// signed i32, this produces a valid sleb128 sequence where the high bit
+// of the 5th byte is the sign bit; the 5-byte length is preserved
+// regardless of value, so post-hoc patching cannot shift downstream
+// instructions.
+export function writeSleb128Fixed5(buf ByteArray, value ParsedInt)
+	var v = value as MachineWord
+	let isNegative = value < 0
+	for _ in 0 upto 4 'fourLowBytes'
+		buf.push((v and 0x7F) or 0x80)
+		v = v shr 7
+		if isNegative 'signExtend'
+			v = v or 0xFE00000000000000
+		end 'signExtend'
+	end 'fourLowBytes'
+	buf.push(v and 0x7F)
+end 'writeSleb128Fixed5'
+
+// Patch a 5-byte fixed-width SLEB128 at the given offset. Mirror of
+// `patchUleb128Fixed5` but with sign-extension so the encoded byte
+// sequence remains a valid sleb128 for negative values.
+export function patchSleb128Fixed5(buf ByteArray, offset ByteOffset, value ParsedInt)
+	var v = value as MachineWord
+	let isNegative = value < 0
+	for i in 0 upto 4 'fourLowBytes'
+		try buf.set(offset + i, value: (v and 0x7F) or 0x80) otherwise panic("invariant: buf.set OOB")
+		v = v shr 7
+		if isNegative 'signExtend'
+			v = v or 0xFE00000000000000
+		end 'signExtend'
+	end 'fourLowBytes'
+	try buf.set(offset + 4, value: v and 0x7F) otherwise panic("invariant: buf.set OOB")
+end 'patchSleb128Fixed5'
+
 // Encode a signed integer as LEB128 into buf.
 // Converts to unsigned bits and simulates arithmetic shift right.
 export function writeSleb128(buf ByteArray, value ParsedInt)

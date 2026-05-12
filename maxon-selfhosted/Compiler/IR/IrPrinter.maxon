@@ -80,6 +80,26 @@ typealias BracketDepth = int(0 to u64.max)
 // can't collide with this sentinel.
 let MODULE_SCOPE = "<module>"
 
+// Byte-level scan for ASCII underscore (0x5F) anywhere in `line`. Used by
+// `stabilizeLabels`'s pass1/pass2 fast paths to skip the grapheme-aware
+// `for c in line` walk on lines that can't contain a renameable token
+// (every counter-suffixed candidate has the shape `<base>_<digits>`).
+// Avoids the per-call wrapper allocation that `line.contains("_")` would
+// incur from materializing a fresh String literal at every call site.
+function lineHasUnderscore(line String) returns bool
+	let mm = line.managed
+	let len = mm.length()
+	var i = 0
+	while i < len 'scan'
+		let b = try mm.byteAt(i) otherwise panic("lineHasUnderscore: byteAt OOB at i={i} (len={len})")
+		if b == 0x5F 'isUnderscore'
+			return true
+		end 'isUnderscore'
+		i = i + 1
+	end 'scan'
+	return false
+end 'lineHasUnderscore'
+
 export function stabilizeLabels(text String) returns String
 	var renames = LabelRenameMap.create()
 	var nextNum = NextIndexMap.create()
@@ -166,6 +186,14 @@ end 'extractTopLevelFuncName'
 // register `k_15`); the substitution pass in Pass 2 preserves the `.cmp0`
 // portion verbatim around the renumbered base.
 function collectLabelsFromLine(line String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
+	// Fast path: every counter-suffixed candidate has the shape
+	// `<base>_<digits>` (an underscore followed eventually by digits).
+	// Lines without an underscore can't register anything. Skip the full
+	// char-walk for them — most x64 op lines (`x64.mov r8, [rbp-8]`,
+	// `x64.add r12, 1`) have no underscores so this fast path dominates.
+	if not lineHasUnderscore(line) 'fastPath'
+		return
+	end 'fastPath'
 	// Block header: `^  <ident>:` (exactly two leading spaces, identifier,
 	// colon, then end of line / whitespace).
 	if line.startsWith("  ") and not line.startsWith("    ") 'blockHeaderShape'
@@ -401,7 +429,18 @@ end 'endsWithMemRefVar'
 // Walk `line` and append it to `out`, emitting each identifier-run via the
 // rename map (or unchanged if no rename was registered). Delimiters pass
 // through verbatim. Identifier-runs are the same shape as in Pass 1.
+//
+// Fast path: every renameable token has the shape `<base>_<digits>`, so a
+// line that contains no underscore can't carry any rename. Skip the
+// character-walk entirely in that case — most IR lines (block headers,
+// generic ops, immediate-only x64 instructions) match the fast path, and
+// the slow walk's per-char Character/String allocations were the dominant
+// cost of `__finalIrString` on inlining-heavy fragments.
 function appendRewrittenLine(out String, line String, renames LabelRenameMap)
+	if not lineHasUnderscore(line) 'fastPath'
+		out.append(line)
+		return
+	end 'fastPath'
 	var token = ""
 	for c in line 'eachChar'
 		if isIdentChar(c) 'ident'

@@ -4776,6 +4776,19 @@ function checkCallVisibility(project Project, callee ByteArray, callContext Call
 	if project.funcReturnTypes.contains(qualified) 'visible'
 		return
 	end 'visible'
+	// `__`-prefixed references from outside the internals files always trip
+	// the gate, regardless of the cache-restore visibility-info gap. Mirror
+	// the name-based check in `qualifyCalleeForContextWithType` and report
+	// the same "not exported" diagnostic as if `funcVisibilities` had been
+	// preserved. This is the user-visible counterpart of `checkReservedDeclName`'s
+	// declaration-side rule.
+	if bareCallee.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternalsRef'
+		let stdlibCandidate = qualifyName("stdlib", name: bareCallee)
+		if project.funcReturnTypes.contains(stdlibCandidate) 'haveInternalsCandidate'
+			reportHiddenCalleeError(project, displayName: bareCallee, tier: Visibility.file, range: range, filePath: readerFilePath)
+			return
+		end 'haveInternalsCandidate'
+	end 'rejectInternalsRef'
 	// Bare call: resolved name doesn't exist; check whether a hidden
 	// candidate would have matched if visibility allowed it.
 	let candidates = project.methodNameIndex.get(bareCallee)
@@ -5095,10 +5108,16 @@ end 'substituteParamTypes'
 // `call` ops we skip entirely — these never reach `slotArgsForCall` in
 // lowering, so caching their resolution is wasted work. The list mirrors
 // the early-return prefix checks in `lowerCall` itself.
+//
+// `__mm_alloc_count` lowers to a `globalAddr + load` rather than a call,
+// so resolving it through the regular pipeline would just waste a
+// resolvedCallees entry. The other `__mm_*` names (alloc/decref/incref/free)
+// are now real stdlib functions in `stdlib/Internals.maxon` and DO need
+// normal resolution.
 function shouldSkipCallSite(bareCallee String) returns bool
-	if bareCallee.startsWith("__mm_") 'isMmIntrinsic'
+	if bareCallee == "__mm_alloc_count" 'isCountIntrinsic'
 		return true
-	end 'isMmIntrinsic'
+	end 'isCountIntrinsic'
 	return isMathIntrinsicName(bareCallee)
 end 'shouldSkipCallSite'
 

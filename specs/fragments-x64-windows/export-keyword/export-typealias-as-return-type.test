@@ -19,7 +19,7 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u8 {
+  func @makeArray() -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov ecx, 8
@@ -42,10 +42,18 @@ module {
     x64.mov edx, 42
     x64.mov rcx, r12
     x64.call Array.push
+    x64.mov r8, r12
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call makeArray
     x64.xor edx, edx
   inlined_Array.get_0:
-    x64.mov rcx, [r12+0] (8b)
-    x64.call __managed_mem_get
+    x64.mov rcx, [r8+0] (8b)
+    x64.call stdlib.__managed_mem_get
     x64.test rdx, rdx
     x64.je inlined_Array.get_2
   inlined_Array.get_1:

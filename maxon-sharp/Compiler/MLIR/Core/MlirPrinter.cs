@@ -92,6 +92,11 @@ public static class IrPrinter {
   // qualified forms (`enum-match-only.main.foo_3`).
   private const string IdentPattern = @"[A-Za-z0-9_][A-Za-z0-9_.\-]*";
 
+  // SYSLIB1045 suggests source-generated regexes, but these patterns interpolate
+  // `IdentPattern` at construction time — incompatible with the
+  // GeneratedRegexAttribute model. Suppress for the regex block.
+#pragma warning disable SYSLIB1045
+
   // Function header: `^  func @<name>(`. Two-space indent matches every printer.
   private static readonly Regex FuncHeaderRegex = new(
     $@"^  func @(?<name>{IdentPattern})\(",
@@ -158,6 +163,8 @@ public static class IrPrinter {
   private static readonly Regex SubstitutionRegex = new(
     @"(?<![A-Za-z0-9_.])(?:(?<func>[A-Za-z0-9_][A-Za-z0-9_.\-]*)\.)?(?<base>[A-Za-z_][A-Za-z0-9_]*)_(?<num>\d+)(?<tail>(?:\.[A-Za-z0-9_]+)*)(?![A-Za-z0-9_])",
     RegexOptions.Compiled);
+
+#pragma warning restore SYSLIB1045
 
   public static string StabilizeLabels(string text) {
     // Pass 1: walk the text, collect every (scope, originalName) where a label

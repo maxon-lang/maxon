@@ -26,9 +26,49 @@ ExitCode: 84
 ---
 // CompiledIR
 module {
+  func @manyVars(rcx: i64, rdx: i64, rax: i64, r9: i64, rsi: i64, rdi: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.add r9, 4
+    x64.add rax, 3
+    x64.add rdx, 2
+    x64.add rcx, 1
+    x64.mov r8, rax
+    x64.add r8, r9
+    x64.mov rbx, rcx
+    x64.add rbx, rdx
+    x64.add rdi, 6
+    x64.add rsi, 5
+    x64.add rbx, r8
+    x64.mov r8, rsi
+    x64.add r8, rdi
+    x64.add r8, rbx
+    x64.add r8, rcx
+    x64.add r8, rdx
+    x64.add r8, rax
+    x64.add r8, r9
+    x64.add r8, rsi
+    x64.add r8, rdi
+    x64.epilogue
+    x64.ret
+  }
   func @main() -> u8 {
   entry:
-    x64.mov r8d, 84
+    x64.prologue stack_size=16
+    x64.mov edi, 6
+    x64.mov esi, 5
+    x64.mov r9d, 4
+    x64.mov eax, 3
+    x64.mov edx, 2
+    x64.mov ecx, 1
+    x64.call manyVars
+    x64.cmp r8, 125
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_7]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
     x64.ret
   }
 }

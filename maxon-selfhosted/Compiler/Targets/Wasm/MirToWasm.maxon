@@ -146,6 +146,24 @@ end 'WasmTypeFixup'
 
 export typealias WasmTypeFixupArray = Array with WasmTypeFixup
 
+// Per-function fixup for an `opI32Const` emitted by `emitFuncAddr` when the
+// target function's wasm-table index isn't known at stdlib-cache lowering
+// time. The cache writes a 5-byte fixed-width sleb128 placeholder and
+// records the byte offset; the user-build patches it once the final table
+// layout is known. Mirrors `WasmCallFixup` but for funcAddr emission so
+// stdlib functions can legally take the address of another stdlib function
+// (e.g. `mm_alloc(40, destructor: funcAddr __destruct___ManagedMemory, 0)`).
+export type WasmFuncAddrFixup
+	export var bodyOffset CodeOffset
+	export var targetName String
+
+	export static function create(bodyOffset CodeOffset, targetName String) returns WasmFuncAddrFixup
+		return Self{bodyOffset: bodyOffset, targetName: targetName}
+	end 'create'
+end 'WasmFuncAddrFixup'
+
+export typealias WasmFuncAddrFixupArray = Array with WasmFuncAddrFixup
+
 // Per-function WASM emission result for caching. `throwsTypeName` mirrors
 // IrFunction.throwsTypeName as a `ThrowsClause`: `none` means non-throwing,
 // `throwing(name)` carries the bare error-enum name. Throwing functions
@@ -164,6 +182,11 @@ export type WasmObjectFunction
 	// patches it at user-build module-assembly time once the type section
 	// is finalized — same shape as `callFixups` for direct calls.
 	export var typeFixups WasmTypeFixupArray
+	// Fixups for `i32.const <tableIdx>` bytes emitted by funcAddr ops whose
+	// target wasn't in the stdlib-cache function table. The user-build
+	// resolves the table index from its full funcNames list and patches in
+	// place. Empty for stdlib functions that never take a function address.
+	export var funcAddrFixups WasmFuncAddrFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none) returns WasmObjectFunction
 		return Self{
@@ -174,7 +197,8 @@ export type WasmObjectFunction
 			throwsTypeName: throwsTypeName,
 			body: ByteArray.create(),
 			callFixups: WasmCallFixupArray.create(),
-			typeFixups: WasmTypeFixupArray.create()
+			typeFixups: WasmTypeFixupArray.create(),
+			funcAddrFixups: WasmFuncAddrFixupArray.create()
 		}
 	end 'create'
 end 'WasmObjectFunction'
@@ -202,7 +226,11 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 		funcSigs.pushFunc(func.name, returnType: func.returnType, throwsTypeName: func.throwsTypeName)
 	end 'collectNames'
 
-	// Compute global data offsets (same layout as emitWasmModule)
+	// Compute global data offsets (same layout as `layoutWasmGlobalData`).
+	// Both rdata blobs (values/names) AND writable .data entries
+	// (dataSectionEntries) must contribute offsets here, otherwise
+	// `globalAddr <name>` panics on functions that touch a writable
+	// allocator global (`__mm_alloc_count`, slab state, etc.).
 	var globalDataOffsets = GlobalDataOffsetMap.create()
 	var dataOffset = scratchEnd as Wasm32Offset
 
@@ -212,6 +240,13 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 		try globalDataOffsets.insert(name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate global data name '{name}' at offset {dataOffset}")
 		dataOffset = (dataOffset + data.count()) as Wasm32Offset
 	end 'computeOffsets'
+	for entry in globalData.dataSectionEntries 'dataEntries'
+		try globalDataOffsets.insert(entry.name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate data section entry '{entry.name}' at offset {dataOffset}")
+		dataOffset = (dataOffset + entry.initialBytes.count()) as Wasm32Offset
+		while dataOffset mod 8 != 0 'align'
+			dataOffset = (dataOffset + 1) as Wasm32Offset
+		end 'align'
+	end 'dataEntries'
 	let stackBase = alignUp(dataOffset as ByteCount, alignment: 16) as Wasm32Offset
 
 	// Emit each function body with fixable call indices
@@ -219,7 +254,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	for func in module.functions 'eachFunc'
 		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes, throwsTypeName: func.throwsTypeName)
 
-		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups)
+		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups, addrFixups: objFunc.funcAddrFixups)
 		objFunc.body = body
 
 		result.push(objFunc)
@@ -302,6 +337,18 @@ export function computeNeededStdlibFunctionsWasm(seeds StringArray, stdlibCache 
 				newDeps.push(fixup.targetName)
 			end 'newDep'
 		end 'eachDep'
+
+		// Cache v29: funcAddr fixups also seed dependencies — a body that
+		// takes the address of another stdlib function (e.g. __managed_mem_create
+		// referencing __destruct___ManagedMemory) must keep that function alive
+		// in the reachable set so its table slot exists and the funcAddr patch
+		// resolves to a real index.
+		for addrFix in func.funcAddrFixups 'eachAddrDep'
+			if funcNameToIndex.contains(addrFix.targetName) and not needed.contains(addrFix.targetName) 'newAddrDep'
+				needed.insert(element: addrFix.targetName)
+				newDeps.push(addrFix.targetName)
+			end 'newAddrDep'
+		end 'eachAddrDep'
 
 		for dep in newDeps 'addDeps'
 			worklist.push(dep)
@@ -617,8 +664,9 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	end 'recordTableIdx'
 	var noFixups = WasmCallFixupArray.create()
 	var noTypeFixups = WasmTypeFixupArray.create()
+	var noAddrFixups = WasmFuncAddrFixupArray.create()
 	for func in module.functions 'emitBodies'
-		let body = lowering.lowerFunction(func, fixups: noFixups, tyFixups: noTypeFixups)
+		let body = lowering.lowerFunction(func, fixups: noFixups, tyFixups: noTypeFixups, addrFixups: noAddrFixups)
 		bodies.push(body)
 	end 'emitBodies'
 
@@ -647,6 +695,17 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			let resolvedTypeIdx = lookupOrRegisterIndirectType(types, typeIndexMap: typeIndexMap, signatureBytes: tyFix.signatureBytes)
 			patchUleb128Fixed5(body, offset: tyFix.bodyOffset, value: resolvedTypeIdx)
 		end 'patchTypes'
+
+		// Patch funcAddr table indices for stdlib functions that took the
+		// address of another function (e.g. `__managed_mem_create` baking
+		// the address of `__destruct___ManagedMemory` into the mm header).
+		// The fixup recorded `targetName`; we resolve it against the
+		// user-build's funcTableIndices map populated immediately before
+		// this loop walks the stdlib bodies.
+		for addrFix in func.funcAddrFixups 'patchAddrs'
+			let tableIdx = try lowering.funcTableIndices.get(addrFix.targetName) otherwise panic("emitWasmModule: funcAddr fixup target '{addrFix.targetName}' missing from user-build table (stdlib body '{func.name}' references it but it isn't in the final module)")
+			patchSleb128Fixed5(body, offset: addrFix.bodyOffset, value: tableIdx as ParsedInt)
+		end 'patchAddrs'
 
 		bodies.push(body)
 	end 'emitStdlibBodies'
@@ -761,6 +820,12 @@ type WasmFunctionLowering
 	// stdlib pipeline used, so we write a placeholder and record the
 	// signature bytes here; emitWasmModule walks these at link time.
 	var typeFixups WasmTypeFixupArray
+	// Same pattern for funcAddr-emitted i32.const bytes whose target
+	// function isn't in the stdlib-cache funcTableIndices map. In fixedCalls
+	// mode emitFuncAddr writes a 5-byte fixed-width sleb128 placeholder and
+	// records the body offset + target name here; the user-build patches
+	// these once the final table layout is known.
+	var funcAddrFixups WasmFuncAddrFixupArray
 	// Per-function blockId → index map. Populated at the top of
 	// lowerFunction by walking func.blockRefs once, so every emitted
 	// branch resolves its target block index in O(1) instead of scanning
@@ -783,6 +848,7 @@ type WasmFunctionLowering
 			typeIndices: WasmTypeIndexMap.create(),
 			callFixups: WasmCallFixupArray.create(),
 			typeFixups: WasmTypeFixupArray.create(),
+			funcAddrFixups: WasmFuncAddrFixupArray.create(),
 			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
 			body: ByteArray.create(),
 			isVoidReturn: true,
@@ -798,7 +864,7 @@ type WasmFunctionLowering
 	// Function body emission
 	// ============================================================
 
-	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray, tyFixups WasmTypeFixupArray) returns ByteArray
+	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray, tyFixups WasmTypeFixupArray, addrFixups WasmFuncAddrFixupArray) returns ByteArray
 		// Replace mrt_panic with a simplified WASM version that writes the
 		// message cstring to stderr then traps (wasmtime provides the backtrace).
 		if srcFunc.name == "mrt_panic" 'isPanic'
@@ -818,6 +884,7 @@ type WasmFunctionLowering
 		end 'kind'
 		callFixups = fixups
 		typeFixups = tyFixups
+		funcAddrFixups = addrFixups
 
 		// Build the per-function blockId → blockRefs-index map up front.
 		// Without this, every emitted branch / cond_branch did a linear
@@ -1707,13 +1774,31 @@ type WasmFunctionLowering
 		// extended to i64 so the value lives in an i64 local matching the
 		// closure ABI. `funcTableIndices` is populated by emitWasmModule
 		// before any function body is lowered, so every user function has
-		// a stable index here. A miss falls back to the previous "address
-		// of any function = 0" behavior, which is correct for the
-		// mrt_panic stack-walk fallback path that doesn't take real
-		// addresses.
-		let tableIdx = try funcTableIndices.get(name) otherwise 0 as MachineWord
+		// a stable index here.
+		//
+		// Stdlib-cache mode (`fixedCalls = true`) starts with an empty
+		// `funcTableIndices` map — the user-build assembles the final table.
+		// Phase 4 (managed-memory migration) introduced stdlib bodies that
+		// take function addresses (`mm_alloc(40, destructor: funcAddr ...)` in
+		// the migrated `__managed_mem_create`/`slice`), so we emit a 5-byte
+		// fixed-width sleb128 placeholder and record a fixup the user-build
+		// patches with the resolved table index.
 		body.push(opI32Const)
-		writeSleb128(body, value: tableIdx as ParsedInt)
+		if fixedCalls 'cacheMode'
+			let tableIdx = try funcTableIndices.get(name) otherwise -1 as MachineWord
+			if tableIdx == (-1 as MachineWord) 'recordFixup'
+				funcAddrFixups.push(WasmFuncAddrFixup.create(body.count(), targetName: name))
+				writeSleb128Fixed5(body, value: 0 as ParsedInt)
+			end 'recordFixup' else 'haveIdx'
+				writeSleb128Fixed5(body, value: tableIdx as ParsedInt)
+			end 'haveIdx'
+		end 'cacheMode' else 'userMode'
+			// User-build pipeline: table is finalized, miss is a bug for a
+			// real funcAddr op but tolerated for fallback paths like
+			// `mrt_panic_print_frame` that emit zero on miss.
+			let tableIdx = try funcTableIndices.get(name) otherwise 0 as MachineWord
+			writeSleb128(body, value: tableIdx as ParsedInt)
+		end 'userMode'
 		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)

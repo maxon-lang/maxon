@@ -494,13 +494,14 @@ function buildIntervalsForValue(module TargetModule, range LiveRange, liveness L
 	end 'eachBlock'
 end 'buildIntervalsForValue'
 
-// Helper to read from BoolArrayArray liveness sets. `sets` is
+// Helper to read from LiveSetArray liveness sets. `sets` is
 // `liveness.liveIn` or `liveness.liveOut`; the outer array is sized to
-// numBlocks, and every inner BoolArray is sized to `liveness.maxValueId`.
-// All callers iterate `valueId` over `[0, maxValueId)`, so OOB is a bug.
-function liveGetBool(sets BoolArrayArray, blockId BlockId, valueId ValueId) returns bool
+// numBlocks. Membership queries hit the dense bitvector inside each
+// LiveSet (O(1)); the sparse member-list is used only by the liveness
+// pass itself during fixed-point propagation.
+function liveGetBool(sets LiveSetArray, blockId BlockId, valueId ValueId) returns bool
 	let blockSet = try sets.get(blockId) otherwise panic("liveGetBool: sets.get({blockId}) OOB; liveness sets sized to numBlocks")
-	return try blockSet.get(valueId) otherwise panic("liveGetBool: blockSet.get({valueId}) OOB; inner sized to maxValueId")
+	return blockSet.contains(valueId)
 end 'liveGetBool'
 
 // ============================================================

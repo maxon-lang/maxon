@@ -16,15 +16,15 @@ module {
     %2 = mir.mov_imm 30 : i64
     %3 = mir.mov_imm 3 : i64
     %4 = mir.mov_imm 8 : i64
-    %5 = mir.call @__managed_mem_create(%3, %4)
+    %5 = mir.call @stdlib.__managed_mem_create(%3, %4)
     %7 = mir.mov_imm 0 : i64
-    %8, %9 = mir.try_call @__managed_mem_set(%5, %7, %0)
+    %8, %9 = mir.try_call @stdlib.__managed_mem_set(%5, %7, %0)
     %10 = mir.mov_imm 1 : i64
-    %11, %12 = mir.try_call @__managed_mem_set(%5, %10, %1)
+    %11, %12 = mir.try_call @stdlib.__managed_mem_set(%5, %10, %1)
     %13 = mir.mov_imm 2 : i64
-    %14, %15 = mir.try_call @__managed_mem_set(%5, %13, %2)
+    %14, %15 = mir.try_call @stdlib.__managed_mem_set(%5, %13, %2)
     %16 = mir.mov_imm 3 : i64
-    %17, %18 = mir.try_call @__managed_mem_set_length(%5, %16)
+    %17, %18 = mir.try_call @stdlib.__managed_mem_set_length(%5, %16)
     %35 = mir.mov_imm 8 : i64
     %36 = mir.call @mrt_alloc(%35)
     %37 = mir.mov_imm 40 : i64
@@ -43,46 +43,23 @@ module {
     mir.store %5, %36, 0
     %22 = mir.mov_imm 0 : i64
     %23 = mir.mov_imm 10 : i64
-    mir.br inlined_Array.slice_0()
-  inlined_Array.slice_0:
-    %44 = mir.load %36, 0
-    %45, %46 = mir.try_call @__managed_mem_slice(%44, %22, %23)
-    %47 = mir.mov_imm 0 : i64
-    %48 = mir.cmp ne, %46, %47
-    mir.cond_br %48 [then: inlined_Array.slice_1(), else: inlined_Array.slice_2()]
-  inlined_Array.slice_1:
-    %49 = mir.mov_imm 1 : i64
-    mir.br inline_cont_main_0(%47, %49)
-  inlined_Array.slice_2:
-    %50 = mir.mov_imm 8 : i64
-    %51 = mir.call @mrt_alloc(%50)
-    %52 = mir.mov_imm 40 : i64
-    %53 = mir.call @mrt_alloc(%52)
-    mir.store %47, %53, 0
-    mir.store %47, %53, 8
-    mir.store %47, %53, 16
-    %54 = mir.mov_imm 8 : i64
-    mir.store %54, %53, 24
-    mir.store %47, %53, 32
-    mir.store %53, %51, 0
-    mir.store %45, %51, 0
-    mir.br inline_cont_main_0(%51, %47)
-  inline_cont_main_0:
+    %24 = mir.global_addr @__layout_Array_Int
+    %25, %26 = mir.try_call @Array.slice(%36, %22, %23, %24)
     %27 = mir.mov_imm 0 : i64
-    %28 = mir.cmp ne, %56, %27
+    %28 = mir.cmp ne, %26, %27
     mir.cond_br %28 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
     %30 = mir.mov_imm 42 : i64
     mir.ret %30
   try_0.merge:
     %33 = mir.global_addr @__layout_Array_Int
-    %34 = mir.call @Array.count(%55, %33)
-    %57 = mir.mov_imm 125 : i64
-    %58 = mir.cmp ugt, %34, %57
-    mir.cond_br %58 [then: __range_panic_0(), else: __range_ok_0()]
+    %34 = mir.call @Array.count(%25, %33)
+    %44 = mir.mov_imm 125 : i64
+    %45 = mir.cmp ugt, %34, %44
+    mir.cond_br %45 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %59 = mir.global_addr @__panic_msg_42
-    %60 = mir.call @mrt_panic(%59)
+    %46 = mir.global_addr @__panic_msg_42
+    %47 = mir.call @mrt_panic(%46)
   __range_ok_0:
     mir.ret %34
   }

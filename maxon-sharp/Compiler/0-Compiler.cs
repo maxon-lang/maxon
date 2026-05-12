@@ -703,7 +703,15 @@ public static class StdlibLoader {
     var stdlibPath = FindStdlibPath();
     if (stdlibPath == null) return [];
 
-    var files = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
+    var allFiles = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
+
+    // stdlib/Internals.maxon is a self-hosted-only file: it uses the
+    // `__Internals.*` intrinsic namespace (file-path-gated raw Std-op
+    // access) which the C# bootstrap doesn't implement. The bootstrap
+    // never needs to compile it because the self-hosted compiler builds
+    // its own stdlib cache from a curated whitelist (StdlibLoader.maxon)
+    // where Internals.maxon contributes the migrated runtime helpers.
+    var files = allFiles.Where(f => Path.GetFileName(f) != "Internals.maxon").ToArray();
 
     // Sort: Interfaces.maxon first (foundational shared protocols), then
     // helper files (in subdirectories), then remaining top-level files,

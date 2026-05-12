@@ -126,23 +126,23 @@ end 'maxOfVarSlotArray'
 // ============================================================
 
 type SlotUseDef
-	export var useSets BoolArrayArray
-	export var defSets BoolArrayArray
+	export var useSets LiveSetArray
+	export var defSets LiveSetArray
 	export var escaped BoolArray
 	export var maxSlotIdx VarSlot
 
-	export static function create(useSets BoolArrayArray, defSets BoolArrayArray, escaped BoolArray, maxSlotIdx VarSlot) returns SlotUseDef
+	export static function create(useSets LiveSetArray, defSets LiveSetArray, escaped BoolArray, maxSlotIdx VarSlot) returns SlotUseDef
 		return Self{useSets: useSets, defSets: defSets, escaped: escaped, maxSlotIdx: maxSlotIdx}
 	end 'create'
 end 'SlotUseDef'
 
 function scanSlotUseDef(module TargetModule, func IrFunction, numBlocks BlockId, maxSlotIdx VarSlot, projection SlotProjection) returns SlotUseDef
-	var useSets = BoolArrayArray.create()
-	var defSets = BoolArrayArray.create()
+	var useSets = LiveSetArray.create()
+	var defSets = LiveSetArray.create()
 	var bi = 0
 	while bi < numBlocks 'init'
-		useSets.push(createBoolVector(maxSlotIdx))
-		defSets.push(createBoolVector(maxSlotIdx))
+		useSets.push(LiveSet.create(maxSlotIdx))
+		defSets.push(LiveSet.create(maxSlotIdx))
 		bi = bi + 1
 	end 'init'
 
@@ -166,20 +166,19 @@ function scanSlotUseDef(module TargetModule, func IrFunction, numBlocks BlockId,
 	return SlotUseDef.create(useSets, defSets: defSets, escaped: escaped, maxSlotIdx: maxSlotIdx)
 end 'scanSlotUseDef'
 
-function scanOpSlots(module TargetModule, packed OpIndex, projection SlotProjection, useSet BoolArray, defSet BoolArray, escaped BoolArray)
+function scanOpSlots(module TargetModule, packed OpIndex, projection SlotProjection, useSet LiveSet, defSet LiveSet, escaped BoolArray)
 	let reads = VarSlotArray.create()
 	projection.collectReads(module, packed: packed, reads: reads)
 	for s in reads 'eachR'
-		let alreadyDef = try defSet.get(s) otherwise panic("scanOpSlots: defSet.get({s}) OOB; defSet sized to maxSlotIdx")
-		if not alreadyDef 'notDef'
-			try useSet.set(s, value: true) otherwise panic("scanOpSlots: useSet.set({s}) OOB; useSet sized to maxSlotIdx")
+		if not defSet.contains(s) 'notDef'
+			_ = useSet.add(s)
 		end 'notDef'
 	end 'eachR'
 
 	let writes = VarSlotArray.create()
 	projection.collectWrites(module, packed: packed, writes: writes)
 	for s in writes 'eachW'
-		try defSet.set(s, value: true) otherwise panic("scanOpSlots: defSet.set({s}) OOB; defSet sized to maxSlotIdx")
+		_ = defSet.add(s)
 	end 'eachW'
 
 	let escapes = VarSlotArray.create()
@@ -197,12 +196,12 @@ function computeSlotLiveness(cfg CfgInfo, rpo RpoInfo, ud SlotUseDef) returns Li
 	let numBlocks = cfg.numBlocks
 	let maxSlotIdx = ud.maxSlotIdx
 
-	var liveIn = BoolArrayArray.create()
-	var liveOut = BoolArrayArray.create()
+	var liveIn = LiveSetArray.create()
+	var liveOut = LiveSetArray.create()
 	var bi = 0
 	while bi < numBlocks 'init'
-		liveIn.push(createBoolVector(maxSlotIdx))
-		liveOut.push(createBoolVector(maxSlotIdx))
+		liveIn.push(LiveSet.create(maxSlotIdx))
+		liveOut.push(LiveSet.create(maxSlotIdx))
 		bi = bi + 1
 	end 'init'
 
@@ -222,14 +221,14 @@ function computeSlotLiveness(cfg CfgInfo, rpo RpoInfo, ud SlotUseDef) returns Li
 
 			for succ in succs 'eachSucc'
 				let succLiveIn = try liveIn.get(succ) otherwise panic("invariant: succ id < numBlocks but liveIn.get failed")
-				if boolVectorUnionInto(blockLiveOut, from: succLiveIn) 'unionChanged'
+				if liveSetUnionInto(blockLiveOut, from: succLiveIn) 'unionChanged'
 					changed = true
 				end 'unionChanged'
 			end 'eachSucc'
 
 			let blockUse = try ud.useSets.get(blockId) otherwise panic("invariant: useSets sized to numBlocks but get({blockId}) failed")
 			let blockDef = try ud.defSets.get(blockId) otherwise panic("invariant: defSets sized to numBlocks but get({blockId}) failed")
-			if computeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'inChanged'
+			if liveSetComputeLiveIn(blockLiveIn, liveOut: blockLiveOut, useSet: blockUse, defSet: blockDef) 'inChanged'
 				changed = true
 			end 'inChanged'
 
@@ -248,8 +247,8 @@ function computeSlotLiveness(cfg CfgInfo, rpo RpoInfo, ud SlotUseDef) returns Li
 			while bi2 < numBlocks 'eachBlk'
 				var inVec = try liveIn.get(bi2) otherwise panic("invariant: liveIn sized to numBlocks but get({bi2}) failed")
 				var outVec = try liveOut.get(bi2) otherwise panic("invariant: liveOut sized to numBlocks but get({bi2}) failed")
-				try inVec.set(si, value: true) otherwise panic("computeSlotLiveness: inVec.set({si}) OOB; vectors sized to maxSlotIdx")
-				try outVec.set(si, value: true) otherwise panic("computeSlotLiveness: outVec.set({si}) OOB; vectors sized to maxSlotIdx")
+				_ = inVec.add(si)
+				_ = outVec.add(si)
 				bi2 = bi2 + 1
 			end 'eachBlk'
 		end 'esc'
@@ -302,8 +301,8 @@ function buildSlotRanges(module TargetModule, func IrFunction, liveness Liveness
 
 		var t = 0
 		while t < maxSlotIdx 'buildPerSlot'
-			let liveIn = try blockLiveIn.get(t) otherwise panic("buildSlotRanges: blockLiveIn.get({t}) OOB; liveIn sized to maxSlotIdx")
-			let liveOut = try blockLiveOut.get(t) otherwise panic("buildSlotRanges: blockLiveOut.get({t}) OOB; liveOut sized to maxSlotIdx")
+			let liveIn = blockLiveIn.contains(t)
+			let liveOut = blockLiveOut.contains(t)
 			let fw = try firstWrite.get(t) otherwise panic("invariant: firstWrite sized to maxSlotIdx but get({t}) failed")
 			let lu = try lastUse.get(t) otherwise panic("invariant: lastUse sized to maxSlotIdx but get({t}) failed")
 

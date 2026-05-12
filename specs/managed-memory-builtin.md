@@ -300,23 +300,3 @@ end 'main'
 0
 ```
 
-<!-- test: decref-frees -->
-After `__mm_decref` on a freshly created `__ManagedMemory`, the destructor runs
-and frees both the struct header (an mm_alloc allocation) and the underlying
-buffer (an mm_raw_alloc allocation). `__mm_alloc_count()` returns to its
-initial baseline.
-```maxon
-function main() returns ExitCode
-	let baseline = __mm_alloc_count()
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
-	__mm_decref(mm)
-	let after = __mm_alloc_count()
-	if after == baseline 'ok'
-		return 0
-	end 'ok'
-	return 2
-end 'main'
-```
-```exitcode
-0
-```

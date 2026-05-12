@@ -1407,10 +1407,31 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 	end 'isLocal'
 	let stdlibName = qualifyName("stdlib", name: bare)
 	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
+		// `__`-prefixed stdlib functions are compiler internals declared
+		// only in `stdlib/Internals.maxon` (or `stdlib/Builtins.maxon` for
+		// the type-system bridge). User code and other stdlib files must
+		// NOT reach them by bare name — only the exempted internals files
+		// themselves and the lowering pass's intrinsic interceptors. The
+		// `funcVisibilities` round-trip through the stdlib cache currently
+		// drops the `(file, declPath)` sidecar, so a pure visibility check
+		// would let cached-stdlib user builds bypass the gate. Gating on
+		// the `__`-prefix + reader-file pair survives the cache (no extra
+		// state required) and is symmetric with `checkReservedDeclName`'s
+		// declaration rule.
+		if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternalsRef'
+			return (localName, MaxonType.unresolved)
+		end 'rejectInternalsRef'
 		return (stdlibName, MaxonType.unresolved)
 	end 'isStdlib'
 	// Cross-file fallback: scan candidates with matching trailing
-	// segment, pick the first visible from `readerFilePath`.
+	// segment, pick the first visible from `readerFilePath`. `__`-prefix
+	// references from non-internals files are blocked here too, matching
+	// the stdlibName branch above (the gate is over the SHAPE of the
+	// reference, not over the visibility sidecar — which doesn't survive
+	// the stdlib cache).
+	if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternalsCrossFile'
+		return (localName, MaxonType.unresolved)
+	end 'rejectInternalsCrossFile'
 	let candidates = project.methodNameIndex.get(bare)
 	for candidate in candidates 'each'
 		if not project.funcReturnTypes.contains(candidate) 'notFunc'
@@ -1423,6 +1444,14 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 	end 'each'
 	return (localName, MaxonType.unresolved)
 end 'qualifyCalleeForContextWithType'
+
+// True when `readerFilePath` is one of the stdlib internals files that may
+// reference `__`-prefixed stdlib functions by bare name. Matches the
+// declaration-side exemption list in `Parser.checkReservedDeclName`.
+export function readerCanCallStdlibInternals(readerFilePath FilePath) returns bool
+	let name = readerFilePath.filename()
+	return name == "Internals.maxon" or name == "Builtins.maxon" or name == "stdlib-bootstrap.maxon"
+end 'readerCanCallStdlibInternals'
 
 // Look up the visibility/sourceFilePath for a function. Missing entries
 // default to `(global, stdlibBootstrapPath)` — stdlib functions are
