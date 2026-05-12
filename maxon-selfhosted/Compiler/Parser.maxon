@@ -179,6 +179,13 @@ export type Parser
 	// arg of the previous param's type. Saved/restored across nested
 	// function declarations.
 	var inFunctionParam bool
+	// True while parsing the source expression of a `for X in <expr> to/upto <expr>`
+	// header. Suppresses the Pratt parser's range-as-binary-op consumption of
+	// `to`/`upto` so the for-in parser sees those tokens and uses its
+	// fast-path while-loop desugaring. parseParenExpr saves/clears this so a
+	// parenthesized sub-expression (e.g. `for x in (1 upto 4).createIterator() 'l'`)
+	// still gets a first-class Range/OpenRange value.
+	var inForInHeader bool
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
@@ -232,7 +239,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -4603,22 +4610,55 @@ export type Parser
 	function parseForStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let forToken = try consume()
 
-		if not at(TokenKind.identifier) 'noName'
-			let tok = cursor.current()
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop variable name after 'for'", line: tok.line, column: tok.column, filePath: filePath)
-			synchronize()
-			return block
-		end 'noName'
-		let nameToken = try consume()
-		let iterName = nameToken.value
+		// `for IDENT in ...` is the canonical for-range / for-in shape. A
+		// leading `(name1, name2, ...)` opens the tuple-destructuring shape
+		// (only used on for-in over a tuple-yielding iterator like
+		// `Map.withIterator()` / `Range.withIterator()`). The first name
+		// becomes the visible iterName when there's exactly one binding; for
+		// >1 the bindings are collected here and field-bound inside the body.
+		var destructureNames = StringArray.create()
+		var iterName = ""
+		if at(TokenKind.leftParen) 'isDestructure'
+			try eat(TokenKind.leftParen)
+			while true 'destructureLoop'
+				if not at(TokenKind.identifier) 'noName2'
+					let tok2 = cursor.current()
+					reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected destructuring variable name", line: tok2.line, column: tok2.column, filePath: filePath)
+					synchronize()
+					return block
+				end 'noName2'
+				let nameTok = try consume()
+				destructureNames.push(nameTok.value)
+				if not at(TokenKind.comma) 'doneList'
+					break
+				end 'doneList'
+				try eat(TokenKind.comma)
+			end 'destructureLoop'
+			try expect(TokenKind.rightParen)
+		end 'isDestructure' else 'singleName'
+			if not at(TokenKind.identifier) 'noName'
+				let tok = cursor.current()
+				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected loop variable name after 'for'", line: tok.line, column: tok.column, filePath: filePath)
+				synchronize()
+				return block
+			end 'noName'
+			let nameToken = try consume()
+			iterName = nameToken.value
+		end 'singleName'
 
 		try expect(TokenKind.in)
 
 		// Parse START into the entry block. For for-range this is the lower
 		// bound; for for-in over an iterable it is the source expression
 		// (renamed locally as `sourceExpr` once we know which path we're on).
+		// Suppress range-as-binary-op so a top-level `to`/`upto` is consumed
+		// by this header (fast-path while-loop desugaring) rather than by
+		// parseExpressionBP (Range.create/OpenRange.create lowering).
 		currentBlock = block
+		let savedInForInHeader = inForInHeader
+		inForInHeader = true
 		let startResult = try parseExpression(block)
+		inForInHeader = savedInForInHeader
 
 		let isInclusive = at(TokenKind.to)
 		let sawRange = accept(TokenKind.to) or accept(TokenKind.upto)
@@ -4632,13 +4672,21 @@ export type Parser
 			// lands. Only loops in functions that ultimately reach lowering
 			// hit the panic — the parser itself accepts the syntax.
 			if at(TokenKind.charLiteral) or at(TokenKind.newline) 'iterablePath'
-				return try parseForInIterable(func, block: block, forToken: forToken, iterName: iterName, sourceExpr: startResult)
+				return try parseForInIterable(func, block: block, forToken: forToken, iterName: iterName, sourceExpr: startResult, destructureNames: destructureNames)
 			end 'iterablePath'
 			let tok = cursor.current()
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "expected 'upto', 'to', or loop label after for-in source", line: tok.line, column: tok.column, filePath: filePath)
 			synchronize()
 			return block
 		end 'noRange'
+
+		// Tuple-destructure on for-range is meaningless — the iterator yields
+		// a scalar int per step, not a tuple. Report and continue parsing the
+		// rest as a normal for-range so the error doesn't cascade.
+		if destructureNames.count() > 0 'destructureOnRange'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "tuple destructuring is not supported on for-range loops; use a single loop variable", line: forToken.line, column: forToken.column, filePath: filePath)
+			iterName = try destructureNames.get(0) otherwise "_"
+		end 'destructureOnRange'
 
 		// Parse END into the entry block.
 		currentBlock = block
@@ -4766,7 +4814,7 @@ export type Parser
 	// They'll surface a clean error at lowering time when methodCall fails
 	// to resolve `.createIterator` on an unresolved receiver — the same
 	// failure mode any unresolved methodCall produces today.
-	function parseForInIterable(func IrFunction, block IrBlock, forToken Token, iterName String, sourceExpr ExprResult) returns IrBlock throws ParserError
+	function parseForInIterable(func IrFunction, block IrBlock, forToken Token, iterName String, sourceExpr ExprResult, destructureNames StringArray) returns IrBlock throws ParserError
 		let forFilePath = filePath.toString()
 		let stmtRange = SourceRange.between(forToken, last: previousToken())
 
@@ -4858,15 +4906,36 @@ export type Parser
 		module.appendOp(bodyBlock, op: MaxonOp.methodCall(currentResultName, receiver: iterRefBodyName, methodName: currentMethodName, args: currentArgs, argLabels: currentArgLabels, argTypes: currentArgTypes, argRanges: currentArgRanges, range: stmtRange))
 
 		// Bind the loop variable inside an inner scope so `break`/`continue`
-		// inside the body still close over the iter slot scope.
+		// inside the body still close over the iter slot scope. The
+		// destructuring shape (`for (a, b) in iter ...`) binds the tuple
+		// value to a synthetic name and then emits one fieldLoad per name
+		// against the tuple's `_0` / `_1` / … field convention (matching
+		// parseParenExpr's tuple-literal lowering).
 		scope.pushScope()
 		var loopVarSlot = 0
-		if iterName == "_" 'discardIter'
+		let isDestructure = destructureNames.count() > 0
+		let effectiveIterName = "__forin_tuple_{forToken.line}_{forToken.column}" if isDestructure else iterName
+		if effectiveIterName == "_" 'discardIter'
 			loopVarSlot = scope.declare("__forin_var_{forToken.line}_{forToken.column}", varType: MaxonType.unresolved, mutable: false)
 		end 'discardIter' else 'namedIter'
-			loopVarSlot = defineVariableWithType(iterName, varType: MaxonType.unresolved)
+			loopVarSlot = defineVariableWithType(effectiveIterName, varType: MaxonType.unresolved)
 		end 'namedIter'
 		module.appendOp(bodyBlock, op: MaxonOp.varDecl(loopVarSlot, value: currentResultName, slotType: MaxonType.unresolved, range: stmtRange))
+		if isDestructure 'emitFieldBindings'
+			for i in 0 upto destructureNames.count() 'eachDestructure'
+				let destName = try destructureNames.get(i) otherwise panic("parseForInIterable: destructureNames.get OOB at {i}")
+				let fieldName = "_{i}".toByteArray()
+				let fieldLoadName = freshSynthName()
+				module.appendOp(bodyBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: currentResultName, fieldName: fieldName, range: stmtRange))
+				var destSlot = 0
+				if destName == "_" 'discardField'
+					destSlot = scope.declare("__forin_destfield_{forToken.line}_{forToken.column}_{i}", varType: MaxonType.unresolved, mutable: false)
+				end 'discardField' else 'namedField'
+					destSlot = defineVariableWithType(destName, varType: MaxonType.unresolved)
+				end 'namedField'
+				module.appendOp(bodyBlock, op: MaxonOp.varDecl(destSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
+			end 'eachDestructure'
+		end 'emitFieldBindings'
 
 		// Parse the body inside the loop context so `break`/`continue`
 		// resolve to this loop's labels. `continue` -> header (where advance
@@ -5103,8 +5172,43 @@ export type Parser
 	// --- Expression Parsing ---
 
 	// Pratt expression parser: single loop handles all binary precedence levels.
+	// `to`/`upto` in expression position lower to Range.create/OpenRange.create
+	// here so the inner Pratt loop never sees them as infix operators. The
+	// for-in header parser sets `inForInHeader` so its outermost call leaves
+	// the trailing `to`/`upto` for the for-in fast-path while-loop desugaring;
+	// the saved-and-cleared pattern matches C#'s `_inForInIterable` capture so
+	// every recursive sub-expression (binop RHS, parens, call args, the range
+	// end expression itself) lowers ranges normally.
 	function parseExpression(block IrBlock) returns ExprResult throws ParserError
-		return try parseExpressionBP(block, minBP: 0)
+		let suppressRangeLowering = inForInHeader
+		inForInHeader = false
+		let result = try parseExpressionBP(block, minBP: 0)
+		inForInHeader = suppressRangeLowering
+		if suppressRangeLowering 'suppressed'
+			return result
+		end 'suppressed'
+		let nextKind = cursor.current().kind
+		if nextKind != TokenKind.to and nextKind != TokenKind.upto 'noRange'
+			return result
+		end 'noRange'
+		let rangeToken = try consume()
+		let inclusive = rangeToken.kind == TokenKind.to
+		let endResult = try parseExpression(currentBlock)
+		let calleeName = "Range.create" if inclusive else "OpenRange.create"
+		let endLabel = "finish" if inclusive else "endExclusive"
+		var args = ByteArrayArray.create()
+		args.push(exprName(result))
+		args.push(exprName(endResult))
+		var argLabels = StringArray.create()
+		argLabels.push("")
+		argLabels.push(endLabel)
+		var argTypes = MaxonTypeArray.create()
+		argTypes.push(exprType(result))
+		argTypes.push(exprType(endResult))
+		var argRanges = SourceRangeArray.create()
+		argRanges.push(SourceRange.ofToken(rangeToken))
+		argRanges.push(SourceRange.ofToken(rangeToken))
+		return emitCallAndResult(currentBlock, calleeName: calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.ofToken(rangeToken))
 	end 'parseExpression'
 
 	// entry: cursor AT first operand's first token.
@@ -7383,7 +7487,14 @@ export type Parser
 		end 'isClos'
 		let openToken = cursor.current()
 		try eat(TokenKind.leftParen)
+		// Parenthesized sub-expression: clear `inForInHeader` so an inner
+		// `to`/`upto` lowers to Range.create/OpenRange.create (the for-in
+		// header's range-suppression only applies to the unparenthesized
+		// top-level bounds).
+		let savedInForInHeader = inForInHeader
+		inForInHeader = false
 		let inner = try parseExpression(block)
+		inForInHeader = savedInForInHeader
 		if not at(TokenKind.comma) 'plainParen'
 			try expect(TokenKind.rightParen)
 			return inner

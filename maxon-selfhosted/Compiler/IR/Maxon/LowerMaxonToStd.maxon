@@ -2490,6 +2490,25 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerCursor'
+		// `it.createIterator()` on a receiver that already conforms to
+		// `Iterator` (without `Iterable`) is a no-op — Iterators are their
+		// own iterators. The `for-in` parser unconditionally emits the
+		// `createIterator` tryMethodCall so it doesn't have to know whether
+		// the source resolves to an Iterable or to a bare Iterator; this
+		// branch resolves the difference at lowering time by aliasing the
+		// result to the receiver and binding the error flag to zero. Used by
+		// `for v in (1 upto 4).createIterator() ...` (RangeIterator) and any
+		// other "iterate the iterator directly" pattern.
+		if String.from(methodName) == "createIterator" 'maybeIteratorPassthrough'
+			let createIteratorCallee = "{receiverStructName}.createIterator"
+			let receiverHasCreateIterator = self.project.funcSignatures.contains(createIteratorCallee)
+			let receiverIsIterator = typeConformsTo(self.project, t: receiverType, interfaceName: "Iterator")
+			if not receiverHasCreateIterator and receiverIsIterator 'isIteratorPassthrough'
+				self.aliasName(result, toId: receiverId)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				return
+			end 'isIteratorPassthrough'
+		end 'maybeIteratorPassthrough'
 		// Resolved callee name (post-overload disambiguation) was stashed by
 		// `resolveAllCalls` during TypeResolution. Same invariant as
 		// `lowerCall`: a missing entry is a compiler bug.

@@ -1,0 +1,55 @@
+// Test: array-from-literal
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	return arr.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %2 = mir.mov_imm 30 : i64
+    %3 = mir.mov_imm 3 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @stdlib.__managed_mem_create(%3, %4)
+    %7 = mir.mov_imm 0 : i64
+    %8, %9 = mir.try_call @stdlib.__managed_mem_set(%5, %7, %0)
+    %10 = mir.mov_imm 1 : i64
+    %11, %12 = mir.try_call @stdlib.__managed_mem_set(%5, %10, %1)
+    %13 = mir.mov_imm 2 : i64
+    %14, %15 = mir.try_call @stdlib.__managed_mem_set(%5, %13, %2)
+    %16 = mir.mov_imm 3 : i64
+    %17, %18 = mir.try_call @stdlib.__managed_mem_set_length(%5, %16)
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    %26 = mir.mov_imm 40 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    %28 = mir.mov_imm 0 : i64
+    mir.store %28, %27, 0
+    %29 = mir.mov_imm 0 : i64
+    mir.store %29, %27, 8
+    %30 = mir.mov_imm 0 : i64
+    mir.store %30, %27, 16
+    %31 = mir.mov_imm 8 : i64
+    mir.store %31, %27, 24
+    %32 = mir.mov_imm 0 : i64
+    mir.store %32, %27, 32
+    mir.store %27, %25, 0
+    mir.store %5, %25, 0
+    %22 = mir.global_addr @__layout_Array_Int
+    %23 = mir.call @Array.count(%25, %22)
+    %33 = mir.mov_imm 125 : i64
+    %34 = mir.cmp ugt, %23, %33
+    mir.cond_br %34 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %35 = mir.global_addr @__panic_msg_0
+    %36 = mir.call @mrt_panic(%35)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

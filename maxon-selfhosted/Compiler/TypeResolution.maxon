@@ -2092,6 +2092,18 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 			qualifiedCallee = extensionCallee
 		end 'foundExt'
 	end 'noDirectReturn'
+	// `it.createIterator()` on a type that conforms to Iterator (but does not
+	// define its own createIterator) is the iterator-passthrough identity —
+	// same shape lowerMethodCall recognises. The producer-type walk needs
+	// this answer too so the result's slotType becomes the receiver's
+	// concrete iterator type (RangeIterator, etc.) rather than `<unresolved>`;
+	// without this, downstream `.advance()` / `.current()` calls land on an
+	// unresolved receiver and lower as an interface-dispatch stub.
+	if not project.funcReturnTypes.contains(qualifiedCallee) and String.from(methodName) == "createIterator" 'maybeIteratorPassthrough'
+		if typeConformsTo(project, t: normReceiver, interfaceName: "Iterator") 'isIteratorPassthrough'
+			return normReceiver
+		end 'isIteratorPassthrough'
+	end 'maybeIteratorPassthrough'
 	let returnType = try project.funcReturnTypes.get(qualifiedCallee) otherwise return MaxonType.unresolved
 	let raw = match returnType 'unwrap'
 		void gives MaxonType.unresolved
