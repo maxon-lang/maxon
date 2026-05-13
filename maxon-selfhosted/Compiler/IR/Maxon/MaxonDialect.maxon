@@ -1540,6 +1540,15 @@ export function readerCanCallStdlibInternals(readerFilePath FilePath) returns bo
 	return name == "Internals.maxon" or name == "Builtins.maxon" or name == "stdlib-bootstrap.maxon"
 end 'readerCanCallStdlibInternals'
 
+// True iff `path` is the virtual `stdlib-bootstrap.maxon` synthesis anchor.
+// Functions attributed there are compiler-synthesized helpers (struct-literal
+// field-init thunks, witness-table dispatch shims, etc.); they manipulate
+// struct fields directly as part of the lowering contract and aren't subject
+// to source-level visibility (E3014 unexported-field-access).
+export function isStdlibBootstrapVirtualPath(path FilePath) returns bool
+	return path.filename() == "stdlib-bootstrap.maxon"
+end 'isStdlibBootstrapVirtualPath'
+
 // Look up the visibility/sourceFilePath for a function. Missing entries
 // default to `(global, stdlibBootstrapPath)` — stdlib functions are
 // restored from the cache without a sidecar entry, and treating them as

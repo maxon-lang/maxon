@@ -1,0 +1,41 @@
+// Test: enum-exhaustive.float-backed-range
+enum Threshold
+		low = 0.1
+		medium = 0.5
+		high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let t = Threshold.medium
+	match t 'check'
+		low to high then return 1
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %2 = mir.mov_imm 4591870180066957722 : f64
+    %3 = mir.cmp feq, %0, %2
+    %4 = mir.mov_imm 4602678819172646912 : f64
+    %5 = mir.cmp feq, %0, %4
+    %6 = mir.or.i64 %3, %5
+    %7 = mir.mov_imm 4606281698874543309 : f64
+    %8 = mir.cmp feq, %0, %7
+    %9 = mir.or.i64 %6, %8
+    mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %10 = mir.mov_imm 1 : i64
+    mir.ret %10
+  check_0.next0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  }
+}
+---

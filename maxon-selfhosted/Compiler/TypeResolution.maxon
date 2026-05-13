@@ -926,7 +926,7 @@ export function layoutAllStructs(project Project)
 			let stdType = resolveMaxonTypeToStd(project, ref: f.fieldType)
 			let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
 			let aligned = roundUpToMultiple(nextOffset, multiple: widthBytes)
-			newFields.push(StructField.create(f.name, fieldType: f.fieldType, offset: aligned as FieldOffset, isMutable: f.isMutable, hasDefault: f.hasDefault, offsetResolved: true))
+			newFields.push(StructField.create(f.name, fieldType: f.fieldType, offset: aligned as FieldOffset, isMutable: f.isMutable, hasDefault: f.hasDefault, offsetResolved: true, isExported: f.isExported))
 			nextOffset = aligned + widthBytes
 		end 'eachField'
 		// Pad struct size up to 8 bytes so `__mm_alloc`'s 8-byte alignment
@@ -4160,6 +4160,74 @@ function validateSelfField(project Project, fieldName String, typeName String, s
 	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Unknown field '{fieldName}' in type '{typeName}'", line: range.line, column: range.column, filePath: filePath)
 end 'validateSelfField'
 
+// E3014: walk every fieldLoad/fieldStore and emit `cannot access unexported
+// field` when the receiver's struct field is not marked `export` AND the
+// access happens outside the type's own methods. Struct-literal init paths
+// (`Value{field: ...}` lowered via `fieldStore` with `isInit: true`) stay
+// unrestricted — the type's own shape determines which fields exist; only
+// post-construction access is governed by visibility.
+function validateFieldVisibility(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateFieldVisibility: funcIdx OOB")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateFieldVisibility: producerTypesPerFunc.get({funcIdx}) failed")
+		// Compiler-synthesized helpers (struct-literal field-init, generic
+		// monomorphization thunks, witness-table thunks) are attributed to
+		// the virtual `stdlib-bootstrap.maxon` path. They synthesize field
+		// reads/writes that aren't bound by source-level visibility — the
+		// compiler is its own privileged access path. Skip them wholesale.
+		if isStdlibBootstrapVirtualPath(func.sourceFilePath) 'syntheticHelper'
+			continue
+		end 'syntheticHelper'
+		let enclosingType = try enclosingTypeName(func.name) otherwise ""
+		// Synthesized functions (closure lifts, etc.) carry an empty
+		// sourceFilePath; fall back to the module's compile-driver
+		// filePath so diagnostics still anchor to a real file.
+		var funcFilePath = filePath
+		if not func.sourceFilePath.isEmpty() 'haveFuncPath'
+			funcFilePath = func.sourceFilePath
+		end 'haveFuncPath'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateFieldVisibility: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateFieldVisibility: opIdx OOB")
+				if op.name == "fieldLoad" 'isLoad'
+					match op 'extract'
+						fieldLoad(_, receiver, fieldName, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: false, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
+						default panic("unreachable: already checked name == fieldLoad")
+					end 'extract'
+				end 'isLoad' else if op.name == "fieldStore" 'isStore'
+					match op 'extract'
+						fieldStore(receiver, fieldName, _, isInit, range) then validateFieldVisibilityOp(project, receiver: receiver, fieldName: String.from(fieldName), isInit: isInit, enclosingType: enclosingType, producerTypes: producerTypes, range: range, filePath: funcFilePath)
+						default panic("unreachable: already checked name == fieldStore")
+					end 'extract'
+				end 'isStore'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateFieldVisibility'
+
+function validateFieldVisibilityOp(project Project, receiver ByteArray, fieldName String, isInit bool, enclosingType String, producerTypes ProducerTypeMap, range SourceRange, filePath FilePath)
+	// Struct-literal init paths are always allowed; the type's shape
+	// dictates what fields exist regardless of visibility.
+	if isInit 'initAlwaysOk'
+		return
+	end 'initAlwaysOk'
+	let receiverType = lookupProducerType(producerTypes, name: receiver)
+	let structName = try maxonTypeStructName(project, t: receiverType) otherwise return
+	// Inside the type's own methods every field is reachable — that's the
+	// whole point of being a method on this type.
+	if structName == enclosingType 'sameType'
+		return
+	end 'sameType'
+	let structType = try project.structTypes.get(structName) otherwise return
+	let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return
+	let field = try structType.fields.get(fieldIdx) otherwise return
+	if field.isExported 'exported'
+		return
+	end 'exported'
+	reportCompileError(project, code: ErrorCode.semanticUnexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{structName}'", line: range.line, column: range.column, filePath: filePath)
+end 'validateFieldVisibilityOp'
+
 // --- Top-level let resolution ---
 //
 // The parser captures every top-level `let NAME = <init>` and `var NAME =
@@ -4870,6 +4938,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	dispatchEqualityOps(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
 	validateSelfFields(project, module: module, filePath: filePath)
+
+	// E3014: emit `cannot access unexported field` for fieldLoad/fieldStore
+	// ops whose receiver's struct has the field marked non-exported AND the
+	// access happens outside the type's own methods (struct-literal init
+	// stays unrestricted — the type's shape determines what fields exist).
+	// Runs after `fillUnresolvedTypes` so the receiver's MaxonType is
+	// concrete; before lowering so the diagnostic fires before the IR
+	// builds machine code for a still-erroneous access.
+	validateFieldVisibility(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
 	// Visibility filtering: emit E3008 / E3088 for `call` ops whose only
 	// matching candidate is hidden from the reading file. Runs before

@@ -3134,18 +3134,27 @@ export type Parser
 				break
 			end 'isEnd'
 
-			// Field/method-level visibility modifiers. The C# bootstrap
-			// accepts `export` and the contextual `module` modifier on
-			// instance fields, static fields, static methods, and
-			// instance methods. Self-hosted treats these as advisory for
-			// now — the modifier is consumed but the underlying decl
-			// inherits the enclosing type's visibility tier.
-			_ = accept(TokenKind.export)
+			// Field/method-level visibility modifiers. The `export` keyword
+			// on a `var`/`let` field marks it as externally accessible
+			// (`v.field` outside the type's own methods); without it the
+			// field is private and external access raises E3014. The
+			// contextual `module` modifier is parsed but treated as
+			// advisory (visibility tier inheritance via the enclosing
+			// type's modifier).
+			var isExportedField = accept(TokenKind.export)
 			let maybeMod = cursor.current()
 			if maybeMod.kind == TokenKind.identifier and maybeMod.value == "module" 'maybeModuleField'
 				let nextField = try cursor.peek(1) otherwise Token.eof()
 				if nextField.kind == TokenKind.var or nextField.kind == TokenKind.let or nextField.kind == TokenKind.static or nextField.kind == TokenKind.function or nextField.kind == TokenKind.typealias 'isModuleField'
 					try cursor.advance() otherwise break
+					// `module var` makes the field accessible from any file
+					// in the same module — the visibility check at field
+					// load/store sites doesn't currently distinguish module-
+					// scoped from fully-exported, so treat both as
+					// externally-accessible (suppresses E3014). A future
+					// cross-module visibility refinement would split the
+					// flag back out.
+					isExportedField = true
 				end 'isModuleField'
 			end 'maybeModuleField'
 
@@ -3184,7 +3193,7 @@ export type Parser
 				// Offset is a placeholder; `layoutAllStructs` in TypeResolution
 				// stamps the real offset (and flips `offsetResolved`) once
 				// `field.fieldType` has been resolved against typealiases.
-				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: 0, isMutable: isMutableField, hasDefault: hasFieldDefault, offsetResolved: false))
+				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: 0, isMutable: isMutableField, hasDefault: hasFieldDefault, offsetResolved: false, isExported: isExportedField))
 				try skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.typealias 'isInnerAlias'
 				try eat(TokenKind.typealias)

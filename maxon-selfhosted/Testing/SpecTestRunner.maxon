@@ -133,9 +133,11 @@ let whitelist = ["basics",
 	// "enum-allcasenames" (7/8) — `string-backed` (same parser gap).
 	// "enum-ordinal" (7/9) — `string-backed` / `char-backed` (same parser gap).
 	"match-range-single-value",
-	// "enum-match-exhaustive" — 17/17 on x64-windows but 16/17 on wasm32-wasi:
-	// `enum-exhaustive.float-backed-range` hits a pre-existing wasm-backend
-	// float-backed-enum codegen bug (i64/f64 type mismatch in wasm validator).
+	// `enum-match-exhaustive` re-enabled 2026-05-12: now 17/17 on both
+	// x64-windows and wasm32-wasi (the previous wasm float-backed-enum
+	// validator mismatch was resolved by the narrow-int storage work in
+	// Phases A-K of the enum-backing plan).
+	"enum-match-exhaustive",
 	// Phase 9 Stage 4: union destructors landed, so the previously-leaking
 	// associated-value specs no longer hit exit-code-101. `enum-match-only`
 	// stays off — `enum-map-key-still-works.test` panics on a Hashable
@@ -153,6 +155,8 @@ let whitelist = ["basics",
 	"enum-nested-struct-backing",
 	"union-struct-backing",
 	"enum-narrow-storage",
+	"match-exhaustive-default-panic",
+	"export-var-fields",
 	// `enum-hashable` panics on `simple-enum-as-map-key` — `Map with
 	// (Color, Int)` needs a Hashable witness for the bare-enum element
 	// type, and BuildWitnessTables doesn't emit one. Same gap blocks

@@ -83,21 +83,43 @@ module {
     mir.cond_br %13 [then: search_0.exit(), else: search_0()]
   search_0:
     %62 = mir.load %42, 0 width: qword
-    %63 = mir.load %62, 0 width: qword
-    %64 = mir.load %62, 8 width: qword
-    %65 = mir.load %62, 24 width: qword
-    %66 = mir.mul.i64 %64, %65
-    %67 = mir.add.i64 %63, %66
-    %68 = mir.mov_imm 0 : i64
-    %69 = mir.load_byte %67, %68
-    %70 = mir.load %67, 0 width: qword
-    %71 = mir.mov_imm 1 : i64
-    %72 = mir.cmp eq, %65, %71
-    %73 = mir.sub.i64 %69, %70
-    %74 = mir.mul.i64 %72, %73
-    %75 = mir.add.i64 %70, %74
-    %76 = mir.add.i64 %75, %68
-    %18 = mir.load %76, 0 width: qword
+    mir.br inlined_stdlib.__managed_mem_cursor_current_0()
+  inlined_stdlib.__managed_mem_cursor_current_0:
+    %66 = mir.load %62, 0 width: qword
+    %67 = mir.mov_imm 8 : i64
+    %68 = mir.add.i64 %62, %67
+    %69 = mir.load %68, 0 width: qword
+    %70 = mir.mov_imm 24 : i64
+    %71 = mir.add.i64 %62, %70
+    %72 = mir.load %71, 0 width: qword
+    %73 = mir.mul.i64 %69, %72
+    %74 = mir.add.i64 %66, %73
+    %75 = mir.mov_imm 1 : i64
+    %76 = mir.cmp eq, %72, %75
+    mir.cond_br %76 [then: inlined_stdlib.__managed_mem_cursor_current_1(), else: inlined_stdlib.__managed_mem_cursor_current_2()]
+  inlined_stdlib.__managed_mem_cursor_current_1:
+    %77 = mir.mov_imm 0 : i64
+    %78 = mir.load_byte %74, %77
+    mir.br inline_cont_findEntry_2(%78)
+  inlined_stdlib.__managed_mem_cursor_current_2:
+    %79 = mir.mov_imm 2 : i64
+    %80 = mir.cmp eq, %72, %79
+    mir.cond_br %80 [then: inlined_stdlib.__managed_mem_cursor_current_3(), else: inlined_stdlib.__managed_mem_cursor_current_4()]
+  inlined_stdlib.__managed_mem_cursor_current_3:
+    %81 = mir.load %74, 0 width: halfword
+    mir.br inline_cont_findEntry_2(%81)
+  inlined_stdlib.__managed_mem_cursor_current_4:
+    %82 = mir.mov_imm 4 : i64
+    %83 = mir.cmp eq, %72, %82
+    mir.cond_br %83 [then: inlined_stdlib.__managed_mem_cursor_current_5(), else: inlined_stdlib.__managed_mem_cursor_current_6()]
+  inlined_stdlib.__managed_mem_cursor_current_5:
+    %84 = mir.load %74, 0 width: word
+    mir.br inline_cont_findEntry_2(%84)
+  inlined_stdlib.__managed_mem_cursor_current_6:
+    %85 = mir.load %74, 0 width: qword
+    mir.br inline_cont_findEntry_2(%85)
+  inline_cont_findEntry_2:
+    %18 = mir.load %86, 0 width: qword
     %20 = mir.call @String.equals(%18, %34)
     mir.cond_br %20 [then: found_0(), else: inlined_ArrayIterator.advance_0()]
   search_0.exit:
@@ -118,12 +140,12 @@ module {
     mir.store %23, %29, 0 width: qword
     %30 = mir.mov_imm 1 : i64
     mir.store %30, %29, 8 width: qword
-    %77 = mir.mov_imm 8 : i64
-    %78 = mir.call @mrt_alloc(%77)
-    mir.store %29, %78, 0 width: qword
-    mir.ret %78
+    %64 = mir.mov_imm 8 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %29, %65, 0 width: qword
+    mir.ret %65
   found_0:
-    mir.ret %76
+    mir.ret %86
   }
   func @main() -> u8 {
   entry:

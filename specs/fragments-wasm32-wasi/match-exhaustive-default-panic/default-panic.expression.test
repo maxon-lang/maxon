@@ -1,0 +1,51 @@
+// Test: default-panic.expression
+function main() returns ExitCode
+	let x = 3
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+		3 gives 30
+		default panic("unexpected value")
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    mir.br eval_0.next0()
+  eval_0.merge:
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %17, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  eval_0.next0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.cmp eq, %0, %8
+    mir.cond_br %9 [then: eval_0.case1(), else: eval_0.next1()]
+  eval_0.case1:
+    %10 = mir.mov_imm 20 : i64
+    mir.br eval_0.merge(%10)
+  eval_0.next1:
+    %11 = mir.mov_imm 3 : i64
+    %12 = mir.cmp eq, %0, %11
+    mir.cond_br %12 [then: eval_0.case2(), else: eval_0.case3()]
+  eval_0.case2:
+    %13 = mir.mov_imm 30 : i64
+    mir.br eval_0.merge(%13)
+  eval_0.case3:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+    %16 = mir.mov_imm 0 : i64
+    mir.ret %16
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_1
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %17
+  }
+}
+---

@@ -1,0 +1,42 @@
+// Test: export-var-basic
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	export var n Integer
+	var private Integer
+
+	static function create() returns Self
+		return Value{n: 42, private: 100}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let v = Value.create()
+	return v.n
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 16 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    %5 = mir.mov_imm 42 : i64
+    mir.store %5, %4, 0 width: qword
+    %6 = mir.mov_imm 100 : i64
+    mir.store %6, %4, 8 width: qword
+    %2 = mir.load %4, 0 width: qword
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %2, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

@@ -1,0 +1,68 @@
+// Test: enum-exhaustive.default-throws
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+enum AppError
+		unmatched
+end 'AppError'
+
+typealias ColorCode = int(0 to 10)
+
+function checkColor(c Color) returns ColorCode throws AppError
+	match c 'check'
+		red then return 1
+		default throws AppError.unmatched
+	end 'check'
+end 'checkColor'
+
+function main() returns ExitCode
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @checkColor(local0: u8) -> u8 {
+  entry:
+    %8 = mir.param local0 : u8
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp eq, %8, %2
+    mir.cond_br %3 [then: check_0.case0(), else: check_0.case1()]
+  check_0.case0:
+    %4 = mir.mov_imm 1 : i64
+    %5 = mir.mov_imm 0 : i64
+    mir.error_return %4, %5
+  check_0.case1:
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.mov_imm 1 : i64
+    mir.error_return %6, %7
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1, %2 = mir.try_call @checkColor(%0)
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %2, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %6 = mir.mov_imm 99 : i64
+    mir.ret %6
+  try_0.merge:
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %1, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %1
+  }
+}
+---

@@ -2247,9 +2247,17 @@ export type StructField
 	// panic on `not offsetResolved` to catch any code path that bypasses the
 	// pass — silent layout corruption would otherwise be possible.
 	export var offsetResolved bool
+	// True when the field declaration carried the `export` modifier. Fields
+	// without it are accessible only from inside the type's own methods —
+	// external read/write sites (`v.field` outside `type Value`) emit E3014
+	// `semanticUnexportedFieldAccess`. Struct-literal initialization
+	// (`Value{field: ...}`) is always permitted regardless: the type's own
+	// shape determines what fields exist, and visibility only governs access
+	// after construction.
+	export var isExported bool
 
-	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false, offsetResolved bool = false) returns StructField
-		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault, offsetResolved: offsetResolved}
+	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false, offsetResolved bool = false, isExported bool = false) returns StructField
+		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault, offsetResolved: offsetResolved, isExported: isExported}
 	end 'create'
 end 'StructField'
 

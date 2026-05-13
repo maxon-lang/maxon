@@ -1,0 +1,68 @@
+// Test: default-panic.enum-range-expression
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+	add
+	sub
+	mul
+	exec(code Integer)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.mul
+	let result = match op 'eval'
+		add to sub gives 1
+		mul gives 2
+		default panic("unexpected op")
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %20 = mir.mov_imm 16 : i64
+    %21 = mir.mov_imm 0 : i64
+    %22 = mir.mov_imm 2 : i64
+    %23 = mir.call @stdlib.__mm_alloc(%20, %21, %22)
+    mir.store %22, %23, 0 width: qword
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %23, 8 width: qword
+    %3 = mir.load %23, 0 width: qword
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp ge, %3, %4
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.cmp le, %3, %6
+    %8 = mir.and.i64 %5, %7
+    mir.cond_br %8 [then: eval_0.case0(), else: eval_0.next0()]
+  eval_0.merge:
+    %25 = mir.mov_imm 125 : i64
+    %26 = mir.cmp ugt, %19, %25
+    mir.cond_br %26 [then: __range_panic_0(), else: __range_ok_0()]
+  eval_0.case0:
+    %11 = mir.mov_imm 1 : i64
+    mir.br eval_0.merge(%11)
+  eval_0.next0:
+    %12 = mir.load %23, 0 width: qword
+    %13 = mir.mov_imm 2 : i64
+    %14 = mir.cmp eq, %12, %13
+    mir.cond_br %14 [then: eval_0.case1(), else: eval_0.case2()]
+  eval_0.case1:
+    %15 = mir.mov_imm 2 : i64
+    mir.br eval_0.merge(%15)
+  eval_0.case2:
+    %16 = mir.global_addr @__panic_msg_0
+    %17 = mir.call @mrt_panic(%16)
+    %18 = mir.mov_imm 0 : i64
+    mir.ret %18
+  __range_panic_0:
+    %27 = mir.global_addr @__panic_msg_1
+    %28 = mir.call @mrt_panic(%27)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

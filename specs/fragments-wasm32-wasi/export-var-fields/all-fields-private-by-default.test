@@ -1,0 +1,48 @@
+// Test: all-fields-private-by-default
+
+typealias Integer = int(i64.min to i64.max)
+
+type Simple
+	var x Integer
+	var y Integer
+
+	static function make(a Integer, b Integer) returns Self
+		return Simple{x: a, y: b}
+	end 'make'
+
+	function sum() returns Integer
+		return x + y
+	end 'sum'
+end 'Simple'
+
+function main() returns ExitCode
+	let s = Simple.make(20, b: 22)
+	return s.sum()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 20 : i64
+    %1 = mir.mov_imm 22 : i64
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %0, %6, 0 width: qword
+    mir.store %1, %6, 8 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %6, 8 width: qword
+    %9 = mir.add.i64 %7, %8
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_0
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

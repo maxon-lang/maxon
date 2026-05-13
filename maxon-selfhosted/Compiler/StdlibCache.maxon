@@ -97,7 +97,10 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // land in `project.staticRdataValues` and `pipeline.globalData`; stdlib
 // array literals routed through them produce different rdata bytes than
 // the pre-pass runtime-allocated builds.
-let CACHE_FORMAT_VERSION = 34
+// v35: per-field `StructField.isExported` flag for E3014
+// `semanticUnexportedFieldAccess`. Encoded payload grows by one byte per
+// field.
+let CACHE_FORMAT_VERSION = 35
 
 // ============================================================
 // Types
@@ -666,6 +669,9 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			// keep the `offsetResolved: true` flag that the producing run's
 			// `layoutAllStructs` pass stamped.
 			writeBoolByte(buf, b: field.offsetResolved)
+			// Cache v35: round-trip the per-field `export` flag used by the
+			// E3014 unexported-field-access diagnostic.
+			writeBoolByte(buf, b: field.isExported)
 		end 'eachField'
 
 		// Cache v7: persist the per-struct inner-typealias map so cache-hit
@@ -1136,7 +1142,10 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			// producing run has executed `layoutAllStructs`.
 			let (offsetResolved, pOr) = readBoolByte(buf, offset: pos)
 			pos = pOr
-			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable, offsetResolved: offsetResolved))
+			// Cache v35: read back the per-field `export` flag.
+			let (isExported, pEx) = readBoolByte(buf, offset: pos)
+			pos = pEx
+			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable, offsetResolved: offsetResolved, isExported: isExported))
 		end 'eachField'
 
 		// Cache v7: read back the per-struct inner-typealias map. The
@@ -1516,7 +1525,7 @@ end 'translateIrInterface'
 function translateStructType(project Project, data StdlibCacheData, st StructType) returns StructType
 	var fields = StructFieldArray.create()
 	for f in st.fields 'eachField'
-		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable, offsetResolved: f.offsetResolved))
+		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable, offsetResolved: f.offsetResolved, isExported: f.isExported))
 	end 'eachField'
 	var translatedInner = ResolvedInnerAliasMap.create()
 	for (aliasName, aliasType) in st.innerAliases 'eachInner'

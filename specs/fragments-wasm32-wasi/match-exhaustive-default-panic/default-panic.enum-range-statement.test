@@ -1,0 +1,49 @@
+// Test: default-panic.enum-range-statement
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+	add
+	sub
+	mul
+	exec(code Integer)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.sub
+	match op 'check'
+		add to mul then return 1
+		default panic("unexpected op")
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %12 = mir.mov_imm 16 : i64
+    %13 = mir.mov_imm 0 : i64
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.call @stdlib.__mm_alloc(%12, %13, %14)
+    mir.store %14, %15, 0 width: qword
+    %16 = mir.mov_imm 0 : i64
+    mir.store %16, %15, 8 width: qword
+    %2 = mir.load %15, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ge, %2, %3
+    %5 = mir.mov_imm 2 : i64
+    %6 = mir.cmp le, %2, %5
+    %7 = mir.and.i64 %4, %6
+    mir.cond_br %7 [then: check_0.case0(), else: check_0.case1()]
+  check_0.case0:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  check_0.case1:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+    %11 = mir.mov_imm 0 : i64
+    mir.ret %11
+  }
+}
+---

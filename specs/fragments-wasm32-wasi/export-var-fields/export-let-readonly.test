@@ -1,0 +1,39 @@
+// Test: export-let-readonly
+
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+	export let version Integer
+
+	static function create() returns Self
+		return Config{version: 42}
+	end 'create'
+end 'Config'
+
+function main() returns ExitCode
+	let c = Config.create()
+	return c.version
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    %5 = mir.mov_imm 42 : i64
+    mir.store %5, %4, 0 width: qword
+    %2 = mir.load %4, 0 width: qword
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %2, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_0
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

@@ -85,9 +85,9 @@ module {
     x64.mov r8, r12
     x64.jmp loop_0.exit
   inlined_ArrayIterator.advance_0:
-    x64.mov rsi, [r8+0] (8b)
-    x64.mov rdi, [rsi+8] (8b)
-    x64.mov rax, [rsi+16] (8b)
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rdi, [r9+8] (8b)
+    x64.mov rax, [r9+16] (8b)
     x64.mov rcx, rdi
     x64.add rcx, 1
     x64.mov rdx, rcx
@@ -101,8 +101,8 @@ module {
     x64.sub rdx, rax
     x64.imul rdx, rbx
     x64.add rdi, rcx
-    x64.mov [rsi+8], rdi (8b)
-    x64.xor esi, esi
+    x64.mov [r9+8], rdi (8b)
+    x64.xor r9d, r9d
     x64.test rdx, rdx
     x64.je __phi_trampoline_9_0
   inlined_ArrayIterator.advance_1:
@@ -110,38 +110,55 @@ module {
   inline_cont_Container.sum_1:
     x64.test rdx, rdx
     x64.je __phi_trampoline_12_0
-    x64.mov r8, r9
+    x64.mov r8, rsi
     x64.jmp loop_0.exit
   loop_0:
     x64.mov r9, [r8+0] (8b)
-    x64.mov rsi, [r9+24] (8b)
-    x64.mov rdi, [r9+8] (8b)
-    x64.mov rax, [r9+0] (8b)
-    x64.imul rdi, rsi
-    x64.add rax, rdi
+  inlined_stdlib.__managed_mem_cursor_current_0:
+    x64.mov rsi, r9
+    x64.add rsi, 24
+    x64.mov rdi, r9
+    x64.add rdi, 8
+    x64.mov rax, [rsi+0] (8b)
+    x64.mov rsi, [rdi+0] (8b)
+    x64.mov rdi, [r9+0] (8b)
+    x64.imul rsi, rax
+    x64.add rdi, rsi
+    x64.cmp rax, 1
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_2
+  inlined_stdlib.__managed_mem_cursor_current_1:
     x64.xor r9d, r9d
-    x64.mov rdi, [rax+0] (8b)
-    x64.mov [rbp-8], rax
+    x64.mov [rbp-8], rdi
     x64.mov [rbp-16], r9
     x64.movzx rax, byte ptr [rax+0]
     x64.mov r9, [rbp-8]
-    x64.sub r9, rdi
-    x64.cmp rsi, 1
-    x64.sete rsi
-    x64.imul rsi, r9
-    x64.add rdi, rsi
-    x64.add rdi, 0
-    x64.mov r9, r12
-    x64.add r9, rdi
+    x64.jmp inline_cont_Container.sum_2
+  inlined_stdlib.__managed_mem_cursor_current_2:
+    x64.cmp rax, 2
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_4
+  inlined_stdlib.__managed_mem_cursor_current_3:
+    x64.movzx r9, [rdi+0] (2b)
+    x64.jmp inline_cont_Container.sum_2
+  inlined_stdlib.__managed_mem_cursor_current_4:
+    x64.cmp rax, 4
+    x64.jne inlined_stdlib.__managed_mem_cursor_current_6
+  inlined_stdlib.__managed_mem_cursor_current_5:
+    x64.mov r9, [rdi+0] (4b)
+    x64.jmp inline_cont_Container.sum_2
+  inlined_stdlib.__managed_mem_cursor_current_6:
+    x64.mov r9, [rdi+0] (8b)
+  inline_cont_Container.sum_2:
+    x64.mov rsi, r12
+    x64.add rsi, r9
     x64.jmp inlined_ArrayIterator.advance_0
   loop_0.exit:
     x64.epilogue
     x64.ret
   __phi_trampoline_9_0:
-    x64.mov rdx, rsi
+    x64.mov rdx, r9
     x64.jmp inline_cont_Container.sum_1
   __phi_trampoline_12_0:
-    x64.mov r12, r9
+    x64.mov r12, rsi
     x64.jmp loop_0
   }
   func @main() -> u32 {

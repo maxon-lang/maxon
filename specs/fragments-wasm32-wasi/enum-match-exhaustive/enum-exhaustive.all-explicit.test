@@ -1,0 +1,46 @@
+// Test: enum-exhaustive.all-explicit
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.green
+	match c 'check'
+		red then return 1
+		green then return 2
+		blue then return 3
+	end 'check'
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br check_0.next0()
+  check_0.next0:
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.cmp eq, %0, %5
+    mir.cond_br %6 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %7 = mir.mov_imm 2 : i64
+    mir.ret %7
+  check_0.next1:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.cmp eq, %0, %8
+    mir.cond_br %9 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %10 = mir.mov_imm 3 : i64
+    mir.ret %10
+  check_0.next2:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+    %13 = mir.mov_imm 0 : i64
+    mir.ret %13
+  }
+}
+---

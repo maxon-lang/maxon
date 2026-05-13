@@ -2697,7 +2697,17 @@ type MaxonToStdLowering
 			for argName in args 'eachCursorArg'
 				cursorArgIds.push(self.resolveName(argName))
 			end 'eachCursorArg'
-			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, args: cursorArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+			// Element type from the cursor's generic arg, when the
+			// receiver is a fully-substituted instance. Inside the
+			// generic stdlib body (where the cursor is
+			// `__ManagedMemoryCursor with Element`), this yields a
+			// `typeParameter` MaxonType and the call site does no
+			// sign-extension; the user-side substitution context (if
+			// available through methodCallResultType's receiver
+			// substitution) supplies the concrete type at lowering for
+			// monomorphized callers.
+			let cursorElementType = signExtendElementType(self.project, receiverType: receiverType)
+			if self.lowerManagedMemoryCursorBuiltin(result, methodName: bareMethodName, receiverId: receiverId, elementType: cursorElementType, args: cursorArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
 				return
 			end 'handled'
 		end 'didLowerCursor'
@@ -4129,9 +4139,9 @@ type MaxonToStdLowering
 	// above keeps the wire format consistent with the existing enum and
 	// stays parallel to the C# bootstrap's two-code scheme (1 = exhausted,
 	// 2 = atStart).
-	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, args ValueIdArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
+	function lowerManagedMemoryCursorBuiltin(result ByteArray, methodName String, receiverId ValueId, elementType MaxonType, args ValueIdArray, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
 		if methodName == "current" 'mCurrent'
-			self.lowerCursorCurrent(result, cursorId: receiverId, dstBlock: dstBlock)
+			self.lowerCursorCurrent(result, cursorId: receiverId, elementType: elementType, dstBlock: dstBlock)
 			return true
 		end 'mCurrent'
 		if methodName == "index" 'mIndex'
@@ -4279,21 +4289,12 @@ type MaxonToStdLowering
 	// downstream consumers see -1 (not 255) for an i8 read of byte 0xFF.
 	function maybeSignExtendNarrowGetResult(result ByteArray, receiverId ValueId, dstBlock IrBlock)
 		// Recover the element MaxonType from the receiver's
-		// genericInstance(`__ManagedMemory`, [Element]).
+		// genericInstance(`__ManagedMemory`, [Element]) and delegate to
+		// the element-type variant — same XOR-SUB widening, different
+		// element-type source.
 		let receiverType = self.getValueType(receiverId)
 		let elementType = signExtendElementType(self.project, receiverType: receiverType)
-		if not signExtendApplies(self.project, elementType: elementType) 'noExtend'
-			return
-		end 'noExtend'
-		let stdType = resolveMaxonTypeToStd(self.project, ref: elementType)
-		let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
-		if widthBytes >= 8 'noWiden'
-			return
-		end 'noWiden'
-		let rawId = self.resolveName(result)
-		let signExtId = self.emitNarrowSignExtend(rawId, widthBytes: widthBytes, dstBlock: dstBlock)
-		self.setValueType(signExtId, t: elementType)
-		self.aliasName(result, toId: signExtId)
+		self.maybeSignExtendNarrowReturn(result, elementType: elementType, dstBlock: dstBlock)
 	end 'maybeSignExtendNarrowGetResult'
 
 	// Constant-array-to-rdata fast path. The `ConstantArrayLiteralRdata`
@@ -4386,41 +4387,67 @@ type MaxonToStdLowering
 	// dereference past the buffer; today's stdlib never reaches that path,
 	// but a future revision can add an explicit bounds check + panic.
 	//
-	// Element-size-aware: emits a byte path (loadByte, zero-extending to i64)
-	// when elementSize == 1 and an 8-byte path otherwise. Without the byte
-	// path, `cursor.current()` over a `Byte` array reads 8 bytes including
-	// 7 bytes of adjacent buffer state, which leaks past the buffer end and
-	// trips the lexer's charClassTable when the high bytes form a sentinel
-	// value (e.g. -61 from 0xC3 sign extension on a multibyte source byte).
-	function lowerCursorCurrent(result ByteArray, cursorId ValueId, dstBlock IrBlock)
-		let buffer = self.emitLoadFieldI64(cursorId, offset: 0, dstBlock: dstBlock)
-		let position = self.emitLoadFieldI64(cursorId, offset: 8, dstBlock: dstBlock)
-		let elementSize = self.emitLoadFieldI64(cursorId, offset: 24, dstBlock: dstBlock)
-		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: position, rightId: elementSize, dstBlock: dstBlock)
-		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
+	// Implementation: delegate to the stdlib runtime helper
+	// `__managed_mem_cursor_current`, which dispatches on the cursor's
+	// runtime `element_size` field with proper control flow (one branch
+	// per supported width) and calls the matching narrow `loadByte` /
+	// `loadHalfword` / `loadWord` / `loadIndirect` primitive. The
+	// runtime-helper approach is the right design here because at
+	// lowering time the cursor's element type is `typeParameter(Element)`
+	// — the concrete element width isn't known until the user-side
+	// instantiation context, which isn't visible at the stdlib-lowering
+	// boundary. Doing the dispatch in the runtime helper keeps the
+	// width selection at the one place that has the runtime element_size
+	// value (the cursor's own field) and avoids reading bytes past the
+	// element bound — critical for narrow types like `Byte`/`u8` where
+	// a qword load would leak 7 bytes of adjacent buffer state and
+	// historically caused the lexer's charClassTable to misfire on
+	// multibyte source.
+	//
+	// The helper is non-throwing (cursor invariants guarantee bounds);
+	// we emit a plain `call` rather than the throwing-call shape.
+	// Source-level sign-extension for narrow signed element types
+	// (e.g. i8-backed enums) is handled by `maybeSignExtendCallResult`
+	// in `emitCallWithArgs` — but since we bypass that wrapper here
+	// (the helper's declared return type is `int`/i64, not a generic
+	// type parameter), we apply the sign-extension shim explicitly when
+	// the call site's element type resolves to a signed narrow StdType.
+	function lowerCursorCurrent(result ByteArray, cursorId ValueId, elementType MaxonType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
-		self.emitElementSizedLoad(resultId, addrId: address, elementSizeId: elementSize, dstBlock: dstBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cursorId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "stdlib.__managed_mem_cursor_current", argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		// Sign-extend the narrow signed-element return value so the
+		// i64 SSA result carries the right value. Mirror of the
+		// `maybeSignExtendNarrowGetResult` shim used by Array.get's
+		// __managed_mem_get call; same XOR-SUB trick because shrI64
+		// lowers as unsigned on every backend.
+		self.maybeSignExtendNarrowReturn(result, elementType: elementType, dstBlock: dstBlock)
 	end 'lowerCursorCurrent'
 
-	// Emit a load whose width depends on `elementSizeId`. For elementSize==1
-	// emit a `loadByte` (zero-extending to i64). For any other size emit a
-	// full i64 `loadIndirect`. Both paths run; a select picks the right
-	// result at runtime since Std-IR doesn't yet expose a runtime-sized
-	// load primitive.
-	function emitElementSizedLoad(resultId ValueId, addrId ValueId, elementSizeId ValueId, dstBlock IrBlock)
-		let zeroOffset = self.emitConstI64(0, dstBlock: dstBlock)
-		let byteResult = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(byteResult, baseId: addrId, offsetId: zeroOffset)))
-		self.setValueType(byteResult, t: MaxonType.integer)
-		let wordResult = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(wordResult, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
-		self.setValueType(wordResult, t: MaxonType.integer)
-		let oneConst = self.emitConstI64(1, dstBlock: dstBlock)
-		let isByte = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: elementSizeId, rightId: oneConst, dstBlock: dstBlock)
-		let selected = self.emitArithmeticSelect(isByte, trueVal: byteResult, falseVal: wordResult, dstBlock: dstBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: resultId, leftId: selected, rightId: zeroOffset))))
-		self.setValueType(resultId, t: MaxonType.integer)
-	end 'emitElementSizedLoad'
+	// Sign-extend a narrow signed value returned from a non-generic
+	// runtime helper. Shared with the cursor-current path and any
+	// future helper that returns a width-narrowed signed value through
+	// the i64 ABI. No-op when `elementType` resolves to an unsigned or
+	// qword `StdType` (the common case). Same shape as
+	// `maybeSignExtendNarrowGetResult` but takes the element type
+	// directly because the cursor receiver doesn't expose it via
+	// `genericInstance` at this call site.
+	function maybeSignExtendNarrowReturn(result ByteArray, elementType MaxonType, dstBlock IrBlock)
+		if not signExtendApplies(self.project, elementType: elementType) 'noExtend'
+			return
+		end 'noExtend'
+		let stdType = resolveMaxonTypeToStd(self.project, ref: elementType)
+		let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
+		if widthBytes >= 8 'noWiden'
+			return
+		end 'noWiden'
+		let rawId = self.resolveName(result)
+		let signExtId = self.emitNarrowSignExtend(rawId, widthBytes: widthBytes, dstBlock: dstBlock)
+		self.setValueType(signExtId, t: elementType)
+		self.aliasName(result, toId: signExtId)
+	end 'maybeSignExtendNarrowReturn'
 
 	// Phase 11.4: cursor.index() — return the current position as i64.
 	function lowerCursorIndex(result ByteArray, cursorId ValueId, dstBlock IrBlock)
@@ -5776,7 +5803,7 @@ type MaxonToStdLowering
 	// "min ... max" form at parse time so we never reach the
 	// degenerate "always true" case here.
 	function lowerRangeMatchArm(scrutineeName ByteArray, loValue ParsedInt, hiValue ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, enumOwnerName String, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
-		let scrutineeId = self.resolveName(scrutineeName)
+		var scrutineeId = self.resolveName(scrutineeName)
 		// Float-backed enum range arm: parser stored case ordinals as the
 		// bounds, but the scrutinee is the f64 raw value. Range semantics
 		// are ordinal-based, so an i64 ge/le directly against the f64
@@ -5790,6 +5817,16 @@ type MaxonToStdLowering
 					self.lowerFloatBackedEnumRangeArm(scrutineeId, enumType: enumType, loOrdinal: loValue, hiOrdinal: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 					return
 				end 'isFloatBacked'
+				// Union scrutinee: the SSA value is a heap pointer; the tag
+				// sits at offset 0 in the boxed layout. Load the tag before
+				// the i64 ge/le compares — without this, the range checks
+				// the pointer address against the case-ordinal bounds and
+				// every match either always-fires or never-fires depending
+				// on the heap address. Mirrors `lowerEnumMatchArm`'s
+				// `unionTypeForScrutinee` tag-load.
+				if enumType.isUnion 'isUnion'
+					scrutineeId = self.emitLoadFieldI64(scrutineeId, offset: 0, dstBlock: dstBlock)
+				end 'isUnion'
 			end 'isResolvedEnum'
 		end 'isEnumRange'
 		var combinedId = 0 as ValueId

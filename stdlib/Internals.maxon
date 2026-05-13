@@ -812,6 +812,32 @@ function __managed_mem_set_length(self int, n int) returns int throws __ManagedM
 	return 0
 end '__managed_mem_set_length'
 
+// cursor_current(cursor) — load the element at the cursor's current
+// position, dispatching on element_size like __managed_mem_get does.
+// Non-throwing: callers (the for-in iterator protocol) only invoke this
+// after a successful `advance()`, which guarantees `position < length`,
+// so the bounds check from __managed_mem_get is provably dead.
+// Cursor layout: buffer @0, position @8, length @16, element_size @24,
+// source_ptr @32. Each load is zero-extending; source-level signed
+// narrow types are sign-extended at the call site by the
+// `maybeSignExtendCallResult` shim in LowerMaxonToStd.
+function __managed_mem_cursor_current(cursor int) returns int
+	let buffer = __Internals.loadIndirect(cursor)
+	let position = __Internals.loadIndirect(cursor + 8)
+	let elemSize = __Internals.loadIndirect(cursor + 24)
+	let addr = buffer + position * elemSize
+	if elemSize == 1 'b'
+		return __Internals.loadByte(addr, offset: 0)
+	end 'b'
+	if elemSize == 2 'h'
+		return __Internals.loadHalfword(addr)
+	end 'h'
+	if elemSize == 4 'w'
+		return __Internals.loadWord(addr)
+	end 'w'
+	return __Internals.loadIndirect(addr)
+end '__managed_mem_cursor_current'
+
 // get(self, idx) — bounds-check idx ∈ [0, length), then load the element.
 // Dispatch on element_size: 1 byte (loadByte), 2 (loadHalfword), 4 (loadWord),
 // fall through to qword (loadIndirect). Unsigned reads — typed sign-extension
