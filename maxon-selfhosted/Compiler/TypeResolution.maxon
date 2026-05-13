@@ -443,6 +443,12 @@ end 'reportAliasNameUnresolved'
 // other interfaces structurally for resolution. `extends` parents are
 // validated by Phase 3b's transitive walk, not here.
 function resolveAllInterfaces(project Project)
+	// Inherit `uses` parameters from `extends` parents before draining —
+	// the parser cannot do this safely because parents declared in a
+	// different file aren't in `unresolvedInterfaces` until every file
+	// has been parsed.
+	inheritInterfaceUsesParams(project)
+
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedInterfaces 'sweep'
@@ -460,6 +466,58 @@ function resolveAllInterfaces(project Project)
 		_ = project.unresolvedInterfaces.remove(resolvedName)
 	end 'drop'
 end 'resolveAllInterfaces'
+
+// For each interface in `unresolvedInterfaces` with no explicit `uses`
+// clause, copy `usesParams` from its first `extends` parent that has
+// any. Parents are looked up against both `unresolvedInterfaces` (the
+// current compile's user interfaces) and `interfaces` (stdlib-cached
+// interfaces). An explicit `uses` clause on the child is preserved
+// unchanged — opting in to inheritance is the default, opting out is
+// explicit. Forward references across files are now safe because every
+// interface has been recorded by the time TR runs.
+function inheritInterfaceUsesParams(project Project)
+	var updates = InterfaceUsesUpdateArray.create()
+	for (name, entry) in project.unresolvedInterfaces 'scan'
+		if entry.usesParams.count() > 0 'hasOwnUses'
+			continue
+		end 'hasOwnUses'
+		for parentName in entry.extendsNames 'eachParent'
+			let inherited = lookupInterfaceUsesParams(project, name: parentName)
+			if inherited.count() > 0 'foundInherit'
+				updates.push(InterfaceUsesUpdate.create(name, params: inherited))
+				break
+			end 'foundInherit'
+		end 'eachParent'
+	end 'scan'
+
+	for upd in updates 'apply'
+		if let existing = try project.unresolvedInterfaces.get(upd.name) 'haveEntry'
+			let updated = UnresolvedInterfaceType.create(existing.name, extendsNames: existing.extendsNames, usesParams: upd.params, methods: existing.methods, visibility: existing.visibility, line: existing.line, column: existing.column, filePath: existing.filePath)
+			project.unresolvedInterfaces.upsert(upd.name, value: updated)
+		end 'haveEntry'
+	end 'apply'
+end 'inheritInterfaceUsesParams'
+
+function lookupInterfaceUsesParams(project Project, name String) returns StringArray
+	if let resolved = try project.interfaces.get(name) 'fromResolved'
+		return resolved.usesParams
+	end 'fromResolved'
+	if let unresolved = try project.unresolvedInterfaces.get(name) 'fromUnresolved'
+		return unresolved.usesParams
+	end 'fromUnresolved'
+	return StringArray.create()
+end 'lookupInterfaceUsesParams'
+
+type InterfaceUsesUpdate
+	export var name String
+	export var params StringArray
+
+	export static function create(name String, params StringArray) returns InterfaceUsesUpdate
+		return Self{name: name, params: params}
+	end 'create'
+end 'InterfaceUsesUpdate'
+
+typealias InterfaceUsesUpdateArray = Array with InterfaceUsesUpdate
 
 // Phase 9.7: when an interface inherits its `usesParams` from an `extends`
 // parent, allow a 0-args sibling conformance to reuse the parent's bindings.
@@ -1737,6 +1795,17 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 	// a `value(n)` payload case use the tag value as their raw comparison.
 	let unionCaseHit = resolveUnionCaseRawValue(project, enumName: enumName, caseName: caseName)
 	if unionCaseHit.hit 'isUnionCase'
+		// E3035: a destructuring pattern `case(b1, b2, ...)` must supply
+		// exactly as many bindings as the union case has payload fields.
+		// Only fires when the user wrote bindings — bare-case patterns
+		// (`case` without parens) carry an empty `bindingNames` and are
+		// always valid against any payload arity.
+		if bindingNames.count() > 0 'haveBindings'
+			let info = lookupUnionCasePayloadArity(project, unionName: enumName, caseName: caseName)
+			if info.isUnion and info.payloadArity != bindingNames.count() as ParsedInt 'arityMismatch'
+				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "wrong binding count: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
+			end 'arityMismatch'
+		end 'haveBindings'
 		try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: unionCaseHit.rawValue, isFloat: false, resolved: true, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("resolveOneEnumMatchArm: ops.set OOB at idx={opIdx}")
 		return
 	end 'isUnionCase'
@@ -3089,7 +3158,7 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		// no consumer reads these results yet.
 		enumConstruct then return
 		enumTag then return
-		enumPayloadRead then return
+		enumPayloadRead(result, enumValName, caseName, fieldIndex, fieldType, _) then recordResultType(producerTypes, name: result, t: resolveEnumPayloadFieldType(project, producerTypes: producerTypes, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType))
 		enumPayloadStore then return
 		error then return
 		throw then return
@@ -3285,13 +3354,16 @@ function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpI
 		unresolvedAssign then return
 		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) then fillEnumMatchArmType(module, opIdx: opIdx, scrutineeName: scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range, producerTypes: producerTypes)
 		rangeMatchArm then return
-		// Phase 9 Stage 2 plumbing: union ops carry concrete payload types
-		// from parse-time on. Nothing to fill here — Stage 3 may extend if
-		// type-flow drives any field-type inference.
+		// Phase 9 Stage 2 plumbing: most union ops carry concrete payload
+		// types from parse-time on. `enumPayloadRead` / `enumPayloadStore`
+		// are the exceptions — the parser stamps `unresolved` because the
+		// union's case-table may live in another file; these fills make
+		// that resolution flow through the producer-types map to the
+		// matching varDecl / lowering.
 		enumConstruct then return
 		enumTag then return
-		enumPayloadRead then return
-		enumPayloadStore then return
+		enumPayloadRead(result, enumValName, caseName, fieldIndex, fieldType, range) then fillEnumPayloadRead(project, module: module, opIdx: opIdx, result: result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType, range: range, producerTypes: producerTypes)
+		enumPayloadStore(enumValName, caseName, fieldIndex, fieldType, newValueName, range) then fillEnumPayloadStore(project, module: module, opIdx: opIdx, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType, newValueName: newValueName, range: range, producerTypes: producerTypes)
 		error then return
 		throw then return
 		tryCall then return
@@ -3335,6 +3407,86 @@ function fillVarDecl(module MaxonModule, opIdx OpIndex, slotId VarSlot, value By
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 end 'fillVarDecl'
+
+// Resolve the field type for a union case's payload at the given index.
+// The parser emits `enumPayloadRead` with `fieldType = unresolved` because
+// the scrutinee's union may be declared in a different file — TR fills
+// the type once `producerTypes` has the scrutinee's resolved type.
+// Returns the op-stamped `fieldType` if it is already concrete, or
+// `MaxonType.unresolved` if the scrutinee's union name or the union case
+// itself isn't known yet (a later pass will retry).
+function resolveEnumPayloadFieldType(project Project, producerTypes ProducerTypeMap, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType) returns MaxonType
+	if not isUnresolvedType(fieldType) 'haveType'
+		return fieldType
+	end 'haveType'
+	let scrutineeType = lookupProducerType(producerTypes, name: enumValName)
+	let unionName = scrutineeType.nameOrEmpty(project)
+	if unionName.isEmpty() 'noUnion'
+		return MaxonType.unresolved
+	end 'noUnion'
+	return lookupUnionCasePayloadField(project, unionName: unionName, caseName: caseName, fieldIndex: fieldIndex)
+end 'resolveEnumPayloadFieldType'
+
+// Walk both the resolved and unresolved enum registries to find a union
+// case's payload field by index. Returns `MaxonType.unresolved` on miss
+// (unknown union, unknown case, or index out of range) — the diagnostic
+// is the responsibility of the match-arm validation pass.
+function lookupUnionCasePayloadField(project Project, unionName String, caseName String, fieldIndex IntConstant) returns MaxonType
+	if let et = try project.enumTypes.get(unionName) 'haveResolved'
+		if let idx = try et.caseByName.get(caseName) 'haveCase'
+			let c = try et.cases.get(idx) otherwise return MaxonType.unresolved
+			let field = try c.payloadFields.get(fieldIndex as ElementCount) otherwise return MaxonType.unresolved
+			return field.fieldType
+		end 'haveCase'
+	end 'haveResolved'
+	if let ut = try project.unresolvedEnums.get(unionName) 'haveUnresolved'
+		for c in ut.cases 'eachCase'
+			if c.name == caseName 'hit'
+				let field = try c.payloadFields.get(fieldIndex as ElementCount) otherwise return MaxonType.unresolved
+				return field.fieldType
+			end 'hit'
+		end 'eachCase'
+	end 'haveUnresolved'
+	return MaxonType.unresolved
+end 'lookupUnionCasePayloadField'
+
+// Resolve a payload field type from `unresolved` to its concrete type,
+// returning `MaxonType.unresolved` when the existing `fieldType` is
+// already concrete (caller skips) or when nothing in the registries
+// can fill it yet (caller defers to a later pass). Shared front-end
+// for both `fillEnumPayloadRead` and `fillEnumPayloadStore`.
+function tryResolvePayloadFieldType(project Project, producerTypes ProducerTypeMap, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType) returns MaxonType
+	if not isUnresolvedType(fieldType) 'haveType'
+		return MaxonType.unresolved
+	end 'haveType'
+	let filled = resolveEnumPayloadFieldType(project, producerTypes: producerTypes, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType)
+	if isUnresolvedType(filled) 'stillUnresolved'
+		return MaxonType.unresolved
+	end 'stillUnresolved'
+	return filled
+end 'tryResolvePayloadFieldType'
+
+// Rewrite an enumPayloadRead's `fieldType` from `unresolved` to the
+// resolved type, mirroring `fillVarDecl`. The op's `enumValName`
+// provides the scrutinee's producer-type and the carried `caseName`
+// selects the right field-type from the union's case table.
+function fillEnumPayloadRead(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	let filled = tryResolvePayloadFieldType(project, producerTypes: producerTypes, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType)
+	if isUnresolvedType(filled) 'skip'
+		return
+	end 'skip'
+	try module.ops.set(opIdx, value: MaxonOp.enumPayloadRead(result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, range: range)) otherwise panic("fillEnumPayloadRead: ops.set OOB at idx={opIdx}")
+end 'fillEnumPayloadRead'
+
+// Rewrite an enumPayloadStore's `fieldType` from `unresolved` to the
+// resolved type. Same shape as `fillEnumPayloadRead`.
+function fillEnumPayloadStore(project Project, module MaxonModule, opIdx OpIndex, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange, producerTypes ProducerTypeMap)
+	let filled = tryResolvePayloadFieldType(project, producerTypes: producerTypes, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: fieldType)
+	if isUnresolvedType(filled) 'skip'
+		return
+	end 'skip'
+	try module.ops.set(opIdx, value: MaxonOp.enumPayloadStore(enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: filled, newValueName: newValueName, range: range)) otherwise panic("fillEnumPayloadStore: ops.set OOB at idx={opIdx}")
+end 'fillEnumPayloadStore'
 
 // Refine `expr(name, kind)` parts of a stringInterp op now that producer
 // types are concrete. The parser inferred each kind from the parse-time

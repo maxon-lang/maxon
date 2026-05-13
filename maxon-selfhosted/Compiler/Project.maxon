@@ -1346,20 +1346,26 @@ export type VarInfo
 	export var isPayloadBinding bool
 	export var payloadScrutineeName String
 	export var payloadFieldIndex CaseOrdinal
+	// Phase 9 Stage 4 follow-up: the union case this binding belongs to.
+	// Carries through to `enumPayloadStore` so TR can resolve the payload's
+	// field type from the union's case table — different cases of the
+	// same union have independent payload field types, so the case name
+	// is required, not just the union name.
+	export var payloadCaseName String
 
 	export static function create(name String, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
 	end 'create'
 
 	export static function createSelfField(name String, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal}
+		return Self{name: name, varType: varType, mutable: true, slot: slot, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: "", payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: ""}
 	end 'createSelfField'
 
 	// Phase 9 Stage 4: factory for a payload-binding alias. Mutability
 	// inherits from the scrutinee's `let`/`var` declaration (see
 	// `mutable-enums.md` test `error.assign-to-let-enum-binding`).
-	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex}
+	export static function createPayloadBinding(name String, varType MaxonType, mutable bool, slot VarSlot, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
 	end 'createPayloadBinding'
 end 'VarInfo'
 

@@ -4178,27 +4178,11 @@ export type Parser
 			end 'usesLoop'
 		end 'hasUses'
 
-		// Parse-time inheritance of `uses` parameters from `extends` parents.
-		// `interface BidirectionalIterator extends Iterator` is supposed to
-		// inherit Iterator's `uses Element` so user code can write
-		// `BidirectionalIterator with Element`. Without this, the conformance
-		// check in computeExpectedMethodsForConformances reports
-		// "expects 0 type parameter(s), got 1".
-		//
-		// Only inherit when the child has no `uses` clause of its own —
-		// an explicit `uses` in the child means the user is opting out of
-		// inheritance. Lookup is best-effort: if the parent isn't yet in
-		// `unresolvedInterfaces` (e.g. forward reference within the same
-		// file), the child is left with an empty `usesParams`, matching
-		// the prior behavior.
-		if usesParams.count() == 0 'maybeInherit'
-			for parentName in extendsNames 'eachParent'
-				let parent = try project.unresolvedInterfaces.get(parentName) otherwise continue
-				for paramName in parent.usesParams 'copyParam'
-					usesParams.push(paramName)
-				end 'copyParam'
-			end 'eachParent'
-		end 'maybeInherit'
+		// Inheritance of `uses` parameters from `extends` parents is
+		// performed by `TypeResolution.inheritInterfaceUsesParams`, which
+		// runs after every interface (including cross-file ones) has been
+		// recorded — the parser only sees its own file, so the lookup
+		// would be best-effort against `unresolvedInterfaces` here.
 
 		try skipNewlines()
 
@@ -5037,13 +5021,6 @@ export type Parser
 			if not rewrote 'tryMethod'
 				rewrote = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
 			end 'tryMethod'
-			if rewrote 'resolveType'
-				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: re-read OOB")
-				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp)
-				if isUnresolvedMaxonType(callReturnType) 'doResolve'
-					callReturnType = resolveQualifiedCalleeReturnType(qualifiedCallee: qualifiedCallee)
-				end 'doResolve'
-			end 'resolveType'
 		end 'haveLast'
 		if not rewrote 'noRewrite'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'if let/var/try' requires a throwing call expression after 'try'", line: tryToken.line, column: tryToken.column, filePath: filePath)
@@ -5421,15 +5398,11 @@ export type Parser
 		end 'hasBindings'
 		try eat(TokenKind.rightParen)
 
-		// Best-effort arity check against the owning union case. The
-		// parser already maintains both registries; same lookup
-		// strategy as `parseEnumRangePattern`. On miss we leave validation
-		// to TypeResolution so the user sees one canonical diagnostic.
-		if let expectedArity = try lookupCasePayloadArity(caseToken.value) 'haveArity'
-			if expectedArity != bindings.count() as ParsedInt 'arityMismatch'
-				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "case '{caseToken.value}' takes {expectedArity} payload(s), got {bindings.count()}", line: caseToken.line, column: caseToken.column, filePath: filePath)
-			end 'arityMismatch'
-		end 'haveArity'
+		// Arity validation against the owning union case is deferred to
+		// TypeResolution — the parser can't see cross-file enum
+		// declarations, and TR's match-arm walk knows the resolved
+		// scrutinee type so it can produce the canonical E3035 with the
+		// correct enum-case binding.
 
 		// E3081: an all-discard pattern (`case(_, _)`) provides no usable
 		// bindings; the bare-case form covers the same source intent more
@@ -5441,55 +5414,6 @@ export type Parser
 
 		return MatchPatternSpec.enumCaseWithBindings(caseToken, caseName: caseToken.value, bindings: bindings, bindingNames: bindingNames)
 	end 'parseCaseBindingPattern'
-
-	// Look up the payload arity for a case name across both enum
-	// registries. Throws `EnumCaseProbeError.notFound` when the case is
-	// unknown — caller routes the miss to TypeResolution for the canonical
-	// diagnostic. Walks resolved enums first, then unresolved — the two
-	// are disjoint by construction (resolved drains unresolved) so the
-	// first hit is canonical.
-	function lookupCasePayloadArity(caseName String) returns ParsedInt throws EnumCaseProbeError
-		// Phase 9 Stage 4: scan unions first and only fall back to bare
-		// enums after exhausting them. The `.unionCases` companion enum
-		// duplicates the parent union's case spellings with zero payload
-		// fields; matching `walk(dir)` against `Move.walk` (1 payload)
-		// must NOT see the companion's zero-arity `Move.unionCases.walk`
-		// first. Companion enums are recognisable by a dot in their name —
-		// no user-declared enum can collide with that shape.
-		for (_, enumType) in project.enumTypes 'searchResolved'
-			if not enumType.isUnion 'notUnionR'
-				continue
-			end 'notUnionR'
-			if let idx = try enumType.caseByName.get(caseName) 'hit'
-				let c = try enumType.cases.get(idx) otherwise panic("lookupCasePayloadArity: caseByName.get returned in-range index {idx} but cases.get failed for '{caseName}' on union '{enumType.name}'")
-				return c.payloadFields.count() as ParsedInt
-			end 'hit'
-		end 'searchResolved'
-		for (_, enumType) in project.unresolvedEnums 'searchUnresolvedUnion'
-			if not enumType.isUnion 'notUnionU'
-				continue
-			end 'notUnionU'
-			for c in enumType.cases 'casesUnion'
-				if c.name == caseName 'unionHit'
-					return c.payloadFields.count() as ParsedInt
-				end 'unionHit'
-			end 'casesUnion'
-		end 'searchUnresolvedUnion'
-		for (_, enumType) in project.enumTypes 'searchResolvedBare'
-			if let idx = try enumType.caseByName.get(caseName) 'hit'
-				let c = try enumType.cases.get(idx) otherwise panic("lookupCasePayloadArity: caseByName.get returned in-range index {idx} but cases.get failed for '{caseName}' on enum '{enumType.name}'")
-				return c.payloadFields.count() as ParsedInt
-			end 'hit'
-		end 'searchResolvedBare'
-		for (_, enumType) in project.unresolvedEnums 'searchUnresolved'
-			for c in enumType.cases 'cases'
-				if c.name == caseName 'hit'
-					return c.payloadFields.count() as ParsedInt
-				end 'hit'
-			end 'cases'
-		end 'searchUnresolved'
-		throw EnumCaseProbeError.notFound
-	end 'lookupCasePayloadArity'
 
 	// Parse `caseName to|upto (caseName | max)`. Resolves both case
 	// ordinals against the enum registry so the range op carries integer
@@ -6089,35 +6013,20 @@ export type Parser
 	// Bindings become regular locals so user code like
 	// `value(n) then return n` reaches `n` via the standard varLoad path.
 	// Discard (`_`) bindings produce no slot and no read. Bare-enum
-	// (non-union) scrutinees and arms without bindings skip silently. The
-	// case's payload field types are recovered from the union registry;
-	// an unknown union/case path returns `false` so the caller can leave
-	// TR to surface the canonical diagnostic. The caller must position
-	// `currentBlock` on the arm body block before invoking — same shape
-	// as `parseMatchStatementArmBody`.
-	function emitUnionArmBindings(scrutineeName ByteArray, scrutineeType MaxonType, pattern MatchPatternSpec, scrutineeMutable bool) returns bool
+	// (non-union) scrutinees and arms without bindings skip silently.
+	// The payload field's MaxonType is resolved later by TR — the parser
+	// can't see cross-file union declarations, and the case's payload
+	// arity / field types live in registries TR drains. The caller must
+	// position `currentBlock` on the arm body block before invoking.
+	function emitUnionArmBindings(scrutineeName ByteArray, pattern MatchPatternSpec, scrutineeMutable bool) returns bool
 		if pattern.bindings.count() == 0 'noBindings'
 			return false
 		end 'noBindings'
-		let payloadFields = lookupCasePayloadFields(scrutineeType, caseName: pattern.caseName)
-		if not payloadFields.hit 'unknownCase'
-			// TR will surface E3034/E3035 for arity/case errors; emit nothing.
-			return false
-		end 'unknownCase'
-		if pattern.bindings.count() != payloadFields.fields.count() 'arityMismatch'
-			// Parser's `parseCaseBindingPattern` already reported E3035 on
-			// mismatch — but the bindings array still carries whatever the
-			// user wrote. Skip emission to avoid out-of-range slot
-			// allocation; the existing diagnostic stays the user-visible
-			// message.
-			return false
-		end 'arityMismatch'
 		for i in 0 upto pattern.bindings.count() 'eachBinding'
 			let binding = try pattern.bindings.get(i) otherwise panic("emitUnionArmBindings: bindings.get OOB at {i}")
 			if binding.isDiscard 'discardBinding'
 				continue
 			end 'discardBinding'
-			let field = try payloadFields.fields.get(i) otherwise panic("emitUnionArmBindings: payloadFields.get OOB at {i}")
 			// Phase 9 Stage 4: payload bindings inherit the scrutinee's
 			// mutability per `mutable-enums.md`: a `var u` scrutinee yields
 			// writable bindings (assignment rewrites to `enumPayloadStore`);
@@ -6127,64 +6036,13 @@ export type Parser
 			// but does NOT override the scrutinee's immutability — `let u`
 			// + `var v = …` still surfaces E2013.
 			let bindingMutable = scrutineeMutable
-			let bindingSlot = scope.declarePayloadBinding(binding.name, varType: field.fieldType, mutable: bindingMutable, scrutineeName: String.from(scrutineeName), fieldIndex: i as CaseOrdinal)
+			let bindingSlot = scope.declarePayloadBinding(binding.name, varType: MaxonType.unresolved, mutable: bindingMutable, scrutineeName: String.from(scrutineeName), fieldIndex: i as CaseOrdinal, caseName: pattern.caseName)
 			let readName = "__match_payload_{binding.name}_{i}".toByteArray()
-			module.appendOp(currentBlock, op: MaxonOp.enumPayloadRead(readName, enumValName: scrutineeName, fieldIndex: i as IntConstant, fieldType: field.fieldType, range: SourceRange.none()))
-			module.appendOp(currentBlock, op: MaxonOp.varDecl(bindingSlot, value: readName, slotType: field.fieldType, range: SourceRange.none()))
+			module.appendOp(currentBlock, op: MaxonOp.enumPayloadRead(readName, enumValName: scrutineeName, caseName: pattern.caseName, fieldIndex: i as IntConstant, fieldType: MaxonType.unresolved, range: SourceRange.none()))
+			module.appendOp(currentBlock, op: MaxonOp.varDecl(bindingSlot, value: readName, slotType: MaxonType.unresolved, range: SourceRange.none()))
 		end 'eachBinding'
 		return true
 	end 'emitUnionArmBindings'
-
-	// Best-effort lookup of `(union, case).payloadFields` against both the
-	// resolved and unresolved enum registries. Mirrors
-	// `lookupCasePayloadArity` but returns the full field list so callers
-	// can index by field type. Resolved enums hit first by construction
-	// (TypeResolution drains unresolved into resolved); the unresolved
-	// pass is the fallback for cases where the match arm parses before
-	// the union's body has been fully resolved.
-	function lookupCasePayloadFields(scrutineeType MaxonType, caseName String) returns CasePayloadFieldsLookup
-		let unionName = scrutineeType.nameOrEmpty(project)
-		if not unionName.isEmpty() 'haveName'
-			if let et = try project.enumTypes.get(unionName) 'haveResolved'
-				if let idx = try et.caseByName.get(caseName) 'haveCaseR'
-					let c = try et.cases.get(idx) otherwise return CasePayloadFieldsLookup.miss()
-					return CasePayloadFieldsLookup.found(c.payloadFields)
-				end 'haveCaseR'
-			end 'haveResolved'
-			if let ut = try project.unresolvedEnums.get(unionName) 'haveUnresolved'
-				for c in ut.cases 'eachCase'
-					if c.name == caseName 'hit'
-						return CasePayloadFieldsLookup.found(c.payloadFields)
-					end 'hit'
-				end 'eachCase'
-			end 'haveUnresolved'
-		end 'haveName'
-		// Fallback: scan every union case across both registries by case
-		// name only. Used when the scrutinee's type hasn't been resolved
-		// yet (typealias chain, or pre-TR pattern parsing); the case-
-		// name space is union-typed so a single hit identifies the
-		// payload shape uniquely.
-		for (_, et) in project.enumTypes 'scanResolved'
-			if not et.isUnion 'notUnion'
-				continue
-			end 'notUnion'
-			if let idx = try et.caseByName.get(caseName) 'haveCase'
-				let c = try et.cases.get(idx) otherwise continue
-				return CasePayloadFieldsLookup.found(c.payloadFields)
-			end 'haveCase'
-		end 'scanResolved'
-		for (_, ut) in project.unresolvedEnums 'scanUnresolved'
-			if not ut.isUnion 'notUnion2'
-				continue
-			end 'notUnion2'
-			for c in ut.cases 'eachCase2'
-				if c.name == caseName 'hit2'
-					return CasePayloadFieldsLookup.found(c.payloadFields)
-				end 'hit2'
-			end 'eachCase2'
-		end 'scanUnresolved'
-		return CasePayloadFieldsLookup.miss()
-	end 'lookupCasePayloadFields'
 
 	// Emit the body of a `default panic(...)` or `default throws Err.case`
 	// arm into `armBodyBlock`. The arm body terminates the block directly:
@@ -6392,7 +6250,7 @@ export type Parser
 			// pointer (avoiding the `let arm = …` immutability friction).
 			scope.pushScope()
 			currentBlock = arm.body
-			_ = emitUnionArmBindings(header.scrutineeName, scrutineeType: header.scrutineeType, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
+			_ = emitUnionArmBindings(header.scrutineeName, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
 			let bodyExit = try parseMatchStatementArmBody(arm.body)
 			scope.popScope()
 			let armHasFallthrough = checkAndConsumeFallthrough(hadReturn: bodyExit.hadReturn)
@@ -6620,7 +6478,7 @@ export type Parser
 			// via the parser's mutable block pointer.
 			scope.pushScope()
 			currentBlock = arm.body
-			_ = emitUnionArmBindings(header.scrutineeName, scrutineeType: header.scrutineeType, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
+			_ = emitUnionArmBindings(header.scrutineeName, pattern: patterns.first(), scrutineeMutable: header.scrutineeMutable)
 			let armResult = try parseMatchExpressionArmBody(arm.body)
 			scope.popScope()
 			rejectFallthroughInMatchExpression()
@@ -7205,7 +7063,7 @@ export type Parser
 				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 				return
 			end 'immutableBinding'
-			module.appendOp(emitBlock, op: MaxonOp.enumPayloadStore(bindingInfo.payloadScrutineeName.toByteArray(), fieldIndex: bindingInfo.payloadFieldIndex as IntConstant, fieldType: bindingInfo.varType, newValueName: exprName(materializedResult), range: stmtRange))
+			module.appendOp(emitBlock, op: MaxonOp.enumPayloadStore(bindingInfo.payloadScrutineeName.toByteArray(), caseName: bindingInfo.payloadCaseName, fieldIndex: bindingInfo.payloadFieldIndex as IntConstant, fieldType: bindingInfo.varType, newValueName: exprName(materializedResult), range: stmtRange))
 			return
 		end 'payloadWrite'
 		if scope.isSelfField(nameToken.value) 'selfFieldWrite'
@@ -7845,19 +7703,23 @@ export type Parser
 			rewroteCall = tryRewriteCallToTryCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
 			if rewroteCall 'resolveCalleeInfo'
 				// Resolve the qualified callee name once from the rewritten tryCall;
-				// the void-return guard, return-type refinement, and throws-type
-				// lookup all key off the same name.
+				// the void-return guard and throws-type lookup both key off the
+				// same name. The callee's return type is filled by TR via
+				// producerTypes — the parser leaves callReturnType as whatever
+				// `exprType(inner)` reported (typically unresolved for call
+				// results), and `validateTryOtherwiseTypes` re-runs the
+				// otherwise-type-mismatch check after resolution completes.
 				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: re-read OOB after rewrite")
 				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp)
 				// E3059: void-returning function cannot be used as an assignment expression.
 				// Throws ParserError.unhandledToken after reporting so the unsupported
-				// otherwise block is never parsed.
+				// otherwise block is never parsed. Kept in the parser because the
+				// "expression-context try" signal (isStatementContext) is parser-only
+				// and the void return type collapses to unresolved in producerTypes,
+				// so TR cannot recover the distinction from the IR alone.
 				if not isStatementContext 'checkVoidReturn'
 					try checkQualifiedCalleeNotVoidReturn(qualifiedCallee: qualifiedCallee, tryToken: tryToken)
 				end 'checkVoidReturn'
-				if isUnresolvedMaxonType(callReturnType) 'resolveCallType'
-					callReturnType = resolveQualifiedCalleeReturnType(qualifiedCallee: qualifiedCallee)
-				end 'resolveCallType'
 				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
 			end 'resolveCalleeInfo'
 		end 'haveLastOp'
@@ -8255,18 +8117,6 @@ export type Parser
 			throw ParserError.unhandledToken
 		end 'isVoid'
 	end 'checkQualifiedCalleeNotVoidReturn'
-
-	// Look up the resolved return type for a qualified callee. Returns
-	// MaxonType.unresolved when the callee is not registered or is void —
-	// gives parseTryFallback a concrete expected type for the otherwise
-	// type-mismatch (E3059) check when one is available.
-	function resolveQualifiedCalleeReturnType(qualifiedCallee String) returns MaxonType
-		let retType = try project.funcReturnTypes.get(qualifiedCallee) otherwise return MaxonType.unresolved
-		return match retType 'unwrap'
-			void gives MaxonType.unresolved
-			value(inner) gives inner
-		end 'unwrap'
-	end 'resolveQualifiedCalleeReturnType'
 
 	// Emit a literal of the current function's return type's family —
 	// 0 (i64) for ints/byte/bool, 0.0 (f64) for floats. void return types
@@ -11363,24 +11213,6 @@ export type MatchPatternBinding
 end 'MatchPatternBinding'
 
 export typealias MatchPatternBindingArray = Array with MatchPatternBinding
-
-// Phase 9 Stage 3: result of looking up a (union, case) pair's payload-
-// field list. `hit` is false when the case is unknown or the type isn't
-// a union — callers fall back to silent skip (TR surfaces the canonical
-// diagnostic). Lives outside the Parser type because Maxon doesn't allow
-// nested type declarations.
-export type CasePayloadFieldsLookup
-	export var hit bool
-	export var fields EnumPayloadFieldArray
-
-	export static function miss() returns CasePayloadFieldsLookup
-		return Self{hit: false, fields: EnumPayloadFieldArray.create()}
-	end 'miss'
-
-	export static function found(fields EnumPayloadFieldArray) returns CasePayloadFieldsLookup
-		return Self{hit: true, fields: fields}
-	end 'found'
-end 'CasePayloadFieldsLookup'
 
 export type MatchPatternSpec
 	export var kind MatchPatternKind

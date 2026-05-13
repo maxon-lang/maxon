@@ -72,11 +72,13 @@ export type Scope
 	// normal local (the parser seeds the slot from `enumPayloadRead` at the
 	// arm body's head), but writes go through `enumPayloadStore` against the
 	// scrutinee + field index. `mutable` reflects the scrutinee's `let`/`var`
-	// declaration; assignment to an immutable binding emits E2013.
-	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal) returns VarSlot
+	// declaration; assignment to an immutable binding emits E2013. `caseName`
+	// is threaded through to `enumPayloadStore` so TR can resolve the
+	// payload field type from the union's case table.
+	export function declarePayloadBinding(name String, varType MaxonType, mutable bool, scrutineeName String, fieldIndex CaseOrdinal, caseName String) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex)
+		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
 		vars.upsert(name, value: info)
 		self.recordInCurrentFrame(name)
 		return slot

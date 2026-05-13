@@ -1070,13 +1070,17 @@ export union MaxonOp
 	// plus a refcount-bump for managed types. `fieldType` carries the
 	// concrete field type so lowering picks the right load width and
 	// managed-aware bump. Float fields bit-cast i64->f64 inside the lowering.
-	enumPayloadRead(result ByteArray, enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, range SourceRange)
+	// `caseName` identifies which union case this read belongs to;
+	// TR uses it to resolve `fieldType` when the parser left it
+	// `unresolved`, since the field's type depends on the case (different
+	// cases of the same union have independent payload field types).
+	enumPayloadRead(result ByteArray, enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, range SourceRange)
 	// Phase 9 Stage 2: write one payload field of a union value.
 	// Reserved for Stage 4 (match-binding write-back): an assignment
 	// `value = 42` inside an arm body on a `var` scrutinee rewrites
 	// to this op. Stage 2 declares it but never emits it; lowering
 	// panics on a stray sighting to surface a misordered pipeline early.
-	enumPayloadStore(enumValName ByteArray, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange)
+	enumPayloadStore(enumValName ByteArray, caseName String, fieldIndex IntConstant, fieldType MaxonType, newValueName ByteArray, range SourceRange)
 	// Phase 9 Stage 0: range match-arm terminator. Lowers to
 	// `scrutinee >= lo AND scrutinee <= hi (or < hi for upto)` plus
 	// `cond_br thenTarget elseTarget`. `loValue` / `hiValue` are
@@ -1247,8 +1251,8 @@ export function maxonOpToString(project Project, op MaxonOp, blocks IrBlockArray
 		enumMatchArm(scrutineeName, caseName, _, _, _, _, thenTarget, elseTarget, bindingNames, _) gives maxonEnumMatchArmToString(scrutineeName, caseName: caseName, bindingNames: bindingNames, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		enumConstruct(result, enumName, caseName, payloadValues, _) gives "%{String.from(result)} = maxon.enum_construct {enumName}.{caseName}({formatArgNames(payloadValues)})"
 		enumTag(result, enumValName, _) gives "%{String.from(result)} = maxon.enum_tag %{String.from(enumValName)}"
-		enumPayloadRead(result, enumValName, fieldIndex, fieldType, _) gives "%{String.from(result)} = maxon.enum_payload_read %{String.from(enumValName)}[{fieldIndex}] : {fieldType.toString(project)}"
-		enumPayloadStore(enumValName, fieldIndex, fieldType, newValueName, _) gives "maxon.enum_payload_store %{String.from(enumValName)}[{fieldIndex}] = %{String.from(newValueName)} : {fieldType.toString(project)}"
+		enumPayloadRead(result, enumValName, _, fieldIndex, fieldType, _) gives "%{String.from(result)} = maxon.enum_payload_read %{String.from(enumValName)}[{fieldIndex}] : {fieldType.toString(project)}"
+		enumPayloadStore(enumValName, _, fieldIndex, fieldType, newValueName, _) gives "maxon.enum_payload_store %{String.from(enumValName)}[{fieldIndex}] = %{String.from(newValueName)} : {fieldType.toString(project)}"
 		rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, _, thenTarget, elseTarget, _) gives maxonRangeMatchArmToString(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
 		error(kind, message, _) gives "maxon.error [{kind.rawValue}] \"{message}\""
 		throw(enumName, variantName, payloadValueName, _) gives maxonThrowToString(enumName, variantName: variantName, payloadValueName: payloadValueName)
