@@ -33,18 +33,18 @@ module {
   func @error-handling.mayFail() -> i64 {
   entry:
     %0 = mir.global_addr @__data_counter
-    %1 = mir.load %0, 0
+    %1 = mir.load %0, 0 width: qword
     %2 = mir.mov_imm 1 : i64
     %3 = mir.add.i64 %1, %2
     %4 = mir.global_addr @__data_counter
-    mir.store %3, %4, 0
+    mir.store %3, %4, 0 width: qword
     %5 = mir.mov_imm 42 : i64
     %8 = mir.mov_imm 16 : i64
     %9 = mir.mov_imm 0 : i64
     %10 = mir.mov_imm 0 : i64
     %11 = mir.call @stdlib.__mm_alloc(%8, %9, %10)
-    mir.store %10, %11, 0
-    mir.store %5, %11, 8
+    mir.store %10, %11, 0 width: qword
+    mir.store %5, %11, 8 width: qword
     %7 = mir.mov_imm 0 : i64
     mir.error_return %7, %11
   }
@@ -55,16 +55,16 @@ module {
     %4 = mir.cmp ne, %2, %0
     mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%0, %1)]
   try_0.otherwise:
-    %7 = mir.load %2, 0
+    %7 = mir.load %2, 0 width: qword
     %9 = mir.cmp eq, %7, %0
     mir.cond_br %9 [then: check_0.case0(), else: check_0.next0()]
   check_0.merge:
     mir.br try_0.merge(%19, %0)
   check_0.case0:
-    %11 = mir.load %2, 8
+    %11 = mir.load %2, 8 width: qword
     mir.br check_0.merge(%11)
   check_0.next0:
-    %13 = mir.load %2, 0
+    %13 = mir.load %2, 0 width: qword
     %14 = mir.mov_imm 1 : i64
     mir.br check_0.merge(%0)
   try_0.merge:

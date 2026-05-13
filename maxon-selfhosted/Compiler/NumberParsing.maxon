@@ -129,6 +129,28 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 		bit = bit - 1
 	end 'mantissaBits'
 
+	// Round-to-nearest-even: produce one more bit and use it (plus the
+	// remaining residue) to decide whether to round up. Without this the
+	// truncation drops up to half a ULP — e.g. 3.14 ended up at 0x...851E
+	// (3.1399999999999997) instead of the correctly-rounded 0x...851F.
+	numerator = numerator * 2
+	let roundBit = 1 if numerator >= denominator else 0
+	if roundBit == 1 'maybeRoundUp'
+		numerator = numerator - denominator
+	end 'maybeRoundUp'
+	let hasRemainder = numerator > 0
+	if roundBit == 1 'doRound'
+		// Round up when the discarded tail exceeds half a ULP, or it is
+		// exactly half a ULP and the kept mantissa LSB is odd (round-half-
+		// to-even). On overflow into the implicit leading 1, bumping the
+		// mantissa carries into the exponent automatically because the
+		// IEEE 754 layout puts mantissa adjacent to the exponent field.
+		let mantissaOdd = (mantissa and 1) == 1
+		if hasRemainder or mantissaOdd 'roundUp'
+			mantissa = mantissa + 1
+		end 'roundUp'
+	end 'doRound'
+
 	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
 	let biasedExp = exponent + 1023
 	return (biasedExp shl 52) + mantissa

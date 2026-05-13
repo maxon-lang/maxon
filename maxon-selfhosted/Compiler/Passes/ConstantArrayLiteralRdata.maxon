@@ -1,0 +1,436 @@
+// ConstantArrayLiteralRdata Pass — Maxon-level.
+//
+// Detects array literals whose elements are all compile-time integer
+// constants (post-TypeResolution: enum cases / int literals / bool
+// literals have been folded to `MaxonOp.literal`) and tags the
+// corresponding `__ManagedMemory.create` call for a `.rdata` fast path.
+//
+// Why this exists
+// ---------------
+// The parser lowers `[Color.red, Color.green, Color.blue]` into a runtime
+// sequence:
+//
+//   tryCall __ManagedMemory.create(count, elementSize)  -> mm
+//   tryMethodCall mm.set(0, Color.red)
+//   tryMethodCall mm.set(1, Color.green)
+//   tryMethodCall mm.set(2, Color.blue)
+//   tryMethodCall mm.setLength(count)
+//   call Array.init(mm)                                 -> arr
+//
+// On its own this allocates a fresh writable buffer, then writes each
+// element through `__managed_mem_set` (capacity bounds + COW check
+// included). For a constant array that's pure overhead — the bytes are
+// fixed at compile time and belong in `.rdata`.
+//
+// What the pass does
+// ------------------
+// For each `__ManagedMemory.create` op whose element values are all
+// integer literals:
+//   1. Compute the resolved element MaxonType (via `arrayLiteralProducers`).
+//   2. Pick the narrow `StoreWidth` for that type (1, 2, 4, or 8 bytes).
+//   3. Encode the literal values little-endian into a fresh ByteArray.
+//   4. Register the bytes under a unique `__rdata_arr_*` label in both
+//      `project.staticRdataValues` (so the layout pipeline knows about
+//      them) and `globalData` (so the rdata section actually emits them).
+//   5. Record a `ConstantArrayRdataInfo` entry keyed by the create op's
+//      `OpIndex` in `project.constantArrayRdata`.
+//   6. Erase the subsequent `mm.set(i, value)` and `mm.setLength(...)`
+//      ops from the block — the rdata buffer is read-only (capacity = -2,
+//      parent = -2) and any runtime mutation would trigger COW.
+//
+// Lowering side
+// -------------
+// `lowerManagedMemBuiltin` reads `project.constantArrayRdata`. When an
+// entry is present for the current op, instead of calling the runtime
+// `__managed_mem_create` helper (which allocates a writable buffer) the
+// lowering emits an `__mm_alloc(40)` for the header plus stores that
+// point the header's buffer field at the rdata label and stamp
+// `capacity = -2` and `parent = -2` (the read-only sentinels recognized
+// by `__managed_mem_cow_check` and `__destruct___ManagedMemory`).
+//
+// Pipeline placement
+// ------------------
+// Runs after `expandCastRangeChecks` (so cast checks don't perturb the
+// op ordering we walk) and after `deadFunctionElimination` (so dead
+// array literals don't waste rdata). Runs before `lowerMaxonToStd` (the
+// only consumer of `project.constantArrayRdata`).
+
+// Counter for unique rdata labels. Each constant array literal gets its
+// own label so the GlobalDataTable insertion-order layout is stable.
+// Reset per project to keep label names deterministic across compiles.
+var constantArrayLiteralCounter = 0 as ParsedInt
+
+export function runConstantArrayLiteralRdata(project Project, module MaxonModule, globalData GlobalDataTable)
+	// Reset the counter so label names are stable across multiple
+	// pipeline runs in the same process (spec-test harness, etc.).
+	constantArrayLiteralCounter = 0
+
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("runConstantArrayLiteralRdata: funcIdx OOB at {funcIdx}")
+		processFunction(project, module: module, globalData: globalData, func: func)
+	end 'eachFunc'
+end 'runConstantArrayLiteralRdata'
+
+// Walk a single function's ops looking for `__ManagedMemory.create` calls
+// that came from array-literal lowering and have all-literal elements.
+function processFunction(project Project, module MaxonModule, globalData GlobalDataTable, func IrFunction)
+	// Step 1: collect every literal-producing op so we can quickly look
+	// up "is this value name a known integer constant?" by name. A single
+	// pass over the function builds the per-function lookup table —
+	// linear in op count.
+	var litValues = LiteralValueMap.create()
+	collectLiteralValues(module, func: func, litValues: litValues)
+
+	// Step 2: scan blocks for `__ManagedMemory.create` tryCalls. Each
+	// match consults `arrayLiteralProducers` (parser-side sidecar) for
+	// the element value names and element MaxonType.
+	for blockRef in func.blockRefs 'eachBlock'
+		processBlock(project, module: module, globalData: globalData, func: func, blockRef: blockRef, litValues: litValues)
+	end 'eachBlock'
+end 'processFunction'
+
+// Build a per-function map of `value-name -> literal int value`. Only
+// includes literal ops whose `valueType` was already pinned to either
+// an integer MaxonType or a named MaxonType (resolved enum cases). Bool
+// literals lower to an integer 0/1, which is also accepted.
+function collectLiteralValues(module MaxonModule, func IrFunction, litValues LiteralValueMap)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectLiteralValues: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("collectLiteralValues: opIdx OOB at {opIdx}")
+			if op.name != "literal" 'notLit'
+				continue
+			end 'notLit'
+			match op 'pickShape'
+				literal(result, value, valueType, _) then maybeRecordLiteral(litValues, result: result, value: value, valueType: valueType)
+				default panic("collectLiteralValues: op.name == literal but match did not extract")
+			end 'pickShape'
+		end 'eachOp'
+	end 'eachBlock'
+end 'collectLiteralValues'
+
+// Record a literal value under its result name. Only integer-shaped
+// literals are eligible for rdata encoding; float/struct/string literals
+// are ignored (their result names simply won't appear in the map, which
+// the array-literal scanner treats as "not a known constant").
+function maybeRecordLiteral(litValues LiteralValueMap, result ByteArray, value ParsedInt, valueType MaxonType)
+	if not literalValueTypeIsRdataEligible(valueType) 'skipKind'
+		return
+	end 'skipKind'
+	let key = String.from(result)
+	litValues.upsert(key, value: value)
+end 'maybeRecordLiteral'
+
+// True when the literal's MaxonType is one we can encode in rdata
+// bytes. Integers (bare `int` or named integer typealiases — both arms
+// of `MaxonType.integer` and `MaxonType.named`) and booleans qualify.
+// Float and string literals are out of scope for the narrow-int rdata
+// path; they have their own rdata-label machinery upstream.
+function literalValueTypeIsRdataEligible(t MaxonType) returns bool
+	return match t 'check'
+		integer gives true
+		boolean gives true
+		named gives true
+		unresolved gives false
+		float gives false
+		string gives false
+		function gives false
+		typeParameter gives false
+		genericInstance gives false
+		interface gives false
+	end 'check'
+end 'literalValueTypeIsRdataEligible'
+
+// Process one block: scan its op list for `__ManagedMemory.create`
+// tryCalls, check eligibility, and rewrite. Removes set/setLength ops in
+// place — `pos` is reset to 0 after a successful rewrite because the
+// block's op list has shrunk and we want a clean walk.
+function processBlock(project Project, module MaxonModule, globalData GlobalDataTable, func IrFunction, blockRef BlockRef, litValues LiteralValueMap)
+	let block = try module.blocks.get(blockRef) otherwise panic("processBlock: blockRef OOB")
+	var pos = 0
+	while pos < block.opRefs.count() 'walk'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("processBlock: opRefs.get OOB at {pos}")
+		let op = try module.ops.get(opIdx) otherwise panic("processBlock: ops.get OOB at {opIdx}")
+		let info = extractMmCreateInfo(project, op: op)
+		if not info.isMmCreate 'notCreate'
+			pos = pos + 1
+			continue
+		end 'notCreate'
+		// Look up the array-literal producer entry for this MM result.
+		// Map-literal axes also key under their __mm name, so we end up
+		// processing them too — that's fine, they share the same shape.
+		let producerKey = arrayLiteralProducerKey(funcName: func.name, valueName: info.resultName)
+		let producer = try project.arrayLiteralProducers.get(producerKey) otherwise 'noProducer'
+			pos = pos + 1
+			continue
+		end 'noProducer'
+		if not allElementsAreLiterals(litValues, producer: producer) 'notAllConst'
+			pos = pos + 1
+			continue
+		end 'notAllConst'
+		let elementType = lookupResolvedElementType(module, func: func, producer: producer)
+		if isUnresolvedType(elementType) 'noType'
+			// Could not pin element type yet — leave for runtime path.
+			pos = pos + 1
+			continue
+		end 'noType'
+		let widthBytes = primitiveStorageWidthBytes(project, t: elementType)
+		let count = producer.elemNames.count() as ParsedInt
+		let bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
+		let label = mintConstantArrayLabel(funcName: func.name)
+		project.staticRdataValues.upsert(label, value: bytes)
+		addNamedGlobalData(globalData, name: label, data: bytes)
+		let elementSizeInt = widthBytes as ParsedInt
+		let rdataInfo = ConstantArrayRdataInfo.create(label, count: count, elementSize: elementSizeInt)
+		project.constantArrayRdata.upsert(opIdx, value: rdataInfo)
+		// Strip per-element set / setLength calls that target this MM.
+		eraseSetCallsForMm(module, block: block, mmName: info.resultName, startPos: pos + 1)
+		pos = pos + 1
+	end 'walk'
+end 'processBlock'
+
+// Identify a `tryCall` / `call` whose callee resolves to
+// `__ManagedMemory.create`. The callee bytes are interned per project so
+// a bytewise compare against the interned name is sufficient. Both
+// tryCall and call are accepted because the parser's `emitErrorFlagDrain`
+// rewrites the `call` into `tryCall` immediately after emission — but
+// dead-code elimination or other passes may not preserve the try-form.
+function extractMmCreateInfo(project Project, op MaxonOp) returns MmCreateInfo
+	if op.name != "tryCall" and op.name != "call" 'notCall'
+		return MmCreateInfo.none()
+	end 'notCall'
+	let createName = project.calleeNames.intern("__ManagedMemory.create")
+	match op 'shape'
+		tryCall(result, callee, _, _, _, _, _, _, _) then return matchMmCreateCallee(result: result, callee: callee, createName: createName)
+		call(result, callee, _, _, _, _, _, _) then return matchMmCreateCallee(result: result, callee: callee, createName: createName)
+		default panic("extractMmCreateInfo: op.name was call/tryCall but match did not extract")
+	end 'shape'
+end 'extractMmCreateInfo'
+
+function matchMmCreateCallee(result ByteArray, callee ByteArray, createName ByteArray) returns MmCreateInfo
+	if callee == createName 'isCreate'
+		return MmCreateInfo.create(result)
+	end 'isCreate'
+	return MmCreateInfo.none()
+end 'matchMmCreateCallee'
+
+type MmCreateInfo
+	export var isMmCreate bool
+	export var resultName ByteArray
+
+	export static function none() returns MmCreateInfo
+		return Self{isMmCreate: false, resultName: ByteArray.create()}
+	end 'none'
+
+	export static function create(resultName ByteArray) returns MmCreateInfo
+		return Self{isMmCreate: true, resultName: resultName}
+	end 'create'
+end 'MmCreateInfo'
+
+// Every element value name in the array-literal producer must be the
+// result of a literal op. The producer's `elemNames` list is the parser-
+// recorded source-order element-value sequence; we match each against the
+// per-function literal value map collected upstream.
+function allElementsAreLiterals(litValues LiteralValueMap, producer ArrayLiteralProducer) returns bool
+	if producer.elemNames.count() == 0 'empty'
+		return false
+	end 'empty'
+	for elemName in producer.elemNames 'each'
+		let key = String.from(elemName)
+		if not litValues.contains(key) 'missing'
+			return false
+		end 'missing'
+	end 'each'
+	return true
+end 'allElementsAreLiterals'
+
+// The producer's first element name carries the resolved element
+// MaxonType through `producerTypes` — but the pass runs after
+// `fillUnresolvedTypes` so the per-function producer-type maps have
+// been thrown away. Recover the type by inspecting the first element's
+// literal op directly (every element shares one unified type post-TR).
+function lookupResolvedElementType(module MaxonModule, func IrFunction, producer ArrayLiteralProducer) returns MaxonType
+	if producer.elemNames.count() == 0 'empty'
+		return MaxonType.unresolved
+	end 'empty'
+	let firstName = try producer.elemNames.get(0) otherwise panic("lookupResolvedElementType: elemNames.get(0) OOB")
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("lookupResolvedElementType: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("lookupResolvedElementType: opIdx OOB at {opIdx}")
+			if op.name != "literal" 'notLit'
+				continue
+			end 'notLit'
+			let hit = matchLiteralValueType(op, target: firstName)
+			if hit.found 'gotIt'
+				return hit.valueType
+			end 'gotIt'
+		end 'eachOp'
+	end 'eachBlock'
+	return MaxonType.unresolved
+end 'lookupResolvedElementType'
+
+type LiteralValueTypeProbe
+	export var found bool
+	export var valueType MaxonType
+
+	export static function miss() returns LiteralValueTypeProbe
+		return Self{found: false, valueType: MaxonType.unresolved}
+	end 'miss'
+
+	export static function hit(valueType MaxonType) returns LiteralValueTypeProbe
+		return Self{found: true, valueType: valueType}
+	end 'hit'
+end 'LiteralValueTypeProbe'
+
+// Extract the literal's MaxonType when the result name matches `target`.
+// Wraps the match-on-MaxonOp + name comparison so the caller doesn't need
+// to express an if-inside-match (which the parser rejects).
+function matchLiteralValueType(op MaxonOp, target ByteArray) returns LiteralValueTypeProbe
+	match op 'pickShape'
+		literal(result, _, valueType, _) then return literalValueTypeProbeFor(result: result, valueType: valueType, target: target)
+		default panic("matchLiteralValueType: op.name == literal but match did not extract")
+	end 'pickShape'
+end 'matchLiteralValueType'
+
+function literalValueTypeProbeFor(result ByteArray, valueType MaxonType, target ByteArray) returns LiteralValueTypeProbe
+	if result == target 'matched'
+		return LiteralValueTypeProbe.hit(valueType)
+	end 'matched'
+	return LiteralValueTypeProbe.miss()
+end 'literalValueTypeProbeFor'
+
+// Resolve a MaxonType to its in-memory storage width in bytes. Wraps
+// `resolveMaxonTypeToStd` + `storeWidthOfStdType` + `storeWidthBytes`
+// to centralize the chain. Returns 1 for boolean (booleans collapse to
+// one byte at the layout-descriptor level — see BuildLayoutDescriptors).
+function primitiveStorageWidthBytes(project Project, t MaxonType) returns MachineWord
+	return match t 'w'
+		boolean gives 1 as MachineWord
+		integer gives 8 as MachineWord
+		float gives 8 as MachineWord
+		named gives storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: t)))
+		string gives 8 as MachineWord
+		function gives 8 as MachineWord
+		unresolved gives 8 as MachineWord
+		typeParameter gives 8 as MachineWord
+		genericInstance gives 8 as MachineWord
+		interface gives 8 as MachineWord
+	end 'w'
+end 'primitiveStorageWidthBytes'
+
+// Pack each element value into the encoded byte sequence. Little-endian
+// per the target ABI — every supported target (x64, arm64, wasm) is
+// little-endian. Signedness is not threaded through: the two's-complement
+// byte pattern for a signed value matches the unsigned bit pattern at
+// every width, so the bytes are identical either way.
+function encodeConstantArrayBytes(litValues LiteralValueMap, producer ArrayLiteralProducer, widthBytes MachineWord) returns ByteArray
+	var bytes = ByteArray.create()
+	for elemName in producer.elemNames 'each'
+		let key = String.from(elemName)
+		let v = try litValues.get(key) otherwise panic("encodeConstantArrayBytes: missing literal for '{key}' (allElementsAreLiterals should have guarded)")
+		appendLittleEndian(bytes, value: v, widthBytes: widthBytes)
+	end 'each'
+	return bytes
+end 'encodeConstantArrayBytes'
+
+// Append `widthBytes` little-endian bytes of `value` to `bytes`. Sign
+// handling is implicit: `ParsedInt` is i64, two's-complement, and the
+// low N bytes match what every backend's narrow store writes.
+function appendLittleEndian(bytes ByteArray, value ParsedInt, widthBytes MachineWord)
+	var i = 0 as MachineWord
+	while i < widthBytes 'each'
+		let shift = (i * 8) as ParsedInt
+		let byteVal = ((value shr shift) and 0xff) as Byte
+		bytes.push(byteVal)
+		i = i + 1
+	end 'each'
+end 'appendLittleEndian'
+
+// Mint a fresh `__rdata_arr_*` label. The function name disambiguates
+// across functions (multiple `let arr = [...]` in distinct functions),
+// the counter disambiguates within one function (e.g. nested literals
+// or sibling array constants). The result is interned via
+// `staticRdataValues` so a second mint with the same label would
+// overwrite — the counter prevents that.
+function mintConstantArrayLabel(funcName String) returns String
+	let id = constantArrayLiteralCounter
+	constantArrayLiteralCounter = constantArrayLiteralCounter + 1
+	// Sanitize function name: replace `.` with `_` so the label is a
+	// valid linker symbol (matches the bootstrap's `__const_array_*`
+	// shape).
+	let sanitized = sanitizeFunctionNameForLabel(funcName)
+	return "__rdata_arr_{sanitized}_{id}"
+end 'mintConstantArrayLabel'
+
+// Replace `.` characters in a function name with `_` so the resulting
+// label is a clean linker-friendly symbol. Mirrors the approach the
+// bootstrap uses when minting per-function rdata labels.
+function sanitizeFunctionNameForLabel(name String) returns String
+	let raw = name.toByteArray()
+	// 0x5f = '_'. Using the numeric literal sidesteps a bootstrap-side
+	// cast-validation hiccup for char-to-Byte conversion (the self-hosted
+	// compiler treats both as integer).
+	let underscore = 0x5f as Byte
+	var out = ByteArray.create()
+	for b in raw 'each'
+		if b == '.' 'isDot'
+			out.push(underscore)
+		end 'isDot' else 'keep'
+			out.push(b)
+		end 'keep'
+	end 'each'
+	return String.from(out)
+end 'sanitizeFunctionNameForLabel'
+
+// Remove `mm.set(...)` and `mm.setLength(...)` ops whose receiver is
+// `mmName`, starting at `startPos`. The walk skips over interleaved
+// literal ops (the parser emits an `int` literal for each set's index /
+// the setLength count between the call ops), and stops at the first op
+// that mentions `mmName` as anything other than a set/setLength
+// receiver — that's the first downstream use (the `Array.init(mm)`
+// call) and signals we've consumed every internally-emitted setter.
+function eraseSetCallsForMm(module MaxonModule, block IrBlock, mmName ByteArray, startPos OpCount)
+	var pos = startPos
+	while pos < block.opRefs.count() 'walk'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("eraseSetCallsForMm: opRefs.get OOB at {pos}")
+		let op = try module.ops.get(opIdx) otherwise panic("eraseSetCallsForMm: ops.get OOB at {opIdx}")
+		if isSetOrSetLengthOnMm(op, mmName: mmName) 'isTarget'
+			_ = try block.opRefs.remove(at: pos) otherwise panic("eraseSetCallsForMm: opRefs.remove OOB at {pos}")
+			continue
+		end 'isTarget'
+		// Index / count literals interleaved with the set calls — leave
+		// in place (later DCE drops their dead defs).
+		if op.name == "literal" 'isLiteral'
+			pos = pos + 1
+			continue
+		end 'isLiteral'
+		// Anything else means we've reached the first non-setter use
+		// of the MM (typically `Array.init(mm)`); stop scanning.
+		return
+	end 'walk'
+end 'eraseSetCallsForMm'
+
+// Is `op` a `tryMethodCall` / `methodCall` whose receiver is `mmName`
+// and whose method is `set` or `setLength`? The parser emits the entire
+// per-element write sequence using these exact method names, so a
+// byte-level compare on the method name field is enough.
+function isSetOrSetLengthOnMm(op MaxonOp, mmName ByteArray) returns bool
+	let setName = "set".toByteArray()
+	let setLengthName = "setLength".toByteArray()
+	if op.name != "tryMethodCall" and op.name != "methodCall" 'notMethodCall'
+		return false
+	end 'notMethodCall'
+	match op 'shape'
+		tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) then return receiver == mmName and (methodName == setName or methodName == setLengthName)
+		methodCall(_, receiver, methodName, _, _, _, _, _) then return receiver == mmName and (methodName == setName or methodName == setLengthName)
+		default panic("isSetOrSetLengthOnMm: op.name was methodCall/tryMethodCall but match did not extract")
+	end 'shape'
+end 'isSetOrSetLengthOnMm'
+
+// Per-function value-name → integer-value lookup. Keys are
+// `String.from(byteArray)` because Map's hash/eq operate on String, and
+// element names are slices over the source buffer (so direct ByteArray
+// keys would compare by identity rather than content). Building the
+// map keys once up-front amortizes the conversion cost across the scan.
+typealias LiteralValueMap = Map with(String, ParsedInt)

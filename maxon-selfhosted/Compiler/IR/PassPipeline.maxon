@@ -40,6 +40,13 @@ export union PassKind
 	// known) but before lowering (which would otherwise panic on the
 	// placeholder).
 	expandCastRangeChecks
+	// Detect array literals whose elements are all compile-time integer
+	// constants (enum cases, int literals, bool literals) and lower them
+	// to a `.rdata` byte sequence rather than the runtime
+	// __managed_mem_create + per-element set sequence. Runs after type
+	// resolution (so element types are concrete) but before lowering
+	// (which consumes `project.constantArrayRdata`).
+	constantArrayLiteralRdata
 	// Phase 3: Maxon → Std
 	lowerMaxonToStd
 	// Phase 4: Std passes
@@ -214,6 +221,7 @@ export type PassPipeline
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
 			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName)
+			constantArrayLiteralRdata then runConstantArrayLiteralRdata(project, module: maxonModule, globalData: globalData)
 
 			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
 			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
@@ -381,6 +389,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
 		expandCastRangeChecks gives PassClassification.wholeModule
+		constantArrayLiteralRdata gives PassClassification.wholeModule
 		augmentWithRuntime gives PassClassification.wholeModule
 		instrumentCoverage gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
@@ -440,6 +449,13 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// placeholder has no Std lowering.
 	passes.push(PassKind.expandCastRangeChecks)
 	passes.push(PassKind.deadFunctionElimination)
+	// Constant-array-to-rdata fast path. Runs after type resolution so
+	// element types are concrete, after DFE so unreferenced array literals
+	// don't waste rdata space, and immediately before lowering — the
+	// lowering hook in `lowerManagedMemBuiltin` reads
+	// `project.constantArrayRdata` to decide between the runtime path and
+	// the rdata fast path.
+	passes.push(PassKind.constantArrayLiteralRdata)
 	// Phase 3: Maxon → Std
 	passes.push(PassKind.lowerMaxonToStd)
 	// Phase 4a: Memory safety (Std-level)
@@ -543,6 +559,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
 		expandCastRangeChecks gives PipelinePhase.maxon
+		constantArrayLiteralRdata gives PipelinePhase.maxon
 		lowerMaxonToStd gives PipelinePhase.std
 		borrowCheck gives PipelinePhase.std
 		injectDrops gives PipelinePhase.std
@@ -663,6 +680,7 @@ export function passKindToString(pass PassKind) returns String
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"
 		expandCastRangeChecks gives "expand-cast-range-checks"
+		constantArrayLiteralRdata gives "constant-array-literal-rdata"
 		borrowCheck gives "borrow-check"
 		injectDrops gives "inject-drops"
 		insertRangeChecks gives "insert-range-checks"

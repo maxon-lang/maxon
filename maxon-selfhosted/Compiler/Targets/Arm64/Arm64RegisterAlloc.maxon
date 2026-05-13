@@ -208,7 +208,7 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		fpStoreIndirect(baseReg, _, src, _) gives isVirtualArm64Gpr(baseReg) or isVirtualArm64FpReg(src)
 		fpLoadIndirect(dest, baseReg, _, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64Gpr(baseReg)
 		storeIndirect(baseReg, _, srcReg, _) gives isVirtualArm64Gpr(baseReg) or isVirtualArm64Gpr(srcReg)
-		loadIndirect(destReg, baseReg, _, _) gives isVirtualArm64Gpr(destReg) or isVirtualArm64Gpr(baseReg)
+		loadIndirect(destReg, baseReg, _, _, _) gives isVirtualArm64Gpr(destReg) or isVirtualArm64Gpr(baseReg)
 		globalLoad(dest, _, _) gives isVirtualArm64Gpr(dest)
 		globalStore(_, src, _) gives isVirtualArm64Gpr(src)
 		globalLoadFloat(dest, _, _) gives isVirtualArm64FpReg(dest)
@@ -298,7 +298,7 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		fpStoreIndirect(baseReg, _, src, _) then countArm64MixedReads(counts, gpr: baseReg, fp: src)
 		fpLoadIndirect(_, baseReg, _, _) then incUse(counts, id: arm64VRegId(baseReg))
 		storeIndirect(baseReg, _, srcReg, _) then countArm64TwoReads(counts, reg1: baseReg, reg2: srcReg)
-		loadIndirect(_, baseReg, _, _) then incUse(counts, id: arm64VRegId(baseReg))
+		loadIndirect(_, baseReg, _, _, _) then incUse(counts, id: arm64VRegId(baseReg))
 		globalLoad then break 'scan'
 		globalStore(_, src, _) then incUse(counts, id: arm64VRegId(src))
 		globalLoadFloat then break 'scan'
@@ -460,7 +460,7 @@ end 'noteArm64DefUse'
 
 function noteArm64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
 	match op 'extract'
-		loadIndirect(dest, _, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIndirect(dest, _, _, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		nullSafeLoad(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		default panic("noteArm64: unexpected op for pattern")
 	end 'extract'
@@ -552,7 +552,7 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		fpStoreIndirect(baseReg, _, src, _) then recordArm64MixedLastUses(positions, gpr: baseReg, fp: src, opIdx: opIdx)
 		fpLoadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
 		storeIndirect(baseReg, _, srcReg, _) then recordArm64TwoLastUses(positions, reg1: baseReg, reg2: srcReg, opIdx: opIdx)
-		loadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
+		loadIndirect(_, baseReg, _, _, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
 		globalLoad then break 'scan'
 		globalStore(_, src, _) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
 		globalLoadFloat then break 'scan'
@@ -1045,29 +1045,29 @@ end 'colorA64MovRegRegInner'
 
 function colorA64BaseUseSrcUse(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
-		storeIndirect(baseReg, offset, srcReg, size) then colorA64StoreIndirect(module, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, coloring: coloring, opRefs: opRefs)
+		storeIndirect(baseReg, offset, srcReg, width) then colorA64StoreIndirect(module, baseReg: baseReg, offset: offset, srcReg: srcReg, width: width, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseSrcUse: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseSrcUse'
 
-function colorA64StoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, coloring ColoringResult, opRefs OpIndexList)
+function colorA64StoreIndirect(module TargetModule, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, width StoreWidth, coloring ColoringResult, opRefs OpIndexList)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
 	let s = colorArm64Gpr(srcReg, coloring: coloring)
-	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), width: width))
 end 'colorA64StoreIndirect'
 
 function colorA64BaseUseDest(module TargetModule, a64Op Arm64Op, coloring ColoringResult, opRefs OpIndexList)
 	match a64Op 'extract'
-		loadIndirect(destReg, baseReg, offset, size) then colorA64LoadIndirect(module, destReg: destReg, baseReg: baseReg, offset: offset, size: size, coloring: coloring, opRefs: opRefs)
+		loadIndirect(destReg, baseReg, offset, width, signed) then colorA64LoadIndirect(module, destReg: destReg, baseReg: baseReg, offset: offset, width: width, signed: signed, coloring: coloring, opRefs: opRefs)
 		nullSafeLoad(dest, baseReg, offset) then colorA64NullSafeLoad(module, dest: dest, baseReg: baseReg, offset: offset, coloring: coloring, opRefs: opRefs)
 		default panic("colorA64BaseUseDest: unexpected op")
 	end 'extract'
 end 'colorA64BaseUseDest'
 
-function colorA64LoadIndirect(module TargetModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, coloring ColoringResult, opRefs OpIndexList)
+function colorA64LoadIndirect(module TargetModule, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, width StoreWidth, signed bool, coloring ColoringResult, opRefs OpIndexList)
 	let d = colorArm64Gpr(destReg, coloring: coloring)
 	let b = colorArm64Gpr(baseReg, coloring: coloring)
-	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size))
+	pushArm64ToList(module, opRefs: opRefs, op: Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, width: width, signed: signed))
 end 'colorA64LoadIndirect'
 
 function colorA64NullSafeLoad(module TargetModule, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, coloring ColoringResult, opRefs OpIndexList)
@@ -1402,14 +1402,14 @@ end 'remapA64MovRegReg'
 
 function remapA64BaseUseSrcUse(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
-		storeIndirect(base, offset, src, size) gives Arm64Op.storeIndirect(remapArm64Gpr(base, remap: remap), offset: offset, srcReg: remapArm64Gpr(src, remap: remap), size: size)
+		storeIndirect(base, offset, src, width) gives Arm64Op.storeIndirect(remapArm64Gpr(base, remap: remap), offset: offset, srcReg: remapArm64Gpr(src, remap: remap), width: width)
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64BaseUseSrcUse'
 
 function remapA64BaseUseDest(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 	return match a64Op 'remap'
-		loadIndirect(dest, base, offset, size) gives Arm64Op.loadIndirect(remapArm64Gpr(dest, remap: remap), baseReg: remapArm64Gpr(base, remap: remap), offset: offset, size: size)
+		loadIndirect(dest, base, offset, width, signed) gives Arm64Op.loadIndirect(remapArm64Gpr(dest, remap: remap), baseReg: remapArm64Gpr(base, remap: remap), offset: offset, width: width, signed: signed)
 		nullSafeLoad(dest, base, offset) gives Arm64Op.nullSafeLoad(remapArm64Gpr(dest, remap: remap), baseReg: remapArm64Gpr(base, remap: remap), offset: offset)
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'

@@ -205,8 +205,8 @@ export union Arm64Op
 	fpStoreIndirect(baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseFpUse, implicitGprReads: 0, implicitGprDefs: 0}
 	fpLoadIndirect(dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseFpDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Indirect memory ops (GPR)
-	storeIndirect(baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseSrcUse, implicitGprReads: 0, implicitGprDefs: 0}
-	loadIndirect(destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
+	storeIndirect(baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, width StoreWidth) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseSrcUse, implicitGprReads: 0, implicitGprDefs: 0}
+	loadIndirect(destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, width StoreWidth, signed bool) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
 	// Global variable ops
 	globalLoad(dest Arm64VReg, name String, size MachineWord) = Arm64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.singleDef, implicitGprReads: 0, implicitGprDefs: 0}
 	globalStore(name String, src Arm64VReg, size MachineWord) = Arm64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.singleUse, implicitGprReads: 0, implicitGprDefs: 0}
@@ -304,8 +304,8 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		frintn(dest, src, _) gives "arm64.frintn {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
 		fpStoreIndirect(baseReg, offset, src, _) gives "arm64.str {arm64FpVRegToString(src)}, [{arm64VRegToString(baseReg)}, #{offset}]"
 		fpLoadIndirect(dest, baseReg, offset, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [{arm64VRegToString(baseReg)}, #{offset}]"
-		storeIndirect(baseReg, offset, srcReg, size) gives "arm64.str {arm64VRegToString(srcReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({size}b)"
-		loadIndirect(destReg, baseReg, offset, size) gives "arm64.ldr {arm64VRegToString(destReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({size}b)"
+		storeIndirect(baseReg, offset, srcReg, width) gives "arm64.str {arm64VRegToString(srcReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({storeWidthBytes(width)}b)"
+		loadIndirect(destReg, baseReg, offset, width, signed) gives "arm64.{arm64LoadIndirectMnemonic(width, signed: signed)} {arm64VRegToString(destReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({storeWidthBytes(width)}b)"
 		globalLoad(dest, name, _) gives "arm64.ldr {arm64VRegToString(dest)}, [{name}]"
 		globalStore(name, src, _) gives "arm64.str {arm64VRegToString(src)}, [{name}]"
 		globalLoadFloat(dest, name, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [{name}]"
@@ -322,3 +322,17 @@ export function arm64OpToString(op Arm64Op, blocks IrBlockArray) returns String
 		atomicXaddMem(resultReg, addrReg, valReg) gives "arm64.atomic_xadd {arm64VRegToString(resultReg)}, [{arm64VRegToString(addrReg)}], {arm64VRegToString(valReg)}"
 	end 'toString'
 end 'arm64OpToString'
+
+// Pick the mnemonic that matches the opcode the ARM64 emitter actually
+// generates per (width, signed). The `signed` flag is ignored at qword
+// width because a 64-bit LDR fills the register naturally; at word
+// width it picks LDRSW vs plain LDR (Wn → Xn zero-extends); narrower
+// widths pick LDRSB/LDRSH vs LDRB/LDRH.
+function arm64LoadIndirectMnemonic(width StoreWidth, signed bool) returns String
+	return match width 'w'
+		byte gives "ldrsb" if signed else "ldrb"
+		halfword gives "ldrsh" if signed else "ldrh"
+		word gives "ldrsw" if signed else "ldr"
+		qword gives "ldr"
+	end 'w'
+end 'arm64LoadIndirectMnemonic'

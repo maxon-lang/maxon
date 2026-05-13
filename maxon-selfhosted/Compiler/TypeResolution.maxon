@@ -868,6 +868,83 @@ function resolveAllEnumTypes(project Project)
 	end 'drop'
 end 'resolveAllEnumTypes'
 
+// Round `value` up to the next multiple of `multiple`. `multiple` is always
+// a positive power-of-2 here (1, 2, 4, 8 — the storeWidthBytes results), so
+// the bit-twiddling form is equivalent to `((value + multiple - 1) / multiple)
+// * multiple` and avoids the division. Local to the layout pass — other
+// alignment paths in the codebase use the targets/Shared `alignUp` helper
+// which carries the same semantics but a different parameter shape.
+function roundUpToMultiple(value MachineWord, multiple MachineWord) returns MachineWord
+	return (value + multiple - 1) and not (multiple - 1)
+end 'roundUpToMultiple'
+
+// Stamp every registered struct's field offsets and total `byteSize`.
+//
+// Runs after both `resolveAllStructTypes` and `resolveAllEnumTypes` so that:
+//   - Every struct that the parser registered now lives in
+//     `project.structTypes` with its fields' MaxonTypes copied over.
+//   - Typealiases (including narrow-int aliases produced by enums) are
+//     fully resolved, so this pass can call
+//     `resolveMaxonTypeToStd(project, ref: field.fieldType)` and get a
+//     correct StdType for each field.
+//
+// Each field is placed at the next offset that satisfies natural alignment
+// for its resolved StdType's `StoreWidth`. Pointer-shaped types (struct
+// references, strings, function values, interface values, typeParameters,
+// genericInstances) resolve to `i64` and so consume 8 bytes at 8-byte
+// alignment — preserving the historic layout. Narrow integer typealiases
+// (e.g. an enum backed by `int(0 to 255)` → `u8`) consume only 1 byte. The
+// struct's total `byteSize` is rounded up to 8 bytes so `__mm_alloc`'s
+// 8-byte alignment invariant continues to hold for every allocated struct.
+//
+// Structs whose fields are all already `offsetResolved: true` (i.e.
+// loaded from the stdlib cache, or synthesized at lowering time with
+// hand-baked offsets) are left untouched.
+export function layoutAllStructs(project Project)
+	// Iterating `project.structTypes` by value yields immutable copies of
+	// each StructType, so we accumulate the rebuilt entries and `upsert`
+	// them after the walk. Mutating in-place would be cheaper but the map
+	// API doesn't expose that today.
+	var rebuiltNames = StringArray.create()
+	var rebuiltStructs = StructTypeArray.create()
+	for (structName, st) in project.structTypes 'eachStruct'
+		var allResolved = true
+		for f in st.fields 'check'
+			if not f.offsetResolved 'unresolved'
+				allResolved = false
+				break
+			end 'unresolved'
+		end 'check'
+		if allResolved 'skipCached'
+			continue
+		end 'skipCached'
+
+		var newFields = StructFieldArray.create()
+		var nextOffset = 0 as MachineWord
+		for i in 0 upto st.fields.count() 'eachField'
+			let f = try st.fields.get(i) otherwise panic("layoutAllStructs: fields.get OOB at {i} for '{structName}'")
+			let stdType = resolveMaxonTypeToStd(project, ref: f.fieldType)
+			let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
+			let aligned = roundUpToMultiple(nextOffset, multiple: widthBytes)
+			newFields.push(StructField.create(f.name, fieldType: f.fieldType, offset: aligned as FieldOffset, isMutable: f.isMutable, hasDefault: f.hasDefault, offsetResolved: true))
+			nextOffset = aligned + widthBytes
+		end 'eachField'
+		// Pad struct size up to 8 bytes so `__mm_alloc`'s 8-byte alignment
+		// invariant for managed allocations is preserved regardless of how
+		// the trailing field's natural alignment landed.
+		let totalSize = roundUpToMultiple(nextOffset, multiple: 8)
+		let rebuilt = StructType.create(st.name, fields: newFields, byteSize: totalSize as FieldOffset, visibility: st.visibility, sourceFilePath: st.sourceFilePath, nameLine: st.nameLine, nameColumn: st.nameColumn, expectedMethods: st.expectedMethods, innerAliases: st.innerAliases)
+		rebuiltNames.push(structName)
+		rebuiltStructs.push(rebuilt)
+	end 'eachStruct'
+
+	for i in 0 upto rebuiltNames.count() 'commit'
+		let name = try rebuiltNames.get(i) otherwise panic("layoutAllStructs: rebuiltNames.get OOB at {i}")
+		let st = try rebuiltStructs.get(i) otherwise panic("layoutAllStructs: rebuiltStructs.get OOB at {i}")
+		project.structTypes.upsert(name, value: st)
+	end 'commit'
+end 'layoutAllStructs'
+
 // --- Phase 11.1 (step 5): conformance + extension validation ---
 
 // Walk every still-pending unresolved struct/enum's `implementedInterfaces`
@@ -4712,6 +4789,13 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	drainPendingConstraintChecks(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
+	// Compute struct field offsets and total byteSize now that every named
+	// type the parser saw has been promoted into `project.structTypes` /
+	// `project.enumTypes` / `project.typealiases`. Must run before any
+	// pass that reads `field.offset` or `st.byteSize` (notably
+	// `buildLayoutDescriptors` and the fieldLoad/Store lowering in
+	// `LowerMaxonToStd`).
+	layoutAllStructs(project)
 	// Top-level decls (lets and vars together) depend on enums (cases
 	// registered as constants) and typealiases (`as TypeName` casts), so
 	// they sequence after both drains. Lets and vars share one drain pass

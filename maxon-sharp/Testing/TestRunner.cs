@@ -1272,6 +1272,51 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           }
           break;
         }
+        case "u8[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!byte.TryParse(part.Trim(), out var b)) return null;
+            result.Add(b);
+          }
+          break;
+        }
+        case "i16[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!short.TryParse(part.Trim(), out var s)) return null;
+            result.AddRange(BitConverter.GetBytes(s));
+          }
+          break;
+        }
+        case "u16[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!ushort.TryParse(part.Trim(), out var u)) return null;
+            result.AddRange(BitConverter.GetBytes(u));
+          }
+          break;
+        }
+        case "u32": {
+          if (!uint.TryParse(value, out var u)) return null;
+          result.AddRange(BitConverter.GetBytes(u));
+          break;
+        }
+        case "u32[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!uint.TryParse(part.Trim(), out var u)) return null;
+            result.AddRange(BitConverter.GetBytes(u));
+          }
+          break;
+        }
+        case "i32[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!int.TryParse(part.Trim(), out var n)) return null;
+            result.AddRange(BitConverter.GetBytes(n));
+          }
+          break;
+        }
         case "utf8": {
           if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
           try {

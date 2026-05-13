@@ -86,7 +86,18 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v28: persist TypeParamRegistry.declaringTypeParamLists so getParamNames
 // returns source-declaration order (Map.Key before Map.Value) regardless of
 // what order interns happened in.
-let CACHE_FORMAT_VERSION = 30
+// v32: persist `StructField.offsetResolved` so the new TypeResolution
+// `layoutAllStructs` pass can tell parser-time placeholder offsets from
+// real ones. Cached struct fields carry the real offsets the C# bootstrap
+// (or a prior self-hosted run) already computed, so on read they are
+// flagged `offsetResolved: true` and the layout pass leaves them alone.
+// v33: `StdSystemOp.loadIndirect` gains a `signed: bool` field for sign-
+// extending narrow loads. The encoded payload grows by one byte.
+// v34: constant-array-to-rdata fast path. New `__rdata_arr_*` labels
+// land in `project.staticRdataValues` and `pipeline.globalData`; stdlib
+// array literals routed through them produce different rdata bytes than
+// the pre-pass runtime-allocated builds.
+let CACHE_FORMAT_VERSION = 34
 
 // ============================================================
 // Types
@@ -651,6 +662,10 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			try writeMaxonType(project, buf: buf, t: field.fieldType)
 			writeDword(buf, value: field.offset)
 			writeBoolByte(buf, b: field.isMutable)
+			// Cache v32: round-trip the layout-pass sentinel so cached fields
+			// keep the `offsetResolved: true` flag that the producing run's
+			// `layoutAllStructs` pass stamped.
+			writeBoolByte(buf, b: field.offsetResolved)
 		end 'eachField'
 
 		// Cache v7: persist the per-struct inner-typealias map so cache-hit
@@ -1116,7 +1131,12 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			pos = pos + 4
 			let (isMutable, pIm) = readBoolByte(buf, offset: pos)
 			pos = pIm
-			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable))
+			// Cache v32: read back the layout-pass sentinel. Cached struct
+			// fields carry real offsets, so this is always `true` once the
+			// producing run has executed `layoutAllStructs`.
+			let (offsetResolved, pOr) = readBoolByte(buf, offset: pos)
+			pos = pOr
+			fields.push(StructField.create(fieldName, fieldType: fieldType, offset: fieldOffset, isMutable: isMutable, offsetResolved: offsetResolved))
 		end 'eachField'
 
 		// Cache v7: read back the per-struct inner-typealias map. The
@@ -1496,7 +1516,7 @@ end 'translateIrInterface'
 function translateStructType(project Project, data StdlibCacheData, st StructType) returns StructType
 	var fields = StructFieldArray.create()
 	for f in st.fields 'eachField'
-		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable))
+		fields.push(StructField.create(f.name, fieldType: translateMaxonType(project, data: data, t: f.fieldType), offset: f.offset, isMutable: f.isMutable, offsetResolved: f.offsetResolved))
 	end 'eachField'
 	var translatedInner = ResolvedInnerAliasMap.create()
 	for (aliasName, aliasType) in st.innerAliases 'eachInner'
@@ -2902,9 +2922,9 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osClose(fdId) then writeQword(buf, value: fdId)
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then writeStdSysOsGetEnv(buf, resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId)
 		loadFramePtr(resultId) then writeQword(buf, value: resultId)
-		loadIndirect(resultId, addrId, offset, isFloat) then writeStdSysLoadIndirect(buf, resultId: resultId, addrId: addrId, offset: offset, isFloat: isFloat)
+		loadIndirect(resultId, addrId, offset, width, signed, isFloat) then writeStdSysLoadIndirect(buf, resultId: resultId, addrId: addrId, offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) then try writeStdSysFuncAddr(buf, resultId: resultId, name: name)
-		storeIndirect(addrId, offset, valueId, isFloat) then writeStdSysStoreIndirect(buf, addrId: addrId, offset: offset, valueId: valueId, isFloat: isFloat)
+		storeIndirect(addrId, offset, valueId, width, isFloat) then writeStdSysStoreIndirect(buf, addrId: addrId, offset: offset, valueId: valueId, width: width, isFloat: isFloat)
 		drop(valueId) then writeQword(buf, value: valueId)
 		osAllocPages(resultId, sizeId) then writeStdSysOsAllocPages(buf, resultId: resultId, sizeId: sizeId)
 		osAllocPagesLarge(resultId, sizeId) then writeStdSysOsAllocPagesLarge(buf, resultId: resultId, sizeId: sizeId)
@@ -2995,10 +3015,12 @@ function writeStdSysOsGetEnv(buf ByteArray, resultId ValueId, namePtrId ValueId,
 	writeQword(buf, value: outBufLenId)
 end 'writeStdSysOsGetEnv'
 
-function writeStdSysLoadIndirect(buf ByteArray, resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool)
+function writeStdSysLoadIndirect(buf ByteArray, resultId ValueId, addrId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: addrId)
 	writeQword(buf, value: offset)
+	writeStoreWidthTag(buf, w: width)
+	writeBoolByte(buf, b: signed)
 	writeBoolByte(buf, b: isFloat)
 end 'writeStdSysLoadIndirect'
 
@@ -3007,10 +3029,11 @@ function writeStdSysFuncAddr(buf ByteArray, resultId ValueId, name String) throw
 	try writeString(buf, s: name)
 end 'writeStdSysFuncAddr'
 
-function writeStdSysStoreIndirect(buf ByteArray, addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool)
+function writeStdSysStoreIndirect(buf ByteArray, addrId ValueId, offset MachineWord, valueId ValueId, width StoreWidth, isFloat bool)
 	writeQword(buf, value: addrId)
 	writeQword(buf, value: offset)
 	writeQword(buf, value: valueId)
+	writeStoreWidthTag(buf, w: width)
 	writeBoolByte(buf, b: isFloat)
 end 'writeStdSysStoreIndirect'
 
@@ -3224,8 +3247,10 @@ function readStdSysLoadIndirect(buf ByteArray, offset ByteOffset) returns (StdSy
 	let resultId = readQword(buf, offset: offset)
 	let addrId = readQword(buf, offset: offset + 8)
 	let off = readQword(buf, offset: offset + 16)
-	let (isFloat, p) = readBoolByte(buf, offset: offset + 24)
-	return (StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: off, isFloat: isFloat), p)
+	let (width, posAfterWidth) = readStoreWidthTag(buf, offset: offset + 24)
+	let (signed, posAfterSigned) = readBoolByte(buf, offset: posAfterWidth)
+	let (isFloat, p) = readBoolByte(buf, offset: posAfterSigned)
+	return (StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: off, width: width, signed: signed, isFloat: isFloat), p)
 end 'readStdSysLoadIndirect'
 
 function readStdSysFuncAddr(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset) throws CacheCorruption
@@ -3238,8 +3263,9 @@ function readStdSysStoreIndirect(buf ByteArray, offset ByteOffset) returns (StdS
 	let addrId = readQword(buf, offset: offset)
 	let off = readQword(buf, offset: offset + 8)
 	let valueId = readQword(buf, offset: offset + 16)
-	let (isFloat, p) = readBoolByte(buf, offset: offset + 24)
-	return (StdSystemOp.storeIndirect(addrId, offset: off, valueId: valueId, isFloat: isFloat), p)
+	let (width, posAfterWidth) = readStoreWidthTag(buf, offset: offset + 24)
+	let (isFloat, p) = readBoolByte(buf, offset: posAfterWidth)
+	return (StdSystemOp.storeIndirect(addrId, offset: off, valueId: valueId, width: width, isFloat: isFloat), p)
 end 'readStdSysStoreIndirect'
 
 function readStdSysDrop(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)

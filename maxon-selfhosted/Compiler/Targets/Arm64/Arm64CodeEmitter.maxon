@@ -1185,11 +1185,11 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		frintp(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E64C000, opcodeSingle: 0x1E24C000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
 		frintz(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E65C000, opcodeSingle: 0x1E25C000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
 		frintn(dest, src, precision) then arm64EmitFrint(code, opcodeDouble: 0x1E644000, opcodeSingle: 0x1E244000, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
-		loadIndirect(destReg, baseReg, offset, size) then arm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, size: size)
+		loadIndirect(destReg, baseReg, offset, width, signed) then arm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, width: width, signed: signed)
 		leaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups, rdataRelocs: rdataRelocs)
 		fpStoreIndirect(baseReg, offset, src, precision) then arm64EmitFpStoreIndirectOp(code, baseReg: baseReg, offset: offset, src: src, precision: precision)
 		fpLoadIndirect(dest, baseReg, offset, precision) then arm64EmitFpLoadIndirectOp(code, dest: dest, baseReg: baseReg, offset: offset, precision: precision)
-		storeIndirect(baseReg, offset, srcReg, size) then arm64EmitStoreIndirectOp(code, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size)
+		storeIndirect(baseReg, offset, srcReg, width) then arm64EmitStoreIndirectOp(code, baseReg: baseReg, offset: offset, srcReg: srcReg, width: width)
 		globalLoad(dest, name, size) then arm64EmitGlobalLoadOp(code, dest: dest, name: name, size: size)
 		globalStore(name, src, size) then arm64EmitGlobalStoreOp(code, name: name, src: src, size: size)
 		globalLoadFloat(dest, name, precision) then arm64EmitGlobalLoadFloatOp(code, dest: dest, name: name, precision: precision)
@@ -1314,19 +1314,48 @@ function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray,
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitGlobalAddrOp'
 
-// loadIndirect: LDR dest, [base, #offset]
-function arm64EmitLoadIndirectOp(code ByteArray, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord)
+// loadIndirect: dispatches to the dedicated ARMv8 unsigned-immediate
+// load instruction for each width. The narrow forms come in signed and
+// unsigned variants (LDRSB vs LDRB, LDRSH vs LDRH, LDRSW vs LDR W). At
+// the qword width signedness is moot — `LDR Xn` already loads a full
+// 64-bit value with no extension.
+function arm64EmitLoadIndirectOp(code ByteArray, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, width StoreWidth, signed bool)
 	let rd = resolveArm64Gpr(destReg).rawValue
 	let rn = resolveArm64Gpr(baseReg).rawValue
-	if size == 8 'qword'
-		arm64EmitLdrImm(code, rt: rd, rn: rn, imm12: offset)
-	end 'qword' else if size == 4 'dword'
-		let insn = 0xB9400000 or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rd
-		arm64EmitInsn(code, insn: insn)
-	end 'dword' else 'unsupported'
-		panic("ARM64 loadIndirect: unsupported size {size}")
-	end 'unsupported'
+	match width 'w'
+		qword then arm64EmitLdrImm(code, rt: rd, rn: rn, imm12: offset)
+		word then arm64EmitLoadWordWidth(code, rt: rd, rn: rn, offset: offset, signed: signed)
+		halfword then arm64EmitLoadHalfwordWidth(code, rt: rd, rn: rn, offset: offset, signed: signed)
+		byte then arm64EmitLoadByteWidth(code, rt: rd, rn: rn, offset: offset, signed: signed)
+	end 'w'
 end 'arm64EmitLoadIndirectOp'
+
+// LDR Wt, [Xn, #imm12] (unsigned 32-bit) zero-extends to Xt automatically.
+// LDRSW Xt, [Xn, #imm12] sign-extends to 64 bits. imm12 is scaled by 4
+// for both encodings.
+function arm64EmitLoadWordWidth(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord, signed bool)
+	let base = 0xB9800000 if signed else 0xB9400000
+	let insn = base or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLoadWordWidth'
+
+// LDRH Wt, [Xn, #imm12] (unsigned 16-bit, zero-extends to Wt; the upper
+// 32 bits of Xt are then zero per the writeback semantics of W-register
+// destinations). LDRSH Xt, [Xn, #imm12] sign-extends directly into Xt.
+// imm12 is scaled by 2.
+function arm64EmitLoadHalfwordWidth(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord, signed bool)
+	let base = 0x79800000 if signed else 0x79400000
+	let insn = base or (((offset / 2) and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLoadHalfwordWidth'
+
+// LDRB Wt, [Xn, #imm12] (unsigned 8-bit, zero-extends). LDRSB Xt sign-
+// extends into Xt. imm12 is unscaled.
+function arm64EmitLoadByteWidth(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord, signed bool)
+	let base = 0x39800000 if signed else 0x39400000
+	let insn = base or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLoadByteWidth'
 
 // leaFuncAddr: ADR dest, funcName — patched after layout via fixup or rdata relocation
 function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName String, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray)
@@ -1596,23 +1625,37 @@ end 'arm64EmitFcvt'
 
 // --- Indirect memory ops ---
 
-// STR Xt, [Xn, #imm12] (64-bit) and STR Wt, [Xn, #imm12] (32-bit).
-// imm12 is scaled by the transfer size (8 or 4).
-function arm64EmitStoreIndirectOp(code ByteArray, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord)
+// Indirect store. STR / STRH / STRB select the dedicated width op; the
+// imm12 immediate is scaled by the transfer size in every form. The byte
+// arm shares its encoding with `arm64EmitStrb` (the legacy storeByte
+// syscall path), so we route through that helper directly.
+function arm64EmitStoreIndirectOp(code ByteArray, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, width StoreWidth)
 	let rn = resolveArm64Gpr(baseReg).rawValue
 	let rt = resolveArm64Gpr(srcReg).rawValue
-	if size == 8 'qword'
-		let insn = 0xF9000000 or (((offset / 8) and 0xFFF) shl 10) or (rn shl 5) or rt
-		arm64EmitInsn(code, insn: insn)
-	end 'qword' else if size == 4 'dword'
-		let insn = 0xB9000000 or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rt
-		arm64EmitInsn(code, insn: insn)
-	end 'dword' else if size == 1 'byte'
-		arm64EmitStrb(code, rt: rt, rn: rn, offset: offset)
-	end 'byte' else 'unsupported'
-		panic("ARM64 storeIndirect: unsupported size {size}")
-	end 'unsupported'
+	match width 'w'
+		qword then arm64EmitStrQword(code, rt: rt, rn: rn, offset: offset)
+		word then arm64EmitStrWord(code, rt: rt, rn: rn, offset: offset)
+		halfword then arm64EmitStrHalfword(code, rt: rt, rn: rn, offset: offset)
+		byte then arm64EmitStrb(code, rt: rt, rn: rn, offset: offset)
+	end 'w'
 end 'arm64EmitStoreIndirectOp'
+
+function arm64EmitStrQword(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+	let insn = 0xF9000000 or (((offset / 8) and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStrQword'
+
+function arm64EmitStrWord(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+	let insn = 0xB9000000 or (((offset / 4) and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStrWord'
+
+// STRH Wt, [Xn, #imm12] — imm12 scaled by 2 (offset must be 2-byte aligned).
+function arm64EmitStrHalfword(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+	let insn = 0x79000000 or (((offset / 2) and 0xFFF) shl 10) or (rn shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStrHalfword'
+
 
 // STR Dt, [Xn, #imm12] for 64-bit FP store; STR St for 32-bit.
 function arm64EmitFpStoreIndirectOp(code ByteArray, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision)

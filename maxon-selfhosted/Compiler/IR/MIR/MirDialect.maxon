@@ -76,9 +76,11 @@ export union MirOp
 	// [base+off]` and a `movsd xmm, [base+off]` at the X64 backend; ARM64
 	// picks ldr/x vs ldr/d the same way. Plumbed in by lowerStdToMir from
 	// the StdOp's declared slotType so float-typed globals / fields read
-	// into XMM directly instead of staging through a GP register.
-	load(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
-	store(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
+	// into XMM directly instead of staging through a GP register. `signed`
+	// on `load` chooses sign- vs zero-extension at narrower widths; for
+	// `qword` and `isFloat` the bit is unused.
+	load(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
+	store(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool)
 	loadSlot(resultId ValueId, slotId VarSlot)
 	storeSlot(slotId VarSlot, valueId ValueId)
 	stackSlotAddr(resultId ValueId, slotId VarSlot)
@@ -157,8 +159,8 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		ret(retValId) gives "mir.ret %{retValId}"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = mir.param local{paramIndex} : {paramType.name}"
 		// Memory
-		load(resultId, baseId, offset, isFloat) gives mirLoadToString(resultId, baseId: baseId, offset: offset, isFloat: isFloat)
-		store(valueId, baseId, offset, isFloat) gives mirStoreToString(valueId, baseId: baseId, offset: offset, isFloat: isFloat)
+		load(resultId, baseId, offset, width, signed, isFloat) gives mirLoadToString(resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat)
+		store(valueId, baseId, offset, width, isFloat) gives mirStoreToString(valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat)
 		loadSlot(resultId, slotId) gives "%{resultId} = mir.load_slot slot_{slotId}"
 		storeSlot(slotId, valueId) gives "mir.store_slot slot_{slotId}, %{valueId}"
 		stackSlotAddr(resultId, slotId) gives "%{resultId} = mir.stack_slot_addr slot_{slotId}"
@@ -199,18 +201,27 @@ function mirMovImmToString(resultId ValueId, value ParsedInt, isFloat bool) retu
 	return "%{resultId} = mir.mov_imm {value} : i64"
 end 'mirMovImmToString'
 
-function mirLoadToString(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool) returns String
+function mirLoadToString(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool) returns String
 	if isFloat 'float'
-		return "%{resultId} = mir.load %{baseId}, {offset} : f64"
+		return "%{resultId} = mir.load %{baseId}, {offset} width: {storeWidthName(width)} : f64"
 	end 'float'
-	return "%{resultId} = mir.load %{baseId}, {offset}"
+	// `signed` is meaningless at qword width — a 64-bit load fills the
+	// register naturally — so suppress the tag to match what the backend
+	// actually emits (plain `mov`/`ldr`, never `movsx`/`ldrsw`).
+	let signTag = match width 'w'
+		qword gives ""
+		byte gives " signed" if signed else ""
+		halfword gives " signed" if signed else ""
+		word gives " signed" if signed else ""
+	end 'w'
+	return "%{resultId} = mir.load %{baseId}, {offset} width: {storeWidthName(width)}{signTag}"
 end 'mirLoadToString'
 
-function mirStoreToString(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool) returns String
+function mirStoreToString(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool) returns String
 	if isFloat 'float'
-		return "mir.store %{valueId}, %{baseId}, {offset} : f64"
+		return "mir.store %{valueId}, %{baseId}, {offset} width: {storeWidthName(width)} : f64"
 	end 'float'
-	return "mir.store %{valueId}, %{baseId}, {offset}"
+	return "mir.store %{valueId}, %{baseId}, {offset} width: {storeWidthName(width)}"
 end 'mirStoreToString'
 
 function mirCondBranchToString(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, blocks IrBlockArray) returns String

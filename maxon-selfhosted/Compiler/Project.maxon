@@ -464,6 +464,11 @@ export type Project
 	// monomorphization-quality codegen.
 	export var staticRdataValues StaticRdataValueMap
 
+	// Constant-array-to-rdata fast path. Populated by the
+	// `runConstantArrayLiteralRdata` pass; consumed by the lowering hook
+	// at `__ManagedMemory.create`. See ConstantArrayRdataInfo for details.
+	export var constantArrayRdata ConstantArrayRdataMap
+
 	// Phase 11.4 follow-up: per-instance witness-method thunks that
 	// `BuildWitnessTables` recorded for this pipeline run.
 	// `lowerMaxonToStd.synthesizeWitnessThunks` reads this list to know
@@ -555,6 +560,7 @@ export type Project
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
+			constantArrayRdata: ConstantArrayRdataMap.create(),
 			pendingWitnessThunkGids: GenericInstanceIdArray.create(),
 			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
@@ -731,6 +737,27 @@ export typealias PendingConstraintCheckArray = Array with PendingConstraintCheck
 // the canonicalize pass to fold `descriptorField` reads into constants
 // when the descriptor's content is known at compile time.
 export typealias StaticRdataValueMap = Map with(String, ByteArray)
+
+// Phase: constant-array-to-rdata fast path. Populated by the
+// `runConstantArrayLiteralRdata` pass for `__ManagedMemory.create` call
+// ops whose subsequent per-element `set` ops use only compile-time
+// integer literals. The lowering hook in `lowerManagedMemBuiltin` reads
+// the table on each call op: when an entry is present, the create lowers
+// to an mm_alloc(40) + buffer/length/elemSize/parent stores pointing at
+// the registered `__rdata_arr_*` label instead of allocating a fresh
+// buffer + running per-element set runtime calls. Keyed by the call op's
+// stable `OpIndex` (which is unique per MaxonModule).
+export type ConstantArrayRdataInfo
+	export var rdataLabel String
+	export var count ParsedInt
+	export var elementSize ParsedInt
+
+	export static function create(rdataLabel String, count ParsedInt, elementSize ParsedInt) returns ConstantArrayRdataInfo
+		return Self{rdataLabel: rdataLabel, count: count, elementSize: elementSize}
+	end 'create'
+end 'ConstantArrayRdataInfo'
+
+export typealias ConstantArrayRdataMap = Map with(OpIndex, ConstantArrayRdataInfo)
 
 // --- Function-type registry ---
 //
@@ -2211,9 +2238,18 @@ export type StructField
 	// the struct-literal lowerer to call that helper for any literal that
 	// omits this field.
 	export var hasDefault bool
+	// Sentinel that distinguishes "the layout pass has run and stamped a real
+	// offset" from "this field still holds the parser-time zero placeholder".
+	// `FieldOffset` is `int(0 to 65520)`, so the value 0 alone cannot tell a
+	// pre-layout placeholder from a legitimate first-field offset. The
+	// `layoutAllStructs` pass in TypeResolution sets this `true` on every
+	// field it processes; downstream consumers (fieldLoad/fieldStore lowering)
+	// panic on `not offsetResolved` to catch any code path that bypasses the
+	// pass — silent layout corruption would otherwise be possible.
+	export var offsetResolved bool
 
-	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false) returns StructField
-		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault}
+	export static function create(name String, fieldType MaxonType, offset FieldOffset, isMutable bool, hasDefault bool = false, offsetResolved bool = false) returns StructField
+		return Self{name: name, fieldType: fieldType, offset: offset, isMutable: isMutable, hasDefault: hasDefault, offsetResolved: offsetResolved}
 	end 'create'
 end 'StructField'
 
@@ -2275,6 +2311,7 @@ export type StructType
 end 'StructType'
 
 export typealias StructTypeMap = Map with(String, StructType)
+export typealias StructTypeArray = Array with StructType
 
 // Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
 // `GenericTypealiasMap`'s shape; lives on `StructType` so per-type

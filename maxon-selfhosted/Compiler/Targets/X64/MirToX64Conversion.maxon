@@ -151,8 +151,8 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
-		load(_, baseId, _, _) then ucIncrement(uc, valueId: baseId)
-		store(valueId, baseId, _, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
+		load(_, baseId, _, _, _, _) then ucIncrement(uc, valueId: baseId)
+		store(valueId, baseId, _, _, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 		stackSlotAddr to loadFramePtr then break 'count'
@@ -305,8 +305,8 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
-		load(_, baseId, _, _) then ucIncrement(uc, valueId: baseId)
-		store(valueId, baseId, _, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
+		load(_, baseId, _, _, _, _) then ucIncrement(uc, valueId: baseId)
+		store(valueId, baseId, _, _, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
 		loadSlot then break 'count'
 		storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
 		stackSlotAddr to loadFramePtr then break 'count'
@@ -834,8 +834,8 @@ type X64FunctionLowering
 			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
 			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
-			load(resultId, baseId, offset, isFloat) then lowerLoadIndirect(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
-			store(valueId, baseId, offset, isFloat) then lowerStoreIndirect(valueId: valueId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
+			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirect(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
+			store(valueId, baseId, offset, width, isFloat) then lowerStoreIndirect(valueId: valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat, dstBlock: dstBlock)
 			loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then lowerMirSysOp(op: op, dstBlock: dstBlock)
@@ -877,23 +877,23 @@ type X64FunctionLowering
 	// and a `movsd xmm, [base+off]` so the SSA result lands in the register
 	// class the producing MaxonType demands. The flag is stamped in by
 	// lowerStdToMir from the StdSystemOp's slotType.
-	function lowerLoadIndirect(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool, dstBlock IrBlock)
+	function lowerLoadIndirect(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool, dstBlock IrBlock)
 		if isFloat 'fp'
 			appendX64Op(target, block: dstBlock, op: X64Op.loadIndirectXmm(X64FpVReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, precision: FloatPrecision.f64))
 			return
 		end 'fp'
-		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, size: 8))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(X64VReg.virtual(resultId), baseReg: X64VReg.virtual(baseId), offset: offset, width: width, signed: signed))
 	end 'lowerLoadIndirect'
 
 	// Indirect store, mirror of `lowerLoadIndirect`. XMM stores route to
 	// `storeIndirectXmm` (movsd) so float-typed values keep their register
 	// class through the store.
-	function lowerStoreIndirect(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool, dstBlock IrBlock)
+	function lowerStoreIndirect(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool, dstBlock IrBlock)
 		if isFloat 'fp'
 			appendX64Op(target, block: dstBlock, op: X64Op.storeIndirectXmm(X64VReg.virtual(baseId), offset: offset, src: X64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
 			return
 		end 'fp'
-		appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), size: 8))
+		appendX64Op(target, block: dstBlock, op: X64Op.storeIndirect(X64VReg.virtual(baseId), offset: offset, srcReg: X64VReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'
 
 	// ============================================================
@@ -1212,7 +1212,7 @@ type X64FunctionLowering
 
 		// Load fn-ptr from witness table directly into R10. No virtual reg.
 		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
-		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(physReg(X64Register.r10), baseReg: X64VReg.virtual(witnessAddrId), offset: offset, size: 8))
+		appendX64Op(target, block: dstBlock, op: X64Op.loadIndirect(physReg(X64Register.r10), baseReg: X64VReg.virtual(witnessAddrId), offset: offset, width: StoreWidth.qword, signed: false))
 
 		// Indirect call through the physical R10.
 		appendX64Op(target, block: dstBlock, op: X64Op.callIndirect(physReg(X64Register.r10)))

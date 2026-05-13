@@ -113,7 +113,16 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 		addNamedGlobalData(globalData, name: label, data: bytes)
 		project.staticRdataValues.upsert(label, value: bytes)
 		project.witnessTables.intern(typeName, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: parentLabel, isFatBoxed: isFatBoxed)
-	end 'emitNew'
+	end 'emitNew' else 'alreadyEmittedReinsert'
+		// Cache restore path: `project.witnessTables` was rehydrated from the
+		// stdlib cache, so we skip re-encoding. But `globalData` is fresh per
+		// compile — without re-adding the bytes here, the relocs pushed below
+		// would resolve to offset 0 (lookup miss) and corrupt whatever lands
+		// at the start of `.rdata`. `addNamedGlobalData` is idempotent on
+		// name, so this is a no-op once the entry exists.
+		let bytes = try project.staticRdataValues.get(label) otherwise panic("buildWitnessTables: witness '{label}' marked alreadyEmitted but staticRdataValues is missing the entry — cache restore should have populated both")
+		addNamedGlobalData(globalData, name: label, data: bytes)
+	end 'alreadyEmittedReinsert'
 
 	// Re-push func-abs64 relocs every time. The relocs live on
 	// `globalData.pendingRdataRelocs` which is per-pipeline-run; the

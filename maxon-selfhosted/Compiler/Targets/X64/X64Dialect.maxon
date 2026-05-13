@@ -252,8 +252,8 @@ export union X64Op
 	movqGprToXmm(dest X64FpVReg, src X64VReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.gprToFp, implicitGprReads: 0, implicitGprDefs: 0}
 	andMaskRipRel(dest X64FpVReg, rdataLabel String, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpSingleUse, implicitGprReads: 0, implicitGprDefs: 0}
 	// Indirect memory ops
-	storeIndirect(baseReg X64VReg, offset MachineWord, srcReg X64VReg, size MachineWord) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseSrcUse, implicitGprReads: 0, implicitGprDefs: 0}
-	loadIndirect(destReg X64VReg, baseReg X64VReg, offset MachineWord, size MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
+	storeIndirect(baseReg X64VReg, offset MachineWord, srcReg X64VReg, width StoreWidth) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseSrcUse, implicitGprReads: 0, implicitGprDefs: 0}
+	loadIndirect(destReg X64VReg, baseReg X64VReg, offset MachineWord, width StoreWidth, signed bool) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseDest, implicitGprReads: 0, implicitGprDefs: 0}
 	storeIndirectXmm(baseReg X64VReg, offset MachineWord, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false, pattern: OpPattern.baseUseFpUse, implicitGprReads: 0, implicitGprDefs: 0}
 	loadIndirectXmm(dest X64FpVReg, baseReg X64VReg, offset MachineWord, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.baseUseFpDef, implicitGprReads: 0, implicitGprDefs: 0}
 	// Global variable ops
@@ -372,32 +372,32 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		xorRegRegSelf(reg) gives "x64.xor {x64VRegToString32(reg)}, {x64VRegToString32(reg)}"
 		callIndirect(reg) gives "x64.call {x64VRegToString(reg)}"
 		xchgRegReg(reg1, reg2) gives "x64.xchg {x64VRegToString(reg1)}, {x64VRegToString(reg2)}"
-		movXmmXmm(dest, src, _) gives "x64.movsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		spillXmmToStack(offset, src, _) gives "x64.movsd [rbp{formatSignedOffset(offset)}], {x64FpVRegToString(src)}"
-		reloadXmmFromStack(dest, offset, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
-		movXmmRipRel(dest, label, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{label}]"
-		addXmm(dest, src, _) gives "x64.addsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		subXmm(dest, src, _) gives "x64.subsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		mulXmm(dest, src, _) gives "x64.mulsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		divXmm(dest, src, _) gives "x64.divsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		sqrtXmm(dest, src, _) gives "x64.sqrtsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
-		roundXmm(dest, src, mode, _) gives "x64.roundsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}, {mode}"
-		ucomisXmm(src1, src2, _) gives "x64.ucomisd {x64FpVRegToString(src1)}, {x64FpVRegToString(src2)}"
-		cvtSi2Float(dest, src, _) gives "x64.cvtsi2sd {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
-		cvttFloat2Si(dest, src, _) gives "x64.cvttsd2si {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
+		movXmmXmm(dest, src, prec) gives "x64.mov{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		spillXmmToStack(offset, src, prec) gives "x64.mov{fpSuffix(prec)} [rbp{formatSignedOffset(offset)}], {x64FpVRegToString(src)}"
+		reloadXmmFromStack(dest, offset, prec) gives "x64.mov{fpSuffix(prec)} {x64FpVRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
+		movXmmRipRel(dest, label, prec) gives "x64.mov{fpSuffix(prec)} {x64FpVRegToString(dest)}, [rip+{label}]"
+		addXmm(dest, src, prec) gives "x64.add{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		subXmm(dest, src, prec) gives "x64.sub{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		mulXmm(dest, src, prec) gives "x64.mul{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		divXmm(dest, src, prec) gives "x64.div{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		sqrtXmm(dest, src, prec) gives "x64.sqrt{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		roundXmm(dest, src, mode, prec) gives "x64.round{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}, {mode}"
+		ucomisXmm(src1, src2, prec) gives "x64.ucomi{fpSuffix(prec)} {x64FpVRegToString(src1)}, {x64FpVRegToString(src2)}"
+		cvtSi2Float(dest, src, prec) gives "x64.cvtsi2{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
+		cvttFloat2Si(dest, src, prec) gives "x64.cvtt{fpSuffix(prec)}2si {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
 		cvtSd2Ss(dest, src) gives "x64.cvtsd2ss {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		cvtSs2Sd(dest, src) gives "x64.cvtss2sd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		movqXmmToGpr(dest, src) gives "x64.movq {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
 		movqGprToXmm(dest, src) gives "x64.movq {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
 		andMaskRipRel(dest, label, _) gives "x64.andpd {x64FpVRegToString(dest)}, [rip+{label}]"
-		storeIndirect(baseReg, offset, srcReg, size) gives "x64.mov [{x64VRegToString(baseReg)}+{offset}], {x64VRegToString(srcReg)} ({size}b)"
-		loadIndirect(destReg, baseReg, offset, size) gives "x64.mov {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}+{offset}] ({size}b)"
-		storeIndirectXmm(baseReg, offset, src, _) gives "x64.movsd [{x64VRegToString(baseReg)}+{offset}], {x64FpVRegToString(src)}"
-		loadIndirectXmm(dest, baseReg, offset, _) gives "x64.movsd {x64FpVRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
+		storeIndirect(baseReg, offset, srcReg, width) gives "x64.mov [{x64VRegToString(baseReg)}+{offset}], {x64VRegToString(srcReg)} ({storeWidthBytes(width)}b)"
+		loadIndirect(destReg, baseReg, offset, width, signed) gives "x64.{x64LoadIndirectMnemonic(width, signed: signed)} {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}+{offset}] ({storeWidthBytes(width)}b)"
+		storeIndirectXmm(baseReg, offset, src, prec) gives "x64.mov{fpSuffix(prec)} [{x64VRegToString(baseReg)}+{offset}], {x64FpVRegToString(src)}"
+		loadIndirectXmm(dest, baseReg, offset, prec) gives "x64.mov{fpSuffix(prec)} {x64FpVRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
 		globalLoad(dest, name, _) gives "x64.mov {x64VRegToString(dest)}, [rip+{name}]"
 		globalStore(name, src, _) gives "x64.mov [rip+{name}], {x64VRegToString(src)}"
-		globalLoadXmm(dest, name, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{name}]"
-		globalStoreXmm(name, src, _) gives "x64.movsd [rip+{name}], {x64FpVRegToString(src)}"
+		globalLoadXmm(dest, name, prec) gives "x64.mov{fpSuffix(prec)} {x64FpVRegToString(dest)}, [rip+{name}]"
+		globalStoreXmm(name, src, prec) gives "x64.mov{fpSuffix(prec)} [rip+{name}], {x64FpVRegToString(src)}"
 		leaFromStack(dest, offset) gives "x64.lea {x64VRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
 		leaRipRelative(dest, label) gives "x64.lea {x64VRegToString(dest)}, [rip+{label}]"
 		leaFuncAddr(dest, funcName) gives "x64.lea {x64VRegToString(dest)}, [rip+{funcName}]"
@@ -413,3 +413,29 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		lockXaddMemReg(valReg, addrReg) gives "x64.lock xadd qword ptr [{x64VRegToString(addrReg)}], {x64VRegToString(valReg)}"
 	end 'toString'
 end 'x64OpToString'
+
+// Pick the mnemonic that matches the opcode the X64 emitter actually
+// generates per (width, signed). The `signed` flag is ignored at qword
+// width because a 64-bit MOV fills the register naturally; at word
+// width it picks MOVSXD vs plain MOV (eax → rax zero-extends);
+// narrower widths pick MOVSX vs MOVZX.
+function x64LoadIndirectMnemonic(width StoreWidth, signed bool) returns String
+	return match width 'w'
+		byte gives "movsx" if signed else "movzx"
+		halfword gives "movsx" if signed else "movzx"
+		word gives "movsxd" if signed else "mov"
+		qword gives "mov"
+	end 'w'
+end 'x64LoadIndirectMnemonic'
+
+// SSE/SSE2 scalar-instruction suffix that matches the actual opcode
+// the X64 emitter generates for each FloatPrecision: `sd` (scalar
+// double, MOVSD/ADDSD/...) for f64 and `ss` (scalar single,
+// MOVSS/ADDSS/...) for f32. Keeps printer output honest when an
+// f32-precision XMM op is scheduled.
+function fpSuffix(prec FloatPrecision) returns String
+	return match prec 'p'
+		f64 gives "sd"
+		f32 gives "ss"
+	end 'p'
+end 'fpSuffix'

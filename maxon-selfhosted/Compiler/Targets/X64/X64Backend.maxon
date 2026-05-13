@@ -1417,31 +1417,49 @@ function emitCmovOp(code ByteArray, dest X64Register, src X64Register, condition
 end 'emitCmovOp'
 
 // --- Store indirect: mov [base+offset], src ---
-function emitStoreIndirectOp(code ByteArray, baseReg X64Register, offset MachineWord, srcReg X64Register, size MachineWord)
-	if size == 8 'qword'
-		emitRexWPrefix(code, regField: srcReg, rmField: baseReg)
-		code.push(0x89)
-	end 'qword' else 'other'
-		if size == 4 'dword'
-			// 32-bit store: no REX.W, but may need REX for extended regs
-			if isExtended(srcReg) or isExtended(baseReg) 'needRex'
-				var rex = 0x40
-				if isExtended(srcReg) 'rBit'
-					rex = rex or 0x04
-				end 'rBit'
-				if isExtended(baseReg) 'bBit'
-					rex = rex or 0x01
-				end 'bBit'
-				code.push(rex)
-			end 'needRex'
-			code.push(0x89)
-		end 'dword' else 'byte'
-			emitRexWPrefix(code, regField: srcReg, rmField: baseReg)
-			code.push(0x89)
-		end 'byte'
-	end 'other'
+// Each arm emits its width-specific prefixes and opcode here, then a single
+// shared `emitMemDisp` writes the ModRM + displacement (and SIB if needed).
+function emitStoreIndirectOp(code ByteArray, baseReg X64Register, offset MachineWord, srcReg X64Register, width StoreWidth)
+	match width 'w'
+		qword then emitStoreIndirectQword(code, baseReg: baseReg, srcReg: srcReg)
+		word then emitStoreIndirectWord(code, baseReg: baseReg, srcReg: srcReg)
+		halfword then emitStoreIndirectHalfword(code, baseReg: baseReg, srcReg: srcReg)
+		byte then emitStoreIndirectByte(code, baseReg: baseReg, srcReg: srcReg)
+	end 'w'
 	emitMemDisp(code, regField: srcReg, baseReg: baseReg, offset: offset)
 end 'emitStoreIndirectOp'
+
+// REX.W + `mov [base], src` opcode (no ModRM/disp — those come from the
+// shared `emitMemDisp` call in the caller).
+function emitStoreIndirectQword(code ByteArray, baseReg X64Register, srcReg X64Register)
+	emitRexWPrefix(code, regField: srcReg, rmField: baseReg)
+	code.push(0x89)
+end 'emitStoreIndirectQword'
+
+// `mov [base], src32`: `89 /r`. No REX.W (operand size is 32). Emit a plain
+// REX only if base or src is an extended register; the upper 32 bits of the
+// source are simply ignored by the store, so no operand-size prefix is needed.
+function emitStoreIndirectWord(code ByteArray, baseReg X64Register, srcReg X64Register)
+	emitRexNoWIfNeeded(code, regField: srcReg, rmField: baseReg)
+	code.push(0x89)
+end 'emitStoreIndirectWord'
+
+// `mov [base], src16`: `66 89 /r`. The 0x66 operand-size prefix selects
+// 16-bit operand. A plain REX may follow for extended regs.
+function emitStoreIndirectHalfword(code ByteArray, baseReg X64Register, srcReg X64Register)
+	code.push(0x66)
+	emitRexNoWIfNeeded(code, regField: srcReg, rmField: baseReg)
+	code.push(0x89)
+end 'emitStoreIndirectHalfword'
+
+// `mov [base], src8`: `88 /r`. Byte stores must emit a REX prefix whenever
+// the source is one of rsp/rbp/rsi/rdi (so the byte register decodes as
+// SPL/BPL/SIL/DIL instead of AH/CH/DH/BH) OR when either src or base is in
+// r8..r15. For rax..rdx the AL/CL/DL/BL encoding is fine without REX.
+function emitStoreIndirectByte(code ByteArray, baseReg X64Register, srcReg X64Register)
+	emitRexNoWForByteOp(code, regField: srcReg, rmField: baseReg)
+	code.push(0x88)
+end 'emitStoreIndirectByte'
 
 // --- Load indirect (XMM): movsd/movss xmm, [base+offset] ---
 // Encoding: F2/F3 [REX] 0F 10 ModRM disp
@@ -1500,30 +1518,111 @@ function emitXmmMemDisp(code ByteArray, regFieldCode MachineWord, baseReg X64Reg
 end 'emitXmmMemDisp'
 
 // --- Load indirect: mov dest, [base+offset] ---
-function emitLoadIndirectOp(code ByteArray, destReg X64Register, baseReg X64Register, offset MachineWord, size MachineWord)
-	if size == 8 'qword'
-		emitRexWPrefix(code, regField: destReg, rmField: baseReg)
-		code.push(0x8B)
-	end 'qword' else 'other'
-		if size == 4 'dword'
-			if isExtended(destReg) or isExtended(baseReg) 'needRex'
-				var rex = 0x40
-				if isExtended(destReg) 'rBit'
-					rex = rex or 0x04
-				end 'rBit'
-				if isExtended(baseReg) 'bBit'
-					rex = rex or 0x01
-				end 'bBit'
-				code.push(rex)
-			end 'needRex'
-			code.push(0x8B)
-		end 'dword' else 'byte'
-			emitRexWPrefix(code, regField: destReg, rmField: baseReg)
-			code.push(0x8B)
-		end 'byte'
-	end 'other'
+// Each arm emits its width-specific prefixes and opcode here, then a single
+// shared `emitMemDisp` writes the ModRM + displacement (and SIB if needed).
+// `signed` selects between sign- and zero-extending forms for the narrow
+// widths; for qword it's unused (a full-width load doesn't extend).
+function emitLoadIndirectOp(code ByteArray, destReg X64Register, baseReg X64Register, offset MachineWord, width StoreWidth, signed bool)
+	match width 'w'
+		qword then emitLoadIndirectQword(code, destReg: destReg, baseReg: baseReg)
+		word then emitLoadIndirectWord(code, destReg: destReg, baseReg: baseReg, signed: signed)
+		halfword then emitLoadIndirectHalfword(code, destReg: destReg, baseReg: baseReg, signed: signed)
+		byte then emitLoadIndirectByte(code, destReg: destReg, baseReg: baseReg, signed: signed)
+	end 'w'
 	emitMemDisp(code, regField: destReg, baseReg: baseReg, offset: offset)
 end 'emitLoadIndirectOp'
+
+// REX.W + `mov dest, [base]` opcode (ModRM/disp emitted by the caller's
+// `emitMemDisp`).
+function emitLoadIndirectQword(code ByteArray, destReg X64Register, baseReg X64Register)
+	emitRexWPrefix(code, regField: destReg, rmField: baseReg)
+	code.push(0x8B)
+end 'emitLoadIndirectQword'
+
+// 32-bit load. Signed form uses MOVSXD (REX.W + 63 /r). Unsigned form uses
+// `MOV r32, r/m32` (8B /r) without REX.W; the implicit zero-extension of a
+// 32-bit write covers the upper 32 bits of the 64-bit register.
+function emitLoadIndirectWord(code ByteArray, destReg X64Register, baseReg X64Register, signed bool)
+	if signed 'signed'
+		emitRexWPrefix(code, regField: destReg, rmField: baseReg)
+		code.push(0x63)
+	end 'signed' else 'unsigned'
+		emitRexNoWIfNeeded(code, regField: destReg, rmField: baseReg)
+		code.push(0x8B)
+	end 'unsigned'
+end 'emitLoadIndirectWord'
+
+// 16-bit load. MOVSX r64, r/m16 = REX.W + 0F BF /r; MOVZX r64, r/m16 =
+// REX.W + 0F B7 /r. REX.W keeps the destination at full 64-bit operand
+// size; the extension semantics are encoded in the opcode byte.
+function emitLoadIndirectHalfword(code ByteArray, destReg X64Register, baseReg X64Register, signed bool)
+	emitRexWPrefix(code, regField: destReg, rmField: baseReg)
+	code.push(0x0F)
+	code.push(0xBF if signed else 0xB7)
+end 'emitLoadIndirectHalfword'
+
+// 8-bit load. MOVSX r64, r/m8 = REX.W + 0F BE /r; MOVZX r64, r/m8 =
+// REX.W + 0F B6 /r.
+function emitLoadIndirectByte(code ByteArray, destReg X64Register, baseReg X64Register, signed bool)
+	emitRexWPrefix(code, regField: destReg, rmField: baseReg)
+	code.push(0x0F)
+	code.push(0xBE if signed else 0xB6)
+end 'emitLoadIndirectByte'
+
+// Emit a plain REX prefix (no W bit) when either operand is extended
+// (r8-r15). Used for the narrow stores and the unsigned 32-bit load
+// where REX.W must NOT be set.
+function emitRexNoWIfNeeded(code ByteArray, regField X64Register, rmField X64Register)
+	let needRexR = isExtended(regField)
+	let needRexB = isExtended(rmField)
+	if needRexR or needRexB 'needRex'
+		var rex = 0x40
+		if needRexR 'rBit'
+			rex = rex or 0x04
+		end 'rBit'
+		if needRexB 'bBit'
+			rex = rex or 0x01
+		end 'bBit'
+		code.push(rex)
+	end 'needRex'
+end 'emitRexNoWIfNeeded'
+
+// REX (no W) emitter for byte ops. In addition to the extended-register
+// cases handled by `emitRexNoWIfNeeded`, byte ops MUST emit a REX prefix
+// when the byte source/destination register is one of rsp/rbp/rsi/rdi —
+// without REX those encodings select AH/CH/DH/BH (the high halves of
+// rax/rcx/rdx/rbx) instead of SPL/BPL/SIL/DIL. ModRM.reg holds the GP
+// register in our store sequence (src for `mov [r/m], r`).
+function emitRexNoWForByteOp(code ByteArray, regField X64Register, rmField X64Register)
+	let needsRexForByteReg = needsRexForByteAccess(regField) or needsRexForByteAccess(rmField)
+	let needRexR = isExtended(regField)
+	let needRexB = isExtended(rmField)
+	if needsRexForByteReg or needRexR or needRexB 'needRex'
+		var rex = 0x40
+		if needRexR 'rBit'
+			rex = rex or 0x04
+		end 'rBit'
+		if needRexB 'bBit'
+			rex = rex or 0x01
+		end 'bBit'
+		code.push(rex)
+	end 'needRex'
+end 'emitRexNoWForByteOp'
+
+// rsp/rbp/rsi/rdi require a REX prefix on byte ops to disambiguate from
+// AH/CH/DH/BH (which encode without REX). For all other registers the
+// byte form is reachable without REX (rax->al, rcx->cl, rdx->dl, rbx->bl
+// — and r8..r15's REX.B is already covered by isExtended).
+function needsRexForByteAccess(reg X64Register) returns bool
+	return match reg 'b'
+		rsp gives true
+		rbp gives true
+		rsi gives true
+		rdi gives true
+		rax to rbx gives false
+		r8 to r15 gives false
+	end 'b'
+end 'needsRexForByteAccess'
 
 // Emit ModRM + displacement for [base+offset] addressing.
 // Thin wrapper around `emitMemDispBits` that extracts the GP reg-field code
@@ -1890,8 +1989,8 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		movqXmmToGpr(dest, src) then emitMovqXmmToGprOp(code, dest: resolveGpr(dest), src: resolveFp(src))
 		movqGprToXmm(dest, src) then emitMovqGprToXmmOp(code, dest: resolveFp(dest), src: resolveGpr(src))
 		andMaskRipRel(dest, rdataLabel, precision) then emitAndMaskRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
-		storeIndirect(baseReg, offset, srcReg, size) then emitStoreIndirectOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveGpr(srcReg), size: size)
-		loadIndirect(destReg, baseReg, offset, size) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, size: size)
+		storeIndirect(baseReg, offset, srcReg, width) then emitStoreIndirectOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveGpr(srcReg), width: width)
+		loadIndirect(destReg, baseReg, offset, width, signed) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, width: width, signed: signed)
 		storeIndirectXmm(baseReg, offset, src, precision) then emitStoreIndirectXmmOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveFp(src), precision: precision)
 		loadIndirectXmm(dest, baseReg, offset, precision) then emitLoadIndirectXmmOp(code, destReg: resolveFp(dest), baseReg: resolveGpr(baseReg), offset: offset, precision: precision)
 		globalLoad(dest, name, size) then emitGlobalLoadOp(code, dest: resolveGpr(dest), name: name, size: size)

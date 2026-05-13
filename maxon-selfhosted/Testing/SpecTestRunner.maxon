@@ -152,6 +152,7 @@ let whitelist = ["basics",
 	"enum-struct-backing",
 	"enum-nested-struct-backing",
 	"union-struct-backing",
+	"enum-narrow-storage",
 	// `enum-hashable` panics on `simple-enum-as-map-key` — `Map with
 	// (Color, Int)` needs a Hashable witness for the bare-enum element
 	// type, and BuildWitnessTables doesn't emit one. Same gap blocks
@@ -1044,6 +1045,23 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		end 'loweringFailed'
 	end 'checkLowering'
 
+	// Check RequiredRdata — byte-for-byte compare the compiled .exe's .rdata
+	// section against the typed values in the spec block. PE-only; ELF and
+	// Mach-O don't have a `.rdata` section. Mirrors TestRunner.cs:748.
+	if fragment.expectation.hasRequiredRdata 'checkRdata'
+		if target.os == Os.windows 'isWindows'
+			let rdataResult = checkRequiredRdataBytes(fragment.expectation.requiredRdata, exePath: outputPath)
+			if not rdataResult.passed 'rdataFailed'
+				passed = false
+				if errorMsg.isEmpty() 'firstRdata'
+					errorMsg = "Required Rdata mismatch: {rdataResult.message}"
+				end 'firstRdata' else 'appendRdata'
+					errorMsg = "{errorMsg}\nRequired Rdata mismatch: {rdataResult.message}"
+				end 'appendRdata'
+			end 'rdataFailed'
+		end 'isWindows'
+	end 'checkRdata'
+
 	if passed 'didPass'
 		logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
 	end 'didPass'
@@ -1137,6 +1155,574 @@ end 'stripFilePathFromError'
 function cleanup(tempExe FilePath)
 	try File.delete(tempExe) otherwise ignore
 end 'cleanup'
+
+// --- RequiredRdata validation ---
+//
+// Verify a compiled PE executable's `.rdata` section matches the typed-value
+// block declared in the spec's `RequiredRdata` block. This is the byte-level
+// counterpart to `RequiredIR` — it pins the on-disk constant layout produced
+// by the backend so a regression in narrow-storage lowering, struct field
+// packing, or rdata serialization surfaces as a comparison failure.
+//
+// The check is gated on `target.os == Os.windows` because only PE has a
+// `.rdata` section. ELF (Linux) and Mach-O (macOS) place read-only data in
+// other sections; mirroring this for those formats is out-of-scope here and
+// matches the bootstrap's behaviour.
+
+typealias RdataByte = int(0 to u8.max)
+typealias RdataValue = int(i64.min to i64.max)
+typealias SectionByteCount = int(0 to u64.max)
+typealias SectionFileOffset = int(0 to u64.max)
+typealias RdataWidth = int(1 to 8)
+typealias HexNibble = int(0 to 15)
+typealias UnicodeCodepoint = int(0 to 0x10FFFF)
+
+type RdataCheckResult
+	export var passed bool
+	export var message String
+
+	static function create(passed bool, message String) returns RdataCheckResult
+		return Self{passed: passed, message: message}
+	end 'create'
+end 'RdataCheckResult'
+
+enum RdataParseError implements Error
+	missingType            // line had no space between type tag and value
+	unknownType            // unrecognised type tag
+	badInteger             // int.fromString failed
+	outOfRange             // integer literal outside the requested type's range
+	badFloat               // float.fromString failed
+	badQuotedString        // utf8 form missing surrounding quotes
+	badEscapeSequence      // unknown / malformed escape inside utf8 string
+end 'RdataParseError'
+
+enum PeParseError implements Error
+	notPeFile          // missing DOS magic or PE signature
+	truncated          // header read off the end of the buffer
+	sectionMissing     // requested section name not present
+end 'PeParseError'
+
+type PeSectionInfo
+	export var name String
+	export var virtualSize SectionByteCount
+	export var rawSize SectionByteCount
+	export var rawOffset SectionFileOffset
+
+	static function create(name String, virtualSize SectionByteCount, rawSize SectionByteCount, rawOffset SectionFileOffset) returns PeSectionInfo
+		return Self{name: name, virtualSize: virtualSize, rawSize: rawSize, rawOffset: rawOffset}
+	end 'create'
+end 'PeSectionInfo'
+
+typealias PeSectionInfoArray = Array with PeSectionInfo
+
+// Append `value` as `width` little-endian bytes to `buf`. For signed inputs,
+// rely on two's-complement bit patterns: `(value and 0xFF)` extracts the
+// low byte regardless of sign. Width is the integer width in bytes (1, 2,
+// 4, or 8); other widths panic.
+function appendLittleEndian(buf ByteArray, value RdataValue, width RdataWidth)
+	var v = value
+	var i = 0
+	while i < width 'shift'
+		buf.push((v and 0xFF) as RdataByte)
+		v = v shr 8
+		i = i + 1
+	end 'shift'
+end 'appendLittleEndian'
+
+// Parse a signed decimal integer, verify it fits in `[lo, hi]`, and return
+// the value. Trims surrounding whitespace first because the spec format is
+// comma-or-space separated and individual elements often carry trailing
+// spaces.
+function parseRangedInt(text String, lo RdataValue, hi RdataValue) returns RdataValue throws RdataParseError
+	let trimmed = trimWhitespace(text)
+	let value = try int.fromString(trimmed) otherwise throw RdataParseError.badInteger
+	if value < lo 'tooSmall'
+		throw RdataParseError.outOfRange
+	end 'tooSmall'
+	if value > hi 'tooBig'
+		throw RdataParseError.outOfRange
+	end 'tooBig'
+	return value
+end 'parseRangedInt'
+
+// Decode escape sequences inside a `utf8 "..."` value: supports \n, \t, \r,
+// \0, \\, \", \', \xNN, \uNNNN. Mirrors maxon-sharp/StringUtils.ResolveEscapes
+// so the bootstrap and self-hosted runners accept the same spec syntax.
+function decodeUtf8Escapes(text String) returns ByteArray throws RdataParseError
+	let src = text.toByteArray()
+	let n = src.count()
+	var out = ByteArray.create()
+	var i = 0
+	while i < n 'walk'
+		let c = try src.get(i) otherwise panic("decodeUtf8Escapes: i < n just checked but get({i}) failed")
+		if c != '\\' 'plain'
+			out.push(c)
+			i = i + 1
+			continue
+		end 'plain'
+
+		if i + 1 >= n 'trailingBackslash'
+			throw RdataParseError.badEscapeSequence
+		end 'trailingBackslash'
+
+		let next = try src.get(i + 1) otherwise panic("decodeUtf8Escapes: i + 1 < n just checked but get failed")
+		if next == 'x' 'hexEscape'
+			if i + 3 >= n 'shortHex'
+				throw RdataParseError.badEscapeSequence
+			end 'shortHex'
+			let h1 = try src.get(i + 2) otherwise panic("decodeUtf8Escapes: i + 3 < n just checked")
+			let h2 = try src.get(i + 3) otherwise panic("decodeUtf8Escapes: i + 3 < n just checked")
+			let v1 = try hexDigitValue(h1) otherwise throw RdataParseError.badEscapeSequence
+			let v2 = try hexDigitValue(h2) otherwise throw RdataParseError.badEscapeSequence
+			out.push(((v1 shl 4) or v2) as RdataByte)
+			i = i + 4
+			continue
+		end 'hexEscape'
+
+		if next == 'u' 'unicodeEscape'
+			if i + 5 >= n 'shortU'
+				throw RdataParseError.badEscapeSequence
+			end 'shortU'
+			let u1 = try src.get(i + 2) otherwise panic("decodeUtf8Escapes: i + 5 < n just checked")
+			let u2 = try src.get(i + 3) otherwise panic("decodeUtf8Escapes: i + 5 < n just checked")
+			let u3 = try src.get(i + 4) otherwise panic("decodeUtf8Escapes: i + 5 < n just checked")
+			let u4 = try src.get(i + 5) otherwise panic("decodeUtf8Escapes: i + 5 < n just checked")
+			let v1 = try hexDigitValue(u1) otherwise throw RdataParseError.badEscapeSequence
+			let v2 = try hexDigitValue(u2) otherwise throw RdataParseError.badEscapeSequence
+			let v3 = try hexDigitValue(u3) otherwise throw RdataParseError.badEscapeSequence
+			let v4 = try hexDigitValue(u4) otherwise throw RdataParseError.badEscapeSequence
+			let cp = (v1 shl 12) or (v2 shl 8) or (v3 shl 4) or v4
+			appendUtf8Codepoint(out, codepoint: cp)
+			i = i + 6
+			continue
+		end 'unicodeEscape'
+
+		var decoded = 0
+		if next == 'n' 'esc_n'
+			decoded = 10
+		end 'esc_n' else if next == 't' 'esc_t'
+			decoded = 9
+		end 'esc_t' else if next == 'r' 'esc_r'
+			decoded = 13
+		end 'esc_r' else if next == '0' 'esc_0'
+			decoded = 0
+		end 'esc_0' else if next == '\\' 'esc_bs'
+			decoded = 92
+		end 'esc_bs' else if next == '"' 'esc_dq'
+			decoded = 34
+		end 'esc_dq' else if next == '\'' 'esc_sq'
+			decoded = 39
+		end 'esc_sq' else 'unknown'
+			throw RdataParseError.badEscapeSequence
+		end 'unknown'
+
+		out.push(decoded as RdataByte)
+		i = i + 2
+	end 'walk'
+
+	return out
+end 'decodeUtf8Escapes'
+
+function hexDigitValue(c RdataByte) returns HexNibble throws RdataParseError
+	if c >= '0' 'gteZero'
+		if c <= '9' 'isDigit'
+			return c - '0'
+		end 'isDigit'
+	end 'gteZero'
+	if c >= 'a' 'gteLowerA'
+		if c <= 'f' 'isLower'
+			return c - 'a' + 10
+		end 'isLower'
+	end 'gteLowerA'
+	if c >= 'A' 'gteUpperA'
+		if c <= 'F' 'isUpper'
+			return c - 'A' + 10
+		end 'isUpper'
+	end 'gteUpperA'
+	throw RdataParseError.badEscapeSequence
+end 'hexDigitValue'
+
+// Encode `codepoint` as UTF-8 into `buf`. Used by the \uNNNN escape — the
+// BMP fits in at most 3 bytes per RFC 3629.
+function appendUtf8Codepoint(buf ByteArray, codepoint UnicodeCodepoint)
+	if codepoint < 0x80 'oneByte'
+		buf.push(codepoint as RdataByte)
+		return
+	end 'oneByte'
+	if codepoint < 0x800 'twoByte'
+		buf.push((0xC0 or (codepoint shr 6)) as RdataByte)
+		buf.push((0x80 or (codepoint and 0x3F)) as RdataByte)
+		return
+	end 'twoByte'
+	if codepoint < 0x10000 'threeByte'
+		buf.push((0xE0 or (codepoint shr 12)) as RdataByte)
+		buf.push((0x80 or ((codepoint shr 6) and 0x3F)) as RdataByte)
+		buf.push((0x80 or (codepoint and 0x3F)) as RdataByte)
+		return
+	end 'threeByte'
+	buf.push((0xF0 or (codepoint shr 18)) as RdataByte)
+	buf.push((0x80 or ((codepoint shr 12) and 0x3F)) as RdataByte)
+	buf.push((0x80 or ((codepoint shr 6) and 0x3F)) as RdataByte)
+	buf.push((0x80 or (codepoint and 0x3F)) as RdataByte)
+end 'appendUtf8Codepoint'
+
+// Parse one comma-separated list of integers and append each as little-endian
+// bytes of the given width. Range-checked against `[lo, hi]`.
+function parseIntList(buf ByteArray, value String, lo RdataValue, hi RdataValue, width RdataWidth) throws RdataParseError
+	let parts = value.split(",")
+	for part in parts 'each'
+		let n = try parseRangedInt(part, lo: lo, hi: hi)
+		appendLittleEndian(buf, value: n, width: width)
+	end 'each'
+end 'parseIntList'
+
+// Parse one space-separated list of integers — used only by the `u16` form
+// (single line, multiple values separated by spaces), preserved for parity
+// with the bootstrap parser.
+function parseSpaceSeparatedU16(buf ByteArray, value String) throws RdataParseError
+	let parts = value.split(" ")
+	for part in parts 'each'
+		let trimmed = trimWhitespace(part)
+		if trimmed.isEmpty() 'skipEmpty'
+			continue
+		end 'skipEmpty'
+		let n = try parseRangedInt(trimmed, lo: 0, hi: 0xFFFF)
+		appendLittleEndian(buf, value: n, width: 2)
+	end 'each'
+end 'parseSpaceSeparatedU16'
+
+function parseUtf8Value(buf ByteArray, value String) throws RdataParseError
+	let trimmed = trimWhitespace(value)
+	let len = trimmed.bytes().count()
+	if len < 2 'tooShort'
+		throw RdataParseError.badQuotedString
+	end 'tooShort'
+	let bytes = trimmed.toByteArray()
+	let first = try bytes.get(0) otherwise panic("parseUtf8Value: bytes.count() >= 2 just verified")
+	let last = try bytes.get(len - 1) otherwise panic("parseUtf8Value: bytes.count() >= 2 just verified")
+	if first != '"' 'noOpenQuote'
+		throw RdataParseError.badQuotedString
+	end 'noOpenQuote'
+	if last != '"' 'noCloseQuote'
+		throw RdataParseError.badQuotedString
+	end 'noCloseQuote'
+	let inner = trimmed.slice(try trimmed.indexAfter(trimmed.startIndex()) otherwise panic("parseUtf8Value: indexAfter(start) failed on non-empty string"), endIndex: try previousIndex(trimmed, idx: trimmed.endIndex()) otherwise panic("parseUtf8Value: previousIndex(end) failed on non-empty string"))
+	let decoded = try decodeUtf8Escapes(inner)
+	for i in 0 upto decoded.count() 'copy'
+		let b = try decoded.get(i) otherwise panic("parseUtf8Value: i < decoded.count() invariant")
+		buf.push(b)
+	end 'copy'
+end 'parseUtf8Value'
+
+// Return the StringIndex one step before `idx`. We need this for `utf8`
+// because String slicing is half-open and we want to drop the trailing
+// double-quote. Implemented as a linear walk from the start; the utf8 block
+// is small enough that this is fine, and avoids needing a `previous` API.
+function previousIndex(s String, idx StringIndex) returns StringIndex throws StringError
+	var cur = s.startIndex()
+	let endIdx = s.endIndex()
+	if cur >= idx 'noStep'
+		throw StringError.invalidIndex
+	end 'noStep'
+	while cur < endIdx 'walk'
+		let next = try s.indexAfter(cur)
+		if next >= idx 'reached'
+			return cur
+		end 'reached'
+		cur = next
+	end 'walk'
+	throw StringError.invalidIndex
+end 'previousIndex'
+
+// Parse a `RequiredRdata` block into the concrete byte sequence the .rdata
+// section should start with. Each line is a typed-value form; supported tags
+// match the bootstrap (TestRunner.cs:ParseTypedSectionValues) plus the new
+// narrow-storage forms (u8[], u16[], u32, u32[], i16[], i32[]) added for the
+// enum-narrow-storage spec.
+function parseRequiredRdataBytes(spec String) returns ByteArray throws RdataParseError
+	var buf = ByteArray.create()
+	let lines = spec.split("\n")
+	for rawLine in lines 'eachLine'
+		let line = trimWhitespace(rawLine)
+		if line.isEmpty() 'skipBlank'
+			continue
+		end 'skipBlank'
+
+		let spaceIdx = try line.findFirst(" ") otherwise throw RdataParseError.missingType
+		let afterSpace = try line.indexAfter(spaceIdx) otherwise throw RdataParseError.missingType
+		let typeTag = line.slice(line.startIndex(), endIndex: spaceIdx)
+		let value = trimWhitespace(line.slice(afterSpace, endIndex: line.endIndex()))
+
+		if typeTag == "i8" 'tagI8'
+			let n = try parseRangedInt(value, lo: -128, hi: 127)
+			appendLittleEndian(buf, value: n, width: 1)
+			continue
+		end 'tagI8'
+		if typeTag == "u8" 'tagU8'
+			let n = try parseRangedInt(value, lo: 0, hi: 0xFF)
+			appendLittleEndian(buf, value: n, width: 1)
+			continue
+		end 'tagU8'
+		if typeTag == "i16" 'tagI16'
+			let n = try parseRangedInt(value, lo: -32768, hi: 32767)
+			appendLittleEndian(buf, value: n, width: 2)
+			continue
+		end 'tagI16'
+		if typeTag == "i32" 'tagI32'
+			let n = try parseRangedInt(value, lo: -2147483648, hi: 2147483647)
+			appendLittleEndian(buf, value: n, width: 4)
+			continue
+		end 'tagI32'
+		if typeTag == "i64" 'tagI64'
+			let n = try parseRangedInt(value, lo: i64.min, hi: i64.max)
+			appendLittleEndian(buf, value: n, width: 8)
+			continue
+		end 'tagI64'
+		if typeTag == "u32" 'tagU32'
+			let n = try parseRangedInt(value, lo: 0, hi: 0xFFFFFFFF)
+			appendLittleEndian(buf, value: n, width: 4)
+			continue
+		end 'tagU32'
+		if typeTag == "u16" 'tagU16'
+			// Space-separated values to match the bootstrap (short-type.md).
+			try parseSpaceSeparatedU16(buf, value: value)
+			continue
+		end 'tagU16'
+		if typeTag == "i8[]" 'tagI8Arr'
+			try parseIntList(buf, value: value, lo: -128, hi: 127, width: 1)
+			continue
+		end 'tagI8Arr'
+		if typeTag == "u8[]" 'tagU8Arr'
+			try parseIntList(buf, value: value, lo: 0, hi: 0xFF, width: 1)
+			continue
+		end 'tagU8Arr'
+		if typeTag == "i16[]" 'tagI16Arr'
+			try parseIntList(buf, value: value, lo: -32768, hi: 32767, width: 2)
+			continue
+		end 'tagI16Arr'
+		if typeTag == "u16[]" 'tagU16Arr'
+			try parseIntList(buf, value: value, lo: 0, hi: 0xFFFF, width: 2)
+			continue
+		end 'tagU16Arr'
+		if typeTag == "i32[]" 'tagI32Arr'
+			try parseIntList(buf, value: value, lo: -2147483648, hi: 2147483647, width: 4)
+			continue
+		end 'tagI32Arr'
+		if typeTag == "u32[]" 'tagU32Arr'
+			try parseIntList(buf, value: value, lo: 0, hi: 0xFFFFFFFF, width: 4)
+			continue
+		end 'tagU32Arr'
+		if typeTag == "i64[]" 'tagI64Arr'
+			let parts = value.split(",")
+			for part in parts 'eachI64'
+				let trimmed = trimWhitespace(part)
+				let n = try int.fromString(trimmed) otherwise throw RdataParseError.badInteger
+				appendLittleEndian(buf, value: n, width: 8)
+			end 'eachI64'
+			continue
+		end 'tagI64Arr'
+		if typeTag == "f64" 'tagF64'
+			let trimmed = trimWhitespace(value)
+			let f = try float.fromString(trimmed) otherwise throw RdataParseError.badFloat
+			let bits = __Builtins.floatToBits(f)
+			appendLittleEndian(buf, value: bits, width: 8)
+			continue
+		end 'tagF64'
+		if typeTag == "utf8" 'tagUtf8'
+			try parseUtf8Value(buf, value: value)
+			continue
+		end 'tagUtf8'
+		if typeTag == "pad" 'tagPad'
+			let count = try parseRangedInt(value, lo: 0, hi: 0xFFFFFFFF)
+			for _ in 0 upto count 'zero'
+				buf.push(0)
+			end 'zero'
+			continue
+		end 'tagPad'
+
+		throw RdataParseError.unknownType
+	end 'eachLine'
+	return buf
+end 'parseRequiredRdataBytes'
+
+// Read a 16-bit little-endian unsigned int at `offset` from `buf`.
+function readWordLE(buf ByteArray, offset SectionFileOffset) returns RdataValue throws PeParseError
+	if offset + 2 > buf.count() 'oob'
+		throw PeParseError.truncated
+	end 'oob'
+	let b0 = try buf.get(offset) otherwise panic("readWordLE: bounds checked above")
+	let b1 = try buf.get(offset + 1) otherwise panic("readWordLE: bounds checked above")
+	return b0 or (b1 shl 8)
+end 'readWordLE'
+
+// Read a 32-bit little-endian unsigned int at `offset` from `buf`.
+function readDwordLE(buf ByteArray, offset SectionFileOffset) returns RdataValue throws PeParseError
+	if offset + 4 > buf.count() 'oob'
+		throw PeParseError.truncated
+	end 'oob'
+	let b0 = try buf.get(offset) otherwise panic("readDwordLE: bounds checked above")
+	let b1 = try buf.get(offset + 1) otherwise panic("readDwordLE: bounds checked above")
+	let b2 = try buf.get(offset + 2) otherwise panic("readDwordLE: bounds checked above")
+	let b3 = try buf.get(offset + 3) otherwise panic("readDwordLE: bounds checked above")
+	return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+end 'readDwordLE'
+
+// Parse a PE file's section table from an in-memory copy of the executable.
+// Layout reference (PE/COFF spec):
+//   0x00      DOS magic ("MZ")
+//   0x3C      u32 PE header file offset
+//   <PE>      "PE\0\0" signature (4B), COFF header (20B), optional header (size in COFF.OptHdrSize)
+//   <secs>    NumberOfSections × 40B section table entries
+// Each section entry: name(8) | virtualSize(4) | virtualAddress(4) |
+//   rawSize(4) | rawOffset(4) | 12 bytes padding | characteristics(4).
+function parsePeSections(buf ByteArray) returns PeSectionInfoArray throws PeParseError
+	let dosMagic = try readWordLE(buf, offset: 0)
+	if dosMagic != 0x5A4D 'badDos'
+		throw PeParseError.notPeFile
+	end 'badDos'
+
+	let peOffset = try readDwordLE(buf, offset: 0x3C)
+	let peSignature = try readDwordLE(buf, offset: peOffset)
+	if peSignature != 0x00004550 'badPe'
+		throw PeParseError.notPeFile
+	end 'badPe'
+
+	// COFF header begins immediately after the 4-byte PE signature.
+	let coff = peOffset + 4
+	let numberOfSections = try readWordLE(buf, offset: coff + 2)
+	let sizeOfOptionalHeader = try readWordLE(buf, offset: coff + 16)
+	// Section table follows COFF (20B) + optional header.
+	var entry = coff + 20 + sizeOfOptionalHeader
+
+	var sections = PeSectionInfoArray.create()
+	var idx = 0
+	while idx < numberOfSections 'eachSection'
+		if entry + 40 > buf.count() 'oob'
+			throw PeParseError.truncated
+		end 'oob'
+		let name = readSectionName(buf, offset: entry)
+		let virtualSize = try readDwordLE(buf, offset: entry + 8)
+		// entry + 12 is virtualAddress (unused — we read the file image directly).
+		let rawSize = try readDwordLE(buf, offset: entry + 16)
+		let rawOffset = try readDwordLE(buf, offset: entry + 20)
+		sections.push(PeSectionInfo.create(name, virtualSize: virtualSize, rawSize: rawSize, rawOffset: rawOffset))
+		entry = entry + 40
+		idx = idx + 1
+	end 'eachSection'
+	return sections
+end 'parsePeSections'
+
+// Read the 8-byte ASCII section name and strip trailing NUL padding. PE
+// names are fixed-width; shorter names are zero-padded.
+function readSectionName(buf ByteArray, offset SectionFileOffset) returns String
+	var out = ""
+	for i in 0 upto 8 'each'
+		let b = try buf.get(offset + i) otherwise break
+		if b == 0 'pad'
+			break
+		end 'pad'
+		let ch = Character.fromCodepoint(b)
+		out = "{out}{ch.toString()}"
+	end 'each'
+	return out
+end 'readSectionName'
+
+// Locate and read a named section's on-disk bytes. PE file padding stops at
+// `min(virtualSize, rawSize)` — virtualSize is the logical extent of the
+// section's contents, and rawSize is the file-aligned size which may include
+// trailing zero padding. Reading `min(...)` matches the bootstrap and trims
+// the alignment tail before the byte comparison.
+function readPeSectionBytes(buf ByteArray, info PeSectionInfo) returns ByteArray
+	var out = ByteArray.create()
+	let logical = info.virtualSize if info.virtualSize < info.rawSize else info.rawSize
+	let endOff = info.rawOffset + logical
+	let cap = buf.count()
+	let stop = endOff if endOff <= cap else cap
+	for off in info.rawOffset upto stop 'copy'
+		let b = try buf.get(off) otherwise break
+		out.push(b)
+	end 'copy'
+	return out
+end 'readPeSectionBytes'
+
+// Format a byte array as space-separated lowercase hex for error messages.
+function formatHexBytes(bytes ByteArray) returns String
+	var out = ""
+	let n = bytes.count()
+	for i in 0 upto n 'each'
+		let b = try bytes.get(i) otherwise break
+		if i > 0 'sep'
+			out = "{out} "
+		end 'sep'
+		out = "{out}{b:02x}"
+	end 'each'
+	return out
+end 'formatHexBytes'
+
+function findSection(sections PeSectionInfoArray, name String) returns PeSectionInfo throws PeParseError
+	for section in sections 'each'
+		if section.name == name 'match'
+			return section
+		end 'match'
+	end 'each'
+	throw PeParseError.sectionMissing
+end 'findSection'
+
+// Read the executable, locate `.rdata`, and verify the section's leading
+// bytes match `expectedSpec`. The match is a prefix-match: the runtime may
+// append extra rdata-resident data (string-interner pool, witness tables,
+// etc.) after the user values, so we only compare up to the expected length.
+// Trailing zero file-alignment padding is excluded by capping the read at
+// `virtualSize` in readPeSectionBytes.
+export function checkRequiredRdataBytes(expectedSpec String, exePath FilePath) returns RdataCheckResult
+	let expected = try parseRequiredRdataBytes(expectedSpec) otherwise(e) 'parseFail'
+		let reason = match e 'kind'
+			missingType gives "missing type tag (expected '<type> <value>')"
+			unknownType gives "unknown type tag"
+			badInteger gives "could not parse integer literal"
+			outOfRange gives "integer literal outside declared type's range"
+			badFloat gives "could not parse float literal"
+			badQuotedString gives "utf8 value missing surrounding double-quotes"
+			badEscapeSequence gives "malformed escape sequence in utf8 string"
+		end 'kind'
+		return RdataCheckResult.create(false, message: "RequiredRdata parse error: {reason}")
+	end 'parseFail'
+
+	let exeBytes = try File.readBinary(exePath) otherwise 'readFail'
+		return RdataCheckResult.create(false, message: "Failed to read executable at {exePath}")
+	end 'readFail'
+
+	let sections = try parsePeSections(exeBytes) otherwise(e) 'peFail'
+		let reason = match e 'kind'
+			notPeFile gives "not a PE file (DOS/PE signature missing)"
+			truncated gives "PE headers truncated"
+			sectionMissing gives "internal: sectionMissing thrown during parse"
+		end 'kind'
+		return RdataCheckResult.create(false, message: "Failed to parse PE: {reason}")
+	end 'peFail'
+
+	let rdata = try findSection(sections, name: ".rdata") otherwise 'noRdata'
+		return RdataCheckResult.create(false, message: "PE does not contain .rdata section")
+	end 'noRdata'
+
+	let actual = readPeSectionBytes(exeBytes, info: rdata)
+	let expectedLen = expected.count()
+	let actualLen = actual.count()
+
+	if actualLen < expectedLen 'tooShort'
+		return RdataCheckResult.create(false, message: ".rdata mismatch.\nExpected ({expectedLen} bytes): {formatHexBytes(expected)}\nActual ({actualLen} bytes): {formatHexBytes(actual)}")
+	end 'tooShort'
+
+	for i in 0 upto expectedLen 'eachByte'
+		let want = try expected.get(i) otherwise panic("checkRequiredRdataBytes: i < expectedLen invariant")
+		let got = try actual.get(i) otherwise panic("checkRequiredRdataBytes: i < actualLen >= expectedLen invariant")
+		if want != got 'mismatch'
+			return RdataCheckResult.create(false, message: ".rdata mismatch.\nExpected ({expectedLen} bytes): {formatHexBytes(expected)}\nActual ({actualLen} bytes): {formatHexBytes(actual)}")
+		end 'mismatch'
+	end 'eachByte'
+
+	return RdataCheckResult.create(true, message: "")
+end 'checkRequiredRdataBytes'
 
 // --- RequiredLowering validation ---
 

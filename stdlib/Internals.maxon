@@ -813,8 +813,10 @@ function __managed_mem_set_length(self int, n int) returns int throws __ManagedM
 end '__managed_mem_set_length'
 
 // get(self, idx) — bounds-check idx ∈ [0, length), then load the element.
-// Byte-element MMs (element_size == 1) use loadByte; word-element MMs use
-// loadIndirect. Throws indexOutOfBounds (wire 1) on OOB.
+// Dispatch on element_size: 1 byte (loadByte), 2 (loadHalfword), 4 (loadWord),
+// fall through to qword (loadIndirect). Unsigned reads — typed sign-extension
+// is handled by the source-level field-load path with signed: true.
+// Throws indexOutOfBounds (wire 1) on OOB.
 function __managed_mem_get(self int, idx int) returns int throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
@@ -826,9 +828,15 @@ function __managed_mem_get(self int, idx int) returns int throws __ManagedMemory
 	let elemSize = __Internals.loadIndirect(self + 24)
 	let buffer = __Internals.loadIndirect(self)
 	let addr = buffer + idx * elemSize
-	if elemSize == 1 'bytePath'
+	if elemSize == 1 'b'
 		return __Internals.loadByte(addr, offset: 0)
-	end 'bytePath'
+	end 'b'
+	if elemSize == 2 'h'
+		return __Internals.loadHalfword(addr)
+	end 'h'
+	if elemSize == 4 'w'
+		return __Internals.loadWord(addr)
+	end 'w'
 	return __Internals.loadIndirect(addr)
 end '__managed_mem_get'
 
@@ -852,10 +860,18 @@ function __managed_mem_set(self int, idx int, value int) returns int throws __Ma
 	let elemSize = __Internals.loadIndirect(self + 24)
 	let buffer = __Internals.loadIndirect(self)
 	let addr = buffer + idx * elemSize
-	if elemSize == 1 'bytePath'
+	if elemSize == 1 'b'
 		__Internals.storeByte(addr, offset: 0, value: value)
 		return 0
-	end 'bytePath'
+	end 'b'
+	if elemSize == 2 'h'
+		__Internals.storeHalfword(addr, value: value)
+		return 0
+	end 'h'
+	if elemSize == 4 'w'
+		__Internals.storeWord(addr, value: value)
+		return 0
+	end 'w'
 	__Internals.storeIndirect(addr, value: value)
 	return 0
 end '__managed_mem_set'
@@ -954,12 +970,22 @@ function __managed_mem_remove(self int, idx int) returns int throws __ManagedMem
 	let elemSize = __Internals.loadIndirect(self + 24)
 	let buffer = __Internals.loadIndirect(self)
 	let elemAddr = buffer + idx * elemSize
+	// Element-width dispatch mirrors __managed_mem_get. After the load we
+	// shift the tail via the byte-loop below regardless of element width.
 	var result = 0
-	if elemSize == 1 'readByte'
+	if elemSize == 1 'b'
 		result = __Internals.loadByte(elemAddr, offset: 0)
-	end 'readByte' else 'readWord'
-		result = __Internals.loadIndirect(elemAddr)
-	end 'readWord'
+	end 'b' else 'notByte'
+		if elemSize == 2 'h'
+			result = __Internals.loadHalfword(elemAddr)
+		end 'h' else 'notHalf'
+			if elemSize == 4 'w'
+				result = __Internals.loadWord(elemAddr)
+			end 'w' else 'qword'
+				result = __Internals.loadIndirect(elemAddr)
+			end 'qword'
+		end 'notHalf'
+	end 'notByte'
 	// Byte-loop shift: src byte = (idx + 1) * elemSize; dst = src - elemSize.
 	let srcStart = (idx + 1) * elemSize
 	let endByte = length * elemSize

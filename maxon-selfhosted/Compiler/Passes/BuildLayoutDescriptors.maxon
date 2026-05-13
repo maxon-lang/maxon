@@ -48,6 +48,14 @@ end 'buildLayoutDescriptors'
 
 function emitDescriptorForInstance(project Project, maxonModule MaxonModule, globalData GlobalDataTable, gid GenericInstanceId)
 	if project.layoutDescriptors.contains(gid) 'alreadyEmitted'
+		// Cache restore path: the descriptor's bytes were captured in
+		// `project.staticRdataValues` when the stdlib was built, but
+		// `globalData` is fresh per compile. Re-add so `buildRdataSection`
+		// emits the bytes and reloc lookups don't silently fall through to
+		// offset 0. `addNamedGlobalData` is idempotent on name.
+		let label = project.layoutDescriptors.labelFor(gid)
+		let bytes = try project.staticRdataValues.get(label) otherwise return
+		addNamedGlobalData(globalData, name: label, data: bytes)
 		return
 	end 'alreadyEmitted'
 
@@ -107,7 +115,7 @@ function computeLayoutDescriptor(project Project, gid GenericInstanceId, copyNam
 			alignment = size
 		end 'minAlign'
 	end 'isStruct'
-	let elementSize = primitiveElementSize(args)
+	let elementSize = primitiveElementSize(project, args: args)
 	let hasHeapRefs = instanceHasHeapRefs(args)
 	return LayoutDescriptor.create(size, alignment: alignment, elementSize: elementSize, hasHeapRefs: hasHeapRefs, copyFuncName: copyName, destroyFuncName: destroyName, fieldOffsetsPtr: "")
 end 'computeLayoutDescriptor'
@@ -117,24 +125,28 @@ end 'computeLayoutDescriptor'
 // with T`), report that argument's primitive width. Multi-arg or zero-arg
 // instances get 0 — matches the descriptor invariant "0 for non-container
 // types".
-function primitiveElementSize(args MaxonTypeArray) returns MachineWord
+function primitiveElementSize(project Project, args MaxonTypeArray) returns MachineWord
 	if args.count() != 1 'notSingleton'
 		return 0
 	end 'notSingleton'
 	let only = try args.get(0) otherwise panic("primitiveElementSize: args.get(0) failed despite count==1")
-	return primitiveWidth(only)
+	return primitiveWidth(project, t: only)
 end 'primitiveElementSize'
 
-// Conservative element-byte-width for a MaxonType: primitives at their
-// hardware width, everything else 8 (pointer-shaped). Phase 11.4's full
-// walk replaces this with `buildSubstitution`-driven field-by-field sizing.
-function primitiveWidth(t MaxonType) returns MachineWord
+// Element-byte-width for a MaxonType. For named types (typealiases / structs /
+// enums) resolve through the project's StdType registry so a narrow enum or
+// `int(0 to u8.max)` typealias correctly reports its 1-, 2-, or 4-byte storage
+// width. Bare `MaxonType.integer` is `i64` by definition (it's an unconstrained
+// integer literal at the type level) so it stays at 8. Pointer-shaped types
+// (strings, function values, genericInstance, interface, typeParameter) all
+// lower to an i64 ABI slot and so report 8.
+function primitiveWidth(project Project, t MaxonType) returns MachineWord
 	return match t 'w'
 		boolean gives 1
 		integer gives 8
 		float gives 8
 		string gives 8
-		named gives 8
+		named gives storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: t)))
 		function gives 8
 		unresolved gives 8
 		typeParameter gives 8
@@ -445,6 +457,9 @@ function synthesizeCopyThunk(project Project, maxonModule MaxonModule, gid Gener
 		let subst = buildSubstitution(project, declaringTypeName: baseName, args: args)
 		for i in 0 upto st.fields.count() 'eachField'
 			let field = try st.fields.get(i) otherwise panic("synthesizeCopyThunk: fields.get OOB at {i}")
+			if not field.offsetResolved 'unresolved'
+				panic("synthesizeCopyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
+			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
 			let isHeap = maxonTypeIsHeapManaged(t: concrete)
 			emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: field.offset, fieldHasHeapRef: isHeap, tag: "f{i}")
@@ -490,6 +505,9 @@ function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid Ge
 		let subst = buildSubstitution(project, declaringTypeName: baseName, args: args)
 		for i in 0 upto st.fields.count() 'eachField'
 			let field = try st.fields.get(i) otherwise panic("synthesizeDestroyThunk: fields.get OOB at {i}")
+			if not field.offsetResolved 'unresolved'
+				panic("synthesizeDestroyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
+			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
 			if maxonTypeIsHeapManaged(t: concrete) 'isHeap'
 				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, slotMaxonType: concrete, slotId: nextSlot, tag: "f{i}")

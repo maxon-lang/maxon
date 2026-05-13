@@ -483,6 +483,15 @@ export function registerInternalsIntrinsicSignatures(project Project)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeIndirect", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadByte", paramNames: mmParamNames2("addr", second: "offset"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeByte", paramNames: mmParamNames3("addr", second: "offset", third: "value"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
+	// Width-2 / width-4 raw loads/stores. Unsigned reads (signed extension on
+	// typed field loads goes through the StdSystemOp.loadIndirect path with
+	// signed: true at the lowering site for that field). Used by the runtime
+	// `__managed_mem_*` dispatch to honor the element_size encoded in a
+	// __ManagedMemory header for u16/u32/i16/i32 element arrays.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadHalfword", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeHalfword", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.loadWord", paramNames: mmParamNames1("addr"), paramTypes: mmParamTypes1(intType), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.storeWord", paramNames: mmParamNames2("addr", second: "value"), paramTypes: mmParamTypes2(intType, second: intType), returnType: MaxonReturnType.void)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Internals.memcpy", paramNames: mmParamNames3("dst", second: "src", third: "size"), paramTypes: mmParamTypes3(intType, second: intType, third: intType), returnType: MaxonReturnType.void)
 	// Address-of-named-global ops. Each maps to `globalAddr <bakedName>` in
 	// the Std IR. No string-literal args: passing a Maxon string would
@@ -615,8 +624,10 @@ function registerManagedMemoryCursorStruct(project Project)
 	end 'alreadyDone'
 	var fields = StructFieldArray.create()
 	let i64Type = MaxonType.integer
-	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true))
-	fields.push(StructField.create("position", fieldType: i64Type, offset: 8, isMutable: true))
+	// These offsets match the Phase 6 runtime cursor ABI; flag them
+	// resolved so `layoutAllStructs` leaves them alone.
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("position", fieldType: i64Type, offset: 8, isMutable: true, offsetResolved: true))
 	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryCursorStruct: stdlib bootstrap path rejected")
 	let st = StructType.create("__ManagedMemoryCursor", fields: fields, byteSize: 16, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 	try project.structTypes.insert("__ManagedMemoryCursor", value: st) otherwise ignore
@@ -672,11 +683,13 @@ function registerManagedMemoryStruct(project Project)
 	end 'alreadyDone'
 	var fields = StructFieldArray.create()
 	let i64Type = MaxonType.integer
-	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true))
-	fields.push(StructField.create("length", fieldType: i64Type, offset: 8, isMutable: true))
-	fields.push(StructField.create("capacity", fieldType: i64Type, offset: 16, isMutable: true))
-	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24, isMutable: true))
-	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32, isMutable: true))
+	// These offsets match the Phase 6 runtime managed-memory ABI; flag them
+	// resolved so `layoutAllStructs` leaves them alone.
+	fields.push(StructField.create("buffer", fieldType: i64Type, offset: 0, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("length", fieldType: i64Type, offset: 8, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("capacity", fieldType: i64Type, offset: 16, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("element_size", fieldType: i64Type, offset: 24, isMutable: true, offsetResolved: true))
+	fields.push(StructField.create("parent_ptr", fieldType: i64Type, offset: 32, isMutable: true, offsetResolved: true))
 	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedMemoryStruct: stdlib bootstrap path rejected")
 	let st = StructType.create("__ManagedMemory", fields: fields, byteSize: 40, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
 	try project.structTypes.insert("__ManagedMemory", value: st) otherwise ignore
@@ -1720,7 +1733,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
 		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
@@ -1737,7 +1750,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: strArgIds)))
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 		self.storeI64Const(addrId: resultId, offset: 8, value: isAsciiFlag, dstBlock: dstBlock)
 	end 'lowerStringConst'
 
@@ -1769,7 +1782,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
 		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
@@ -1785,7 +1798,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: chArgIds)))
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("Character")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 	end 'lowerCharLiteral'
 
 	// Phase 7 step 7: lower a maxon.byteStringLiteral op to an `Array`-shaped
@@ -1817,7 +1830,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
 		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
@@ -1839,7 +1852,7 @@ type MaxonToStdLowering
 		// type unresolved; lowering matches what the resolver wrote on the op.
 		self.setValueType(resultId, t: byteStringLiteralResultType(self.project))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 	end 'lowerByteStringLiteral'
 
 	// Phase 7 step 5: lower a maxon.stringInterp op to a heap-allocated
@@ -1930,10 +1943,10 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: dataBufId, isFloat: false)))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 8, valueId: totalLenId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: dataBufId, width: StoreWidth.qword, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 8, valueId: totalLenId, width: StoreWidth.qword, isFloat: false)))
 		// capacity = totalLen (real heap-backed; NOT the rdata -2 sentinel).
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 16, valueId: totalLenId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 16, valueId: totalLenId, width: StoreWidth.qword, isFloat: false)))
 		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
 		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
@@ -1947,7 +1960,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_alloc", argIds: strArgIds)))
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 		// isAsciiFlag = 0 (conservative — matches C# bootstrap).
 		self.storeI64Const(addrId: resultId, offset: 8, value: 0, dstBlock: dstBlock)
 	end 'lowerStringInterp'
@@ -2019,13 +2032,13 @@ type MaxonToStdLowering
 	// byte buffer pointer and offset 8 is the i64 length.
 	function materializeStringStructPart(structValueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
 		let mmId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmId, addrId: structValueId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmId, addrId: structValueId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(mmId, t: MaxonType.integer)
 		let bufId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(bufId, t: MaxonType.integer)
 		let lenId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(lenId, t: MaxonType.integer)
 		return (bufId, lenId)
 	end 'materializeStringStructPart'
@@ -2251,7 +2264,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
 		let resultId = self.defineName(result)
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: isFloat)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: isFloat)))
 		self.setIsFloat(resultId, isFloat: isFloat)
 		// Stamp the source-level slot type onto the loaded value so a
 		// subsequent `methodCall` whose receiver is this load resolves the
@@ -2266,7 +2279,7 @@ type MaxonToStdLowering
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: dataSymbolName(name))))
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: slotType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: self.resolveName(value), isFloat: isFloat)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: self.resolveName(value), width: StoreWidth.qword, isFloat: isFloat)))
 	end 'lowerGlobalStore'
 
 	// Lower a binop. If the op is float-family, ensure both operands are
@@ -2773,7 +2786,66 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		end 'plainCall'
 		self.recordCallResultType(resultId, callee: qualifiedCallee, receiverContext: receiverContext)
+		// Sign-extend narrow signed return values. When the callee's
+		// declared return type is `typeParameter(...)` and the call site's
+		// receiverContext binds that parameter to a signed narrow type
+		// (`i8`/`i16`/`i32`, including alias-resolved enums whose
+		// `computeOptimalIntType` picked a signed narrow StdType), the
+		// runtime ABI hands back the value zero-extended in RAX/X0 (every
+		// narrow-load primitive in `__managed_mem_get` / field-load is
+		// zero-extending). Recover the sign bit by emitting shl + shr
+		// (arithmetic) and re-aliasing the user-name to the extended SSA.
+		self.maybeSignExtendCallResult(result, callee: qualifiedCallee, receiverContext: receiverContext, dstBlock: dstBlock)
 	end 'emitCallWithArgs'
+
+	// Post-call sign-extension for narrow signed return types. Resolves the
+	// callee's declared return type through the call-site's `receiverContext`
+	// to its concrete form (substituting type parameters), checks whether
+	// the resulting `StdType` is signed and narrower than 8 bytes, and if
+	// so, emits a sign-extension sequence.
+	function maybeSignExtendCallResult(result ByteArray, callee String, receiverContext MaxonType, dstBlock IrBlock)
+		let returnType = try self.project.funcReturnTypes.get(callee) otherwise return
+		let raw = match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		let concrete = substituteReturnTypeViaReceiver(self.project, raw: raw, receiverContext: receiverContext)
+		if not signExtendApplies(self.project, elementType: concrete) 'noExtend'
+			return
+		end 'noExtend'
+		let stdType = resolveMaxonTypeToStd(self.project, ref: concrete)
+		let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
+		if widthBytes >= 8 'noWiden'
+			return
+		end 'noWiden'
+		let rawId = self.resolveName(result)
+		let signExtId = self.emitNarrowSignExtend(rawId, widthBytes: widthBytes, dstBlock: dstBlock)
+		self.setValueType(signExtId, t: concrete)
+		self.aliasName(result, toId: signExtId)
+	end 'maybeSignExtendCallResult'
+
+	// Emit a sign-extension sequence for a narrow integer value already
+	// held in an i64 register with the high bits zero-extended. Uses the
+	// trick `(x XOR signBit) - signBit` where `signBit = 1 << (width*8 - 1)`:
+	//   - Flips the value's narrow-sign bit (bit at position width*8-1).
+	//   - Subtracting `signBit` from the result subtracts 0 when the
+	//     original sign bit was 0 (because XOR flipped 0 → 1, then
+	//     subtracting 1*signBit moves down by signBit, matching the
+	//     positive zero-extension result), and subtracts 2*signBit when
+	//     the original sign bit was 1 (flipping 1 → 0 + subtraction
+	//     produces the negative two's-complement form).
+	// Works for widthBytes ∈ {1, 2, 4}. Uses only XOR and SUB, both of
+	// which exist as unsigned-style i64 binops — sidesteps the lack of
+	// a signed-shift StdOp (today's `shrI64` lowers to SHR on x64 and
+	// `i64.shr_u` on wasm).
+	function emitNarrowSignExtend(rawId ValueId, widthBytes MachineWord, dstBlock IrBlock) returns ValueId
+		let signBit = (1 shl ((widthBytes * 8 - 1) as ParsedInt)) as ParsedInt
+		let signBitId = self.emitConstI64(signBit, dstBlock: dstBlock)
+		self.setValueType(signBitId, t: MaxonType.integer)
+		let xoredId = self.emitBinaryI64(StdArithBinaryOpcode.xorI64, leftId: rawId, rightId: signBitId, dstBlock: dstBlock)
+		let extendedId = self.emitBinaryI64(StdArithBinaryOpcode.subI64, leftId: xoredId, rightId: signBitId, dstBlock: dstBlock)
+		return extendedId
+	end 'emitNarrowSignExtend'
 
 	// Resolve the layout descriptor for the call site and return an
 	// updated argIds with the descriptor's address appended. If the
@@ -3297,6 +3369,18 @@ type MaxonToStdLowering
 		if methodName == "storeByte" 'isStoreByte'
 			return self.lowerInternalsStoreByte(result: result, args: args, dstBlock: dstBlock)
 		end 'isStoreByte'
+		if methodName == "loadHalfword" 'isLoadHalfword'
+			return self.lowerInternalsLoadSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
+		end 'isLoadHalfword'
+		if methodName == "storeHalfword" 'isStoreHalfword'
+			return self.lowerInternalsStoreSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
+		end 'isStoreHalfword'
+		if methodName == "loadWord" 'isLoadWord'
+			return self.lowerInternalsLoadSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
+		end 'isLoadWord'
+		if methodName == "storeWord" 'isStoreWord'
+			return self.lowerInternalsStoreSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
+		end 'isStoreWord'
 		if methodName == "memcpy" 'isMemcpy'
 			return self.lowerInternalsMemcpy(result: result, args: args, dstBlock: dstBlock)
 		end 'isMemcpy'
@@ -3443,7 +3527,7 @@ type MaxonToStdLowering
 		let addrName = try args.get(0) otherwise panic("invariant")
 		let addrId = self.resolveName(addrName)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsLoadIndirect'
@@ -3457,7 +3541,7 @@ type MaxonToStdLowering
 		let valueName = try args.get(1) otherwise panic("invariant")
 		let addrId = self.resolveName(addrName)
 		let valId = self.resolveName(valueName)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: valId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: valId, width: StoreWidth.qword, isFloat: false)))
 		let resultId = self.defineName(result)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
 		self.setValueType(resultId, t: MaxonType.integer)
@@ -3496,6 +3580,44 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerInternalsStoreByte'
+
+	// Width-N unsigned load: `__Internals.loadHalfword(addr)` /
+	// `__Internals.loadWord(addr)` → i64. Offset is always 0 — the Maxon
+	// caller computes `addr + n` first. signed: false because these are the
+	// raw width-N accessors; typed field loads needing sign-extension go
+	// through the dedicated field-load path with signed: true.
+	function lowerInternalsLoadSized(result ByteArray, args ByteArrayArray, dstBlock IrBlock, methodName String, width StoreWidth) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.{methodName}: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let addrId = self.resolveName(addrName)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, width: width, signed: false, isFloat: false)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsLoadSized'
+
+	// Width-N store: `__Internals.storeHalfword(addr, value)` /
+	// `__Internals.storeWord(addr, value)`. The low N bytes of value are
+	// written; high bits are discarded by the StdSystemOp.storeIndirect at
+	// the chosen width.
+	function lowerInternalsStoreSized(result ByteArray, args ByteArrayArray, dstBlock IrBlock, methodName String, width StoreWidth) returns bool
+		if args.count() != 2 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Internals.{methodName}: expected 2 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let addrName = try args.get(0) otherwise panic("invariant: args.count() == 2 just checked (addr)")
+		let valueName = try args.get(1) otherwise panic("invariant: args.count() == 2 just checked (value)")
+		let addrId = self.resolveName(addrName)
+		let valId = self.resolveName(valueName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: 0, valueId: valId, width: width, isFloat: false)))
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerInternalsStoreSized'
 
 	function lowerInternalsMemcpy(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
 		if args.count() != 3 'badArity'
@@ -3733,7 +3855,7 @@ type MaxonToStdLowering
 		let byteOffId = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: ready.operand, rightId: eightId, dstBlock: dstBlock)
 		let finalAddrId = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: addrId, rightId: byteOffId, dstBlock: dstBlock)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: finalAddrId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: finalAddrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerBuiltinsUcdI64At'
@@ -3750,10 +3872,10 @@ type MaxonToStdLowering
 		let mmName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
 		let mmId = self.resolveName(mmName)
 		let bufId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(bufId, addrId: mmId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(bufId, t: MaxonType.integer)
 		let lenId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(lenId, addrId: mmId, offset: 8, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(lenId, t: MaxonType.integer)
 		var argIds = ValueIdArray.create()
 		argIds.push(bufId)
@@ -3819,7 +3941,7 @@ type MaxonToStdLowering
 		let addrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(addrId, name: globalName)))
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerMmCountRead'
@@ -3904,12 +4026,28 @@ type MaxonToStdLowering
 			let zeroId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: zeroId, value: 0))))
 			self.setValueType(zeroId, t: MaxonType.integer)
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: 8, valueId: zeroId, isFloat: false)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: 8, valueId: zeroId, width: StoreWidth.qword, isFloat: false)))
 			let resId = self.defineName(result)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resId, value: 0))))
 			self.setValueType(resId, t: MaxonType.integer)
 			return true
 		end 'mClear'
+
+		// --- Constant-array-to-rdata fast path --------------------------
+		// `ConstantArrayLiteralRdata` pass tagged this call op as a
+		// known-constant array literal whose bytes are already emitted into
+		// `.rdata`. Skip the runtime `__managed_mem_create` (which would
+		// allocate a fresh writable buffer) and instead point the freshly-
+		// allocated __ManagedMemory header at the rdata label with the
+		// read-only sentinels (capacity = -2, parent = -2). The per-element
+		// `set` / `setLength` calls were stripped by the pass.
+		if methodName == "create" 'maybeRdata'
+			if let info = try self.project.constantArrayRdata.get(opIdx) 'hasRdataInfo'
+				self.lowerManagedMemCreateFromRdata(result, info: info, dstBlock: dstBlock)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				return true
+			end 'hasRdataInfo'
+		end 'maybeRdata'
 
 		// --- Runtime-helper dispatch ------------------------------------
 		if let helperName = try managedMemHelperFor(methodName) 'hasHelper'
@@ -3937,6 +4075,19 @@ type MaxonToStdLowering
 			if lowered 'refineType'
 				self.refineMmCallResultType(result, methodName: methodName)
 			end 'refineType'
+			// Sign-extend narrow signed reads. `__managed_mem_get` for
+			// elemSize ∈ {1, 2, 4} routes through `loadByte` / `loadHalfword` /
+			// `loadWord`, which zero-extend by default. For signed narrow
+			// element types (`i8` / `i16` / `i32`), the SSA value must be
+			// arithmetic-shifted left then right to recover the sign bit
+			// before user code (or the inlined Array.get wrapper) reads
+			// `arr.get(i).rawValue`. Note: this path covers direct
+			// `__ManagedMemory` method calls; user `arr.get(...)` flows
+			// through `Array.get` → `emitCallWithArgs`, which handles its
+			// own narrow-signed sign-extension via `maybeSignExtendCallResult`.
+			if methodName == "get" and hasReceiver 'maybeSignExt'
+				self.maybeSignExtendNarrowGetResult(result, receiverId: receiverId, dstBlock: dstBlock)
+			end 'maybeSignExt'
 			return lowered
 		end 'hasHelper'
 
@@ -4027,16 +4178,22 @@ type MaxonToStdLowering
 	end 'emitConstI64'
 
 	// Emit `result = loadIndirect(addrId + offset)` typed i64 and return resultId.
+	// Used for pointer-shaped header words (managed-memory metadata, union tags,
+	// payload slots) — every one of those is i64-wide so the helper hardcodes
+	// width=qword, signed=false. Narrow user-struct field loads inline their
+	// own `StdSystemOp.loadIndirect` because they resolve `width` / `signed`
+	// from the field's MaxonType at the call site.
 	function emitLoadFieldI64(addrId ValueId, offset ParsedInt, dstBlock IrBlock) returns ValueId
 		let id = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(id, addrId: addrId, offset: offset, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(id, addrId: addrId, offset: offset, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(id, t: MaxonType.integer)
 		return id
 	end 'emitLoadFieldI64'
 
-	// Emit `storeIndirect(addrId + offset, valueId)` for an i64 field.
+	// Emit `storeIndirect(addrId + offset, valueId)` for an i64 field. Same
+	// pointer-shaped-only contract as `emitLoadFieldI64` above.
 	function emitStoreFieldI64(addrId ValueId, offset ParsedInt, valueId ValueId, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valueId, width: StoreWidth.qword, isFloat: false)))
 	end 'emitStoreFieldI64'
 
 	// Emit `result = leftId <op> rightId` for an i64 binary op and return resultId.
@@ -4113,6 +4270,79 @@ type MaxonToStdLowering
 	// (`emptySlot`, code 1) when the source's length is zero so the
 	// surrounding `try source.createCursor() otherwise throw` rejects empty
 	// sources. The cursor pointer is bound as the call's result.
+	// After `__managed_mem_get` returns, sign-extend the SSA result when
+	// the element type is a signed narrow integer (i8 / i16 / i32). The
+	// runtime helper's narrow load routes through `loadByte` /
+	// `loadHalfword` / `loadWord` which all zero-extend; for signed slots
+	// we recover the sign bit via `emitNarrowSignExtend`. The user-name
+	// binding is rewritten to point at the sign-extended SSA value so
+	// downstream consumers see -1 (not 255) for an i8 read of byte 0xFF.
+	function maybeSignExtendNarrowGetResult(result ByteArray, receiverId ValueId, dstBlock IrBlock)
+		// Recover the element MaxonType from the receiver's
+		// genericInstance(`__ManagedMemory`, [Element]).
+		let receiverType = self.getValueType(receiverId)
+		let elementType = signExtendElementType(self.project, receiverType: receiverType)
+		if not signExtendApplies(self.project, elementType: elementType) 'noExtend'
+			return
+		end 'noExtend'
+		let stdType = resolveMaxonTypeToStd(self.project, ref: elementType)
+		let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
+		if widthBytes >= 8 'noWiden'
+			return
+		end 'noWiden'
+		let rawId = self.resolveName(result)
+		let signExtId = self.emitNarrowSignExtend(rawId, widthBytes: widthBytes, dstBlock: dstBlock)
+		self.setValueType(signExtId, t: elementType)
+		self.aliasName(result, toId: signExtId)
+	end 'maybeSignExtendNarrowGetResult'
+
+	// Constant-array-to-rdata fast path. The `ConstantArrayLiteralRdata`
+	// pass registered `info` against this op's `OpIndex`; the bytes already
+	// live in `.rdata` under `info.rdataLabel`. Emit:
+	//
+	//   newStruct = __mm_alloc(40, destructor = __destruct___ManagedMemory, tag = 0)
+	//   newStruct[0]  = globalAddr(info.rdataLabel)   // buffer
+	//   newStruct[8]  = info.count                    // length
+	//   newStruct[16] = -2                            // capacity (read-only sentinel)
+	//   newStruct[24] = info.elementSize              // element_size
+	//   newStruct[32] = -2                            // parent (rdata sentinel for destructor)
+	//
+	// `capacity = -2` makes `__managed_mem_cow_check` allocate a fresh
+	// writable buffer the first time the array is mutated (e.g. via
+	// `arr.set(i, …)` from user code, which the pass doesn't remove —
+	// only the literal's own statically-eliminated set chain is stripped).
+	// `parent = -2` keeps `__destruct___ManagedMemory` from decref'ing the
+	// rdata pointer when the wrapping struct falls out of scope.
+	function lowerManagedMemCreateFromRdata(result ByteArray, info ConstantArrayRdataInfo, dstBlock IrBlock)
+		// destructor function pointer.
+		let dtorRefId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(dtorRefId, funcName: "stdlib.__destruct___ManagedMemory")))
+		self.setValueType(dtorRefId, t: MaxonType.integer)
+		// Refcount-tracked allocation: 40-byte payload + 24-byte header,
+		// destructor stored at ptr-24.
+		let sizeId = self.emitConstI64(40, dstBlock: dstBlock)
+		self.setValueType(sizeId, t: MaxonType.integer)
+		let tagId = self.emitConstI64(0, dstBlock: dstBlock)
+		self.setValueType(tagId, t: MaxonType.integer)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(sizeId)
+		allocArgs.push(dtorRefId)
+		allocArgs.push(tagId)
+		let mmId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "stdlib.__mm_alloc", argIds: allocArgs)))
+		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+		// Buffer points at the rdata label.
+		let bufferPtrId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(bufferPtrId, name: info.rdataLabel)))
+		self.setValueType(bufferPtrId, t: MaxonType.integer)
+		self.emitStoreFieldI64(mmId, offset: 0, valueId: bufferPtrId, dstBlock: dstBlock)
+		// Stamp length / capacity / element_size / parent.
+		self.storeI64Const(addrId: mmId, offset: 8, value: info.count, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 24, value: info.elementSize, dstBlock: dstBlock)
+		self.storeI64Const(addrId: mmId, offset: 32, value: -2, dstBlock: dstBlock)
+	end 'lowerManagedMemCreateFromRdata'
+
 	function lowerCreateCursor(result ByteArray, sourceId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
 		// Allocate 40 bytes via mrt_alloc. The result is an opaque i64 ptr.
 		let sizeId = self.emitConstI64(40, dstBlock: dstBlock)
@@ -4183,7 +4413,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadByte(byteResult, baseId: addrId, offsetId: zeroOffset)))
 		self.setValueType(byteResult, t: MaxonType.integer)
 		let wordResult = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(wordResult, addrId: addrId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(wordResult, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(wordResult, t: MaxonType.integer)
 		let oneConst = self.emitConstI64(1, dstBlock: dstBlock)
 		let isByte = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: elementSizeId, rightId: oneConst, dstBlock: dstBlock)
@@ -4195,7 +4425,7 @@ type MaxonToStdLowering
 	// Phase 11.4: cursor.index() — return the current position as i64.
 	function lowerCursorIndex(result ByteArray, cursorId ValueId, dstBlock IrBlock)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: cursorId, offset: 8, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: cursorId, offset: 8, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 	end 'lowerCursorIndex'
 
@@ -4269,7 +4499,7 @@ type MaxonToStdLowering
 		let byteOffset = self.emitBinaryI64(StdArithBinaryOpcode.mulI64, leftId: safeTarget, rightId: elementSize, dstBlock: dstBlock)
 		let address = self.emitBinaryI64(StdArithBinaryOpcode.addI64, leftId: buffer, rightId: byteOffset, dstBlock: dstBlock)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: address, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		let codeValue = self.emitErrorCodeForFailure(isValid, errorCode: 1, dstBlock: dstBlock)
 		self.emitFlagBind(errorBoundName, codeValueId: codeValue)
@@ -4281,7 +4511,7 @@ type MaxonToStdLowering
 	// struct is 8 bytes and integer-typed.
 	function lowerMmFieldLoad(result ByteArray, selfId ValueId, offset ParsedInt, dstBlock IrBlock) returns bool
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: offset, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerMmFieldLoad'
@@ -4831,8 +5061,11 @@ type MaxonToStdLowering
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
 		end 'notFound'
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: hit.offset, isFloat: isFloat)))
+		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
+		let fieldWidth = storeWidthOfStdType(fieldStdType)
+		let fieldSigned = stdTypeIsSigned(fieldStdType)
+		let isFloat = stdTypeIsFloat(fieldStdType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: receiverId, offset: hit.offset, width: fieldWidth, signed: fieldSigned, isFloat: isFloat)))
 		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerFieldLoad'
 
@@ -5168,8 +5401,10 @@ type MaxonToStdLowering
 			reportCompileError(self.project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to field '{hit.structName}.{fieldNameStr}' because it is immutable (declare with 'var' to make it mutable)", line: range.line, column: range.column, filePath: path)
 			return
 		end 'immutableField'
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: self.resolveName(value), isFloat: isFloat)))
+		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
+		let fieldWidth = storeWidthOfStdType(fieldStdType)
+		let isFloat = stdTypeIsFloat(fieldStdType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: self.resolveName(value), width: fieldWidth, isFloat: isFloat)))
 	end 'lowerFieldStore'
 
 	// selfFieldLoad/selfFieldStore: synthesize a fieldLoad/Store against the
@@ -5191,8 +5426,11 @@ type MaxonToStdLowering
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: hit.offset, isFloat: isFloat)))
+		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
+		let fieldWidth = storeWidthOfStdType(fieldStdType)
+		let fieldSigned = stdTypeIsSigned(fieldStdType)
+		let isFloat = stdTypeIsFloat(fieldStdType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: selfId, offset: hit.offset, width: fieldWidth, signed: fieldSigned, isFloat: isFloat)))
 		self.setValueType(resultId, t: hit.fieldType)
 	end 'lowerSelfFieldLoad'
 
@@ -5207,8 +5445,10 @@ type MaxonToStdLowering
 			return
 		end 'notFound'
 		let selfId = self.loadSelfPointer(dstBlock)
-		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: hit.fieldType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: hit.offset, valueId: self.resolveName(value), isFloat: isFloat)))
+		let fieldStdType = maxonTypeToStdType(self.project, ref: hit.fieldType)
+		let fieldWidth = storeWidthOfStdType(fieldStdType)
+		let isFloat = stdTypeIsFloat(fieldStdType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(selfId, offset: hit.offset, valueId: self.resolveName(value), width: fieldWidth, isFloat: isFloat)))
 	end 'lowerSelfFieldStore'
 
 	// Materialize the __self parameter into a fresh SSA ValueId via a slot
@@ -5240,6 +5480,14 @@ type MaxonToStdLowering
 		let structType = try self.project.structTypes.get(structName) otherwise throw FieldLookupError.notFound
 		let fieldIdx = try structType.fieldByName.get(fieldName) otherwise throw FieldLookupError.notFound
 		let field = try structType.fields.get(fieldIdx) otherwise panic("StructType.fieldByName references missing field index {fieldIdx} on '{structName}' (count={structType.fields.count()})")
+		// Guard against any path that constructs a StructField but bypasses
+		// `layoutAllStructs`. `FieldOffset = 0` is also the offset of the
+		// leading field on every struct, so an unresolved sentinel is the
+		// only way to detect a missed-stamp bug before it silently corrupts
+		// loads/stores by aliasing every field at offset 0.
+		if not field.offsetResolved 'unresolved'
+			panic("lowerMaxonToStd: field '{fieldName}' on struct '{structName}' has unresolved offset — layoutAllStructs pass did not run")
+		end 'unresolved'
 		return FieldHit.create(field.offset, fieldType: field.fieldType, isMutable: field.isMutable, structName: structName)
 	end 'lookupFieldByStructName'
 
@@ -5438,7 +5686,7 @@ type MaxonToStdLowering
 	function lowerEnumTag(result ByteArray, enumValName ByteArray, dstBlock IrBlock)
 		let enumValId = self.resolveName(enumValName)
 		let resultId = self.defineName(result)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: 0, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: MaxonType.integer)
 	end 'lowerEnumTag'
 
@@ -5457,7 +5705,7 @@ type MaxonToStdLowering
 		let enumValId = self.resolveName(enumValName)
 		let resultId = self.defineName(result)
 		let offset = 8 + fieldIndex * 8
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: offset, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: enumValId, offset: offset, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(resultId, t: fieldType)
 		if maxonTypeIsManagedRef(self.project, t: fieldType) 'managedBump'
 			var argIds = ValueIdArray.create()
@@ -5659,7 +5907,7 @@ type MaxonToStdLowering
 		// Store each capture address into env[i*8].
 		for i in 0 upto captureCount 'eachStore'
 			let addrId = try captureAddrs.get(i) otherwise panic("lowerClosureCreate: captureAddrs.get OOB at {i}")
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(envBaseId, offset: i * 8, valueId: addrId, isFloat: false)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(envBaseId, offset: i * 8, valueId: addrId, width: StoreWidth.qword, isFloat: false)))
 		end 'eachStore'
 
 		self.fnEnvVarNames.upsert(fnRefId, value: envBaseId)
@@ -5697,12 +5945,12 @@ type MaxonToStdLowering
 
 		// env[i*8] → captured slot's address.
 		let addrId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(addrId, addrId: envBaseId, offset: captureIndex * 8, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(addrId, addrId: envBaseId, offset: captureIndex * 8, width: StoreWidth.qword, signed: false, isFloat: false)))
 
 		// *<address> → the live value.
 		let resultId = self.defineName(result)
 		let isFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: captureType))
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, isFloat: isFloat)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(resultId, addrId: addrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: isFloat)))
 		self.setValueType(resultId, t: captureType)
 	end 'lowerClosureEnvLoad'
 
@@ -5812,6 +6060,12 @@ type MaxonToStdLowering
 			if fieldBaseName != "__ManagedMemory" 'notManaged'
 				continue
 			end 'notManaged'
+			// Same sentinel check as `lookupFieldByStructName` — see the
+			// extended comment there. Catches any path that constructs a
+			// StructField but bypasses `layoutAllStructs`.
+			if not field.offsetResolved 'unresolved'
+				panic("synthesizeManagedFieldInits: field '{field.name}' on struct '{structType.name}' has unresolved offset — layoutAllStructs pass did not run")
+			end 'unresolved'
 			// Allocate 40 bytes for the inner __ManagedMemory record.
 			let mmSizeId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: mmSizeId, value: 40))))
@@ -5829,7 +6083,7 @@ type MaxonToStdLowering
 			self.storeI64Const(addrId: mmId, offset: 24, value: 8, dstBlock: dstBlock)
 			self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
 			// Store mmId pointer at field's offset in the parent.
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: mmId, isFloat: false)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 		end 'eachField'
 	end 'synthesizeManagedFieldInits'
 
@@ -5838,7 +6092,7 @@ type MaxonToStdLowering
 		let valId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: valId, value: value))))
 		self.setValueType(valId, t: MaxonType.integer)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valId, isFloat: false)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(addrId, offset: offset, valueId: valId, width: StoreWidth.qword, isFloat: false)))
 	end 'storeI64Const'
 
 	// Lower `ret retVal` as a block terminator. In a non-throwing function this
@@ -6867,3 +7121,63 @@ function predicateIsNe(predicate CmpPredicate) returns bool
 		ge gives false
 	end 'p'
 end 'predicateIsNe'
+
+// Pick the element MaxonType of a __ManagedMemory receiver. Returns
+// `unresolved` for any non-genericInstance receiver (cursor calls,
+// constrained generic receivers, …) — `signExtendApplies` then short-
+// circuits, leaving the call result as-is.
+function signExtendElementType(project Project, receiverType MaxonType) returns MaxonType
+	return match receiverType 'pick'
+		genericInstance(gid) gives firstGenericArgOf(project, gid: gid)
+		boolean to function gives MaxonType.unresolved
+		unresolved gives MaxonType.unresolved
+		typeParameter gives MaxonType.unresolved
+		interface gives MaxonType.unresolved
+	end 'pick'
+end 'signExtendElementType'
+
+// Pull the first type-arg of a generic instance. Mirrors
+// TypeResolution.firstGenericArg but lives here so LowerMaxonToStd
+// doesn't pull TypeResolution into its call graph.
+function firstGenericArgOf(project Project, gid GenericInstanceId) returns MaxonType
+	let (_, args) = project.genericInstances.get(gid)
+	return try args.get(0) otherwise MaxonType.unresolved
+end 'firstGenericArgOf'
+
+// Substitute type parameters in `raw` (the callee's declared return type)
+// through the receiver context's generic-instance args. Mirrors what
+// `methodCallResultType` does at TypeResolution time, but happens at
+// lowering time where the `producerTypes` map is no longer live. The
+// `raw` type might mention `typeParameter(Element)`; the receiver
+// context might bind `Element -> Signal`. Returns `raw` unchanged when
+// no substitution applies (non-generic receiver, primitive return
+// type, …).
+function substituteReturnTypeViaReceiver(project Project, raw MaxonType, receiverContext MaxonType) returns MaxonType
+	let promoted = promoteNamedToGenericInstance(project, raw: raw, candidate: receiverContext)
+	let subst = buildSubstitutionForInstance(project, t: receiverContext)
+	return substituteType(project, t: promoted, subst: subst)
+end 'substituteReturnTypeViaReceiver'
+
+// True when an `__managed_mem_get` result should be sign-extended to fill
+// the i64 register. Holds for signed narrow integer types (`i8`, `i16`,
+// `i32`); the qword case is a no-op, the unsigned cases zero-extend
+// already, floats are unaffected.
+function signExtendApplies(project Project, elementType MaxonType) returns bool
+	let signedNamed = match elementType 'arm'
+		named gives stdTypeIsSigned(resolveMaxonTypeToStd(project, ref: elementType))
+		integer gives false
+		boolean gives false
+		float gives false
+		string gives false
+		function gives false
+		unresolved gives false
+		typeParameter gives false
+		genericInstance gives false
+		interface gives false
+	end 'arm'
+	if not signedNamed 'notSigned'
+		return false
+	end 'notSigned'
+	let width = storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: elementType)))
+	return width < 8
+end 'signExtendApplies'

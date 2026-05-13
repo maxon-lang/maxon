@@ -229,14 +229,57 @@ export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeO
 	return try map.index.get(name) otherwise 0
 end 'lookupRdataOffset'
 
+// Classify a globalData entry by name. User-emitted constants (string
+// literals, float literals, user panic messages, UCD blobs) come first in
+// `.rdata`; infrastructure entries (layout descriptors, witness tables,
+// runtime panic strings) come after. This matches the C# bootstrap, where
+// runtime data lives in `.symdata` and `.rdata` opens with user values —
+// `RequiredRdata` blocks in spec files rely on that prefix.
+function isUserRdataEntry(name String) returns bool
+	if name.startsWith("__str_") 'isStr'
+		return true
+	end 'isStr'
+	if name.startsWith("__istr_") 'isIStr'
+		return true
+	end 'isIStr'
+	if name.startsWith("__float_") 'isFloat'
+		return true
+	end 'isFloat'
+	if name.startsWith("__panic_msg_") 'isPanicMsg'
+		return true
+	end 'isPanicMsg'
+	if name.startsWith("__ucd_") 'isUcd'
+		return true
+	end 'isUcd'
+	if name.startsWith("__rdata_arr_") 'isArrayLit'
+		return true
+	end 'isArrayLit'
+	return false
+end 'isUserRdataEntry'
+
 // Serialize the global data table into a flat ByteArray for the .rdata section.
 // Each entry is 8-byte aligned. Populates the offset map for label-to-offset resolution.
+// Two-pass emission: user entries (classified by `isUserRdataEntry`) first,
+// infrastructure entries last. Within each pass, original insertion order is
+// preserved. Matching the C# bootstrap's prefix-first layout lets the spec
+// runner verify user `RequiredRdata` byte blocks against the start of the
+// section.
 export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
 	var rdata = ByteArray.create()
 	let count = table.names.count()
+	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: true)
+	emitRdataPass(rdata, table: table, map: map, count: count, wantUser: false)
+	return rdata
+end 'buildRdataSection'
+
+function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMap, count ByteCount, wantUser bool)
 	for i in 0 upto count 'build'
-		let name = try table.names.get(i) otherwise panic("buildRdataSection.build: i < count = table.names.count() but get({i}) failed")
-		var data = try table.values.get(i) otherwise panic("buildRdataSection.build: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
+		let name = try table.names.get(i) otherwise panic("emitRdataPass: i < count = table.names.count() but get({i}) failed")
+		let isUser = isUserRdataEntry(name)
+		if isUser != wantUser 'skipPass'
+			continue
+		end 'skipPass'
+		var data = try table.values.get(i) otherwise panic("emitRdataPass: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
 		map.record(name, offset: rdata.count())
 		rdata.append(data)
 		// Pad to 8-byte alignment
@@ -244,8 +287,7 @@ export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) ret
 			rdata.push(0)
 		end 'align'
 	end 'build'
-	return rdata
-end 'buildRdataSection'
+end 'emitRdataPass'
 
 // Resolve rdata relocations: fill in rdataOffset from the offset map.
 // Returns a new array with resolved offsets.

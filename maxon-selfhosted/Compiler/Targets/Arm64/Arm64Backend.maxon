@@ -431,8 +431,8 @@ export type Arm64Backend implements TargetBackend
 			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCallArm64(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then result = nextTempSlot  // handled as terminator
 			param(resultId, paramIndex, paramType) then lowerParamArm64(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
-			load(resultId, baseId, offset, isFloat) then lowerLoadIndirectArm64(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
-			store(valueId, baseId, offset, isFloat) then lowerStoreIndirectArm64(valueId: valueId, baseId: baseId, offset: offset, isFloat: isFloat, dstBlock: dstBlock)
+			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirectArm64(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
+			store(valueId, baseId, offset, width, isFloat) then lowerStoreIndirectArm64(valueId: valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat, dstBlock: dstBlock)
 			loadSlot(resultId, slotId) then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(slotId, src: Arm64VReg.virtual(valueId)))
 			stackSlotAddr to loadByte then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -545,22 +545,22 @@ export type Arm64Backend implements TargetBackend
 	// Indirect load. `isFloat` picks between an integer `ldr` and an FP
 	// `ldr Dx, [base+off]` so float-typed globals / fields land in an FP
 	// vreg directly rather than staging through a GP register.
-	function lowerLoadIndirectArm64(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool, dstBlock IrBlock)
+	function lowerLoadIndirectArm64(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool, dstBlock IrBlock)
 		if isFloat 'fp'
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fpLoadIndirect(Arm64FpVReg.virtual(resultId), baseReg: Arm64VReg.virtual(baseId), offset: offset, precision: FloatPrecision.f64))
 			return
 		end 'fp'
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(Arm64VReg.virtual(resultId), baseReg: Arm64VReg.virtual(baseId), offset: offset, size: 8))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(Arm64VReg.virtual(resultId), baseReg: Arm64VReg.virtual(baseId), offset: offset, width: width, signed: signed))
 	end 'lowerLoadIndirectArm64'
 
 	// Indirect store, mirror of `lowerLoadIndirectArm64`. FP stores route to
 	// `fpStoreIndirect` so float-typed values keep their register class.
-	function lowerStoreIndirectArm64(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool, dstBlock IrBlock)
+	function lowerStoreIndirectArm64(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool, dstBlock IrBlock)
 		if isFloat 'fp'
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fpStoreIndirect(Arm64VReg.virtual(baseId), offset: offset, src: Arm64FpVReg.virtual(valueId), precision: FloatPrecision.f64))
 			return
 		end 'fp'
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(Arm64VReg.virtual(baseId), offset: offset, srcReg: Arm64VReg.virtual(valueId), size: 8))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.storeIndirect(Arm64VReg.virtual(baseId), offset: offset, srcReg: Arm64VReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirectArm64'
 
 	// Float constant: load directly into FP register via literal pool data island.
@@ -835,7 +835,7 @@ export type Arm64Backend implements TargetBackend
 		end 'tooManyArgs'
 
 		let offset = WITNESS_OFFSET_METHODS + 8 * methodIndex
-		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(arm64PhysReg(Arm64Register.x16), baseReg: Arm64VReg.virtual(witnessAddrId), offset: offset, size: 8))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.loadIndirect(arm64PhysReg(Arm64Register.x16), baseReg: Arm64VReg.virtual(witnessAddrId), offset: offset, width: StoreWidth.qword, signed: false))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.branchLinkReg(arm64PhysReg(Arm64Register.x16)))
 		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: arm64PhysReg(Arm64Register.x0)))
 	end 'lowerWitnessCallArm64'

@@ -1716,7 +1716,7 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		osClose gives nextId
 		osGetEnv(resultId, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		loadFramePtr(resultId) gives bindOneDefine(remap, key: resultId, nextId: nextId)
-		loadIndirect(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		loadIndirect(resultId, _, _, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		funcAddr(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		storeIndirect gives nextId
 		drop gives nextId
@@ -1881,9 +1881,9 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osClose(fdId) gives StdSystemOp.osClose(lookupRemap(remap, key: fdId))
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives StdSystemOp.osGetEnv(lookupRemap(remap, key: resultId), namePtrId: lookupRemap(remap, key: namePtrId), nameLenId: lookupRemap(remap, key: nameLenId), outBufPtrId: lookupRemap(remap, key: outBufPtrId), outBufLenId: lookupRemap(remap, key: outBufLenId))
 		loadFramePtr(resultId) gives StdSystemOp.loadFramePtr(lookupRemap(remap, key: resultId))
-		loadIndirect(resultId, addrId, offset, isFloat) gives StdSystemOp.loadIndirect(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), offset: offset, isFloat: isFloat)
+		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives StdSystemOp.loadIndirect(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives StdSystemOp.funcAddr(lookupRemap(remap, key: resultId), name: name)
-		storeIndirect(addrId, offset, valueId, isFloat) gives StdSystemOp.storeIndirect(lookupRemap(remap, key: addrId), offset: offset, valueId: lookupRemap(remap, key: valueId), isFloat: isFloat)
+		storeIndirect(addrId, offset, valueId, width, isFloat) gives StdSystemOp.storeIndirect(lookupRemap(remap, key: addrId), offset: offset, valueId: lookupRemap(remap, key: valueId), width: width, isFloat: isFloat)
 		drop(valueId) gives StdSystemOp.drop(lookupRemap(remap, key: valueId))
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))

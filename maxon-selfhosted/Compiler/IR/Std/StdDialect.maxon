@@ -102,6 +102,78 @@ export function stdReturnTypeIsFloat(rt StdReturnType) returns bool
 	end 'check'
 end 'stdReturnTypeIsFloat'
 
+// --- StoreWidth: byte-count for memory load/store ops ---
+// Bare-union (no payloads) so consumers exhaustively match all four
+// widths. Used by StdSystemOp.loadIndirect / storeIndirect (and the
+// mirroring X64/ARM64 dialect ops) to tag the access width.
+//
+// Naming: ARM ABI conventions — "word" is 4 bytes here (matching the
+// wasm/RISC convention) to avoid x86's overloaded "word" = 2 bytes.
+
+export union StoreWidth
+	byte
+	halfword
+	word
+	qword
+end 'StoreWidth'
+
+// Byte count for a given StoreWidth. Total: byte=1, halfword=2,
+// word=4, qword=8.
+export function storeWidthBytes(w StoreWidth) returns MachineWord
+	return match w 'b'
+		byte gives 1
+		halfword gives 2
+		word gives 4
+		qword gives 8
+	end 'b'
+end 'storeWidthBytes'
+
+// Map a StdType to its natural StoreWidth. i1 packs as one byte
+// (booleans collapse to byte at the layout-descriptor level).
+export function storeWidthOfStdType(t StdType) returns StoreWidth
+	return match t 'w'
+		i1 gives StoreWidth.byte
+		i8 gives StoreWidth.byte
+		u8 gives StoreWidth.byte
+		i16 gives StoreWidth.halfword
+		u16 gives StoreWidth.halfword
+		i32 gives StoreWidth.word
+		u32 gives StoreWidth.word
+		f32 gives StoreWidth.word
+		i64 gives StoreWidth.qword
+		u64 gives StoreWidth.qword
+		f64 gives StoreWidth.qword
+	end 'w'
+end 'storeWidthOfStdType'
+
+// True iff the StdType represents a signed integer (used to choose
+// between sign-extending and zero-extending narrow loads). Floats
+// return false — they have their own load path.
+export function stdTypeIsSigned(t StdType) returns bool
+	return match t 'check'
+		i1 to i64 gives true
+		u8 to f64 gives false
+	end 'check'
+end 'stdTypeIsSigned'
+
+// Cache codec for StoreWidth — bare union, so we lift through
+// `unionCases.fromRawValue` and select the actual case via match.
+export function writeStoreWidthTag(buf ByteArray, w StoreWidth)
+	writeDword(buf, value: w.ordinal)
+end 'writeStoreWidthTag'
+
+export function readStoreWidthTag(buf ByteArray, offset ByteOffset) returns (StoreWidth, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	let kase = try StoreWidth.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown StoreWidth tag {raw}")
+	let w = match kase 'lift'
+		byte gives StoreWidth.byte
+		halfword gives StoreWidth.halfword
+		word gives StoreWidth.word
+		qword gives StoreWidth.qword
+	end 'lift'
+	return (w, offset + 4)
+end 'readStoreWidthTag'
+
 // --- Cache codecs ---
 // StdType is a struct-backed simple enum, so its codec is the collapsed
 // one-line form: write the rawValue, lift through allCases on read.
@@ -376,16 +448,20 @@ export union StdSystemOp
 	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
 	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
 	loadFramePtr(resultId ValueId)
-	// Load 8 bytes from [addrId + offset] into resultId. `isFloat` selects
+	// Load `width` bytes from [addrId + offset] into resultId. `isFloat` selects
 	// between a GP `mov` and a `movsd` at the X64 backend; the lowering
 	// stamps it from the producing op's MaxonType (struct field, global var,
-	// or stack-walk read) so float-typed values land directly in XMM.
-	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool)
+	// or stack-walk read) so float-typed values land directly in XMM. The
+	// `width` tags the access width (byte/halfword/word/qword); `signed`
+	// picks between sign- and zero-extension when loading a narrower width
+	// into the 64-bit register. For `qword` and `isFloat` the bit is unused.
+	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
 	// Load the absolute address of a named function into resultId.
 	funcAddr(resultId ValueId, name String)
-	// Store 8 bytes from valueId into [addrId + offset]. `isFloat` mirrors
-	// `loadIndirect` — chooses the GP vs XMM store at the X64 backend.
-	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool)
+	// Store `width` bytes from valueId into [addrId + offset]. `isFloat` mirrors
+	// `loadIndirect` — chooses the GP vs XMM store at the X64 backend. Narrower
+	// widths write only the low N bytes of the 64-bit register.
+	storeIndirect(addrId ValueId, offset MachineWord, valueId ValueId, width StoreWidth, isFloat bool)
 	// Drop ownership of a heap pointer. Injected by injectDrops; lowered to std.system.free.
 	drop(valueId ValueId)
 	// Allocate `size` bytes of OS pages, page-aligned and zero-filled. Lowered to
@@ -598,9 +674,9 @@ export function sysOpToString(op StdSystemOp) returns String
 		osClose(fdId) gives "sys.os_close %{fdId}"
 		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives "%{resultId} = sys.os_get_env %{namePtrId}, %{nameLenId}, %{outBufPtrId}, %{outBufLenId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
-		loadIndirect(resultId, addrId, offset, isFloat) gives stdLoadIndirectToString(resultId, addrId: addrId, offset: offset, isFloat: isFloat)
+		loadIndirect(resultId, addrId, offset, width, signed, isFloat) gives stdLoadIndirectToString(resultId, addrId: addrId, offset: offset, width: width, signed: signed, isFloat: isFloat)
 		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
-		storeIndirect(addrId, offset, valueId, isFloat) gives stdStoreIndirectToString(addrId, offset: offset, valueId: valueId, isFloat: isFloat)
+		storeIndirect(addrId, offset, valueId, width, isFloat) gives stdStoreIndirectToString(addrId, offset: offset, valueId: valueId, width: width, isFloat: isFloat)
 		drop(valueId) gives "sys.drop %{valueId}"
 		osAllocPages(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages %{sizeId}"
 		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages_large %{sizeId}"
@@ -621,16 +697,35 @@ export function sysOpToString(op StdSystemOp) returns String
 	end 'print'
 end 'sysOpToString'
 
-function stdLoadIndirectToString(resultId ValueId, addrId ValueId, offset MachineWord, isFloat bool) returns String
+// Human-readable name of a StoreWidth for IR printing.
+export function storeWidthName(w StoreWidth) returns String
+	return match w 'n'
+		byte gives "byte"
+		halfword gives "halfword"
+		word gives "word"
+		qword gives "qword"
+	end 'n'
+end 'storeWidthName'
+
+function stdLoadIndirectToString(resultId ValueId, addrId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool) returns String
 	if isFloat 'float'
-		return "%{resultId} = sys.load_indirect %{addrId}, {offset} : f64"
+		return "%{resultId} = sys.load_indirect %{addrId}, {offset} width: {storeWidthName(width)} : f64"
 	end 'float'
-	return "%{resultId} = sys.load_indirect %{addrId}, {offset}"
+	// `signed` is meaningless at qword width — a 64-bit load fills the
+	// register naturally — so suppress the tag to match what the backend
+	// actually emits.
+	let signTag = match width 'w'
+		qword gives ""
+		byte gives " signed" if signed else ""
+		halfword gives " signed" if signed else ""
+		word gives " signed" if signed else ""
+	end 'w'
+	return "%{resultId} = sys.load_indirect %{addrId}, {offset} width: {storeWidthName(width)}{signTag}"
 end 'stdLoadIndirectToString'
 
-function stdStoreIndirectToString(addrId ValueId, offset MachineWord, valueId ValueId, isFloat bool) returns String
+function stdStoreIndirectToString(addrId ValueId, offset MachineWord, valueId ValueId, width StoreWidth, isFloat bool) returns String
 	if isFloat 'float'
-		return "sys.store_indirect %{addrId}, {offset}, %{valueId} : f64"
+		return "sys.store_indirect %{addrId}, {offset}, %{valueId} width: {storeWidthName(width)} : f64"
 	end 'float'
-	return "sys.store_indirect %{addrId}, {offset}, %{valueId}"
+	return "sys.store_indirect %{addrId}, {offset}, %{valueId} width: {storeWidthName(width)}"
 end 'stdStoreIndirectToString'

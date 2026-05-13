@@ -1236,8 +1236,8 @@ type WasmFunctionLowering
 			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then emitWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds)
 			ret(retValId) then emitRet(retValId: retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
-			load(resultId, baseId, offset, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, isFloat: isFloat)
-			store(valueId, baseId, offset, isFloat) then emitStore(valueId: valueId, baseId: baseId, offset: offset, isFloat: isFloat)
+			load(resultId, baseId, offset, width, signed, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat)
+			store(valueId, baseId, offset, width, isFloat) then emitStore(valueId: valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat)
 			loadSlot(resultId, slotId) then emitMemRefLoadSlot(resultId: resultId, slotId: slotId)
 			storeSlot(slotId, valueId) then emitMemRefStoreSlot(slotId: slotId, valueId: valueId)
 			stackSlotAddr(resultId, slotId) then emitStackSlotAddr(resultId: resultId, slotId: slotId)
@@ -1494,27 +1494,63 @@ type WasmFunctionLowering
 		// If resultId == paramIndex, the param is already in the right local.
 	end 'emitParam'
 
-	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
+	// Load `width` bytes from [base+offset] into resultId. Float loads bypass
+	// the integer matrix and use f64.load (only qword is meaningful at the
+	// float type today). For integer loads `signed` selects between sign-
+	// and zero-extending opcodes at narrow widths.
+	function emitLoad(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
 		body.push(opLocalGet)
 		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opI32WrapI64)
-		body.push(opF64Load if isFloat else opI64Load)
-		body.push(0x03)
+		let (loadOpcode, alignment) = selectWasmLoadOpcode(width: width, signed: signed, isFloat: isFloat)
+		body.push(loadOpcode)
+		body.push(alignment)
 		writeUleb128(body, value: offset)
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitLoad'
 
-	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord, isFloat bool)
+	function emitStore(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool)
 		body.push(opLocalGet)
 		writeUleb128(body, value: baseId as Wasm32Index)
 		body.push(opI32WrapI64)
 		body.push(opLocalGet)
 		writeUleb128(body, value: valueId as Wasm32Index)
-		body.push(opF64Store if isFloat else opI64Store)
-		body.push(0x03)
+		let (storeOpcode, alignment) = selectWasmStoreOpcode(width: width, isFloat: isFloat)
+		body.push(storeOpcode)
+		body.push(alignment)
 		writeUleb128(body, value: offset)
 	end 'emitStore'
+
+	// Choose the wasm load opcode + alignment-log2 immediate for a given
+	// access width. Float loads bypass the integer matrix (signed is moot
+	// for f64.load). Alignment is encoded as log2(natural-alignment): 0
+	// for byte, 1 for halfword, 2 for word, 3 for qword.
+	function selectWasmLoadOpcode(width StoreWidth, signed bool, isFloat bool) returns (MachineWord, MachineWord)
+		if isFloat 'fp'
+			return (opF64Load, 0x03)
+		end 'fp'
+		return match width 'w'
+			qword gives (opI64Load, 0x03)
+			word gives (opI64Load32S if signed else opI64Load32U, 0x02)
+			halfword gives (opI64Load16S if signed else opI64Load16U, 0x01)
+			byte gives (opI64Load8S if signed else opI64Load8U, 0x00)
+		end 'w'
+	end 'selectWasmLoadOpcode'
+
+	// Mirror of `selectWasmLoadOpcode` for stores. Stores only need a width:
+	// each `i64.storeN` writes the low N bytes of its i64 operand.
+	function selectWasmStoreOpcode(width StoreWidth, isFloat bool) returns (MachineWord, MachineWord)
+		if isFloat 'fp'
+			return (opF64Store, 0x03)
+		end 'fp'
+		return match width 'w'
+			qword gives (opI64Store, 0x03)
+			word gives (opI64Store32, 0x02)
+			halfword gives (opI64Store16, 0x01)
+			byte gives (opI64Store8, 0x00)
+		end 'w'
+	end 'selectWasmStoreOpcode'
 
 	function emitStackSlotAddr(resultId ValueId, slotId VarSlot)
 		// Stack slots map to linear memory. Each slot is 8 bytes.
@@ -2047,7 +2083,7 @@ type WasmFunctionLowering
 			indirectCall then break 'dispatch'
 			witnessCall then break 'dispatch'
 			ret then break 'dispatch'
-			load(resultId, _, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
+			load(resultId, _, _, _, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
 			store to loadByte then break 'dispatch'
 			osAllocPages to osLockRelease then break 'dispatch'
 			tryCall(resultId, callee, _, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee)
@@ -2208,8 +2244,8 @@ function getMirOpMaxValueId(op MirOp) returns MachineWord
 		witnessCall(resultId, witnessAddrId, _, _) gives maxOfTwo(resultId as MachineWord, b: witnessAddrId as MachineWord)
 		ret(retValId) gives retValId as MachineWord
 		param(resultId, _, _) gives resultId as MachineWord
-		load(resultId, baseId, _, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
-		store(valueId, baseId, _, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
+		load(resultId, baseId, _, _, _, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
+		store(valueId, baseId, _, _, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
 		loadSlot(resultId, _) gives resultId as MachineWord
 		storeSlot(_, valueId) gives valueId as MachineWord
 		stackSlotAddr(resultId, _) gives resultId as MachineWord

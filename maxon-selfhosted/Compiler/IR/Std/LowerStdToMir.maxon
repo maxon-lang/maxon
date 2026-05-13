@@ -223,9 +223,9 @@ type StdToMirLowering
 			osClose(fdId) then self.mirModule.appendOp(dstBlock, op: MirOp.osClose(fdId))
 			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then self.mirModule.appendOp(dstBlock, op: MirOp.osGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId))
 			loadFramePtr(resultId) then self.mirModule.appendOp(dstBlock, op: MirOp.loadFramePtr(resultId))
-			loadIndirect(resultId, addrId, offset, isFloat) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: addrId, offset: offset, isFloat: isFloat))
+			loadIndirect(resultId, addrId, offset, width, signed, isFloat) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: addrId, offset: offset, width: width, signed: signed, isFloat: isFloat))
 			funcAddr(resultId, name) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: name))
-			storeIndirect(addrId, offset, valueId, isFloat) then self.mirModule.appendOp(dstBlock, op: MirOp.store(valueId, baseId: addrId, offset: offset, isFloat: isFloat))
+			storeIndirect(addrId, offset, valueId, width, isFloat) then self.mirModule.appendOp(dstBlock, op: MirOp.store(valueId, baseId: addrId, offset: offset, width: width, isFloat: isFloat))
 			free(ptrId) then self.convertStdFree(ptrId, dstBlock: dstBlock)
 			// drop is a no-op at MIR level.
 			drop then break 'dispatch'
@@ -253,8 +253,8 @@ type StdToMirLowering
 			// Phase 11.4 sugar — lower to globalAddr / load with constant offsets.
 			loadLayoutDescriptor(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
 			loadWitnessTable(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
-			descriptorField(resultId, descAddrId, field) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: descAddrId, offset: descriptorFieldOffset(field), isFloat: false))
-			witnessMethod(resultId, witnessAddrId, methodIndex) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: witnessAddrId, offset: WITNESS_OFFSET_METHODS + 8 * methodIndex, isFloat: false))
+			descriptorField(resultId, descAddrId, field) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: descAddrId, offset: descriptorFieldOffset(field), width: StoreWidth.qword, signed: false, isFloat: false))
+			witnessMethod(resultId, witnessAddrId, methodIndex) then self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: witnessAddrId, offset: WITNESS_OFFSET_METHODS + 8 * methodIndex, width: StoreWidth.qword, signed: false, isFloat: false))
 			// C1.b: lower a type-parameter drop into a descriptor.destroyFunc
 			// load followed by an indirect call with the slot value as the
 			// sole argument. The destroyFunc was installed into the
@@ -265,7 +265,7 @@ type StdToMirLowering
 
 	function lowerDropTypeParam(slotValueId ValueId, layoutValueId ValueId, dstBlock IrBlock)
 		let fnPtrId = allocValueId(self.nextValueIdRef)
-		self.mirModule.appendOp(dstBlock, op: MirOp.load(fnPtrId, baseId: layoutValueId, offset: descriptorFieldOffset(DescriptorField.destroyFunc), isFloat: false))
+		self.mirModule.appendOp(dstBlock, op: MirOp.load(fnPtrId, baseId: layoutValueId, offset: descriptorFieldOffset(DescriptorField.destroyFunc), width: StoreWidth.qword, signed: false, isFloat: false))
 		var argIds = ValueIdArray.create()
 		argIds.push(slotValueId)
 		// resultId 0 mirrors `convertStdFree`'s void-call shape — the
@@ -279,7 +279,7 @@ type StdToMirLowering
 	// reads `ptrId + 0` and stamps the result into resultId.
 	function lowerUnboxValue(resultId ValueId, ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
 		ignoreUnused(sizeId)
-		self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: ptrId, offset: 0, isFloat: false))
+		self.mirModule.appendOp(dstBlock, op: MirOp.load(resultId, baseId: ptrId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false))
 	end 'lowerUnboxValue'
 
 	function convertStdFree(ptrId ValueId, dstBlock IrBlock)

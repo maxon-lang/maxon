@@ -252,7 +252,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		movqGprToXmm(dest, src) gives isVirtualFpReg(dest) or isVirtualGpr(src)
 		andMaskRipRel(dest, _, _) gives isVirtualFpReg(dest)
 		storeIndirect(baseReg, _, srcReg, _) gives isVirtualGpr(baseReg) or isVirtualGpr(srcReg)
-		loadIndirect(destReg, baseReg, _, _) gives isVirtualGpr(destReg) or isVirtualGpr(baseReg)
+		loadIndirect(destReg, baseReg, _, _, _) gives isVirtualGpr(destReg) or isVirtualGpr(baseReg)
 		storeIndirectXmm(baseReg, _, src, _) gives isVirtualGpr(baseReg) or isVirtualFpReg(src)
 		loadIndirectXmm(dest, baseReg, _, _) gives isVirtualFpReg(dest) or isVirtualGpr(baseReg)
 		globalLoad(dest, _, _) gives isVirtualGpr(dest)
@@ -347,7 +347,7 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		movqGprToXmm(_, src) then incUse(counts, id: x64VRegId(src))
 		andMaskRipRel(dest, _, _) then incUse(counts, id: x64FpVRegId(dest))
 		storeIndirect(baseReg, _, srcReg, _) then countX64TwoReads(counts, reg1: baseReg, reg2: srcReg)
-		loadIndirect(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
+		loadIndirect(_, baseReg, _, _, _) then incUse(counts, id: x64VRegId(baseReg))
 		storeIndirectXmm(baseReg, _, src, _) then countX64MixedReads(counts, gpr: baseReg, fp: src)
 		loadIndirectXmm(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
 		globalLoad then break 'scan'
@@ -459,7 +459,7 @@ end 'noteX64UnaryInPlace'
 
 function noteX64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
 	match op 'extract'
-		loadIndirect(dest, _, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadIndirect(dest, _, _, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		nullSafeLoad(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
 		default panic("noteX64: unexpected op for pattern")
 	end 'extract'
@@ -610,7 +610,7 @@ export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx Re
 		movqGprToXmm(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
 		andMaskRipRel(dest, _, _) then recordLastUse(positions, id: x64FpVRegId(dest), opIdx: opIdx)
 		storeIndirect(baseReg, _, srcReg, _) then recordX64TwoLastUses(positions, reg1: baseReg, reg2: srcReg, opIdx: opIdx)
-		loadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
+		loadIndirect(_, baseReg, _, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
 		storeIndirectXmm(baseReg, _, src, _) then recordX64MixedLastUses(positions, gpr: baseReg, fp: src, opIdx: opIdx)
 		loadIndirectXmm(_, baseReg, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
 		globalLoad then break 'scan'
@@ -1055,7 +1055,7 @@ function x64WithBaseUseSrcUse(x64Op X64Op, b RegOrdinal, s RegOrdinal) returns X
 	let bp = x64PhysFromOrd(b)
 	let sp = x64PhysFromOrd(s)
 	return match x64Op 'rebuild'
-		storeIndirect(_, offset, _, size) gives X64Op.storeIndirect(bp, offset: offset, srcReg: sp, size: size)
+		storeIndirect(_, offset, _, width) gives X64Op.storeIndirect(bp, offset: offset, srcReg: sp, width: width)
 		default panic("x64WithBaseUseSrcUse: unexpected op")
 	end 'rebuild'
 end 'x64WithBaseUseSrcUse'
@@ -1063,7 +1063,7 @@ end 'x64WithBaseUseSrcUse'
 // Extract base and dest GPR VRegs from a baseUseDest-pattern op.
 function x64GetBaseUseDestOperands(x64Op X64Op) returns (X64VReg, X64VReg)
 	return match x64Op 'get'
-		loadIndirect(destReg, baseReg, _, _) gives(baseReg, destReg)
+		loadIndirect(destReg, baseReg, _, _, _) gives(baseReg, destReg)
 		nullSafeLoad(dest, baseReg, _) gives(baseReg, dest)
 		default panic("x64GetBaseUseDestOperands: unexpected op")
 	end 'get'
@@ -1074,7 +1074,7 @@ function x64WithBaseUseDest(x64Op X64Op, b RegOrdinal, d RegOrdinal) returns X64
 	let bp = x64PhysFromOrd(b)
 	let dp = x64PhysFromOrd(d)
 	return match x64Op 'rebuild'
-		loadIndirect(_, _, offset, size) gives X64Op.loadIndirect(dp, baseReg: bp, offset: offset, size: size)
+		loadIndirect(_, _, offset, width, signed) gives X64Op.loadIndirect(dp, baseReg: bp, offset: offset, width: width, signed: signed)
 		nullSafeLoad(_, _, offset) gives X64Op.nullSafeLoad(dp, baseReg: bp, offset: offset)
 		default panic("x64WithBaseUseDest: unexpected op")
 	end 'rebuild'
@@ -1779,14 +1779,14 @@ end 'remapX64TwoUse'
 
 function remapX64BaseUseSrcUse(x64Op X64Op, remap RegIntArray) returns X64Op
 	return match x64Op 'remap'
-		storeIndirect(base, offset, src, size) gives X64Op.storeIndirect(remapGpr(base, remap: remap), offset: offset, srcReg: remapGpr(src, remap: remap), size: size)
+		storeIndirect(base, offset, src, width) gives X64Op.storeIndirect(remapGpr(base, remap: remap), offset: offset, srcReg: remapGpr(src, remap: remap), width: width)
 		default panic("remapX64: unexpected op for pattern")
 	end 'remap'
 end 'remapX64BaseUseSrcUse'
 
 function remapX64BaseUseDest(x64Op X64Op, remap RegIntArray) returns X64Op
 	return match x64Op 'remap'
-		loadIndirect(dest, base, offset, size) gives X64Op.loadIndirect(remapGpr(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset, size: size)
+		loadIndirect(dest, base, offset, width, signed) gives X64Op.loadIndirect(remapGpr(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset, width: width, signed: signed)
 		nullSafeLoad(dest, base, offset) gives X64Op.nullSafeLoad(remapGpr(dest, remap: remap), baseReg: remapGpr(base, remap: remap), offset: offset)
 		default panic("remapX64: unexpected op for pattern")
 	end 'remap'

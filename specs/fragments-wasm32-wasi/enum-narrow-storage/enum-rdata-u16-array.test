@@ -1,0 +1,99 @@
+// Test: enum-rdata-u16-array
+typealias Integer = int(i64.min to i64.max)
+
+enum Code
+	a = 100
+	b = 1000
+	c = 10000
+end 'Code'
+
+function main() returns ExitCode
+	let arr = [Code.a, Code.b, Code.c]
+	let v = try arr.get(1) otherwise Code.a
+	return ((v.rawValue as Integer) - 1000) as ExitCode
+end 'main'
+---
+ExitCode: 0
+RequiredRdata: ```
+u16[] 100, 1000, 10000
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %5, %7)
+    %9 = mir.global_addr @__rdata_arr_main_0
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 3 : i64
+    mir.store %10, %8, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %8, 16 width: qword
+    %12 = mir.mov_imm 2 : i64
+    mir.store %12, %8, 24 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %8, 32 width: qword
+    %41 = mir.mov_imm 8 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    %43 = mir.mov_imm 40 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %44, 0 width: qword
+    %46 = mir.mov_imm 0 : i64
+    mir.store %46, %44, 8 width: qword
+    %47 = mir.mov_imm 0 : i64
+    mir.store %47, %44, 16 width: qword
+    %48 = mir.mov_imm 8 : i64
+    mir.store %48, %44, 24 width: qword
+    %49 = mir.mov_imm 0 : i64
+    mir.store %49, %44, 32 width: qword
+    mir.store %44, %42, 0 width: qword
+    mir.store %8, %42, 0 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %50 = mir.load %42, 0 width: qword
+    %51, %52 = mir.try_call @stdlib.__managed_mem_get(%50, %22)
+    %53 = mir.mov_imm 0 : i64
+    %54 = mir.cmp ne, %52, %53
+    mir.cond_br %54 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %55 = mir.mov_imm 0 : i64
+    %56 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%55, %56)
+  inlined_Array.get_2:
+    %57 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%51, %57)
+  inline_cont_main_0:
+    %27 = mir.cmp ne, %59, %7
+    mir.cond_br %27 [then: try_0.otherwise(), else: try_0.merge(%58)]
+  try_0.otherwise:
+    %29 = mir.mov_imm 100 : i64
+    mir.br try_0.merge(%29)
+  try_0.merge:
+    %32 = mir.mov_imm 1000 : i64
+    %33 = mir.sub.i64 %40, %32
+    %34 = mir.mov_imm 125 : i64
+    %35 = mir.cmp gt, %33, %34
+    mir.cond_br %35 [then: __cast_panic_0(), else: __cast_check_lo_0()]
+  __cast_check_lo_0:
+    %37 = mir.cmp lt, %33, %7
+    mir.cond_br %37 [then: __cast_panic_0(), else: __cast_ok_0()]
+  __cast_panic_0:
+    %38 = mir.global_addr @__panic_msg_0
+    %39 = mir.call @mrt_panic(%38)
+  __cast_ok_0:
+    %60 = mir.mov_imm 125 : i64
+    %61 = mir.cmp ugt, %33, %60
+    mir.cond_br %61 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %62 = mir.global_addr @__panic_msg_1
+    %63 = mir.call @mrt_panic(%62)
+  __range_ok_0:
+    mir.ret %33
+  }
+}
+---

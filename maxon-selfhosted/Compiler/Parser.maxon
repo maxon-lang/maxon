@@ -3116,7 +3116,11 @@ export type Parser
 		try skipNewlines()
 
 		var fields = StructFieldArray.create()
-		var fieldOffset = 0 as FieldOffset
+		// Field offsets and struct byteSize are computed by the
+		// `layoutAllStructs` pass in TypeResolution, after typealiases
+		// have been resolved (so narrow-int enums can pick the right
+		// per-field width). The parser stamps `offset: 0` /
+		// `offsetResolved: false` placeholders; the pass overwrites both.
 		// Phase 11.0 step 2: per-type table of `typealias Foo = ...` decls
 		// that appear inside this body. Step 5+ consumes the table during
 		// substitution; this step only stores them.
@@ -3177,8 +3181,10 @@ export type Parser
 						hasFieldDefault = true
 					end 'hasDefault'
 				end 'typedForm'
-				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: fieldOffset, isMutable: isMutableField, hasDefault: hasFieldDefault))
-				fieldOffset = fieldOffset + 8
+				// Offset is a placeholder; `layoutAllStructs` in TypeResolution
+				// stamps the real offset (and flips `offsetResolved`) once
+				// `field.fieldType` has been resolved against typealiases.
+				fields.push(StructField.create(fieldNameToken.value, fieldType: fieldType, offset: 0, isMutable: isMutableField, hasDefault: hasFieldDefault, offsetResolved: false))
 				try skipNewlines()
 			end 'isField' else if kindToken.kind == TokenKind.typealias 'isInnerAlias'
 				try eat(TokenKind.typealias)
@@ -3217,7 +3223,9 @@ export type Parser
 			end 'stuck'
 		end 'body'
 
-		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: fieldOffset, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances, typeParams: usesParams, whereClauses: whereClauses, innerAliases: innerAliases)
+		// byteSize is a placeholder; `layoutAllStructs` in TypeResolution
+		// overwrites it once every field's width is known.
+		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: 0, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances, typeParams: usesParams, whereClauses: whereClauses, innerAliases: innerAliases)
 		try project.unresolvedStructTypes.insert(currentTypeName, value: unresolved) otherwise 'dupType'
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
@@ -3367,9 +3375,20 @@ export type Parser
 
 			if accept(TokenKind.equals) 'hasRawValue'
 				let valueToken = cursor.current()
-				if valueToken.kind == TokenKind.intLiteral 'isInt'
+				// Negative numeric raw value: a unary `-` followed by an int
+				// or float literal. The lexer emits `-` as its own token, so
+				// peel it off, parse the magnitude, then negate. Mirrors how
+				// negation handles a leading-minus in expression position.
+				var rawSign = 1 as ParsedInt
+				if valueToken.kind == TokenKind.minus 'hasMinus'
+					try eat(TokenKind.minus)
+					rawSign = -1 as ParsedInt
+				end 'hasMinus'
+				let magToken = cursor.current()
+				if magToken.kind == TokenKind.intLiteral 'isInt'
 					try eat(TokenKind.intLiteral)
-					let parsed = parseRawValueForEnum(valueToken, kindLabel: "Integer", isFloat: false)
+					let mag = parseRawValueForEnum(magToken, kindLabel: "Integer", isFloat: false)
+					let parsed = (mag * rawSign) as ParsedInt
 					rawValue = parsed
 					rawIsFloat = false
 					if hasExplicitBacking and isFloatBacked 'mismatch'
@@ -3380,9 +3399,13 @@ export type Parser
 					end 'structVsIntMix'
 					hasExplicitBacking = true
 					nextOrdinal = parsed + 1
-				end 'isInt' else if valueToken.kind == TokenKind.floatLiteral 'isFloat'
+				end 'isInt' else if magToken.kind == TokenKind.floatLiteral 'isFloat'
 					try eat(TokenKind.floatLiteral)
-					let bits = parseRawValueForEnum(valueToken, kindLabel: "Float", isFloat: true)
+					var bits = parseRawValueForEnum(magToken, kindLabel: "Float", isFloat: true)
+					if rawSign < 0 'negateFloat'
+						// IEEE 754 sign bit is the MSB; XOR-toggle to negate.
+						bits = (bits xor (1 shl 63)) as ParsedInt
+					end 'negateFloat'
 					rawValue = bits
 					rawIsFloat = true
 					if hasExplicitBacking and not isFloatBacked 'intMismatch'
@@ -3393,14 +3416,14 @@ export type Parser
 					end 'structVsFloatMix'
 					hasExplicitBacking = true
 					isFloatBacked = true
-				end 'isFloat' else if valueToken.kind == TokenKind.identifier 'isStructBacking'
+				end 'isFloat' else if magToken.kind == TokenKind.identifier and rawSign > 0 'isStructBacking'
 					// Phase 9 Stage 5: `caseName = StructType{...}` /
 					// `caseName = StructType.create(...)` — capture the per-case
 					// struct backing literal. The struct type is fixed by the
 					// first such case; subsequent cases must use the same type.
 					// The cases keep their auto-assigned ordinal as the rawValue
 					// (the runtime representation is the ordinal i64).
-					let structTypeNameForCase = valueToken.value
+					let structTypeNameForCase = magToken.value
 					if not enumStructBackingTypeName.isEmpty() and structTypeNameForCase != enumStructBackingTypeName 'wrongStructType'
 						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					end 'wrongStructType'
@@ -3421,7 +3444,7 @@ export type Parser
 					rawIsFloat = false
 					nextOrdinal = nextOrdinal + 1
 				end 'isStructBacking' else 'badRawValue'
-					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int or float literal, got '{tokenValueToString(valueToken.value)}'", line: valueToken.line, column: valueToken.column, filePath: filePath)
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int or float literal, got '{tokenValueToString(magToken.value)}'", line: magToken.line, column: magToken.column, filePath: filePath)
 					try cursor.advance() otherwise break
 				end 'badRawValue'
 			end 'hasRawValue' else 'noRaw'
@@ -3484,8 +3507,11 @@ export type Parser
 
 		// Register the enum as a typealias so parameter / return / var
 		// declarations of the enum type resolve via the typealias machinery.
-		// Float-backed enums alias to f64; int-backed alias to int(0 to ord).
-		var enumTypeExpr = UnresolvedTypeExpr.rangedInt(0, upper: enumIntUpperBound(cases))
+		// Float-backed enums alias to f64; int-backed alias to int(lo to hi)
+		// where `lo` widens to the smallest negative raw value so that
+		// `computeOptimalIntType` picks a signed narrow StdType for enums
+		// with negative raw values.
+		var enumTypeExpr = UnresolvedTypeExpr.rangedInt(enumIntLowerBound(cases), upper: enumIntUpperBound(cases))
 		if isFloatBacked 'asFloatExpr'
 			enumTypeExpr = UnresolvedTypeExpr.rangedFloat(f64MinBits(), upper: f64MaxBits())
 		end 'asFloatExpr'
@@ -4590,6 +4616,21 @@ export type Parser
 		end 'scan'
 		return upper
 	end 'enumIntUpperBound'
+
+	// Pick a lower bound for an int-backed enum's typealias range from the
+	// smallest raw value seen. Returns 0 unless at least one case carries a
+	// negative raw value — keeping legacy unsigned-enum range shapes
+	// (`int(0 to N)`) intact while letting signed enums widen the range to
+	// include negatives so `computeOptimalIntType` picks the signed StdType.
+	function enumIntLowerBound(cases EnumCaseArray) returns RangeBound
+		var lower = 0 as RangeBound
+		for c in cases 'scan'
+			if c.rawValue < lower 'newMin'
+				lower = c.rawValue
+			end 'newMin'
+		end 'scan'
+		return lower
+	end 'enumIntLowerBound'
 
 	// Write modified field values back to the struct pointer before returning.
 	function emitFieldWritebacks(block IrBlock, nameToken Token, fields StructFieldArray)
@@ -11019,8 +11060,9 @@ end 'isInvalidIntRange'
 // flip a user-declared `int(...)` into the `byte` cast family — storage
 // is independent of category.
 //
-// Negative lower bounds fall through to signed i64 because signed narrow
-// widths aren't yet used at the Std level.
+// Negative-bounded ranges select narrow signed widths (i8/i16/i32) when
+// the bounds fit; otherwise fall through to i64. Backend load/store
+// lowering carries the resulting width through `StoreWidth`.
 export function computeOptimalIntType(lower BoundValue, upper BoundValue) returns StdType
 	if lower >= 0 'unsigned'
 		// `upper < 0` represents a u64 value above i64.max — needs full u64
@@ -11039,6 +11081,15 @@ export function computeOptimalIntType(lower BoundValue, upper BoundValue) return
 		end 'u32'
 		return StdType.u64
 	end 'unsigned'
+	if lower >= i8.min and upper <= i8.max 'i8'
+		return StdType.i8
+	end 'i8'
+	if lower >= i16.min and upper <= i16.max 'i16'
+		return StdType.i16
+	end 'i16'
+	if lower >= i32.min and upper <= i32.max 'i32'
+		return StdType.i32
+	end 'i32'
 	return StdType.i64
 end 'computeOptimalIntType'
 
