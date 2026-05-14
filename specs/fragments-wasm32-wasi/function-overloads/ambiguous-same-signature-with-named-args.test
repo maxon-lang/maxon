@@ -1,0 +1,52 @@
+// Test: ambiguous-same-signature-with-named-args
+typealias Integer = int(i64.min to i64.max)
+
+function create(name String) returns Integer
+	return name.count()
+end 'create'
+
+function create(label String) returns Integer
+	return label.count() + 1
+end 'create'
+
+function main() returns ExitCode
+	return create(label: "hello world hello world hello world hello worl!")
+end 'main'
+---
+ExitCode: 48
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 47 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %11 = mir.call @String.count(%8)
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %11, %12
+    %14 = mir.mov_imm 125 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_0
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

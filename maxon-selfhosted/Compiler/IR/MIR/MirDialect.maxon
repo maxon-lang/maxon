@@ -18,6 +18,8 @@ export union MirBinOpcode
 	subF64 = "mir.sub.f64"
 	mulF64 = "mir.mul.f64"
 	divF64 = "mir.div.f64"
+	minF64 = "mir.min.f64"
+	maxF64 = "mir.max.f64"
 end 'MirBinOpcode'
 
 export union MirUnaryOpcode
@@ -69,7 +71,7 @@ export union MirOp
 	// (`call qword ptr [witnessAddr + offset]` on x64) so the loaded
 	// pointer never occupies a virtual GPR. Reduces register pressure
 	// at hot witness call sites — see StdCallOp.witnessCall.
-	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
 	ret(retValId ValueId)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
 	// Memory. `isFloat` on `load`/`store` selects between a GP `mov reg,
@@ -140,6 +142,13 @@ function formatMirArgs(argIds ValueIdArray) returns String
 	return result
 end 'formatMirArgs'
 
+function mirOpWitnessCallToString(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray) returns String
+	if isVoid 'voidFmt'
+		return "mir.witness_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
+	end 'voidFmt'
+	return "%{resultId} = mir.witness_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
+end 'mirOpWitnessCallToString'
+
 export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 	return match op 'dispatch'
 		// Constants & moves
@@ -155,7 +164,7 @@ export function mirOpToString(op MirOp, blocks IrBlockArray) returns String
 		// Functions
 		call(resultId, callee, argIds) gives "%{resultId} = mir.call @{callee}({formatMirArgs(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = mir.indirect_call %{calleeId}({formatMirArgs(argIds)})"
-		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives "%{resultId} = mir.witness_call %{witnessAddrId}, [{methodIndex}]({formatMirArgs(argIds)})"
+		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives mirOpWitnessCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		ret(retValId) gives "mir.ret %{retValId}"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = mir.param local{paramIndex} : {paramType.name}"
 		// Memory

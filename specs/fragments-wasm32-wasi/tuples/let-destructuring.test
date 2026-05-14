@@ -1,0 +1,32 @@
+// Test: let-destructuring
+function main() returns ExitCode
+	let (x, y) = (10, 32)
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 32 : i64
+    %2 = mir.mov_imm 16 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %0, %3, 0 width: qword
+    mir.store %1, %3, 8 width: qword
+    %5 = mir.load %3, 0 width: qword
+    %7 = mir.load %3, 8 width: qword
+    %10 = mir.add.i64 %5, %7
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

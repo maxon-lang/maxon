@@ -1,0 +1,99 @@
+// Test: if-try-var-binding-managed-struct
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function makeGreeting(succeed bool) returns String throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return "hello"
+end 'makeGreeting'
+
+function main() returns ExitCode
+	if var s = try makeGreeting(true) 'check'
+		s.append(" world")
+		return s.bytes().count()
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @makeGreeting(local0: i1) -> i64 {
+  entry:
+    %17 = mir.param local0 : i1
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.xor.i64 %17, %2
+    mir.cond_br %3 [then: check_0(), else: check_0.after()]
+  check_0:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 1 : i64
+    mir.error_return %4, %5
+  check_0.after:
+    %6 = mir.global_addr @__istr_0
+    %7 = mir.mov_imm 40 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %6, %8, 0 width: qword
+    %9 = mir.mov_imm 5 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %8, 16 width: qword
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %8, 24 width: qword
+    %12 = mir.mov_imm 0 : i64
+    mir.store %12, %8, 32 width: qword
+    %13 = mir.mov_imm 16 : i64
+    %14 = mir.call @mrt_alloc(%13)
+    mir.store %8, %14, 0 width: qword
+    %15 = mir.mov_imm 1 : i64
+    mir.store %15, %14, 8 width: qword
+    %16 = mir.mov_imm 0 : i64
+    mir.error_return %14, %16
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1, %2 = mir.try_call @makeGreeting(%0)
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %6 = mir.global_addr @__istr_1
+    %7 = mir.mov_imm 40 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %6, %8, 0 width: qword
+    %9 = mir.mov_imm 6 : i64
+    mir.store %9, %8, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %8, 16 width: qword
+    %11 = mir.mov_imm 1 : i64
+    mir.store %11, %8, 24 width: qword
+    %12 = mir.mov_imm 0 : i64
+    mir.store %12, %8, 32 width: qword
+    %13 = mir.mov_imm 16 : i64
+    %14 = mir.call @mrt_alloc(%13)
+    mir.store %8, %14, 0 width: qword
+    %15 = mir.mov_imm 1 : i64
+    mir.store %15, %14, 8 width: qword
+    %16 = mir.call @String.append(%1, %14)
+    %21 = mir.load %1, 0 width: qword
+    %22 = mir.call @ByteView.create(%21)
+    %19 = mir.call @ByteView.count(%22)
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %19, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.after:
+    %20 = mir.mov_imm 0 : i64
+    mir.ret %20
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_0
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %19
+  }
+}
+---

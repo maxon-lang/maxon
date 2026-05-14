@@ -19,42 +19,129 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @Player.create(name: i64, score: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 40
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.lea r8, [rip+__istr_0]
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8d, 5
-    x64.mov [r12+8], r8 (8b)
-    x64.mov r8, -2
-    x64.mov [r12+16], r8 (8b)
-    x64.mov r8d, 1
-    x64.mov [r12+24], r8 (8b)
-    x64.xor r8d, r8d
-    x64.mov [r12+32], r8 (8b)
-    x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov r13, r8
-    x64.mov [r13+0], r12 (8b)
-    x64.mov r8d, 1
-    x64.mov [r13+8], r8 (8b)
-    x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov [r8+0], r13 (8b)
-    x64.mov r9d, 42
-    x64.mov [r8+8], r9 (1b)
-    x64.movzx r9, [r8+8] (1b)
-    x64.mov r8d, 4294967295
-    x64.cmp r9, r8
-    x64.jbe __range_ok_0
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Player]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.lea_rdata rax, [__str_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 5
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov rsi, rbx
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, rsi
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov r9, -2
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-32]
+    x64.mov [rdx+0], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, 5
+    x64.mov [rdx+8], rbx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+16], r9
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 42
+    x64.call Player.create
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg ranged-typealias.main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl ranged-typealias.main.__range_panic_0
+    x64.jmp ranged-typealias.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov r8, r9
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-40], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Player(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_Player.done
+  done:
     x64.epilogue
     x64.ret
   }

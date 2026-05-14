@@ -67,6 +67,9 @@ function tryResolveTypeExpr(project Project, expr UnresolvedTypeExpr) returns Re
 		// `notYet` here lets the match stay exhaustive without any caller
 		// silently consuming a generic alias as a primitive.
 		genericAlias gives ResolveResult.notYet()
+		// Phase 13 (sized typealiases): mirror genericAlias — sized variants
+		// also live in `project.genericTypealiases`.
+		sizedGenericAlias gives ResolveResult.notYet()
 		// Validation-rejected typealias — surface i64 storage so downstream
 		// passes don't crash on a placeholder. The originating E3005 is the
 		// user-visible diagnostic.
@@ -99,6 +102,7 @@ function declaredCastCategoryFor(expr UnresolvedTypeExpr) returns DeclaredCastCa
 		boolPrim gives DeclaredCastCategory.none()
 		aliasName gives DeclaredCastCategory.none()
 		genericAlias gives DeclaredCastCategory.none()
+		sizedGenericAlias gives DeclaredCastCategory.none()
 		invalid gives DeclaredCastCategory.none()
 	end 'pick'
 end 'declaredCastCategoryFor'
@@ -110,6 +114,7 @@ end 'declaredCastCategoryFor'
 function isGenericAliasExpr(expr UnresolvedTypeExpr) returns bool
 	return match expr 'check'
 		genericAlias gives true
+		sizedGenericAlias gives true
 		boolPrim gives false
 		rangedFloat gives false
 		rangedInt gives false
@@ -143,13 +148,29 @@ end 'resolveGenericAliasArgName'
 function resolveGenericAliasExpr(project Project, expr UnresolvedTypeExpr, declaringTypeName String) returns MaxonType
 	match expr 'extract'
 		genericAlias(baseName, args) then return buildGenericInstanceType(project, baseName: baseName, args: args, declaringTypeName: declaringTypeName)
-		boolPrim then panic("resolveGenericAliasExpr: caller passed boolPrim — must be genericAlias")
-		rangedFloat then panic("resolveGenericAliasExpr: caller passed rangedFloat — must be genericAlias")
-		rangedInt then panic("resolveGenericAliasExpr: caller passed rangedInt — must be genericAlias")
-		aliasName then panic("resolveGenericAliasExpr: caller passed aliasName — must be genericAlias")
-		invalid then panic("resolveGenericAliasExpr: caller passed invalid — must be genericAlias")
+		sizedGenericAlias(baseName, size, args) then return buildSizedGenericInstanceType(project, baseName: baseName, size: size, args: args, declaringTypeName: declaringTypeName)
+		boolPrim then panic("resolveGenericAliasExpr: caller passed boolPrim — must be genericAlias / sizedGenericAlias")
+		rangedFloat then panic("resolveGenericAliasExpr: caller passed rangedFloat — must be genericAlias / sizedGenericAlias")
+		rangedInt then panic("resolveGenericAliasExpr: caller passed rangedInt — must be genericAlias / sizedGenericAlias")
+		aliasName then panic("resolveGenericAliasExpr: caller passed aliasName — must be genericAlias / sizedGenericAlias")
+		invalid then panic("resolveGenericAliasExpr: caller passed invalid — must be genericAlias / sizedGenericAlias")
 	end 'extract'
 end 'resolveGenericAliasExpr'
+
+// Phase 13 sized typealias: prepends a `constInt(size)` arg to the
+// resolved args so distinct N produce distinct gids (e.g. `Vector with 1
+// Int` vs `Vector with 4 Int` are separate monomorphizations).
+function buildSizedGenericInstanceType(project Project, baseName String, size IntConstant, args StringArray, declaringTypeName String) returns MaxonType
+	let baseId = project.typeNames.intern(baseName)
+	var resolvedArgs = MaxonTypeArray.create()
+	resolvedArgs.push(MaxonType.constInt(size))
+	for i in 0 upto args.count() 'eachArg'
+		let argName = try args.get(i) otherwise panic("buildSizedGenericInstanceType: args.get OOB at {i}")
+		resolvedArgs.push(resolveGenericAliasArgName(project, declaringTypeName: declaringTypeName, argName: argName))
+	end 'eachArg'
+	let giid = project.genericInstances.intern(baseId, args: resolvedArgs)
+	return MaxonType.genericInstance(giid)
+end 'buildSizedGenericInstanceType'
 
 function buildGenericInstanceType(project Project, baseName String, args StringArray, declaringTypeName String) returns MaxonType
 	let baseId = project.typeNames.intern(baseName)
@@ -177,6 +198,7 @@ export function drainPendingConstraintChecks(project Project)
 	for check in project.pendingConstraintChecks 'eachCheck'
 		validateGenericInstanceConstraints(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 		validateGenericInstanceArgs(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
+		validateGenericInstanceArity(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 	end 'eachCheck'
 	project.pendingConstraintChecks = PendingConstraintCheckArray.create()
 end 'drainPendingConstraintChecks'
@@ -190,6 +212,7 @@ end 'drainPendingConstraintChecks'
 function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	match expr 'extract'
 		genericAlias(_, args) then validateArgNamesExist(project, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
+		sizedGenericAlias then return
 		boolPrim then return
 		rangedFloat then return
 		rangedInt then return
@@ -237,6 +260,7 @@ end 'isBuiltinTypeName'
 function validateGenericInstanceConstraints(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	match expr 'extract'
 		genericAlias(baseName, args) then validateConstraintsFor(project, baseName: baseName, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
+		sizedGenericAlias then return
 		boolPrim then return
 		rangedFloat then return
 		rangedInt then return
@@ -244,6 +268,43 @@ function validateGenericInstanceConstraints(project Project, expr UnresolvedType
 		invalid then return
 	end 'extract'
 end 'validateGenericInstanceConstraints'
+
+// Emit E2003 when the supplied `with`-arg count diverges from the base
+// type's declared `uses` parameter arity (e.g. `Array with (Integer, String)`
+// when `Array` declares `uses Element`). Mirrors the C# bootstrap's parse-
+// time check at `PreScanTypeAlias` — the self-hosted parser accepts any
+// arity and defers validation here, after every interface / struct / enum
+// is registered. Bases with no recorded params (synthetic non-generic
+// types, or a base we couldn't resolve) are left to `validateBaseAndArg-
+// NamesExist`'s E2003 emission so we don't double-report.
+function validateGenericInstanceArity(project Project, expr UnresolvedTypeExpr, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
+	match expr 'extract'
+		genericAlias(baseName, args) then validateArityFor(project, baseName: baseName, args: args, declLine: declLine, declColumn: declColumn, declFilePath: declFilePath)
+		sizedGenericAlias then return
+		boolPrim then return
+		rangedFloat then return
+		rangedInt then return
+		aliasName then return
+		invalid then return
+	end 'extract'
+end 'validateGenericInstanceArity'
+
+function validateArityFor(project Project, baseName String, args StringArray, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
+	// Skip bases that haven't been registered through the parser's
+	// `uses` clause path. This covers stdlib types not yet whitelisted
+	// for self-host compilation (the resolver lazily handles them via
+	// genericInstance lookups against the cache), and avoids false-
+	// positive "no associated types" diagnostics on bases whose
+	// generic-arity info isn't reachable from `lookupTypeParamsForBase`.
+	let typeParams = lookupTypeParamsForBase(project, baseName: baseName)
+	if typeParams.count() == 0 'noParams'
+		return
+	end 'noParams'
+	if args.count() == typeParams.count() 'match'
+		return
+	end 'match'
+	reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Type '{baseName}' expects {typeParams.count()} type argument(s), got {args.count()}", line: declLine, column: declColumn, filePath: declFilePath)
+end 'validateArityFor'
 
 function validateConstraintsFor(project Project, baseName String, args StringArray, declLine LineNumber, declColumn ColumnNumber, declFilePath FilePath)
 	let typeParams = lookupTypeParamsForBase(project, baseName: baseName)
@@ -285,6 +346,16 @@ export function lookupTypeParamsForBase(project Project, baseName String) return
 	if let unresolved = try project.unresolvedStructTypes.get(baseName) 'unresolvedHit'
 		return unresolved.typeParams
 	end 'unresolvedHit'
+	// Interface bases store `uses` parameters directly on the IR record —
+	// the parser doesn't intern them into TypeParamRegistry (mirrors the
+	// bootstrap's `_interfaceAssociatedTypes` side-channel), so probe the
+	// interface tables before falling through to the registry.
+	if let unresolvedIface = try project.unresolvedInterfaces.get(baseName) 'unresolvedIfaceHit'
+		return unresolvedIface.usesParams
+	end 'unresolvedIfaceHit'
+	if let iface = try project.interfaces.get(baseName) 'resolvedIfaceHit'
+		return iface.usesParams
+	end 'resolvedIfaceHit'
 	// Resolved structs don't carry their typeParams directly; reconstruct
 	// the parameter-name list from the project's TypeParamRegistry.
 	return project.typeParameters.getParamNames(baseName)
@@ -415,6 +486,7 @@ function reportUnresolvedTypealias(project Project, entry UnresolvedTypealias)
 		rangedInt then panic("TypeResolution: rangedInt left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		rangedFloat then panic("TypeResolution: rangedFloat left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		genericAlias then panic("TypeResolution: genericAlias left unresolved for '{entry.name}' — drainResolvableTypealiases unconditionally resolves these into project.genericTypealiases")
+		sizedGenericAlias then panic("TypeResolution: sizedGenericAlias left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		invalid then panic("TypeResolution: invalid left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 	end 'classify'
 end 'reportUnresolvedTypealias'
@@ -741,6 +813,7 @@ function substituteMaxonType(project Project, t MaxonType, bindingNames StringAr
 		typeParameter then return t
 		genericInstance then return t
 		interface then return t
+		constInt then return t
 	end 'kind'
 end 'substituteMaxonType'
 
@@ -858,7 +931,7 @@ function resolveAllEnumTypes(project Project)
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
 		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
-		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion)
+		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion, isStringBacked: entry.isStringBacked, isCharBacked: entry.isCharBacked)
 		try project.enumTypes.insert(name, value: et) otherwise ignore
 		resolvedNames.push(name)
 	end 'sweep'
@@ -923,9 +996,24 @@ export function layoutAllStructs(project Project)
 		var nextOffset = 0 as MachineWord
 		for i in 0 upto st.fields.count() 'eachField'
 			let f = try st.fields.get(i) otherwise panic("layoutAllStructs: fields.get OOB at {i} for '{structName}'")
-			let stdType = resolveMaxonTypeToStd(project, ref: f.fieldType)
-			let widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
-			let aligned = roundUpToMultiple(nextOffset, multiple: widthBytes)
+			// Interface-typed fields are stored as 16-byte fat pointers
+			// (data half at +0, witness-table address at +8). Without this
+			// carve-out the field is sized as a plain pointer (8 bytes) and
+			// the field-load lowering has nowhere to read the witness back
+			// from when an interface value is passed onward to a function
+			// expecting the same interface. Both halves are pointer-sized so
+			// 8-byte alignment is sufficient — no need for 16-byte alignment.
+			var widthBytes = 0 as MachineWord
+			var alignBytes = 0 as MachineWord
+			if interfaceTypeIsFat(f.fieldType) 'iface'
+				widthBytes = 16
+				alignBytes = 8
+			end 'iface' else 'plain'
+				let stdType = resolveMaxonTypeToStd(project, ref: f.fieldType)
+				widthBytes = storeWidthBytes(storeWidthOfStdType(stdType))
+				alignBytes = widthBytes
+			end 'plain'
+			let aligned = roundUpToMultiple(nextOffset, multiple: alignBytes)
 			newFields.push(StructField.create(f.name, fieldType: f.fieldType, offset: aligned as FieldOffset, isMutable: f.isMutable, hasDefault: f.hasDefault, offsetResolved: true, isExported: f.isExported))
 			nextOffset = aligned + widthBytes
 		end 'eachField'
@@ -1119,13 +1207,27 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 		typeParameter then return CastCategory.int
 		genericInstance then return CastCategory.int
 		interface then return CastCategory.int
+		constInt then return CastCategory.int
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
 	let name = project.typeNames.get(id)
 	if not namedIdIsKnown(project, id: id) 'unknown'
-		panic("namedIdCastCategory: unknown type name '{name}' — should have been rejected by E3009/E3011 upstream")
+		// Interface `usesParams` (e.g. `interface HasItems uses Element`)
+		// are parsed as `named("Element")` because the parser doesn't
+		// push them onto `currentTypeParams` for interface bodies. When
+		// an `extension HasItems` method consumes such a reference
+		// (e.g. `current()` returns Element, then `item == target` with
+		// `target Element`), the cast category check reaches this arm.
+		// Treat as `int` for the same reason as the `typeParameter`
+		// arm above: substitution would have replaced the param at a
+		// monomorphic call site; reaching the cast validator with a
+		// surviving free param means downstream slot/operand validation
+		// surfaces the missing-pass failure as a normal type error
+		// rather than a panic. Mirrors the genericInstance/interface
+		// arms in `convertCastCategory`.
+		return CastCategory.int
 	end 'unknown'
 	// Phase 7: the `String` struct is the user-facing string type; map to
 	// `CastCategory.string` so call/cast diagnostics distinguish it from
@@ -1164,6 +1266,7 @@ export function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 		typeParameter then return true
 		genericInstance then return true
 		interface then return true
+		constInt then return true
 	end 'check'
 end 'maxonTypeIsKnown'
 
@@ -1387,6 +1490,7 @@ function numericKindOf(project Project, t MaxonType) returns NumericKind
 		typeParameter gives NumericKind.notNumeric
 		genericInstance gives NumericKind.notNumeric
 		interface gives NumericKind.notNumeric
+		constInt gives NumericKind.notNumeric
 	end 'check'
 end 'numericKindOf'
 
@@ -2191,8 +2295,20 @@ end 'lookupProducerType'
 // Record a varDecl: store the slot's effective type (concrete if known,
 // otherwise the producer's recorded type from the value name) into the
 // slot-type map. Subsequent varLoads on the same slot read from this map.
-function recordVarDecl(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray, slotType MaxonType)
+//
+// Phase 15e: when the parser-stamped slotType is a bare `__TupleN` named type
+// but the producer-type has already been upgraded to a fully-specialised
+// `genericInstance(__TupleN, [...])`, prefer the producer's view so downstream
+// fieldLoad type-flow can substitute `_T0`/`_T1`/... typeParameter fields
+// through to their concrete arg types. The parser can't intern the
+// genericInstance because element types are unresolved at parse time.
+function recordVarDecl(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slotId VarSlot, value ByteArray, slotType MaxonType)
 	if not isUnresolvedType(slotType) 'haveType'
+		let fromValue = lookupProducerType(producerTypes, name: value)
+		if maxonTypeIsBareTupleNamed(project, t: slotType) and maxonTypeIsTupleGenericInstance(project, t: fromValue) 'preferRefined'
+			slotTypes.upsert(slotId, value: fromValue)
+			return
+		end 'preferRefined'
 		slotTypes.upsert(slotId, value: slotType)
 		return
 	end 'haveType'
@@ -2202,11 +2318,59 @@ function recordVarDecl(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, slo
 	end 'fromValue'
 end 'recordVarDecl'
 
+// Phase 15e: helpers used by recordVarDecl to detect the "slot was stamped
+// as the unspecialised `__TupleN` named type, but the producer-type has the
+// specialised generic-instance" case so we can prefer the latter.
+function maxonTypeIsBareTupleNamed(project Project, t MaxonType) returns bool
+	let name = match t 'getName'
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'getName'
+	return isTupleStructName(name)
+end 'maxonTypeIsBareTupleNamed'
+
+function maxonTypeIsTupleGenericInstance(project Project, t MaxonType) returns bool
+	let name = match t 'getName'
+		genericInstance(id) gives genericInstanceBaseName(project, gid: id)
+		boolean to string gives ""
+		function gives ""
+		named gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		interface gives ""
+		constInt gives ""
+	end 'getName'
+	return isTupleStructName(name)
+end 'maxonTypeIsTupleGenericInstance'
+
+function genericInstanceBaseName(project Project, gid GenericInstanceId) returns String
+	let (baseId, _) = project.genericInstances.get(gid)
+	return project.typeNames.get(baseId)
+end 'genericInstanceBaseName'
+
 // Record a varLoad: read the slot's recorded type. If the parser-stamped
 // slotType on the varLoad is concrete, use that; otherwise consult the
 // slot-type map.
-function recordVarLoad(producerTypes ProducerTypeMap, slotTypes SlotTypeMap, result ByteArray, slotId VarSlot, slotType MaxonType)
+//
+// Phase 15e: the parser stamps `__TupleN` varLoads with the bare named type
+// (it doesn't intern a generic-instance at parse time because element types
+// are still unresolved). When the slot-type map has the post-refine
+// `genericInstance(__TupleN, [...])` entry, prefer it so downstream
+// fieldLoad type-flow substitutes the `_T0`/`_T1`/... type-parameter
+// fields against their concrete arg types.
+function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, result ByteArray, slotId VarSlot, slotType MaxonType)
 	if not isUnresolvedType(slotType) 'haveType'
+		let fromSlot = try slotTypes.get(slotId) otherwise MaxonType.unresolved
+		if maxonTypeIsBareTupleNamed(project, t: slotType) and maxonTypeIsTupleGenericInstance(project, t: fromSlot) 'preferRefined'
+			recordResultType(producerTypes, name: result, t: fromSlot)
+			return
+		end 'preferRefined'
 		recordResultType(producerTypes, name: result, t: slotType)
 		return
 	end 'haveType'
@@ -2280,6 +2444,7 @@ export function maxonTypeIsNamed(t MaxonType) returns bool
 		boolean to string gives false
 		function to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsNamed'
 
@@ -2291,6 +2456,7 @@ export function maxonTypeIsGenericInstance(t MaxonType) returns bool
 		function to unresolved gives false
 		typeParameter gives false
 		interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsGenericInstance'
 
@@ -2328,6 +2494,32 @@ end 'promoteNamedToGenericInstance'
 // from cascading into unresolved propagation).
 function methodCallResultType(project Project, receiverType MaxonType, methodName ByteArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, args ByteArrayArray, enclosingType String) returns MaxonType
 	let normReceiver = normalizeReceiverInContext(project, t: receiverType, enclosingType: enclosingType)
+	// Iterator-shape passthrough on an interface receiver: when an
+	// `interface Iface` declares `current()` + `advance()` but no
+	// `createIterator`, `for item in self` inside `extension Iface ...` is
+	// the user's "Iface is its own iterator" pattern. The lowerer aliases
+	// the createIterator result back to the receiver; mirror that here so
+	// the iter slot's MaxonType resolves to the receiver's interface and
+	// downstream `advance` / `current` calls dispatch via witness table.
+	if String.from(methodName) == "createIterator" 'maybeIteratorShapePassthrough'
+		if interfaceReceiverIsIteratorShape(project, t: normReceiver) 'isShape'
+			return normReceiver
+		end 'isShape'
+	end 'maybeIteratorShapePassthrough'
+	// Interface receivers: `s.area()` on `s Shape` doesn't qualify through a
+	// concrete struct's funcReturnTypes entry (the interface itself isn't a
+	// struct and the conforming type isn't known at this site — that's the
+	// whole point of dispatch). Without this branch we'd fall through to the
+	// `maxonTypeStructName` / `primitiveExtensionTypeNameWithProject` checks
+	// below, both throw, and the methodCall's producer-type entry stays
+	// `unresolved`. Downstream `fillBinop` then can't derive an operand type
+	// when two interface-dispatched results are combined (`s.area() + s.perimeter()`).
+	// Lookup the method's declared return type on the interface — Phase 11
+	// monomorphization (or witness-table dispatch) preserves this signature
+	// across the lowering boundary.
+	if let interfaceMethodResult = try interfaceMethodResultType(project, receiverType: normReceiver, methodName: methodName) 'fromInterface'
+		return interfaceMethodResult
+	end 'fromInterface'
 	// Phase 11.4 / Phase 7: when the receiver is a primitive
 	// (`int`/`float`/`bool`/`byte`), `maxonTypeStructName` throws and we
 	// fall back to the extension type name registered for the primitive
@@ -2396,9 +2588,184 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	if maxonTypesStructurallyEqual(selfResolved, b: normReceiver) 'selfReturn'
 		return selfResolved
 	end 'selfReturn'
+	// Bare-generic return promotion: when a method on `Map<Key, Value>`
+	// returns `MapIterator` (bare) and `MapIterator` is itself declared
+	// `uses Key, Value`, neither inner-alias nor Self-promotion catches
+	// it — yet downstream layout/witness materialization needs a fully
+	// shaped genericInstance. Promote `named(GenericType)` by pairing
+	// `GenericType`'s param names with typeParameter ids in the
+	// enclosing struct's scope; the upcoming substitution then binds
+	// them through the receiver. Without this, lowering of
+	// `iter.advance()` on a non-generic caller (e.g. `main`) hits
+	// `forwardCallerLayout` with nothing to forward.
+	let scopeResolved = promoteBareGenericReturnToScope(project, t: selfResolved, enclosingStructName: structName)
 	let subst = buildSubstitutionForInstance(project, t: normReceiver)
-	return substituteType(project, t: selfResolved, subst: subst)
+	return substituteType(project, t: scopeResolved, subst: subst)
 end 'methodCallResultType'
+
+// Promote `named(X)` to `genericInstance(X, [typeParameter(<scope>, p)...])`
+// when X is generic and the enclosing scope declares the same param names.
+// The result threads through `buildSubstitutionForInstance`'s scope-keyed
+// bindings; partial overlap means we can't reconstruct a faithful instance
+// and we leave the type as-is for the caller.
+function promoteBareGenericReturnToScope(project Project, t MaxonType, enclosingStructName String) returns MaxonType
+	if not maxonTypeIsNamed(t) 'notNamed'
+		return t
+	end 'notNamed'
+	if enclosingStructName.isEmpty() 'noScope'
+		return t
+	end 'noScope'
+	let targetName = t.nameOrEmpty(project)
+	if targetName.isEmpty() 'noName'
+		return t
+	end 'noName'
+	let targetParams = project.typeParameters.getParamNames(targetName)
+	if targetParams.count() == 0 'notGeneric'
+		return t
+	end 'notGeneric'
+	var args = MaxonTypeArray.create()
+	for i in 0 upto targetParams.count() 'eachParam'
+		let pname = try targetParams.get(i) otherwise panic("promoteBareGenericReturnToScope: targetParams.get OOB at {i}")
+		if not project.typeParameters.contains(enclosingStructName, paramName: pname) 'missingInScope'
+			return t
+		end 'missingInScope'
+		let pid = project.typeParameters.intern(enclosingStructName, paramName: pname)
+		args.push(MaxonType.typeParameter(pid))
+	end 'eachParam'
+	let baseId = project.typeNames.intern(targetName)
+	let gid = project.genericInstances.intern(baseId, args: args)
+	return MaxonType.genericInstance(gid)
+end 'promoteBareGenericReturnToScope'
+
+// True when `t` is an interface receiver whose interface declares both
+// `current()` and `advance()` but no `createIterator` — the user's "this
+// interface is its own iterator" pattern (e.g. `interface HasItems uses
+// Element function current() returns Element function advance() throws ...`).
+// Mirrors `interfaceDeclaresMethodTransitive` in LowerMaxonToStd: the
+// producer-type walk needs to agree with the lowerer about what
+// createIterator returns so the iter-slot's MaxonType lands as the
+// receiver's interface and downstream witness dispatch resolves.
+function interfaceReceiverIsIteratorShape(project Project, t MaxonType) returns bool
+	let interfaceName = match t 'pick'
+		interface(id) gives project.interfaceRegistry.getName(id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		named gives ""
+		genericInstance gives ""
+		constInt gives ""
+	end 'pick'
+	if interfaceName.isEmpty() 'notIface'
+		return false
+	end 'notIface'
+	if interfaceDeclaresMethodInResolved(project, interfaceName: interfaceName, methodName: "createIterator") 'hasCreate'
+		return false
+	end 'hasCreate'
+	if not interfaceDeclaresMethodInResolved(project, interfaceName: interfaceName, methodName: "current") 'noCurrent'
+		return false
+	end 'noCurrent'
+	return interfaceDeclaresMethodInResolved(project, interfaceName: interfaceName, methodName: "advance")
+end 'interfaceReceiverIsIteratorShape'
+
+// Walk an interface's direct methods plus its transitive `extends`
+// parents in the resolved interfaces table. Returns true when any of
+// them declares `methodName`. Used by the iterator-shape passthrough to
+// classify receivers without depending on `unresolvedInterfaces` (which
+// has been drained by the time `methodCallResultType` runs).
+function interfaceDeclaresMethodInResolved(project Project, interfaceName String, methodName String) returns bool
+	var visited = StringArray.create()
+	return interfaceDeclaresMethodInResolvedHelper(project, interfaceName: interfaceName, methodName: methodName, visited: visited)
+end 'interfaceDeclaresMethodInResolved'
+
+function interfaceDeclaresMethodInResolvedHelper(project Project, interfaceName String, methodName String, visited StringArray) returns bool
+	for v in visited 'cycleGuard'
+		if v == interfaceName 'seen'
+			return false
+		end 'seen'
+	end 'cycleGuard'
+	visited.push(interfaceName)
+	let iface = try project.interfaces.get(interfaceName) otherwise return false
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("interfaceDeclaresMethodInResolvedHelper: methods.get OOB at {i}")
+		if m.name == methodName 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	for j in 0 upto iface.extendsNames.count() 'parents'
+		let parent = try iface.extendsNames.get(j) otherwise panic("interfaceDeclaresMethodInResolvedHelper: extendsNames.get OOB at {j}")
+		if interfaceDeclaresMethodInResolvedHelper(project, interfaceName: parent, methodName: methodName, visited: visited) 'parentMatch'
+			return true
+		end 'parentMatch'
+	end 'parents'
+	return false
+end 'interfaceDeclaresMethodInResolvedHelper'
+
+// Resolve a methodCall result type when the receiver is `MaxonType.interface(_)`.
+// Walks the interface's declared methods (resolved-side only — the parser drains
+// `unresolvedInterfaces` into `interfaces` early in type resolution) and returns
+// the matching signature's value-return MaxonType. Throws `InterfaceMethodLookupError`
+// if the receiver isn't an interface, the interface isn't registered, the method
+// isn't declared on it, or the declared return is `void` — callers fall back to
+// the struct/primitive paths in those cases.
+function interfaceMethodResultType(project Project, receiverType MaxonType, methodName ByteArray) returns MaxonType throws InterfaceMethodLookupError
+	let interfaceName = match receiverType 'pick'
+		interface(id) gives project.interfaceRegistry.getName(id)
+		default throws InterfaceMethodLookupError.notInterface
+	end 'pick'
+	let iface = try project.interfaces.get(interfaceName) otherwise throw InterfaceMethodLookupError.notInterface
+	let methodNameStr = String.from(methodName)
+	for i in 0 upto iface.methods.count() 'scan'
+		let m = try iface.methods.get(i) otherwise panic("interfaceMethodResultType: methods.get OOB at {i} (interface={interfaceName})")
+		if m.name == methodNameStr 'hit'
+			let raw = match m.returnType 'unwrap'
+				value(inner) gives inner
+				default throws InterfaceMethodLookupError.voidReturn
+			end 'unwrap'
+			return promoteInterfaceUsesParamRef(project, t: raw, interfaceName: interfaceName)
+		end 'hit'
+	end 'scan'
+	throw InterfaceMethodLookupError.methodNotFound
+end 'interfaceMethodResultType'
+
+// Interface bodies are parsed with `currentTypeParams = []`, so a bare
+// reference to one of the interface's `uses` parameters (e.g. `Element`
+// in `function current() returns Element`) lands as `named(Element)`
+// instead of `typeParameter(...)`. When this type later flows out as a
+// producer-type, downstream cmp/cast validators (`maxonTypeIsKnown`) reject
+// the `named` arm because "Element" isn't a registered named type.
+// Promote `named(usesParamName)` → `typeParameter(intern(IfaceName, name))`
+// at the interface-result boundary so the producer-type map carries the
+// real generic shape the user wrote.
+function promoteInterfaceUsesParamRef(project Project, t MaxonType, interfaceName String) returns MaxonType
+	let name = match t 'pick'
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'pick'
+	if name.isEmpty() 'notNamed'
+		return t
+	end 'notNamed'
+	let iface = try project.interfaces.get(interfaceName) otherwise return t
+	for i in 0 upto iface.usesParams.count() 'scan'
+		let p = try iface.usesParams.get(i) otherwise panic("promoteInterfaceUsesParamRef: usesParams.get OOB at {i} (interface={interfaceName})")
+		if p == name 'hit'
+			return MaxonType.typeParameter(project.typeParameters.intern(interfaceName, paramName: name))
+		end 'hit'
+	end 'scan'
+	return t
+end 'promoteInterfaceUsesParamRef'
+
+enum InterfaceMethodLookupError implements Error
+	notInterface
+	methodNotFound
+	voidReturn
+end 'InterfaceMethodLookupError'
 
 // Promote `Self`-shaped return types to the receiver's full
 // `genericInstance(...)` shape. The parser collapses `Self` to
@@ -2440,6 +2807,7 @@ export function normalizeReceiverInContext(project Project, t MaxonType, enclosi
 		named(id) gives normalizeNamedReceiver(project, id: id, enclosingType: enclosingType)
 		boolean to string gives t
 		function to interface gives t
+		constInt gives t
 	end 'norm'
 end 'normalizeReceiverInContext'
 
@@ -2464,7 +2832,18 @@ function normalizeNamedReceiver(project Project, id TypeNameId, enclosingType St
 end 'normalizeNamedReceiver'
 
 function tryGenericTypealias(project Project, name String, fallbackId TypeNameId) returns MaxonType
-	let resolved = try project.genericTypealiases.get(name) otherwise return tryAnyStructInnerAlias(project, name: name, fallbackId: fallbackId)
+	let resolved = try project.genericTypealiases.get(name) otherwise 'noAlias'
+		// When `name` is a real top-level struct/enum, treat it as that named
+		// type — do NOT fall through to `tryAnyStructInnerAlias`, which would
+		// pick up an arbitrary other struct's inner-alias with the same name
+		// (e.g. user's `type Entry` collides with `Map.typealias Entry = (Key,Value)`).
+		// Returning the named id preserves the struct identity for the
+		// downstream `maxonTypeStructName` lookup.
+		if project.structTypes.contains(name) or project.enumTypes.contains(name) or project.unresolvedEnums.contains(name) 'isNamed'
+			return MaxonType.named(fallbackId)
+		end 'isNamed'
+		return tryAnyStructInnerAlias(project, name: name, fallbackId: fallbackId)
+	end 'noAlias'
 	return resolved
 end 'tryGenericTypealias'
 
@@ -2541,14 +2920,22 @@ end 'firstOverloadVariant'
 // looking it up in funcReturnTypes. Returns MaxonType.unresolved when the
 // callee isn't registered. First-param overload disambiguation kicks in
 // when the qualified name is registered in `overloadedNames`.
-function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns MaxonType
+function callResultType(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingType String) returns MaxonType
 	let bareCallee = String.from(callee)
-	// Math primitives are inlined to a Std unary op by lowering — they have
-	// no entry in funcReturnTypes, so look up their result type directly.
+	// Math primitives are inlined to a Std unary/binary op by lowering — they
+	// have no entry in funcReturnTypes, so look up their result type directly.
 	if let hit = try mathIntrinsicTarget(bare: bareCallee) 'isMath'
 		return hit.resultType
 	end 'isMath'
-	let qualifiedRaw = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	if let binaryHit = try mathBinaryIntrinsicTarget(bare: bareCallee) 'isMathBinary'
+		return binaryHit.resultType
+	end 'isMathBinary'
+	// Forward enclosingType through `qualifyCalleeForContext` so a qualified
+	// callee headed by an inner typealias (e.g. `MyArr.create()` where
+	// `MyArr` is declared inside `Foo`) chases through the enclosing
+	// struct's `innerAliases` to land on `Array.create` — the actual
+	// `funcReturnTypes` key.
+	let (qualifiedRaw, _) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingType)
 	let qualified = resolveOverloadFromArgs(project, bareName: qualifiedRaw, args: args, argTypes: argTypes, producerTypes: producerTypes, hasSelf: false)
 	let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
 	return match returnType 'unwrap'
@@ -2641,6 +3028,7 @@ function elementTypeForIterable(project Project, t MaxonType) returns MaxonType
 		unresolved gives MaxonType.unresolved
 		typeParameter gives MaxonType.unresolved
 		interface gives MaxonType.unresolved
+		constInt gives MaxonType.unresolved
 	end 'pick'
 end 'elementTypeForIterable'
 
@@ -2691,7 +3079,7 @@ end 'resolveFieldTypeInContext'
 // Phase 11.1 step 5e: when `t` is a `MaxonType.named(name)` and `name`
 // matches an inner-typealias on the surrounding struct, return the
 // resolved MaxonType. Otherwise pass through unchanged.
-function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases ResolvedInnerAliasMap) returns MaxonType
+export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases ResolvedInnerAliasMap) returns MaxonType
 	if innerAliases.count() == 0 'empty'
 		return t
 	end 'empty'
@@ -2703,6 +3091,7 @@ function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliases Resol
 		typeParameter gives t
 		genericInstance(gid) gives applyInnerAliasInGenericInstance(project, gid: gid, innerAliases: innerAliases)
 		interface gives t
+		constInt gives t
 	end 'check'
 end 'applyInnerAliasIfNamed'
 
@@ -2815,16 +3204,20 @@ end 'buildProducerTypes'
 
 function recordFuncOpResults(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
+	// Phase 15e: per-function side-table that tracks `(receiver -> partial
+	// args)` for in-progress `__TupleN` allocations. Lives in this stack
+	// frame so the partial state never leaks across function boundaries.
+	var tuplePartialArgs = TuplePartialArgsMap.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("recordFuncOpResults: blockRef OOB")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("recordFuncOpResults: opIdx OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: op)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: op)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
 			let termOp = try module.ops.get(termIdx) otherwise panic("recordFuncOpResults: terminator OOB")
-			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: termOp)
+			recordOpResult(project, producerTypes: producerTypes, slotTypes: slotTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: func.namespace, enclosingType: enclosingType, readerFilePath: func.sourceFilePath, funcName: func.name, op: termOp)
 		end 'hasTerm'
 	end 'eachBlock'
 end 'recordFuncOpResults'
@@ -2870,7 +3263,7 @@ end 'byteStringLiteralResultType'
 // `arrayLiteralProducers` lookup wouldn't find. Falls through to
 // `callResultType` for every call whose result name isn't tracked in
 // either map.
-function callOrArrayLiteralResultType(project Project, funcName String, name ByteArray, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns MaxonType
+function callOrArrayLiteralResultType(project Project, funcName String, name ByteArray, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingType String) returns MaxonType
 	let pinnedMap = mapLiteralResultType(project, funcName: funcName, name: name, producerTypes: producerTypes)
 	if not isUnresolvedType(pinnedMap) 'gotMapPin'
 		return pinnedMap
@@ -2879,7 +3272,7 @@ function callOrArrayLiteralResultType(project Project, funcName String, name Byt
 	if not isUnresolvedType(pinned) 'gotPin'
 		return pinned
 	end 'gotPin'
-	let raw = callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes)
+	let raw = callResultType(project, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes, enclosingType: enclosingType)
 	// Static factories like `IntArray.create()` register their return as
 	// `named(Array)` (the parser collapses `Self` to the enclosing
 	// type's bare name). When the call's qualified head was a generic
@@ -2888,7 +3281,17 @@ function callOrArrayLiteralResultType(project Project, funcName String, name Byt
 	// recorded by `resolveAllCalls`. Without this, the variable bound
 	// to the call result drops to `named(Array)` and downstream
 	// methodCalls can't recover the layout-arg binding.
-	return refineStaticReturnFromQualifiedCallee(project, returnType: raw, callee: callee, callContext: callContext)
+	let refined = refineStaticReturnFromQualifiedCallee(project, returnType: raw, callee: callee, callContext: callContext, enclosingType: enclosingType)
+	// Generic inference for static factories that take a bound arg whose
+	// type pins the enclosing struct's type parameters — `Set from [1,2,3]`
+	// emits `Set.init(arr)` where the arg's type is
+	// `genericInstance(Array, [Int])` and `Set.init`'s signature param is
+	// `Array with Element`. Unify (param, arg) pairs to recover
+	// `Element = Int`, then build `genericInstance(Set, [Int])` for the
+	// call's result type. Lets `parseFromLiteralCall`-emitted callsites
+	// reach lowering with a concrete receiver context instead of the bare
+	// `named(Set)` that would trip `forwardCallerLayout`.
+	return inferGenericReturnFromArgs(project, returnType: refined, callee: callee, callContext: callContext, args: args, argTypes: argTypes, producerTypes: producerTypes)
 end 'callOrArrayLiteralResultType'
 
 // Promote a static-method return type from `named(X)` to
@@ -2897,14 +3300,174 @@ end 'callOrArrayLiteralResultType'
 // `chaseTypealiasInQualifiedCalleeWithType`, which is the same lookup
 // `resolveAllCalls` does — so this stays consistent with the
 // receiverContext that lowering threads to the call site.
-function refineStaticReturnFromQualifiedCallee(project Project, returnType MaxonType, callee ByteArray, callContext CallContext) returns MaxonType
+function refineStaticReturnFromQualifiedCallee(project Project, returnType MaxonType, callee ByteArray, callContext CallContext, enclosingType String) returns MaxonType
 	if not isQualifiedCallContext(callContext) 'notQualified'
 		return returnType
 	end 'notQualified'
 	let bareCallee = String.from(callee)
-	let (_, receiverType) = chaseTypealiasInQualifiedCalleeWithType(project, callee: bareCallee, enclosingType: "")
+	// Forward the caller's enclosingType so an inner typealias declared on
+	// the enclosing struct (e.g. `Foo.typealias MyArr = Array with String`,
+	// referenced inside `Foo.makeArr` as `MyArr.create()`) chases through
+	// the per-struct innerAliases map. Empty for free functions.
+	let (_, receiverType) = chaseTypealiasInQualifiedCalleeWithType(project, callee: bareCallee, enclosingType: enclosingType)
 	return promoteNamedToGenericInstance(project, raw: returnType, candidate: receiverType)
 end 'refineStaticReturnFromQualifiedCallee'
+
+// Infer generic type-parameter bindings for a static-factory call `T.init(args)`
+// (or any `T.method` returning `Self`) by unifying the callee's declared
+// signature param types against the actual arg types. When the return type
+// is still `named(T)` (because the chase didn't recover bindings from a
+// typealias head) and T declares `uses Param1, ...`, walk the (param, arg)
+// pairs and accumulate bindings for any `typeParameter(T.Param_i)` slot
+// reachable inside a `genericInstance` param shape. If a complete binding
+// is recovered, return `genericInstance(T, [bound...])`; otherwise return
+// the input unchanged. Mirrors what the `from-literal` parser would have
+// done if it had access to the callee's signature at parse time.
+function inferGenericReturnFromArgs(project Project, returnType MaxonType, callee ByteArray, callContext CallContext, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns MaxonType
+	if not isQualifiedCallContext(callContext) 'notQualified'
+		return returnType
+	end 'notQualified'
+	if not maxonTypeIsNamed(returnType) 'notBareNamed'
+		return returnType
+	end 'notBareNamed'
+	let typeName = returnType.nameOrEmpty(project)
+	if typeName.isEmpty() 'noName'
+		return returnType
+	end 'noName'
+	let paramNames = project.typeParameters.getParamNames(typeName)
+	if paramNames.count() == 0 'notGeneric'
+		return returnType
+	end 'notGeneric'
+	let signature = try project.funcSignatures.get(String.from(callee)) otherwise return returnType
+	let subst = inferSubstitutionFromCallArgs(project, declaringTypeName: typeName, signature: signature, args: args, argTypes: argTypes, producerTypes: producerTypes)
+	if subst.count() != paramNames.count() 'incomplete'
+		return returnType
+	end 'incomplete'
+	var instanceArgs = MaxonTypeArray.create()
+	for i in 0 upto paramNames.count() 'collect'
+		let pname = try paramNames.get(i) otherwise panic("inferGenericReturnFromArgs: paramNames.get OOB at {i}")
+		let pid = project.typeParameters.intern(typeName, paramName: pname)
+		instanceArgs.push(subst.lookup(pid))
+	end 'collect'
+	let baseId = project.typeNames.intern(typeName)
+	let gid = project.genericInstances.intern(baseId, args: instanceArgs)
+	return MaxonType.genericInstance(gid)
+end 'inferGenericReturnFromArgs'
+
+// Walk the callee's signature against the call's argument types and
+// produce a substitution binding each `typeParameter(declaringTypeName.X)`
+// it encounters to the actual concrete type observed in the matching arg
+// slot. Used by `inferGenericReturnFromArgs` to recover type parameters
+// when the return type is `named(T)` and T's type-parameter slots only
+// appear inside the parameter types. The signature's leading `__self`
+// slot (if any) is skipped so user-arg indices align with `args`.
+function inferSubstitutionFromCallArgs(project Project, declaringTypeName String, signature FuncSignature, args ByteArrayArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap) returns TypeSubstitution
+	var subst = TypeSubstitution.create()
+	// Inner typealias resolution: `Set.init`'s `arr ElementArray` registers
+	// its paramType as `named(ElementArray)`, the inner-alias placeholder.
+	// Resolve through the enclosing struct's innerAliases so unification
+	// sees the real `genericInstance(Array, [typeParameter(Element)])` shape.
+	var innerAliases = ResolvedInnerAliasMap.create()
+	if let st = try project.structTypes.get(declaringTypeName) 'haveStruct'
+		innerAliases = st.innerAliases
+	end 'haveStruct'
+	var startIdx = 0
+	if signature.paramNames.count() > 0 'maybeSelf'
+		let firstName = try signature.paramNames.get(0) otherwise ""
+		if firstName == "__self" 'isSelf'
+			startIdx = 1
+		end 'isSelf'
+	end 'maybeSelf'
+	let userParamCount = signature.paramTypes.count() - startIdx
+	let argCount = argTypes.count()
+	var limit = userParamCount
+	if argCount < limit 'pickFewer'
+		limit = argCount
+	end 'pickFewer'
+	for i in 0 upto limit 'unifyLoop'
+		let rawParamType = try signature.paramTypes.get(i + startIdx) otherwise panic("inferSubstitutionFromCallArgs: paramTypes.get OOB at {i + startIdx}")
+		let paramType = applyInnerAliasIfNamed(project, t: rawParamType, innerAliases: innerAliases)
+		var argType = try argTypes.get(i) otherwise panic("inferSubstitutionFromCallArgs: argTypes.get OOB at {i}")
+		if isUnresolvedType(argType) 'fallback'
+			let argName = try args.get(i) otherwise ByteArray.create()
+			if argName.count() > 0 'haveName'
+				argType = lookupProducerType(producerTypes, name: argName)
+			end 'haveName'
+		end 'fallback'
+		unifyParamWithArg(project, declaringTypeName: declaringTypeName, paramType: paramType, argType: argType, subst: subst)
+	end 'unifyLoop'
+	return subst
+end 'inferSubstitutionFromCallArgs'
+
+// One-step structural unification of a callee param type against an
+// actual arg type, accumulating `typeParameter(declaringTypeName.X)`
+// bindings into `subst`. Recurses through `genericInstance` arg lists
+// when the base ids match. A binding is only added on the first sighting
+// of each type-parameter id — duplicate slots that disagree are silently
+// ignored (the caller's substitution-count check downstream catches
+// incomplete unifications). Non-typeParameter param arms with mismatched
+// arg shapes are dropped without error: this routine is best-effort
+// inference, not constraint validation.
+function unifyParamWithArg(project Project, declaringTypeName String, paramType MaxonType, argType MaxonType, subst TypeSubstitution)
+	match paramType 'paramShape'
+		typeParameter(pid) then unifyBindParam(project, declaringTypeName: declaringTypeName, pid: pid, argType: argType, subst: subst)
+		genericInstance(pgid) then unifyGenericInstance(project, declaringTypeName: declaringTypeName, paramGid: pgid, argType: argType, subst: subst)
+		boolean to string then return
+		named then return
+		function then return
+		unresolved then return
+		interface then return
+		constInt then return
+	end 'paramShape'
+end 'unifyParamWithArg'
+
+function unifyBindParam(project Project, declaringTypeName String, pid TypeParamId, argType MaxonType, subst TypeSubstitution)
+	if isUnresolvedType(argType) 'noBind'
+		return
+	end 'noBind'
+	// Only bind type-parameters declared on the enclosing struct; the
+	// signature may also reference type-parameters from outer scopes
+	// (interface usesParams, where-clause forwards) that shouldn't
+	// contribute to this struct's instantiation.
+	let ownerName = project.typeParameters.getOwner(pid)
+	if ownerName != declaringTypeName 'foreign'
+		return
+	end 'foreign'
+	if not isUnresolvedType(subst.lookup(pid)) 'alreadyBound'
+		return
+	end 'alreadyBound'
+	subst.bind(pid, concrete: argType)
+end 'unifyBindParam'
+
+function unifyGenericInstance(project Project, declaringTypeName String, paramGid GenericInstanceId, argType MaxonType, subst TypeSubstitution)
+	match argType 'argShape'
+		genericInstance(argGid) then unifyGenericInstanceArgs(project, declaringTypeName: declaringTypeName, paramGid: paramGid, argGid: argGid, subst: subst)
+		boolean to string then return
+		named then return
+		function then return
+		unresolved then return
+		typeParameter then return
+		interface then return
+		constInt then return
+	end 'argShape'
+end 'unifyGenericInstance'
+
+function unifyGenericInstanceArgs(project Project, declaringTypeName String, paramGid GenericInstanceId, argGid GenericInstanceId, subst TypeSubstitution)
+	let (paramBaseId, paramArgs) = project.genericInstances.get(paramGid)
+	let (argBaseId, argArgs) = project.genericInstances.get(argGid)
+	if paramBaseId != argBaseId 'differentBase'
+		return
+	end 'differentBase'
+	var limit = paramArgs.count()
+	if argArgs.count() < limit 'pickFewer'
+		limit = argArgs.count()
+	end 'pickFewer'
+	for i in 0 upto limit 'eachArg'
+		let p = try paramArgs.get(i) otherwise panic("unifyGenericInstanceArgs: paramArgs.get OOB at {i}")
+		let a = try argArgs.get(i) otherwise panic("unifyGenericInstanceArgs: argArgs.get OOB at {i}")
+		unifyParamWithArg(project, declaringTypeName: declaringTypeName, paramType: p, argType: a, subst: subst)
+	end 'eachArg'
+end 'unifyGenericInstanceArgs'
 
 // Look up the array-literal entry under `(funcName, name)` and, if found,
 // return the matching `genericInstance(...)` shape. The parser writes the
@@ -3195,15 +3758,164 @@ function deriveUnopResultType(producerTypes ProducerTypeMap, operandType MaxonTy
 	return lookupProducerType(producerTypes, name: operand)
 end 'deriveUnopResultType'
 
-function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, currentNamespace String, enclosingType String, readerFilePath FilePath, funcName String, op MaxonOp)
+typealias TuplePartialArgsMap = Map with(ByteArray, MaxonTypeArray)
+
+// Phase 15e: track tuple-allocation field stores by collecting the value type
+// for each `_N` field via a per-function `tuplePartialArgs` side-table. The
+// staged partial args stay private to this pass (they never reach
+// project.genericInstances), so BuildWitnessTables doesn't see half-resolved
+// __TupleN gids. Once every slot is filled with a concrete arg type, the
+// receiver's producer-type is upgraded from `MaxonType.named("__TupleN")` to
+// `MaxonType.genericInstance(__TupleN, [T0..TN])` and the side-table entry is
+// dropped.
+function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, tuplePartialArgs TuplePartialArgsMap, currentNamespace String, receiver ByteArray, fieldName ByteArray, value ByteArray)
+	// Phase 15e: only refine inside the user pipeline. Stdlib functions go
+	// through this same TypeResolution pass during cache build, and any new
+	// genericInstance entry interned here gets serialised to disk. On cache
+	// hit, those entries are recreated via `readMaxonGenericInstance` (which
+	// re-interns through structural identity). If the user-pipeline run
+	// doesn't observe the same tuple shapes during stdlib re-compile (which
+	// it can't — the cache hit short-circuits that work), captured
+	// layoutDescriptor / witnessTable gids would dangle. Keep refinement
+	// scoped to non-stdlib code so the stdlib cache stays deterministic.
+	if currentNamespace == "stdlib" 'isStdlib'
+		return
+	end 'isStdlib'
+	let receiverType = lookupProducerType(producerTypes, name: receiver)
+	let receiverName = match receiverType 'extractBase'
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'extractBase'
+	if not isTupleStructName(receiverName) 'notTuple'
+		return
+	end 'notTuple'
+	let fieldIdx = try tupleFieldIndex(fieldName) otherwise return
+	let arity = tupleStructArity(receiverName)
+	if fieldIdx >= arity 'oob'
+		return
+	end 'oob'
+	let valueType = lookupProducerType(producerTypes, name: value)
+	if not isConcreteTupleArgType(valueType) 'notConcrete'
+		// Generic-context tuples (stdlib's `(k, v)` where k/v are type
+		// parameters, or values whose type hasn't been resolved yet) stay
+		// `MaxonType.named("__TupleN")`. Introducing a generic-instance entry
+		// with `typeParameter` / `unresolved` args would feed BuildWitnessTables
+		// a non-conditional gid that lowering can't synthesize a witness for.
+		return
+	end 'notConcrete'
+	var args = cloneTupleArgs(try tuplePartialArgs.get(receiver) otherwise seedTupleArgs(arity))
+	try args.set(fieldIdx, value: valueType) otherwise return
+	if not allConcreteTupleArgs(args) 'incomplete'
+		tuplePartialArgs.upsert(receiver, value: args)
+		return
+	end 'incomplete'
+	_ = tuplePartialArgs.remove(receiver)
+	let baseId = project.typeNames.intern(receiverName)
+	let newGid = project.genericInstances.intern(baseId, args: args)
+	recordResultType(producerTypes, name: receiver, t: MaxonType.genericInstance(newGid))
+end 'refineTupleStructAlloc'
+
+function seedTupleArgs(arity TupleArity) returns MaxonTypeArray
+	var seeded = MaxonTypeArray.create()
+	for _ in 0 upto arity 'seed'
+		seeded.push(MaxonType.unresolved)
+	end 'seed'
+	return seeded
+end 'seedTupleArgs'
+
+// Deep-copy a stored arg list before mutating it so the borrow-checker doesn't
+// flag the subsequent `upsert` on the side-table.
+function cloneTupleArgs(src MaxonTypeArray) returns MaxonTypeArray
+	var copy = MaxonTypeArray.create()
+	for i in 0 upto src.count() 'each'
+		let a = try src.get(i) otherwise MaxonType.unresolved
+		copy.push(a)
+	end 'each'
+	return copy
+end 'cloneTupleArgs'
+
+function isConcreteTupleArgType(t MaxonType) returns bool
+	return match t 'check'
+		boolean to string gives true
+		named gives true
+		function gives true
+		genericInstance gives true
+		interface gives true
+		unresolved gives false
+		typeParameter gives false
+		constInt gives true
+	end 'check'
+end 'isConcreteTupleArgType'
+
+function allConcreteTupleArgs(args MaxonTypeArray) returns bool
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise return false
+		if not isConcreteTupleArgType(a) 'notConcrete'
+			return false
+		end 'notConcrete'
+	end 'each'
+	return true
+end 'allConcreteTupleArgs'
+
+// `__TupleN` where N is a digit string (2 or 3 today; future arities follow the
+// same shape). Mirrors the parser's `parseParenExpr` tuple-literal emission.
+function isTupleStructName(name String) returns bool
+	if not name.startsWith("__Tuple") 'noPrefix'
+		return false
+	end 'noPrefix'
+	return tupleStructArity(name) >= 2
+end 'isTupleStructName'
+
+typealias TupleArity = int(0 to u64.max)
+typealias TupleFieldOrdinal = int(0 to u64.max)
+
+enum TupleFieldNameError implements Error
+	notTupleField
+end 'TupleFieldNameError'
+
+// Lookup-table approach: tuple arity is bounded by what the parser emits
+// (today `__Tuple2`, `__Tuple3`; expand the table when higher-arity literals
+// land). Kept simple to avoid coupling to a generic int-parse stdlib helper.
+let knownTupleArities = [2, 3, 4, 5, 6, 7, 8, 9]
+
+function tupleStructArity(name String) returns TupleArity
+	for arity in knownTupleArities 'each'
+		if name == "__Tuple{arity}" 'match'
+			return arity
+		end 'match'
+	end 'each'
+	return 0
+end 'tupleStructArity'
+
+// Tuple field names are `_0`, `_1`, ...; throws if the field name doesn't
+// follow the pattern (callers use `try ... otherwise return` to short-circuit).
+function tupleFieldIndex(fieldName ByteArray) returns TupleFieldOrdinal throws TupleFieldNameError
+	let nameStr = String.from(fieldName)
+	for arity in knownTupleArities 'each'
+		for i in 0 upto arity 'eachIdx'
+			if nameStr == "_{i}" 'match'
+				return i
+			end 'match'
+		end 'eachIdx'
+	end 'each'
+	throw TupleFieldNameError.notTupleField
+end 'tupleFieldIndex'
+
+function recordOpResult(project Project, producerTypes ProducerTypeMap, slotTypes SlotTypeMap, tuplePartialArgs TuplePartialArgsMap, currentNamespace String, enclosingType String, readerFilePath FilePath, funcName String, op MaxonOp)
 	match op 'rec'
 		literal(result, _, valueType, _) then recordResultType(producerTypes, name: result, t: valueType)
 		stringConst(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
 		charLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern("Character")))
 		byteStringLiteral(result, _, _) then recordResultType(producerTypes, name: result, t: byteStringLiteralResultType(project))
 		stringInterp(result, _, _) then recordResultType(producerTypes, name: result, t: stringConstResultType(project))
-		varDecl(slotId, value, slotType, _) then recordVarDecl(producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
-		varLoad(result, slotId, slotType, _) then recordVarLoad(producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
+		varDecl(slotId, value, slotType, _) then recordVarDecl(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value, slotType: slotType)
+		varLoad(result, slotId, slotType, _) then recordVarLoad(project, producerTypes: producerTypes, slotTypes: slotTypes, result: result, slotId: slotId, slotType: slotType)
 		varStore(slotId, value, _) then recordVarStore(project, producerTypes: producerTypes, slotTypes: slotTypes, slotId: slotId, value: value)
 		globalLoad(result, _, slotType, _) then recordResultType(producerTypes, name: result, t: slotType)
 		globalStore then return
@@ -3214,13 +3926,13 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		refEq(result, _, _, _, _) then recordResultType(producerTypes, name: result, t: MaxonType.boolean)
 		condBr then return
 		br then return
-		call(result, callee, callContext, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: callOrArrayLiteralResultType(project, funcName: funcName, name: result, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
-		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
+		call(result, callee, callContext, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: callOrArrayLiteralResultType(project, funcName: funcName, name: result, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes, enclosingType: enclosingType))
+		methodCall(result, receiver, methodName, args, _, argTypes, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		ret then return
 		panic then return
 		structAlloc(result, structName, _) then recordResultType(producerTypes, name: result, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
 		fieldLoad(result, receiver, fieldName, _) then recordResultType(producerTypes, name: result, t: fieldLoadResultType(project, receiverType: normalizeReceiverInContext(project, t: lookupProducerType(producerTypes, name: receiver), enclosingType: enclosingType), fieldName: fieldName))
-		fieldStore then return
+		fieldStore(receiver, fieldName, value, _, _) then refineTupleStructAlloc(project, producerTypes: producerTypes, tuplePartialArgs: tuplePartialArgs, currentNamespace: currentNamespace, receiver: receiver, fieldName: fieldName, value: value)
 		selfFieldLoad(result, fieldName, _) then recordResultType(producerTypes, name: result, t: selfFieldLoadResultType(project, enclosingType: enclosingType, fieldName: fieldName))
 		selfFieldStore then return
 		unresolvedRead then return
@@ -3239,8 +3951,8 @@ function recordOpResult(project Project, producerTypes ProducerTypeMap, slotType
 		enumPayloadStore then return
 		error then return
 		throw then return
-		tryCall(result, callee, callContext, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: callOrArrayLiteralResultType(project, funcName: funcName, name: result, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes))
-		tryMethodCall(result, receiver, methodName, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: lookupProducerType(producerTypes, name: receiver), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
+		tryCall(result, callee, callContext, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: callOrArrayLiteralResultType(project, funcName: funcName, name: result, callee: callee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, args: args, argTypes: argTypes, producerTypes: producerTypes, enclosingType: enclosingType))
+		tryMethodCall(result, receiver, methodName, args, _, argTypes, _, _, _) then recordResultType(producerTypes, name: result, t: methodCallResultType(project, receiverType: retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName), methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, args: args, enclosingType: enclosingType))
 		rethrow then return
 		// Stage E (closures): each closure op's result type derives directly
 		// from a field on the op itself, so the producer-type map gets a
@@ -3305,7 +4017,187 @@ function resolveUnresolvedFunctionReturnTypes(project Project, module MaxonModul
 		func.maxonReturnType = newReturn
 		project.funcReturnTypes.upsert(func.name, value: newReturn)
 	end 'eachFunc'
+	// Stage E (closures): the parser interned each lifted closure's
+	// FunctionTypeRegistry entry with the (then-unresolved) body type.
+	// Now that every lifted function's `maxonReturnType` is concrete,
+	// walk closureCreate / functionRef ops and re-stamp the carried
+	// `fnTypeId`'s return type so indirect-call sites and
+	// MaxonType.function(id) consumers see the resolved signature.
+	patchFunctionTypeRegistryReturns(project, module: module)
 end 'resolveUnresolvedFunctionReturnTypes'
+
+function patchFunctionTypeRegistryReturns(project Project, module MaxonModule)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("patchFunctionTypeRegistryReturns: functions.get OOB")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("patchFunctionTypeRegistryReturns: blocks.get OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("patchFunctionTypeRegistryReturns: ops.get OOB at {opIdx}")
+				maybePatchFnRegistryForOp(project, op: op)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'patchFunctionTypeRegistryReturns'
+
+// Inspect a single op; when it's a `functionRef` or `closureCreate`, route
+// the captured funcName + fnTypeId pair through the registry-patch helper.
+// Every other op shape is a no-op for this pass.
+function maybePatchFnRegistryForOp(project Project, op MaxonOp)
+	match op 'pick'
+		literal to rethrow then return
+		functionRef(_, funcName, fnTypeId, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
+		closureCreate(_, funcName, fnTypeId, _, _, _) then patchFnRegistryEntryIfUnresolved(project, funcName: funcName, fnTypeId: fnTypeId)
+		closureEnvLoad to forInIterable then return
+	end 'pick'
+end 'maybePatchFnRegistryForOp'
+
+// Stage E (closures): walk every `closureCreate` op in the module, then
+// for each, find the matching lifted function (by funcName) and patch
+// its body's `closureEnvLoad` ops' `captureType` from the outer function's
+// resolved slot/producer types. Re-runs `recordFuncOpResults` on each
+// affected lifted body so downstream consumers (fieldLoad, methodCall)
+// see the fixed receiver type in the producer map.
+function patchClosureEnvLoadCaptureTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
+	// Track lifted closures that needed a fix, so we can re-record their
+	// producer-types in a second pass. (Building the map of capture types
+	// in the first pass and applying them in the second avoids mutating
+	// op storage while iterating producers we may revisit.)
+	var liftedToRebuild = StringArray.create()
+	for outerIdx in 0 upto module.functions.count() 'eachOuter'
+		let outerFunc = try module.functions.get(outerIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: outerIdx OOB")
+		let outerSlots = try slotTypesPerFunc.get(outerIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: outer slotTypes OOB")
+		for blockRef in outerFunc.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("patchClosureEnvLoadCaptureTypes: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: opIdx OOB")
+				match op 'check'
+					closureCreate(_, funcName, _, capturedNames, _, _) then patchOneClosureLifted(module, liftedName: funcName, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots, liftedToRebuild: liftedToRebuild)
+					literal to functionRef then break 'check'
+					closureEnvLoad to forInIterable then break 'check'
+				end 'check'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachOuter'
+	// Re-record producer types for each lifted function we patched. The
+	// fix updates `closureEnvLoad`'s `captureType` field but the
+	// previously-recorded producer-type-map entry was the stale unresolved
+	// value; walking the body again from scratch refreshes downstream
+	// fieldLoad / methodCall result types as well.
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("patchClosureEnvLoadCaptureTypes: funcIdx OOB")
+		if not liftedToRebuild.contains(func.name) 'notLifted'
+			continue
+		end 'notLifted'
+		var freshProducers = ProducerTypeMap.create()
+		var freshSlots = SlotTypeMap.create()
+		recordFuncOpResults(project, module: module, func: func, producerTypes: freshProducers, slotTypes: freshSlots)
+		try producerTypesPerFunc.set(funcIdx, value: freshProducers) otherwise panic("patchClosureEnvLoadCaptureTypes: producerTypesPerFunc.set OOB")
+		try slotTypesPerFunc.set(funcIdx, value: freshSlots) otherwise panic("patchClosureEnvLoadCaptureTypes: slotTypesPerFunc.set OOB")
+	end 'eachFunc'
+end 'patchClosureEnvLoadCaptureTypes'
+
+// Walk the lifted closure body's `closureEnvLoad` ops. For each, look
+// up the captured name's resolved type from the outer function's
+// scope (slot id) → outerSlots / outerProducers, and update the op's
+// captureType field when the parser-stamped type was unresolved.
+function patchOneClosureLifted(module MaxonModule, liftedName String, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap, liftedToRebuild StringArray)
+	// Locate the lifted IrFunction by name.
+	var liftedFuncIdx = -1
+	for funcIdx in 0 upto module.functions.count() 'find'
+		let candidate = try module.functions.get(funcIdx) otherwise panic("patchOneClosureLifted: funcIdx OOB")
+		if candidate.name == liftedName 'match'
+			liftedFuncIdx = funcIdx
+			break
+		end 'match'
+	end 'find'
+	if liftedFuncIdx < 0 'noMatch'
+		return
+	end 'noMatch'
+	let liftedFunc = try module.functions.get(liftedFuncIdx) otherwise panic("patchOneClosureLifted: liftedFuncIdx OOB after find")
+	var anyPatched = false
+	for liftedBlockRef in liftedFunc.blockRefs 'eachLBlock'
+		let liftedBlock = try module.blocks.get(liftedBlockRef) otherwise panic("patchOneClosureLifted: liftedBlockRef OOB")
+		for liftedOpIdx in liftedBlock.opRefs 'eachLOp'
+			let liftedOp = try module.ops.get(liftedOpIdx) otherwise panic("patchOneClosureLifted: liftedOpIdx OOB")
+			if patchOneEnvLoadOp(module, opIdx: liftedOpIdx, op: liftedOp, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots) 'patched'
+				anyPatched = true
+			end 'patched'
+		end 'eachLOp'
+	end 'eachLBlock'
+	if anyPatched 'mark'
+		liftedToRebuild.push(liftedName)
+	end 'mark'
+end 'patchOneClosureLifted'
+
+// Patch a single `closureEnvLoad` op in place when its `captureType` is
+// unresolved and the outer function's resolved slot type carries a concrete
+// answer. Returns true when the op was rewritten so the caller can mark
+// the lifted body for producer-types rebuild.
+function patchOneEnvLoadOp(module MaxonModule, opIdx OpIndex, op MaxonOp, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
+	match op 'pick'
+		closureEnvLoad(result, captureIndex, captureName, captureType, range) then return patchEnvLoadIfNeeded(module, opIdx: opIdx, result: result, captureIndex: captureIndex, captureName: captureName, captureType: captureType, range: range, capturedNames: capturedNames, outerFunc: outerFunc, outerSlots: outerSlots)
+		literal to closureCreate then return false
+		indirectCall to forInIterable then return false
+	end 'pick'
+end 'patchOneEnvLoadOp'
+
+function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArray, captureIndex ParsedInt, captureName ByteArray, captureType MaxonType, range SourceRange, capturedNames StringArray, outerFunc IrFunction, outerSlots SlotTypeMap) returns bool
+	if not isUnresolvedType(captureType) 'haveConcrete'
+		return false
+	end 'haveConcrete'
+	if captureIndex >= capturedNames.count() 'idxOOB'
+		return false
+	end 'idxOOB'
+	let outerName = try capturedNames.get(captureIndex) otherwise panic("patchEnvLoadIfNeeded: capturedNames.get({captureIndex}) failed despite count guard")
+	let resolved = resolveOuterCaptureType(outerFunc: outerFunc, outerSlots: outerSlots, captureName: outerName)
+	if isUnresolvedType(resolved) 'noFix'
+		return false
+	end 'noFix'
+	try module.ops.set(opIdx, value: MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: resolved, range: range)) otherwise panic("patchEnvLoadIfNeeded: ops.set OOB at idx={opIdx}")
+	return true
+end 'patchEnvLoadIfNeeded'
+
+// Find the captured name's resolved MaxonType in the outer function's
+// scope. The parser-stamped scope on `outerFunc.scope` carries the slot
+// id; `outerSlots` is the slot → resolved-type map built by `recordVarDecl`.
+function resolveOuterCaptureType(outerFunc IrFunction, outerSlots SlotTypeMap, captureName String) returns MaxonType
+	if not outerFunc.scope.contains(captureName) 'notInScope'
+		return MaxonType.unresolved
+	end 'notInScope'
+	let info = outerFunc.scope.getInfo(captureName)
+	// Slot type may have been refined past the parser's varType stamp.
+	if let slotType = try outerSlots.get(info.slot) 'fromSlot'
+		if not isUnresolvedType(slotType) 'concrete'
+			return slotType
+		end 'concrete'
+	end 'fromSlot'
+	// Fall back to the parser-stamped scope varType — concrete when the
+	// parser already knew the type (parameter, explicit annotation).
+	if not isUnresolvedType(info.varType) 'fromVarInfo'
+		return info.varType
+	end 'fromVarInfo'
+	return MaxonType.unresolved
+end 'resolveOuterCaptureType'
+
+function patchFnRegistryEntryIfUnresolved(project Project, funcName String, fnTypeId FunctionTypeId)
+	let (_, currentReturn) = project.functionTypes.get(fnTypeId)
+	let stillUnresolved = match currentReturn 'check'
+		void gives false
+		value(inner) gives isUnresolvedType(inner)
+	end 'check'
+	if not stillUnresolved 'alreadyResolved'
+		return
+	end 'alreadyResolved'
+	if let resolved = try project.funcReturnTypes.get(funcName) 'haveResolved'
+		let resolvedUnresolved = match resolved 'r'
+			void gives false
+			value(inner) gives isUnresolvedType(inner)
+		end 'r'
+		if not resolvedUnresolved 'concrete'
+			project.functionTypes.setReturnType(fnTypeId, returnType: resolved)
+		end 'concrete'
+	end 'haveResolved'
+end 'patchFnRegistryEntryIfUnresolved'
 
 // Walk a function's terminators; the first `ret` op's value name yields a
 // concrete type via the producer map. Returns `MaxonType.unresolved` when
@@ -3580,7 +4472,7 @@ function fillStringInterpKinds(project Project, module MaxonModule, opIdx OpInde
 		let part = try parts.get(i) otherwise panic("fillStringInterpKinds: parts.get OOB at {i}")
 		let refined = match part 'refine'
 			literal gives part
-			expr(name, kind) gives refineInterpExprPart(project, original: part, name: name, kind: kind, producerTypes: producerTypes)
+			expr(name, kind, formatSpecId) gives refineInterpExprPart(project, original: part, name: name, kind: kind, formatSpecId: formatSpecId, producerTypes: producerTypes)
 		end 'refine'
 		if not interpPartsEqual(part, b: refined) 'diff'
 			changed = true
@@ -3593,13 +4485,13 @@ function fillStringInterpKinds(project Project, module MaxonModule, opIdx OpInde
 	try module.ops.set(opIdx, value: MaxonOp.stringInterp(result, parts: newParts, range: range)) otherwise panic("fillStringInterpKinds: ops.set OOB at idx={opIdx}")
 end 'fillStringInterpKinds'
 
-function refineInterpExprPart(project Project, original StringInterpPart, name ByteArray, kind InterpExprKind, producerTypes ProducerTypeMap) returns StringInterpPart
+function refineInterpExprPart(project Project, original StringInterpPart, name ByteArray, kind InterpExprKind, formatSpecId StringId, producerTypes ProducerTypeMap) returns StringInterpPart
 	let resolvedType = lookupProducerType(producerTypes, name: name)
 	if isUnresolvedType(resolvedType) 'noProducer'
 		return original
 	end 'noProducer'
 	let refinedKind = interpKindForType(project, t: resolvedType, fallback: kind)
-	return StringInterpPart.expr(name, kind: refinedKind)
+	return StringInterpPart.expr(name, kind: refinedKind, formatSpecId: formatSpecId)
 end 'refineInterpExprPart'
 
 function interpKindForType(project Project, t MaxonType, fallback InterpExprKind) returns InterpExprKind
@@ -3611,6 +4503,7 @@ function interpKindForType(project Project, t MaxonType, fallback InterpExprKind
 		named(id) gives interpKindForNamedTypeName(project, name: project.typeNames.get(id), fallback: fallback)
 		function to unresolved gives fallback
 		typeParameter to interface gives fallback
+		constInt gives fallback
 	end 'k'
 end 'interpKindForType'
 
@@ -3624,6 +4517,31 @@ function interpKindForNamedTypeName(project Project, name String, fallback Inter
 	if name == "bool" 'isBool'
 		return InterpExprKind.bool
 	end 'isBool'
+	// Enum-typed value: lowering emits a select chain mapping the ordinal
+	// to the declared case name. Has to come before the typealias check
+	// because the parser registers every enum as a ranged-int typealias
+	// (so its named-type can flow through cast machinery), and the alias
+	// check would otherwise short-circuit and stringify the raw integer.
+	if project.enumTypes.contains(name) 'isEnum'
+		return InterpExprKind.enumName
+	end 'isEnum'
+	// User type that conforms to Stringable: lowering calls toString() via
+	// the witness table and uses the returned String's buffer/length.
+	// Anything implementing Stringable goes through this arm — including
+	// types declared in user code (`type T implements Stringable`).
+	// `project.conformances` is populated during parse, well before
+	// BuildWitnessTables actually emits the witness blobs — checking
+	// conformance here gives lowering the green light to take the
+	// stringable path, and the witness label always exists by the time
+	// lowering runs. Also runs before the typealias check: the parser
+	// registers user struct types under their bare name in `typealiases`
+	// only when the user wrote an explicit `typealias`; Stringable conformers
+	// declared with `type T implements Stringable` never reach that map,
+	// but be defensive about ordering in case extension-driven aliases land
+	// later.
+	if project.conformances.contains(name, interfaceName: "Stringable") 'isStringable'
+		return InterpExprKind.stringable
+	end 'isStringable'
 	// Resolve user-defined typealiases (e.g. `typealias Real = float`) so
 	// `print("{x}")` picks `mrt_f64_to_string` instead of falling back to the
 	// i64 path. Without this, any aliased numeric return type (Math.pow
@@ -3644,9 +4562,9 @@ function interpPartsEqual(a StringInterpPart, b StringInterpPart) returns bool
 			literal(idB) gives idA == idB
 			expr gives false
 		end 'mB1'
-		expr(_, kindA) gives match b 'mB2'
+		expr(_, kindA, fmtA) gives match b 'mB2'
 			literal gives false
-			expr(_, kindB) gives kindA.ordinal == kindB.ordinal
+			expr(_, kindB, fmtB) gives kindA.ordinal == kindB.ordinal and fmtA == fmtB
 		end 'mB2'
 	end 'mA'
 end 'interpPartsEqual'
@@ -3805,6 +4723,7 @@ export function isUnresolvedType(t MaxonType) returns bool
 		unresolved gives true
 		boolean to function gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'isUnresolvedType'
 
@@ -4100,6 +5019,107 @@ function validateRefEqOperands(project Project, left ByteArray, right ByteArray,
 	end 'bothRef'
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "'is' requires reference types (structs), not primitive values", line: range.line, column: range.column, filePath: filePath)
 end 'validateRefEqOperands'
+
+// --- Arithmetic / bitwise binop operand-type validation ---
+//
+// Arithmetic operators (`+`, `-`, `*`, `/`, `mod`, `shl`, `shr`, `and`, `or`,
+// `xor` as integer-bitwise) are not defined on struct-typed operands.
+// `String` is the canonical struct case — users sometimes try `a + b` for
+// string concatenation; the correct Maxon idiom is `"{a}{b}"` interpolation.
+// Other structs (Character, user types) hit the same arm. Equality / ordering
+// comparisons on structs route through `dispatchEqualityOps` /
+// `maybeRewriteCmpToEquals` and so don't reach this check; the operand-type
+// guard here only inspects `binop` ops.
+function validateBinopOperandTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateBinopOperandTypes: funcIdx OOB")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateBinopOperandTypes: producerTypesPerFunc.get({funcIdx}) failed")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateBinopOperandTypes: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateBinopOperandTypes: opIdx OOB")
+				if op.name != "binop" 'notBinop'
+					continue
+				end 'notBinop'
+				match op 'extract'
+					binop(_, left, right, opKind, operandType, range) then checkBinopOperands(project, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes, filePath: filePath)
+					default panic("unreachable: already checked name == binop")
+				end 'extract'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateBinopOperandTypes'
+
+function checkBinopOperands(project Project, left ByteArray, right ByteArray, opKind BinOpKind, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap, filePath FilePath)
+	// Probe both operand sides since fillBinop's choice of `operandType` may
+	// have favoured one operand; the actual offender we want to name in the
+	// diagnostic is whichever side is a struct.
+	let leftType = lookupProducerType(producerTypes, name: left)
+	let rightType = lookupProducerType(producerTypes, name: right)
+	let leftBlame = blameStructTypeName(project, t: leftType)
+	if not leftBlame.isEmpty() 'leftBlamed'
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{binOpKindToSymbol(opKind)}' is not defined for type '{leftBlame}'", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'leftBlamed'
+	let rightBlame = blameStructTypeName(project, t: rightType)
+	if not rightBlame.isEmpty() 'rightBlamed'
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{binOpKindToSymbol(opKind)}' is not defined for type '{rightBlame}'", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'rightBlamed'
+	// Fall back to the binop's own operandType field when neither operand
+	// resolves through the producer-type map (synthesized binops where the
+	// producer entry wasn't recorded).
+	let opBlame = blameStructTypeName(project, t: operandType)
+	if not opBlame.isEmpty() 'opBlamed'
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "operator '{binOpKindToSymbol(opKind)}' is not defined for type '{opBlame}'", line: range.line, column: range.column, filePath: filePath)
+	end 'opBlamed'
+end 'checkBinopOperands'
+
+// Return the user-visible type name when `t` is a struct-typed operand that
+// arithmetic / bitwise binops aren't defined on. `MaxonType.string` is the
+// String primitive flag — early on, parser-emitted string ops carry this arm
+// directly. Named structs (Character, user types) carry `named(id)` with the
+// id resolving to a registered struct. Returns "" for primitives and for
+// named arms that resolve to a non-struct (typealiases over int/float etc.).
+function blameStructTypeName(project Project, t MaxonType) returns String
+	return match t 'check'
+		string gives "String"
+		named(id) gives blameStructIfRegistered(project, id: id)
+		boolean gives ""
+		integer gives ""
+		float gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'check'
+end 'blameStructTypeName'
+
+function blameStructIfRegistered(project Project, id TypeNameId) returns String
+	let name = project.typeNames.get(id)
+	if project.structTypes.contains(name) 'isStruct'
+		return name
+	end 'isStruct'
+	return ""
+end 'blameStructIfRegistered'
+
+function binOpKindToSymbol(opKind BinOpKind) returns String
+	return match opKind 'sym'
+		add gives "+"
+		sub gives "-"
+		mul gives "*"
+		div gives "/"
+		mod gives "mod"
+		bitAnd gives "and"
+		bitOr gives "or"
+		boolOr gives "or"
+		bitXor gives "xor"
+		shl gives "shl"
+		shr gives "shr"
+	end 'sym'
+end 'binOpKindToSymbol'
 
 // --- Self-field validation ---
 //
@@ -4801,9 +5821,11 @@ function maxonTypeIsRefinementOf(project Project, existing MaxonType, refined Ma
 			function to unresolved gives false
 			typeParameter gives false
 			interface gives false
+			constInt gives false
 		end 'pickRefined'
 		boolean to string gives false
 		function to interface gives false
+		constInt gives false
 	end 'pickExisting'
 end 'maxonTypeIsRefinementOf'
 
@@ -4898,6 +5920,17 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	var producerTypesPerFunc = ProducerTypeMapArray.create()
 	var slotTypesPerFunc = SlotTypeMapArray.create()
 	buildProducerTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+	// Stage E (closures): the parser records each `closureEnvLoad`'s
+	// `captureType` from the outer scope's parser-recorded var type. When
+	// that type was `unresolved` at parse time (typical for locals whose
+	// initializer is a function call whose return type the parser doesn't
+	// compute), the lifted body's downstream `fieldLoad` / `methodCall`
+	// receivers see an unresolved receiver type and downstream lowering
+	// trips the survives-past-TR guard. Patch each closureEnvLoad op's
+	// `captureType` from the outer function's now-resolved slot type, then
+	// re-build the lifted bodies' producer types so the fieldLoad chain
+	// gets the right receiver type.
+	patchClosureEnvLoadCaptureTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 	fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 
 	// Backfill `topLevelVars[name].slotType` for any entry whose slot was
@@ -4936,6 +5969,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// operand types are concrete and refEq operand producers are reachable
 	// through the producer-type map.
 	dispatchEqualityOps(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
+
+	// E3005: emit "operator 'X' is not defined for type 'T'" for any
+	// arithmetic / bitwise binop whose operand type is a struct (String,
+	// user-defined types). Mirrors the C# bootstrap's MaxonValueKind.Struct
+	// guard in its binop emitter; the self-hosted parser doesn't reject
+	// struct-typed binops at parse time (operandType may still be
+	// `unresolved` then), so the check lives here after fillUnresolvedTypes
+	// has filled in the concrete operand types.
+	validateBinopOperandTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 
 	validateSelfFields(project, module: module, filePath: filePath)
 
@@ -5425,7 +6467,7 @@ function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFu
 			let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCalls: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("resolveAllCalls: opIdx OOB")
-				resolveOneCallOp(project, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType)
+				resolveOneCallOp(project, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType, funcName: func.name)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -5435,17 +6477,17 @@ end 'resolveAllCalls'
 // passes other ops through. Centralising here keeps the per-function
 // walker above shape-agnostic and lets future op shapes (Stage E
 // indirect calls) hook in with a single arm.
-function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String)
+function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String)
 	if op.name == "call" 'isCall'
 		match op 'extract'
-			call(result, callee, callContext, _, _, argTypes, _, _) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName)
+			call(result, callee, callContext, args, argLabels, argTypes, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == call")
 		end 'extract'
 		return
 	end 'isCall'
 	if op.name == "methodCall" 'isMethodCall'
 		match op 'extract'
-			methodCall(_, receiver, methodName, _, _, argTypes, _, _) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName)
+			methodCall(_, receiver, methodName, args, argLabels, argTypes, _, range) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == methodCall")
 		end 'extract'
 		return
@@ -5455,7 +6497,7 @@ function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTy
 	// same sidetable entries.
 	if op.name == "tryCall" 'isTryCall'
 		match op 'extract'
-			tryCall(result, callee, callContext, _, _, argTypes, _, _, _) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName)
+			tryCall(result, callee, callContext, args, argLabels, argTypes, _, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == tryCall")
 		end 'extract'
 		return
@@ -5465,7 +6507,7 @@ function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTy
 	// it needs the same sidetable entries.
 	if op.name == "tryMethodCall" 'isTryMethodCall'
 		match op 'extract'
-			tryMethodCall(_, receiver, methodName, _, _, argTypes, _, _, _) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName)
+			tryMethodCall(_, receiver, methodName, args, argLabels, argTypes, _, _, range) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == tryMethodCall")
 		end 'extract'
 		return
@@ -5480,12 +6522,12 @@ end 'resolveOneCallOp'
 // `IntArray.create()`), the chase rewrites the head to the base struct
 // and inner-aliases of the base do still resolve through
 // `applyInnerAliasIfNamed`.
-function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, argTypes MaxonTypeArray, result ByteArray, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String)
+function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, result ByteArray, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String, range SourceRange)
 	let bareCallee = String.from(callee)
 	if shouldSkipCallSite(bareCallee) 'skip'
 		return
 	end 'skip'
-	let (initialQualified, qualifyReceiverType) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	let (initialQualified, qualifyReceiverType) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingTypeName)
 	let (chased, chaseReceiverType) = chaseTypealiasInQualifiedCalleeWithType(project, callee: initialQualified, enclosingType: enclosingTypeName)
 	// `qualifyCalleeForContextWithType`'s chase fires against the
 	// user-written head (e.g. `ByteArray`) and recovers the full
@@ -5505,7 +6547,29 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	// `arrayLiteralResultType`, so the typed result carries the element
 	// binding the chase couldn't recover from the bare callee.
 	receiverType = promoteNamedToGenericInstance(project, raw: receiverType, candidate: lookupProducerType(producerTypes, name: result))
-	let resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false)
+	var resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: argTypes, hasSelf: false, argLabels: argLabels)
+	// Char-byte disambiguation: when the integer-fast-path char literal `'e'`
+	// flows into an overload set that has both String and Character variants,
+	// the raw `MaxonType.integer` arg makes neither variant uniquely match.
+	// Retry with the int args that originated as char-byte literals retyped
+	// to Character so the `$Character` variant is picked instead of leaving
+	// the call ambiguous.
+	if resolved == chased and project.overloadedNames.contains(chased) 'tryCharByteRetry'
+		let retryArgTypes = retypeCharByteArgsToCharacter(project, args: args, argTypes: argTypes, hasSelf: false, funcName: funcName)
+		if retryArgTypes.didSubstitute 'didRetype'
+			resolved = resolveOverloadedCallee(project, bareQualifiedName: chased, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels)
+		end 'didRetype'
+	end 'tryCharByteRetry'
+	// Ambiguous-overload detection: the resolver returned the bare overload
+	// bucket name unchanged, meaning no variant matched by type and no
+	// label-based fallback succeeded. Report E3007 with the candidate list
+	// drawn from `overloadedNames`. The caller is responsible for adding a
+	// named argument to disambiguate.
+	if resolved == chased and project.overloadedNames.contains(chased) 'isAmbiguous'
+		reportAmbiguousOverload(project, bareQualifiedName: chased, range: range, filePath: readerFilePath)
+		try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+		return
+	end 'isAmbiguous'
 	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
 	if not isUnresolvedType(receiverType) 'haveReceiver'
 		try project.resolvedReceiverTypes.insert(opIdx, value: receiverType) otherwise ignore
@@ -5515,14 +6579,142 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
 end 'resolveCallSite'
 
+// Char-byte overload retry: re-type every `MaxonType.integer` arg whose value
+// name is recorded as a char-byte literal in `project.charByteLiterals` to
+// `MaxonType.named("Character")`. Returns the rewritten type list along with
+// a `didSubstitute` flag so the caller can skip the retry when no arg was
+// char-byte-tainted (cheap exit, no extra resolver work).
+type CharByteRetypedArgs
+	export var types MaxonTypeArray
+	export var didSubstitute bool
+
+	export static function create(types MaxonTypeArray, didSubstitute bool) returns CharByteRetypedArgs
+		return Self{types: types, didSubstitute: didSubstitute}
+	end 'create'
+end 'CharByteRetypedArgs'
+
+// Char-byte receiver retype: when a method-call receiver value name is
+// tagged as a char-byte literal (the single-byte char-literal fast path
+// emits `MaxonType.integer` for `'x'`), treat its receiver type as
+// `Character` for method-resolution purposes. Without this, calls like
+// `c.asciiValue()` on a char-byte-typed `c` route through `int`'s
+// extension table (where `asciiValue` doesn't exist) and the call's
+// result type stays `<unresolved>`. Mirrors `retypeCharByteArgsToCharacter`
+// but operates on the receiver slot instead of the arg list.
+function retypeCharByteReceiver(project Project, receiver ByteArray, receiverType MaxonType, funcName String) returns MaxonType
+	let isCharByte = match receiverType 'check'
+		boolean gives false
+		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: receiver))
+		float to string gives false
+		named to interface gives false
+		constInt gives false
+	end 'check'
+	if not isCharByte 'pass'
+		return receiverType
+	end 'pass'
+	return MaxonType.named(project.typeNames.intern("Character"))
+end 'retypeCharByteReceiver'
+
+function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, argTypes MaxonTypeArray, hasSelf bool, funcName String) returns CharByteRetypedArgs
+	var startIdx = 0
+	if hasSelf 'skipSelf'
+		startIdx = 1
+	end 'skipSelf'
+	var didSubstitute = false
+	var newTypes = MaxonTypeArray.create()
+	let characterType = MaxonType.named(project.typeNames.intern("Character"))
+	for i in 0 upto argTypes.count() 'eachArg'
+		let t = try argTypes.get(i) otherwise return CharByteRetypedArgs.create(types: argTypes, didSubstitute: false)
+		if i < startIdx 'beforeUser'
+			newTypes.push(t)
+			continue
+		end 'beforeUser'
+		let argName = try args.get(i - startIdx) otherwise ByteArray.create()
+		if argName.count() == 0 'noName'
+			newTypes.push(t)
+			continue
+		end 'noName'
+		let isCharByte = match t 'check'
+			boolean gives false
+			integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: argName))
+			float to string gives false
+			named to interface gives false
+			constInt gives false
+		end 'check'
+		if isCharByte 'retype'
+			newTypes.push(characterType)
+			didSubstitute = true
+			continue
+		end 'retype'
+		newTypes.push(t)
+	end 'eachArg'
+	return CharByteRetypedArgs.create(types: newTypes, didSubstitute: didSubstitute)
+end 'retypeCharByteArgsToCharacter'
+
+// Emit E3007 with the bare overload name and a Candidates list rendered
+// from each variant's signature (parameter names paired with the source-
+// rendered type). The wording mirrors the C# bootstrap so spec fragments
+// pass with byte-identical stderr.
+function reportAmbiguousOverload(project Project, bareQualifiedName String, range SourceRange, filePath FilePath)
+	let bareName = extractBareName(bareQualifiedName)
+	let candidates = renderOverloadCandidates(project, bareQualifiedName: bareQualifiedName)
+	reportCompileError(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareName}': multiple overloads match. Candidates: {candidates}", line: range.line, column: range.column, filePath: filePath)
+end 'reportAmbiguousOverload'
+
+// Strip the namespace prefix from a qualified name so diagnostics show
+// the user-facing bare identifier (`create`) instead of the internal
+// `function-overloads.create`. Returns the input unchanged when there's
+// no dot — covers `main` and other unqualified roots.
+function extractBareName(qualified String) returns String
+	let bytes = qualified.toByteArray()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= bytes.count() 'noDot'
+		return qualified
+	end 'noDot'
+	return byteSliceToString(bytes, startIndex: dotIdx + 1, endIndex: bytes.count())
+end 'extractBareName'
+
+// Render `(name1 Type1), (name2 Type2)` for each variant in the bucket so
+// E3007's "Candidates:" list shows each signature in source-level form.
+function renderOverloadCandidates(project Project, bareQualifiedName String) returns String
+	let variants = try project.overloadedNames.get(bareQualifiedName) otherwise return ""
+	var out = ""
+	for i in 0 upto variants.count() 'eachVariant'
+		let v = try variants.get(i) otherwise continue
+		let sig = try project.funcSignatures.get(v) otherwise continue
+		if i > 0 'separator'
+			out = "{out}, "
+		end 'separator'
+		out = "{out}({renderSignatureParams(project, sig: sig)})"
+	end 'eachVariant'
+	return out
+end 'renderOverloadCandidates'
+
+function renderSignatureParams(project Project, sig FuncSignature) returns String
+	var startIdx = 0
+	if signatureFirstParamIsSelf(sig) 'hasSelf'
+		startIdx = 1
+	end 'hasSelf'
+	var out = ""
+	for i in startIdx upto sig.paramNames.count() 'eachParam'
+		let name = try sig.paramNames.get(i) otherwise return out
+		let paramType = try sig.paramTypes.get(i) otherwise return out
+		if i > startIdx 'separator'
+			out = "{out}, "
+		end 'separator'
+		out = "{out}{name} {paramType.toString(project)}"
+	end 'eachParam'
+	return out
+end 'renderSignatureParams'
+
 // `methodCall` op resolution. The receiver's MaxonType comes from
 // `producerTypes` (filled by `buildProducerTypes`/`fillUnresolvedTypes`
 // earlier in the pipeline). After normalising named typealiases we
 // extract the receiver's struct name; an empty result indicates an
 // interface-dispatch site that lowering will route through its stub
 // emitter, so we skip both the resolved-name and paramTypes inserts.
-function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArray, methodName ByteArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String)
-	let rawReceiverType = lookupProducerType(producerTypes, name: receiver)
+function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String, readerFilePath FilePath, funcName String, range SourceRange)
+	let rawReceiverType = retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName)
 	let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingTypeName)
 	// Phase 11.4 / Phase 7: primitive receiver (`int.toString()`,
 	// `bool.equals(...)`, …) — fall back to the extension type
@@ -5538,7 +6730,24 @@ function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArra
 	end 'tryPrimitive'
 	let bareMethodName = String.from(methodName)
 	let baseQualified = "{receiverStructName}.{bareMethodName}"
-	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false)
+	var resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: argTypes, hasSelf: false, argLabels: argLabels)
+	// Char-byte disambiguation: same retry pattern as resolveCallSite. The
+	// methodCall arg list has no receiver-pseudo-arg (instance dispatch
+	// supplies the receiver out-of-band), so `hasSelf` stays false here.
+	if resolved == baseQualified and project.overloadedNames.contains(baseQualified) 'tryCharByteRetry'
+		let retryArgTypes = retypeCharByteArgsToCharacter(project, args: args, argTypes: argTypes, hasSelf: false, funcName: funcName)
+		if retryArgTypes.didSubstitute 'didRetype'
+			resolved = resolveOverloadedCallee(project, bareQualifiedName: baseQualified, argTypes: retryArgTypes.types, hasSelf: false, argLabels: argLabels)
+		end 'didRetype'
+	end 'tryCharByteRetry'
+	// Ambiguous-overload detection for instance method calls (E3007).
+	// Mirrors the free-call path's check: when the resolver returned the
+	// bare overload bucket name and the bucket exists, we couldn't pick.
+	if resolved == baseQualified and project.overloadedNames.contains(baseQualified) 'isAmbiguous'
+		reportAmbiguousOverload(project, bareQualifiedName: baseQualified, range: range, filePath: readerFilePath)
+		try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
+		return
+	end 'isAmbiguous'
 	// When the concrete-type qualified name has no registered signature,
 	// fall back to an extension method declared on an interface that the
 	// receiver conforms to (`Countable.count` for an `IntList implements
@@ -5812,19 +7021,24 @@ end 'validateMethodCallArgLabels'
 typealias TrySlotSet = Set with VarSlot
 typealias SlotCastCategoryMap = Map with(VarSlot, CastCategory)
 typealias SlotSourceRangeMap = Map with(VarSlot, SourceRange)
+typealias SlotMaxonTypeMap = Map with(VarSlot, MaxonType)
 typealias TryCallResultSet = Set with ByteArray
 
 // Track everything we need per try-result slot to validate the fallback
 // store: which slots are try-result slots, the success-side category, and
-// the success-side store range used for the diagnostic location.
+// the success-side store range used for the diagnostic location. The
+// `expectedType` map carries the success-side resolved MaxonType so the
+// fallback-range check can identify ranged-typealias success types and
+// compare the literal fallback against their bounds.
 type TryResultIndex
 	export var slots TrySlotSet
 	export var tryCallResults TryCallResultSet
 	export var expectedCat SlotCastCategoryMap
 	export var expectedRange SlotSourceRangeMap
+	export var expectedType SlotMaxonTypeMap
 
 	export static function create() returns TryResultIndex
-		return Self{slots: TrySlotSet.create(), tryCallResults: TryCallResultSet.create(), expectedCat: SlotCastCategoryMap.create(), expectedRange: SlotSourceRangeMap.create()}
+		return Self{slots: TrySlotSet.create(), tryCallResults: TryCallResultSet.create(), expectedCat: SlotCastCategoryMap.create(), expectedRange: SlotSourceRangeMap.create(), expectedType: SlotMaxonTypeMap.create()}
 	end 'create'
 end 'TryResultIndex'
 
@@ -5909,7 +7123,7 @@ function validateFallbackStoreCategories(project Project, module MaxonModule, fu
 				continue
 			end 'notStore'
 			match op 'extract'
-				varStore(slotId, value, range) then validateFallbackCategory(project, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index, filePath: filePath)
+				varStore(slotId, value, range) then validateFallbackCategory(project, module: module, func: func, slotId: slotId, value: value, range: range, producerTypes: producerTypes, index: index, filePath: filePath)
 				default panic("unreachable: already checked name == varStore")
 			end 'extract'
 		end 'eachOp'
@@ -5944,9 +7158,14 @@ function recordExpectedTryCategory(project Project, slotId VarSlot, value ByteAr
 	let cat = try resolveCategoryForValue(project, producerTypes: producerTypes, value: value) otherwise return
 	index.expectedCat.upsert(slotId, value: cat)
 	index.expectedRange.upsert(slotId, value: range)
+	// Record the resolved MaxonType so the fallback range-check can
+	// identify a ranged-typealias success type — needed for the
+	// `otherwise -1` ↔ `int(0 to 127)` diagnostic at fallback validation
+	// time.
+	index.expectedType.upsert(slotId, value: lookupProducerType(producerTypes, name: value))
 end 'recordExpectedTryCategory'
 
-function validateFallbackCategory(project Project, slotId VarSlot, value ByteArray, range SourceRange, producerTypes ProducerTypeMap, index TryResultIndex, filePath FilePath)
+function validateFallbackCategory(project Project, module MaxonModule, func IrFunction, slotId VarSlot, value ByteArray, range SourceRange, producerTypes ProducerTypeMap, index TryResultIndex, filePath FilePath)
 	if not index.slots.contains(slotId) 'notTrySlot'
 		return
 	end 'notTrySlot'
@@ -5958,18 +7177,53 @@ function validateFallbackCategory(project Project, slotId VarSlot, value ByteArr
 	end 'noExpected'
 	let actualCat = try resolveCategoryForValue(project, producerTypes: producerTypes, value: value) otherwise return
 	let expectedCat = try index.expectedCat.get(slotId) otherwise panic("validateFallbackCategory: slot in expectedCat but get failed")
+	let expectedRange = try index.expectedRange.get(slotId) otherwise range
 	if expectedCat == actualCat 'sameCategory'
+		checkFallbackLiteralRange(project, module: module, func: func, slotId: slotId, value: value, expectedRange: expectedRange, index: index, filePath: filePath)
 		return
 	end 'sameCategory'
 	// Allow numeric coercions: int↔byte across the success/fallback edges.
 	if castCategoryIsIntegerFamily(expectedCat) and castCategoryIsIntegerFamily(actualCat) 'bothIntegerFamily'
+		checkFallbackLiteralRange(project, module: module, func: func, slotId: slotId, value: value, expectedRange: expectedRange, index: index, filePath: filePath)
 		return
 	end 'bothIntegerFamily'
-	let expectedRange = try index.expectedRange.get(slotId) otherwise range
 	let expectedName = castCategoryName(expectedCat)
 	let actualName = castCategoryName(actualCat)
 	reportCompileError(project, code: ErrorCode.semanticOtherwiseTypeMismatch, message: "type mismatch: 'otherwise type '{actualName}' does not match expected type '{expectedName}''", line: expectedRange.line, column: expectedRange.column, filePath: filePath)
 end 'validateFallbackCategory'
+
+// Compile-time range check on the fallback expression of `try X otherwise V`
+// when the success-side type is a ranged typealias. Mirrors
+// `checkConvertLiteralRange` for `LITERAL as RangedAlias`: walks the producer
+// chain for the fallback value, decodes the literal (including a leading
+// `-`), and emits E3005 when it falls outside the registered range. Float
+// aliases are handled the same way the convert path handles them.
+function checkFallbackLiteralRange(project Project, module MaxonModule, func IrFunction, slotId VarSlot, value ByteArray, expectedRange SourceRange, index TryResultIndex, filePath FilePath)
+	if not index.expectedType.contains(slotId) 'noType'
+		return
+	end 'noType'
+	let expectedType = try index.expectedType.get(slotId) otherwise return
+	let aliasName = expectedType.namedAliasNameOrEmpty(project)
+	if aliasName.isEmpty() 'notNamed'
+		return
+	end 'notNamed'
+	let typealiasRange = try project.typealiasRanges.get(aliasName) otherwise return
+	if isAliasFullRange(project, aliasName: aliasName, range: typealiasRange) 'fullRange'
+		return
+	end 'fullRange'
+	let lit = findLiteralProducerInFunc(project, module: module, func: func, operandName: value)
+	if not lit.found 'noLit'
+		return
+	end 'noLit'
+	let isFloat = aliasIsFloat(project, name: aliasName)
+	let outOfRange = literalOutOfRangeFloat(value: lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(value: lit.value, range: typealiasRange)
+	if not outOfRange 'inRange'
+		return
+	end 'inRange'
+	let displayValue = formatLiteralValue(value: lit.value, isFloat: isFloat)
+	let displayRange = formatTypealiasRange(project, aliasName: aliasName, range: typealiasRange)
+	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "otherwise value {displayValue} is outside the range of '{aliasName}' ({displayRange})", line: expectedRange.line, column: expectedRange.column, filePath: filePath)
+end 'checkFallbackLiteralRange'
 
 function validateCallArityOp(project Project, op MaxonOp, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, filePath FilePath)
 	if op.name == "call" 'isCall'

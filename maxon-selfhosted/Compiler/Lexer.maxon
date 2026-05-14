@@ -12,6 +12,11 @@ export union LexerError implements Error
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	unterminatedString(line LineNumber, column ColumnNumber)
 	unterminatedBlockComment(line LineNumber, column ColumnNumber)
+	// An opening `{` inside a double-quoted string didn't close before the
+	// string did. The (line, column) point at the offending `{` so the
+	// diagnostic underlines the brace itself rather than the EOF position.
+	// Use `\{` to embed a literal `{` in a string literal.
+	unescapedBrace(line LineNumber, column ColumnNumber)
 end 'LexerError'
 
 // --- Character classes ---
@@ -621,6 +626,18 @@ type Lexer
 				end 'squoteEof'
 				return
 			end 'endStr'
+			// Raw escape bytes stay in the fragment; the parser decodes them
+			// on emit. Skip the byte following `\` so `\'` doesn't close the
+			// literal and `\\` doesn't swallow the next byte as escape lead.
+			if sc == Ascii.backslash 'esc'
+				if not tryAdvance() 'escEof'
+					break
+				end 'escEof'
+				if not tryAdvance() 'escNextEof'
+					break
+				end 'escNextEof'
+				continue
+			end 'esc'
 			if not tryAdvance() 'advEof'
 				break
 			end 'advEof'
@@ -685,7 +702,7 @@ type Lexer
 				if not tryAdvance() 'lBraceEof'
 					throw CursorError.exhausted
 				end 'lBraceEof'
-				try scanInterp()
+				try scanInterp(openLine: interpLine, openCol: interpCol)
 				// scanInterp returns with cursor AT `}`; advance past it to start
 				// the next fragment.
 				let closeLine = line
@@ -759,8 +776,23 @@ type Lexer
 	// nested braces so struct literals inside an interpolation don't terminate
 	// it early. Delegates each byte to stepDfa so every token kind (identifiers,
 	// calls, operators, nested strings) is lexed correctly.
-	function scanInterp() throws CursorError
+	//
+	// `openLine`/`openCol` point at the `{` that opened this interpolation so
+	// failures can blame the offending brace (mirrors C# `firstBraceColumn`).
+	// On EOF without a matching `}` we distinguish two flavours, mirroring the
+	// C# `recoveredFromUnbalancedBrace` heuristic at Lexer.cs:598:
+	//   * If we ever encountered a `"` inside the interp body, that `"` was
+	//     almost certainly the outer string's intended closer and the `{` was
+	//     a literal brace the user meant to escape — emit unescapedBrace.
+	//   * Otherwise the source genuinely ran out before the interp closed —
+	//     emit unterminatedString.
+	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
 		var depth = 1
+		// Cursor position right after the opening `{` — used on failure to
+		// scan the consumed body for `"`. We can't track this via a flag set
+		// in scanInterp's outer loop because sub-scanners like the char-literal
+		// scanner gobble bytes (including `"`) without surfacing them back.
+		let bodyStart = cursor.index()
 		while cursor.index() < len 'interp'
 			let ch = cursor.current()
 			if ch == '}' 'closeBrace'
@@ -789,30 +821,46 @@ type Lexer
 			end 'openBrace'
 
 			let atEnd = try stepDfa(startLine: line, startCol: column) otherwise 'subEof'
-				// A sub-scanner unwound via CursorError. Inside an interpolation
-				// any EOF — even an "emittedAtEof = true" clean completion —
-				// means the closing `}` is missing; reroute to the unterminated-
-				// string path so `run()` surfaces E1002 instead of treating the
-				// stream as cleanly terminated.
-				hasPendingError = true
-				pendingError = LexerError.unterminatedString(line: line, column: column)
-				throw CursorError.exhausted
+				try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'subEof'
 			if atEnd 'interpEof'
-				// stepDfa hit EOF inside an interpolation — the closing `}`
-				// is missing. Stash the lexer error so run() reports it as
-				// a string-unterminated diagnostic.
-				hasPendingError = true
-				pendingError = LexerError.unterminatedString(line: line, column: column)
-				throw CursorError.exhausted
+				try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'interpEof'
 		end 'interp'
-		// Ran off end without finding matching `}` — unterminated string
-		// (the interpolation expression had no closing brace before EOF).
-		hasPendingError = true
-		pendingError = LexerError.unterminatedString(line: line, column: column)
-		throw CursorError.exhausted
+		// Loop guard `cursor.index() < len` failed without a matching `}`.
+		try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
 	end 'scanInterp'
+
+	// Stash the right LexerError for a scanInterp that ran out of input
+	// without finding `}`. Looks at the bytes consumed since the opening
+	// `{` for a `"` — its presence means the interp gobbled past the outer
+	// string's closing quote, so the `{` was meant as a literal brace.
+	// Mirrors the C# `recoveredFromUnbalancedBrace` flag at Lexer.cs:598.
+	function failInterp(openLine LineNumber, openCol ColumnNumber, bodyStart CharOffset) throws CursorError
+		hasPendingError = true
+		if interpBodyContainsDquote(bodyStart) 'sawDquote'
+			pendingError = LexerError.unescapedBrace(line: openLine, column: openCol)
+		end 'sawDquote' else 'genuineEof'
+			pendingError = LexerError.unterminatedString(line: openLine, column: openCol)
+		end 'genuineEof'
+		throw CursorError.exhausted
+	end 'failInterp'
+
+	// Walk the bytes from `bodyStart` up to the cursor's current position
+	// looking for `"`. A hit means the interp's body chewed through the
+	// outer string's intended closing quote.
+	function interpBodyContainsDquote(bodyStart CharOffset) returns bool
+		var i = bodyStart
+		let stop = cursor.index()
+		while i < stop 'scan'
+			let b = try bytes.get(i) otherwise return false
+			if b == Ascii.dquote 'hit'
+				return true
+			end 'hit'
+			i = i + 1
+		end 'scan'
+		return false
+	end 'interpBodyContainsDquote'
 
 	// Cursor points to the first digit (not yet consumed by this scanner).
 	function scanNumber(startLine LineNumber, startCol ColumnNumber) throws CursorError

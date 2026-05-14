@@ -1,0 +1,56 @@
+// Test: int-promotion
+function main() returns ExitCode
+	let result = Math.log(10)  // Int promoted to float
+	print("{result}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+2.302585
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.sitofp.f64 %0
+    %2 = mir.call @Math.log(%1)
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 32 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    %8 = mir.call @mrt_f64_to_string(%2, %7)
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %5, %8
+    %14 = mir.add.i64 %13, %10
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.add.i64 %14, %15
+    %17 = mir.call @mrt_alloc(%16)
+    mir.memcpy %17, %4, %5
+    %18 = mir.add.i64 %17, %5
+    mir.memcpy %18, %7, %8
+    %19 = mir.add.i64 %18, %8
+    mir.memcpy %19, %9, %10
+    %21 = mir.mov_imm 40 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %17, %22, 0 width: qword
+    mir.store %14, %22, 8 width: qword
+    mir.store %14, %22, 16 width: qword
+    %23 = mir.mov_imm 1 : i64
+    mir.store %23, %22, 24 width: qword
+    mir.store %5, %22, 32 width: qword
+    %25 = mir.mov_imm 16 : i64
+    %26 = mir.call @mrt_alloc(%25)
+    mir.store %22, %26, 0 width: qword
+    mir.store %5, %26, 8 width: qword
+    %29 = mir.load %26, 0 width: qword
+    %30 = mir.load %29, 0 width: qword
+    %31 = mir.load %29, 8 width: qword
+    %32 = mir.call @mrt_write_stdout(%30, %31)
+    mir.ret %5
+  }
+}
+---

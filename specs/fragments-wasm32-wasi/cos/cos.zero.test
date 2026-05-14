@@ -1,0 +1,29 @@
+// Test: cos.zero
+function main() returns ExitCode
+	let result = Math.cos(0.0)
+	if result == 1.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : f64
+    %1 = mir.call @Math.cos(%0)
+    %3 = mir.mov_imm 4607182418800017408 : f64
+    %4 = mir.cmp feq, %1, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  check_0.after:
+    %6 = mir.mov_imm 1 : i64
+    mir.ret %6
+  }
+}
+---

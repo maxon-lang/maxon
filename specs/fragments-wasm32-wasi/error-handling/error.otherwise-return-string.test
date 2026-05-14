@@ -34,7 +34,7 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @error-handling.tryIt(local0: i1) -> i64 {
+  func @tryIt(local0: i1) -> i64 {
   entry:
     %15 = mir.param local0 : i1
     mir.cond_br %15 [then: c_0(), else: c_0.after()]
@@ -63,10 +63,10 @@ module {
     %14 = mir.mov_imm 0 : i64
     mir.error_return %12, %14
   }
-  func @error-handling.wrap(local0: i1) -> i64 {
+  func @wrap(local0: i1) -> i64 {
   entry:
     %19 = mir.param local0 : i1
-    %2, %3 = mir.try_call @error-handling.tryIt(%19)
+    %2, %3 = mir.try_call @tryIt(%19)
     %4 = mir.mov_imm 0 : i64
     %5 = mir.cmp ne, %3, %4
     mir.cond_br %5 [then: try_0.otherwise(), else: try_0.merge()]
@@ -95,9 +95,9 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 0 : i64
-    %1 = mir.call @error-handling.wrap(%0)
+    %1 = mir.call @wrap(%0)
     %2 = mir.mov_imm 1 : i64
-    %3 = mir.call @error-handling.wrap(%2)
+    %3 = mir.call @wrap(%2)
     %5 = mir.global_addr @__istr_0
     %6 = mir.mov_imm 40 : i64
     %7 = mir.call @mrt_alloc(%6)

@@ -1,0 +1,27 @@
+// Test: enum-ordinal.int-backed
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+	let s = HttpStatus.serverError
+	// ordinal is 2 (third case), not 500 (the raw value)
+	if s.ordinal == 2 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %16 = mir.mov_imm 1 : i64
+    mir.ret %16
+  }
+}
+---

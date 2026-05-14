@@ -1,0 +1,26 @@
+// Test: trunc.zero
+function main() returns ExitCode
+	let x = 0.5
+	let y = trunc(x)
+	return y
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4602678819172646912 : f64
+    %2 = mir.fptosi.i64 %0
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_0
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

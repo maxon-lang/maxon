@@ -1,0 +1,158 @@
+// Test: find
+function main() returns ExitCode
+	let s = "hello world"
+	let idx = try s.findFirst("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	let idx2 = try s.findFirst("xyz") otherwise s.endIndex()
+	if idx2 == s.endIndex() 'not_found'
+		print("-1\n")
+	end 'not_found'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+6
+-1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 11 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %11 = mir.global_addr @__istr_1
+    %12 = mir.mov_imm 40 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %11, %13, 0 width: qword
+    %14 = mir.mov_imm 5 : i64
+    mir.store %14, %13, 8 width: qword
+    %15 = mir.mov_imm -2 : i64
+    mir.store %15, %13, 16 width: qword
+    mir.store %5, %13, 24 width: qword
+    mir.store %6, %13, 32 width: qword
+    %18 = mir.mov_imm 16 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %13, %19, 0 width: qword
+    mir.store %5, %19, 8 width: qword
+    %21, %22 = mir.try_call @String.findFirst(%8, %19)
+    %24 = mir.cmp ne, %22, %6
+    mir.cond_br %24 [then: try_0.otherwise(), else: try_0.merge(%21)]
+  try_0.otherwise:
+    %93 = mir.call @String.count(%8)
+    %94 = mir.load %8, 0 width: qword
+    %95 = mir.load %94, 8 width: qword
+    %116 = mir.mov_imm 16 : i64
+    %117 = mir.call @mrt_alloc(%116)
+    mir.store %93, %117, 0 width: qword
+    mir.store %95, %117, 8 width: qword
+    mir.br try_0.merge(%117)
+  try_0.merge:
+    %30 = mir.call @StringIndex.charIndex(%91)
+    %31 = mir.global_addr @__istr_2
+    %33 = mir.mov_imm 21 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    %35 = mir.call @mrt_i64_to_string(%30, %34)
+    %36 = mir.global_addr @__istr_3
+    %40 = mir.add.i64 %6, %35
+    %41 = mir.add.i64 %40, %5
+    %43 = mir.add.i64 %41, %5
+    %44 = mir.call @mrt_alloc(%43)
+    mir.memcpy %44, %31, %6
+    %45 = mir.add.i64 %44, %6
+    mir.memcpy %45, %34, %35
+    %46 = mir.add.i64 %45, %35
+    mir.memcpy %46, %36, %5
+    %48 = mir.mov_imm 40 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %44, %49, 0 width: qword
+    mir.store %41, %49, 8 width: qword
+    mir.store %41, %49, 16 width: qword
+    mir.store %5, %49, 24 width: qword
+    mir.store %6, %49, 32 width: qword
+    %52 = mir.mov_imm 16 : i64
+    %53 = mir.call @mrt_alloc(%52)
+    mir.store %49, %53, 0 width: qword
+    mir.store %6, %53, 8 width: qword
+    %97 = mir.load %53, 0 width: qword
+    %98 = mir.load %97, 0 width: qword
+    %99 = mir.load %97, 8 width: qword
+    %100 = mir.call @mrt_write_stdout(%98, %99)
+    %57 = mir.global_addr @__istr_4
+    %58 = mir.mov_imm 40 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    mir.store %57, %59, 0 width: qword
+    %60 = mir.mov_imm 3 : i64
+    mir.store %60, %59, 8 width: qword
+    %61 = mir.mov_imm -2 : i64
+    mir.store %61, %59, 16 width: qword
+    mir.store %5, %59, 24 width: qword
+    mir.store %6, %59, 32 width: qword
+    %64 = mir.mov_imm 16 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %59, %65, 0 width: qword
+    mir.store %5, %65, 8 width: qword
+    %67, %68 = mir.try_call @String.findFirst(%8, %65)
+    %70 = mir.cmp ne, %68, %6
+    mir.cond_br %70 [then: try_1.otherwise(), else: try_1.merge(%67)]
+  try_1.otherwise:
+    %101 = mir.call @String.count(%8)
+    %102 = mir.load %8, 0 width: qword
+    %103 = mir.load %102, 8 width: qword
+    %118 = mir.mov_imm 16 : i64
+    %119 = mir.call @mrt_alloc(%118)
+    mir.store %101, %119, 0 width: qword
+    mir.store %103, %119, 8 width: qword
+    mir.br try_1.merge(%119)
+  try_1.merge:
+    %105 = mir.call @String.count(%8)
+    %106 = mir.load %8, 0 width: qword
+    %107 = mir.load %106, 8 width: qword
+    %120 = mir.mov_imm 16 : i64
+    %121 = mir.call @mrt_alloc(%120)
+    mir.store %105, %121, 0 width: qword
+    mir.store %107, %121, 8 width: qword
+    %109 = mir.load %92, 0 width: qword
+    %110 = mir.load %121, 0 width: qword
+    %111 = mir.cmp eq, %109, %110
+    mir.cond_br %111 [then: not_found_0(), else: not_found_0.after()]
+  not_found_0:
+    %79 = mir.global_addr @__istr_5
+    %80 = mir.mov_imm 40 : i64
+    %81 = mir.call @mrt_alloc(%80)
+    mir.store %79, %81, 0 width: qword
+    %82 = mir.mov_imm 3 : i64
+    mir.store %82, %81, 8 width: qword
+    %83 = mir.mov_imm -2 : i64
+    mir.store %83, %81, 16 width: qword
+    mir.store %5, %81, 24 width: qword
+    mir.store %6, %81, 32 width: qword
+    %86 = mir.mov_imm 16 : i64
+    %87 = mir.call @mrt_alloc(%86)
+    mir.store %81, %87, 0 width: qword
+    mir.store %5, %87, 8 width: qword
+    %112 = mir.load %87, 0 width: qword
+    %113 = mir.load %112, 0 width: qword
+    %114 = mir.load %112, 8 width: qword
+    %115 = mir.call @mrt_write_stdout(%113, %114)
+    mir.br not_found_0.after()
+  not_found_0.after:
+    mir.ret %6
+  }
+}
+---

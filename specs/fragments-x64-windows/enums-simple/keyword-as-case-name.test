@@ -29,16 +29,61 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @enums-simple.main() -> u32 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov r8d, 1
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.mov rbx, [rbp-24]
+    x64.jump_table rbx, 8 cases, default=enums-simple.main.check_0.merge
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case2:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case3:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case4:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case5:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case6:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
+  check_0.case7:
+    x64.xor eax, eax
+    x64.mov [rbp-16], rax
+    x64.jmp enums-simple.main.check_0.merge
   check_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg enums-simple.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl enums-simple.main.__range_panic_0
+    x64.jmp enums-simple.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

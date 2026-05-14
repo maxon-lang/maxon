@@ -1,0 +1,28 @@
+// Test: from-literal-initializer
+let path = FilePath from "test.txt"
+
+function main() returns ExitCode
+	print(path.toString())
+	return 0
+end 'main'
+---
+Stdout: ```
+test.txt
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_path
+    %1 = mir.load %0, 0 width: qword
+    %5 = mir.load %1, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %6, 8 width: qword
+    %9 = mir.call @mrt_write_stdout(%7, %8)
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

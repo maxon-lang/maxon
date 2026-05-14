@@ -1,0 +1,114 @@
+// Test: interface-field-pass-as-arg
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+// Holder stores an interface-typed field. main() constructs a Holder
+// over a Marker, then reads the field (h.t) and passes it to a
+// function expecting the same interface type. The construction and
+// the field-read happen in the same function so monomorphization can
+// propagate the concrete type (`Marker`) through the Holder instance
+// and rewrite the indirect dispatch in `callTag` to `Marker.tag`.
+//
+// Regression guard for two parser bugs around interface-typed fields,
+// both diagnosed via the FunctionRegAllocator interface-field
+// workaround in the self-hosted register allocator:
+//   1. Field-access op produced a MaxonStruct with empty TypeName,
+//      crashing FillDefaultArgs with NullReferenceException at the
+//      call site (Dictionary.TryGetValue, key=null).
+//   2. After fixing the empty TypeName, the call-site type-check
+//      rejected the value with E3005 "type '' does not implement
+//      interface 'Tagged'" because the value registered in the
+//      variables table for the field still carried no struct-type
+//      name, so the resolved MaxonStruct came back with an empty
+//      TypeName at the next use.
+type Holder
+	export let t Tagged
+
+	static function create(t Tagged) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Holder'
+
+function callTag(t Tagged) returns Integer
+	return t.tag()
+end 'callTag'
+
+function main() returns ExitCode
+	let m = Marker.create(n: 42)
+	let h = Holder.create(t: m)
+	return callTag(h.t)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Marker.tag(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @Holder.create(local0: i64, local1: i64) -> i64 {
+  entry:
+    %6 = mir.param local0 : i64
+    mir.store_slot slot_0, %6
+    %7 = mir.param local1 : i64
+    mir.store_slot slot_1, %7
+    %2 = mir.mov_imm 16 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    %4 = mir.load_slot slot_0
+    %5 = mir.load_slot slot_1
+    mir.store %4, %3, 0 width: qword
+    mir.store %5, %3, 8 width: qword
+    mir.ret %3
+  }
+  func @interface-dispatch.callTag(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %0, %10, 0 width: qword
+    %3 = mir.global_addr @__witness_Marker_Tagged
+    %4 = mir.call @Holder.create(%10, %3)
+    %6 = mir.load %4, 0 width: qword
+    %7 = mir.load %4, 8 width: qword
+    %8 = mir.call @interface-dispatch.callTag(%6, %7)
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %8, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

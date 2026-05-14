@@ -1,0 +1,61 @@
+// Test: contains.true
+function main() returns ExitCode
+	let m = [10: 100, 20: 200, 30: 300]
+	if m.contains(20) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 3 : i64
+    %8 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %9 = mir.mov_imm 40 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %8, %10)
+    %12 = mir.global_addr @__rdata_arr_map_main_4
+    mir.store %12, %11, 0 width: qword
+    mir.store %6, %11, 8 width: qword
+    %14 = mir.mov_imm -2 : i64
+    mir.store %14, %11, 16 width: qword
+    %15 = mir.mov_imm 8 : i64
+    mir.store %15, %11, 24 width: qword
+    %16 = mir.mov_imm -2 : i64
+    mir.store %16, %11, 32 width: qword
+    %24 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %25 = mir.mov_imm 40 : i64
+    %27 = mir.call @stdlib.__mm_alloc(%25, %24, %10)
+    %28 = mir.global_addr @__rdata_arr_map_main_5
+    mir.store %28, %27, 0 width: qword
+    mir.store %6, %27, 8 width: qword
+    %30 = mir.mov_imm -2 : i64
+    mir.store %30, %27, 16 width: qword
+    %31 = mir.mov_imm 8 : i64
+    mir.store %31, %27, 24 width: qword
+    %32 = mir.mov_imm -2 : i64
+    mir.store %32, %27, 32 width: qword
+    %38 = mir.global_addr @__layout_Map_Int_Int
+    %39 = mir.global_addr @__witness_int_Hashable
+    %40 = mir.global_addr @__witness_int_Equatable
+    %41 = mir.call @Map.init(%11, %27, %38, %39, %40)
+    %43 = mir.mov_imm 20 : i64
+    %44 = mir.global_addr @__layout_Map_Int_Int
+    %45 = mir.global_addr @__witness_int_Hashable
+    %46 = mir.global_addr @__witness_int_Equatable
+    %49 = mir.call @Map.findSlot(%41, %43, %44, %45, %46)
+    %50 = mir.mov_imm 0 : i64
+    %51 = mir.cmp ge, %49, %50
+    mir.cond_br %51 [then: check_0(), else: check_0.after()]
+  check_0:
+    %48 = mir.mov_imm 1 : i64
+    mir.ret %48
+  check_0.after:
+    mir.ret %10
+  }
+}
+---

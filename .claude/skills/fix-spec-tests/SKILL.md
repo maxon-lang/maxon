@@ -3,8 +3,7 @@ name: fix-spec-tests
 description: Run spec tests and fix any failures in the compiler
 ---
 
-Run the spec tests and fix any failures by modifying the compiler code.
-By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
+Run the spec tests and fix any failures by modifying the compiler code. Use --filter when working on a specific failing test.
 
 ## Steps
 0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.

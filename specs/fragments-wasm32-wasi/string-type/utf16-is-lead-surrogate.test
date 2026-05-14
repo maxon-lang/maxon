@@ -1,0 +1,53 @@
+// Test: utf16-is-lead-surrogate
+function main() returns ExitCode
+	// 0xD83D = 55357 (high surrogate for 😀)
+	if utf16IsLeadSurrogate(55357) 'c1'
+		print("1\n")
+	end 'c1'
+	if utf16IsLeadSurrogate(56832) 'c2'
+		print("0\n")
+	end 'c2'
+	if utf16IsLeadSurrogate(65) 'c3'
+		print("0\n")
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %40 = mir.mov_imm 1 : i64
+    mir.br c1_0()
+  c1_0:
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 40 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    %5 = mir.mov_imm 2 : i64
+    mir.store %5, %4, 8 width: qword
+    %6 = mir.mov_imm -2 : i64
+    mir.store %6, %4, 16 width: qword
+    mir.store %40, %4, 24 width: qword
+    %8 = mir.mov_imm 0 : i64
+    mir.store %8, %4, 32 width: qword
+    %9 = mir.mov_imm 16 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %4, %10, 0 width: qword
+    mir.store %40, %10, 8 width: qword
+    %46 = mir.load %10, 0 width: qword
+    %47 = mir.load %46, 0 width: qword
+    %48 = mir.load %46, 8 width: qword
+    %49 = mir.call @mrt_write_stdout(%47, %48)
+    mir.br c3_0.after()
+  c3_0.after:
+    %39 = mir.mov_imm 0 : i64
+    mir.ret %39
+  }
+}
+---

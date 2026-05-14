@@ -1,0 +1,80 @@
+// Test: parsable.float-fromstring
+function main() returns ExitCode
+	let f = try float.fromString("3.14") otherwise 0.0
+	let check = f * 100.0
+	print("{trunc(check)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+314
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 4 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10, %11 = mir.try_call @stdlib.__float_fromString(%8)
+    %13 = mir.cmp ne, %11, %6
+    mir.cond_br %13 [then: try_0.otherwise(), else: try_0.merge(%10)]
+  try_0.otherwise:
+    %15 = mir.mov_imm 0 : f64
+    mir.br try_0.merge(%15)
+  try_0.merge:
+    %18 = mir.mov_imm 4636737291354636288 : f64
+    %19 = mir.mul.f64 %48, %18
+    %21 = mir.fptosi.i64 %19
+    %22 = mir.global_addr @__istr_1
+    %24 = mir.mov_imm 21 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    %26 = mir.call @mrt_i64_to_string(%21, %25)
+    %27 = mir.global_addr @__istr_2
+    %28 = mir.mov_imm 1 : i64
+    %31 = mir.add.i64 %6, %26
+    %32 = mir.add.i64 %31, %28
+    %33 = mir.mov_imm 1 : i64
+    %34 = mir.add.i64 %32, %33
+    %35 = mir.call @mrt_alloc(%34)
+    mir.memcpy %35, %22, %6
+    %36 = mir.add.i64 %35, %6
+    mir.memcpy %36, %25, %26
+    %37 = mir.add.i64 %36, %26
+    mir.memcpy %37, %27, %28
+    %39 = mir.mov_imm 40 : i64
+    %40 = mir.call @mrt_alloc(%39)
+    mir.store %35, %40, 0 width: qword
+    mir.store %32, %40, 8 width: qword
+    mir.store %32, %40, 16 width: qword
+    %41 = mir.mov_imm 1 : i64
+    mir.store %41, %40, 24 width: qword
+    mir.store %6, %40, 32 width: qword
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    mir.store %40, %44, 0 width: qword
+    mir.store %6, %44, 8 width: qword
+    %49 = mir.load %44, 0 width: qword
+    %50 = mir.load %49, 0 width: qword
+    %51 = mir.load %49, 8 width: qword
+    %52 = mir.call @mrt_write_stdout(%50, %51)
+    mir.ret %6
+  }
+}
+---

@@ -100,7 +100,29 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v35: per-field `StructField.isExported` flag for E3014
 // `semanticUnexportedFieldAccess`. Encoded payload grows by one byte per
 // field.
-let CACHE_FORMAT_VERSION = 35
+// v36: removed the compiler-internal `__ManagedMemory.makeCharFromBytes`
+// method registration; the function moved to `stdlib/Internals.maxon` as
+// `__makeCharFromBytes`. Old caches list the builtin and would re-emit the
+// removed panic stub.
+// v37: added `stdlib/Builtins.maxon` to the whitelist so the four
+// `__*_fromString` helpers (`__int_fromString`, `__float_fromString`,
+// `__bool_fromString`, `__byte_fromString`) plus the literal-marker
+// interface bodies (`BuiltinStringLiteral.init`, `Parsable.fromString`,
+// the `InitableFrom*` family, `ParseError`, the `__Managed*Error` enums,
+// `ParsedInt`, `ParsedFloat`) live in the cached stdlib metadata; the
+// bootstrap source dropped the stub versions of those interfaces.
+// v44: whitelisted stdlib/CommandLine.maxon (Stage E step 4); structurally
+// no on-disk format change, but the registry-decode path now also interns
+// each writer-side `GenericInstanceId` into `project.genericInstances` and
+// records a writer→project translation table. Old v43 caches were created
+// before that fix and would re-tripper the `data.genericInstances.get:
+// invalid id N` panic on a build with extra whitelisted stdlib files.
+// v45: Phase 15f added synth `Process` + `FilePath` types and the
+// `__Builtins.executablePath` intrinsic to the stdlib bootstrap. The synth
+// types register fresh `Process.executablePath`/`FilePath` signatures into
+// the cached stdlib metadata; v44 caches lack those entries and would miss
+// the wrap-MM-in-FilePath call lowered into user code.
+let CACHE_FORMAT_VERSION = 47
 
 // ============================================================
 // Types
@@ -191,7 +213,22 @@ export type StdlibCacheData
 	export var typealiasCastCategories TypealiasCastCategoryMap
 	export var funcReturnTypes FuncReturnTypeMap
 	export var funcSignatures FuncSignatureMap
+	// Cache v47: persisted throws-clause per qualified function name so
+	// `try X.method() otherwise (e)` can recover the bare-enum / union
+	// throws type at parse time even when stdlib was loaded from cache
+	// instead of re-parsed. Without this, `funcThrowsTypes.get(qualified)`
+	// returns `none` for every stdlib method and the `(e)` binding falls
+	// back to `integer`, breaking the downstream `match e` dispatch (E3005).
+	export var funcThrowsTypes FuncThrowsTypeMap
 	export var structTypes StructTypeMap
+	// Cache v47: persisted enum-type registry so cache-hit user code can
+	// match-dispatch on stdlib enum cases (e.g. `match e ... keyAlreadyExists
+	// then ...` against `MapError`). Without this, `project.enumTypes` is
+	// empty post-restore and `resolveEnumMatchArms` rejects every stdlib-
+	// throws scrutinee with E3005 "match scrutinee must be an enum-typed
+	// value". Mirrors the structTypes round-trip — fields decoded against
+	// the destination project's interner via the captured typeNameTable.
+	export var enumTypes EnumTypeMap
 	export var topLevelConstants ConstantMap
 	// Snapshot of the source project's type-name interner at capture time.
 	// MaxonType.named(id) values stored in funcReturnTypes / structTypes
@@ -241,6 +278,17 @@ export type StdlibCacheData
 	// dropped after inlining so the linker-side stdlib cache stays the
 	// sole source of stdlib machine code.
 	export var inlinerStdModule StdModule
+	// In-memory only. Maps each writer-side `GenericInstanceId` (the raw
+	// qword serialized in `layoutDescriptors`/`witnessTables` payloads) to
+	// the equivalent destination-`project.genericInstances` id assigned
+	// when `readGenericInstanceRegistry` re-interned the writer's entries.
+	// Necessary because `readMaxonGenericInstance` interns args recursively
+	// before the outer entry is interned, so the destination project's id
+	// space does not preserve the writer's id ordering. Built during
+	// decode; consumed by `translateWriterGenericInstanceId` in
+	// `restoreRegistries`. Not serialised — recomputable from the on-disk
+	// registry list at every cache load.
+	export var writerGidToProjectGid GenericInstanceIdArray
 
 	export static function create() returns StdlibCacheData
 		return Self{
@@ -253,7 +301,9 @@ export type StdlibCacheData
 			typealiasCastCategories: TypealiasCastCategoryMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			funcThrowsTypes: FuncThrowsTypeMap.create(),
 			structTypes: StructTypeMap.create(),
+			enumTypes: EnumTypeMap.create(),
 			topLevelConstants: ConstantMap.create(),
 			typeNameTable: StringArray.create(),
 			builtinArrayLiteralTypeName: BuiltinArrayLiteralName.none,
@@ -269,7 +319,8 @@ export type StdlibCacheData
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
-			inlinerStdModule: StdModule.create()
+			inlinerStdModule: StdModule.create(),
+			writerGidToProjectGid: GenericInstanceIdArray.create()
 		}
 	end 'create'
 end 'StdlibCacheData'
@@ -580,6 +631,18 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			writeDword(buf, value: addrFix.bodyOffset)
 			try writeString(buf, s: addrFix.targetName)
 		end 'eachAddrFix'
+
+		// Cache v46: WASM globalAddr linear-memory offset fixups. The user
+		// pipeline merges its data ahead of the stdlib chunks, so the
+		// cache-time offsets stored at lower time don't reflect the final
+		// layout. Each fixup carries the body offset of the 5-byte fixed-
+		// width i64.const payload plus the symbol name that the user-build
+		// resolves via globalDataOffsets.
+		writeDword(buf, value: func.globalAddrFixups.count())
+		for gAddrFix in func.globalAddrFixups 'eachGAddrFix'
+			writeDword(buf, value: gAddrFix.bodyOffset)
+			try writeString(buf, s: gAddrFix.targetName)
+		end 'eachGAddrFix'
 	end 'eachWasmFunc'
 
 	// GlobalData
@@ -653,6 +716,14 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 		end 'eachParamDefault'
 	end 'eachSig'
 
+	// Cache v47: per-function throws-clause. Mirrors the funcReturnTypes
+	// layout — string key + ThrowsClause field via the absent/throwing codec.
+	writeDword(buf, value: data.funcThrowsTypes.count())
+	for (name, throwsClause) in data.funcThrowsTypes 'eachThrows'
+		try writeString(buf, s: name)
+		try writeThrowsClauseField(buf, clause: throwsClause)
+	end 'eachThrows'
+
 	// Struct types
 	writeDword(buf, value: data.structTypes.count())
 	for (name, st) in data.structTypes 'eachStruct'
@@ -686,6 +757,37 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			try writeMaxonType(project, buf: buf, t: aliasType)
 		end 'eachInnerAlias'
 	end 'eachStruct'
+
+	// Cache v47: enum types. Required so cache-hit user code can dispatch
+	// on stdlib enum cases via `match`. Mirrors the struct loop's writer
+	// shape — name + flags + case array. Visibility/sourceFilePath are not
+	// persisted; the reader stamps `global` + stdlib bootstrap path the
+	// same way structTypes does. Payload-field types are written via
+	// `writeMaxonType` for the typeNameTable round-trip. `rawStringValue`
+	// and `backingStructName` route through `writeOptionalString` because
+	// they're empty strings for plain enum cases — the mandatory `writeString`
+	// codec rejects empty strings.
+	writeDword(buf, value: data.enumTypes.count())
+	for (name, et) in data.enumTypes 'eachEnum'
+		try writeString(buf, s: name)
+		writeBoolByte(buf, b: et.isFloatBacked)
+		writeBoolByte(buf, b: et.isStringBacked)
+		writeBoolByte(buf, b: et.isCharBacked)
+		writeBoolByte(buf, b: et.isUnion)
+		writeDword(buf, value: et.cases.count())
+		for ec in et.cases 'eachCase'
+			try writeString(buf, s: ec.name)
+			writeDword(buf, value: ec.ordinal)
+			writeQword(buf, value: ec.rawValue)
+			try writeOptionalStringDefaultEmpty(buf, value: ec.rawStringValue)
+			try writeOptionalStringDefaultEmpty(buf, value: ec.backingStructName)
+			writeDword(buf, value: ec.payloadFields.count())
+			for pf in ec.payloadFields 'eachPayload'
+				try writeString(buf, s: pf.name)
+				try writeMaxonType(project, buf: buf, t: pf.fieldType)
+			end 'eachPayload'
+		end 'eachCase'
+	end 'eachEnum'
 
 	// Top-level constants. Visibility / sourceFilePath are not serialized:
 	// every stdlib constant is implicitly `exported` and originates at the
@@ -985,6 +1087,17 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 			wFunc.funcAddrFixups.push(WasmFuncAddrFixup.create(addrOffset, targetName: addrTarget))
 		end 'eachAddrFix'
 
+		// Cache v46: globalAddr linear-memory offset fixups.
+		let wGAddrFixCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		for _ in 0 upto wGAddrFixCount 'eachGAddrFix'
+			let gOffset = readDword(buf, offset: pos)
+			pos = pos + 4
+			let (gTarget, gp1) = try readString(buf, offset: pos)
+			pos = gp1
+			wFunc.globalAddrFixups.push(WasmGlobalAddrFixup.create(gOffset, targetName: gTarget))
+		end 'eachGAddrFix'
+
 		data.wasmFunctions.push(wFunc)
 	end 'eachWasmFunc'
 
@@ -1106,6 +1219,18 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		try data.funcSignatures.insert(sigName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
 	end 'eachSig'
 
+	// Cache v47: function throws-clause entries. Mirrors the
+	// funcReturnTypes loop above — string key + ThrowsClause value.
+	let throwsCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto throwsCount 'eachThrows'
+		let (throwsName, pTh0) = try readString(buf, offset: pos)
+		pos = pTh0
+		let (clause, pTh1) = try readThrowsClauseField(buf, offset: pos)
+		pos = pTh1
+		try data.funcThrowsTypes.insert(throwsName, value: clause) otherwise ignore
+	end 'eachThrows'
+
 	// Stdlib decls don't carry visibility / sourceFilePath in the cache
 	// codec — every entry is implicitly `global` and originates at the
 	// shared stdlib bootstrap path. Stamping these defaults here lets
@@ -1168,6 +1293,53 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'eachStruct'
 
+	// Cache v47: enum types. Mirrors the writer above; visibility +
+	// sourceFilePath stamp `global` + the stdlib bootstrap path the same
+	// way structTypes does, and `expectedMethods` stays empty because the
+	// cache-hit pipeline doesn't re-check enum conformance.
+	let enumCount = readDword(buf, offset: pos)
+	pos = pos + 4
+	for _ in 0 upto enumCount 'eachEnum'
+		let (enumName, pEn0) = try readString(buf, offset: pos)
+		pos = pEn0
+		let (isFloatBacked, pEn1) = readBoolByte(buf, offset: pos)
+		pos = pEn1
+		let (isStringBacked, pEn2) = readBoolByte(buf, offset: pos)
+		pos = pEn2
+		let (isCharBacked, pEn3) = readBoolByte(buf, offset: pos)
+		pos = pEn3
+		let (isUnion, pEn4) = readBoolByte(buf, offset: pos)
+		pos = pEn4
+		let caseCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var cases = EnumCaseArray.create()
+		for _ in 0 upto caseCount 'eachCase'
+			let (caseName, pCa0) = try readString(buf, offset: pos)
+			pos = pCa0
+			let ordinal = readDword(buf, offset: pos)
+			pos = pos + 4
+			let rawValue = readQword(buf, offset: pos)
+			pos = pos + 8
+			let (rawStringValue, pCa1) = try readOptionalStringDefaultEmpty(buf, offset: pos)
+			pos = pCa1
+			let (backingStructName, pCa2) = try readOptionalStringDefaultEmpty(buf, offset: pos)
+			pos = pCa2
+			let payloadCount = readDword(buf, offset: pos)
+			pos = pos + 4
+			var payloadFields = EnumPayloadFieldArray.create()
+			for _ in 0 upto payloadCount 'eachPayload'
+				let (pfName, pPf0) = try readString(buf, offset: pos)
+				pos = pPf0
+				let (pfType, pPf1) = try readMaxonType(project, buf: buf, offset: pos)
+				pos = pPf1
+				payloadFields.push(EnumPayloadField.create(pfName, fieldType: pfType))
+			end 'eachPayload'
+			cases.push(EnumCase.create(caseName, ordinal: ordinal as CaseOrdinal, rawValue: rawValue, line: 0, column: 0, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: 0, rawStringValue: rawStringValue))
+		end 'eachCase'
+		let et = EnumType.create(enumName, cases: cases, isFloatBacked: isFloatBacked, visibility: Visibility.global, sourceFilePath: stdlibBootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), isUnion: isUnion, isStringBacked: isStringBacked, isCharBacked: isCharBacked)
+		try data.enumTypes.insert(enumName, value: et) otherwise ignore
+	end 'eachEnum'
+
 	// Top-level constants
 	let constCount = readDword(buf, offset: pos)
 	pos = pos + 4
@@ -1201,7 +1373,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let (ifaceReg, pIfr) = try readInterfaceTypeRegistry(buf, offset: pos)
 	pos = pIfr
 	data.interfaceRegistry = ifaceReg
-	let (gInstReg, pGir) = try readGenericInstanceRegistry(project, buf: buf, offset: pos)
+	let (gInstReg, pGir) = try readGenericInstanceRegistry(project, buf: buf, offset: pos, writerGidMap: data.writerGidToProjectGid)
 	pos = pGir
 	data.genericInstances = gInstReg
 	let (ifaceMap, pIm) = try readInterfaceMap(project, buf: buf, offset: pos)
@@ -1249,19 +1421,19 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		data.typeNameTable.push(name)
 	end 'mirrorTable'
 
-	// Cache v19: same identity-mirror trick for the generic-instance,
+	// Cache v19 + v44: identity-mirror trick for the generic-instance,
 	// type-parameter, and interface registries. `readMaxonType` interns
 	// nested generic instances directly into `project.genericInstances`
 	// (not `data.genericInstances`), so any cached `genericInstance(id)`
-	// references the project registry — but `readGenericInstanceRegistry`
-	// built a separate `data.genericInstances` with its own (different)
-	// ordering because outer interns happen *after* recursive arg reads.
-	// `translateCapturedGenericInstanceId` would then look up the project-
-	// space id in data.genericInstances and get the wrong payload, causing
-	// e.g. `Array.innerAliases["ArrayIter"]` to resolve to `__ManagedMemory
-	// with Element` post-restore. Replace data registries wholesale with
-	// fresh registries mirrored verbatim from project.* so translation is
-	// an identity round-trip.
+	// payload in a MaxonType is already a project-space id. Mirror
+	// project.* into data.* here so `translateCapturedGenericInstance` can
+	// look up the project-id payload in `data.genericInstances` and get
+	// an identity round-trip. Raw writer-side gids in
+	// `layoutDescriptors`/`witnessTables` do *not* use this path — they go
+	// through `translateWriterGenericInstanceId` against the
+	// `writerGidToProjectGid` table built during the registry read, since
+	// writer-id ordering generally diverges from reader-project-id ordering
+	// once recursive arg interning reorders project assignments.
 	data.genericInstances = GenericInstanceRegistry.create()
 	for i in 0 upto project.genericInstances.count() 'mirrorGenericInstances'
 		let (baseId, args) = project.genericInstances.get(i)
@@ -1423,6 +1595,9 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
 		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
 		interface (id) gives translateCapturedInterface(project, data: data, id: id)
+		// `constInt` arms carry a literal payload, not a registry id —
+		// no captured-data lookup needed, pass the literal through.
+		constInt gives t
 	end 'translate'
 end 'translateMaxonType'
 
@@ -1473,6 +1648,18 @@ function translateCapturedGenericInstanceId(project Project, data StdlibCacheDat
 	let destArgs = translateCapturedTypeArray(project, data: data, src: sourceArgs)
 	return project.genericInstances.intern(destBaseId, args: destArgs)
 end 'translateCapturedGenericInstanceId'
+
+// Translate a writer-side `GenericInstanceId` (the raw qword payload of
+// `layoutDescriptors`/`witnessTables`) to the destination project's id
+// space by consulting the `writerGidToProjectGid` table built during
+// `readGenericInstanceRegistry`. Distinct from
+// `translateCapturedGenericInstanceId` (which works in
+// data.genericInstances' id space — post-mirror == project space) because
+// the writer's id space generally diverges from the reader's after
+// recursive arg interning reorders project assignments.
+function translateWriterGenericInstanceId(data StdlibCacheData, writerGid GenericInstanceId) returns GenericInstanceId
+	return try data.writerGidToProjectGid.get(writerGid) otherwise panic("translateWriterGenericInstanceId: writerGid={writerGid} OOB (table count={data.writerGidToProjectGid.count()}) — writer wrote a gid the read pass never saw")
+end 'translateWriterGenericInstanceId'
 
 // Translate every captured MaxonType in `src` through `translateMaxonType`
 // into a fresh MaxonTypeArray in the destination project's id space.
@@ -1579,9 +1766,23 @@ export function captureStdlibMetadata(project Project, data StdlibCacheData)
 		try data.funcSignatures.insert(name, value: sig) otherwise ignore
 	end 'copySigs'
 
+	// Cache v47: snapshot per-callee throws-clause so a cached-stdlib run
+	// of `try map.insert(...) otherwise (e) ... match e ...` recovers the
+	// MapError-typed binding instead of falling back to `integer`.
+	for (name, throwsClause) in project.funcThrowsTypes 'copyThrows'
+		try data.funcThrowsTypes.insert(name, value: throwsClause) otherwise ignore
+	end 'copyThrows'
+
 	for (name, st) in project.structTypes 'copyStructs'
 		try data.structTypes.insert(name, value: st) otherwise ignore
 	end 'copyStructs'
+
+	// Cache v47: enumTypes so cache-hit user code can dispatch on stdlib
+	// enum cases (MapError, ArrayError, ...). Without this round-trip the
+	// `match` scrutinee check in TR rejects every stdlib-throws binding.
+	for (name, et) in project.enumTypes 'copyEnums'
+		try data.enumTypes.insert(name, value: et) otherwise ignore
+	end 'copyEnums'
 
 	for (name, entry) in project.topLevelConstants 'copyConsts'
 		try data.topLevelConstants.insert(name, value: entry) otherwise ignore
@@ -1747,6 +1948,15 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		try project.funcSignatures.insert(name, value: FuncSignature.create(sig.paramNames, paramTypes: translatedTypes, paramDefaults: sig.paramDefaults)) otherwise ignore
 	end 'restoreSigs'
 
+	// Cache v47: replay per-callee throws-clause so `funcThrowsTypes.get`
+	// at parse time of user code returns the stdlib method's declared
+	// error type. The clause is a plain `ThrowsClause.throwing(name)` /
+	// `ThrowsClause.none` — no captured-id translation required since the
+	// payload is a String (the throws type is looked up by name later).
+	for (name, throwsClause) in data.funcThrowsTypes 'restoreThrows'
+		try project.funcThrowsTypes.insert(name, value: throwsClause) otherwise ignore
+	end 'restoreThrows'
+
 	// Rebuild `overloadedNames` from the restored signature names.
 	// The overload bucket is populated by the parser when a second `function
 	// foo` registers under the same qualified name — rekeyExistingFunction
@@ -1766,6 +1976,14 @@ export function restoreStdlibMetadata(project Project, data StdlibCacheData)
 		let translated = translateStructType(project, data: data, st: st)
 		try project.structTypes.insert(name, value: translated) otherwise ignore
 	end 'restoreStructs'
+
+	// Cache v47: restore enum types so `match` on cached stdlib enums
+	// (MapError, ArrayError, ...) dispatches by case name. Payload-field
+	// MaxonTypes were already re-interned through the destination project's
+	// interner during `readMaxonType`, so no further translation step.
+	for (name, et) in data.enumTypes 'restoreEnums'
+		try project.enumTypes.insert(name, value: et) otherwise ignore
+	end 'restoreEnums'
 
 	// Restore top-level constants
 	for (name, entry) in data.topLevelConstants 'restoreConsts'
@@ -1902,13 +2120,15 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		try project.genericTypealiases.insert(name, value: translateMaxonType(project, data: data, t: t)) otherwise ignore
 	end 'eachGta'
 
-	// layoutDescriptors are keyed by GenericInstanceId. The captured `gid`
-	// references `data.genericInstances` (source id space); translate to the
-	// destination's gid by walking through the captured payload and re-interning.
+	// layoutDescriptors are keyed by GenericInstanceId. The serialized `gid`
+	// is a *writer-side* project id (raw qword payload), not a translated
+	// `data.genericInstances` index — so route it through
+	// `translateWriterGenericInstanceId` which consults the writer→project
+	// table built during `readGenericInstanceRegistry`.
 	for i in 0 upto data.layoutDescriptors.count() 'eachLd'
 		let sourceGid = try data.layoutDescriptors.instanceIds.get(i) otherwise panic("restoreRegistries: layoutDescriptors.instanceIds.get OOB at {i}")
 		let label = try data.layoutDescriptors.labels.get(i) otherwise panic("restoreRegistries: layoutDescriptors.labels desync at {i}")
-		let destGid = translateCapturedGenericInstanceId(project, data: data, id: sourceGid)
+		let destGid = translateWriterGenericInstanceId(data, writerGid: sourceGid)
 		project.layoutDescriptors.intern(destGid, label: label)
 	end 'eachLd'
 
@@ -1916,12 +2136,12 @@ function restoreRegistries(project Project, data StdlibCacheData)
 		let e = data.witnessTables.get(i)
 		project.witnessTables.intern(e.typeName, interfaceName: e.interfaceName, label: e.label, methodImplNames: e.methodImplNames, parentWitnessLabel: e.parentWitnessLabel, isFatBoxed: e.isFatBoxed)
 	end 'eachWt'
-	// Per-instance gid-keyed entries. Translate the captured gid through
-	// the gid remapping table so the user pipeline's witness loader can
+	// Per-instance gid-keyed entries. Same writer-id translation as
+	// layoutDescriptors above so the user pipeline's witness loader can
 	// resolve labels for stdlib-emitted instances (e.g. `Array<Byte>`).
 	for i in 0 upto data.witnessTables.gidCount() 'eachGidWt'
 		let g = data.witnessTables.getGid(i)
-		let destGid = translateCapturedGenericInstanceId(project, data: data, id: g.gid)
+		let destGid = translateWriterGenericInstanceId(data, writerGid: g.gid)
 		project.witnessTables.internForGid(destGid, interfaceName: g.interfaceName, label: g.label, methodImplNames: g.methodImplNames, isFatBoxed: g.isFatBoxed)
 	end 'eachGidWt'
 
@@ -2161,7 +2381,18 @@ function writeGenericInstanceRegistry(project Project, buf ByteArray, registry G
 	end 'eachInst'
 end 'writeGenericInstanceRegistry'
 
-function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset) returns (GenericInstanceRegistry, ByteOffset) throws CacheCorruption
+// Read the on-disk generic-instance registry. Each writer-side entry is
+// interned into the fresh `data.genericInstances` (so the i-th entry
+// keeps writer-id i — needed by raw qword gid translation for
+// `layoutDescriptors`/`witnessTables`). The writer→project mapping is
+// recorded in `writerGidMap` by interning each entry's `(baseId, args)`
+// into `project.genericInstances` (idempotent — returns the existing id
+// when the recursive arg read already created it via
+// `readMaxonGenericInstance`). Polymorphic-slot writer entries whose args
+// contain `unresolved`/`typeParameter` placeholders also surface in
+// project as a side effect; downstream emission passes filter them via
+// `gidIsConditional`.
+function readGenericInstanceRegistry(project Project, buf ByteArray, offset ByteOffset, writerGidMap GenericInstanceIdArray) returns (GenericInstanceRegistry, ByteOffset) throws CacheCorruption
 	let count = readDword(buf, offset: offset)
 	var pos = offset + 4
 	var registry = GenericInstanceRegistry.create()
@@ -2171,7 +2402,9 @@ function readGenericInstanceRegistry(project Project, buf ByteArray, offset Byte
 		let (args, p2) = try readMaxonTypeArray(project, buf: buf, offset: pos)
 		pos = p2
 		let baseId = project.typeNames.intern(baseName)
+		let projectGid = project.genericInstances.intern(baseId, args: args)
 		_ = registry.intern(baseId, args: args)
+		writerGidMap.push(projectGid)
 	end 'eachInst'
 	return (registry, pos)
 end 'readGenericInstanceRegistry'
@@ -2625,6 +2858,8 @@ function liftStdArithBinaryOpcode(raw MachineWord) returns StdArithBinaryOpcode 
 		subF64 gives StdArithBinaryOpcode.subF64
 		mulF64 gives StdArithBinaryOpcode.mulF64
 		divF64 gives StdArithBinaryOpcode.divF64
+		minF64 gives StdArithBinaryOpcode.minF64
+		maxF64 gives StdArithBinaryOpcode.maxF64
 		cmpI64Eq gives StdArithBinaryOpcode.cmpI64Eq
 		cmpI64Ne gives StdArithBinaryOpcode.cmpI64Ne
 		cmpI64Lt gives StdArithBinaryOpcode.cmpI64Lt
@@ -2733,7 +2968,7 @@ function writeStdCallOp(buf ByteArray, op StdCallOp) throws CacheCorruption
 		call(resultId, callee, argIds) then try writeStdCallCall(buf, resultId: resultId, callee: callee, argIds: argIds)
 		tryCall(resultId, callee, argIds, errorFlagId) then try writeStdCallTryCall(buf, resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) then writeStdCallIndirect(buf, resultId: resultId, calleeId: calleeId, argIds: argIds)
-		witnessCall(resultId, witnessAddrId, methodIndex, argIds) then writeStdCallWitness(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds)
+		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then writeStdCallWitness(buf, resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		funcRef(resultId, funcName) then try writeStdCallFuncRef(buf, resultId: resultId, funcName: funcName)
 		tailCall(callee, argIds) then try writeStdCallTail(buf, callee: callee, argIds: argIds)
 		param(resultId, paramIndex, paramType) then writeStdCallParam(buf, resultId: resultId, paramIndex: paramIndex, paramType: paramType)
@@ -2760,10 +2995,12 @@ function writeStdCallIndirect(buf ByteArray, resultId ValueId, calleeId ValueId,
 	writeValueIdArrayCodec(buf, arr: argIds)
 end 'writeStdCallIndirect'
 
-function writeStdCallWitness(buf ByteArray, resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+function writeStdCallWitness(buf ByteArray, resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: witnessAddrId)
 	writeQword(buf, value: methodIndex)
+	let voidFlag = 1 if isVoid else 0
+	writeQword(buf, value: voidFlag)
 	writeValueIdArrayCodec(buf, arr: argIds)
 end 'writeStdCallWitness'
 
@@ -2835,8 +3072,10 @@ function readStdCallWitness(buf ByteArray, offset ByteOffset) returns (StdCallOp
 	let resultId = readQword(buf, offset: offset)
 	let witnessAddrId = readQword(buf, offset: offset + 8)
 	let methodIndex = readQword(buf, offset: offset + 16)
-	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 24)
-	return (StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds), p)
+	let isVoidFlag = readQword(buf, offset: offset + 24)
+	let isVoid = isVoidFlag != 0
+	let (argIds, p) = readValueIdArrayCodec(buf, offset: offset + 32)
+	return (StdCallOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds), p)
 end 'readStdCallWitness'
 
 function readStdCallFuncRef(buf ByteArray, offset ByteOffset) returns (StdCallOp, ByteOffset) throws CacheCorruption

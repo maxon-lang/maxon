@@ -1,0 +1,173 @@
+// Test: dispatch-transitive-leak
+
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Worker
+	function process(values IntArray) returns Integer
+end 'Worker'
+
+type SumWorker implements Worker
+	let tag Integer
+
+	function process(values IntArray) returns Integer
+		var total = 0
+		var i = 0
+		while i < values.count() 'loop'
+			let v = try values.get(i) otherwise 0
+			total = total + v
+			i = i + 1
+		end 'loop'
+		return total
+	end 'process'
+
+	export static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+end 'SumWorker'
+
+// Level 3: leaf function that uses the interface and creates temporaries
+function processOne(w Worker, value Integer) returns Integer
+	var arr = IntArray.create()
+	arr.push(value)
+	return w.process(arr)
+end 'processOne'
+
+// Level 2: intermediate function that calls level 3
+function processTwo(w Worker, a Integer, b Integer) returns Integer
+	let r1 = processOne(w, value: a)
+	let r2 = processOne(w, value: b)
+	return r1 + r2
+end 'processTwo'
+
+// Level 1: entry point that creates the concrete type and passes through
+function doWork(w Worker) returns Integer
+	return processTwo(w, a: 10, b: 32)
+end 'doWork'
+
+function main() returns ExitCode
+	let worker = SumWorker.create()
+	return doWork(worker)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @SumWorker.process(local0: i64, local1: i64) -> i64 {
+  entry:
+    %30 = mir.param local1 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%2, %3)
+  loop_0.header:
+    %6 = mir.global_addr @__layout_Array_Integer
+    %7 = mir.call @Array.count(%30, %6)
+    %8 = mir.cmp lt, %27, %7
+    mir.cond_br %8 [then: inlined_Array.get_0(), else: loop_0.exit()]
+  inlined_Array.get_0:
+    %31 = mir.load %30, 0 width: qword
+    %32, %33 = mir.try_call @stdlib.__managed_mem_get(%31, %27)
+    %34 = mir.mov_imm 0 : i64
+    %35 = mir.cmp ne, %33, %34
+    mir.cond_br %35 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.mov_imm 1 : i64
+    mir.br inline_cont_SumWorker.process_0(%36, %37)
+  inlined_Array.get_2:
+    %38 = mir.mov_imm 0 : i64
+    mir.br inline_cont_SumWorker.process_0(%32, %38)
+  inline_cont_SumWorker.process_0:
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.cmp ne, %40, %14
+    mir.cond_br %15 [then: try_0.otherwise(), else: try_0.merge(%39)]
+  loop_0.exit:
+    mir.ret %26
+  try_0.otherwise:
+    %18 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%18)
+  try_0.merge:
+    %22 = mir.add.i64 %26, %28
+    %24 = mir.mov_imm 1 : i64
+    %25 = mir.add.i64 %27, %24
+    mir.br loop_0.header(%22, %25)
+  }
+  func @processOne(local0: i64, local1: i64, local2: i64) -> i64 {
+  entry:
+    %13 = mir.param local0 : i64
+    mir.store_slot slot_0, %13
+    %14 = mir.param local1 : i64
+    mir.store_slot slot_1, %14
+    %15 = mir.param local2 : i64
+    %16 = mir.mov_imm 8 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    %18 = mir.mov_imm 40 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    %20 = mir.mov_imm 0 : i64
+    mir.store %20, %19, 0 width: qword
+    %21 = mir.mov_imm 0 : i64
+    mir.store %21, %19, 8 width: qword
+    %22 = mir.mov_imm 0 : i64
+    mir.store %22, %19, 16 width: qword
+    %23 = mir.mov_imm 8 : i64
+    mir.store %23, %19, 24 width: qword
+    %24 = mir.mov_imm 0 : i64
+    mir.store %24, %19, 32 width: qword
+    mir.store %19, %17, 0 width: qword
+    %7 = mir.global_addr @__layout_Array_Integer
+    %8 = mir.call @Array.push(%17, %15, %7)
+    %9 = mir.load_slot slot_0
+    %10 = mir.load_slot slot_1
+    %12 = mir.witness_call %10, [0](%9, %17)
+    mir.ret %12
+  }
+  func @processTwo(local0: i64, local1: i64, local2: i64, local3: i64) -> i64 {
+  entry:
+    %15 = mir.param local0 : i64
+    mir.store_slot slot_0, %15
+    %16 = mir.param local1 : i64
+    mir.store_slot slot_1, %16
+    %17 = mir.param local2 : i64
+    %18 = mir.param local3 : i64
+    %4 = mir.load_slot slot_0
+    %5 = mir.load_slot slot_1
+    %7 = mir.call @processOne(%4, %5, %17)
+    %8 = mir.load_slot slot_0
+    %9 = mir.load_slot slot_1
+    %11 = mir.call @processOne(%8, %9, %18)
+    %14 = mir.add.i64 %7, %11
+    mir.ret %14
+  }
+  func @doWork(local0: i64, local1: i64) -> i64 {
+  entry:
+    %7 = mir.param local0 : i64
+    mir.store_slot slot_0, %7
+    %8 = mir.param local1 : i64
+    mir.store_slot slot_1, %8
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.mov_imm 10 : i64
+    %5 = mir.mov_imm 32 : i64
+    %6 = mir.call @processTwo(%2, %3, %4, %5)
+    mir.ret %6
+  }
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %5, 0 width: qword
+    %2 = mir.global_addr @__witness_SumWorker_Worker
+    %3 = mir.call @doWork(%5, %2)
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %3, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

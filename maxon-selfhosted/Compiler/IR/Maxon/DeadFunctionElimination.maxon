@@ -130,6 +130,18 @@ end 'addCalleesFromOpIndex'
 
 function markCalleeFromCall(project Project, callee ByteArray, callContext CallContext, currentNamespace String, readerFilePath FilePath, worklist StringArray, seen StringSet)
 	let qualified = qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
+	// Overloaded callee: the bare qualified name has no funcReturnTypes entry
+	// (the parser rekeyed each variant under a mangled suffix). Mark every
+	// variant in the bucket so DFE doesn't drop overload candidates that
+	// TypeResolution will pick at the call site. Resolving precisely here
+	// would require per-call argType propagation which DFE doesn't track
+	// (correctness only — over-marking only inflates binary size).
+	if let bucket = try project.overloadedNames.get(qualified) 'isOverloaded'
+		for variant in bucket 'eachVariant'
+			markCallee(variant, worklist: worklist, seen: seen)
+		end 'eachVariant'
+		return
+	end 'isOverloaded'
 	markCallee(qualified, worklist: worklist, seen: seen)
 end 'markCalleeFromCall'
 

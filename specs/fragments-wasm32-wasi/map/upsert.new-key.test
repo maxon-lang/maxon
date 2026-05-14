@@ -1,0 +1,64 @@
+// Test: upsert.new-key
+function main() returns ExitCode
+	var m = [1: 10]
+	m.upsert(2, value: 20)
+	return m.count()
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%5, %4, %6)
+    %8 = mir.global_addr @__rdata_arr_map_main_46
+    mir.store %8, %7, 0 width: qword
+    mir.store %0, %7, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %7, 16 width: qword
+    %11 = mir.mov_imm 8 : i64
+    mir.store %11, %7, 24 width: qword
+    %12 = mir.mov_imm -2 : i64
+    mir.store %12, %7, 32 width: qword
+    %18 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %19 = mir.mov_imm 40 : i64
+    %21 = mir.call @stdlib.__mm_alloc(%19, %18, %6)
+    %22 = mir.global_addr @__rdata_arr_map_main_47
+    mir.store %22, %21, 0 width: qword
+    mir.store %0, %21, 8 width: qword
+    %24 = mir.mov_imm -2 : i64
+    mir.store %24, %21, 16 width: qword
+    %25 = mir.mov_imm 8 : i64
+    mir.store %25, %21, 24 width: qword
+    %26 = mir.mov_imm -2 : i64
+    mir.store %26, %21, 32 width: qword
+    %30 = mir.global_addr @__layout_Map_Int_Int
+    %31 = mir.global_addr @__witness_int_Hashable
+    %32 = mir.global_addr @__witness_int_Equatable
+    %33 = mir.call @Map.init(%7, %21, %30, %31, %32)
+    %35 = mir.mov_imm 2 : i64
+    %36 = mir.mov_imm 20 : i64
+    %37 = mir.global_addr @__layout_Map_Int_Int
+    %38 = mir.global_addr @__witness_int_Hashable
+    %39 = mir.global_addr @__witness_int_Equatable
+    %40 = mir.call @Map.upsert(%33, %35, %36, %37, %38, %39)
+    %42 = mir.global_addr @__layout_Map_Int_Int
+    %43 = mir.global_addr @__witness_int_Hashable
+    %44 = mir.global_addr @__witness_int_Equatable
+    %45 = mir.call @Map.count(%33, %42, %43, %44)
+    %46 = mir.mov_imm 125 : i64
+    %47 = mir.cmp ugt, %45, %46
+    mir.cond_br %47 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %48 = mir.global_addr @__panic_msg_0
+    %49 = mir.call @mrt_panic(%48)
+  __range_ok_0:
+    mir.ret %45
+  }
+}
+---

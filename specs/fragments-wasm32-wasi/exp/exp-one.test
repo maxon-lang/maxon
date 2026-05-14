@@ -1,0 +1,26 @@
+// Test: exp-one
+function main() returns ExitCode
+	let result = Math.exp(1.0)  // e^1 ≈ 2.71828
+	return trunc(result)
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4607182418800017408 : f64
+    %1 = mir.call @Math.exp(%0)
+    %3 = mir.fptosi.i64 %1
+    %4 = mir.mov_imm 125 : i64
+    %5 = mir.cmp ugt, %3, %4
+    mir.cond_br %5 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %6 = mir.global_addr @__panic_msg_0
+    %7 = mir.call @mrt_panic(%6)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

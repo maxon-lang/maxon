@@ -241,6 +241,8 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		subXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		mulXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		divXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
+		minXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
+		maxXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		sqrtXmm(dest, src, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		roundXmm(dest, src, _, _) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		ucomisXmm(src1, src2, _) gives isVirtualFpReg(src1) or isVirtualFpReg(src2)
@@ -336,6 +338,8 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		subXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
 		mulXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
 		divXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		minXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		maxXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
 		sqrtXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
 		roundXmm(_, src, _, _) then incUse(counts, id: x64FpVRegId(src))
 		ucomisXmm(src1, src2, _) then countX64FpTwoReads(counts, fp1: src1, fp2: src2)
@@ -599,6 +603,8 @@ export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx Re
 		subXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
 		mulXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
 		divXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		minXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		maxXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
 		sqrtXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
 		roundXmm(_, src, _, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
 		ucomisXmm(src1, src2, _) then recordX64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
@@ -1129,6 +1135,8 @@ function x64GetFpTwoAddrOperands(x64Op X64Op) returns (X64FpVReg, X64FpVReg)
 		subXmm(dest, src, _) gives(dest, src)
 		mulXmm(dest, src, _) gives(dest, src)
 		divXmm(dest, src, _) gives(dest, src)
+		minXmm(dest, src, _) gives(dest, src)
+		maxXmm(dest, src, _) gives(dest, src)
 		default panic("x64GetFpTwoAddrOperands: unexpected op")
 	end 'get'
 end 'x64GetFpTwoAddrOperands'
@@ -1142,6 +1150,8 @@ function x64WithFpTwoAddr(x64Op X64Op, d RegOrdinal, s RegOrdinal) returns X64Op
 		subXmm(_, _, precision) gives X64Op.subXmm(dp, src: sp, precision: precision)
 		mulXmm(_, _, precision) gives X64Op.mulXmm(dp, src: sp, precision: precision)
 		divXmm(_, _, precision) gives X64Op.divXmm(dp, src: sp, precision: precision)
+		minXmm(_, _, precision) gives X64Op.minXmm(dp, src: sp, precision: precision)
+		maxXmm(_, _, precision) gives X64Op.maxXmm(dp, src: sp, precision: precision)
 		default panic("x64WithFpTwoAddr: unexpected op")
 	end 'rebuild'
 end 'x64WithFpTwoAddr'
@@ -1826,6 +1836,8 @@ function remapX64FpTwoAddr(x64Op X64Op, remap RegIntArray) returns X64Op
 		subXmm(dest, src, precision) gives X64Op.subXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
 		mulXmm(dest, src, precision) gives X64Op.mulXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
 		divXmm(dest, src, precision) gives X64Op.divXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		minXmm(dest, src, precision) gives X64Op.minXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
+		maxXmm(dest, src, precision) gives X64Op.maxXmm(remapFpReg(dest, remap: remap), src: remapFpReg(src, remap: remap), precision: precision)
 		default panic("remapX64: unexpected op for pattern")
 	end 'remap'
 end 'remapX64FpTwoAddr'

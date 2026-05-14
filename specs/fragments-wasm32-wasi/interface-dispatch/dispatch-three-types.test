@@ -1,0 +1,106 @@
+// Test: dispatch-three-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function value() returns Integer
+end 'Valued'
+
+type One implements Valued
+	function value() returns Integer
+		return 1
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'One'
+
+type Two implements Valued
+	function value() returns Integer
+		return 2
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Two'
+
+type Three implements Valued
+	function value() returns Integer
+		return 3
+	end 'value'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Three'
+
+function getValue(v Valued) returns Integer
+	return v.value()
+end 'getValue'
+
+function main() returns ExitCode
+	let a = One.create()
+	let b = Two.create()
+	let c = Three.create()
+	return getValue(a) + getValue(b) + getValue(c)
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @One.value(local0: i64) -> i64 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    mir.ret %1
+  }
+  func @Two.value(local0: i64) -> i64 {
+  entry:
+    %1 = mir.mov_imm 2 : i64
+    mir.ret %1
+  }
+  func @Three.value(local0: i64) -> i64 {
+  entry:
+    %1 = mir.mov_imm 3 : i64
+    mir.ret %1
+  }
+  func @getValue(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    %4 = mir.global_addr @__witness_One_Valued
+    %5 = mir.call @getValue(%15, %4)
+    %7 = mir.global_addr @__witness_Two_Valued
+    %8 = mir.call @getValue(%17, %7)
+    %9 = mir.add.i64 %5, %8
+    %11 = mir.global_addr @__witness_Three_Valued
+    %12 = mir.call @getValue(%19, %11)
+    %13 = mir.add.i64 %9, %12
+    %20 = mir.mov_imm 125 : i64
+    %21 = mir.cmp ugt, %13, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_0
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

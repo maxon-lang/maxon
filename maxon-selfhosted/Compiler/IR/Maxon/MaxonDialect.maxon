@@ -106,6 +106,14 @@ export union MaxonType
 	// represent these as fat pointers in Phase 11.3; for now the arm exists
 	// only on the parser-AST surface.
 	interface(id InterfaceTypeId)
+	// Phase 13 (sized typealiases): a compile-time integer constant carried
+	// as a generic-instance arg. Used by `typealias Vec1 = Vector with 1 Int`
+	// — the gid's args become `[constInt(1), named(Int)]` so distinct N
+	// produce distinct gids. This arm appears ONLY in a genericInstance's
+	// args list; it is never a value type a user can write. Lowering reads
+	// the payload to size __ManagedMemory allocations and per-instance
+	// layout descriptors.
+	constInt(value IntConstant)
 
 	// Render the source-level spelling of this type, or its display name
 	// for primitives. Used by diagnostic messages and IR printers — the
@@ -122,6 +130,7 @@ export union MaxonType
 			typeParameter(id) gives project.typeParameters.getName(id)
 			genericInstance(id) gives genericInstanceIdToString(project, id: id)
 			interface(id) gives project.interfaceRegistry.getName(id)
+			constInt(value) gives "{value}"
 		end 'str'
 	end 'toString'
 
@@ -139,6 +148,7 @@ export union MaxonType
 			typeParameter(id) gives project.typeParameters.getName(id)
 			genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
 			interface(id) gives project.interfaceRegistry.getName(id)
+			constInt gives ""
 		end 'name'
 	end 'nameOrEmpty'
 
@@ -156,6 +166,7 @@ export union MaxonType
 			typeParameter gives ""
 			genericInstance gives ""
 			interface gives ""
+			constInt gives ""
 		end 'name'
 	end 'namedAliasNameOrEmpty'
 end 'MaxonType'
@@ -170,6 +181,7 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 		boolean to named gives false
 		unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'isFunctionMaxonType'
 
@@ -184,6 +196,7 @@ export function interfaceTypeIsFat(t MaxonType) returns bool
 		unresolved gives false
 		typeParameter gives false
 		genericInstance gives false
+		constInt gives false
 	end 'check'
 end 'interfaceTypeIsFat'
 
@@ -207,6 +220,7 @@ export function maxonTypeWidthBytes(project Project, t MaxonType) returns Machin
 		typeParameter gives 8
 		genericInstance(gid) gives genericInstanceWidthBytes(project, gid: gid)
 		interface gives 8
+		constInt gives 8
 	end 'w'
 end 'maxonTypeWidthBytes'
 
@@ -359,6 +373,7 @@ export function walkInstantiations(project Project, t MaxonType, out GenericInst
 		unresolved then return
 		typeParameter then return
 		interface then return
+		constInt then return
 	end 'walk'
 end 'walkInstantiations'
 
@@ -428,6 +443,7 @@ export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bo
 		typeParameter(idA) gives matchesTypeParameterArm(b, idA: idA)
 		genericInstance(idA) gives matchesGenericInstanceArm(b, idA: idA)
 		interface(idA) gives matchesInterfaceArm(b, idA: idA)
+		constInt(valueA) gives matchesConstIntArm(b, valueA: valueA)
 	end 'lhs'
 end 'maxonTypesStructurallyEqual'
 
@@ -436,6 +452,7 @@ function matchesBooleanArm(b MaxonType) returns bool
 		boolean gives true
 		integer to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesBooleanArm'
 
@@ -445,6 +462,7 @@ function matchesIntegerArm(b MaxonType) returns bool
 		boolean gives false
 		float to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesIntegerArm'
 
@@ -454,6 +472,7 @@ function matchesFloatArm(b MaxonType) returns bool
 		boolean to integer gives false
 		string to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesFloatArm'
 
@@ -463,6 +482,7 @@ function matchesStringArm(b MaxonType) returns bool
 		boolean to float gives false
 		named to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesStringArm'
 
@@ -472,6 +492,7 @@ function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
 		boolean to string gives false
 		function to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesNamedArm'
 
@@ -481,6 +502,7 @@ function matchesFunctionArm(b MaxonType, idA FunctionTypeId) returns bool
 		boolean to named gives false
 		unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesFunctionArm'
 
@@ -489,6 +511,7 @@ function matchesUnresolvedArm(b MaxonType) returns bool
 		unresolved gives true
 		boolean to function gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesUnresolvedArm'
 
@@ -497,6 +520,7 @@ function matchesTypeParameterArm(b MaxonType, idA TypeParamId) returns bool
 		typeParameter(idB) gives idA == idB
 		boolean to unresolved gives false
 		genericInstance to interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesTypeParameterArm'
 
@@ -506,6 +530,7 @@ function matchesGenericInstanceArm(b MaxonType, idA GenericInstanceId) returns b
 		boolean to unresolved gives false
 		typeParameter gives false
 		interface gives false
+		constInt gives false
 	end 'm'
 end 'matchesGenericInstanceArm'
 
@@ -514,8 +539,16 @@ function matchesInterfaceArm(b MaxonType, idA InterfaceTypeId) returns bool
 		interface(idB) gives idA == idB
 		boolean to unresolved gives false
 		typeParameter to genericInstance gives false
+		constInt gives false
 	end 'm'
 end 'matchesInterfaceArm'
+
+function matchesConstIntArm(b MaxonType, valueA IntConstant) returns bool
+	return match b 'm'
+		constInt(valueB) gives valueA == valueB
+		boolean to interface gives false
+	end 'm'
+end 'matchesConstIntArm'
 
 export function maxonReturnTypesStructurallyEqual(a MaxonReturnType, b MaxonReturnType) returns bool
 	return match a 'lhs'
@@ -663,6 +696,9 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		typeParameter(id) then try writeTypeParameterPayload(project, buf: buf, id: id)
 		genericInstance(id) then try writeGenericInstancePayload(project, buf: buf, id: id)
 		interface(id) then try writeString(buf, s: project.interfaceRegistry.getName(id))
+		// Phase 13 (sized typealiases): const-int args in generic instances.
+		// Persist the i64 payload verbatim; the reader rebuilds the same arm.
+		constInt(value) then writeQword(buf, value: value)
 	end 'payload'
 end 'writeMaxonType'
 
@@ -762,6 +798,8 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		typeParameter then return try readMaxonTypeParameter(project, buf: buf, offset: pos)
 		genericInstance then return try readMaxonGenericInstance(project, buf: buf, offset: pos)
 		interface then return try readMaxonInterface(project, buf: buf, offset: pos)
+		// Phase 13 (sized typealiases): mirror writer's constInt payload.
+		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
 	end 'tag'
 end 'readMaxonType'
 
@@ -848,6 +886,10 @@ end 'MaxonErrorKind'
 //   - string  → load `String.managed.buffer` and `String.managed.length`.
 //   - character → load `Character.managed.buffer` and `length` (same shape
 //     as `string`, but the outer struct has only the `managed` field).
+//   - stringable → call `toString()` through the type's Stringable witness
+//     table; the returned String's `managed` buffer/length is the output.
+//   - enumName → emit a select chain mapping the enum ordinal to its
+//     declared case name; the case-name rdata literal supplies buffer/length.
 export union InterpExprKind
 	i64
 	u64
@@ -855,15 +897,31 @@ export union InterpExprKind
 	bool
 	string
 	character
+	stringable
+	enumName
+	// Single-byte char-literal value carried as a raw integer codepoint.
+	// Distinct from `character` (which expects a Character struct's
+	// `__ManagedMemory` layout) because the parser's single-byte char-literal
+	// fast path emits a raw integer rather than a Character struct so that
+	// `b == 'a'` byte comparisons keep compiling without coercions. Lowering
+	// encodes the codepoint as UTF-8 bytes and appends them to the
+	// interpolation buffer at runtime.
+	charByte
 end 'InterpExprKind'
 
 // Phase 7 step 5: one part of an interpolated string. Either a raw literal
 // fragment (interned StringId; lowered to a globalAddr+constI64 length pair)
 // or an expression value whose .toString() materialization is performed at
 // lowering time per `kind`.
+//
+// `formatSpecId` on `expr` carries the optional `:format` clause text
+// (e.g. `04x`, `.3`, `6.2`, `verbose`). An empty interned string means no
+// format spec was written. Lowering routes formatted numeric parts through
+// `mrt_i64_to_string_fmt` / `mrt_f64_to_string_fmt`; non-formatted parts
+// keep the legacy fast paths.
 export union StringInterpPart
 	literal(stringId StringId)
-	expr(valueName ByteArray, kind InterpExprKind)
+	expr(valueName ByteArray, kind InterpExprKind, formatSpecId StringId)
 end 'StringInterpPart'
 
 export typealias StringInterpPartArray = Array with StringInterpPart
@@ -1327,11 +1385,23 @@ export function formatStringInterpParts(project Project, parts StringInterpPartA
 		end 'comma'
 		match part 'k'
 			literal(stringId) then out = "{out}\"{project.strings.get(stringId)}\" #{stringId}"
-			expr(valueName, kind) then out = "{out}%{String.from(valueName)} : {interpExprKindName(kind)}"
+			expr(valueName, kind, formatSpecId) then out = "{out}{formatInterpExprPart(project, valueName: valueName, kind: kind, formatSpecId: formatSpecId)}"
 		end 'k'
 	end 'each'
 	return out
 end 'formatStringInterpParts'
+
+// Helper for `formatStringInterpParts` — separated out because match `then`
+// arms only accept a single statement and the format-spec suffix needs an
+// `if not isEmpty` check before tacking on `:spec`.
+function formatInterpExprPart(project Project, valueName ByteArray, kind InterpExprKind, formatSpecId StringId) returns String
+	var out = "%{String.from(valueName)} : {interpExprKindName(kind)}"
+	let fmtStr = project.strings.get(formatSpecId)
+	if not fmtStr.isEmpty() 'hasFmt'
+		out = "{out}:{fmtStr}"
+	end 'hasFmt'
+	return out
+end 'formatInterpExprPart'
 
 function interpExprKindName(kind InterpExprKind) returns String
 	return match kind 'n'
@@ -1341,6 +1411,9 @@ function interpExprKindName(kind InterpExprKind) returns String
 		bool gives "bool"
 		string gives "string"
 		character gives "character"
+		stringable gives "stringable"
+		enumName gives "enumName"
+		charByte gives "charByte"
 	end 'n'
 end 'interpExprKindName'
 
@@ -1470,9 +1543,12 @@ end 'qualifyCalleeForContext'
 // `genericInstance(...)` shape into a call-site sidecar (e.g.
 // `resolvedReceiverTypes` for layout-arg materialization) read this
 // instead of re-chasing the resolved name.
-export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath) returns (String, MaxonType)
+export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String = "") returns (String, MaxonType)
 	if isQualifiedCallContext(callContext) 'isQualified'
-		return chaseTypealiasInQualifiedCalleeWithType(project, callee: bare, enclosingType: "")
+		// Forward enclosingType so an inner typealias declared on the
+		// enclosing struct (chased via `chaseTypealiasNameToType`'s
+		// `innerAliases` branch) wins over a global-scope miss.
+		return chaseTypealiasInQualifiedCalleeWithType(project, callee: bare, enclosingType: enclosingType)
 	end 'isQualified'
 	// `sibling` first tries the enclosing-type prefix; on miss, falls
 	// through to the same probe order as `free`. The receiver MaxonType
@@ -1484,6 +1560,13 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 		if project.funcReturnTypes.contains(siblingName) 'isSibling'
 			return (siblingName, MaxonType.unresolved)
 		end 'isSibling'
+		// Overloaded sibling: `overloadedNames` is keyed by the bare
+		// qualified name and `funcReturnTypes` only has the mangled
+		// variants. Returning the bare key here lets `resolveOverloadedCallee`
+		// downstream pick the matching variant from the bucket.
+		if project.overloadedNames.contains(siblingName) 'isSiblingOverloaded'
+			return (siblingName, MaxonType.unresolved)
+		end 'isSiblingOverloaded'
 	end 'inSibling'
 	if bare == "main" 'isMain'
 		return (bare, MaxonType.unresolved)
@@ -1492,6 +1575,15 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 	if project.funcReturnTypes.contains(localName) 'isLocal'
 		return (localName, MaxonType.unresolved)
 	end 'isLocal'
+	// Overloaded local: the bare-name slot in `funcReturnTypes` was
+	// vacated by `rekeyExistingFunction` when the second overload was
+	// registered, so `contains(localName)` misses. The `overloadedNames`
+	// bucket is keyed by the bare qualified name — handing that back lets
+	// `resolveOverloadedCallee` pick the matching mangled variant via
+	// `argTypes`.
+	if project.overloadedNames.contains(localName) 'isLocalOverloaded'
+		return (localName, MaxonType.unresolved)
+	end 'isLocalOverloaded'
 	let stdlibName = qualifyName("stdlib", name: bare)
 	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
 		// `__`-prefixed stdlib functions are compiler internals declared
@@ -1510,6 +1602,17 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 		end 'rejectInternalsRef'
 		return (stdlibName, MaxonType.unresolved)
 	end 'isStdlib'
+	// Overloaded stdlib: same shape as the local path — bare-key bucket
+	// exists in `overloadedNames` while `funcReturnTypes` only has the
+	// mangled variants. Apply the same `__`-prefix gate the resolved-name
+	// stdlib branch applies above so user code doesn't accidentally bind
+	// to a stdlib internals overload.
+	if project.overloadedNames.contains(stdlibName) 'isStdlibOverloaded'
+		if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternalsOverloadedRef'
+			return (localName, MaxonType.unresolved)
+		end 'rejectInternalsOverloadedRef'
+		return (stdlibName, MaxonType.unresolved)
+	end 'isStdlibOverloaded'
 	// Cross-file fallback: scan candidates with matching trailing
 	// segment, pick the first visible from `readerFilePath`. `__`-prefix
 	// references from non-internals files are blocked here too, matching
@@ -1830,14 +1933,96 @@ export function mangleSuffixForMaxonType(project Project, t MaxonType) returns S
 		integer gives "$int"
 		float gives "$float"
 		string gives "$String"
-		named(id) gives "${project.typeNames.get(id)}"
+		// Named types may be typealiases for primitives (`typealias Integer =
+		// int(i64.min to i64.max)`); fold them to the primitive suffix so an
+		// `int` literal argument and an `Integer` parameter mangle identically.
+		// Non-aliased struct names fall through to the user-facing name.
+		named(id) gives namedTypeMangleSuffix(project, name: project.typeNames.get(id))
 		typeParameter(id) gives "${project.typeParameters.getName(id)}"
 		genericInstance(id) gives "${mangleSuffixForGenericInstance(project, id: id)}"
 		function gives "$_"
 		interface(id) gives "${project.interfaceRegistry.getName(id)}"
 		unresolved gives "$_"
+		constInt(value) gives "${value}"
 	end 'mangle'
 end 'mangleSuffixForMaxonType'
+
+// Resolve a named type's mangle suffix. Typealiases to primitives fold to
+// the primitive's suffix so overload registration (which sees the declared
+// parameter type, e.g. `value Integer`) and call-site resolution (which sees
+// the literal's primitive type, e.g. `21` → `integer`) produce matching
+// suffixes. Non-aliased names emit the bare user-facing name.
+//
+// Checks `project.typealiases` first (populated by TypeResolution) then
+// `project.unresolvedTypealiases` (populated at parse time) so the mangle
+// is stable whether resolution has run yet or not — parser-side
+// overload registration needs the parse-time path; call-site resolution
+// (after TypeResolution) hits the resolved path.
+function namedTypeMangleSuffix(project Project, name String) returns String
+	if let stdType = try project.typealiases.get(name) 'isPrimAlias'
+		return match stdType.rawValue.castCategory 'cat'
+			int gives "$int"
+			float gives "$float"
+			bool gives "$bool"
+			string gives "$String"
+		end 'cat'
+	end 'isPrimAlias'
+	if let unresolved = try project.unresolvedTypealiases.get(name) 'isUnresolvedPrim'
+		if let category = try parseTimeTypealiasCategory(project, expr: unresolved.expr) 'haveCat'
+			return match category 'cat'
+				int gives "$int"
+				float gives "$float"
+				bool gives "$bool"
+				string gives "$String"
+			end 'cat'
+		end 'haveCat'
+	end 'isUnresolvedPrim'
+	return "${name}"
+end 'namedTypeMangleSuffix'
+
+// Walk a parse-time `UnresolvedTypeExpr` chain to its primitive category,
+// matching what TypeResolution will eventually fold it to. Returns
+// `unresolved` for shapes that aren't primitive aliases (generic /
+// invalid) so the caller can fall back to the bare-name mangling.
+function parseTimeTypealiasCategory(project Project, expr UnresolvedTypeExpr) returns CastCategory throws TypealiasCategoryError
+	return match expr 'kind'
+		rangedInt gives CastCategory.int
+		rangedFloat gives CastCategory.float
+		boolPrim gives CastCategory.bool
+		aliasName(name) gives try parseTimeTypealiasCategoryByName(project, name: name) otherwise throw TypealiasCategoryError.notPrimitive
+		genericAlias throws TypealiasCategoryError.notPrimitive
+		sizedGenericAlias throws TypealiasCategoryError.notPrimitive
+		invalid throws TypealiasCategoryError.notPrimitive
+	end 'kind'
+end 'parseTimeTypealiasCategory'
+
+function parseTimeTypealiasCategoryByName(project Project, name String) returns CastCategory throws TypealiasCategoryError
+	// Primitive built-in shortcut: `int`/`float`/`bool`/`string` may surface
+	// inside an `aliasName(int)` from `typealias Foo = int` without bounds.
+	if name == "int" or name == "byte" 'isInt'
+		return CastCategory.int
+	end 'isInt'
+	if name == "float" 'isFloat'
+		return CastCategory.float
+	end 'isFloat'
+	if name == "bool" 'isBool'
+		return CastCategory.bool
+	end 'isBool'
+	if name == "String" or name == "string" 'isString'
+		return CastCategory.string
+	end 'isString'
+	if let stdType = try project.typealiases.get(name) 'haveResolved'
+		return stdType.rawValue.castCategory
+	end 'haveResolved'
+	if let unresolved = try project.unresolvedTypealiases.get(name) 'haveUnresolved'
+		return try parseTimeTypealiasCategory(project, expr: unresolved.expr) otherwise throw TypealiasCategoryError.notPrimitive
+	end 'haveUnresolved'
+	throw TypealiasCategoryError.notPrimitive
+end 'parseTimeTypealiasCategoryByName'
+
+enum TypealiasCategoryError implements Error
+	notPrimitive
+end 'TypealiasCategoryError'
 
 // Helper: render a genericInstance as `Base_Arg1_Arg2`, recursing into args
 // so nested generics still produce a stable string. Returns the raw token
@@ -1866,6 +2051,7 @@ function mangleTokenForMaxonType(project Project, t MaxonType) returns String
 		function gives "_"
 		interface(id) gives project.interfaceRegistry.getName(id)
 		unresolved gives "_"
+		constInt(value) gives "{value}"
 	end 'token'
 end 'mangleTokenForMaxonType'
 
@@ -1895,6 +2081,31 @@ export function mangleSuffixForFirstParam(project Project, paramTypes MaxonTypeA
 	return suffix
 end 'mangleSuffixForFirstParam'
 
+// Name-based mangle suffix. Used as a fallback when two overloads share
+// the same type signature but differ in param names (e.g.
+// `slice(start Integer, endIndex Integer)` vs
+// `slice(start Integer, length Integer)`). Concatenates every non-self
+// param's name with `_` separators, prefixed with `$`. Zero-arg signatures
+// collapse to `$` (no name to distinguish).
+export function mangleSuffixForParamNames(paramNames StringArray, hasSelf bool) returns String
+	var startIdx = 0
+	if hasSelf 'skipSelf'
+		startIdx = 1
+	end 'skipSelf'
+	if startIdx >= paramNames.count() 'noParam'
+		return "$"
+	end 'noParam'
+	var suffix = "$"
+	for i in startIdx upto paramNames.count() 'eachParam'
+		let name = try paramNames.get(i) otherwise panic("mangleSuffixForParamNames: paramNames.get OOB at {i}")
+		if i > startIdx 'separator'
+			suffix = "{suffix}_"
+		end 'separator'
+		suffix = "{suffix}{name}"
+	end 'eachParam'
+	return suffix
+end 'mangleSuffixForParamNames'
+
 // Resolve a call's qualified callee against the overload registry. When the
 // bare qualified name has overload variants registered, pick the one whose
 // first non-self param-type suffix matches the call's first non-self
@@ -1909,7 +2120,7 @@ end 'mangleSuffixForFirstParam'
 //
 // Returns the bare name when multiple variants match (currently unreachable —
 // the parser rejects same-suffix overloads as E2001 — but kept defensive).
-export function resolveOverloadedCallee(project Project, bareQualifiedName String, argTypes MaxonTypeArray, hasSelf bool) returns String
+export function resolveOverloadedCallee(project Project, bareQualifiedName String, argTypes MaxonTypeArray, hasSelf bool, argLabels StringArray = StringArray.create()) returns String
 	let variants = try project.overloadedNames.get(bareQualifiedName) otherwise return bareQualifiedName
 	var startIdx = 0
 	if hasSelf 'skipSelf'
@@ -1941,6 +2152,17 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 			return target
 		end 'hit'
 	end 'scan'
+	// Type-suffix miss: the variant might have been registered under the
+	// name-based fallback (same types, different param names). Resolve by
+	// matching each variant's signature paramNames against the call's
+	// argLabels — labeled args bind name-to-name; unlabeled args fall to
+	// the bucket's variant whose first non-self paramName matches the
+	// first labeled arg (positional args after a label retain their
+	// declared position). When exactly one variant's labeled positions
+	// match the call's label sequence, return it.
+	if let nameMatch = try resolveOverloadByLabels(project, variants: variants, argLabels: argLabels, hasSelf: hasSelf) 'haveNameMatch'
+		return nameMatch
+	end 'haveNameMatch'
 	// Conditional-extension dispatch: a registered variant whose first
 	// user-param mentions a type-parameter (`Array.contains$Element`,
 	// `Array.contains$Array_Element`) accepts any concrete arg type
@@ -1976,6 +2198,68 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 	return bareQualifiedName
 end 'resolveOverloadedCallee'
 
+// Resolve overload by matching call's labeled args against each variant's
+// paramNames. Used as a fallback when type-only mangling collides (e.g.
+// `slice(start, endIndex)` vs `slice(start, length)` — same types, different
+// names). Walks each variant; for each labeled arg position the variant's
+// param name must match the label exactly; unlabeled positions match any
+// param name. Returns the first variant that matches all labeled positions
+// and rejects nothing. Empty argLabels means "no label-based disambiguation
+// possible" — returns missing. Multiple matches (none distinguished by
+// labels) also returns missing — caller falls back to its own diagnostic.
+function resolveOverloadByLabels(project Project, variants QualifiedNameArray, argLabels StringArray, hasSelf bool) returns String throws OverloadLabelError
+	var hasAnyLabel = false
+	for label in argLabels 'scanLabels'
+		if not label.isEmpty() 'isLabeled'
+			hasAnyLabel = true
+			break
+		end 'isLabeled'
+	end 'scanLabels'
+	if not hasAnyLabel 'noLabels'
+		throw OverloadLabelError.noMatch
+	end 'noLabels'
+	var matched = ""
+	for v in variants 'scanVariant'
+		let sig = try project.funcSignatures.get(v) otherwise continue
+		var startIdx = 0
+		if hasSelf 'skipSelf'
+			startIdx = 1
+		end 'skipSelf'
+		var ok = true
+		for i in 0 upto argLabels.count() 'eachArg'
+			let label = try argLabels.get(i) otherwise return v
+			if label.isEmpty() 'unlabeled'
+				continue
+			end 'unlabeled'
+			let paramIdx = startIdx + i
+			let paramName = try sig.paramNames.get(paramIdx) otherwise 'paramOob'
+				ok = false
+				break
+			end 'paramOob'
+			if paramName != label 'mismatch'
+				ok = false
+				break
+			end 'mismatch'
+		end 'eachArg'
+		if not ok 'noMatch'
+			continue
+		end 'noMatch'
+		if not matched.isEmpty() 'ambiguous'
+			throw OverloadLabelError.ambiguous
+		end 'ambiguous'
+		matched = v
+	end 'scanVariant'
+	if matched.isEmpty() 'noMatch'
+		throw OverloadLabelError.noMatch
+	end 'noMatch'
+	return matched
+end 'resolveOverloadByLabels'
+
+export enum OverloadLabelError implements Error
+	noMatch
+	ambiguous
+end 'OverloadLabelError'
+
 // Phase 11.0 step 8c: helper to skip the implicit `__self` slot when a
 // signature's first param is the receiver. Used by the overload-resolution
 // fallback that probes each variant's first user-facing param type. Reads
@@ -2007,6 +2291,7 @@ function paramTypeMentionsTypeParam(project Project, t MaxonType) returns bool
 		function gives false
 		interface gives false
 		unresolved gives false
+		constInt gives false
 	end 'check'
 end 'paramTypeMentionsTypeParam'
 
@@ -2041,5 +2326,6 @@ function paramTypeShape(t MaxonType) returns ParsedInt
 		typeParameter gives 8
 		genericInstance gives 9
 		unresolved gives 0
+		constInt gives 10
 	end 'shape'
 end 'paramTypeShape'

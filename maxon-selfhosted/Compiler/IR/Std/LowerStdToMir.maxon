@@ -167,7 +167,7 @@ type StdToMirLowering
 			ret(retValId) then self.mirModule.appendOp(dstBlock, op: MirOp.ret(retValId))
 			param(resultId, paramIndex, paramType) then self.mirModule.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
 			indirectCall(resultId, calleeId, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
-			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds))
+			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
 			tailCall(callee, argIds) then self.mirModule.appendOp(dstBlock, op: MirOp.call(0, callee: callee, argIds: argIds))
 			tryCall(resultId, callee, argIds, errorFlagId) then self.mirModule.appendOp(dstBlock, op: MirOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId))
@@ -183,7 +183,7 @@ type StdToMirLowering
 			tryCall(resultId, callee, argIds, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.tryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId))
 			param(resultId, paramIndex, paramType) then self.mirModule.appendOp(dstBlock, op: MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType))
 			indirectCall(resultId, calleeId, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds))
-			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds))
+			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then self.mirModule.setTerminator(dstBlock, op: MirOp.witnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds))
 			funcRef(resultId, funcName) then self.mirModule.appendOp(dstBlock, op: MirOp.funcAddr(resultId, name: funcName))
 			errorReturn(retValId, errorFlagId) then self.mirModule.setTerminator(dstBlock, op: MirOp.errorReturn(retValId, errorFlagId: errorFlagId))
 		end 'dispatch'
@@ -303,7 +303,7 @@ end 'ignoreUnused'
 function arithBinaryOpcodeToMir(opcode StdArithBinaryOpcode) returns MirBinOpcode
 	match opcode 'check'
 		cmpI64Eq to cmpF64Ge then panic("arithBinaryOpcodeToMir: comparison opcode passed to arithmetic mapping")
-		addI64 to divF64 then break 'check'
+		addI64 to maxF64 then break 'check'
 	end 'check'
 	return match opcode 'map'
 		addI64 gives MirBinOpcode.addI64
@@ -321,6 +321,8 @@ function arithBinaryOpcodeToMir(opcode StdArithBinaryOpcode) returns MirBinOpcod
 		subF64 gives MirBinOpcode.subF64
 		mulF64 gives MirBinOpcode.mulF64
 		divF64 gives MirBinOpcode.divF64
+		minF64 gives MirBinOpcode.minF64
+		maxF64 gives MirBinOpcode.maxF64
 		default panic("arithBinaryOpcodeToMir: comparison opcode in arithmetic mapping")
 	end 'map'
 end 'arithBinaryOpcodeToMir'
@@ -329,7 +331,7 @@ end 'arithBinaryOpcodeToMir'
 // Only call this for comparison opcodes.
 function arithBinaryOpcodeToCmpPredicate(opcode StdArithBinaryOpcode) returns MirCmpPredicate
 	match opcode 'check'
-		addI64 to divF64 then panic("arithBinaryOpcodeToCmpPredicate: arithmetic opcode passed to comparison mapping")
+		addI64 to maxF64 then panic("arithBinaryOpcodeToCmpPredicate: arithmetic opcode passed to comparison mapping")
 		cmpI64Eq to cmpF64Ge then break 'check'
 	end 'check'
 	return match opcode 'map'
@@ -353,7 +355,7 @@ end 'arithBinaryOpcodeToCmpPredicate'
 // Returns true if the StdArithBinaryOpcode is a comparison (cmpI64* or cmpF64*).
 function isComparisonOpcode(opcode StdArithBinaryOpcode) returns bool
 	return match opcode 'check'
-		addI64 to divF64 gives false
+		addI64 to maxF64 gives false
 		cmpI64Eq to cmpF64Ge gives true
 	end 'check'
 end 'isComparisonOpcode'

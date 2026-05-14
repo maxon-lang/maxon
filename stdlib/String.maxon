@@ -100,7 +100,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'createIterator'
 
 	function makeCharFromBytesAt(pos BytePos, len ByteCount) returns Character
-		return managed.makeCharFromBytes(pos, len)
+		return makeCharacterFromManagedRange(managed, pos: pos, len: len)
 	end 'makeCharFromBytesAt'
 
 	// String index methods
@@ -406,7 +406,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			// Forward scan: each ASCII byte is one grapheme
 			var start = 0
 			while start < len 'scanStartAscii'
-				let ch = managed.makeCharFromBytes(start, 1)
+				let ch = makeCharacterFromManagedRange(managed, pos: start, len: 1)
 				if not chars.contains(ch) 'foundStartAscii'
 					break
 				end 'foundStartAscii'
@@ -424,7 +424,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			var endPos = managed.length()
 			while endPos > start 'scanEndAscii'
 				endPos = endPos - 1
-				let ch = managed.makeCharFromBytes(endPos, 1)
+				let ch = makeCharacterFromManagedRange(managed, pos: endPos, len: 1)
 				if not chars.contains(ch) 'foundEndAscii'
 					endPos = endPos + 1
 					break
@@ -442,7 +442,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while start < len 'scan_start'
 			let endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
 			let graphemeLen = endByte - start
-			let ch = managed.makeCharFromBytes(start, graphemeLen)
+			let ch = makeCharacterFromManagedRange(managed, pos: start, len: graphemeLen)
 			if not chars.contains(ch) 'found_start'
 				break
 			end 'found_start'
@@ -461,7 +461,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while endPos > start 'scan_end'
 			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: endPos)
 			let graphemeLen = endPos - graphemeStart
-			let ch = managed.makeCharFromBytes(graphemeStart, graphemeLen)
+			let ch = makeCharacterFromManagedRange(managed, pos: graphemeStart, len: graphemeLen)
 			if not chars.contains(ch) 'found_end'
 				break
 			end 'found_end'
@@ -484,7 +484,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if isAsciiFlag 'asciiPath'
 			var start = 0
 			while start < len 'scanStartAscii'
-				let ch = managed.makeCharFromBytes(start, 1)
+				let ch = makeCharacterFromManagedRange(managed, pos: start, len: 1)
 				if not chars.contains(ch) 'foundStartAscii'
 					break
 				end 'foundStartAscii'
@@ -508,7 +508,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while start < len 'scan_start'
 			let endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
 			let graphemeLen = endByte - start
-			let ch = managed.makeCharFromBytes(start, graphemeLen)
+			let ch = makeCharacterFromManagedRange(managed, pos: start, len: graphemeLen)
 			if not chars.contains(ch) 'found_start'
 				break
 			end 'found_start'
@@ -539,7 +539,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			var pos = managed.length()
 			while pos > 0 'scanAscii'
 				pos = pos - 1
-				let ch = managed.makeCharFromBytes(pos, 1)
+				let ch = makeCharacterFromManagedRange(managed, pos: pos, len: 1)
 				if not chars.contains(ch) 'notMatch'
 					let result = try managed.slice(0, pos + 1) otherwise 'teAsciiSliceErr'
 						panic("String.trimEnd: ASCII end slice — pos bounded by scan")
@@ -558,7 +558,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while pos > 0 'scan'
 			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: pos)
 			let graphemeLen = pos - graphemeStart
-			let ch = managed.makeCharFromBytes(graphemeStart, graphemeLen)
+			let ch = makeCharacterFromManagedRange(managed, pos: graphemeStart, len: graphemeLen)
 			if not chars.contains(ch) 'not_match'
 				break
 			end 'not_match'
@@ -614,7 +614,7 @@ export type StringIterator implements Iterator with Character
 	end 'create'
 
 	export function current() returns Character
-		return managed.makeCharFromBytes(iterPos, len: graphemeLen)
+		return makeCharacterFromManagedRange(managed, pos: iterPos, len: graphemeLen)
 	end 'current'
 
 	export function advance() throws IterationError

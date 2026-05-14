@@ -1,0 +1,39 @@
+// Test: tuple-destructuring
+
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+	let (x, y) = makePair(10, b: 32)
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 32 : i64
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0 width: qword
+    mir.store %1, %11, 8 width: qword
+    %4 = mir.load %11, 0 width: qword
+    %6 = mir.load %11, 8 width: qword
+    %9 = mir.add.i64 %4, %6
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %9, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

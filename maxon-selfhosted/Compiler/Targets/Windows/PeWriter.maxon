@@ -11,8 +11,9 @@ let SECTION_ALIGNMENT = 4096
 let DATA_SECTION_VIRTUAL_SIZE = 65536
 
 // --- Import section builder ---
-// IAT slot indices for kernel32.dll imports. Must stay in sync with the
-// identically-named constants in Compiler/Targets/X64/MirToX64Conversion.maxon.
+// IAT slot indices for kernel32.dll / shell32.dll imports. Must stay in sync
+// with the identically-named constants in
+// Compiler/Targets/X64/MirToX64Conversion.maxon.
 let IAT_SLOT_EXIT_PROCESS = 0
 let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
@@ -24,7 +25,17 @@ let IAT_SLOT_VIRTUAL_FREE = 7
 let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 8
 let IAT_SLOT_ENTER_CRITICAL_SECTION = 9
 let IAT_SLOT_LEAVE_CRITICAL_SECTION = 10
-let IAT_SLOT_COUNT = 11
+// Phase 15b: command-line argument retrieval.
+let IAT_SLOT_GET_COMMAND_LINE_W = 11
+let IAT_SLOT_LOCAL_FREE = 12
+let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 13
+// Phase 15f: executable-path retrieval. kernel32!GetModuleFileNameW writes the
+// running module's path into a caller-supplied UTF-16 buffer; the runtime
+// helper then re-encodes via WideCharToMultiByte (slot 13). Kernel32 slot.
+let IAT_SLOT_GET_MODULE_FILE_NAME_W = 14
+// shell32.dll's CommandLineToArgvW. Lives in a second DLL import directory.
+let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 15
+let IAT_SLOT_COUNT = 16
 
 type ImportSection
 	export var data ByteArray
@@ -37,17 +48,32 @@ type ImportSection
 	end 'create'
 end 'ImportSection'
 
+// Number of import-directory entries (kernel32, shell32). The flat IAT
+// is split into two per-DLL runs: kernel32 takes slots 0..KERNEL32_END-1
+// and shell32 takes slot SHELL32_START..IAT_SLOT_COUNT-1. Each run gets
+// its own null terminator, so the table layout is:
+//   IAT  [k32 entries] 0  [s32 entries] 0
+//   ILT  [k32 entries] 0  [s32 entries] 0
+// followed by the Import Directory (3 entries: kernel32, shell32, null).
+let KERNEL32_IAT_END = 15  // exclusive; slots 0..14 are kernel32
+let SHELL32_IAT_START = 15 // slot 15 is shell32 (CommandLineToArgvW)
+let IMPORT_DIRECTORY_ENTRIES = 2
+
 function buildImportSection(idataRva Rva) returns ImportSection
 	var data = ByteArray.create()
-	data.reserve(256)
+	data.reserve(512)
 
-	// Layout: IAT (N entries + null = (N+1)*8 bytes), ILT (same size),
-	// Import Directory (20 + 20 = 40 bytes), Hint/Name entries, DLL name.
-	let tableBytes = (IAT_SLOT_COUNT + 1) * 8
+	// Per-DLL slot count for kernel32; shell32's count is implicit in the
+	// run that follows. Each per-DLL run gets its own trailing null
+	// terminator in IAT/ILT so the loader stops at the right place.
+	let kernel32Count = KERNEL32_IAT_END
+	// Total table size: every slot + one null terminator per DLL.
+	let tableBytes = (IAT_SLOT_COUNT + IMPORT_DIRECTORY_ENTRIES) * 8
 	let iatOffset = 0
 	let iltOffset = tableBytes
 	let importDirOffset = tableBytes * 2
-	let hintNameOffset = importDirOffset + 40
+	// Import directory: 2 entries (kernel32, shell32) + 1 null = 60 bytes.
+	let hintNameOffset = importDirOffset + 20 * (IMPORT_DIRECTORY_ENTRIES + 1)
 	let hintExitProcess = hintNameOffset
 	let hintGetStdHandle = hintExitProcess + 14
 	let hintWriteFile = hintGetStdHandle + 16
@@ -59,9 +85,22 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let hintInitializeCriticalSection = hintVirtualFree + 14
 	let hintEnterCriticalSection = hintInitializeCriticalSection + 28
 	let hintLeaveCriticalSection = hintEnterCriticalSection + 24
-	let dllNameOffset = hintLeaveCriticalSection + 24
+	// New kernel32 entries for Phase 15b. Name byte counts:
+	// "GetCommandLineW\0" = 16; "LocalFree\0" = 10; "WideCharToMultiByte\0" = 20.
+	// Each preceded by `\x00\x00` hint (2 bytes), padded to even total.
+	let hintGetCommandLineW = hintLeaveCriticalSection + 24
+	let hintLocalFree = hintGetCommandLineW + 18
+	let hintWideCharToMultiByte = hintLocalFree + 12
+	// Phase 15f: "GetModuleFileNameW\0" = 19 → padded to 20 with the leading hint.
+	let hintGetModuleFileNameW = hintWideCharToMultiByte + 22
+	// shell32 entry. "CommandLineToArgvW\0" = 19 → padded to 20 with leading hint.
+	let hintCommandLineToArgvW = hintGetModuleFileNameW + 22
+	let kernel32DllNameOffset = hintCommandLineToArgvW + 22
+	// "kernel32.dll\0" is 13 bytes — no pad needed; the next entry is the
+	// shell32 DLL name string at offset +13.
+	let shell32DllNameOffset = kernel32DllNameOffset + 13
 
-	// IAT entries: point to hint/name table entries + null terminator
+	// IAT entries: kernel32 run, null terminator, shell32 run, null terminator.
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
@@ -73,9 +112,15 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintInitializeCriticalSection)
 	writeQword(data, value: idataRva + hintEnterCriticalSection)
 	writeQword(data, value: idataRva + hintLeaveCriticalSection)
+	writeQword(data, value: idataRva + hintGetCommandLineW)
+	writeQword(data, value: idataRva + hintLocalFree)
+	writeQword(data, value: idataRva + hintWideCharToMultiByte)
+	writeQword(data, value: idataRva + hintGetModuleFileNameW)
+	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
-	// ILT entries: same as IAT + null terminator
+	// ILT entries: same as IAT.
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
@@ -87,19 +132,38 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintInitializeCriticalSection)
 	writeQword(data, value: idataRva + hintEnterCriticalSection)
 	writeQword(data, value: idataRva + hintLeaveCriticalSection)
+	writeQword(data, value: idataRva + hintGetCommandLineW)
+	writeQword(data, value: idataRva + hintLocalFree)
+	writeQword(data, value: idataRva + hintWideCharToMultiByte)
+	writeQword(data, value: idataRva + hintGetModuleFileNameW)
+	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
-	// Import Directory entry
-	writeDword(data, value: idataRva + iltOffset)
-	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")  // TimeDateStamp(0), ForwarderChain(0)
-	writeDword(data, value: idataRva + dllNameOffset)
-	writeDword(data, value: idataRva + iatOffset)
+	// Per-DLL Import Directory entries. Each: 4-byte OriginalFirstThunk
+	// (ILT RVA), 8-byte zeros (TimeDateStamp, ForwarderChain), 4-byte
+	// Name RVA, 4-byte FirstThunk (IAT RVA).
+	// kernel32 occupies offsets [0..kernel32Count*8) inside IAT and ILT.
+	let kernel32IatRva = idataRva + iatOffset
+	let kernel32IltRva = idataRva + iltOffset
+	// shell32 begins one null terminator (8 bytes) after the kernel32 run.
+	let shell32IatRva = kernel32IatRva + (kernel32Count + 1) * 8
+	let shell32IltRva = kernel32IltRva + (kernel32Count + 1) * 8
 
-	// Import Directory null terminator (20 bytes)
+	writeDword(data, value: kernel32IltRva)
+	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	writeDword(data, value: idataRva + kernel32DllNameOffset)
+	writeDword(data, value: kernel32IatRva)
+
+	writeDword(data, value: shell32IltRva)
+	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+	writeDword(data, value: idataRva + shell32DllNameOffset)
+	writeDword(data, value: shell32IatRva)
+
+	// Import Directory null terminator (20 bytes).
 	writeZeros(data, n: 20)
 
-	// Hint/Name table entries (hint=0 for each) + DLL name.
-	// Each entry is `\x00\x00` (hint) + ASCII name + `\x00` + optional pad to even alignment.
+	// Hint/Name table entries (hint=0 for each) + DLL names.
 	data.append(b"\x00\x00ExitProcess\x00")
 	data.append(b"\x00\x00GetStdHandle\x00\x00")
 	data.append(b"\x00\x00WriteFile\x00")
@@ -111,9 +175,15 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00InitializeCriticalSection\x00")
 	data.append(b"\x00\x00EnterCriticalSection\x00\x00")
 	data.append(b"\x00\x00LeaveCriticalSection\x00\x00")
+	data.append(b"\x00\x00GetCommandLineW\x00")
+	data.append(b"\x00\x00LocalFree\x00")
+	data.append(b"\x00\x00WideCharToMultiByte\x00")
+	data.append(b"\x00\x00GetModuleFileNameW\x00\x00")
+	data.append(b"\x00\x00CommandLineToArgvW\x00\x00")
 	data.append(b"kernel32.dll\x00")
+	data.append(b"shell32.dll\x00\x00")
 
-	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20)
+	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20 * IMPORT_DIRECTORY_ENTRIES)
 end 'buildImportSection'
 
 // --- Section header writer ---
@@ -242,11 +312,24 @@ end 'writeCoffSymbolTable'
 
 // --- Main PE writer ---
 
+// Convert a flat slot index into its byte offset in the IAT. Each DLL run
+// in the IAT/ILT is followed by an 8-byte null terminator, so slots past
+// the first DLL boundary are shifted by 8 bytes for every prior boundary.
+// Today the only boundary is between kernel32 (slots 0..KERNEL32_IAT_END-1)
+// and shell32 (slot SHELL32_IAT_START onward); extend this stepwise as
+// more DLLs are imported.
+function iatSlotByteOffset(slotIndex MachineWord) returns ByteOffset
+	if slotIndex >= SHELL32_IAT_START 'inShell32'
+		return (slotIndex + 1) * 8
+	end 'inShell32'
+	return slotIndex * 8
+end 'iatSlotByteOffset'
+
 // Patch x64 RIP-relative relocations: each relocation is a disp32 at codeOffset
 function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
 	for reloc in relocations 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + 4
-		let iatEntryRva = idataRva + (reloc.slotIndex * 8)
+		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex)
 		let rel = iatEntryRva - ripAtReloc
 		patchDword(code, offset: reloc.codeOffset, value: rel)
 	end 'patch'
@@ -284,7 +367,7 @@ end 'patchRdataRelocationsArm64'
 // Patch ARM64 ADRP+LDR relocations: codeOffset points to ADRP, LDR is at codeOffset+4
 function patchRelocationsArm64(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
 	for reloc in relocations 'patch'
-		let iatEntryRva = idataRva + (reloc.slotIndex * 8)
+		let iatEntryRva = idataRva + iatSlotByteOffset(reloc.slotIndex)
 		let instrRva = textRva + reloc.codeOffset
 
 		// ADRP: target page relative to instruction page
@@ -428,8 +511,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let imageBase = 0x140000000
 	patchFuncAbs64InRdata(codeResult.rdata, rdataRelocs: codeResult.rdataRelocations, textAbsBase: imageBase + textRva, debugSymbols: codeResult.debugSymbols)
 
-	// IAT directory size: one qword per slot plus a null terminator entry.
-	let iatDirSize = (IAT_SLOT_COUNT + 1) * 8
+	// IAT directory size: one qword per slot plus one null terminator per
+	// imported DLL. Layout matches `buildImportSection`.
+	let iatDirSize = (IAT_SLOT_COUNT + IMPORT_DIRECTORY_ENTRIES) * 8
 
 	// === DOS Header (64 bytes) + PE Signature ===
 	// MZ magic, 58 zero bytes, PE offset=64, then PE\0\0 signature

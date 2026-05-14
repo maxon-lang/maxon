@@ -1,0 +1,62 @@
+// Test: if-try-binding-with-else
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if let value = try mayFail(false) 'check'
+		return value
+	end 'check' else 'err'
+		return 77
+	end 'err'
+end 'main'
+---
+ExitCode: 77
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_mayFail_0()
+  inlined_mayFail_0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.xor.i64 %0, %7
+    mir.cond_br %8 [then: inlined_mayFail_1(), else: inlined_mayFail_2()]
+  inlined_mayFail_1:
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%9, %10)
+  inlined_mayFail_2:
+    %11 = mir.mov_imm 42 : i64
+    %12 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%11, %12)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %14, %3
+    mir.cond_br %4 [then: check_0(), else: err_0()]
+  check_0:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %13, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  err_0:
+    %6 = mir.mov_imm 77 : i64
+    mir.ret %6
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

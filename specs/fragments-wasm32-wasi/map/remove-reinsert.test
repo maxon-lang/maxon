@@ -1,0 +1,113 @@
+// Test: remove-reinsert
+function main() returns ExitCode
+	var m = [1: 10, 2: 20, 3: 30]
+	_ = m.remove(2)
+	try m.insert(2, value: 99) otherwise ignore
+	let result = try m.get(2) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 2 : i64
+    %4 = mir.mov_imm 3 : i64
+    %8 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %9 = mir.mov_imm 40 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %8, %10)
+    %12 = mir.global_addr @__rdata_arr_map_main_29
+    mir.store %12, %11, 0 width: qword
+    mir.store %4, %11, 8 width: qword
+    %14 = mir.mov_imm -2 : i64
+    mir.store %14, %11, 16 width: qword
+    %15 = mir.mov_imm 8 : i64
+    mir.store %15, %11, 24 width: qword
+    %16 = mir.mov_imm -2 : i64
+    mir.store %16, %11, 32 width: qword
+    %24 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %25 = mir.mov_imm 40 : i64
+    %27 = mir.call @stdlib.__mm_alloc(%25, %24, %10)
+    %28 = mir.global_addr @__rdata_arr_map_main_30
+    mir.store %28, %27, 0 width: qword
+    mir.store %4, %27, 8 width: qword
+    %30 = mir.mov_imm -2 : i64
+    mir.store %30, %27, 16 width: qword
+    %31 = mir.mov_imm 8 : i64
+    mir.store %31, %27, 24 width: qword
+    %32 = mir.mov_imm -2 : i64
+    mir.store %32, %27, 32 width: qword
+    %38 = mir.global_addr @__layout_Map_Int_Int
+    %39 = mir.global_addr @__witness_int_Hashable
+    %40 = mir.global_addr @__witness_int_Equatable
+    %41 = mir.call @Map.init(%11, %27, %38, %39, %40)
+    %44 = mir.global_addr @__layout_Map_Int_Int
+    %45 = mir.global_addr @__witness_int_Hashable
+    %46 = mir.global_addr @__witness_int_Equatable
+    %47 = mir.call @Map.remove(%41, %2, %44, %45, %46)
+    %50 = mir.mov_imm 99 : i64
+    %51 = mir.global_addr @__layout_Map_Int_Int
+    %52 = mir.global_addr @__witness_int_Hashable
+    %53 = mir.global_addr @__witness_int_Equatable
+    %54, %55 = mir.try_call @Map.insert(%41, %2, %50, %51, %52, %53)
+    %57 = mir.cmp ne, %55, %10
+    mir.cond_br %57 [then: try_0.merge(%10), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%54)
+  try_0.merge:
+    %63 = mir.global_addr @__layout_Map_Int_Int
+    %64 = mir.global_addr @__witness_int_Hashable
+    %65 = mir.global_addr @__witness_int_Equatable
+    mir.br inlined_Map.get_0()
+  inlined_Map.get_0:
+    %76 = mir.call @Map.findSlot(%41, %2, %63, %64, %65)
+    %77 = mir.mov_imm 0 : i64
+    %78 = mir.cmp ge, %76, %77
+    mir.cond_br %78 [then: inlined_Map.get_1(), else: inlined_Map.get_3()]
+  inlined_Map.get_1:
+    %79 = mir.load %41, 8 width: qword
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %89 = mir.load %79, 0 width: qword
+    %90, %91 = mir.try_call @stdlib.__managed_mem_get(%89, %76)
+    %92 = mir.mov_imm 0 : i64
+    %93 = mir.cmp ne, %91, %92
+    mir.cond_br %93 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %94 = mir.mov_imm 0 : i64
+    %95 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%94, %95)
+  inlined_Array.get_2:
+    %96 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%90, %96)
+  inline_cont_main_0:
+    %82 = mir.mov_imm 0 : i64
+    %83 = mir.cmp eq, %98, %82
+    mir.cond_br %83 [then: inlined_Map.get_2(), else: inlined_Map.get_3()]
+  inlined_Map.get_2:
+    %84 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%97, %84)
+  inlined_Map.get_3:
+    %85 = mir.mov_imm 0 : i64
+    %86 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%85, %86)
+  inline_cont_main_1:
+    %69 = mir.cmp ne, %88, %10
+    mir.cond_br %69 [then: try_1.merge(%10), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%87)
+  try_1.merge:
+    %99 = mir.mov_imm 125 : i64
+    %100 = mir.cmp ugt, %75, %99
+    mir.cond_br %100 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %101 = mir.global_addr @__panic_msg_0
+    %102 = mir.call @mrt_panic(%101)
+  __range_ok_0:
+    mir.ret %75
+  }
+}
+---

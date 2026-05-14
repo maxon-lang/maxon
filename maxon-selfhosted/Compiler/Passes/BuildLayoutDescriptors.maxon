@@ -21,6 +21,16 @@ typealias VisitedSet = Set with GenericInstanceId
 typealias AsciiByte = int(0 to u8.max)
 
 export function buildLayoutDescriptors(project Project, maxonModule MaxonModule, globalData GlobalDataTable)
+	// Pre-intern `Interface with [confArgs]` gids for every conformance
+	// that carries `with` args. The conformance binding implicitly creates
+	// a per-instance generic shape that interface-extension call sites
+	// need a layout descriptor for (e.g. `intList.has(20)` where
+	// `IntList implements HasItems with Integer` resolves the layout via
+	// `(HasItems, [Integer])`). Without this seeding, the gid is never
+	// interned through normal use-site flow and lowering panics when it
+	// tries to load a missing descriptor.
+	seedConformanceLayouts(project)
+
 	let count = project.genericInstances.count()
 	if count == 0 'noWork'
 		return
@@ -45,6 +55,26 @@ export function buildLayoutDescriptors(project Project, maxonModule MaxonModule,
 		emitDescriptorForInstance(project, maxonModule: maxonModule, globalData: globalData, gid: gid)
 	end 'emit'
 end 'buildLayoutDescriptors'
+
+// Walk every conformance and pre-intern the `Interface with [args]` gid
+// so the downstream descriptor emit picks it up. Conformances without
+// `with` args don't carry a generic shape and stay unseeded — their
+// interface methods receive no implicit layout param.
+function seedConformanceLayouts(project Project)
+	let total = project.conformances.count()
+	for i in 0 upto total 'eachConf'
+		let confArgs = try project.conformances.withArgsList.get(i) otherwise panic("seedConformanceLayouts: withArgsList.get OOB at {i}")
+		if confArgs.count() == 0 'noArgs'
+			continue
+		end 'noArgs'
+		if anyMaxonTypeIsConditional(confArgs) 'conditional'
+			continue
+		end 'conditional'
+		let ifaceName = try project.conformances.interfaceNames.get(i) otherwise panic("seedConformanceLayouts: interfaceNames.get OOB at {i}")
+		let baseId = project.typeNames.intern(ifaceName)
+		_ = project.genericInstances.intern(baseId, args: confArgs)
+	end 'eachConf'
+end 'seedConformanceLayouts'
 
 function emitDescriptorForInstance(project Project, maxonModule MaxonModule, globalData GlobalDataTable, gid GenericInstanceId)
 	if project.layoutDescriptors.contains(gid) 'alreadyEmitted'
@@ -140,7 +170,7 @@ end 'primitiveElementSize'
 // integer literal at the type level) so it stays at 8. Pointer-shaped types
 // (strings, function values, genericInstance, interface, typeParameter) all
 // lower to an i64 ABI slot and so report 8.
-function primitiveWidth(project Project, t MaxonType) returns MachineWord
+export function primitiveWidth(project Project, t MaxonType) returns MachineWord
 	return match t 'w'
 		boolean gives 1
 		integer gives 8
@@ -152,6 +182,7 @@ function primitiveWidth(project Project, t MaxonType) returns MachineWord
 		typeParameter gives 8
 		genericInstance gives 8
 		interface gives 8
+		constInt gives 8
 	end 'w'
 end 'primitiveWidth'
 
@@ -180,6 +211,7 @@ function maxonTypeIsHeapManaged(t MaxonType) returns bool
 		function gives false
 		unresolved gives false
 		typeParameter gives false
+		constInt gives false
 	end 'h'
 end 'maxonTypeIsHeapManaged'
 
@@ -203,9 +235,16 @@ export function maxonTypeIsConditional(t MaxonType) returns bool
 	return match t 'check'
 		typeParameter gives true
 		boolean to function gives false
-		unresolved gives false
+		// `unresolved` is the polymorphic-slot sentinel used by builtin
+		// signatures (see registerManagedMemoryMethods). A writer-side
+		// `__ManagedMemory with unresolved` (or similar) is a placeholder
+		// shape, not a ground type — `BuildWitnessTables` / `BuildLayoutDescriptors`
+		// must skip it so witness-thunk synthesis never receives the
+		// `unresolved` arm at `emitThunkWitnessLoadForBoundType`.
+		unresolved gives true
 		genericInstance gives false
 		interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsConditional'
 
@@ -237,6 +276,7 @@ function mangleType(project Project, t MaxonType) returns String
 		typeParameter(id) gives sanitizeIdentifier(project.typeParameters.getName(id))
 		genericInstance(gid) gives mangleInstance(project, gid: gid)
 		interface(id) gives sanitizeIdentifier(project.interfaceRegistry.getName(id))
+		constInt(value) gives "N{value}"
 	end 'm'
 end 'mangleType'
 

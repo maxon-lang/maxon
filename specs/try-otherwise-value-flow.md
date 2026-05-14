@@ -118,3 +118,35 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: try-otherwise-value-flow.nested-try-in-arg -->
+Nested `try ... otherwise X` in an argument position: the inner try's
+result must be visible to the outer call's argument list. Reproduces the
+`unresolved value name '$tN'` parser binding bug.
+```maxon
+enum E
+	bad
+end 'E'
+
+function getString(i ExitCode) returns ExitCode throws E
+	if i == 0 'zero'
+		throw E.bad
+	end 'zero'
+	return 42
+end 'getString'
+
+function consume(x ExitCode) returns ExitCode throws E
+	if x == 0 'empty'
+		throw E.bad
+	end 'empty'
+	return x
+end 'consume'
+
+function main() returns ExitCode
+	let n = try consume(try getString(1) otherwise 0) otherwise 0
+	return n
+end 'main'
+```
+```exitcode
+42
+```

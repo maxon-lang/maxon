@@ -109,11 +109,23 @@ end 'insertSpillCode'
 
 // Insert reload ops for spilled branch-arg sources and rewrite the
 // block.branchEdges argIds in place to use the fresh reload IDs.
+//
+// Reloads must execute before EVERY outgoing-edge control transfer. For
+// fall-through blocks (single terminator) that means just-before the
+// terminator. For condBr blocks the conditional jump op lives in opRefs
+// (Layout 1: opRefs=[..., condJump], terminator=unconditional jmp) or in
+// the terminator slot (Layout 2 after eliminateFallthroughJumps). In Layout 1
+// appending reloads to opRefs places them AFTER the condJump, so the
+// cond-taken edge skips them entirely and reads stale physical-reg values
+// that an intervening call may have clobbered.
+//
+// Fix: collect reloads in a side list and splice them before the trailing
+// condJump (if any). Reloads are pure memory reads, safe to execute on both
+// paths of a condBr.
 function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block IrBlock, regTarget RegAllocTarget)
-	// Reloads must be placed after the block's last non-terminator op and
-	// BEFORE the terminator. We splice them into block.opRefs, and the
-	// caller has already moved the terminator to block.terminator.
+	var reloadOps = OpIndexList.create()
 	var newEdges = BranchEdgeArray.create()
+
 	for edge in block.branchEdges 'eachEdge'
 		var newArgIds = ValueIdArray.create()
 		for argId in edge.argIds 'eachArg'
@@ -122,7 +134,7 @@ function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block 
 				let rc = getOr(state.spillRegClass, index: argId, fallback: SPILL_RC_GPR)
 				let freshId = freshValueId(state)
 				let stackOff = computeStackOffset(state, slotOffset: slotOffset)
-				regTarget.emitReloadOp(module, ops: block.opRefs, freshId: freshId, stackOffset: stackOff, regClass: rc)
+				regTarget.emitReloadOp(module, ops: reloadOps, freshId: freshId, stackOffset: stackOff, regClass: rc)
 				newArgIds.push(freshId)
 			end 'isSpilled' else 'notSpilled'
 				newArgIds.push(argId)
@@ -131,7 +143,41 @@ function remapBranchEdgeArgs(module TargetModule, state SpillInsertState, block 
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: newArgIds))
 	end 'eachEdge'
 	block.branchEdges = newEdges
+
+	if reloadOps.count() == 0 'noReloads'
+		return
+	end 'noReloads'
+
+	// Find the insertion point: just before a trailing condJump if present,
+	// otherwise at the end of opRefs (which is right before the terminator).
+	let insertAt = findCondJumpIndex(module, block: block, regTarget: regTarget)
+	insertOpsAt(block.opRefs, ops: reloadOps, at: insertAt)
 end 'remapBranchEdgeArgs'
+
+// Return the index of a trailing condJump in opRefs, or opRefs.count() if
+// there's no condJump in opRefs (single-successor block, or the condJump
+// was already promoted to the terminator slot by eliminateFallthroughJumps).
+function findCondJumpIndex(module TargetModule, block IrBlock, regTarget RegAllocTarget) returns RegInt
+	let count = block.opRefs.count()
+	if count == 0 'empty'
+		return 0
+	end 'empty'
+	let lastIdx = count - 1
+	let lastPacked = try block.opRefs.get(lastIdx) otherwise panic("invariant: lastIdx valid by count>0 check")
+	if regTarget.getCondBrTarget(module, packed: lastPacked) >= 0 'isCondJump'
+		return lastIdx
+	end 'isCondJump'
+	return count
+end 'findCondJumpIndex'
+
+// Splice `ops` into `dst` at index `at`, preserving order.
+function insertOpsAt(dst OpIndexList, ops OpIndexList, at RegInt)
+	var i = 0
+	for op in ops 'eachOp'
+		try dst.insert(at: at + i, value: op) otherwise panic("invariant: at + i within bounds of growing list")
+		i = i + 1
+	end 'eachOp'
+end 'insertOpsAt'
 
 // Build maps from valueId to spill slot offset and register class.
 function buildSpillMaps(state SpillInsertState, spillDecision SpillDecision)

@@ -136,7 +136,8 @@ end 'findRuntimePath'
 //     count are visible to the backend's data-section emission.
 export function augmentWithRuntime(module StdModule, project Project) returns StdModule
 	let runtimeModule = loadRuntimeModule()
-	let filteredRuntime = filterRuntimeForCoverage(runtimeModule, coverageEnabled: project.coverageEnabled)
+	let osFilteredRuntime = filterRuntimeForOs(runtimeModule, os: project.target.os)
+	let filteredRuntime = filterRuntimeForCoverage(osFilteredRuntime, coverageEnabled: project.coverageEnabled)
 	if project.coverageEnabled 'reserveGlobals'
 		// Register the coverage globals once per compile, after instrumentation
 		// has finalized the site count but before backend emission reads the
@@ -370,6 +371,70 @@ function isCoverageRuntimeFunction(name String) returns bool
 	return name == "mrt_cov_hit" or name == "mrt_cov_dump" or name == "mrt_start_with_coverage"
 end 'isCoverageRuntimeFunction'
 
+// Phase 15b/15f: select per-OS command-line + executable-path runtime
+// bodies. Runtime.std ships both Windows-specific iatCall bodies and
+// non-Windows stubs (empty buffers / argc=1). On non-Windows targets the
+// Windows body would reference IAT slots that don't exist in the output
+// binary, so we substitute the stubs by renaming.
+//
+// Public-name pairs (drop the loser, rename the winner into the public
+// name): mrt_command_line_count[_stub], mrt_command_line_arg[_stub],
+// mrt_executable_path[_stub]. Either way the symbol resolution at link
+// time sees exactly one definition per public name.
+function filterRuntimeForOs(module StdModule, os Os) returns StdModule
+	var filtered = cloneRuntimeShellSharingBodies(module)
+	let isWindows = match os 'check'
+		windows gives true
+		linux gives false
+		macos gives false
+		wasi gives false
+	end 'check'
+	for func in module.functions 'eachFunc'
+		if isWindows 'win'
+			// Drop stub bodies; keep IAT-based versions verbatim.
+			if isPerOsStubName(func.name) 'dropStub'
+				continue
+			end 'dropStub'
+			filtered.functions.push(func)
+		end 'win' else 'other'
+			// Drop IAT-based versions; promote stubs to the public names.
+			if isPerOsPublicWindowsBodyName(func.name) 'dropWinBody'
+				continue
+			end 'dropWinBody'
+			let publicName = stripStubSuffix(func.name)
+			if publicName != func.name 'renameStub'
+				var renamed = IrFunction.cloneWithBlockRefs(func)
+				renamed.name = publicName
+				filtered.functions.push(renamed)
+				continue
+			end 'renameStub'
+			filtered.functions.push(func)
+		end 'other'
+	end 'eachFunc'
+	return filtered
+end 'filterRuntimeForOs'
+
+function isPerOsStubName(name String) returns bool
+	return name == "mrt_command_line_count_stub" or name == "mrt_command_line_arg_stub" or name == "mrt_executable_path_stub"
+end 'isPerOsStubName'
+
+function isPerOsPublicWindowsBodyName(name String) returns bool
+	return name == "mrt_command_line_count" or name == "mrt_command_line_arg" or name == "mrt_executable_path"
+end 'isPerOsPublicWindowsBodyName'
+
+// Strip a trailing `_stub` suffix when present; otherwise return the name
+// unchanged. Used by `filterRuntimeForOs` to rename non-Windows stub
+// bodies into their public counterparts.
+function stripStubSuffix(name String) returns String
+	let suffix = "_stub"
+	if not name.endsWith(suffix) 'noSuffix'
+		return name
+	end 'noSuffix'
+	let cutLen = name.byteLength() - suffix.byteLength()
+	let head = try name.managed.slice(0, cutLen) otherwise panic("stripStubSuffix: slice — endsWith just verified cutLen >= 0")
+	return String.init(head)
+end 'stripStubSuffix'
+
 // Backend execution driven by the pipeline.
 // Phases 5-7 (augmentWithRuntime, lowerStdToMir, scheduleInstructions,
 // lowerMirToTarget, allocateRegisters, insertPrologueEpilogue) run through
@@ -525,6 +590,8 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 		subF64 gives 4
 		mulF64 gives 4
 		divF64 gives table.fpDivLatency
+		minF64 gives 4
+		maxF64 gives 4
 	end 'dispatch'
 end 'getMirBinOpLatency'
 

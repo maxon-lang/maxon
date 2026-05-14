@@ -1,0 +1,95 @@
+// Test: single-element
+typealias Int = int(i64.min to i64.max)
+typealias Vec1 = Vector with 1 Int
+
+function main() returns ExitCode
+	var v = Vec1.create()
+	try v.set(0, value: 77) otherwise panic("test invariant: set OOB")
+	return try v.get(0) otherwise 0
+end 'main'
+---
+ExitCode: 77
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %32 = mir.mov_imm 8 : i64
+    %33 = mir.call @mrt_alloc(%32)
+    %34 = mir.mov_imm 40 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    %36 = mir.mov_imm 0 : i64
+    mir.store %36, %35, 0 width: qword
+    %37 = mir.mov_imm 0 : i64
+    mir.store %37, %35, 8 width: qword
+    %38 = mir.mov_imm 0 : i64
+    mir.store %38, %35, 16 width: qword
+    %39 = mir.mov_imm 8 : i64
+    mir.store %39, %35, 24 width: qword
+    %40 = mir.mov_imm 0 : i64
+    mir.store %40, %35, 32 width: qword
+    mir.store %35, %33, 0 width: qword
+    %2 = mir.load %33, 0 width: qword
+    %3 = mir.mov_imm 1 : i64
+    mir.store %3, %2, 16 width: qword
+    %4 = mir.mov_imm 8 : i64
+    mir.store %4, %2, 24 width: qword
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %6, %2, 0 width: qword
+    %7 = mir.mov_imm 1 : i64
+    mir.store %7, %2, 8 width: qword
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 77 : i64
+    mir.br inlined_Vector.set_0()
+  inlined_Vector.set_0:
+    %41 = mir.load %33, 0 width: qword
+    %42, %43 = mir.try_call @stdlib.__managed_mem_set(%41, %9, %10)
+    %44 = mir.mov_imm 0 : i64
+    %45 = mir.cmp ne, %43, %44
+    mir.cond_br %45 [then: inlined_Vector.set_1(), else: inlined_Vector.set_2()]
+  inlined_Vector.set_1:
+    %46 = mir.mov_imm 0 : i64
+    %47 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%46, %47)
+  inlined_Vector.set_2:
+    %48 = mir.mov_imm 0 : i64
+    %49 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%48, %49)
+  inline_cont_main_0:
+    %15 = mir.cmp ne, %51, %9
+    mir.cond_br %15 [then: try_0.otherwise(), else: inlined_Vector.get_0()]
+  try_0.otherwise:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+    mir.ret %9
+  inlined_Vector.get_0:
+    %52 = mir.load %33, 0 width: qword
+    %53, %54 = mir.try_call @stdlib.__managed_mem_get(%52, %9)
+    %55 = mir.mov_imm 0 : i64
+    %56 = mir.cmp ne, %54, %55
+    mir.cond_br %56 [then: inlined_Vector.get_1(), else: inlined_Vector.get_2()]
+  inlined_Vector.get_1:
+    %57 = mir.mov_imm 0 : i64
+    %58 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%57, %58)
+  inlined_Vector.get_2:
+    %59 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%53, %59)
+  inline_cont_main_1:
+    %27 = mir.cmp ne, %61, %9
+    mir.cond_br %27 [then: try_1.merge(%9), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%60)
+  try_1.merge:
+    %62 = mir.mov_imm 125 : i64
+    %63 = mir.cmp ugt, %31, %62
+    mir.cond_br %63 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %64 = mir.global_addr @__panic_msg_1
+    %65 = mir.call @mrt_panic(%64)
+  __range_ok_0:
+    mir.ret %31
+  }
+}
+---

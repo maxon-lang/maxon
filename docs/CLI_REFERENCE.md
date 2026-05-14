@@ -9,8 +9,11 @@ This document covers the Maxon command-line interface and project system.
 | Command | Description |
 |---------|-------------|
 | `maxon build [file\|directory]` | Compile a file, directory, or project (default: current directory) |
-| `maxon run <function>` | Run an exported function from `build.maxon` |
-| `maxon test` | Run spec fragment tests |
+| `maxon run [function]` | Run an exported function from `build.maxon`; lists commands if omitted |
+| `maxon fmt [file\|directory]` | Format `.maxon` source files in-place (default: current directory) |
+| `maxon spec-test [options]` | Run spec tests |
+| `maxon monitor <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
+| `maxon lsp-server` | Start the language server (LSP) |
 
 ---
 
@@ -32,8 +35,15 @@ maxon build [file|directory] [options]
 
 | Option | Description |
 |--------|-------------|
-| `--emit-ir` | Emit IR output to `<source>.ir` |
-| `--dump-stages` | Write IR at each pipeline stage |
+| `--target=ARCH-OS` | Set compilation target (default: `x64-windows`). Examples: `x64-windows`, `arm64-macos`, `x64-linux` |
+| `--emit-ir` | Write `.ir` file |
+| `--dump-stages` | Write IR at each pipeline stage (`.1-maxon.ir`, etc.) |
+| `--mm-trace` | Enable runtime memory manager trace output (stderr) |
+| `--mm-debug` | Enable runtime memory debug checks (magic, canary, poison) |
+| `--async-trace` | Enable async/await runtime trace output (stderr) |
+| `--debugstream` | Enable shared-memory debug stream (use with `maxon monitor`) |
+| `--timing` | Print per-stage compile timings to stderr |
+| `--timing-functions=N` | Print top-N hottest functions per heavy pass (implies `--timing`) |
 
 **Behavior:**
 - **Single file:** Compiles the file directly. Output name comes from the source filename (`foo.maxon` → `foo.exe`).
@@ -47,6 +57,9 @@ maxon build hello.maxon
 
 # Compile with IR output
 maxon build app.maxon --emit-ir
+
+# Compile for a different target
+maxon build app.maxon --target=arm64-macos
 
 # Build a project directory (uses build.maxon if present)
 maxon build myproject/
@@ -63,11 +76,13 @@ Compiles `build.maxon` in the current directory and runs the specified exported 
 
 **Usage:**
 ```bash
-maxon run [function]
+maxon run [function] [options]
 ```
 
 **Arguments:**
 - `[function]` - Name of an exported function in `build.maxon` (optional). If omitted, lists all available exported functions.
+
+Accepts the same build options as `maxon build`.
 
 **Behavior:**
 1. Finds `build.maxon` in the current directory
@@ -110,41 +125,117 @@ end 'spec_test_selfhosted'
 
 ---
 
-### `maxon test`
+### `maxon fmt`
 
-Runs the spec fragment tests from `maxon-bin/specs/fragments/`.
+Formats `.maxon` source files in-place.
 
 **Usage:**
 ```bash
-maxon test [options]
+maxon fmt [file|directory]
+```
+
+**Arguments:**
+- `[file|directory]` - Path to a source file or directory to format (default: current directory). When given a directory, formats all `.maxon` files recursively, skipping directories with `.maxonignore`.
+
+**Examples:**
+```bash
+# Format all files in current directory
+maxon fmt
+
+# Format a single file
+maxon fmt main.maxon
+
+# Format a specific directory
+maxon fmt src/
+```
+
+---
+
+### `maxon spec-test`
+
+Runs the spec tests.
+
+**Usage:**
+```bash
+maxon spec-test [options]
 ```
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--filter <pattern>` | Run only tests matching the pattern |
-| `--verbose` | Show detailed output for each test |
+| `--filter=PATTERN` | Run only tests matching the pattern |
+| `--workers=N` | Use N worker threads (default: `ProcessorCount - 2`) |
+| `--update-required` | Force regeneration and update `RequiredIR` + `MmTrace` stderr blocks |
+| `--verbose` | Show per-test PASS/FAIL timing logs |
+| `--no-batch` | Disable per-spec compile batching (each test compiled individually) |
 
 **Examples:**
 ```bash
 # Run all tests
-maxon test
+maxon spec-test
 
 # Run tests matching a pattern
-maxon test --filter "array"
+maxon spec-test --filter=array
 
 # Run with verbose output
-maxon test --verbose
+maxon spec-test --verbose
+
+# Regenerate RequiredIR blocks
+maxon spec-test --update-required
 
 # Combine options
-maxon test --filter "string" --verbose
+maxon spec-test --filter=string --verbose
 ```
 
-**Output:**
-- Shows pass/fail status for each test
-- Displays summary with total passed, failed, and skipped
-- Shows elapsed time
+---
+
+### `maxon monitor`
+
+Launches an executable with the shared-memory debug stream monitor. Reads debug output written via `--debugstream` and prints it to the terminal.
+
+**Usage:**
+```bash
+maxon monitor <exe> [args...]
+```
+
+**Examples:**
+```bash
+# Build with debugstream enabled, then monitor
+maxon build app.maxon --debugstream
+maxon monitor app.exe
+```
+
+---
+
+### `maxon lsp-server`
+
+Starts the language server for IDE integration. Communicates over stdin/stdout using the Language Server Protocol. Normally launched automatically by the VS Code extension.
+
+---
+
+## Logging
+
+All commands accept logging options to control diagnostic output:
+
+| Option | Description |
+|--------|-------------|
+| `--log=LEVEL` | Set all log categories to the given level |
+| `--log=CATEGORY:LEVEL` | Set a specific category to the given level |
+
+**Log levels:** `none`, `error`, `info`, `debug`, `trace`
+
+**Log categories:** `compiler`, `lexer`, `parser`, `semantic`, `hir`, `lir`, `optimizer`, `codegen`, `pe`, `testing`
+
+**Testing log levels:**
+- `info` — Show failures and summary only
+- `debug` — Also show each passing test
+
+**Examples:**
+```bash
+maxon spec-test --log=ir:debug
+maxon build app.maxon --log=codegen:trace
+```
 
 ---
 
@@ -273,7 +364,7 @@ The compiler looks for the standard library in these locations (in order):
 
 - `maxon build` - Output is relative to the source file/directory location
 - `maxon run` - Runs from the current working directory (requires `build.maxon`)
-- `maxon test` - Runs from the `maxon-bin/` directory
+- `maxon spec-test` - Runs from the current directory
 
 ---
 
@@ -308,17 +399,14 @@ maxon run spec-test-selfhosted
 ### Running Tests During Development
 
 ```bash
-# From maxon-bin directory
-cd maxon-bin
-
 # Run all tests
-./bin/maxon test
+maxon spec-test
 
 # Run specific tests
-./bin/maxon test --filter "optional"
+maxon spec-test --filter=optional
 
 # Verbose output for debugging
-./bin/maxon test --filter "map" --verbose
+maxon spec-test --filter=map --verbose
 ```
 
 ### Debugging Compilation Issues

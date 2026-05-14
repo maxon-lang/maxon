@@ -89,7 +89,13 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 
 	var methodImplNames = StringArray.create()
 	for m in iface.methods 'eachMethod'
-		let implName = "{typeName}.{m.name}"
+		// Resolve to the actual registered implementation name. When the
+		// conforming type has multiple methods with the same name (an
+		// overload), the bare `{typeName}.{methodName}` key was re-mangled
+		// to disambiguate; pick the overload bucket entry whose signature
+		// matches the interface method.
+		let bareImplName = "{typeName}.{m.name}"
+		let implName = resolveImplNameForMethod(project, bareName: bareImplName, m: m)
 		methodImplNames.push(implName)
 		// Push each impl name onto `livenessRoots` unconditionally so DFE
 		// keeps the function alive even on user-builds where the witness
@@ -135,6 +141,36 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 		pushFuncAbs64Reloc(globalData, rdataLabel: label, funcName: implName, offsetInLabel: slotOffset)
 	end 'eachReloc'
 end 'emitWitnessForConformance'
+
+// Resolve the concrete IR function name for `bareName` (= `{Type}.{method}`).
+// When the user has only one method with that name, the bare name is the
+// registered key. When two or more methods share a name (overload), the
+// parser re-mangled each one with a first-param suffix; this helper walks
+// `project.overloadedNames[bareName]` and picks the entry whose arity
+// matches the interface method `m` (with allowance for the implicit __self
+// at slot 0). Returns `bareName` as a safe fallback when no resolution
+// applies — downstream relocation errors then surface against the original
+// label, which keeps diagnostics anchored to the user's source.
+function resolveImplNameForMethod(project Project, bareName String, m InterfaceMethodSig) returns String
+	if project.funcReturnTypes.contains(bareName) 'bareKeyExists'
+		return bareName
+	end 'bareKeyExists'
+	let bucket = try project.overloadedNames.get(bareName) otherwise return bareName
+	for i in 0 upto bucket.count() 'eachMangled'
+		let key = try bucket.get(i) otherwise panic("resolveImplNameForMethod: bucket.get OOB at {i}")
+		if not project.funcReturnTypes.contains(key) 'staleEntry'
+			continue
+		end 'staleEntry'
+		let sig = try project.funcSignatures.get(key) otherwise panic("resolveImplNameForMethod: funcSignatures.get '{key}' missing despite contains")
+		let skipSelf = 1 if sig.paramNames.count() > 0 and (try sig.paramNames.get(0) otherwise "") == "__self" else 0
+		let userArity = sig.paramNames.count() - skipSelf
+		if userArity != m.paramTypes.count() 'arityMismatch'
+			continue
+		end 'arityMismatch'
+		return key
+	end 'eachMangled'
+	return bareName
+end 'resolveImplNameForMethod'
 
 // Pick the first `extends` parent the conforming type also implements; the
 // returned `ParentWitnessLabel.present(label)` carries the witness label
@@ -204,50 +240,69 @@ function emitPerInstanceWitnessTables(project Project, globalData GlobalDataTabl
 end 'emitPerInstanceWitnessTables'
 
 function emitPerInstanceWitnessForConformance(project Project, globalData GlobalDataTable, gid GenericInstanceId, interfaceName String)
-	// Cache-restored entries (e.g. stdlib's own `Array<Byte>: Equatable`)
-	// already have their rdata blob and thunk function compiled into the
-	// stdlib object code. Skip everything for them — re-emitting would
-	// duplicate the symbol at link time. Mirrors `BuildLayoutDescriptors.
-	// emitDescriptorForInstance`'s early-return.
-	if project.witnessTables.containsForGid(gid, interfaceName: interfaceName) 'alreadyEmitted'
-		return
-	end 'alreadyEmitted'
-
 	let iface = try project.interfaces.get(interfaceName) otherwise 'noIface'
 		return
 	end 'noIface'
+
+	let alreadyEmitted = project.witnessTables.containsForGid(gid, interfaceName: interfaceName)
 
 	let mangledInstance = mangleInstanceForWitness(project, gid: gid)
 	let mangledIface = sanitizeIdentifier(interfaceName)
 	let label = "__witness_{mangledInstance}_{mangledIface}"
 
 	var methodImplNames = StringArray.create()
-	for m in iface.methods 'eachMethod'
-		let thunkName = "__witness_thunk_{mangledInstance}_{mangledIface}_{m.name}"
-		methodImplNames.push(thunkName)
-		// DFE roots so the synthesized thunk survives the dead-function
-		// elimination pass that runs over the Std module. Each pipeline run
-		// re-pushes its own root list, mirroring the unconditional path.
+	if alreadyEmitted 'reuseFromCache'
+		let cached = project.witnessTables.gidMethodImplNamesFor(gid, interfaceName: interfaceName)
+		for ci in 0 upto cached.count() 'eachCached'
+			let thunkName = try cached.get(ci) otherwise panic("emitPerInstanceWitnessForConformance: cached.get OOB at {ci}")
+			methodImplNames.push(thunkName)
+		end 'eachCached'
+	end 'reuseFromCache' else 'buildFresh'
+		for m in iface.methods 'eachMethod'
+			let thunkName = "__witness_thunk_{mangledInstance}_{mangledIface}_{m.name}"
+			methodImplNames.push(thunkName)
+		end 'eachMethod'
+	end 'buildFresh'
+
+	// DFE roots — every pipeline run re-pushes its own root list. The
+	// cache restore re-hydrates `project.witnessTables` but not the
+	// per-run livenessRoots set, so a cached entry still needs its
+	// thunks rooted here or DFE strips them and the funcAbs64 reloc
+	// resolves to address 0 (segfault on dispatch).
+	for i in 0 upto methodImplNames.count() 'rootEach'
+		let thunkName = try methodImplNames.get(i) otherwise panic("emitPerInstanceWitnessForConformance: methodImplNames.get OOB at {i}")
 		project.livenessRoots.push(thunkName)
-	end 'eachMethod'
+	end 'rootEach'
 
 	let isFatBoxed = maxonTypeWidthBytes(project, t: MaxonType.genericInstance(gid)) > 8
 
-	var table = WitnessTable.create(mangledInstance, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: ParentWitnessLabel.none, isFatBoxed: isFatBoxed)
-	let bytes = encodeWitnessTable(table)
-	addNamedGlobalData(globalData, name: label, data: bytes)
-	project.staticRdataValues.upsert(label, value: bytes)
-	project.witnessTables.internForGid(gid, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, isFatBoxed: isFatBoxed)
-	// Pending thunk-synthesis list — read by `lowerMaxonToStd.
-	// synthesizeWitnessThunks` so the bodies for these labels get emitted
-	// in this pipeline run rather than relying on the stdlib cache.
-	project.pendingWitnessThunkGids.push(gid)
-	project.pendingWitnessThunkInterfaces.push(interfaceName)
+	if not alreadyEmitted 'emitNew'
+		var table = WitnessTable.create(mangledInstance, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, parentWitnessLabel: ParentWitnessLabel.none, isFatBoxed: isFatBoxed)
+		let bytes = encodeWitnessTable(table)
+		addNamedGlobalData(globalData, name: label, data: bytes)
+		project.staticRdataValues.upsert(label, value: bytes)
+		project.witnessTables.internForGid(gid, interfaceName: interfaceName, label: label, methodImplNames: methodImplNames, isFatBoxed: isFatBoxed)
+		// Pending thunk-synthesis list — read by `lowerMaxonToStd.
+		// synthesizeWitnessThunks` so the bodies for these labels get
+		// emitted in this pipeline run rather than relying on the stdlib
+		// cache.
+		project.pendingWitnessThunkGids.push(gid)
+		project.pendingWitnessThunkInterfaces.push(interfaceName)
+	end 'emitNew' else 'reuseCachedRdata'
+		// Cache restore: the rdata bytes were captured into
+		// `staticRdataValues` but `globalData` is fresh per pipeline run.
+		// Re-add the bytes so the funcAbs64 relocs below land on a
+		// registered label rather than offset 0. `addNamedGlobalData` is
+		// idempotent on name.
+		let bytes = try project.staticRdataValues.get(label) otherwise panic("emitPerInstanceWitnessForConformance: per-instance witness '{label}' marked alreadyEmitted but staticRdataValues is missing the entry — cache restore should have populated both")
+		addNamedGlobalData(globalData, name: label, data: bytes)
+	end 'reuseCachedRdata'
 
-	// Queue funcAbs64 relocs for each method slot. The link-time patcher
-	// fills these with the thunk function's absolute address once Std
-	// lowering has produced the thunk bodies (see `synthesizeWitnessThunks`
-	// in lowerMaxonToStd).
+	// Re-push funcAbs64 relocs every pipeline run. Relocs live on
+	// `globalData.pendingRdataRelocs` which is per-run; the cache brings
+	// back the witness registry and the rdata bytes but NOT these
+	// relocs. Without re-pushing, the method slots stay zero-filled in
+	// rdata and indirect dispatch through the slot segfaults at runtime.
 	for i in 0 upto methodImplNames.count() 'eachReloc'
 		let implName = try methodImplNames.get(i) otherwise panic("emitPerInstanceWitnessForConformance: methodImplNames.get OOB at {i}")
 		let slotOffset = WITNESS_OFFSET_METHODS + 8 * i

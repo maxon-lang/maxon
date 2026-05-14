@@ -7,11 +7,20 @@
 
 let wasiProcExit = 0
 let wasiFdWrite = 1
-let wasiImportCount = 2
+// WASI argv discovery: `args_sizes_get(argc_out, buf_size_out) -> errno`
+// followed by `args_get(argv_ptrs_out, buf_out) -> errno`. The first call
+// learns the count + total bytes needed; the second fills the argv pointer
+// array and the data buffer. mrt_command_line_count / mrt_command_line_arg
+// (replaced inline for wasm) call args_sizes_get on the first invocation,
+// allocate a single mm-managed buffer for the pointer table + data area,
+// then call args_get; subsequent invocations hit the cached buffer.
+let wasiArgsSizesGet = 2
+let wasiArgsGet = 3
+let wasiImportCount = 4
 
 // --- Linear memory layout ---
 // We reserve a block of linear memory for various runtime needs. The layout is:
-//   0..1024              scratch (iovec buffer for fd_write)
+//   0..1024              scratch (iovec buffer for fd_write + argv cache)
 //   1024..dataOffset     global data (string literals, top-level vars, stdlib data)
 //   dataOffset..         stack slots (per-function frames)
 //
@@ -23,9 +32,22 @@ let wasiImportCount = 2
 //
 // iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
 // nwritten at offset 8
+//
+// argv cache (zero-initialized, lazily populated by mrt_command_line_count
+// / mrt_command_line_arg on first call):
+//   16..20 (i32): args_sizes_get out: argc (also serves as cached argc)
+//   20..24 (i32): args_sizes_get out: total bytes in the argv buffer
+//   24..28 (i32): init flag (0 = uninitialized, 1 = wasi calls completed)
+//   28..32 (i32): pointer to mm-allocated argv buffer; first argc*4 bytes
+//                 hold the WASI-written argv pointer array, the rest holds
+//                 the string data with WASI's NUL terminators
 
 let iovecBase = 0
 let nwrittenBase = 8
+let argvCacheArgcBase = 16
+let argvCacheBufSizeBase = 20
+let argvCacheInitFlagBase = 24
+let argvCacheBufPtrBase = 28
 let scratchEnd = 1024
 
 // Initial memory pages: enough for scratch + global data + reasonable stack.
@@ -164,6 +186,24 @@ end 'WasmFuncAddrFixup'
 
 export typealias WasmFuncAddrFixupArray = Array with WasmFuncAddrFixup
 
+// Per-function record of a `globalAddr` emission whose target linear-memory
+// offset the cache-build doesn't yet know. The cache build assigns a
+// stdlib-only offset that the user pipeline must re-resolve once user data
+// shifts the merged layout; without this fixup, stdlib bodies read garbage
+// for string-literal pointers like `"true"` baked into `__bool_fromString`.
+// The cache emits a 5-byte fixed-width sleb128 placeholder; the user-build
+// patches it with the final globalDataOffsets[targetName] value.
+export type WasmGlobalAddrFixup
+	export var bodyOffset CodeOffset
+	export var targetName String
+
+	export static function create(bodyOffset CodeOffset, targetName String) returns WasmGlobalAddrFixup
+		return Self{bodyOffset: bodyOffset, targetName: targetName}
+	end 'create'
+end 'WasmGlobalAddrFixup'
+
+export typealias WasmGlobalAddrFixupArray = Array with WasmGlobalAddrFixup
+
 // Per-function WASM emission result for caching. `throwsTypeName` mirrors
 // IrFunction.throwsTypeName as a `ThrowsClause`: `none` means non-throwing,
 // `throwing(name)` carries the bare error-enum name. Throwing functions
@@ -187,6 +227,14 @@ export type WasmObjectFunction
 	// resolves the table index from its full funcNames list and patches in
 	// place. Empty for stdlib functions that never take a function address.
 	export var funcAddrFixups WasmFuncAddrFixupArray
+	// Fixups for `i64.const <linMemOffset>` bytes emitted by globalAddr ops.
+	// Stdlib bodies bake stdlib-only data offsets at cache time; the user
+	// pipeline merges its own globalData ahead of the stdlib chunks, so the
+	// cached offsets need re-resolution against the final layout. Without
+	// this patch, stdlib functions that take the address of a string literal
+	// (e.g. `__bool_fromString`'s `"true"` constant) load garbage bytes and
+	// report `input == "true"` as false for matching input.
+	export var globalAddrFixups WasmGlobalAddrFixupArray
 
 	export static function create(name String, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, throwsTypeName ThrowsClause = ThrowsClause.none) returns WasmObjectFunction
 		return Self{
@@ -198,7 +246,8 @@ export type WasmObjectFunction
 			body: ByteArray.create(),
 			callFixups: WasmCallFixupArray.create(),
 			typeFixups: WasmTypeFixupArray.create(),
-			funcAddrFixups: WasmFuncAddrFixupArray.create()
+			funcAddrFixups: WasmFuncAddrFixupArray.create(),
+			globalAddrFixups: WasmGlobalAddrFixupArray.create()
 		}
 	end 'create'
 end 'WasmObjectFunction'
@@ -254,7 +303,7 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 	for func in module.functions 'eachFunc'
 		var objFunc = WasmObjectFunction.create(func.name, returnType: func.returnType, paramCount: func.paramCount, paramTypes: func.paramTypes, throwsTypeName: func.throwsTypeName)
 
-		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups, addrFixups: objFunc.funcAddrFixups)
+		let body = lowering.lowerFunction(func, fixups: objFunc.callFixups, tyFixups: objFunc.typeFixups, addrFixups: objFunc.funcAddrFixups, gaddrFixups: objFunc.globalAddrFixups)
 		objFunc.body = body
 
 		result.push(objFunc)
@@ -467,8 +516,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// We need function types for:
 	// 1. WASI proc_exit: (i32) -> ()
 	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32)
-	// 3. Each module function
-	// 4. Stage F (closures): every distinct indirect-call signature used
+	// 3. WASI args_sizes_get: (i32, i32) -> (i32)
+	// 4. WASI args_get: (i32, i32) -> (i32)
+	// 5. Each module function
+	// 6. Stage F (closures): every distinct indirect-call signature used
 	//    by `call_indirect` in any user function body. Direct-call types
 	//    above are interned into `typeIndexMap` first so a matching
 	//    indirect call reuses the same entry.
@@ -486,6 +537,20 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeFuncType(fdWriteType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(fdWriteType)
 	typeIndexMap.upsert(fdWriteType, value: 1 as Wasm32Index)
+
+	// Types 2 and 3: (i32, i32) -> (i32) — args_sizes_get and args_get share
+	// this shape (two i32 out-pointers, errno return). Two type-section
+	// entries occupy the slots so the function section's positional
+	// `wasiImportCount + i` lookup still resolves module-function-N's type
+	// at type-index N + 4. The dedup map only records the first entry —
+	// downstream indirect calls with the same shape will reuse type 2.
+	var argsSizesGetType = ByteArray.create()
+	writeFuncType(argsSizesGetType, paramTypes: makeByteArray2(wasmTypeI32, b: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
+	types.push(argsSizesGetType)
+	typeIndexMap.upsert(argsSizesGetType, value: 2 as Wasm32Index)
+	var argsGetType = ByteArray.create()
+	writeFuncType(argsGetType, paramTypes: makeByteArray2(wasmTypeI32, b: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
+	types.push(argsGetType)
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
@@ -558,6 +623,14 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 
 	// Import 1: fd_write
 	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"fd_write", typeIndex: 1, countRef: importCount)
+
+	// Import 2: args_sizes_get — populates argc / total-buf-size for the
+	// argv-cache logic in mrt_command_line_count / mrt_command_line_arg.
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"args_sizes_get", typeIndex: 2, countRef: importCount)
+
+	// Import 3: args_get — writes the argv pointer array + the
+	// NUL-terminated argv buffer.
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"args_get", typeIndex: 3, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -665,8 +738,9 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var noFixups = WasmCallFixupArray.create()
 	var noTypeFixups = WasmTypeFixupArray.create()
 	var noAddrFixups = WasmFuncAddrFixupArray.create()
+	var noGlobalAddrFixups = WasmGlobalAddrFixupArray.create()
 	for func in module.functions 'emitBodies'
-		let body = lowering.lowerFunction(func, fixups: noFixups, tyFixups: noTypeFixups, addrFixups: noAddrFixups)
+		let body = lowering.lowerFunction(func, fixups: noFixups, tyFixups: noTypeFixups, addrFixups: noAddrFixups, gaddrFixups: noGlobalAddrFixups)
 		bodies.push(body)
 	end 'emitBodies'
 
@@ -706,6 +780,15 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 			let tableIdx = try lowering.funcTableIndices.get(addrFix.targetName) otherwise panic("emitWasmModule: funcAddr fixup target '{addrFix.targetName}' missing from user-build table (stdlib body '{func.name}' references it but it isn't in the final module)")
 			patchSleb128Fixed5(body, offset: addrFix.bodyOffset, value: tableIdx as ParsedInt)
 		end 'patchAddrs'
+
+		// Patch globalAddr linear-memory offsets. The stdlib cache baked
+		// stdlib-only offsets which don't match the merged image once user
+		// globalData is layered in first; resolve each fixup against the
+		// final globalDataOffsets map.
+		for gAddrFix in func.globalAddrFixups 'patchGlobalAddrs'
+			let resolved = try globalDataOffsets.get(gAddrFix.targetName) otherwise panic("emitWasmModule: globalAddr fixup target '{gAddrFix.targetName}' missing from final globalDataOffsets (stdlib body '{func.name}' references it but it isn't in the merged data section)")
+			patchSleb128Fixed5(body, offset: gAddrFix.bodyOffset, value: resolved as ParsedInt)
+		end 'patchGlobalAddrs'
 
 		bodies.push(body)
 	end 'emitStdlibBodies'
@@ -750,6 +833,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeWasmName(funcNameMap, name: b"proc_exit")
 	writeUleb128(funcNameMap, value: 1)
 	writeWasmName(funcNameMap, name: b"fd_write")
+	writeUleb128(funcNameMap, value: 2)
+	writeWasmName(funcNameMap, name: b"args_sizes_get")
+	writeUleb128(funcNameMap, value: 3)
+	writeWasmName(funcNameMap, name: b"args_get")
 	for i in 0 upto funcCount 'nameFuncs'
 		let name = try funcNames.get(i) otherwise "unknown"
 		writeUleb128(funcNameMap, value: (wasiImportCount + i) as Wasm32Index)
@@ -826,6 +913,15 @@ type WasmFunctionLowering
 	// records the body offset + target name here; the user-build patches
 	// these once the final table layout is known.
 	var funcAddrFixups WasmFuncAddrFixupArray
+	// Same pattern for globalAddr-emitted i64.const bytes that hold a linear-
+	// memory offset. In fixedCalls mode the stdlib cache assigns offsets
+	// against the stdlib-only data layout, but the user pipeline puts its own
+	// data first; we write a 10-byte fixed-width sleb128 placeholder and
+	// patch in the resolved offset at module-assembly time. Without this
+	// fixup, stdlib functions that take the address of a baked string
+	// literal (e.g. `__bool_fromString`'s `"true"`) read whatever bytes
+	// happen to land at the stdlib-relative offset in the merged image.
+	var globalAddrFixups WasmGlobalAddrFixupArray
 	// Per-function blockId → index map. Populated at the top of
 	// lowerFunction by walking func.blockRefs once, so every emitted
 	// branch resolves its target block index in O(1) instead of scanning
@@ -849,6 +945,7 @@ type WasmFunctionLowering
 			callFixups: WasmCallFixupArray.create(),
 			typeFixups: WasmTypeFixupArray.create(),
 			funcAddrFixups: WasmFuncAddrFixupArray.create(),
+			globalAddrFixups: WasmGlobalAddrFixupArray.create(),
 			func: IrFunction.createFromStd("", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0),
 			body: ByteArray.create(),
 			isVoidReturn: true,
@@ -864,7 +961,7 @@ type WasmFunctionLowering
 	// Function body emission
 	// ============================================================
 
-	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray, tyFixups WasmTypeFixupArray, addrFixups WasmFuncAddrFixupArray) returns ByteArray
+	function lowerFunction(srcFunc IrFunction, fixups WasmCallFixupArray, tyFixups WasmTypeFixupArray, addrFixups WasmFuncAddrFixupArray, gaddrFixups WasmGlobalAddrFixupArray) returns ByteArray
 		// Replace mrt_panic with a simplified WASM version that writes the
 		// message cstring to stderr then traps (wasmtime provides the backtrace).
 		if srcFunc.name == "mrt_panic" 'isPanic'
@@ -874,6 +971,19 @@ type WasmFunctionLowering
 		if srcFunc.name == "mrt_panic_print_frame" 'isPrintFrame'
 			return emitWasmNopVoidFunc()
 		end 'isPrintFrame'
+		// Replace the Windows IAT-call command-line bodies with WASI-driven
+		// equivalents. filterRuntimeForOs renamed the *_stub helpers into the
+		// public names already; the stubs returned argc=1 + empty argv and
+		// would otherwise leave wasm tests with no argv access at all.
+		if srcFunc.name == "mrt_command_line_count" 'isCmdCount'
+			return emitWasmCommandLineCount(funcSigs: funcSigs)
+		end 'isCmdCount'
+		if srcFunc.name == "mrt_command_line_arg" 'isCmdArg'
+			return emitWasmCommandLineArg(funcSigs: funcSigs)
+		end 'isCmdArg'
+		if srcFunc.name == "mrt_executable_path" 'isExePath'
+			return emitWasmExecutablePath(funcSigs: funcSigs)
+		end 'isExePath'
 
 		func = srcFunc
 		body = ByteArray.create()
@@ -885,6 +995,7 @@ type WasmFunctionLowering
 		callFixups = fixups
 		typeFixups = tyFixups
 		funcAddrFixups = addrFixups
+		globalAddrFixups = gaddrFixups
 
 		// Build the per-function blockId → blockRefs-index map up front.
 		// Without this, every emitted branch / cond_branch did a linear
@@ -1233,7 +1344,7 @@ type WasmFunctionLowering
 			branch then nop()
 			call(resultId, callee, argIds) then emitCall(resultId: resultId, callee: callee, argIds: argIds)
 			indirectCall(resultId, calleeId, argIds) then emitIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds)
-			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then emitWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds)
+			witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) then emitWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 			ret(retValId) then emitRet(retValId: retValId)
 			param(resultId, paramIndex, _) then emitParam(resultId: resultId, paramIndex: paramIndex)
 			load(resultId, baseId, offset, width, signed, isFloat) then emitLoad(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat)
@@ -1316,6 +1427,8 @@ type WasmFunctionLowering
 			subF64 gives opF64Sub
 			mulF64 gives opF64Mul
 			divF64 gives opF64Div
+			minF64 gives opF64Min
+			maxF64 gives opF64Max
 		end 'pickOp'
 
 		body.push(wasmOp)
@@ -1563,9 +1676,20 @@ type WasmFunctionLowering
 	end 'emitStackSlotAddr'
 
 	function emitGlobalAddr(resultId ValueId, name String)
-		let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
 		body.push(opI64Const)
-		writeSleb128(body, value: offset as ParsedInt)
+		if fixedCalls 'cacheMode'
+			// Stdlib-cache build: the user pipeline merges its globalData
+			// before the stdlib chunks, so cache-time offsets won't match
+			// the final image. Record a fixup that the user-build patches
+			// against the final globalDataOffsets map. Use a 5-byte fixed-
+			// width sleb128 — linear-memory offsets are non-negative and
+			// fit in 28 bits comfortably.
+			globalAddrFixups.push(WasmGlobalAddrFixup.create(body.count(), targetName: name))
+			writeSleb128Fixed5(body, value: 0 as ParsedInt)
+		end 'cacheMode' else 'userMode'
+			let offset = try globalDataOffsets.get(name) otherwise panic("wasm: unknown global address '{name}' — not registered in globalDataOffsets")
+			writeSleb128(body, value: offset as ParsedInt)
+		end 'userMode'
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitGlobalAddr'
@@ -1872,7 +1996,7 @@ type WasmFunctionLowering
 		return s
 	end 'describeIndirectCallShape'
 
-	function buildIndirectCallTypeBytes(resultId ValueId, argIds ValueIdArray) returns ByteArray
+	function buildIndirectCallTypeBytes(resultId ValueId, isVoid bool, argIds ValueIdArray) returns ByteArray
 		var params = ByteArray.create()
 		for argId in argIds 'eachArg'
 			if isFloatLocal(funcFloatSet, localIdx: argId as MachineWord) 'isFloat'
@@ -1882,16 +2006,19 @@ type WasmFunctionLowering
 			end 'isInt'
 		end 'eachArg'
 		var results = ByteArray.create()
-		// Indirect calls into a closure always return a value today — the
-		// closure body's `gives <expr>` desugars to a non-void return.
-		// When/if void closures land, this branch needs an "is the
-		// resultId actually consumed?" check; for now, every call site
-		// produces an i64 or f64 result.
-		if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
-			results.push(wasmTypeF64)
-		end 'floatRes' else 'intRes'
-			results.push(wasmTypeI64)
-		end 'intRes'
+		// `isVoid` covers void interface methods (e.g. `interface Printer
+		// { function show() }`); for non-void callees the wasm `call_indirect`
+		// type must declare exactly one i64/f64 result so it matches what
+		// the callee actually pushes. Closures always return a value today
+		// (the body's `gives <expr>` desugars to a non-void return), so
+		// emitIndirectCall passes isVoid=false.
+		if not isVoid 'hasResult'
+			if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
+				results.push(wasmTypeF64)
+			end 'floatRes' else 'intRes'
+				results.push(wasmTypeI64)
+			end 'intRes'
+		end 'hasResult'
 		var funcType = ByteArray.create()
 		writeFuncType(funcType, paramTypes: params, resultTypes: results)
 		return funcType
@@ -1902,8 +2029,12 @@ type WasmFunctionLowering
 	// the Wasm stack between the load and the call_indirect, taking
 	// advantage of the stack-machine model. Pressure-reduction motive
 	// inherited from the X64 lowering, even though Wasm itself doesn't have
-	// a register pressure problem.
-	function emitWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+	// a register pressure problem. `isVoid` lets void interface methods
+	// (e.g. `interface Printer { function show() }`) declare a no-result
+	// signature — call_indirect type-matches against the actual callee,
+	// which pushes nothing onto the stack, so a phantom i64 result would
+	// trap with "indirect call type mismatch".
+	function emitWitnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
 		// Push args first (matches call_indirect stack order: args before
 		// callee index).
 		for argId in argIds 'pushArgs'
@@ -1926,7 +2057,7 @@ type WasmFunctionLowering
 
 		// Look up the type-section index for this call signature. Same
 		// shape resolution as emitIndirectCall.
-		let typeBytes = buildIndirectCallTypeBytes(resultId, argIds: argIds)
+		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: isVoid, argIds: argIds)
 		body.push(opCallIndirect)
 		if fixedCalls 'useFixed'
 			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
@@ -1937,8 +2068,13 @@ type WasmFunctionLowering
 		end 'useVariable'
 		writeUleb128(body, value: 0)
 
-		body.push(opLocalSet)
-		writeUleb128(body, value: resultId as Wasm32Index)
+		// Void method bodies push nothing; skip the local.set so the
+		// stack stays balanced. The dead resultId still has a wasm local
+		// reserved (sized by findMaxValueId) but is simply never written.
+		if not isVoid 'storeResult'
+			body.push(opLocalSet)
+			writeUleb128(body, value: resultId as Wasm32Index)
+		end 'storeResult'
 	end 'emitWitnessCall'
 
 	function emitIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
@@ -1962,7 +2098,7 @@ type WasmFunctionLowering
 		// own the final type-section layout; we record a typeFixup and
 		// write a 5-byte placeholder that gets patched at module-assembly
 		// time.
-		let typeBytes = buildIndirectCallTypeBytes(resultId, argIds: argIds)
+		let typeBytes = buildIndirectCallTypeBytes(resultId, isVoid: false, argIds: argIds)
 		body.push(opCallIndirect)
 		if fixedCalls 'useFixed'
 			typeFixups.push(WasmTypeFixup.create(body.count(), signatureBytes: typeBytes))
@@ -1995,34 +2131,8 @@ type WasmFunctionLowering
 	end 'findBlockIndex'
 
 	function findMaxValueId() returns MachineWord
-		var maxId = 0 as MachineWord
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-			for blockArg in block.blockArgs 'eachBlockArg'
-				if blockArg.valueId > maxId 'update'
-					maxId = blockArg.valueId as MachineWord
-				end 'update'
-			end 'eachBlockArg'
-			for packed in block.opRefs 'eachOp'
-				let opMax = getPackedOpMaxValueId(opIdx: packed)
-				if opMax > maxId 'updateOp'
-					maxId = opMax
-				end 'updateOp'
-			end 'eachOp'
-			if block.hasTerminatorOp() 'hasTerm'
-				let termMax = getPackedOpMaxValueId(opIdx: block.terminatorIndex())
-				if termMax > maxId 'updateTerm'
-					maxId = termMax
-				end 'updateTerm'
-			end 'hasTerm'
-		end 'eachBlock'
-		return maxId
+		return scanMaxMirValueId(module, func: func) as MachineWord
 	end 'findMaxValueId'
-
-	function getPackedOpMaxValueId(opIdx OpIndex) returns MachineWord
-		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
-		return getMirOpMaxValueId(mirOp)
-	end 'getPackedOpMaxValueId'
 
 	// ============================================================
 	// Float value tracking
@@ -2226,68 +2336,336 @@ function emitWasmNopVoidFunc() returns ByteArray
 	return body
 end 'emitWasmNopVoidFunc'
 
+// mrt_executable_path() on wasm: delegate to mrt_command_line_arg(0). WASI
+// follows the POSIX convention of argv[0] = executable path, so the cache
+// already populated by ensureArgvCache holds the value we want. Wrapping
+// keeps the runtime API surface identical across targets while avoiding a
+// second copy of the cache logic.
+function emitWasmExecutablePath(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// No locals.
+	writeUleb128(body, value: 0)
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opCall)
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mrt_command_line_arg", importCount: wasiImportCount))
+	body.push(opEnd)
+	return body
+end 'emitWasmExecutablePath'
+
+// Emit the bytecode that ensures the argv cache (scratch slots starting at
+// argvCacheInitFlagBase) is populated. Runs at the top of each public-name
+// command-line helper; the first call performs the two WASI imports and the
+// mrt_alloc, subsequent calls take the early-out branch. `scratchLocal` is
+// the caller-supplied i32 local index used as a scratch register for the
+// mrt_alloc result and the args_get pointer parameters; callers must declare
+// the local with type i32 and ensure it doesn't alias any i64 param/local.
+// Drops the wasm-import errno results — a non-zero return from either WASI
+// import would surface downstream as a malformed argv buffer (length 0 from
+// the scan loop) rather than a panic, matching the spec runner's "treat
+// argv access failures as empty" convention on non-Windows targets.
+function emitArgvCacheEnsure(body ByteArray, funcSigs WasmFuncSigs, scratchLocal MachineWord)
+	// if (load i32 from argvCacheInitFlagBase) != 0: skip everything.
+	body.push(opBlock)
+	body.push(wasmTypeVoid)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheInitFlagBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opBrIf)
+	writeUleb128(body, value: 0)
+
+	// args_sizes_get(argvCacheArgcBase, argvCacheBufSizeBase) — writes the
+	// counts into the two scratch slots. Drop the errno return.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufSizeBase as ParsedInt)
+	body.push(opCall)
+	writeUleb128(body, value: 2)
+	body.push(opDrop)
+
+	// total bytes (i64) = argc*4 + bufSize. mrt_alloc consumes the i64,
+	// returns the buffer address as an i64; we wrap to i32 and store into
+	// local 0 (the per-call scratch register that also feeds args_get).
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI32Const)
+	writeSleb128(body, value: 2)
+	body.push(opI32Shl)
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufSizeBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI32Add)
+	body.push(opI64ExtendI32U)
+	body.push(opCall)
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "mrt_alloc", importCount: wasiImportCount))
+	body.push(opI32WrapI64)
+	body.push(opLocalSet)
+	writeUleb128(body, value: scratchLocal)
+
+	// scratch[argvCacheBufPtrBase] = bufPtr. Push addr first, then value.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+	body.push(opLocalGet)
+	writeUleb128(body, value: scratchLocal)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	// args_get(buf_ptr, buf_ptr + argc*4) — the first argc*4 bytes hold
+	// the WASI-written argv pointer array, the rest holds the data buffer.
+	body.push(opLocalGet)
+	writeUleb128(body, value: scratchLocal)
+	body.push(opLocalGet)
+	writeUleb128(body, value: scratchLocal)
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI32Const)
+	writeSleb128(body, value: 2)
+	body.push(opI32Shl)
+	body.push(opI32Add)
+	body.push(opCall)
+	writeUleb128(body, value: 3)
+	body.push(opDrop)
+
+	// Mark cache initialized so subsequent calls skip everything above.
+	// Push addr, then value, then i32.store.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheInitFlagBase as ParsedInt)
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	body.push(opEnd)
+end 'emitArgvCacheEnsure'
+
+// mrt_command_line_count() returns the WASI argc as i64. Wasm body: ensure
+// the cache (lazy first-call) then load argvCacheArgcBase and extend to i64.
+// Local 0 (i32) is the scratch register passed to emitArgvCacheEnsure for
+// the freshly-allocated argv-buffer pointer; this function has no params,
+// so local 0 is the first declared local.
+function emitWasmCommandLineCount(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// One local group: one i32 (the argv-buf pointer scratch register).
+	writeUleb128(body, value: 1)
+	writeUleb128(body, value: 1)
+	body.push(wasmTypeI32)
+
+	emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: 0)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI64ExtendI32U)
+
+	body.push(opEnd)
+	return body
+end 'emitWasmCommandLineCount'
+
+// mrt_command_line_arg(idx i64) returns a fresh __ManagedMemory whose buffer
+// holds the bytes of argv[idx] (NUL-terminator excluded from the length
+// stored at mm[8]). Out-of-bounds idx yields an empty mm (length 0) without
+// trapping — the spec runner's argv normalization relies on that behaviour.
+//
+// Local layout (param at local 0; explicit i32 locals follow):
+//   local 0 = idx (param, i64)
+//   local 1 = argv-buf scratch (i32) consumed by emitArgvCacheEnsure
+//   local 2 = scan ptr (i32) used while computing strlen
+//   local 3 = len (i32) — argv[idx] byte count
+//   local 4 = mm pointer (i32)
+//   local 5 = argv[idx] (i32)
+function emitWasmCommandLineArg(funcSigs WasmFuncSigs) returns ByteArray
+	var body = ByteArray.create()
+	// Locals: 5 i32 (no i64 locals — the i64 param is local 0).
+	writeUleb128(body, value: 1)
+	writeUleb128(body, value: 5)
+	body.push(wasmTypeI32)
+
+	let localIdx = 0
+	let localScratch = 1
+	let localScan = 2
+	let localLen = 3
+	let localMm = 4
+	let localArgvI = 5
+
+	emitArgvCacheEnsure(body, funcSigs: funcSigs, scratchLocal: localScratch)
+
+	// Bounds check: if idx < 0 OR idx >= argc, jump to the empty-mm path.
+	// Outer block is i64-typed: the OOB fall-through pushes an empty-mm
+	// (i64) which lands as the block result. The happy path uses opReturn
+	// to exit the function directly, bypassing the block's stack contract.
+	body.push(opBlock)
+	body.push(wasmTypeI64)
+	body.push(opBlock)
+	body.push(wasmTypeVoid)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localIdx)
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opI64LtS)
+	body.push(opBrIf)
+	writeUleb128(body, value: 0)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localIdx)
+	body.push(opI32WrapI64)
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheArgcBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opI32GeU)
+	body.push(opBrIf)
+	writeUleb128(body, value: 0)
+
+	// argv[idx] is an i32 at buf_ptr + idx*4. Load and stash into localArgvI.
+	body.push(opI32Const)
+	writeSleb128(body, value: argvCacheBufPtrBase as ParsedInt)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localIdx)
+	body.push(opI32WrapI64)
+	body.push(opI32Const)
+	writeSleb128(body, value: 2)
+	body.push(opI32Shl)
+	body.push(opI32Add)
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opLocalTee)
+	writeUleb128(body, value: localArgvI)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localScan)
+
+	// Initialize len = 0
+	body.push(opI32Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localLen)
+
+	// Scan loop: while *scanPtr != 0 { scanPtr++; len++; }
+	body.push(opBlock)
+	body.push(wasmTypeVoid)
+	body.push(opLoop)
+	body.push(wasmTypeVoid)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localScan)
+	body.push(opI32Load8U)
+	body.push(0x00)
+	writeUleb128(body, value: 0)
+	body.push(opI32Eqz)
+	body.push(opBrIf)
+	writeUleb128(body, value: 1)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localScan)
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+	body.push(opI32Add)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localScan)
+
+	body.push(opLocalGet)
+	writeUleb128(body, value: localLen)
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+	body.push(opI32Add)
+	body.push(opLocalSet)
+	writeUleb128(body, value: localLen)
+
+	body.push(opBr)
+	writeUleb128(body, value: 0)
+	body.push(opEnd)
+	body.push(opEnd)
+
+	// Allocate __ManagedMemory sized for len + 1 (NUL terminator preserved
+	// to match the Windows path; length stored at mm[8] excludes the NUL).
+	// __managed_mem_create takes (count, elemSize) as i64s.
+	body.push(opLocalGet)
+	writeUleb128(body, value: localLen)
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+	body.push(opI32Add)
+	body.push(opI64ExtendI32U)
+	body.push(opI64Const)
+	writeSleb128(body, value: 1)
+	body.push(opCall)
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "__managed_mem_create", importCount: wasiImportCount))
+	body.push(opI32WrapI64)
+	body.push(opLocalTee)
+	writeUleb128(body, value: localMm)
+
+	// Copy len bytes from argv[idx] into mm.buffer (mm[0] is the buf ptr).
+	// memory.copy dst src len (all i32). Push dst = mm.buffer.
+	body.push(opI32Load)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localArgvI)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localLen)
+	body.push(0xFC)
+	writeUleb128(body, value: 10)
+	body.push(0x00)
+	body.push(0x00)
+
+	// mm[8] = len (i64). Wasm i64.store, alignment 3.
+	body.push(opLocalGet)
+	writeUleb128(body, value: localMm)
+	body.push(opLocalGet)
+	writeUleb128(body, value: localLen)
+	body.push(opI64ExtendI32U)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: 8)
+
+	// Return mm pointer as i64.
+	body.push(opLocalGet)
+	writeUleb128(body, value: localMm)
+	body.push(opI64ExtendI32U)
+	body.push(opReturn)
+
+	body.push(opEnd)
+
+	// Out-of-bounds branch lands here. Allocate an empty (count=1, len=0)
+	// __ManagedMemory and return it. Mirrors the Windows path's oob block.
+	body.push(opI64Const)
+	writeSleb128(body, value: 1)
+	body.push(opI64Const)
+	writeSleb128(body, value: 1)
+	body.push(opCall)
+	writeUleb128(body, value: findFunctionIndex(funcSigs, name: "__managed_mem_create", importCount: wasiImportCount))
+
+	body.push(opEnd)
+	// Function-body end. The OOB path leaves [i64] on the stack at this
+	// point; the happy path returned via opReturn above. Both paths must
+	// agree on the stack shape that the function returns (i64).
+	body.push(opEnd)
+	return body
+end 'emitWasmCommandLineArg'
+
 // ============================================================
 // Utility functions
 // ============================================================
-
-function getMirOpMaxValueId(op MirOp) returns MachineWord
-	return match op 'dispatch'
-		movImm(resultId, _, _) gives resultId as MachineWord
-		movReg(resultId, srcId) gives maxOfTwo(resultId as MachineWord, b: srcId as MachineWord)
-		binOp(resultId, leftId, rightId, _) gives maxOfThree(resultId as MachineWord, b: leftId as MachineWord, c: rightId as MachineWord)
-		unaryOp(resultId, operandId, _) gives maxOfTwo(resultId as MachineWord, b: operandId as MachineWord)
-		cmp(resultId, leftId, rightId, _) gives maxOfThree(resultId as MachineWord, b: leftId as MachineWord, c: rightId as MachineWord)
-		condBranch(condId, _, _, _, _) gives condId as MachineWord
-		branch gives 0
-		call(resultId, _, _) gives resultId as MachineWord
-		indirectCall(resultId, calleeId, _) gives maxOfTwo(resultId as MachineWord, b: calleeId as MachineWord)
-		witnessCall(resultId, witnessAddrId, _, _) gives maxOfTwo(resultId as MachineWord, b: witnessAddrId as MachineWord)
-		ret(retValId) gives retValId as MachineWord
-		param(resultId, _, _) gives resultId as MachineWord
-		load(resultId, baseId, _, _, _, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
-		store(valueId, baseId, _, _, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
-		loadSlot(resultId, _) gives resultId as MachineWord
-		storeSlot(_, valueId) gives valueId as MachineWord
-		stackSlotAddr(resultId, _) gives resultId as MachineWord
-		globalAddr(resultId, _) gives resultId as MachineWord
-		funcAddr(resultId, _) gives resultId as MachineWord
-		loadFramePtr(resultId) gives resultId as MachineWord
-		syscall(resultId, _, _) gives resultId as MachineWord
-		iatCall(resultId, _, _) gives resultId as MachineWord
-		osExit(codeId) gives codeId as MachineWord
-		osWrite(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
-		osWriteErr(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
-		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThree(resultId as MachineWord, b: pathPtrId as MachineWord, c: pathLenId as MachineWord)
-		osWriteFd(fdId, ptrId, lenId) gives maxOfThree(fdId as MachineWord, b: ptrId as MachineWord, c: lenId as MachineWord)
-		osClose(fdId) gives fdId as MachineWord
-		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwo(maxOfThree(resultId as MachineWord, b: namePtrId as MachineWord, c: nameLenId as MachineWord), b: maxOfTwo(outBufPtrId as MachineWord, b: outBufLenId as MachineWord))
-		memcpy(dstId, srcId, lenId) gives maxOfThree(dstId as MachineWord, b: srcId as MachineWord, c: lenId as MachineWord)
-		storeByte(baseId, offsetId, byteId) gives maxOfThree(baseId as MachineWord, b: offsetId as MachineWord, c: byteId as MachineWord)
-		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId as MachineWord, b: baseId as MachineWord, c: offsetId as MachineWord)
-		osAllocPages(resultId, sizeId) gives maxOfTwo(resultId as MachineWord, b: sizeId as MachineWord)
-		osAllocPagesLarge(resultId, sizeId) gives maxOfTwo(resultId as MachineWord, b: sizeId as MachineWord)
-		osFreePages(ptrId, sizeId) gives maxOfTwo(ptrId as MachineWord, b: sizeId as MachineWord)
-		atomicInc(addrId) gives addrId as MachineWord
-		atomicDec(addrId) gives addrId as MachineWord
-		atomicXadd(resultId, addrId, valId) gives maxOfThree(resultId as MachineWord, b: addrId as MachineWord, c: valId as MachineWord)
-		osLockInit(addrId) gives addrId as MachineWord
-		osLockAcquire(addrId) gives addrId as MachineWord
-		osLockRelease(addrId) gives addrId as MachineWord
-		tryCall(resultId, _, _, errorFlagId) gives maxOfTwo(resultId as MachineWord, b: errorFlagId as MachineWord)
-		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId as MachineWord, b: errorFlagId as MachineWord)
-	end 'dispatch'
-end 'getMirOpMaxValueId'
-
-function maxOfTwo(a MachineWord, b MachineWord) returns MachineWord
-	if a > b 'aWins'
-		return a
-	end 'aWins'
-	return b
-end 'maxOfTwo'
-
-function maxOfThree(a MachineWord, b MachineWord, c MachineWord) returns MachineWord
-	return maxOfTwo(maxOfTwo(a, b: b), b: c)
-end 'maxOfThree'
 
 function nop()
 end 'nop'
@@ -2298,6 +2676,14 @@ function makeByteArray1(v MachineWord) returns ByteArray
 	arr.push(v)
 	return arr
 end 'makeByteArray1'
+
+// Helper to create a ByteArray with 2 elements.
+function makeByteArray2(a MachineWord, b MachineWord) returns ByteArray
+	var arr = ByteArray.create()
+	arr.push(a)
+	arr.push(b)
+	return arr
+end 'makeByteArray2'
 
 // Helper to create a ByteArray with 4 elements.
 function makeByteArray4(a MachineWord, b MachineWord, c MachineWord, d MachineWord) returns ByteArray
@@ -2330,6 +2716,7 @@ end 'setFloatBit'
 function markIfFloatBinOp(floatSet BoolArray, id MachineWord, opcode MirBinOpcode)
 	match opcode 'check'
 		addF64 to divF64 then setFloatBit(floatSet, id: id)
+		minF64 to maxF64 then setFloatBit(floatSet, id: id)
 		addI64 to shrI64 then break 'check'
 	end 'check'
 end 'markIfFloatBinOp'
@@ -2373,8 +2760,8 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
 				match op 'check'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
-					witnessCall(resultId, _, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds)
+					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds)
 					movImm to call then break 'check'
 					ret to loadByte then break 'check'
 					osAllocPages to osLockRelease then break 'check'
@@ -2384,8 +2771,8 @@ function collectIndirectCallTypes(module MirModule, types ByteArrayArray, typeIn
 			if block.hasTerminatorOp() 'hasTerm'
 				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
 				match termOp 'checkTerm'
-					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
-					witnessCall(resultId, _, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, argIds: argIds)
+					indirectCall(resultId, _, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: false, argIds: argIds)
+					witnessCall(resultId, _, _, isVoid, argIds) then registerIndirectCallType(types, typeIndexMap: typeIndexMap, floatSet: floatSet, resultId: resultId, isVoid: isVoid, argIds: argIds)
 					movImm to call then break 'checkTerm'
 					ret to loadByte then break 'checkTerm'
 					osAllocPages to osLockRelease then break 'checkTerm'
@@ -2411,7 +2798,7 @@ function lookupOrRegisterIndirectType(types ByteArrayArray, typeIndexMap WasmTyp
 	return existing as Wasm32Index
 end 'lookupOrRegisterIndirectType'
 
-function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, argIds ValueIdArray)
+function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeIndexMap, floatSet BoolArray, resultId ValueId, isVoid bool, argIds ValueIdArray)
 	var params = ByteArray.create()
 	for argId in argIds 'eachArg'
 		if isFloatLocal(floatSet, localIdx: argId as MachineWord) 'isFloat'
@@ -2421,11 +2808,17 @@ function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeInd
 		end 'isInt'
 	end 'eachArg'
 	var results = ByteArray.create()
-	if isFloatLocal(floatSet, localIdx: resultId as MachineWord) 'floatRes'
-		results.push(wasmTypeF64)
-	end 'floatRes' else 'intRes'
-		results.push(wasmTypeI64)
-	end 'intRes'
+	// Void witness/indirect calls (interface methods declared with no
+	// returns clause) MUST register a no-result signature; wasm's
+	// `call_indirect` traps with "indirect call type mismatch" if the
+	// expected type carries a result the actual callee doesn't push.
+	if not isVoid 'hasResult'
+		if isFloatLocal(floatSet, localIdx: resultId as MachineWord) 'floatRes'
+			results.push(wasmTypeF64)
+		end 'floatRes' else 'intRes'
+			results.push(wasmTypeI64)
+		end 'intRes'
+	end 'hasResult'
 	var funcType = ByteArray.create()
 	writeFuncType(funcType, paramTypes: params, resultTypes: results)
 	if typeIndexMap.contains(funcType) 'alreadyInterned'
@@ -2442,29 +2835,7 @@ end 'registerIndirectCallType'
 // mirrors findFloatValueIds exactly: seed block-arg floats, then walk
 // ops marking results based on opcode / source.
 function computeFloatValueIdsForFunc(module MirModule, func IrFunction) returns BoolArray
-	var maxId = 0 as MachineWord
-	for blockRef in func.blockRefs 'scanMax'
-		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-		for blockArg in block.blockArgs 'eachArg'
-			if blockArg.valueId > maxId 'update'
-				maxId = blockArg.valueId as MachineWord
-			end 'update'
-		end 'eachArg'
-		for packed in block.opRefs 'eachOp'
-			let mirOp = try module.ops.get(packed) otherwise panic("invariant: opIdx from block.opRefs not in module.ops")
-			let opMax = getMirOpMaxValueId(mirOp)
-			if opMax > maxId 'updateOp'
-				maxId = opMax
-			end 'updateOp'
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in module.ops")
-			let termMax = getMirOpMaxValueId(termOp)
-			if termMax > maxId 'updateTerm'
-				maxId = termMax
-			end 'updateTerm'
-		end 'hasTerm'
-	end 'scanMax'
+	let maxId = scanMaxMirValueId(module, func: func) as MachineWord
 	var floatSet = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'
 		floatSet.push(false)

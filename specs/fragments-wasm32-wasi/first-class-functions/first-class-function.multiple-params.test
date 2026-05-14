@@ -1,0 +1,37 @@
+// Test: first-class-function.multiple-params
+
+typealias Integer = int(i64.min to i64.max)
+
+function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
+	return f(a, b)
+end 'calculate'
+
+function add(x Integer, y Integer) returns Integer
+	return x + y
+end 'add'
+
+function main() returns ExitCode
+	return calculate(add, a: 15, b: 27)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.func_addr @__fnref_add
+    %1 = mir.mov_imm 15 : i64
+    %2 = mir.mov_imm 27 : i64
+    %4 = mir.indirect_call %0(%1, %2, %0)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

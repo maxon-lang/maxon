@@ -1,0 +1,44 @@
+// Test: first-class-function.reassign
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	var f = double
+	let a = f(10)
+	f = triple
+	let b = f(10)
+	return a + b
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.func_addr @__fnref_double
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.indirect_call %0(%3, %0)
+    %5 = mir.func_addr @__fnref_triple
+    %8 = mir.mov_imm 10 : i64
+    %9 = mir.indirect_call %5(%8, %5)
+    %12 = mir.add.i64 %4, %9
+    %13 = mir.mov_imm 125 : i64
+    %14 = mir.cmp ugt, %12, %13
+    mir.cond_br %14 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %15 = mir.global_addr @__panic_msg_0
+    %16 = mir.call @mrt_panic(%15)
+  __range_ok_0:
+    mir.ret %12
+  }
+}
+---

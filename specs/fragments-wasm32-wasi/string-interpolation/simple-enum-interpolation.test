@@ -1,0 +1,73 @@
+// Test: simple-enum-interpolation
+enum Direction
+	north
+	south
+	east
+	west
+end 'Direction'
+
+function main() returns ExitCode
+	let d = Direction.east
+	print("Direction: {d}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Direction: east
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 11 : i64
+    %4 = mir.global_addr @__istr_1
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.global_addr @__istr_2
+    %8 = mir.mov_imm 0 : i64
+    %10 = mir.sub.i64 %6, %4
+    %11 = mir.mul.i64 %8, %10
+    %12 = mir.add.i64 %4, %11
+    %13 = mir.mov_imm 4 : i64
+    %16 = mir.global_addr @__istr_3
+    %20 = mir.sub.i64 %16, %12
+    %21 = mir.mul.i64 %8, %20
+    %22 = mir.add.i64 %12, %21
+    %26 = mir.global_addr @__istr_4
+    %30 = mir.sub.i64 %26, %22
+    %31 = mir.mul.i64 %5, %30
+    %32 = mir.add.i64 %22, %31
+    %36 = mir.global_addr @__istr_5
+    %40 = mir.sub.i64 %36, %32
+    %41 = mir.mul.i64 %8, %40
+    %42 = mir.add.i64 %32, %41
+    %46 = mir.global_addr @__istr_6
+    %51 = mir.mov_imm 16 : i64
+    %53 = mir.mov_imm 17 : i64
+    %54 = mir.call @mrt_alloc(%53)
+    mir.memcpy %54, %2, %3
+    %55 = mir.add.i64 %54, %3
+    mir.memcpy %55, %42, %13
+    %56 = mir.add.i64 %55, %13
+    mir.memcpy %56, %46, %5
+    %58 = mir.mov_imm 40 : i64
+    %59 = mir.call @mrt_alloc(%58)
+    mir.store %54, %59, 0 width: qword
+    mir.store %51, %59, 8 width: qword
+    mir.store %51, %59, 16 width: qword
+    mir.store %5, %59, 24 width: qword
+    mir.store %8, %59, 32 width: qword
+    %62 = mir.mov_imm 16 : i64
+    %63 = mir.call @mrt_alloc(%62)
+    mir.store %59, %63, 0 width: qword
+    mir.store %8, %63, 8 width: qword
+    %66 = mir.load %63, 0 width: qword
+    %67 = mir.load %66, 0 width: qword
+    %68 = mir.load %66, 8 width: qword
+    %69 = mir.call @mrt_write_stdout(%67, %68)
+    mir.ret %8
+  }
+}
+---

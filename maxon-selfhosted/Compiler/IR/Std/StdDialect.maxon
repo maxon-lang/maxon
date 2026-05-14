@@ -298,6 +298,8 @@ export union StdArithBinaryOpcode
 	subF64 = "subf"
 	mulF64 = "mulf"
 	divF64 = "divf"
+	minF64 = "minf"
+	maxF64 = "maxf"
 	cmpI64Eq = "cmpi eq,"
 	cmpI64Ne = "cmpi ne,"
 	cmpI64Lt = "cmpi lt,"
@@ -348,7 +350,10 @@ export union StdCallOp
 	// generic code with `where T is SomeInterface` constraints (e.g. the
 	// `existing == key` comparison in stdlib Map.findSlot's probe loop).
 	// Backends lower this directly to a memory-indirect call instruction.
-	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, argIds ValueIdArray)
+	// `isVoid` lets backends with strict typed calls (wasm `call_indirect`)
+	// emit a no-result signature; native backends (x64/arm64) ignore it
+	// since RAX/X0 is always a return slot.
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
 	funcRef(resultId ValueId, funcName String)
 	tailCall(callee String, argIds ValueIdArray)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
@@ -635,13 +640,20 @@ function formatValueIdList(ids ValueIdArray) returns String
 	return result
 end 'formatValueIdList'
 
+function funcOpWitnessCallToString(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray) returns String
+	if isVoid 'voidFmt'
+		return "func.witness_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
+	end 'voidFmt'
+	return "%{resultId} = func.witness_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
+end 'funcOpWitnessCallToString'
+
 export function funcOpToString(op StdCallOp) returns String
 	return match op 'print'
 		ret(retValId) gives "func.return %{retValId}"
 		call(resultId, callee, argIds) gives "%{resultId} = func.call @{callee}({formatArgIds(argIds)})"
 		tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{callee}({formatArgIds(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
-		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives "%{resultId} = func.witness_call %{witnessAddrId}, [{methodIndex}]({formatArgIds(argIds)})"
+		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives funcOpWitnessCallToString(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, isVoid: isVoid, argIds: argIds)
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{funcName}"
 		tailCall(callee, argIds) gives "func.tail_call @{callee}({formatArgIds(argIds)})"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {paramType.name}"

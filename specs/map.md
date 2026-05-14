@@ -119,13 +119,13 @@ end 'main'
 <!-- test: literal.int-keys -->
 ```maxon
 function main() returns ExitCode
-	let m = [1: 100, 2: 200, 3: 300]
+	let m = [1: 10, 2: 20, 3: 30]
 	let result = try m.get(2) otherwise 0
 	return result
 end 'main'
 ```
 ```exitcode
-200
+20
 ```
 
 <!-- test: contains.true -->
@@ -308,13 +308,13 @@ end 'main'
 function main() returns ExitCode
 	var m = [1: 10, 2: 20, 3: 30]
 	_ = m.remove(2)
-	try m.insert(2, value: 200) otherwise ignore
+	try m.insert(2, value: 99) otherwise ignore
 	let result = try m.get(2) otherwise 0
 	return result
 end 'main'
 ```
 ```exitcode
-200
+99
 ```
 
 <!-- test: map-type-in-field -->

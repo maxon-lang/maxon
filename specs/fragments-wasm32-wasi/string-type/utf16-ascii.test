@@ -1,0 +1,99 @@
+// Test: utf16-ascii
+function main() returns ExitCode
+	let s = "ABC"
+	for u in s.utf16() 'loop'
+		print("{u}\n")
+	end 'loop'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+65
+66
+67
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 3 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %49 = mir.load %8, 0 width: qword
+    %50 = mir.call @UTF16View.create(%49)
+    mir.br inlined_UTF16View.createIterator_0()
+  inlined_UTF16View.createIterator_0:
+    %51 = mir.load %50, 0 width: qword
+    %52, %53 = mir.try_call @UTF16Iterator.create(%51)
+    %54 = mir.mov_imm 0 : i64
+    %55 = mir.cmp ne, %53, %54
+    mir.cond_br %55 [then: inlined_UTF16View.createIterator_1(), else: inlined_UTF16View.createIterator_2()]
+  inlined_UTF16View.createIterator_1:
+    %56 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%56, %53)
+  inlined_UTF16View.createIterator_2:
+    %57 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%52, %57)
+  inline_cont_main_0:
+    %15 = mir.cmp ne, %59, %6
+    mir.cond_br %15 [then: loop_0.exit(), else: loop_0()]
+  loop_0.header:
+    %17, %18 = mir.try_call @UTF16Iterator.advance(%58)
+    %20 = mir.cmp ne, %18, %6
+    mir.cond_br %20 [then: loop_0.exit(), else: loop_0()]
+  loop_0:
+    %22 = mir.call @UTF16Iterator.current(%58)
+    %24 = mir.global_addr @__istr_1
+    %26 = mir.mov_imm 21 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    %28 = mir.call @mrt_i64_to_string(%22, %27)
+    %29 = mir.global_addr @__istr_2
+    %30 = mir.mov_imm 1 : i64
+    %33 = mir.add.i64 %6, %28
+    %34 = mir.add.i64 %33, %30
+    %35 = mir.mov_imm 1 : i64
+    %36 = mir.add.i64 %34, %35
+    %37 = mir.call @mrt_alloc(%36)
+    mir.memcpy %37, %24, %6
+    %38 = mir.add.i64 %37, %6
+    mir.memcpy %38, %27, %28
+    %39 = mir.add.i64 %38, %28
+    mir.memcpy %39, %29, %30
+    %41 = mir.mov_imm 40 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %37, %42, 0 width: qword
+    mir.store %34, %42, 8 width: qword
+    mir.store %34, %42, 16 width: qword
+    %43 = mir.mov_imm 1 : i64
+    mir.store %43, %42, 24 width: qword
+    mir.store %6, %42, 32 width: qword
+    %45 = mir.mov_imm 16 : i64
+    %46 = mir.call @mrt_alloc(%45)
+    mir.store %42, %46, 0 width: qword
+    mir.store %6, %46, 8 width: qword
+    %60 = mir.load %46, 0 width: qword
+    %61 = mir.load %60, 0 width: qword
+    %62 = mir.load %60, 8 width: qword
+    %63 = mir.call @mrt_write_stdout(%61, %62)
+    mir.br loop_0.header()
+  loop_0.exit:
+    mir.ret %6
+  }
+}
+---

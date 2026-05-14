@@ -8,19 +8,30 @@ ExitCode: 8
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @parentheses.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov r8d, 2
-    x64.mov eax, 16
-    x64.xor edx, edx
-    x64.idiv r8
-    x64.mov r8, rax
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov rax, 10
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.imul rcx, rdx
+    x64.add rax, rcx
+    x64.mov rbx, 4
+    x64.mov rsi, 2
+    x64.sub rbx, rsi
+    x64.mov [rbp-8], rax
+    x64.cqo
+    x64.idiv rbx
+    x64.xor edi, edi
+    x64.mov r8, 4294967295
+    x64.cmp rax, r8
+    x64.jg parentheses.main.__range_panic_0
+    x64.cmp rax, rdi
+    x64.jl parentheses.main.__range_panic_0
+    x64.jmp parentheses.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

@@ -146,6 +146,13 @@ type SlotInfo
 	// path. When this bit is set for a slot, classifyPromotable refuses
 	// promotion regardless of load/store counts.
 	export var slotAddressTaken BoolArray
+	// Per-value-id float-ness: a value is float when produced by a float
+	// arith op, a float-returning call, an f64 block arg, or a load from a
+	// known-float slot. The store-side pass below propagates float-ness into
+	// the destination slot when any store delivers a float value — handles
+	// the parseTryFallback / parseMatchExpression seeded-with-int-zero slot
+	// whose only "real" stores are the float result/fallback arms.
+	export var valueIsFloat BoolArray
 
 	static function create() returns SlotInfo
 		return Self{
@@ -156,7 +163,8 @@ type SlotInfo
 			hasAnySlot: false,
 			slotHasStore: BoolArray.create(),
 			slotHasLoad: BoolArray.create(),
-			slotAddressTaken: BoolArray.create()
+			slotAddressTaken: BoolArray.create(),
+			valueIsFloat: BoolArray.create()
 		}
 	end 'create'
 end 'SlotInfo'
@@ -209,8 +217,16 @@ function analyzeSlots(func IrFunction, module StdModule, paramCount ParamCount) 
 		pti = pti + 1
 	end 'markParamFloat'
 
-	// Detect float local slots by checking if load results are used as float operands
+	// Detect float local slots by checking if load results are used as float
+	// operands AND by walking forward/backward through stores to slots whose
+	// stored value is provably float-typed. The latter handles the parser-
+	// emitted try-otherwise / match result slot, whose `0` integer seed is
+	// followed by float stores from the success / fallback arms. Without
+	// store-side propagation, the merge block's phi argType is misclassified
+	// as i64 and the regalloc emits GPR-class edge copies for an XMM-class
+	// block arg, producing uninitialized xmm reads at the use site.
 	markFloatSlotsFromUsage(func, module: module, info: info)
+	markFloatSlotsFromStores(func, module: module, info: info)
 
 	// Extend maxSlot to cover all param slots
 	if paramCount > 0 'extendForParams'
@@ -337,9 +353,208 @@ function markFloatArithOperands(op StdArithOp, info SlotInfo)
 	end 'check'
 end 'markFloatArithOperands'
 
+// Iterate to a fixed point, marking slots whose stores deliver float values.
+// Each iteration:
+//   - tags float-producing ops' result ids in `valueIsFloat`
+//   - propagates `valueIsFloat` for memref loads from already-float slots
+//   - flips slots to float when any `storeSlot` writes a float value
+// Stops when no new value or slot was flipped, which is guaranteed because
+// the bitmaps are monotonically increasing.
+function markFloatSlotsFromStores(func IrFunction, module StdModule, info SlotInfo)
+	// Seed value-is-float from block args' declared types. The parser only
+	// emits block args for synthetic match/cond merges (which still need
+	// the per-block-arg type) plus mem2reg's own phis (which haven't been
+	// inserted yet), so this pass picks up only the parser-emitted ones.
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		for blockArg in block.blockArgs 'eachArg'
+			if stdTypeIsFloat(blockArg.argType) 'isFloat'
+				markValueAsFloat(blockArg.valueId, info: info)
+			end 'isFloat'
+		end 'eachArg'
+	end 'eachBlock'
+
+	var changed = true
+	while changed 'fixedPoint'
+		changed = false
+		for blockRef in func.blockRefs 'eachBlockProp'
+			let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+			for packed in block.opRefs 'eachOpProp'
+				if propagateFloatForOp(packed, module: module, info: info) 'flipped'
+					changed = true
+				end 'flipped'
+			end 'eachOpProp'
+		end 'eachBlockProp'
+	end 'fixedPoint'
+end 'markFloatSlotsFromStores'
+
+// One pass of float-ness propagation for a single op. Returns true when this
+// call flipped a previously-unset bit (value or slot), so the outer fixed-
+// point loop knows to iterate again.
+function propagateFloatForOp(opIdx OpIndex, module StdModule, info SlotInfo) returns bool
+	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
+	return match stdOp 'dispatch'
+		arith(op) gives propagateFloatForArith(op, info: info)
+		memory(op) gives propagateFloatForMemory(op, info: info)
+		call(op) gives propagateFloatForCall(op, module: module, info: info)
+		control gives false
+		system gives false
+	end 'dispatch'
+end 'propagateFloatForOp'
+
+function propagateFloatForArith(op StdArithOp, info SlotInfo) returns bool
+	return match op 'check'
+		const(c) gives propagateFloatForArithConst(c, info: info)
+		binary(b) gives propagateFloatForArithBinary(b, info: info)
+		unary(u) gives propagateFloatForArithUnary(u, info: info)
+	end 'check'
+end 'propagateFloatForArith'
+
+function propagateFloatForArithConst(op StdArithConst, info SlotInfo) returns bool
+	return match op.opcode 'check'
+		constI64 gives false
+		constF64 gives flipValueToFloat(op.resultId, info: info)
+	end 'check'
+end 'propagateFloatForArithConst'
+
+function propagateFloatForArithBinary(op StdArithBinaryOp, info SlotInfo) returns bool
+	return match op.opcode 'check'
+		addI64 to shrI64 gives false
+		cmpI64Eq to cmpI64Ugt gives false
+		addF64 to maxF64 gives flipValueToFloat(op.resultId, info: info)
+		// Float comparisons produce a boolean (i64 result), not a float.
+		cmpF64Eq to cmpF64Ge gives false
+	end 'check'
+end 'propagateFloatForArithBinary'
+
+function propagateFloatForArithUnary(op StdArithUnaryOp, info SlotInfo) returns bool
+	return match op.opcode 'check'
+		negI64 to bitNotI64 gives false
+		// fpToSiI64 converts float → int, so result is int.
+		fpToSiI64 gives false
+		// bitcastF64ToI64 reinterprets float bits as int, so result is int.
+		bitcastF64ToI64 gives false
+		// siToFpF64 converts int → float, result is float.
+		siToFpF64 gives flipValueToFloat(op.resultId, info: info)
+		// sqrtF64 .. absF64 all produce a float.
+		sqrtF64 to absF64 gives flipValueToFloat(op.resultId, info: info)
+	end 'check'
+end 'propagateFloatForArithUnary'
+
+function propagateFloatForMemory(op StdMemoryOp, info SlotInfo) returns bool
+	return match op 'check'
+		loadSlot(resultId, slotId) gives propagateFloatForLoad(resultId: resultId, slotId: slotId, info: info)
+		storeSlot(slotId, valueId) gives propagateFloatForStore(slotId: slotId, valueId: valueId, info: info)
+	end 'check'
+end 'propagateFloatForMemory'
+
+// A load from a known-float slot yields a float value. Conversely, when the
+// load result is already known float (e.g. its use in `fptosi` poisoned it
+// via `markFloatSlotsFromUsage`), the SOURCE slot must also be float — the
+// load can't produce a float from an int slot. Both directions flip
+// monotonically, so a single iteration discovers either.
+function propagateFloatForLoad(resultId ValueId, slotId VarSlot, info SlotInfo) returns bool
+	var changed = false
+	if getSlotBool(info.slotIsFloat, slotId: slotId) 'slotIsFloat'
+		if flipValueToFloat(resultId, info: info) 'flippedValue'
+			changed = true
+		end 'flippedValue'
+	end 'slotIsFloat'
+	if getValueIsFloat(resultId, info: info) 'valueIsFloat'
+		if not getSlotBool(info.slotIsFloat, slotId: slotId) 'slotNotYet'
+			growSlotInfo(slotId, info: info)
+			try info.slotIsFloat.set(slotId, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB in propagateFloatForLoad")
+			changed = true
+		end 'slotNotYet'
+	end 'valueIsFloat'
+	return changed
+end 'propagateFloatForLoad'
+
+// A store of a known-float value flips the slot to float (forward) and a
+// store INTO a known-float slot back-propagates float-ness onto the stored
+// value (so a chain `slot_a → store slot_b → fptosi` correctly marks both
+// slots, even when slot_a's stores are the only float sources).
+function propagateFloatForStore(slotId VarSlot, valueId ValueId, info SlotInfo) returns bool
+	var changed = false
+	if getValueIsFloat(valueId, info: info) 'valIsFloat'
+		if not getSlotBool(info.slotIsFloat, slotId: slotId) 'slotNotYet'
+			growSlotInfo(slotId, info: info)
+			try info.slotIsFloat.set(slotId, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB in propagateFloatForStore")
+			changed = true
+		end 'slotNotYet'
+	end 'valIsFloat'
+	if getSlotBool(info.slotIsFloat, slotId: slotId) 'slotIsFloat'
+		if flipValueToFloat(valueId, info: info) 'flippedVal'
+			changed = true
+		end 'flippedVal'
+	end 'slotIsFloat'
+	return changed
+end 'propagateFloatForStore'
+
+function propagateFloatForCall(op StdCallOp, module StdModule, info SlotInfo) returns bool
+	return match op 'check'
+		call(resultId, callee, _) gives propagateFloatForCallResult(resultId: resultId, callee: callee, module: module, info: info)
+		tryCall(resultId, callee, _, _) gives propagateFloatForCallResult(resultId: resultId, callee: callee, module: module, info: info)
+		// Indirect, witness, and func-ref results carry no static type info
+		// from the call site alone (they'd need the function-type table),
+		// so we don't taint them as float here. Callees in `param`, `funcRef`,
+		// and `tailCall` arms either produce no value or produce an opaque
+		// pointer (funcRef), neither of which is float.
+		indirectCall gives false
+		witnessCall gives false
+		funcRef gives false
+		tailCall gives false
+		ret gives false
+		errorReturn gives false
+		param(resultId, _, paramType) gives propagateFloatForParam(resultId: resultId, paramType: paramType, info: info)
+	end 'check'
+end 'propagateFloatForCall'
+
+function propagateFloatForCallResult(resultId ValueId, callee String, module StdModule, info SlotInfo) returns bool
+	if not calleeReturnsFloat(callee, module: module) 'notFloat'
+		return false
+	end 'notFloat'
+	return flipValueToFloat(resultId, info: info)
+end 'propagateFloatForCallResult'
+
+function propagateFloatForParam(resultId ValueId, paramType StdType, info SlotInfo) returns bool
+	if not stdTypeIsFloat(paramType) 'notFloat'
+		return false
+	end 'notFloat'
+	return flipValueToFloat(resultId, info: info)
+end 'propagateFloatForParam'
+
+// Look up the callee's return type in the current module's function list.
+// Returns true only when the callee is a defined function whose return
+// type is float. Calls into runtime helpers or other stdlib functions not
+// in `module.functions` return false (the caller is therefore conservative
+// — slots fed only by external calls won't be classified as float). The
+// regalloc treats unclassified slots as int, matching the previous
+// behavior for those cases.
+function calleeReturnsFloat(callee String, module StdModule) returns bool
+	for func in module.functions 'search'
+		if func.name == callee 'found'
+			return match func.returnType 'pick'
+				void gives false
+				value(inner) gives stdTypeIsFloat(inner)
+			end 'pick'
+		end 'found'
+	end 'search'
+	return false
+end 'calleeReturnsFloat'
+
+// Set valueIsFloat[valueId] to true; return true if this was a new flip.
+function flipValueToFloat(valueId ValueId, info SlotInfo) returns bool
+	if getValueIsFloat(valueId, info: info) 'already'
+		return false
+	end 'already'
+	markValueAsFloat(valueId, info: info)
+	return true
+end 'flipValueToFloat'
+
 function markFloatBinaryOperands(op StdArithBinaryOp, info SlotInfo)
 	match op.opcode 'check'
-		addF64 to divF64 then markBothOperandSlots(op.leftId, rightId: op.rightId, info: info)
+		addF64 to maxF64 then markBothOperandSlots(op.leftId, rightId: op.rightId, info: info)
 		cmpF64Eq to cmpF64Ge then markBothOperandSlots(op.leftId, rightId: op.rightId, info: info)
 		addI64 to shrI64 then break 'check'
 		cmpI64Eq to cmpI64Ugt then break 'check'
@@ -377,6 +592,22 @@ function markOperandSlotAsFloat(valueId ValueId, info SlotInfo)
 	growSlotInfo(slotId, info: info)
 	try info.slotIsFloat.set(slotId, value: true) otherwise panic("invariant: info.slotIsFloat.set OOB")
 end 'markOperandSlotAsFloat'
+
+// Mark a value id as float-producing in `info.valueIsFloat`. The array grows
+// on demand; callers do not need to size it first.
+function markValueAsFloat(valueId ValueId, info SlotInfo)
+	while info.valueIsFloat.count() <= valueId 'grow'
+		info.valueIsFloat.push(false)
+	end 'grow'
+	try info.valueIsFloat.set(valueId, value: true) otherwise panic("invariant: info.valueIsFloat.set OOB")
+end 'markValueAsFloat'
+
+function getValueIsFloat(valueId ValueId, info SlotInfo) returns bool
+	if valueId >= info.valueIsFloat.count() 'noEntry'
+		return false
+	end 'noEntry'
+	return try info.valueIsFloat.get(valueId) otherwise false
+end 'getValueIsFloat'
 
 // ============================================================
 // Promotability classification
@@ -445,6 +676,7 @@ function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 		unresolved gives false
 		typeParameter gives false
 		genericInstance gives false
+		constInt gives false
 	end 'check'
 	if isInterface 'valueHalf'
 		return true
@@ -459,6 +691,7 @@ function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 			unresolved gives false
 			typeParameter gives false
 			genericInstance gives false
+			constInt gives false
 		end 'check'
 		if prevIsInterface 'isParamWitness'
 			return true
@@ -478,6 +711,7 @@ function slotIsInterfaceFatPointer(func IrFunction, slotId VarSlot) returns bool
 			unresolved gives false
 			typeParameter gives false
 			genericInstance gives false
+			constInt gives false
 		end 'm'
 		if m 'inc'
 			localInterfaceCount = localInterfaceCount + 1
@@ -1602,7 +1836,7 @@ function maxValueIdInFunc(op StdCallOp) returns ValueId
 		call(resultId, _, argIds) gives maxOfIdAndArray(resultId, arr: argIds)
 		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThree(resultId, b: maxOfArray(argIds), c: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives maxOfThree(resultId, b: calleeId, c: maxOfArray(argIds))
-		witnessCall(resultId, witnessAddrId, _, argIds) gives maxOfThree(resultId, b: witnessAddrId, c: maxOfArray(argIds))
+		witnessCall(resultId, witnessAddrId, _, _, argIds) gives maxOfThree(resultId, b: witnessAddrId, c: maxOfArray(argIds))
 		funcRef(resultId, _) gives resultId
 		tailCall(_, argIds) gives maxOfArray(argIds)
 		errorReturn(retValId, errorFlagId) gives maxOfTwo(retValId, b: errorFlagId)
@@ -1755,7 +1989,7 @@ function substituteFuncOp(op StdCallOp, remap ValueIdArray) returns StdCallOp
 		call(resultId, callee, argIds) gives StdCallOp.call(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap))
 		tryCall(resultId, callee, argIds, errorFlagId) gives StdCallOp.tryCall(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) gives StdCallOp.indirectCall(resultId, calleeId: remapValue(calleeId, remap: remap), argIds: remapValueIds(argIds, remap: remap))
-		witnessCall(resultId, witnessAddrId, methodIndex, argIds) gives StdCallOp.witnessCall(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex, argIds: remapValueIds(argIds, remap: remap))
+		witnessCall(resultId, witnessAddrId, methodIndex, isVoid, argIds) gives StdCallOp.witnessCall(resultId, witnessAddrId: remapValue(witnessAddrId, remap: remap), methodIndex: methodIndex, isVoid: isVoid, argIds: remapValueIds(argIds, remap: remap))
 		funcRef(resultId, funcName) gives StdCallOp.funcRef(resultId, funcName: funcName)
 		tailCall(callee, argIds) gives StdCallOp.tailCall(callee, argIds: remapValueIds(argIds, remap: remap))
 		param(resultId, paramIndex, paramType) gives StdCallOp.param(resultId, paramIndex: paramIndex, paramType: paramType)

@@ -1174,6 +1174,8 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		fsub(dest, src1, src2, precision) then arm64EmitFsub(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
 		fmul(dest, src1, src2, precision) then arm64EmitFmul(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
 		fdiv(dest, src1, src2, precision) then arm64EmitFdiv(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fmin(dest, src1, src2, precision) then arm64EmitFmin(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
+		fmax(dest, src1, src2, precision) then arm64EmitFmax(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src1).rawValue, rm: resolveArm64Fp(src2).rawValue, precision: precision)
 		fsqrt(dest, src, precision) then arm64EmitFsqrt(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
 		fabs(dest, src, precision) then arm64EmitFabs(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
 		fneg(dest, src, precision) then arm64EmitFneg(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue, precision: precision)
@@ -1503,6 +1505,16 @@ end 'arm64EmitFmul'
 function arm64EmitFdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
 	arm64EmitFpBin(code, opcodeLow: 0x1800, rd: rd, rn: rn, rm: rm, precision: precision)
 end 'arm64EmitFdiv'
+
+// FMAX Dd, Dn, Dm => 0x1E604800 | (Rm << 16) | (Rn << 5) | Rd
+function arm64EmitFmax(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x4800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFmax'
+
+// FMIN Dd, Dn, Dm => 0x1E605800 | (Rm << 16) | (Rn << 5) | Rd
+function arm64EmitFmin(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, precision FloatPrecision)
+	arm64EmitFpBin(code, opcodeLow: 0x5800, rd: rd, rn: rn, rm: rm, precision: precision)
+end 'arm64EmitFmin'
 
 // FCMP Dn, Dm
 // Encoding (double): 0x1E602000 | (Rm << 16) | (Rn << 5)

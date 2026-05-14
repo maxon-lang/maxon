@@ -1,0 +1,52 @@
+// Test: utf16-valid-surrogate-pair
+function main() returns ExitCode
+	if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
+		print("1\n")  // valid pair
+	end 'c14'
+	if utf16IsValidSurrogatePair(56832, low: 55357) 'c15'
+		print("0\n")  // reversed
+	end 'c15'
+	if utf16IsValidSurrogatePair(65, low: 66) 'c16'
+		print("0\n")        // not surrogates
+	end 'c16'
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %43 = mir.mov_imm 1 : i64
+    mir.br c14_0()
+  c14_0:
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 2 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    mir.store %43, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    mir.store %43, %11, 8 width: qword
+    %47 = mir.load %11, 0 width: qword
+    %48 = mir.load %47, 0 width: qword
+    %49 = mir.load %47, 8 width: qword
+    %50 = mir.call @mrt_write_stdout(%48, %49)
+    mir.br c16_0.after()
+  c16_0.after:
+    %42 = mir.mov_imm 0 : i64
+    mir.ret %42
+  }
+}
+---

@@ -148,7 +148,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
-		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
+		witnessCall(_, witnessAddrId, _, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
 		load(_, baseId, _, _, _, _) then ucIncrement(uc, valueId: baseId)
@@ -191,6 +191,7 @@ function countBinOpNonAbsorb(leftId ValueId, rightId ValueId, opcode MirBinOpcod
 		subI64 gives true
 		mulI64 to shrI64 gives false
 		addF64 to divF64 gives false
+		minF64 to maxF64 gives false
 	end 'check'
 	if isAddSub 'mayAbsorb'
 		let cv = constMapGet(constMap, valueId: rightId)
@@ -302,7 +303,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		branch(_, args) then ucIncrementArray(uc, ids: args)
 		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
 		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
-		witnessCall(_, witnessAddrId, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
+		witnessCall(_, witnessAddrId, _, _, argIds) then ucIncrementIdAndArray(uc, id: witnessAddrId, arr: argIds)
 		ret(retValId) then ucIncrement(uc, valueId: retValId)
 		param then break 'count'
 		load(_, baseId, _, _, _, _) then ucIncrement(uc, valueId: baseId)
@@ -487,6 +488,8 @@ union FloatBinKind
 	sub
 	mul
 	div
+	min
+	max
 end 'FloatBinKind'
 
 // ============================================================
@@ -590,9 +593,14 @@ type X64FunctionLowering
 	var valueSlots ValueSlotMap
 	var nextTempSlot SlotIndex
 	var condBrCondId ValueId
+	// X64-private scratch ValueId allocator. Initialized per-function to
+	// one past the highest MIR ValueId seen in this function so scratch ids
+	// never collide with MIR ones. Used for short-lived helper registers
+	// (e.g. the second setcc result in NaN-aware float compare lowering).
+	var scratchValueIdCursor ValueId
 
 	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
-		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR}
+		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}
 	end 'create'
 
 	// ============================================================
@@ -632,6 +640,7 @@ type X64FunctionLowering
 		constMap = buildConstMap(module, func: srcFunc)
 		useCounts = buildUseCountMap(module, func: srcFunc)
 		absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
+		scratchValueIdCursor = scanMaxMirValueId(module, func: srcFunc) + 1
 
 		// Create the destination IrFunction and its blocks up front so terminator
 		// block IDs from MIR still refer to valid blocks.
@@ -831,7 +840,7 @@ type X64FunctionLowering
 			branch then break 'dispatch'
 			call(resultId, callee, argIds) then lowerCall(resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
 			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
-			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddrId, methodIndex, _, argIds) then lowerWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
 			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
 			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirect(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
@@ -916,6 +925,8 @@ type X64FunctionLowering
 			subF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.sub, dstBlock: dstBlock)
 			mulF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.mul, dstBlock: dstBlock)
 			divF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.div, dstBlock: dstBlock)
+			minF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.min, dstBlock: dstBlock)
+			maxF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.max, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBinOp'
 
@@ -965,6 +976,8 @@ type X64FunctionLowering
 			sub then appendX64Op(target, block: dstBlock, op: X64Op.subXmm(dest, src: src, precision: FloatPrecision.f64))
 			mul then appendX64Op(target, block: dstBlock, op: X64Op.mulXmm(dest, src: src, precision: FloatPrecision.f64))
 			div then appendX64Op(target, block: dstBlock, op: X64Op.divXmm(dest, src: src, precision: FloatPrecision.f64))
+			min then appendX64Op(target, block: dstBlock, op: X64Op.minXmm(dest, src: src, precision: FloatPrecision.f64))
+			max then appendX64Op(target, block: dstBlock, op: X64Op.maxXmm(dest, src: src, precision: FloatPrecision.f64))
 		end 'emit'
 	end 'lowerFloatBinOp'
 
@@ -1039,10 +1052,13 @@ type X64FunctionLowering
 
 	// Float absolute value via ANDPD with a sign-mask constant (clears bit 63).
 	// Two-step: mov result, src; andpd result, [rip+mask].
+	// ANDPD reads a 128-bit memory operand which must be 16-byte aligned in
+	// SSE (legacy, non-VEX) encoding, so the mask is registered as a 16-byte
+	// `__xmmmask_*` entry whose layout pass aligns it to 16 bytes in rdata.
 	function lowerFloatAbs(resultId ValueId, operandId ValueId, dstBlock IrBlock)
 		let dest = X64FpVReg.virtual(resultId)
 		appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(dest, src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
-		let label = registerFloatConstant(0x7FFFFFFFFFFFFFFF, globalData: globalData)
+		let label = registerXmmMaskConstant(0x7FFFFFFFFFFFFFFF, rawBitsHi: 0x7FFFFFFFFFFFFFFF, globalData: globalData)
 		appendX64Op(target, block: dstBlock, op: X64Op.andMaskRipRel(dest, rdataLabel: label, precision: FloatPrecision.f64))
 	end 'lowerFloatAbs'
 
@@ -1089,10 +1105,55 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.ucomisXmm(X64FpVReg.virtual(leftId), src2: X64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
 		// Skip setcc when the sole consumer is a condBr (which reads flags directly).
 		if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
-			let condition = predicateToSetcc(predicate)
-			appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
+			emitFloatCmpSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
 		end 'needsSetcc'
 	end 'lowerFloatCmp'
+
+	// IEEE 754 fp setcc: feq/fne need both ZF and PF read; a single setcc can't
+	// express "(ZF=1 AND PF=0)" or "(ZF=0 OR PF=1)". For these two predicates,
+	// the dest is materialized from PF (unordered flag) and then combined with
+	// the ZF result via AND/OR. Other predicates lower to a single setcc
+	// because the unsigned-condition mapping (a/b/ae/be) already treats
+	// unordered as "comparison failed". setcc doesn't clobber flags, so the
+	// second setcc reads the same flags set by the ucomisd above.
+	function emitFloatCmpSetcc(resultId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
+		match predicate 'pick'
+			feq then emitFeqSetcc(resultId: resultId, dstBlock: dstBlock)
+			fne then emitFneSetcc(resultId: resultId, dstBlock: dstBlock)
+			eq to ugt then emitSingleSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
+			flt to fge then emitSingleSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
+		end 'pick'
+	end 'emitFloatCmpSetcc'
+
+	function emitSingleSetcc(resultId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
+		let condition = predicateToSetcc(predicate)
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: condition))
+	end 'emitSingleSetcc'
+
+	// feq result = (ZF=1) AND (PF=0). Sequence: `setnp tmp; sete result; and result, tmp`.
+	function emitFeqSetcc(resultId ValueId, dstBlock IrBlock)
+		let tmpId = allocScratchValueId()
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(tmpId), condition: X64SetccCondition.np))
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: X64SetccCondition.e))
+		appendX64Op(target, block: dstBlock, op: X64Op.andRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(tmpId)))
+	end 'emitFeqSetcc'
+
+	// fne result = (ZF=0) OR (PF=1). Sequence: `setp tmp; setne result; or result, tmp`.
+	function emitFneSetcc(resultId ValueId, dstBlock IrBlock)
+		let tmpId = allocScratchValueId()
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(tmpId), condition: X64SetccCondition.p))
+		appendX64Op(target, block: dstBlock, op: X64Op.setcc(X64VReg.virtual(resultId), condition: X64SetccCondition.ne))
+		appendX64Op(target, block: dstBlock, op: X64Op.orRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(tmpId)))
+	end 'emitFneSetcc'
+
+	// Hand out a fresh ValueId for an X64-private scratch register. The cursor
+	// is seeded per-function in lowerFunction from scanMaxMirValueId+1, which
+	// gives an upper bound the regalloc can size arrays against.
+	function allocScratchValueId() returns ValueId
+		let id = scratchValueIdCursor
+		scratchValueIdCursor = scratchValueIdCursor + 1
+		return id
+	end 'allocScratchValueId'
 
 	// ============================================================
 	// Call
@@ -1334,8 +1395,8 @@ type X64FunctionLowering
 			gt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.le, targetBlock: elseTarget))
 			ge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.l, targetBlock: elseTarget))
 			ugt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
-			feq then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
-			fne then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
+			feq then emitFeqCondBr(dstBlock: dstBlock, elseTarget: elseTarget)
+			fne then emitFneCondBr(dstBlock: dstBlock, thenTarget: thenTarget, elseTarget: elseTarget)
 			flt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
 			fle then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
 			fgt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
@@ -1345,6 +1406,25 @@ type X64FunctionLowering
 		// Unconditional jump to then block
 		appendX64Op(target, block: dstBlock, op: X64Op.jmp(thenTarget))
 	end 'lowerCondBr'
+
+	// IEEE 754: NaN compares as unordered. After ucomisd, ZF=1+PF=1 for
+	// unordered, ZF=1+PF=0 for truly equal, ZF=0+PF=0 for ordered-not-equal.
+	// A single je/jne can't distinguish unordered from equal (both set ZF=1),
+	// so feq/fne need an extra parity pre-check.
+	//
+	// feq is FALSE when either operand is NaN, so route NaN to elseTarget.
+	// Both subsequent jne/jp paths target elseTarget (one CFG successor).
+	function emitFeqCondBr(dstBlock IrBlock, elseTarget BlockId)
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.p, targetBlock: elseTarget))
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ne, targetBlock: elseTarget))
+	end 'emitFeqCondBr'
+
+	// fne is TRUE when either operand is NaN (NaN != anything per IEEE),
+	// so route NaN straight to thenTarget; otherwise je → elseTarget.
+	function emitFneCondBr(dstBlock IrBlock, thenTarget BlockId, elseTarget BlockId)
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.p, targetBlock: thenTarget))
+		appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.e, targetBlock: elseTarget))
+	end 'emitFneCondBr'
 
 	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock IrBlock)
 		// If the previous op is an or/and/xor that defines condId, its flags are still

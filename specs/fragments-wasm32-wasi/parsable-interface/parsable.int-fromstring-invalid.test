@@ -1,0 +1,48 @@
+// Test: parsable.int-fromstring-invalid
+function main() returns ExitCode
+	let n = try int.fromString("abc") otherwise 99
+	return n
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 3 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10, %11 = mir.try_call @stdlib.__int_fromString(%8)
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.cmp ne, %11, %12
+    mir.cond_br %13 [then: try_0.otherwise(), else: try_0.merge(%10)]
+  try_0.otherwise:
+    %15 = mir.mov_imm 99 : i64
+    mir.br try_0.merge(%15)
+  try_0.merge:
+    %19 = mir.mov_imm 125 : i64
+    %20 = mir.cmp ugt, %18, %19
+    mir.cond_br %20 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %21 = mir.global_addr @__panic_msg_0
+    %22 = mir.call @mrt_panic(%21)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

@@ -1,0 +1,35 @@
+// Test: method-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+type Converter
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function convert(value Integer) returns Integer
+		return value * 2
+	end 'convert'
+
+	function convert(value String) returns Integer
+		return value.count()
+	end 'convert'
+end 'Converter'
+
+function main() returns ExitCode
+	var c = Converter.create()
+	return c.convert(21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    %7 = mir.mov_imm 42 : i64
+    mir.ret %7
+  }
+}
+---

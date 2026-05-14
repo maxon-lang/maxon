@@ -1,0 +1,76 @@
+// Test: atan2.negative-x-axis
+function main() returns ExitCode
+	// π ≈ 3.14159
+	let angle = Math.atan2(0.0, x: -1.0)
+	print("{angle}\n")
+	// Should be approximately π
+	if angle > 3.14 'check1'
+		if angle < 3.15 'check2'
+			return 0
+		end 'check2'
+	end 'check1'
+	return 1
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+3.141593
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : f64
+    %1 = mir.mov_imm 4607182418800017408 : f64
+    %2 = mir.mov_imm 0 : f64
+    %3 = mir.sub.f64 %2, %1
+    %4 = mir.call @Math.atan2(%0, %3)
+    %6 = mir.global_addr @__istr_0
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 32 : i64
+    %9 = mir.call @mrt_alloc(%8)
+    %10 = mir.call @mrt_f64_to_string(%4, %9)
+    %11 = mir.global_addr @__istr_1
+    %12 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %7, %10
+    %16 = mir.add.i64 %15, %12
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %16, %17
+    %19 = mir.call @mrt_alloc(%18)
+    mir.memcpy %19, %6, %7
+    %20 = mir.add.i64 %19, %7
+    mir.memcpy %20, %9, %10
+    %21 = mir.add.i64 %20, %10
+    mir.memcpy %21, %11, %12
+    %23 = mir.mov_imm 40 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %19, %24, 0 width: qword
+    mir.store %16, %24, 8 width: qword
+    mir.store %16, %24, 16 width: qword
+    %25 = mir.mov_imm 1 : i64
+    mir.store %25, %24, 24 width: qword
+    mir.store %7, %24, 32 width: qword
+    %27 = mir.mov_imm 16 : i64
+    %28 = mir.call @mrt_alloc(%27)
+    mir.store %24, %28, 0 width: qword
+    mir.store %7, %28, 8 width: qword
+    %39 = mir.load %28, 0 width: qword
+    %40 = mir.load %39, 0 width: qword
+    %41 = mir.load %39, 8 width: qword
+    %42 = mir.call @mrt_write_stdout(%40, %41)
+    %32 = mir.mov_imm 4614253070214989087 : f64
+    %33 = mir.cmp fgt, %4, %32
+    mir.cond_br %33 [then: check1_0(), else: check1_0.after()]
+  check1_0:
+    %35 = mir.mov_imm 4614275588213125939 : f64
+    %36 = mir.cmp flt, %4, %35
+    mir.cond_br %36 [then: check2_0(), else: check1_0.after()]
+  check2_0:
+    mir.ret %7
+  check1_0.after:
+    %38 = mir.mov_imm 1 : i64
+    mir.ret %38
+  }
+}
+---

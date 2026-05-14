@@ -6,6 +6,22 @@ typealias BreakProperty = int(0 to 13)
 // ByteCount, GraphemeCount, BytePos exported by stdlib/String.maxon.
 typealias RegionalIndicatorCount = int(0 to u64.max)
 
+// Build a fresh Character whose `managed` field owns `len` bytes copied out of
+// `source` starting at byte offset `pos`. Called by StringIterator and
+// String.trim / charAt to materialise per-grapheme Character values during
+// iteration — hot path, hence the stdlib home so the inliner can see this body
+// at each call site. Callers must guarantee `pos >= 0`, `len >= 0`, and
+// `pos + len <= source.length()`; any violation panics through the slice
+// helper's invariant guard. Lives in this helper file (rather than Internals
+// or Builtins) because the C# bootstrap skips Internals.maxon and the
+// self-hosted compiler's `__`-prefix reader-file gate forbids non-internals
+// stdlib files from calling `__`-prefixed names, so the helper takes a
+// non-`__` name and a regular load path that both compilers accept.
+export function makeCharacterFromManagedRange(source __ManagedMemory, pos BytePos, len ByteCount) returns Character
+	let managed = try source.slice(pos, pos + len) otherwise panic("makeCharacterFromManagedRange: slice OOB — caller invariant pos+len <= source.length() violated")
+	return Character.init(managed)
+end 'makeCharacterFromManagedRange'
+
 // ============================================
 // Find grapheme end helpers (UAX #29)
 // ============================================

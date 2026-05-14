@@ -1,0 +1,59 @@
+// Test: character-inequality-multibyte
+function main() returns ExitCode
+	let a = 'é'
+	let b = 'è'
+	if a != b 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 40 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %9, %11, 0 width: qword
+    %12 = mir.mov_imm 2 : i64
+    mir.store %12, %11, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %11, 16 width: qword
+    %14 = mir.mov_imm 1 : i64
+    mir.store %14, %11, 24 width: qword
+    %15 = mir.mov_imm 0 : i64
+    mir.store %15, %11, 32 width: qword
+    %16 = mir.mov_imm 8 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    mir.store %11, %17, 0 width: qword
+    %20 = mir.call @Character.equals(%8, %17)
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.xor.i64 %20, %21
+    mir.cond_br %22 [then: check_0(), else: check_0.after()]
+  check_0:
+    %23 = mir.mov_imm 0 : i64
+    mir.ret %23
+  check_0.after:
+    %24 = mir.mov_imm 1 : i64
+    mir.ret %24
+  }
+}
+---

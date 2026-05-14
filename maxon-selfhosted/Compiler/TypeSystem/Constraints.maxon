@@ -73,29 +73,129 @@ export function typeConformsTo(project Project, t MaxonType, interfaceName Strin
 		interface(id) gives interfaceConformsTo(project, id: id, interfaceName: interfaceName)
 		function gives false
 		unresolved gives false
+		// `constInt` is a compile-time integer carried in genericInstance
+		// args (sized typealiases); it never participates in conformance.
+		constInt gives false
 	end 'check'
 end 'typeConformsTo'
 
-// Named type: a struct or enum. Conformance lives in `project.conformances`,
-// populated by TypeResolution's `validateConformances` pass when the type
-// declared `implements I` and by `processExtensions` for added conformances.
+// Named type: a struct, enum, or typealias. Conformance lives in
+// `project.conformances`, populated by TypeResolution's
+// `validateConformances` pass when the type declared `implements I` and by
+// `processExtensions` for added conformances.
+//
+// A bare `named(id)` may also be a generic typealias (e.g.
+// `typealias ByteArray = Array with Byte`); the alias itself has no
+// recorded conformance — the underlying generic instance does, gated by
+// any conditional `where`-clause on the conformer's extension. Chase
+// `genericTypealiases` one level and recurse so the lookup hits the
+// generic-instance arm with the substitution intact.
 function namedConformsTo(project Project, id TypeNameId, interfaceName String) returns bool
 	let typeName = project.typeNames.get(id)
+	if let aliasTarget = try project.genericTypealiases.get(typeName) 'isGenericAlias'
+		return typeConformsTo(project, t: aliasTarget, interfaceName: interfaceName)
+	end 'isGenericAlias'
 	return project.conformances.contains(typeName, interfaceName: interfaceName)
 end 'namedConformsTo'
 
-// Generic instance: structural conformance lookup against the base type.
+// Generic instance: structural conformance lookup against the base type
+// gated by any conditional where-clause on the matching extension.
 // `Array with Int` conforms to `Iterable` iff `Array` itself conforms.
-// Conditional conformances (e.g. `extension Array implements Hashable
-// where Element is Hashable`) are also recorded under the base name in
-// `project.conformances`; the where-clause that gates them is checked
-// separately by `whereClauseSatisfied` at the call site, so this lookup
-// is the unconditional structural step.
+// `Array with Int` conforms to `Hashable` iff (1) `Array` itself records
+// the `Hashable` conformance AND (2) every where-clause from the
+// extension that introduced the conformance is satisfied by the gid's
+// type-args.
 function genericInstanceConformsTo(project Project, gid GenericInstanceId, interfaceName String) returns bool
-	let (baseId, _) = project.genericInstances.get(gid)
+	let (baseId, gidArgs) = project.genericInstances.get(gid)
 	let baseName = project.typeNames.get(baseId)
-	return project.conformances.contains(baseName, interfaceName: interfaceName)
+	if not project.conformances.contains(baseName, interfaceName: interfaceName) 'noBase'
+		return false
+	end 'noBase'
+	return conditionalConformanceWhereClauseSatisfied(project, baseName: baseName, interfaceName: interfaceName, gidArgs: gidArgs)
 end 'genericInstanceConformsTo'
+
+// Walk the parser-recorded extensions, find the one that introduced
+// `(baseName, interfaceName)`, and check every where-clause against the
+// gid's concrete args. An unconditional conformance (no matching
+// extension found, or extension with no where-clauses) passes trivially.
+//
+// The extension's parameter names live in `targetTypeParams` (or
+// `getParamNames(baseName)` when the extension inherits the target's
+// parameter names verbatim, which is the common case). The gid's args
+// are positional in `getParamNames(baseName)` order.
+function conditionalConformanceWhereClauseSatisfied(project Project, baseName String, interfaceName String, gidArgs MaxonTypeArray) returns bool
+	let extensions = project.unresolvedExtensions
+	for ei in 0 upto extensions.count() 'eachExt'
+		let ext = try extensions.get(ei) otherwise panic("conditionalConformanceWhereClauseSatisfied: extensions.get OOB at {ei}")
+		if ext.targetTypeName != baseName 'notTarget'
+			continue
+		end 'notTarget'
+		var matches = false
+		for ci in 0 upto ext.addedConformances.count() 'eachConf'
+			let conf = try ext.addedConformances.get(ci) otherwise panic("conditionalConformanceWhereClauseSatisfied: addedConformances.get OOB at {ci}")
+			if conf.interfaceName == interfaceName 'hit'
+				matches = true
+				break
+			end 'hit'
+		end 'eachConf'
+
+		if not matches 'noMatch'
+			continue
+		end 'noMatch'
+		if ext.whereClauses.count() == 0 'unconditional'
+			return true
+		end 'unconditional'
+		if extensionWhereClausesSatisfied(project, ext: ext, baseName: baseName, gidArgs: gidArgs) 'pass'
+			return true
+		end 'pass'
+	end 'eachExt'
+
+	// No matching extension found — the conformance was declared directly
+	// on the type with no `where`-clause gating, so the structural lookup
+	// already succeeded above. Treat as unconditionally satisfied.
+	return true
+end 'conditionalConformanceWhereClauseSatisfied'
+
+// Resolve each `WhereClause` against the gid's positional args by pairing
+// the conformer's declared `usesParams` (e.g. `Element` for `Array`) with
+// `gidArgs`. Bare paramName matched against the clause's `paramName`.
+function extensionWhereClausesSatisfied(project Project, ext UnresolvedExtension, baseName String, gidArgs MaxonTypeArray) returns bool
+	var paramNames = ext.targetTypeParams
+	if paramNames.count() == 0 'inheritFromTarget'
+		paramNames = project.typeParameters.getParamNames(baseName)
+	end 'inheritFromTarget'
+	if paramNames.count() != gidArgs.count() 'arityMismatch'
+		// Phase-ordering bug — the gid's arity must match the conformer's
+		// declared param count. Falling through with `false` keeps the
+		// caller's diagnostic flow intact rather than crashing the resolver.
+		return false
+	end 'arityMismatch'
+	for ci in 0 upto ext.whereClauses.count() 'eachClause'
+		let clause = try ext.whereClauses.get(ci) otherwise panic("extensionWhereClausesSatisfied: whereClauses.get OOB at {ci}")
+		var bound = MaxonType.unresolved
+		var bindingFound = false
+		for pi in 0 upto paramNames.count() 'pair'
+			let pn = try paramNames.get(pi) otherwise panic("extensionWhereClausesSatisfied: paramNames.get OOB at {pi}")
+			if pn == clause.paramName 'hit'
+				bound = try gidArgs.get(pi) otherwise panic("extensionWhereClausesSatisfied: gidArgs.get OOB at {pi}")
+				bindingFound = true
+				break
+			end 'hit'
+		end 'pair'
+
+		if not bindingFound 'unbound'
+			// The where-clause names a param that isn't on the conforming
+			// type — likely a parser/resolver inconsistency. Conservatively
+			// fail the conformance so the caller surfaces a diagnostic.
+			return false
+		end 'unbound'
+		if not typeConformsTo(project, t: bound, interfaceName: clause.requiredTraitName) 'fail'
+			return false
+		end 'fail'
+	end 'eachClause'
+
+	return true
+end 'extensionWhereClausesSatisfied'
 
 // Type parameter: its constraints live as a String list on the
 // type-parameter registry, populated by the parser when a `where T is Trait`

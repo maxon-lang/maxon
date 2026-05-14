@@ -1,0 +1,52 @@
+// Test: byte.compare.less
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let a = 10 as Byte
+	let b = 20 as Byte
+	let result = a.compare(b)
+	match result 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 1
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 20 : i64
+    %4 = mir.call @int.compare(%0, %1)
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp eq, %4, %6
+    mir.cond_br %7 [then: check_0.case0(), else: check_0.next0()]
+  check_0.case0:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  check_0.next0:
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.cmp eq, %4, %9
+    mir.cond_br %10 [then: check_0.case1(), else: check_0.next1()]
+  check_0.case1:
+    %11 = mir.mov_imm 1 : i64
+    mir.ret %11
+  check_0.next1:
+    %12 = mir.mov_imm 2 : i64
+    %13 = mir.cmp eq, %4, %12
+    mir.cond_br %13 [then: check_0.case2(), else: check_0.next2()]
+  check_0.case2:
+    %14 = mir.mov_imm 1 : i64
+    mir.ret %14
+  check_0.next2:
+    %15 = mir.global_addr @__panic_msg_0
+    %16 = mir.call @mrt_panic(%15)
+    %17 = mir.mov_imm 0 : i64
+    mir.ret %17
+  }
+}
+---

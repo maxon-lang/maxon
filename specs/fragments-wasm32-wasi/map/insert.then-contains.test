@@ -1,0 +1,72 @@
+// Test: insert.then-contains
+function main() returns ExitCode
+	var m = [10: 1]
+	try m.insert(20, value: 2) otherwise ignore
+	if m.contains(20) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    %4 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %5 = mir.mov_imm 40 : i64
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.call @stdlib.__mm_alloc(%5, %4, %6)
+    %8 = mir.global_addr @__rdata_arr_map_main_16
+    mir.store %8, %7, 0 width: qword
+    mir.store %1, %7, 8 width: qword
+    %10 = mir.mov_imm -2 : i64
+    mir.store %10, %7, 16 width: qword
+    %11 = mir.mov_imm 8 : i64
+    mir.store %11, %7, 24 width: qword
+    %12 = mir.mov_imm -2 : i64
+    mir.store %12, %7, 32 width: qword
+    %18 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %19 = mir.mov_imm 40 : i64
+    %21 = mir.call @stdlib.__mm_alloc(%19, %18, %6)
+    %22 = mir.global_addr @__rdata_arr_map_main_17
+    mir.store %22, %21, 0 width: qword
+    mir.store %1, %21, 8 width: qword
+    %24 = mir.mov_imm -2 : i64
+    mir.store %24, %21, 16 width: qword
+    %25 = mir.mov_imm 8 : i64
+    mir.store %25, %21, 24 width: qword
+    %26 = mir.mov_imm -2 : i64
+    mir.store %26, %21, 32 width: qword
+    %30 = mir.global_addr @__layout_Map_Int_Int
+    %31 = mir.global_addr @__witness_int_Hashable
+    %32 = mir.global_addr @__witness_int_Equatable
+    %33 = mir.call @Map.init(%7, %21, %30, %31, %32)
+    %35 = mir.mov_imm 20 : i64
+    %36 = mir.mov_imm 2 : i64
+    %37 = mir.global_addr @__layout_Map_Int_Int
+    %38 = mir.global_addr @__witness_int_Hashable
+    %39 = mir.global_addr @__witness_int_Equatable
+    %40, %41 = mir.try_call @Map.insert(%33, %35, %36, %37, %38, %39)
+    %43 = mir.cmp ne, %41, %6
+    mir.cond_br %43 [then: try_0.merge(%6), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%40)
+  try_0.merge:
+    %48 = mir.mov_imm 20 : i64
+    %49 = mir.global_addr @__layout_Map_Int_Int
+    %50 = mir.global_addr @__witness_int_Hashable
+    %51 = mir.global_addr @__witness_int_Equatable
+    %56 = mir.call @Map.findSlot(%33, %48, %49, %50, %51)
+    %57 = mir.mov_imm 0 : i64
+    %58 = mir.cmp ge, %56, %57
+    mir.cond_br %58 [then: check_0(), else: check_0.after()]
+  check_0:
+    mir.ret %1
+  check_0.after:
+    mir.ret %6
+  }
+}
+---

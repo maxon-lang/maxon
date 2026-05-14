@@ -1,0 +1,169 @@
+// Test: heap-string-data-access
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	// Verify heap-allocated string data is accessible via bytes()
+	let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	// Read first byte ('A' = 65)
+	var first_printed = false
+	for b in s.bytes() 'read_first'
+		if not first_printed 'print_first'
+			print("{b}\n")
+			first_printed = true
+		end 'print_first'
+	end 'read_first'
+	// Read last byte ('Z' = 90)
+	var last_byte = 0 as Byte
+	for b in s.bytes() 'read_all'
+		last_byte = b
+	end 'read_all'
+	print("{last_byte}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+65
+90
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 26 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %99 = mir.load %8, 0 width: qword
+    %100 = mir.call @ByteView.create(%99)
+    mir.br inlined_ByteView.createIterator_0()
+  inlined_ByteView.createIterator_0:
+    %101 = mir.load %100, 0 width: qword
+    %102, %103 = mir.try_call @ByteIterator.create(%101)
+    %104 = mir.mov_imm 0 : i64
+    %105 = mir.cmp ne, %103, %104
+    mir.cond_br %105 [then: inlined_ByteView.createIterator_1(), else: inlined_ByteView.createIterator_2()]
+  inlined_ByteView.createIterator_1:
+    %106 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%106, %103)
+  inlined_ByteView.createIterator_2:
+    %107 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%102, %107)
+  inline_cont_main_0:
+    %16 = mir.cmp ne, %109, %6
+    mir.cond_br %16 [then: read_first_0.exit(), else: read_first_0(%6)]
+  read_first_0.header:
+    %18, %19 = mir.try_call @ByteIterator.advance(%108)
+    %21 = mir.cmp ne, %19, %6
+    mir.cond_br %21 [then: read_first_0.exit(), else: read_first_0(%96)]
+  read_first_0:
+    %23 = mir.call @ByteIterator.current(%108)
+    %26 = mir.xor.i64 %97, %5
+    mir.cond_br %26 [then: print_first_0(), else: print_first_0.after(%97)]
+  read_first_0.exit:
+    %110 = mir.load %8, 0 width: qword
+    %111 = mir.call @ByteView.create(%110)
+    mir.br inlined_ByteView.createIterator_0()
+  inlined_ByteView.createIterator_0:
+    %112 = mir.load %111, 0 width: qword
+    %113, %114 = mir.try_call @ByteIterator.create(%112)
+    %115 = mir.mov_imm 0 : i64
+    %116 = mir.cmp ne, %114, %115
+    mir.cond_br %116 [then: inlined_ByteView.createIterator_1(), else: inlined_ByteView.createIterator_2()]
+  inlined_ByteView.createIterator_1:
+    %117 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%117, %114)
+  inlined_ByteView.createIterator_2:
+    %118 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%113, %118)
+  inline_cont_main_1:
+    %33 = mir.cmp ne, %120, %6
+    mir.cond_br %33 [then: read_all_0.exit(%6), else: read_all_0()]
+  print_first_0:
+    %35 = mir.global_addr @__istr_1
+    %37 = mir.mov_imm 21 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    %39 = mir.call @mrt_i64_to_string(%23, %38)
+    %40 = mir.global_addr @__istr_2
+    %44 = mir.add.i64 %6, %39
+    %45 = mir.add.i64 %44, %5
+    %47 = mir.add.i64 %45, %5
+    %48 = mir.call @mrt_alloc(%47)
+    mir.memcpy %48, %35, %6
+    %49 = mir.add.i64 %48, %6
+    mir.memcpy %49, %38, %39
+    %50 = mir.add.i64 %49, %39
+    mir.memcpy %50, %40, %5
+    %52 = mir.mov_imm 40 : i64
+    %53 = mir.call @mrt_alloc(%52)
+    mir.store %48, %53, 0 width: qword
+    mir.store %45, %53, 8 width: qword
+    mir.store %45, %53, 16 width: qword
+    mir.store %5, %53, 24 width: qword
+    mir.store %6, %53, 32 width: qword
+    %56 = mir.mov_imm 16 : i64
+    %57 = mir.call @mrt_alloc(%56)
+    mir.store %53, %57, 0 width: qword
+    mir.store %6, %57, 8 width: qword
+    %121 = mir.load %57, 0 width: qword
+    %122 = mir.load %121, 0 width: qword
+    %123 = mir.load %121, 8 width: qword
+    %124 = mir.call @mrt_write_stdout(%122, %123)
+    mir.br print_first_0.after(%5)
+  print_first_0.after:
+    mir.br read_first_0.header()
+  read_all_0.header:
+    %62, %63 = mir.try_call @ByteIterator.advance(%119)
+    %65 = mir.cmp ne, %63, %6
+    mir.cond_br %65 [then: read_all_0.exit(%67), else: read_all_0()]
+  read_all_0:
+    %67 = mir.call @ByteIterator.current(%119)
+    mir.br read_all_0.header()
+  read_all_0.exit:
+    %70 = mir.global_addr @__istr_1
+    %72 = mir.mov_imm 21 : i64
+    %73 = mir.call @mrt_alloc(%72)
+    %74 = mir.call @mrt_i64_to_string(%98, %73)
+    %75 = mir.global_addr @__istr_2
+    %79 = mir.add.i64 %6, %74
+    %80 = mir.add.i64 %79, %5
+    %82 = mir.add.i64 %80, %5
+    %83 = mir.call @mrt_alloc(%82)
+    mir.memcpy %83, %70, %6
+    %84 = mir.add.i64 %83, %6
+    mir.memcpy %84, %73, %74
+    %85 = mir.add.i64 %84, %74
+    mir.memcpy %85, %75, %5
+    %87 = mir.mov_imm 40 : i64
+    %88 = mir.call @mrt_alloc(%87)
+    mir.store %83, %88, 0 width: qword
+    mir.store %80, %88, 8 width: qword
+    mir.store %80, %88, 16 width: qword
+    mir.store %5, %88, 24 width: qword
+    mir.store %6, %88, 32 width: qword
+    %91 = mir.mov_imm 16 : i64
+    %92 = mir.call @mrt_alloc(%91)
+    mir.store %88, %92, 0 width: qword
+    mir.store %6, %92, 8 width: qword
+    %125 = mir.load %92, 0 width: qword
+    %126 = mir.load %125, 0 width: qword
+    %127 = mir.load %125, 8 width: qword
+    %128 = mir.call @mrt_write_stdout(%126, %127)
+    mir.ret %6
+  }
+}
+---

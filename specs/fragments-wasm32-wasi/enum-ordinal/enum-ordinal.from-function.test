@@ -1,0 +1,53 @@
+// Test: enum-ordinal.from-function
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
+typealias OrdinalValue = int(0 to 100)
+
+function getOrdinal(p Priority) returns OrdinalValue
+	return p.ordinal
+end 'getOrdinal'
+
+function main() returns ExitCode
+	let p = Priority.high
+	if getOrdinal(p) == 2 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @getOrdinal(local0: u8) -> u8 {
+  entry:
+    %2 = mir.param local0 : u8
+    %3 = mir.mov_imm 100 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_0
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    %2 = mir.call @getOrdinal(%0)
+    %3 = mir.mov_imm 2 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  check_0.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

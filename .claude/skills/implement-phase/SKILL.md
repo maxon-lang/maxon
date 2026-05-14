@@ -5,7 +5,7 @@ description: Implement a phase of the ROADMAP.md plan
 
 Implement the specific phase of the ROADMAP.md plan.
 
-By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
+Run the spec tests and fix any failures by modifying the compiler code. Use --filter when working on a specific failing test.
 
 ## Steps
 

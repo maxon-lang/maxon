@@ -28,52 +28,113 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
-  func @Point.equals(rcx: i64, rdx: i64) -> i1 {
+  func @Point.equals(__self_ptr: i64, other: i64) -> i1 {
   entry:
-    x64.mov r8, [rdx+8] (8b)
-    x64.mov r9, [rcx+8] (8b)
-    x64.mov rsi, [rdx+0] (8b)
-    x64.mov rdi, [rcx+0] (8b)
-    x64.cmp r9, r8
-    x64.sete r9
-    x64.cmp rdi, rsi
-    x64.sete r8
-    x64.and r8, r9
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rax+0]
+    x64.cmp rbx, rsi
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor ebx, ebx
+    x64.mov [rbp-17], rbx
+    x64.test rax, rax
+    x64.je Point.equals.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.cmp rbx, rcx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov [rbp-17], rsi
+    x64.jmp Point.equals.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-17]
+    x64.epilogue
     x64.ret
   }
-  func @main() -> u32 {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @equatable.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 1
-    x64.mov [r12+0], r8 (8b)
-    x64.mov r8d, 2
-    x64.mov [r12+8], r8 (8b)
-    x64.mov ecx, 16
-    x64.call mrt_alloc
-    x64.mov r9d, 1
-    x64.mov [r8+0], r9 (8b)
-    x64.mov r9d, 2
-    x64.mov [r8+8], r9 (8b)
-    x64.mov r9, [r8+8] (8b)
-    x64.mov rsi, [r12+8] (8b)
-    x64.mov rdi, [r8+0] (8b)
-    x64.mov r8, [r12+0] (8b)
-    x64.cmp rsi, r9
-    x64.sete r9
-    x64.cmp r8, rdi
-    x64.sete r8
-    x64.and r8, r9
-    x64.je check_0.after
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.call Point.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Point.equals
+    x64.test rax, rax
+    x64.je equatable.main.check_0.after
   check_0:
-    x64.xor r8d, r8d
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor eax, eax
     x64.epilogue
     x64.ret
   check_0.after:
-    x64.mov r8d, 1
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, 1
     x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Point.done
+  done:
     x64.ret
   }
 }

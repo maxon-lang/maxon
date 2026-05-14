@@ -389,6 +389,16 @@ export type Project
 	// labels per run.
 	export var castCheckCounter ParsedInt
 
+	// Phase 15e: map each `__TupleN` structAlloc's result name to the
+	// fully-specialised `genericInstance(__TupleN, [T0..TN])` interned by
+	// the parser. lowerStructAlloc consults this so the receiver's lowering
+	// value-type is the gi instead of the bare `named(__TupleN)`, which lets
+	// downstream fieldLoad/fieldStore substitute `_TN` typeParameter fields
+	// through to their concrete arg types (essential for mixed int/float
+	// tuples where the field's width / SSE-register-ness depends on the
+	// resolved arg type).
+	export var tupleAllocGids TupleAllocGidMap
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -496,6 +506,12 @@ export type Project
 	// a diagnostic.
 	export var pendingUnusedChecks PendingUnusedCheckArray
 
+	// Provenance for char-byte literals — see `CharByteLiteralSet` for the why.
+	// Populated by the parser at every single-byte char-literal site and
+	// expanded by TypeResolution's producer-types walk through varDecl/varLoad
+	// chains so consumers can recover char-ness at use sites.
+	export var charByteLiterals CharByteLiteralSet
+
 	// Stage B (closures): hand out the next unique `_$closure_<N>` suffix
 	// and bump the counter. Called by the parser at every closure
 	// expression to keep lifted-function names disjoint.
@@ -548,6 +564,7 @@ export type Project
 			interfaceRegistry: InterfaceTypeRegistry.create(),
 			closureCounter: 0,
 			castCheckCounter: 0,
+			tupleAllocGids: TupleAllocGidMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -564,7 +581,8 @@ export type Project
 			pendingWitnessThunkGids: GenericInstanceIdArray.create(),
 			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
-			pendingUnusedChecks: PendingUnusedCheckArray.create()
+			pendingUnusedChecks: PendingUnusedCheckArray.create(),
+			charByteLiterals: CharByteLiteralSet.create()
 		}
 	end 'create'
 end 'Project'
@@ -645,6 +663,29 @@ end 'PendingUnusedCheck'
 
 export typealias PendingUnusedCheckArray = Array with PendingUnusedCheck
 export typealias ReferencedNameSet = Set with String
+
+// Parser-recorded provenance for char literals. The single-byte fast path in
+// `parseCharLiteralExpr` emits a `MaxonType.integer` literal so existing
+// `b == 'a'`-style byte comparisons keep type-checking without coercions, but
+// that loses the value's char-ness for two consumers that need it:
+//   - overload resolution: `s.contains('e')` against `contains(needle String)`
+//     / `contains(character Character)` is ambiguous on the raw int.
+//   - string interpolation: `print("{c}\n")` on `let c = 'A'` prints `65`
+//     instead of `A` because the lowering picks the i64 arm.
+// The set is keyed by `"<funcName>|<valueName>"` (the same key scheme
+// `ArrayLiteralProducerMap` uses) and is populated by the parser at the
+// char-literal site. TypeResolution then propagates membership through
+// varDecl/varLoad so a value loaded out of a `let c = 'A'` slot stays
+// recognisable as a char byte at the consumer site.
+export typealias CharByteLiteralSet = Set with String
+
+// Build the composite key under which `charByteLiterals` records a char-byte
+// value's provenance. Mirrors `arrayLiteralProducerKey`'s scheme so the
+// per-function `freshSynthName` reset doesn't cause cross-function
+// collisions.
+export function charByteLiteralKey(funcName String, valueName ByteArray) returns String
+	return "{funcName}|{String.from(valueName)}"
+end 'charByteLiteralKey'
 
 // Structural description of an array literal, recorded by the parser and
 // consumed by TypeResolution. Carries only IR-shape information — no
@@ -807,6 +848,15 @@ export type FunctionTypeRegistry
 		let ret = try returnTypes.get(id) otherwise panic("FunctionTypeRegistry.get: returnTypes desync at id {id}")
 		return (params, ret)
 	end 'get'
+
+	// Replace the captured return type at `id`. Used by TypeResolution's
+	// post-`resolveUnresolvedFunctionReturnTypes` patch pass: the parser
+	// interns a lifted closure's function type with `value(unresolved)`
+	// when the body's expression type couldn't be derived at parse time,
+	// and the registry entry must be updated once TR has resolved it.
+	export function setReturnType(id FunctionTypeId, returnType MaxonReturnType)
+		try returnTypes.set(id, value: returnType) otherwise panic("FunctionTypeRegistry.setReturnType: invalid id {id}")
+	end 'setReturnType'
 end 'FunctionTypeRegistry'
 
 // --- Phase 11.0 generic-aware registries ---
@@ -893,6 +943,15 @@ export type TypeParamRegistry
 	export function getName(id TypeParamId) returns String
 		return try paramNames.get(id) otherwise ""
 	end 'getName'
+
+	// Return the enclosing declaration name this param id was interned
+	// against (e.g. "Set" for `Set`'s `Element`). Used by call-site type
+	// inference to filter out type-parameters that belong to outer scopes
+	// (interface usesParams / where-clause forwards) when walking a struct's
+	// own signature. Same defensive empty-string return as `getName`.
+	export function getOwner(id TypeParamId) returns String
+		return try declaringTypeNames.get(id) otherwise ""
+	end 'getOwner'
 
 	// True when the registry already has a binding for the given pair.
 	// Helper for callers that want to skip interning.
@@ -1672,6 +1731,12 @@ export union UnresolvedTypeExpr
 	// `MaxonType.genericInstance(...)` and stores it in `project.genericTypealiases`,
 	// not `project.typealiases` (which is StdType-typed).
 	genericAlias(baseName String, args StringArray)
+	// Phase 13 (sized typealiases): `typealias Vec1 = Vector with 1 Int`.
+	// Same as `genericAlias` but a positive-int const prefixes the args
+	// (encoded as a leading `constInt(size)` MaxonType arg in the resulting
+	// gid). Distinct N produce distinct gids so Vec1 and Vec4 don't share
+	// monomorphization.
+	sizedGenericAlias(baseName String, size IntConstant, args StringArray)
 	// Sentinel for a syntactically valid but semantically rejected typealias
 	// (range validation failure). Carried through resolution so the unused-
 	// typealias check (E3062) suppresses its cascade — the E3005 raised at
@@ -2068,6 +2133,12 @@ end 'TopLevelVarInfo'
 
 export typealias TopLevelVarMap = Map with(String, TopLevelVarInfo)
 
+// Phase 15e: parser-pinned tuple-allocation result name -> generic-instance id.
+// Used by lowerStructAlloc to recover the specialised receiver type that the
+// parser computed at parse time but cannot stash on the structAlloc op itself
+// (the op's only payload is the bare struct name).
+export typealias TupleAllocGidMap = Map with(ByteArray, GenericInstanceId)
+
 export type TypealiasRange
 	export var lower RangeBound
 	export var upper RangeBound
@@ -2152,6 +2223,7 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		typeParameter then return StdType.i64
 		genericInstance then return StdType.i64
 		interface then return StdType.i64
+		constInt then return StdType.i64
 	end 'stringGuard'
 end 'resolveMaxonTypeToStd'
 
@@ -2372,9 +2444,18 @@ export type EnumCase
 	// sentinel `0` when the case has no struct backing.
 	export var backingStructName String
 	export var backingStructExprId UnresolvedConstExprId
+	// Phase 9 (string/char-backed enums): decoded text of the raw value
+	// when the case was declared as `caseName = "literal"` or
+	// `caseName = 'literal'`. Empty string when the case has no
+	// string/char backing. The runtime representation of the enum value
+	// remains the ordinal (`rawValue == ordinal`); this field is the
+	// compile-time literal used by interpolation and `.rawValue` /
+	// `.fromName` lookups. The enclosing `EnumType.isStringBacked` /
+	// `isCharBacked` flag tells consumers how to interpret the bytes.
+	export var rawStringValue String
 
-	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0) returns EnumCase
-		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId}
+	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0, rawStringValue String = "") returns EnumCase
+		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId, rawStringValue: rawStringValue}
 	end 'create'
 end 'EnumCase'
 
@@ -2396,10 +2477,39 @@ export function enumCasesAnyPayload(cases EnumCaseArray) returns bool
 	return false
 end 'enumCasesAnyPayload'
 
+// True when at least one case carries a `rawValue` that differs from its
+// declaration ordinal — i.e. the user wrote `= N` on some case so the enum
+// has an explicit int (or float) backing rather than the default
+// auto-incremented sequence. String-interpolation lowering uses this to
+// decide between case-name lookup (implicit ordinals) and raw-value
+// stringification (explicit backing), matching the bootstrap behavior
+// where `enum Color { red = 1; green = 2 }` prints "1" / "2" but
+// `enum Direction { north; south; east; west }` prints "north" etc.
+export function enumHasExplicitBacking(enumDef EnumType) returns bool
+	if enumDef.isFloatBacked or enumDef.isStringBacked or enumDef.isCharBacked 'asNonInt'
+		return true
+	end 'asNonInt'
+	for c in enumDef.cases 'scan'
+		if c.rawValue != c.ordinal as IntConstant 'differs'
+			return true
+		end 'differs'
+	end 'scan'
+	return false
+end 'enumHasExplicitBacking'
+
 export type EnumType
 	export var name String
 	export var cases EnumCaseArray
 	export var isFloatBacked bool
+	// Phase 9 (string/char-backed enums): true when raw values were
+	// declared as string/char literals. Mutually exclusive with
+	// `isFloatBacked` (and with each other); the parser enforces the
+	// invariant. Runtime representation is still the per-case ordinal —
+	// these flags only tell interpolation / lookup helpers to read the
+	// declared literal from `EnumCase.rawStringValue` instead of treating
+	// `rawValue` as an int / float bit pattern.
+	export var isStringBacked bool
+	export var isCharBacked bool
 	export var caseByName CaseIndexMap
 	// Visibility tier and declaring file path. Cross-file references
 	// (named-type operands, dot-prefixed case reads when no top-level
@@ -2425,7 +2535,7 @@ export type EnumType
 	// `enumCasesAnyPayload(cases) implies isUnion` is enforced in `create`.
 	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
@@ -2434,7 +2544,16 @@ export type EnumType
 		if enumCasesAnyPayload(cases) and not isUnion 'invariant'
 			panic("EnumType.create: enum '{name}' has payload cases but isUnion is false")
 		end 'invariant'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, isUnion: isUnion}
+		// String/char/float backings are mutually exclusive — the parser
+		// emits an E3032 the moment it sees a second-kind raw value, so by
+		// the time we reach `create` at most one flag is true.
+		if isFloatBacked and (isStringBacked or isCharBacked) 'badMix1'
+			panic("EnumType.create: enum '{name}' has multiple scalar backings (float+string/char)")
+		end 'badMix1'
+		if isStringBacked and isCharBacked 'badMix2'
+			panic("EnumType.create: enum '{name}' has both string and char backings")
+		end 'badMix2'
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, isUnion: isUnion}
 	end 'create'
 end 'EnumType'
 
@@ -2444,6 +2563,12 @@ export type UnresolvedEnumType
 	export var name String
 	export var cases EnumCaseArray
 	export var isFloatBacked bool
+	// Phase 9 (string/char-backed enums): mirror of `EnumType`'s flags.
+	// Promoted unchanged when TypeResolution constructs the resolved
+	// `EnumType`. Mutually exclusive with each other and with
+	// `isFloatBacked`; the parser enforces the invariant.
+	export var isStringBacked bool
+	export var isCharBacked bool
 	// Visibility tier from the enum declaration's modifier. Used to
 	// stamp the per-case `TopLevelConstant`s and the implicit typealias
 	// the parser registers for the enum's name. The pre-register entry
@@ -2462,11 +2587,11 @@ export type UnresolvedEnumType
 	// answer at both stages.
 	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false) returns UnresolvedEnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false) returns UnresolvedEnumType
 		if enumCasesAnyPayload(cases) and not isUnion 'invariant'
 			panic("UnresolvedEnumType.create: enum '{name}' has payload cases but isUnion is false")
 		end 'invariant'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, isUnion: isUnion}
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, isUnion: isUnion}
 	end 'create'
 end 'UnresolvedEnumType'
 

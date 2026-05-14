@@ -5,7 +5,7 @@ description: Implement the self hosted compiler
 
 We are developing the self hosted maxon compiler by enabling spec tests one by one and fixing any failures until all tests pass. This ensures that we are building the compiler incrementally and have a clear understanding of what features are implemented at each step. Run the spec tests and fix any failures by implementing missing functionality in the self hosted compiler code.
 
-By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
+Run the spec tests and fix any failures by modifying the compiler code. Use --filter when working on a specific failing test.
 
 ## Steps
 

@@ -925,7 +925,7 @@ maxon lsp-server             # Start LSP server for IDE integration
 | Option | Description |
 |--------|-------------|
 | `--filter=PATTERN` | Run tests matching pattern |
-| `--verbose` | Show detailed failure messages for failing tests |
+| `--verbose` | Show pass/fail per test |
 | `--update-required` | Regenerate and update RequiredIR + MmTrace stderr |
 | `--workers=N` | Set number of parallel test workers |
 

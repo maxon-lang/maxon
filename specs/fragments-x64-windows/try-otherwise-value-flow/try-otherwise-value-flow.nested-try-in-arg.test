@@ -1,0 +1,128 @@
+// Test: try-otherwise-value-flow.nested-try-in-arg
+enum E
+	bad
+end 'E'
+
+function getString(i ExitCode) returns ExitCode throws E
+	if i == 0 'zero'
+		throw E.bad
+	end 'zero'
+	return 42
+end 'getString'
+
+function consume(x ExitCode) returns ExitCode throws E
+	if x == 0 'empty'
+		throw E.bad
+	end 'empty'
+	return x
+end 'consume'
+
+function main() returns ExitCode
+	let n = try consume(try getString(1) otherwise 0) otherwise 0
+	return n
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @try-otherwise-value-flow.getString(i: i64) -> u32 {
+  entry:
+    x64.xor eax, eax
+    x64.cmp rcx, rax
+    x64.jne try-otherwise-value-flow.getString.zero_0.after
+  zero_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  zero_0.after:
+    x64.mov rax, 42
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @try-otherwise-value-flow.consume(x: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.xor eax, eax
+    x64.cmp rcx, rax
+    x64.jne try-otherwise-value-flow.consume.empty_0.after
+  empty_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  empty_0.after:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg try-otherwise-value-flow.consume.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl try-otherwise-value-flow.consume.__range_panic_0
+    x64.jmp try-otherwise-value-flow.consume.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @try-otherwise-value-flow.main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 1
+    x64.call try-otherwise-value-flow.getString
+    x64.mov ecx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rcx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.je try-otherwise-value-flow.main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp try-otherwise-value-flow.main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call try-otherwise-value-flow.consume
+    x64.mov ecx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-24], rax
+    x64.mov [rbp-32], rcx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je try-otherwise-value-flow.main.otherwise_default_continue_1
+  otherwise_default_error_1:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.jmp try-otherwise-value-flow.main.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg try-otherwise-value-flow.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl try-otherwise-value-flow.main.__range_panic_0
+    x64.jmp try-otherwise-value-flow.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -25,7 +25,6 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 ### Common flags
 
 - `--filter=PATTERN` — run only tests matching a pattern
-- `--verbose` — show detailed failure messages
 - `--update-required` — regenerate RequiredIR blocks
 - `--log=CATEGORY:LEVEL` — enable detailed logging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)

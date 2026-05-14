@@ -1,0 +1,166 @@
+// Test: if-try-binding-struct-multiple-managed-fields
+enum MyError implements Error
+	failed
+end 'MyError'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type MultiManaged
+	export var numbers IntArray
+	export var text String
+	export var tag String
+
+	static function create(numbers IntArray, text String, tag String) returns Self
+		return Self{numbers: numbers, text: text, tag: tag}
+	end 'create'
+end 'MultiManaged'
+
+function mayFail(succeed bool) returns MultiManaged throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	var nums = IntArray.create()
+	nums.push(10)
+	nums.push(20)
+	return MultiManaged.create(numbers: nums, text: "hello", tag: "world")
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	var i = 0
+	while i < 3 'loop'
+		if let item = try mayFail(true) 'check'
+			result = result + (try item.numbers.get(0) otherwise 0)
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @mayFail(local0: i1) -> i64 {
+  entry:
+    %39 = mir.param local0 : i1
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.xor.i64 %39, %2
+    mir.cond_br %3 [then: check_0(), else: check_0.after()]
+  check_0:
+    %4 = mir.mov_imm 0 : i64
+    mir.error_return %4, %2
+  check_0.after:
+    %40 = mir.mov_imm 8 : i64
+    %41 = mir.call @mrt_alloc(%40)
+    %42 = mir.mov_imm 40 : i64
+    %43 = mir.call @mrt_alloc(%42)
+    %44 = mir.mov_imm 0 : i64
+    mir.store %44, %43, 0 width: qword
+    %45 = mir.mov_imm 0 : i64
+    mir.store %45, %43, 8 width: qword
+    %46 = mir.mov_imm 0 : i64
+    mir.store %46, %43, 16 width: qword
+    %47 = mir.mov_imm 8 : i64
+    mir.store %47, %43, 24 width: qword
+    %48 = mir.mov_imm 0 : i64
+    mir.store %48, %43, 32 width: qword
+    mir.store %43, %41, 0 width: qword
+    %9 = mir.mov_imm 10 : i64
+    %10 = mir.global_addr @__layout_Array_Int
+    %11 = mir.call @Array.push(%41, %9, %10)
+    %13 = mir.mov_imm 20 : i64
+    %14 = mir.global_addr @__layout_Array_Int
+    %15 = mir.call @Array.push(%41, %13, %14)
+    %17 = mir.global_addr @__istr_0
+    %18 = mir.mov_imm 40 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    mir.store %17, %19, 0 width: qword
+    %20 = mir.mov_imm 5 : i64
+    mir.store %20, %19, 8 width: qword
+    %21 = mir.mov_imm -2 : i64
+    mir.store %21, %19, 16 width: qword
+    mir.store %2, %19, 24 width: qword
+    %23 = mir.mov_imm 0 : i64
+    mir.store %23, %19, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %19, %25, 0 width: qword
+    mir.store %2, %25, 8 width: qword
+    %27 = mir.global_addr @__istr_1
+    %28 = mir.mov_imm 40 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    mir.store %27, %29, 0 width: qword
+    %30 = mir.mov_imm 5 : i64
+    mir.store %30, %29, 8 width: qword
+    %31 = mir.mov_imm -2 : i64
+    mir.store %31, %29, 16 width: qword
+    mir.store %2, %29, 24 width: qword
+    %33 = mir.mov_imm 0 : i64
+    mir.store %33, %29, 32 width: qword
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %29, %35, 0 width: qword
+    mir.store %2, %35, 8 width: qword
+    %49 = mir.mov_imm 24 : i64
+    %50 = mir.call @mrt_alloc(%49)
+    mir.store %41, %50, 0 width: qword
+    mir.store %25, %50, 8 width: qword
+    mir.store %35, %50, 16 width: qword
+    %38 = mir.mov_imm 0 : i64
+    mir.error_return %50, %38
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %0)
+  loop_0.header:
+    %3 = mir.mov_imm 3 : i64
+    %4 = mir.cmp lt, %29, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %5 = mir.mov_imm 1 : i64
+    %6, %7 = mir.try_call @mayFail(%5)
+    %9 = mir.cmp eq, %7, %0
+    mir.cond_br %9 [then: check_0(), else: check_0.after(%28)]
+  loop_0.exit:
+    %41 = mir.mov_imm 125 : i64
+    %42 = mir.cmp ugt, %28, %41
+    mir.cond_br %42 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0:
+    %13 = mir.load %6, 0 width: qword
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %31 = mir.load %13, 0 width: qword
+    %32, %33 = mir.try_call @stdlib.__managed_mem_get(%31, %0)
+    %34 = mir.mov_imm 0 : i64
+    %35 = mir.cmp ne, %33, %34
+    mir.cond_br %35 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%36, %37)
+  inlined_Array.get_2:
+    %38 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%32, %38)
+  inline_cont_main_0:
+    %19 = mir.cmp ne, %40, %0
+    mir.cond_br %19 [then: try_0.merge(%0), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%39)
+  try_0.merge:
+    %23 = mir.add.i64 %28, %30
+    mir.br check_0.after(%23)
+  check_0.after:
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.add.i64 %29, %25
+    mir.br loop_0.header(%27, %26)
+  __range_panic_0:
+    %43 = mir.global_addr @__panic_msg_0
+    %44 = mir.call @mrt_panic(%43)
+  __range_ok_0:
+    mir.ret %28
+  }
+}
+---

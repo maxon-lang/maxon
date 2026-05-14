@@ -18,9 +18,41 @@ ExitCode: 6
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @namespaces.add(a: i64, b: i64) -> i64 {
   entry:
-    x64.mov r8d, 6
+    x64.lea rax, [rcx + rdx]
+    x64.ret
+  }
+  func @namespaces.sum_three(a: i64, b: i64, c: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], r8
+    x64.call namespaces.add
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, rax
+    x64.epilogue
+    x64.jmp namespaces.add
+  }
+  func @namespaces.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov r8, 3
+    x64.call namespaces.sum_three
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg namespaces.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl namespaces.main.__range_panic_0
+    x64.jmp namespaces.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
     x64.ret
   }
 }

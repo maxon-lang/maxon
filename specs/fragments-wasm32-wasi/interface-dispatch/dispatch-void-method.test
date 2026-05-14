@@ -1,0 +1,100 @@
+// Test: dispatch-void-method
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Printer
+	function show()
+end 'Printer'
+
+type Thing implements Printer
+	let label Integer
+
+	function show()
+		print("{label}\n")
+	end 'show'
+
+	static function create(label Integer) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Thing'
+
+function display(p Printer)
+	p.show()
+end 'display'
+
+function main() returns ExitCode
+	let t = Thing.create(label: 99)
+	display(t)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+99
+```
+---
+// CompiledIR
+module {
+  func @Thing.show(local0: i64) {
+  entry:
+    %29 = mir.param local0 : i64
+    %1 = mir.load %29, 0 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 21 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.call @mrt_i64_to_string(%1, %6)
+    %8 = mir.global_addr @__istr_1
+    %9 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %4, %7
+    %13 = mir.add.i64 %12, %9
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %4
+    %17 = mir.add.i64 %16, %4
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    mir.memcpy %18, %8, %9
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %16, %21, 0 width: qword
+    mir.store %13, %21, 8 width: qword
+    mir.store %13, %21, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %21, 24 width: qword
+    mir.store %4, %21, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %21, %25, 0 width: qword
+    mir.store %4, %25, 8 width: qword
+    %30 = mir.load %25, 0 width: qword
+    %31 = mir.load %30, 0 width: qword
+    %32 = mir.load %30, 8 width: qword
+    %33 = mir.call @mrt_write_stdout(%31, %32)
+    mir.ret %4
+  }
+  func @display(local0: i64, local1: i64) {
+  entry:
+    %6 = mir.param local0 : i64
+    mir.store_slot slot_0, %6
+    %7 = mir.param local1 : i64
+    mir.store_slot slot_1, %7
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    mir.witness_call %3, [0](%2)
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 99 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %0, %7, 0 width: qword
+    %3 = mir.global_addr @__witness_Thing_Printer
+    %4 = mir.call @display(%7, %3)
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---

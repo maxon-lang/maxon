@@ -20,28 +20,34 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @static-variables.init() {
   entry:
-    x64.lea r8, [rip+__data_initialized]
-    x64.mov r9, [r8+0] (8b)
-    x64.test r9, r9
-    x64.je check1_0.after
+    x64.mov rax, 1
+    x64.mov byte [rip+initialized], rax
+    x64.ret
+  }
+  func @static-variables.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx rax, byte [rip+initialized]
+    x64.test rax, rax
+    x64.je static-variables.main.check1_0.after
   check1_0:
-    x64.mov r8d, 1
+    x64.mov rax, 1
+    x64.epilogue
     x64.ret
   check1_0.after:
-    x64.lea r8, [rip+__data_initialized]
-    x64.mov r9d, 1
-    x64.mov [r8+0], r9 (8b)
-    x64.lea r8, [rip+__data_initialized]
-    x64.mov r9, [r8+0] (8b)
-    x64.test r9, r9
-    x64.je check2_0.after
+    x64.call static-variables.init
+    x64.movzx rax, byte [rip+initialized]
+    x64.test rax, rax
+    x64.je static-variables.main.check2_0.after
   check2_0:
-    x64.mov r8d, 42
+    x64.mov rax, 42
+    x64.epilogue
     x64.ret
   check2_0.after:
-    x64.xor r8d, r8d
+    x64.xor eax, eax
+    x64.epilogue
     x64.ret
   }
 }

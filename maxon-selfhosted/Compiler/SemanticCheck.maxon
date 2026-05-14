@@ -1,6 +1,17 @@
 // Semantic validation pass over the MaxonModule.
 // Checks program structure requirements before lowering.
 
+// Per-pass alias for guard-name sets used by E3087's contains/get
+// redundancy lint. File-private to mirror DeadFunctionElimination's
+// own `StringSet` typealias — re-exporting generic typealiases across
+// files isn't supported yet.
+typealias StringSet = Set with String
+
+// Op-index domain widened with a "no producer found" sentinel of -1.
+// Parser doesn't accept `int(-1 to u64.max)` at param-type position, so the
+// range needs to be declared via a typealias.
+typealias OpIndexOrMissing = int(-1 to u64.max)
+
 export function runSemanticChecks(project Project, module MaxonModule)
 	logDebug(LogCategory.semantic, message: () gives "semcheck: functions={module.functions.count()}")
 
@@ -14,6 +25,11 @@ export function runSemanticChecks(project Project, module MaxonModule)
 	// Phase 4e error-handling rules: E3054 (main cannot throw),
 	// E3055 (try on non-throwing function), E3057 (missing try on throwing call).
 	checkErrorHandlingRules(project, module: module)
+
+	// E3087: lint `if x.contains(k) ... try x.get(k) otherwise ...` patterns.
+	// Mirrors the C# bootstrap's CheckRedundantContainsGet — see the
+	// per-function helper below for the full algorithm.
+	checkRedundantContainsGet(project, module: module)
 
 	for func in module.functions 'scan'
 		if func.name == "main" 'isMain'
@@ -65,7 +81,15 @@ function checkConformanceForType(project Project, typeName String, expected Inte
 	var wrongSig = StringArray.create()
 	for sig in expected 'eachExpected'
 		let qualified = "{typeName}.{sig.name}"
-		if not project.funcReturnTypes.contains(qualified) 'absent'
+		// Two paths exist for the actual implementation: the bare qualified
+		// name (un-overloaded method), or one of the overload bucket entries
+		// (when the user wrote multiple methods with the same name — e.g.
+		// `toString()` for Stringable plus `toString(format)` for
+		// FormattedStringable). Try the bare key first, then walk the
+		// bucket and pick the entry whose signature matches `sig`.
+		let bareHit = project.funcReturnTypes.contains(qualified)
+		let matchKey = qualified if bareHit else findOverloadMatchingSignature(project, qualified: qualified, sig: sig)
+		if matchKey.isEmpty() 'absent'
 			var entry = formatMethodSig(project, sig: sig)
 			if not sig.sourceInterfaceName.isEmpty() and sig.sourceInterfaceName != sig.directInterfaceName 'fromExtends'
 				entry = "{entry} (from {sig.sourceInterfaceName})"
@@ -77,15 +101,23 @@ function checkConformanceForType(project Project, typeName String, expected Inte
 		// runtime witness is dispatched against them, so a signature-shape
 		// mismatch can't cause a call-site type confusion. Skip them here to
 		// match the C# bootstrap's `if (method.IsStatic) ... continue` branch.
+		// However, throws-clause conformance is still validated for static
+		// methods (matching C#'s ValidateThrowsConformance call inside the
+		// IsStatic branch).
 		if sig.isStatic 'isStatic'
+			validateThrowsConformance(project, sig: sig, actualName: matchKey, typeName: typeName, line: line, column: column, filePath: filePath)
 			continue
 		end 'isStatic'
-		let actualReturn = try project.funcReturnTypes.get(qualified) otherwise panic("checkConformanceForType: funcReturnTypes.get '{qualified}' missing despite contains")
-		let actualSig = try project.funcSignatures.get(qualified) otherwise panic("checkConformanceForType: funcSignatures.get '{qualified}' missing despite contains")
+		let actualReturn = try project.funcReturnTypes.get(matchKey) otherwise panic("checkConformanceForType: funcReturnTypes.get '{matchKey}' missing despite contains")
+		let actualSig = try project.funcSignatures.get(matchKey) otherwise panic("checkConformanceForType: funcSignatures.get '{matchKey}' missing despite contains")
 		if not signatureMatches(project, expected: sig, actualParamNames: actualSig.paramNames, actualParamTypes: actualSig.paramTypes, actualReturn: actualReturn) 'mismatch'
 			let actualFormatted = formatActualSignature(project, methodName: sig.name, paramNames: actualSig.paramNames, paramTypes: actualSig.paramTypes, returnType: actualReturn)
 			wrongSig.push("{actualFormatted} (expected {formatMethodSig(project, sig: sig)})")
-		end 'mismatch'
+		end 'mismatch' else 'sigOk'
+			// Throws-clause conformance only after a structural-signature match
+			// (mirrors C# `else if (method.ThrowsTypeName != null)` branch).
+			validateThrowsConformance(project, sig: sig, actualName: matchKey, typeName: typeName, line: line, column: column, filePath: filePath)
+		end 'sigOk'
 	end 'eachExpected'
 
 	if missing.count() > 0 'missingFirst'
@@ -97,6 +129,68 @@ function checkConformanceForType(project Project, typeName String, expected Inte
 		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: buildWrongSignatureMessage(typeName, wrongSig: wrongSig), line: line, column: column, filePath: filePath)
 	end 'mismatchOnly'
 end 'checkConformanceForType'
+
+// Validate that a conforming method's `throws` clause satisfies the
+// interface's expected throws contract. Two failure shapes, both reported
+// as E3016:
+//   1. Interface requires `throws X` but the actual method has no throws
+//      clause — surface "must throw 'X' as required by interface 'Y'".
+//   2. The actual throws type names a registered enum that does NOT
+//      conform to Error — surface "throws 'Z' which does not conform to
+//      Error". Throws types that aren't enums (e.g. union or the bare
+//      `Error` interface itself) are accepted, mirroring the C# bootstrap
+//      which only rejects enum throws types missing Error conformance.
+function validateThrowsConformance(project Project, sig InterfaceMethodSig, actualName String, typeName String, line LineNumber, column ColumnNumber, filePath FilePath)
+	let requiredThrows = match sig.throwsTypeName 'expected'
+		none gives ""
+		throwing(name) gives name
+	end 'expected'
+	if requiredThrows.isEmpty() 'noRequirement'
+		return
+	end 'noRequirement'
+
+	let actualThrows = try project.funcThrowsTypes.get(actualName) otherwise ThrowsClause.none
+	let actualName2 = match actualThrows 'actual'
+		none gives ""
+		throwing(name) gives name
+	end 'actual'
+	if actualName2.isEmpty() 'missingThrows'
+		reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Method '{typeName}.{sig.name}' must throw '{requiredThrows}' as required by interface '{sig.directInterfaceName}'", line: line, column: column, filePath: filePath)
+		return
+	end 'missingThrows'
+
+	// Only enum throws types are validated against Error conformance —
+	// non-enum throws types (e.g. unions, the `Error` interface itself,
+	// or unresolved names) pass through unchecked, matching the C#
+	// bootstrap's `if (throwsTypeEntry is IrEnumType throwsEnum && ...)` guard.
+	if not project.enumTypes.contains(actualName2) 'notEnum'
+		return
+	end 'notEnum'
+	if project.conformances.contains(actualName2, interfaceName: "Error") 'isError'
+		return
+	end 'isError'
+	reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Method '{typeName}.{sig.name}' throws '{actualName2}' which does not conform to Error", line: line, column: column, filePath: filePath)
+end 'validateThrowsConformance'
+
+// Walk the overload bucket for a method name and return the registered key
+// whose signature matches `sig`. Returns "" when no matching overload
+// exists. Mirrors `signatureMatches`'s logic so the conformance check sees
+// the same shape the call-site dispatch will pick.
+function findOverloadMatchingSignature(project Project, qualified String, sig InterfaceMethodSig) returns String
+	let bucket = try project.overloadedNames.get(qualified) otherwise return ""
+	for i in 0 upto bucket.count() 'eachMangled'
+		let key = try bucket.get(i) otherwise panic("findOverloadMatchingSignature: bucket.get OOB at {i}")
+		if not project.funcReturnTypes.contains(key) 'stale'
+			continue
+		end 'stale'
+		let actualReturn = try project.funcReturnTypes.get(key) otherwise panic("findOverloadMatchingSignature: funcReturnTypes.get '{key}' missing despite contains")
+		let actualSig = try project.funcSignatures.get(key) otherwise panic("findOverloadMatchingSignature: funcSignatures.get '{key}' missing despite contains")
+		if signatureMatches(project, expected: sig, actualParamNames: actualSig.paramNames, actualParamTypes: actualSig.paramTypes, actualReturn: actualReturn) 'matches'
+			return key
+		end 'matches'
+	end 'eachMangled'
+	return ""
+end 'findOverloadMatchingSignature'
 
 // Compare an expected interface signature against an actual implementation's
 // param names, param types, and return type. The actual paramTypes carry an
@@ -150,6 +244,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 		typeParameter gives ""
 		genericInstance gives ""
 		interface gives ""
+		constInt gives ""
 	end 'expCase'
 	if expName.isEmpty() 'noExpName'
 		return false
@@ -162,6 +257,7 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 		unresolved gives ""
 		genericInstance gives ""
 		interface gives ""
+		constInt gives ""
 	end 'actCase'
 	return not actParamName.isEmpty() and actParamName == expName
 end 'maxonTypesMatchForConformance'
@@ -383,3 +479,402 @@ function checkTryCallForNonThrowingViolation(project Project, callee ByteArray, 
 	end 'isThrowing'
 	reportCompileError(project, code: ErrorCode.semanticTryRequiresThrowingFunction, message: "try requires a throwing function: '{qualifiedCallee}' does not throw'", line: range.line, column: range.column, filePath: readerFilePath)
 end 'checkTryCallForNonThrowingViolation'
+
+// E3087: walks every function and reports `if x.contains(k) ... try x.get(k)
+// otherwise ...` patterns as redundant. The lint targets the double-lookup
+// shape any container exposing both a membership probe and a fallible
+// retrieval falls into (Map, Set, Array via index, …) — the user-facing
+// rewrite `if let v = try x.get(k) ... 'lbl'` performs the same logic with
+// one lookup.
+//
+// Detection per condBr-terminated block:
+//   1. Find the methodCall in this block whose result fed condBr.cond and
+//      whose unqualified method name is `contains`.
+//   2. Build canonical access paths for the contains call's receiver and
+//      first argument (the key) by walking back through varLoad / fieldLoad
+//      / selfFieldLoad / globalLoad producers in the SAME block. Paths
+//      that hit an unsupported producer (call result, binop, literal, …)
+//      are unmatchable and suppress the lint.
+//   3. Scan the thenTarget block linearly. Stop as soon as we see a write
+//      that could invalidate the membership probe (a varStore on a slot
+//      named in the path, a fieldStore on a field named in the path, a
+//      selfFieldStore likewise, OR a method call on the same receiver path
+//      that isn't a `get` with matching key). If we hit a tryMethodCall
+//      whose receiver path AND key path match the contains call AND whose
+//      unqualified method name is `get`, fire E3087.
+function checkRedundantContainsGet(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkRedundantContainsGet: blockRef OOB")
+			if not block.hasTerminatorOp() 'noTerm'
+				continue
+			end 'noTerm'
+			let termIdx = block.terminatorIndex()
+			let termOp = try module.ops.get(termIdx) otherwise panic("checkRedundantContainsGet: terminator opIdx OOB")
+			if termOp.name != "condBr" 'notCondBr'
+				continue
+			end 'notCondBr'
+			match termOp 'unwrapCondBr'
+				condBr(cond, thenTarget, _, _) then maybeEmitRedundantContainsGet(project, module: module, func: func, block: block, condName: cond, thenTarget: thenTarget)
+				default panic("checkRedundantContainsGet: op.name == condBr but match failed")
+			end 'unwrapCondBr'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkRedundantContainsGet'
+
+function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func IrFunction, block IrBlock, condName ByteArray, thenTarget BlockId)
+	// Scan back through this block's ops for the methodCall that produced
+	// `condName`. The condition value must be in the same block — methodCall
+	// results are block-local synthesized names.
+	let containsIdx = try findMethodCallProducingName(module, block: block, name: condName) otherwise return
+	let containsOp = try module.ops.get(containsIdx) otherwise panic("maybeEmitRedundantContainsGet: containsOpIdx OOB")
+	let info = extractMethodCallInfo(op: containsOp)
+	if String.from(info.methodNameBytes) != "contains" 'notContains'
+		return
+	end 'notContains'
+	if info.args.count() < 1 'noKey'
+		return
+	end 'noKey'
+
+	let slotNames = buildSlotNameTable(func: func)
+	let containsLimit = containsIdx as OpIndexOrMissing
+	let receiverPath = buildAccessPath(module, block: block, limitOpIdx: containsLimit, name: info.receiver, slotNames: slotNames)
+	if receiverPath.isEmpty() 'unresolvableReceiver'
+		return
+	end 'unresolvableReceiver'
+	let containsKeyName = try info.args.get(0) otherwise panic("maybeEmitRedundantContainsGet: args.get(0) failed despite count>=1")
+	let keyPath = buildAccessPath(module, block: block, limitOpIdx: containsLimit, name: containsKeyName, slotNames: slotNames)
+	if keyPath.isEmpty() 'unresolvableKey'
+		return
+	end 'unresolvableKey'
+
+	let thenBlock = try findBlockByIdInFunc(module, func: func, blockId: thenTarget) otherwise return
+
+	// Guard sets used to detect intervening writes that could invalidate
+	// the membership probe. `guardedSlotNames` collects the root variable
+	// names in either path; `guardedFields` collects every dotted segment.
+	var guardedSlotNames = StringSet.create()
+	var guardedFields = StringSet.create()
+	splitPathIntoGuards(path: receiverPath, slotNames: guardedSlotNames, fields: guardedFields)
+	splitPathIntoGuards(path: keyPath, slotNames: guardedSlotNames, fields: guardedFields)
+
+	let containsCalleeFmt = stripCalleeMangling(callee: try project.resolvedCallees.get(containsIdx) otherwise "contains")
+
+	for opIdx in thenBlock.opRefs 'eachThenOp'
+		let op = try module.ops.get(opIdx) otherwise panic("maybeEmitRedundantContainsGet: thenBlock op OOB")
+		if storeInvalidatesGuards(op: op, slotNames: slotNames, guardedSlotNames: guardedSlotNames, guardedFields: guardedFields) 'invalidatesGuards'
+			break
+		end 'invalidatesGuards'
+		if not isMethodCallVariant(op: op) 'notMethodCall'
+			continue
+		end 'notMethodCall'
+
+		let inner = extractMethodCallInfo(op: op)
+		let innerLimit = opIdx as OpIndexOrMissing
+		let innerReceiverPath = buildAccessPath(module, block: thenBlock, limitOpIdx: innerLimit, name: inner.receiver, slotNames: slotNames)
+		if innerReceiverPath.isEmpty() 'unresolvableInnerReceiver'
+			// Receiver could alias the contains receiver via a route we
+			// can't statically reconcile (e.g. through a call result);
+			// stay conservative and stop scanning.
+			break
+		end 'unresolvableInnerReceiver'
+		if innerReceiverPath != receiverPath 'differentReceiver'
+			continue
+		end 'differentReceiver'
+
+		if inner.isTry and String.from(inner.methodNameBytes) == "get" and inner.args.count() >= 1 'isTryGetCall'
+			let innerKeyName = try inner.args.get(0) otherwise panic("maybeEmitRedundantContainsGet: inner.args.get(0) failed despite count>=1")
+			let innerKeyPath = buildAccessPath(module, block: thenBlock, limitOpIdx: innerLimit, name: innerKeyName, slotNames: slotNames)
+			if innerKeyPath == keyPath 'matched'
+				let getCalleeFmt = stripCalleeMangling(callee: try project.resolvedCallees.get(opIdx) otherwise "get")
+				let msg = "redundant '{containsCalleeFmt}' followed by '{getCalleeFmt}' on '{receiverPath}': use 'if let v = try {receiverPath}.get({keyPath})' (or 'if var') instead — performs one lookup instead of two"
+				reportCompileError(project, code: ErrorCode.semanticRedundantContainsGet, message: msg, line: info.range.line, column: info.range.column, filePath: func.sourceFilePath)
+				return
+			end 'matched'
+		end 'isTryGetCall'
+
+		// Any other call on the same receiver path could invalidate the
+		// membership check (mutation, removal, etc.). Stop scanning to
+		// avoid both false positives and double-reports.
+		break
+	end 'eachThenOp'
+end 'maybeEmitRedundantContainsGet'
+
+// Carrier for the fields a methodCall/tryMethodCall site exposes to the
+// redundant-contains-get walker. Bundling them lets the destructuring
+// match arm body fit into a single statement (one helper call instead of
+// a multi-line arm body).
+type MethodCallInfo
+	export let receiver ByteArray
+	export let methodNameBytes ByteArray
+	export let args ByteArrayArray
+	export let isTry bool
+	export let range SourceRange
+
+	static function create(receiver ByteArray, methodNameBytes ByteArray, args ByteArrayArray, isTry bool, range SourceRange) returns Self
+		return Self{receiver: receiver, methodNameBytes: methodNameBytes, args: args, isTry: isTry, range: range}
+	end 'create'
+
+	static function empty() returns Self
+		return Self{receiver: ByteArray.create(), methodNameBytes: ByteArray.create(), args: ByteArrayArray.create(), isTry: false, range: SourceRange.none()}
+	end 'empty'
+end 'MethodCallInfo'
+
+function extractMethodCallInfo(op MaxonOp) returns MethodCallInfo
+	return match op 'kind'
+		methodCall(_, r, mn, a, _, _, _, rg) gives MethodCallInfo.create(receiver: r, methodNameBytes: mn, args: a, isTry: false, range: rg)
+		tryMethodCall(_, r, mn, a, _, _, _, _, rg) gives MethodCallInfo.create(receiver: r, methodNameBytes: mn, args: a, isTry: true, range: rg)
+		default panic("extractMethodCallInfo: caller filters non-methodCall ops via isMethodCallVariant")
+	end 'kind'
+end 'extractMethodCallInfo'
+
+function isMethodCallVariant(op MaxonOp) returns bool
+	return op.name == "methodCall" or op.name == "tryMethodCall"
+end 'isMethodCallVariant'
+
+// True when `op` writes to one of the names/fields the membership probe
+// depends on (varStore on a guarded slot, fieldStore on a guarded field,
+// selfFieldStore on a guarded field, globalStore on a guarded global
+// name). Used by the then-block scan to stop early before a stale
+// `contains` answer can flow into a `get` call.
+function storeInvalidatesGuards(op MaxonOp, slotNames SlotNameArray, guardedSlotNames StringSet, guardedFields StringSet) returns bool
+	// Dispatch by op.name to avoid an exhaustive MaxonOp match: only the
+	// four store-shaped ops can invalidate the membership probe; every
+	// other op shape is harmless and returns false unconditionally.
+	if op.name == "varStore" 'isVarStore'
+		return match op 'extract'
+			varStore(slotId, _, _) gives slotIsGuarded(slotId: slotId, slotNames: slotNames, guards: guardedSlotNames)
+			default panic("storeInvalidatesGuards: name==varStore but match arm missed it")
+		end 'extract'
+	end 'isVarStore'
+	if op.name == "fieldStore" 'isFieldStore'
+		return match op 'extract'
+			fieldStore(_, fieldName, _, _, _) gives guardedFields.contains(String.from(fieldName))
+			default panic("storeInvalidatesGuards: name==fieldStore but match arm missed it")
+		end 'extract'
+	end 'isFieldStore'
+	if op.name == "selfFieldStore" 'isSelfFieldStore'
+		return match op 'extract'
+			selfFieldStore(fieldName, _, _) gives guardedFields.contains(String.from(fieldName))
+			default panic("storeInvalidatesGuards: name==selfFieldStore but match arm missed it")
+		end 'extract'
+	end 'isSelfFieldStore'
+	if op.name == "globalStore" 'isGlobalStore'
+		return match op 'extract'
+			globalStore(name, _, _, _) gives guardedSlotNames.contains(name)
+			default panic("storeInvalidatesGuards: name==globalStore but match arm missed it")
+		end 'extract'
+	end 'isGlobalStore'
+	return false
+end 'storeInvalidatesGuards'
+
+// Thrown by findMethodCallProducingName when no methodCall in `block`
+// produces an SSA name equal to the queried one. The condition value of
+// a condBr need not be a methodCall result (a comparison result, varLoad,
+// cmp folding, etc. is far more common), so callers treat a miss as
+// "this condBr doesn't match the lint shape" and skip the block.
+union ProducerLookupError implements Error
+	noProducer
+end 'ProducerLookupError'
+
+// Walk `block.opRefs` and return the op index of the methodCall whose
+// result ByteArray equals `name`.
+function findMethodCallProducingName(module MaxonModule, block IrBlock, name ByteArray) returns OpIndex throws ProducerLookupError
+	for opIdx in block.opRefs 'scan'
+		let op = try module.ops.get(opIdx) otherwise panic("findMethodCallProducingName: opRefs entry OOB")
+		if op.name != "methodCall" 'notMethodCall'
+			continue
+		end 'notMethodCall'
+		let matches = match op 'mc'
+			methodCall(result, _, _, _, _, _, _, _) gives byteArraysEqual(result, b: name)
+			default panic("findMethodCallProducingName: name==methodCall guard above already filtered other shapes")
+		end 'mc'
+		if matches 'hit'
+			return opIdx
+		end 'hit'
+	end 'scan'
+	throw ProducerLookupError.noProducer
+end 'findMethodCallProducingName'
+
+// Locate the IrBlock with the given BlockId within `func.blockRefs`. Returns
+// the block, or throws when the id isn't owned by this function (a malformed
+// condBr that escapes its own function body).
+union BlockLookupError implements Error
+	notInFunc
+end 'BlockLookupError'
+
+function findBlockByIdInFunc(module MaxonModule, func IrFunction, blockId BlockId) returns IrBlock throws BlockLookupError
+	for blockRef in func.blockRefs 'scan'
+		let block = try module.blocks.get(blockRef) otherwise panic("findBlockByIdInFunc: blockRef OOB")
+		if block.id == blockId 'hit'
+			return block
+		end 'hit'
+	end 'scan'
+	throw BlockLookupError.notInFunc
+end 'findBlockByIdInFunc'
+
+// Build a slot→source-name table from the function's scope so varLoad
+// producers can render their source variable name. The scope's primary
+// key is name, so this is the only direction that requires a walk.
+typealias SlotNameArray = Array with String
+
+function buildSlotNameTable(func IrFunction) returns SlotNameArray
+	var table = SlotNameArray.create()
+	for (_, info) in func.scope.allVars() 'eachVar'
+		let needed = info.slot + 1
+		while table.count() < needed 'grow'
+			table.push("")
+		end 'grow'
+		try table.set(info.slot, value: info.name) otherwise panic("buildSlotNameTable: set OOB despite grow")
+	end 'eachVar'
+	return table
+end 'buildSlotNameTable'
+
+// Walk producers within `block` starting from the op that defines `name`
+// (searched at indices strictly before `limitOpIdx` in `block.opRefs`)
+// and accumulate a canonical access path like "m", "holder.cache", or
+// "self.byName". Returns "" when the producer chain hits an op that
+// isn't a supported root (call/binop/literal/cmp/etc.) — those values
+// are not safely matchable as receivers/keys.
+function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limitOpIdx OpIndexOrMissing, slotNames SlotNameArray) returns String
+	// Find the producer of `name` within `block` (at an opRef strictly
+	// preceding `limitOpIdx`). opRefs are appended in emission order so
+	// the first match traveling backward is the producer.
+	var producerIdx = u64.max as OpIndex
+	var found = false
+	for opIdx in block.opRefs 'scan'
+		if (opIdx as OpIndexOrMissing) >= limitOpIdx 'reachedLimit'
+			break
+		end 'reachedLimit'
+		let op = try module.ops.get(opIdx) otherwise panic("buildAccessPath: opRef OOB")
+		if opProducesName(op: op, name: name) 'isProducer'
+			producerIdx = opIdx
+			found = true
+		end 'isProducer'
+	end 'scan'
+	if not found 'noProducer'
+		return ""
+	end 'noProducer'
+
+	let producer = try module.ops.get(producerIdx) otherwise panic("buildAccessPath: producerIdx OOB after found=true")
+	// Dispatch by op.name: only four producer shapes encode a canonical
+	// access path; anything else returns "" so the lint stays conservative.
+	if producer.name == "varLoad" 'isVarLoad'
+		return match producer 'extract'
+			varLoad(_, slotId, _, _) gives slotPathFromTable(slotNames: slotNames, slotId: slotId)
+			default panic("buildAccessPath: name==varLoad but match arm missed it")
+		end 'extract'
+	end 'isVarLoad'
+	if producer.name == "selfFieldLoad" 'isSelfFieldLoad'
+		return match producer 'extract'
+			selfFieldLoad(_, fieldName, _) gives "self.{String.from(fieldName)}"
+			default panic("buildAccessPath: name==selfFieldLoad but match arm missed it")
+		end 'extract'
+	end 'isSelfFieldLoad'
+	if producer.name == "fieldLoad" 'isFieldLoad'
+		return match producer 'extract'
+			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module: module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: (producerIdx as OpIndexOrMissing), slotNames: slotNames)
+			default panic("buildAccessPath: name==fieldLoad but match arm missed it")
+		end 'extract'
+	end 'isFieldLoad'
+	if producer.name == "globalLoad" 'isGlobalLoad'
+		return match producer 'extract'
+			globalLoad(_, gname, _, _) gives gname
+			default panic("buildAccessPath: name==globalLoad but match arm missed it")
+		end 'extract'
+	end 'isGlobalLoad'
+	return ""
+end 'buildAccessPath'
+
+function fieldChainPath(module MaxonModule, block IrBlock, recv ByteArray, fieldName ByteArray, limitOpIdx OpIndexOrMissing, slotNames SlotNameArray) returns String
+	let inner = buildAccessPath(module, block: block, name: recv, limitOpIdx: limitOpIdx, slotNames: slotNames)
+	if inner.isEmpty() 'innerUnresolvable'
+		return ""
+	end 'innerUnresolvable'
+	return "{inner}.{String.from(fieldName)}"
+end 'fieldChainPath'
+
+function slotPathFromTable(slotNames SlotNameArray, slotId VarSlot) returns String
+	// A slot the parser registered via Scope.declare always appears in
+	// allVars, so an empty entry means the slot is compiler-synthesized
+	// (e.g. for-in iterator slots) and unmatchable for this lint.
+	if slotId >= slotNames.count() 'oob'
+		return ""
+	end 'oob'
+	return try slotNames.get(slotId) otherwise ""
+end 'slotPathFromTable'
+
+// True when `op` defines an SSA name equal to `name`. Only the producer
+// kinds the access-path walker understands need a positive answer here —
+// other producers are treated as `default false`, which routes their
+// users through the "unresolvable" tail of buildAccessPath.
+function opProducesName(op MaxonOp, name ByteArray) returns bool
+	if op.name == "varLoad" 'isVarLoad'
+		return match op 'extract'
+			varLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+			default panic("opProducesName: name==varLoad guard above already filtered other shapes")
+		end 'extract'
+	end 'isVarLoad'
+	if op.name == "selfFieldLoad" 'isSelfFieldLoad'
+		return match op 'extract'
+			selfFieldLoad(result, _, _) gives byteArraysEqual(result, b: name)
+			default panic("opProducesName: name==selfFieldLoad guard above already filtered other shapes")
+		end 'extract'
+	end 'isSelfFieldLoad'
+	if op.name == "fieldLoad" 'isFieldLoad'
+		return match op 'extract'
+			fieldLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+			default panic("opProducesName: name==fieldLoad guard above already filtered other shapes")
+		end 'extract'
+	end 'isFieldLoad'
+	if op.name == "globalLoad" 'isGlobalLoad'
+		return match op 'extract'
+			globalLoad(result, _, _, _) gives byteArraysEqual(result, b: name)
+			default panic("opProducesName: name==globalLoad guard above already filtered other shapes")
+		end 'extract'
+	end 'isGlobalLoad'
+	return false
+end 'opProducesName'
+
+// Split `path` ("root.f1.f2" or "root") into the leading root segment
+// (recorded in `slotNames`) and each trailing field segment (recorded in
+// `fields`). The split lets a single linear thenBlock walk detect a
+// guarded reassignment in O(1) per op without re-parsing the path.
+function splitPathIntoGuards(path String, slotNames StringSet, fields StringSet)
+	let parts = path.split(".")
+	for i in 0 upto parts.count() 'eachPart'
+		let part = try parts.get(i) otherwise panic("splitPathIntoGuards: parts.get OOB despite i < count")
+		if part.isEmpty() 'emptyPart'
+			continue
+		end 'emptyPart'
+		if i == 0 'first'
+			slotNames.insert(part)
+		end 'first' else 'rest'
+			fields.insert(part)
+		end 'rest'
+	end 'eachPart'
+end 'splitPathIntoGuards'
+
+// True when `slotId` maps to a name in the guard set. Synthetic slots
+// (no name registered) trivially miss — they can't appear in any path.
+function slotIsGuarded(slotId VarSlot, slotNames SlotNameArray, guards StringSet) returns bool
+	if slotId >= slotNames.count() 'oob'
+		return false
+	end 'oob'
+	let name = try slotNames.get(slotId) otherwise return false
+	if name.isEmpty() 'synthetic'
+		return false
+	end 'synthetic'
+	return guards.contains(name)
+end 'slotIsGuarded'
+
+// Strip the `$<suffix>` overload-mangling tail from a resolved callee
+// like `Map.contains` / `Map.contains$0_String`. The C# bootstrap performs
+// the same strip in StripCalleeNamespace before emitting the diagnostic so
+// the user sees `Map.contains`, not the synthetic mangled form. We do
+// NOT strip a leading namespace dot because the self-hosted resolver
+// emits `{TypeName}.{method}` directly (no `stdlib.` prefix).
+function stripCalleeMangling(callee String) returns String
+	let dollarIdx = try callee.findFirst("$") otherwise return callee
+	return callee.slice(callee.startIndex(), endIndex: dollarIdx)
+end 'stripCalleeMangling'

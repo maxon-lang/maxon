@@ -4741,26 +4741,35 @@ end 'main'
 ## Compilation Commands
 
 ```bash
-# Compile and run in one step
-maxon program.maxon
+# Compile a single file
+maxon build hello.maxon
 
-# Compile to executable
-maxon build program.maxon -o program.exe
+# Build current directory (uses build.maxon if present)
+maxon build
+
+# Build a project directory
+maxon build myproject/
 
 # Emit IR alongside executable
-maxon build program.maxon --emit-ir
+maxon build app.maxon --emit-ir
 
-# Emit assembly alongside executable
-maxon build program.maxon --emit-asm
+# Write IR at each pipeline stage
+maxon build app.maxon --dump-stages
 
-# Enable verbose output
-maxon build program.maxon -v
+# List available commands from build.maxon
+maxon run
 
-# Run language tests
-maxon test
+# Run an exported function from build.maxon (dashes translate to underscores)
+maxon run spec-test-selfhosted
+
+# Run spec fragment tests
+maxon spec-test
+
+# Run tests matching a pattern
+maxon spec-test --filter=array
 
 # Run tests with verbose output
-maxon test --verbose
+maxon spec-test --verbose
 ```
 
 ---

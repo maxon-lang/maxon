@@ -1,0 +1,57 @@
+// Test: int-format-neg-zero-pad
+function main() returns ExitCode
+	let n = -42
+	print("{n:06}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+-00042
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %1 = mir.neg.i64 %0
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 72 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.global_addr @__istr_1
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.call @mrt_i64_to_string_fmt(%1, %6, %7, %8)
+    %10 = mir.global_addr @__istr_2
+    %11 = mir.mov_imm 1 : i64
+    %14 = mir.add.i64 %4, %9
+    %15 = mir.add.i64 %14, %11
+    %16 = mir.mov_imm 1 : i64
+    %17 = mir.add.i64 %15, %16
+    %18 = mir.call @mrt_alloc(%17)
+    mir.memcpy %18, %3, %4
+    %19 = mir.add.i64 %18, %4
+    mir.memcpy %19, %6, %9
+    %20 = mir.add.i64 %19, %9
+    mir.memcpy %20, %10, %11
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %18, %23, 0 width: qword
+    mir.store %15, %23, 8 width: qword
+    mir.store %15, %23, 16 width: qword
+    %24 = mir.mov_imm 1 : i64
+    mir.store %24, %23, 24 width: qword
+    mir.store %4, %23, 32 width: qword
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %23, %27, 0 width: qword
+    mir.store %4, %27, 8 width: qword
+    %30 = mir.load %27, 0 width: qword
+    %31 = mir.load %30, 0 width: qword
+    %32 = mir.load %30, 8 width: qword
+    %33 = mir.call @mrt_write_stdout(%31, %32)
+    mir.ret %4
+  }
+}
+---

@@ -1,0 +1,50 @@
+// Test: basic-type-disambiguation-string
+typealias Integer = int(i64.min to i64.max)
+
+function process(value Integer) returns Integer
+	return value * 2
+end 'process'
+
+function process(value String) returns Integer
+	return value.count()
+end 'process'
+
+function main() returns ExitCode
+	return process("hello world hello world hello world hello worl!")
+end 'main'
+---
+ExitCode: 47
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 47 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %11 = mir.call @String.count(%8)
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %11, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

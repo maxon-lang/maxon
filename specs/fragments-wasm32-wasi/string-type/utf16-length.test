@@ -1,0 +1,72 @@
+// Test: utf16-length
+function main() returns ExitCode
+	let s = "A😀B"
+	let view = s.utf16()
+	print("{view.count()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+4
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 6 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %6, %8, 8 width: qword
+    %39 = mir.load %8, 0 width: qword
+    %40 = mir.call @UTF16View.create(%39)
+    %13 = mir.call @UTF16View.count(%40)
+    %14 = mir.global_addr @__istr_1
+    %16 = mir.mov_imm 21 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    %18 = mir.call @mrt_i64_to_string(%13, %17)
+    %19 = mir.global_addr @__istr_2
+    %20 = mir.mov_imm 1 : i64
+    %23 = mir.add.i64 %6, %18
+    %24 = mir.add.i64 %23, %20
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.add.i64 %24, %25
+    %27 = mir.call @mrt_alloc(%26)
+    mir.memcpy %27, %14, %6
+    %28 = mir.add.i64 %27, %6
+    mir.memcpy %28, %17, %18
+    %29 = mir.add.i64 %28, %18
+    mir.memcpy %29, %19, %20
+    %31 = mir.mov_imm 40 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    mir.store %27, %32, 0 width: qword
+    mir.store %24, %32, 8 width: qword
+    mir.store %24, %32, 16 width: qword
+    %33 = mir.mov_imm 1 : i64
+    mir.store %33, %32, 24 width: qword
+    mir.store %6, %32, 32 width: qword
+    %35 = mir.mov_imm 16 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    mir.store %32, %36, 0 width: qword
+    mir.store %6, %36, 8 width: qword
+    %41 = mir.load %36, 0 width: qword
+    %42 = mir.load %41, 0 width: qword
+    %43 = mir.load %41, 8 width: qword
+    %44 = mir.call @mrt_write_stdout(%42, %43)
+    mir.ret %6
+  }
+}
+---

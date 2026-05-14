@@ -1,0 +1,68 @@
+// Test: string-enum-interpolation
+enum Status
+	active = "Active"
+	inactive = "Inactive"
+	pending = "Pending"
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.active
+	print("Status: {s}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Status: Active
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.global_addr @__istr_1
+    %5 = mir.mov_imm 1 : i64
+    %6 = mir.global_addr @__istr_2
+    %10 = mir.sub.i64 %6, %4
+    %11 = mir.mul.i64 %5, %10
+    %12 = mir.add.i64 %4, %11
+    %16 = mir.global_addr @__istr_3
+    %20 = mir.sub.i64 %16, %12
+    %21 = mir.mul.i64 %0, %20
+    %22 = mir.add.i64 %12, %21
+    %26 = mir.global_addr @__istr_4
+    %30 = mir.sub.i64 %26, %22
+    %31 = mir.mul.i64 %0, %30
+    %32 = mir.add.i64 %22, %31
+    %35 = mir.mov_imm 6 : i64
+    %36 = mir.global_addr @__istr_5
+    %41 = mir.mov_imm 15 : i64
+    %43 = mir.mov_imm 16 : i64
+    %44 = mir.call @mrt_alloc(%43)
+    mir.memcpy %44, %2, %3
+    %45 = mir.add.i64 %44, %3
+    mir.memcpy %45, %32, %35
+    %46 = mir.add.i64 %45, %35
+    mir.memcpy %46, %36, %5
+    %48 = mir.mov_imm 40 : i64
+    %49 = mir.call @mrt_alloc(%48)
+    mir.store %44, %49, 0 width: qword
+    mir.store %41, %49, 8 width: qword
+    mir.store %41, %49, 16 width: qword
+    mir.store %5, %49, 24 width: qword
+    mir.store %0, %49, 32 width: qword
+    %52 = mir.mov_imm 16 : i64
+    %53 = mir.call @mrt_alloc(%52)
+    mir.store %49, %53, 0 width: qword
+    mir.store %0, %53, 8 width: qword
+    %56 = mir.load %53, 0 width: qword
+    %57 = mir.load %56, 0 width: qword
+    %58 = mir.load %56, 8 width: qword
+    %59 = mir.call @mrt_write_stdout(%57, %58)
+    mir.ret %0
+  }
+}
+---

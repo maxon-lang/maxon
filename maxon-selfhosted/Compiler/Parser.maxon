@@ -64,6 +64,15 @@ typealias TokenIter = ArrayIterator with Token
 typealias FieldChainDepth = int(0 to u64.max)
 typealias ChainPeekOffset = int(0 to u64.max)
 
+// `\xNN` / `\uNNNN` decoding: a single nibble (0..15) and a BMP codepoint.
+typealias HexNibble = int(0 to 15)
+typealias UnicodeCodepoint = int(0 to 0x10FFFF)
+
+// Recursion depth budget for the parser-time producer-type scan that chases
+// varLoad→varDecl→call chains so `var m = MapInit()` resolves to `Map<...>`
+// when the parser needs to qualify a method call on `m`.
+typealias ScanDepth = int(0 to 8)
+
 // Stage E (closures): one entry per distinct outer-scope name captured by
 // a closure body. The parser appends to `closureCaptures` in first-reference
 // order so `index` doubles as the env-array slot at lowering time. Capture
@@ -304,6 +313,16 @@ export type Parser
 		finalizeModuleInit()
 
 		checkUnusedTypeAliases()
+
+		// Propagate char-byte provenance through each function's varDecl /
+		// varLoad chains. The literal-emission site populated
+		// `project.charByteLiterals` for raw literal value names; this walk
+		// extends the set so a `let c = 'A'` binding also marks every
+		// subsequent `varLoad` of `c` as char-byte. Consumers (overload
+		// resolution in MaxonDialect, interpolation lowering in
+		// LowerMaxonToStd) read the project-level set at their site and
+		// don't need a separate per-function pass.
+		propagateCharByteThroughVarChains(project, module: module)
 
 		return module
 	end 'parseModule'
@@ -922,7 +941,7 @@ export type Parser
 		var funcIsDuplicate = false
 		var registrationName = qualifiedName
 		try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise 'dupFunc'
-			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, hasSelf: isInstance, returnType: returnType)
+			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, paramNames: paramNames, hasSelf: isInstance, returnType: returnType)
 			if resolution.isOverload 'isOverload'
 				registrationName = resolution.mangledName
 			end 'isOverload' else 'realDup'
@@ -1163,6 +1182,13 @@ export type Parser
 					try parseGlobalAssignment(block, qualifiedName: qualifiedName)
 					return
 				end 'singleDot'
+				// `globalVar.field1.field2(.fieldN)* = expr` where `globalVar`
+				// is a registered top-level var holding a struct. Mirrors
+				// parseLocalFieldAssignment but seeds the chain from an
+				// unresolvedRead — TypeResolution rewrites that to a globalLoad
+				// once the project's topLevelVars registry is populated.
+				try parseGlobalChainedFieldAssignment(block, chainLen: chainLen)
+				return
 			end 'isFieldAssign'
 			// Dot call: variable.method(args) or Type.staticMethod(args) or field access
 			_ = try parseExpression(block)
@@ -1229,7 +1255,10 @@ export type Parser
 				break
 			end 'notDot'
 			let fieldTok = try cursor.peek(offset + 1) otherwise return 0 as FieldChainDepth
-			if fieldTok.kind != TokenKind.identifier 'notId'
+			// Phase 15e: `t.0 = 20` is a tuple-positional store; accept both
+			// identifier and intLiteral here so the dispatch below routes
+			// `t.0 = ...` through parseLocalFieldAssignment.
+			if fieldTok.kind != TokenKind.identifier and fieldTok.kind != TokenKind.intLiteral 'notId'
 				return 0 as FieldChainDepth
 			end 'notId'
 			depth = depth + 1
@@ -1267,7 +1296,7 @@ export type Parser
 			let fieldTok = try consume()
 			let nextReceiver = freshSynthName()
 			let loadRange = SourceRange.ofToken(fieldTok)
-			module.appendOp(block, op: MaxonOp.fieldLoad(nextReceiver, receiver: receiverName, fieldName: fieldTok.value.toByteArray(), range: loadRange))
+			module.appendOp(block, op: MaxonOp.fieldLoad(nextReceiver, receiver: receiverName, fieldName: computeFieldNameForMemberToken(fieldTok).toByteArray(), range: loadRange))
 			receiverName = nextReceiver
 		end 'eachLoad'
 
@@ -1279,8 +1308,46 @@ export type Parser
 		let exprResult = try parseExpression(block)
 		var emitBlock = currentBlock
 		let stmtRange = SourceRange.between(nameToken, last: previousToken())
-		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: lastFieldTok.value.toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
+		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: computeFieldNameForMemberToken(lastFieldTok).toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
 	end 'parseLocalFieldAssignment'
+
+	// Parse `globalVar.field1.field2(.fieldN)* = <expr>` where `globalVar`
+	// is a (yet-to-be-resolved) top-level var. Lowers to: unresolvedRead
+	// globalVar → fieldLoad field1 → … → fieldStore lastField. The leading
+	// unresolvedRead is rewritten to globalLoad by TypeResolution once
+	// `project.topLevelVars` is fully populated; if the receiver doesn't
+	// resolve, the same pass surfaces the standard "Undefined variable"
+	// diagnostic against that op. `chainLen` is the number of dot-segments
+	// after the leading global (≥2 — chainLen == 1 goes through
+	// parseGlobalAssignment, which emits a single qualifiedName
+	// unresolvedAssign).
+	function parseGlobalChainedFieldAssignment(block IrBlock, chainLen FieldChainDepth) throws ParserError
+		let nameToken = try consume()
+		let nameRange = SourceRange.ofToken(nameToken)
+		var receiverName = freshSynthName()
+		module.appendOp(block, op: MaxonOp.unresolvedRead(receiverName, name: nameToken.value, range: nameRange))
+
+		// Walk the first chainLen-1 dots as field reads to materialize the
+		// innermost struct receiver, leaving the final dot for the store.
+		for _ in 0 upto chainLen - 1 'eachLoad'
+			try eat(TokenKind.dot)
+			let fieldTok = try consume()
+			let nextReceiver = freshSynthName()
+			let loadRange = SourceRange.ofToken(fieldTok)
+			module.appendOp(block, op: MaxonOp.fieldLoad(nextReceiver, receiver: receiverName, fieldName: computeFieldNameForMemberToken(fieldTok).toByteArray(), range: loadRange))
+			receiverName = nextReceiver
+		end 'eachLoad'
+
+		try eat(TokenKind.dot)
+		let lastFieldTok = try consume()
+		try eat(TokenKind.equals)
+
+		currentBlock = block
+		let exprResult = try parseExpression(block)
+		var emitBlock = currentBlock
+		let stmtRange = SourceRange.between(nameToken, last: previousToken())
+		module.appendOp(emitBlock, op: MaxonOp.fieldStore(receiverName, fieldName: computeFieldNameForMemberToken(lastFieldTok).toByteArray(), value: exprName(exprResult), isInit: false, range: stmtRange))
+	end 'parseGlobalChainedFieldAssignment'
 
 	// Parse `TypeName.fieldName = <expr>`. The store target is emitted as
 	// an `unresolvedAssign` op carrying the qualified name; TypeResolution
@@ -1355,17 +1422,28 @@ export type Parser
 	// `paramTypes` is the new function's full param list including __self
 	// when isInstance; `hasSelf` controls the slot-0 skip when computing the
 	// first-param suffix.
-	function tryRegisterOverload(qualifiedName String, paramTypes MaxonTypeArray, hasSelf bool, returnType MaxonReturnType) returns OverloadResolution
-		let newSuffix = mangleSuffixForFirstParam(project, paramTypes: paramTypes, hasSelf: hasSelf)
+	function tryRegisterOverload(qualifiedName String, paramTypes MaxonTypeArray, paramNames StringArray, hasSelf bool, returnType MaxonReturnType) returns OverloadResolution
+		var newSuffix = mangleSuffixForFirstParam(project, paramTypes: paramTypes, hasSelf: hasSelf)
 		// Existing function's first-param type comes from its registered
 		// FuncSignature. If we don't find one, we can't compute its suffix
 		// and must fall back to the duplicate diagnostic.
 		let existingSig = try project.funcSignatures.get(qualifiedName) otherwise return OverloadResolution.duplicate()
 		let existingHasSelf = signatureFirstParamIsSelf(existingSig)
-		let existingSuffix = mangleSuffixForFirstParam(project, paramTypes: existingSig.paramTypes, hasSelf: existingHasSelf)
-		if existingSuffix == newSuffix 'sameSuffix'
-			return OverloadResolution.duplicate()
-		end 'sameSuffix'
+		var existingSuffix = mangleSuffixForFirstParam(project, paramTypes: existingSig.paramTypes, hasSelf: existingHasSelf)
+		// Type-only suffix collides → fall back to name-based suffix. This
+		// is the path the spec's `slice(start, endIndex)` vs `slice(start,
+		// length)` case takes — same `$Integer$Integer` types, different
+		// param names, distinguished at call sites by labels. If the
+		// name-based suffix also collides, the two are a real duplicate.
+		if existingSuffix == newSuffix 'sameTypeSuffix'
+			let nameNew = mangleSuffixForParamNames(paramNames, hasSelf: hasSelf)
+			let nameExisting = mangleSuffixForParamNames(existingSig.paramNames, hasSelf: existingHasSelf)
+			if nameNew == nameExisting 'sameNameSuffix'
+				return OverloadResolution.duplicate()
+			end 'sameNameSuffix'
+			newSuffix = nameNew
+			existingSuffix = nameExisting
+		end 'sameTypeSuffix'
 		let existingMangled = "{qualifiedName}{existingSuffix}"
 		let newMangled = "{qualifiedName}{newSuffix}"
 		// Re-key the existing entry under its mangled form. We compute the
@@ -1820,19 +1898,26 @@ export type Parser
 		return next.kind
 	end 'inferShorthandLitKind'
 
-	// True when the initializer is shaped like `Identifier . identifier (`,
-	// which the C# bootstrap treats as a deferred struct-factory call. The
-	// self-hosted compiler doesn't emit the runtime init yet, but the
-	// shape needs to be recognized so the trailing `(...)` doesn't
-	// destabilize the dispatch loop.
+	// True when the initializer is shaped like `Identifier . identifier (`
+	// (a deferred struct-factory call, e.g. `Outer.create(...)`) OR like
+	// `Identifier from <literal>` (`FilePath from "test.txt"` — sugar for
+	// `Identifier.init(literal)` against an InitableFromStringLiteral /
+	// InitableFromCharLiteral conformer). Both shapes lower into a runtime
+	// call materialized inside the file's `__module_init_<n>` function;
+	// recognizing the shapes here keeps the trailing `(...)` / literal from
+	// destabilizing the const-expression dispatcher.
 	function isRuntimeInitInitializer(valueToken Token) returns bool
 		if valueToken.kind != TokenKind.identifier 'notIdent'
 			return false
 		end 'notIdent'
-		let dotTok = try cursor.peek(1) otherwise Token.eof()
+		let nextTok = try cursor.peek(1) otherwise Token.eof()
+		if nextTok.kind == TokenKind.from 'isFromLiteral'
+			let litTok = try cursor.peek(2) otherwise Token.eof()
+			return litTok.kind == TokenKind.stringLiteral or litTok.kind == TokenKind.charLiteral
+		end 'isFromLiteral'
 		let memberTok = try cursor.peek(2) otherwise Token.eof()
 		let parenTok = try cursor.peek(3) otherwise Token.eof()
-		return dotTok.kind == TokenKind.dot and memberTok.kind == TokenKind.identifier and parenTok.kind == TokenKind.leftParen
+		return nextTok.kind == TokenKind.dot and memberTok.kind == TokenKind.identifier and parenTok.kind == TokenKind.leftParen
 	end 'isRuntimeInitInitializer'
 
 	// `let NAME = TypeName{field: ..., ...}` — deferred struct-literal
@@ -2954,6 +3039,27 @@ export type Parser
 			if at(TokenKind.with) 'hasWith'
 				try eat(TokenKind.with)
 				var argNames = StringArray.create()
+				// Phase 13 (sized typealiases): `typealias Vec1 = Vector with 1 Int`
+				// — an int literal in the first positional slot encodes a
+				// compile-time size. Captured to produce `sizedGenericAlias`;
+				// distinct N produce distinct gids during resolution.
+				var sizeLiteral = 0 as IntConstant
+				var sawSize = false
+				if at(TokenKind.intLiteral) 'isSizedHead'
+					let sizeToken = try consume()
+					let parsedSize = try parseInt(sizeToken.value) otherwise 'overflow'
+						reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "typealias '{nameToken.value}': size literal '{tokenValueToString(sizeToken.value)}' exceeds int range", line: sizeToken.line, column: sizeToken.column, filePath: filePath)
+						skipToNextLine()
+						throw ParserError.unhandledToken
+					end 'overflow'
+					if parsedSize <= 0 'nonPositive'
+						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': sized-typealias size must be positive, got {parsedSize}", line: sizeToken.line, column: sizeToken.column, filePath: filePath)
+						skipToNextLine()
+						throw ParserError.unhandledToken
+					end 'nonPositive'
+					sizeLiteral = parsedSize
+					sawSize = true
+				end 'isSizedHead'
 				if accept(TokenKind.leftParen) 'parenList'
 					while not at(TokenKind.rightParen) 'argLoop'
 						let argToken = cursor.current()
@@ -2992,7 +3098,11 @@ export type Parser
 					// rather than a bare named placeholder.
 					try project.typealiases.insert("__ManagedMemory", value: StdType.i64) otherwise ignore
 				end 'isMmWith'
-				expr = UnresolvedTypeExpr.genericAlias(targetToken.value, args: argNames)
+				if sawSize 'sized'
+					expr = UnresolvedTypeExpr.sizedGenericAlias(targetToken.value, size: sizeLiteral, args: argNames)
+				end 'sized' else 'unsized'
+					expr = UnresolvedTypeExpr.genericAlias(targetToken.value, args: argNames)
+				end 'unsized'
 				sawValidBase = true
 			end 'hasWith' else 'noWith'
 				expr = UnresolvedTypeExpr.aliasName(targetToken.value)
@@ -3320,11 +3430,14 @@ export type Parser
 
 		var cases = EnumCaseArray.create()
 		var caseNames = ReferencedVarSet.create()
-		// Backing kind ('none' / 'int' / 'float') is lazily fixed by the
-		// first explicit raw value. Two bool flags rather than a 3-state
-		// union since the resolution rules are simple enough to compute inline.
+		// Backing kind ('none' / 'int' / 'float' / 'string' / 'char') is
+		// lazily fixed by the first explicit raw value. Float / string /
+		// char backings are mutually exclusive with each other and with
+		// per-case `= int` values; mixing kinds raises E3032.
 		var hasExplicitBacking = false
 		var isFloatBacked = false
+		var isStringBacked = false
+		var isCharBacked = false
 		// Phase 9 Stage 5 (struct-backing): when a case carries
 		// `= StructType{...}`, the struct type fixes the backing for every
 		// case in the enum. Empty means no struct backing has been seen yet;
@@ -3381,6 +3494,12 @@ export type Parser
 			var rawIsFloat = false
 			var caseBackingTypeName = ""
 			var caseBackingExprId = 0 as UnresolvedConstExprId
+			// Decoded text of a `caseName = "literal"` / `caseName = 'literal'`
+			// raw value. Empty for cases that omit `=` or carry a numeric /
+			// struct backing. Interpolation lowering reads this directly to
+			// emit the user-visible rendering; `.rawValue` / `.fromName`
+			// look it up the same way.
+			var rawStringValue = ""
 
 			if accept(TokenKind.equals) 'hasRawValue'
 				let valueToken = cursor.current()
@@ -3452,14 +3571,78 @@ export type Parser
 					rawValue = nextOrdinal
 					rawIsFloat = false
 					nextOrdinal = nextOrdinal + 1
-				end 'isStructBacking' else 'badRawValue'
-					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int or float literal, got '{tokenValueToString(magToken.value)}'", line: magToken.line, column: magToken.column, filePath: filePath)
+				end 'isStructBacking' else if magToken.kind == TokenKind.stringLiteral and rawSign > 0 'isStringLit'
+					// Phase 9 (string-backed enums): `caseName = "literal"`.
+					// Runtime representation stays as the auto-incrementing
+					// ordinal so `match` / equality / hashing all compile to
+					// integer ops; the decoded string is stashed on the case
+					// and used by interpolation, `.rawValue`, and `.fromName`.
+					validateEscapes(magToken, kind: "string literal")
+					try eat(TokenKind.stringLiteral)
+					let decodedBytes = decodeStringEscapes(magToken.value)
+					let decodedString = String.from(decodedBytes)
+					if hasExplicitBacking and not isStringBacked 'stringMismatch'
+						var priorBacking = "int"
+						if isFloatBacked 'asFloat'
+							priorBacking = "float"
+						end 'asFloat'
+						if isCharBacked 'asChar'
+							priorBacking = "char"
+						end 'asChar'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got string'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'stringMismatch'
+					if not enumStructBackingTypeName.isEmpty() 'structVsStringMix'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got string'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'structVsStringMix'
+					hasExplicitBacking = true
+					isStringBacked = true
+					rawValue = nextOrdinal
+					rawIsFloat = false
+					rawStringValue = decodedString
+					nextOrdinal = nextOrdinal + 1
+				end 'isStringLit' else if magToken.kind == TokenKind.charLiteral and rawSign > 0 'isCharLit'
+					// Phase 9 (char-backed enums): `caseName = 'A'` /
+					// `caseName = 'é'` (latin small e with acute).
+					// Same shape as string-backed — runtime rep is the
+					// ordinal; the decoded codepoint bytes drive
+					// interpolation + lookup.
+					validateEscapes(magToken, kind: "character literal")
+					try eat(TokenKind.charLiteral)
+					let decodedBytes = decodeStringEscapes(magToken.value)
+					let decodedString = String.from(decodedBytes)
+					if hasExplicitBacking and not isCharBacked 'charMismatch'
+						var priorBacking = "int"
+						if isFloatBacked 'asFloat'
+							priorBacking = "float"
+						end 'asFloat'
+						if isStringBacked 'asString'
+							priorBacking = "string"
+						end 'asString'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'charMismatch'
+					if not enumStructBackingTypeName.isEmpty() 'structVsCharMix'
+						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got char'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+					end 'structVsCharMix'
+					hasExplicitBacking = true
+					isCharBacked = true
+					rawValue = nextOrdinal
+					rawIsFloat = false
+					rawStringValue = decodedString
+					nextOrdinal = nextOrdinal + 1
+				end 'isCharLit' else 'badRawValue'
+					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "enum raw value must be an int, float, string, or character literal, got '{tokenValueToString(magToken.value)}'", line: magToken.line, column: magToken.column, filePath: filePath)
 					try cursor.advance() otherwise break
 				end 'badRawValue'
 			end 'hasRawValue' else 'noRaw'
 				if hasExplicitBacking and isFloatBacked 'floatRequiresExplicit'
 					reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "float-backed enum case '{caseName}' requires an explicit raw value", line: caseToken.line, column: caseToken.column, filePath: filePath)
 				end 'floatRequiresExplicit'
+				if isStringBacked 'stringRequiresExplicit'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected string, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'stringRequiresExplicit'
+				if isCharBacked 'charRequiresExplicit'
+					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected char, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				end 'charRequiresExplicit'
 				if not enumStructBackingTypeName.isEmpty() 'structRequiresExplicit'
 					reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got int'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 				end 'structRequiresExplicit'
@@ -3471,12 +3654,18 @@ export type Parser
 			// Duplicate-raw-value detection (E3031). Compares stored bit
 			// payloads: int-backed cases use the integer value directly,
 			// float-backed cases compare on IEEE-754 bits (which is exactly
-			// the duplicate semantics — `1.1 == 1.1` shares bits). The
-			// diagnostic shows the raw bit pattern for floats; the spec only
-			// requires the literal to appear in the message.
+			// the duplicate semantics — `1.1 == 1.1` shares bits). String /
+			// char backings compare on the decoded text — the runtime
+			// rawValue is the ordinal (always unique) so the int field can't
+			// detect duplicate spellings. The diagnostic shows the raw bit
+			// pattern for floats and the literal text for string/char; the
+			// spec only requires the literal to appear in the message.
+			let dupOnString = isStringBacked or isCharBacked
 			for existing in cases 'checkDup'
-				if existing.rawValue == rawValue 'isDup'
-					reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+				let isDupHit = (dupOnString and not rawStringValue.isEmpty() and existing.rawStringValue == rawStringValue) or (not dupOnString and existing.rawValue == rawValue)
+				if isDupHit 'isDup'
+					let dupShown = rawStringValue if dupOnString else "{rawValue}"
+					reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{dupShown}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					break
 				end 'isDup'
 			end 'checkDup'
@@ -3492,7 +3681,7 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue))
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
@@ -3531,7 +3720,7 @@ export type Parser
 		// Patch the pre-registered placeholder with the full case list. The
 		// duplicate-name diagnostic was already issued above when we tried to
 		// insert the placeholder, so this upsert is unconditional.
-		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances)
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: isStringBacked, isCharBacked: isCharBacked)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 
 		// Phase 9 Stage 5: synthesize the per-enum `.fromRawValue` /
@@ -3547,7 +3736,14 @@ export type Parser
 		// test (E3034 unknown enum case). `.fromName` stays synthesized so
 		// the user-facing `Name → Case` mapping still works on struct-
 		// backed enums (the spec doesn't forbid it).
-		synthesizeEnumLookupHelpers(enumName: currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: not enumStructBackingTypeName.isEmpty())
+		// String / char backings keep the runtime rawValue at the ordinal
+		// so the synthesized `int(ordinal) -> EnumName` lookup we use for
+		// int-backed enums would always succeed but for the wrong reason.
+		// `.fromRawValue("Active")` is a separate user-facing surface — to
+		// be added when a spec demands it — so skip the helper for now in
+		// the same way struct-backed enums skip it.
+		let skipFromRawHelper = (not enumStructBackingTypeName.isEmpty()) or isStringBacked or isCharBacked
+		synthesizeEnumLookupHelpers(enumName: currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, skipFromRawValue: skipFromRawHelper)
 
 		currentTypeName = ""
 		currentEnumVisibility = Visibility.file
@@ -4394,13 +4590,24 @@ export type Parser
 			// Target hasn't been parsed yet (cross-file extension or
 			// out-of-order declaration) → leave `targetTypeParams` empty
 			// so step 5 can diagnose at resolution time. Otherwise inherit
-			// the target's `uses` parameter names verbatim.
+			// the target's `uses` parameter names verbatim. Extension targets
+			// can be either struct types (`extension Array`) or interfaces
+			// (`extension HasItems where Element is Equatable`); both kinds
+			// declare `uses` parameters that the body needs in scope.
 			if let target = try project.unresolvedStructTypes.get(targetTypeName) 'haveTarget'
 				for i in 0 upto target.typeParams.count() 'copyParams'
 					let p = try target.typeParams.get(i) otherwise panic("parseExtension: typeParams.get OOB at {i}")
 					targetTypeParams.push(p)
 				end 'copyParams'
-			end 'haveTarget'
+			end 'haveTarget' else 'tryInterface'
+				if let ifaceTarget = try project.unresolvedInterfaces.get(targetTypeName) 'haveIface'
+					for i in 0 upto ifaceTarget.usesParams.count() 'copyIfaceParams'
+						let p = try ifaceTarget.usesParams.get(i) otherwise panic("parseExtension: usesParams.get OOB at {i}")
+						targetTypeParams.push(p)
+						_ = project.typeParameters.intern(targetTypeName, paramName: p)
+					end 'copyIfaceParams'
+				end 'haveIface'
+			end 'tryInterface'
 		end 'inheritParams'
 
 		// Push the parser's type-context stack so method bodies can resolve
@@ -4932,7 +5139,7 @@ export type Parser
 		// `emitCallAndResult` emits a regular `MaxonOp.call`, returns the
 		// fresh result name, and leaves `currentBlock` unchanged.
 		let ctorName = unionConstructorSymbolName(typeNameToken.value, caseName: variantToken.value)
-		let result = emitCallAndResult(block, calleeName: ctorName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(lparen, last: rparenToken))
+		let result = emitCallAndResult(calleeName: ctorName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(lparen, last: rparenToken))
 		return ThrowConstructionResult.create(resultName: exprName(result), lastToken: rparenToken)
 	end 'emitUnionThrowConstruction'
 
@@ -5064,6 +5271,7 @@ export type Parser
 
 		let errorFlagName = freshSynthName()
 		var rewrote = false
+		var calleeThrowsTypeName = ThrowsClause.none
 		if opCountAfter > opCountBefore 'haveLast'
 			let lastIdx = opCountAfter - 1
 			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: ops.get OOB")
@@ -5071,6 +5279,14 @@ export type Parser
 			if not rewrote 'tryMethod'
 				rewrote = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
 			end 'tryMethod'
+			if rewrote 'resolveThrows'
+				// Cache the callee's throws clause so an `else (e) 'label'`
+				// binding (added below) can pick the right type for the error
+				// slot, parallel to parseTryFallbackDispatch's binding path.
+				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: re-read OOB after rewrite")
+				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp, opIdx: lastIdx)
+				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
+			end 'resolveThrows'
 		end 'haveLast'
 		if not rewrote 'noRewrite'
 			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'if let/var/try' requires a throwing call expression after 'try'", line: tryToken.line, column: tryToken.column, filePath: filePath)
@@ -5112,6 +5328,23 @@ export type Parser
 
 		if at(TokenKind.else) 'hasElse'
 			let elseToken = try consume()
+			// Optional error binding: `else (e) 'label'` exposes the typed
+			// error value to the else block's body, mirroring the
+			// `otherwise (e) 'label'` form in parseTryFallbackDispatch.
+			var elseBindingName = ""
+			var hasElseBinding = false
+			if at(TokenKind.leftParen) 'hasErrorBinding'
+				try eat(TokenKind.leftParen)
+				let bindingToken = try consume()
+				if not tokenIsIdentifierLike(bindingToken) 'badBindingName'
+					reportTokenMismatch(bindingToken, expectedDisplay: "identifier")
+					synchronize()
+					return condBlock
+				end 'badBindingName'
+				try eat(TokenKind.rightParen)
+				elseBindingName = bindingToken.value
+				hasElseBinding = true
+			end 'hasErrorBinding'
 			var elseLabel = "{baseLabel}.else"
 			if at(TokenKind.charLiteral) 'hasElseLabel'
 				let elseLabelToken = try consume()
@@ -5123,7 +5356,34 @@ export type Parser
 
 			var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
 			let elseBlockId = elseBlock.id
+			// Bind the error value in the else block when `(e)` was present.
+			// Choose the slot type the same way parseTryFallbackDispatch does:
+			// bare-enum throws → `flag - 1` recovers the ordinal (integer slot);
+			// associated-value union → the flag value IS the union pointer.
+			if hasElseBinding 'declareErrorBinding'
+				var bindingType = MaxonType.integer
+				var throwsIsUnion = false
+				if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
+					bindingType = internMaxonType(project, name: throwsName)
+					throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
+				end 'haveThrowsName'
+				scope.pushScope()
+				let bindingSlot = scope.declare(elseBindingName, varType: bindingType, mutable: false)
+				var bindingValueName = ByteArray.create()
+				if throwsIsUnion 'isUnion'
+					bindingValueName = errorFlagName
+				end 'isUnion' else 'isBare'
+					let oneName = emitLiteral(elseBlock, value: 1, valueType: MaxonType.integer)
+					let enumOrdinalName = freshSynthName()
+					module.appendOp(elseBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(elseToken)))
+					bindingValueName = enumOrdinalName
+				end 'isBare'
+				module.appendOp(elseBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: SourceRange.ofToken(elseToken)))
+			end 'declareErrorBinding'
 			let elseExit = try parseScopedStatements(func, block: elseBlock)
+			if hasElseBinding 'popBindingScope'
+				scope.popScope()
+			end 'popBindingScope'
 			try skipEndAndLabel()
 			return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 		end 'hasElse'
@@ -5725,6 +5985,7 @@ export type Parser
 			typeParameter gives false
 			genericInstance gives true
 			interface gives true
+			constInt gives false
 		end 'check'
 	end 'matchScrutineeIsKnownNonEnum'
 
@@ -5761,18 +6022,25 @@ export type Parser
 	end 'rejectFallthroughInMatchExpression'
 
 	// Enforce E2026 — every enum case must be covered when matching on an
-	// enum without a `default` arm. Caller provides the most-recent enum-case
-	// name (from any arm) so we can resolve the scrutinee's enum type, the
-	// set of seen pattern keys (which includes covered case names), and the
-	// source position of the closing `end` for the diagnostic.
-	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
+	// enum without a `default` arm. The caller passes the scrutinee's enum
+	// name when its `MaxonType` resolves to a known enum at parse time;
+	// otherwise we fall back to searching enum registries for `lastEnumCaseName`.
+	// The type-driven path is required once stdlib enums are restored from
+	// cache because case names like `notFound` appear in multiple enums
+	// (StringError, FileError, ...) and a pure case-name search returns the
+	// first one that hits — misrouting the diagnostic when a user enum reuses
+	// the same case name.
+	function validateEnumExhaustiveness(hasEnumArm bool, hasDefault bool, lastEnumCaseName String, scrutineeEnumName String, seenKeys ReferencedVarSet, errorLine LineNumber, errorColumn ColumnNumber)
 		if not hasEnumArm 'noEnum'
 			return
 		end 'noEnum'
 		if hasDefault 'hasDefault'
 			return
 		end 'hasDefault'
-		let enumName = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
+		var enumName = scrutineeEnumName
+		if enumName.isEmpty() 'fallbackToCaseSearch'
+			enumName = enumScrutineeDisplayNameFromCase(lastEnumCaseName)
+		end 'fallbackToCaseSearch'
 		var missing = ""
 		if let resolvedEnum = try project.enumTypes.get(enumName) 'isResolved'
 			missing = enumMissingCases(resolvedEnum.cases, seenKeys: seenKeys)
@@ -5786,6 +6054,20 @@ export type Parser
 		end 'allCovered'
 		reportCompileError(project, code: ErrorCode.parserMatchNotExhaustive, message: "match on enum '{enumName}' is not exhaustive, missing: {missing}", line: errorLine, column: errorColumn, filePath: filePath)
 	end 'validateEnumExhaustiveness'
+
+	// Return the scrutinee's enum name when its MaxonType resolves to a
+	// known enum at parse time. Empty string for unresolved types or non-enum
+	// types so the caller can fall back to case-name search.
+	function enumScrutineeDisplayNameFromType(t MaxonType) returns String
+		let name = t.nameOrEmpty(project)
+		if name.isEmpty() 'noName'
+			return ""
+		end 'noName'
+		if project.enumTypes.contains(name) or project.unresolvedEnums.contains(name) 'isEnum'
+			return name
+		end 'isEnum'
+		return ""
+	end 'enumScrutineeDisplayNameFromType'
 
 	// Resolve `enumName.ordinal` to a case name. Throws
 	// `EnumCaseProbeError.notFound` when the enum isn't registered or the
@@ -6352,8 +6634,13 @@ export type Parser
 		wireMatchFallthroughs(bodies, fallthroughs: fallthroughs, mergeBlockId: mergeBlockId)
 
 		// Enum match exhaustiveness (E2026): if the match was on an enum and
-		// no `default` arm was given, every enum case must be covered.
-		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		// no `default` arm was given, every enum case must be covered. The
+		// scrutinee's MaxonType (when known to be a named enum) wins over
+		// case-name lookup so case names that exist in multiple enums (e.g.
+		// `notFound` in both StringError and a user enum) don't misroute the
+		// diagnostic to the wrong enum.
+		let scrutineeEnumName = enumScrutineeDisplayNameFromType(header.scrutineeType)
+		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		// Non-enum match: every match needs an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated.
@@ -6563,7 +6850,8 @@ export type Parser
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
 		end 'noDefault'
 
-		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
+		let scrutineeEnumNameExpr = enumScrutineeDisplayNameFromType(header.scrutineeType)
+		validateEnumExhaustiveness(hasEnumArm: hasEnumArm, hasDefault: hasDefault, lastEnumCaseName: lastEnumCaseName, scrutineeEnumName: scrutineeEnumNameExpr, seenKeys: seenKeys, errorLine: cursor.current().line, errorColumn: cursor.current().column)
 		// Non-enum match expression: requires an explicit `default` arm
 		// because integer / string / float / char scrutinees can't be
 		// enumerated and the expression must produce a value on every
@@ -6586,6 +6874,7 @@ export type Parser
 			unresolved gives true
 			boolean to function gives false
 			typeParameter to interface gives false
+			constInt gives false
 		end 'check'
 	end 'isUnresolvedMaxonType'
 
@@ -7132,6 +7421,16 @@ export type Parser
 		let kwToken = try consume()
 		let isLet = kwToken.kind == TokenKind.let
 
+		// Phase 15e: `let (x, y) = expr` / `var (x, y) = expr` destructure the
+		// initializer's tuple result into N freshly-declared locals. Parse the
+		// name list and the initializer, then lower to a hidden temp + per-
+		// element fieldLoad sequence so the regular varDecl path still owns
+		// scope registration / unused-var tracking for each binding.
+		if at(TokenKind.leftParen) 'isDestructure'
+			try parseTupleDestructureVarDecl(block, kwToken: kwToken, isLet: isLet)
+			return
+		end 'isDestructure'
+
 		let nameToken = try consumeExpecting("identifier")
 		if nameToken.kind != TokenKind.identifier 'badName'
 			reportTokenMismatch(nameToken, expectedDisplay: "identifier")
@@ -7210,6 +7509,68 @@ export type Parser
 		module.appendOp(emitBlock, op: MaxonOp.varDecl(slot, value: exprName(materializedResult), slotType: exprType(materializedResult), range: stmtRange))
 	end 'parseVarDecl'
 
+	// Phase 15e: parse `let (x, y, ...) = expr` / `var (x, y, ...) = expr`.
+	// Lowered to a hidden temp holding the initializer plus one
+	// `let/var <name> = __tmp._N` binding per element, so each name keeps the
+	// regular per-slot scoping, mutability tracking, and unused-var
+	// diagnostics. The hidden temp is also named so its lifetime extends
+	// across all the field-load bindings.
+	function parseTupleDestructureVarDecl(block IrBlock, kwToken Token, isLet bool) throws ParserError
+		try eat(TokenKind.leftParen)
+		var elemNames = StringArray.create()
+		var elemNameTokens = TokenArray.create()
+		while not at(TokenKind.rightParen) 'collect'
+			let elemTok = try consumeExpecting("identifier")
+			if elemTok.kind != TokenKind.identifier 'badIdent'
+				reportTokenMismatch(elemTok, expectedDisplay: "identifier")
+				synchronize()
+				return
+			end 'badIdent'
+			elemNames.push(elemTok.value)
+			elemNameTokens.push(elemTok)
+			if at(TokenKind.rightParen) 'doneCollect'
+				break
+			end 'doneCollect'
+			try expect(TokenKind.comma)
+		end 'collect'
+		try expect(TokenKind.rightParen)
+		try expect(TokenKind.equals)
+		currentBlock = block
+		let exprResult = try parseExpression(block)
+		let lastExprToken = previousToken()
+		let stmtRange = SourceRange.between(kwToken, last: lastExprToken)
+		let arity = elemNames.count()
+		if arity < 2 'tooFew'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Tuple destructuring requires at least 2 names, got {arity}", line: kwToken.line, column: kwToken.column, filePath: filePath)
+			return
+		end 'tooFew'
+		// Bind the initializer to a hidden temp so each field-load can use
+		// `tmp._N` as its source. `let` / `var` on the temp follows the user's
+		// keyword — destructuring `var` still implies a mutable temp so a
+		// later element-binding `var` reassignment can read updated fields.
+		let tmpName = "__destructure_{kwToken.line}_{kwToken.column}"
+		let tmpType = exprType(exprResult)
+		let tmpSlot = scope.declare(tmpName, varType: tmpType, mutable: not isLet)
+		module.appendOp(currentBlock, op: MaxonOp.varDecl(tmpSlot, value: exprName(exprResult), slotType: tmpType, range: stmtRange))
+		// Emit one `let/var <name> = tmp._N` binding per element. Each binding
+		// goes through the regular scope.declare path so unused-var diagnostics
+		// fire if a name is never referenced.
+		for i in 0 upto arity 'eachBinding'
+			let elemName = try elemNames.get(i) otherwise panic("parseTupleDestructureVarDecl: elemNames.get OOB at {i}")
+			let elemTok = try elemNameTokens.get(i) otherwise panic("parseTupleDestructureVarDecl: elemNameTokens.get OOB at {i}")
+			if elemName != "_" 'recordLocal'
+				localVarLocations.push(ParamLocation.create(elemName, line: elemTok.line, column: elemTok.column))
+			end 'recordLocal'
+			let tmpLoadName = freshSynthName()
+			module.appendOp(currentBlock, op: MaxonOp.varLoad(tmpLoadName, slotId: tmpSlot, slotType: MaxonType.unresolved, range: stmtRange))
+			let fieldLoadName = freshSynthName()
+			let fieldBytes = "_{i}".toByteArray()
+			module.appendOp(currentBlock, op: MaxonOp.fieldLoad(fieldLoadName, receiver: tmpLoadName, fieldName: fieldBytes, range: stmtRange))
+			let elemSlot = scope.declare(elemName, varType: MaxonType.unresolved, mutable: not isLet)
+			module.appendOp(currentBlock, op: MaxonOp.varDecl(elemSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
+		end 'eachBinding'
+	end 'parseTupleDestructureVarDecl'
+
 	// Decode escape sequences in a raw string fragment and return the
 	// decoded bytes. Used at parse time to canonicalize string literals
 	// before interning so identical-after-decode literals share a single
@@ -7233,6 +7594,16 @@ export type Parser
 					i = i + 2
 					continue
 				end 'escT'
+				if next == 'r' 'escR'
+					buf.push(13)
+					i = i + 2
+					continue
+				end 'escR'
+				if next == '0' 'escNul'
+					buf.push(0)
+					i = i + 2
+					continue
+				end 'escNul'
 				if next == '\\' 'escBS'
 					buf.push(92)
 					i = i + 2
@@ -7243,12 +7614,113 @@ export type Parser
 					i = i + 2
 					continue
 				end 'escDQ'
+				// `\'` is the char-literal's required escape for the closing
+				// quote (the lexer accepts it inside `'...'`). Mirrors C#
+				// StringUtils.ResolveEscapes.
+				if next == '\'' 'escSQ'
+					buf.push(39)
+					i = i + 2
+					continue
+				end 'escSQ'
+				// `\{` and `\}` produce literal braces — they're how the user
+				// embeds a `{` or `}` in a string without it being parsed as
+				// an interpolation marker. Mirrors C# ParseStringInterpParts
+				// (Parser.cs:14650). The lexer already skips the byte after
+				// `\` so the `{`/`}` reaches us as a raw escape pair.
+				if next == '{' 'escLBrace'
+					buf.push(123)
+					i = i + 2
+					continue
+				end 'escLBrace'
+				if next == '}' 'escRBrace'
+					buf.push(125)
+					i = i + 2
+					continue
+				end 'escRBrace'
+				// `\xNN` — single-byte hex escape. validateEscapes already
+				// reported an error for malformed forms, so we can decode
+				// optimistically when the two trailing bytes are hex digits
+				// and fall through to literal-copy otherwise.
+				if next == 'x' and i + 3 < fragLen 'escHex'
+					let h1 = try fragBytes.get(i + 2) otherwise panic("decodeStringEscapes.escHex: get(i+2) failed after bounds check")
+					let h2 = try fragBytes.get(i + 3) otherwise panic("decodeStringEscapes.escHex: get(i+3) failed after bounds check")
+					if isHexDigitByte(h1) and isHexDigitByte(h2) 'hexOk'
+						let hi = hexDigitValue(h1)
+						let lo = hexDigitValue(h2)
+						buf.push(((hi shl 4) or lo) as Byte)
+						i = i + 4
+						continue
+					end 'hexOk'
+				end 'escHex'
+				// `\uNNNN` — Unicode codepoint escape (BMP only via 4 hex
+				// digits). Emits the UTF-8 encoding of the codepoint.
+				// Malformed forms were already reported by validateEscapes;
+				// fall through to literal-copy on bad input.
+				if next == 'u' and i + 5 < fragLen 'escUni'
+					let hexA = try fragBytes.get(i + 2) otherwise panic("decodeStringEscapes.escUni: hex digit 1 out of bounds")
+					let hexB = try fragBytes.get(i + 3) otherwise panic("decodeStringEscapes.escUni: hex digit 2 out of bounds")
+					let hexC = try fragBytes.get(i + 4) otherwise panic("decodeStringEscapes.escUni: hex digit 3 out of bounds")
+					let hexD = try fragBytes.get(i + 5) otherwise panic("decodeStringEscapes.escUni: hex digit 4 out of bounds")
+					if isHexDigitByte(hexA) and isHexDigitByte(hexB) and isHexDigitByte(hexC) and isHexDigitByte(hexD) 'uniOk'
+						let nibA = hexDigitValue(hexA)
+						let nibB = hexDigitValue(hexB)
+						let nibC = hexDigitValue(hexC)
+						let nibD = hexDigitValue(hexD)
+						let cp = (nibA shl 12) or (nibB shl 8) or (nibC shl 4) or nibD
+						encodeUtf8Codepoint(buf, codepoint: cp)
+						i = i + 6
+						continue
+					end 'uniOk'
+				end 'escUni'
 			end 'escape'
 			buf.push(ch)
 			i = i + 1
 		end 'decode'
 		return buf
 	end 'decodeStringEscapes'
+
+	// Decode a single ASCII hex digit byte (0-9, a-f, A-F) into its 0..15
+	// value. Caller must have verified `b` via `isHexDigitByte` — otherwise
+	// the panic fires. Used by `\xNN` / `\uNNNN` escape decoding.
+	function hexDigitValue(b Byte) returns HexNibble
+		if b >= '0' and b <= '9' 'digit'
+			return b - '0'
+		end 'digit'
+		if b >= 'a' and b <= 'f' 'lower'
+			return b - 'a' + 10
+		end 'lower'
+		if b >= 'A' and b <= 'F' 'upper'
+			return b - 'A' + 10
+		end 'upper'
+		panic("hexDigitValue: byte {b} is not a hex digit (caller must verify via isHexDigitByte)")
+	end 'hexDigitValue'
+
+	// Append the UTF-8 encoding of a BMP codepoint (0..0xFFFF) to `buf`.
+	// Mirrors SpecTestRunner.appendUtf8Codepoint — supplementary-plane
+	// codepoints (>0xFFFF) need a `\UNNNNNNNN`-style escape which neither
+	// the lexer nor `validateEscapes` currently surfaces, but the encoder
+	// supports them so any future widening doesn't lose data silently.
+	function encodeUtf8Codepoint(buf ByteArray, codepoint UnicodeCodepoint)
+		if codepoint < 0x80 'oneByte'
+			buf.push(codepoint as Byte)
+			return
+		end 'oneByte'
+		if codepoint < 0x800 'twoByte'
+			buf.push((0xC0 or (codepoint shr 6)) as Byte)
+			buf.push((0x80 or (codepoint and 0x3F)) as Byte)
+			return
+		end 'twoByte'
+		if codepoint < 0x10000 'threeByte'
+			buf.push((0xE0 or (codepoint shr 12)) as Byte)
+			buf.push((0x80 or ((codepoint shr 6) and 0x3F)) as Byte)
+			buf.push((0x80 or (codepoint and 0x3F)) as Byte)
+			return
+		end 'threeByte'
+		buf.push((0xF0 or (codepoint shr 18)) as Byte)
+		buf.push((0x80 or ((codepoint shr 12) and 0x3F)) as Byte)
+		buf.push((0x80 or ((codepoint shr 6) and 0x3F)) as Byte)
+		buf.push((0x80 or (codepoint and 0x3F)) as Byte)
+	end 'encodeUtf8Codepoint'
 
 	// Lexer invariant: every stringInterpEnd is followed by a stringLiteral
 	// fragment (possibly empty when the interpolation is adjacent to the closing
@@ -7299,7 +7771,7 @@ export type Parser
 		var argRanges = SourceRangeArray.create()
 		argRanges.push(SourceRange.ofToken(rangeToken))
 		argRanges.push(SourceRange.ofToken(rangeToken))
-		return emitCallAndResult(currentBlock, calleeName: calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.ofToken(rangeToken))
+		return emitCallAndResult(calleeName: calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.ofToken(rangeToken))
 	end 'parseExpression'
 
 	// entry: cursor AT first operand's first token.
@@ -7501,6 +7973,7 @@ export type Parser
 			unresolved gives false
 			genericInstance gives false
 			interface gives false
+			constInt gives false
 		end 'check'
 	end 'shouldCarryAsBinopOperandType'
 
@@ -7510,6 +7983,7 @@ export type Parser
 			boolean to string gives false
 			function to unresolved gives false
 			typeParameter to interface gives false
+			constInt gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -7760,7 +8234,7 @@ export type Parser
 				// results), and `validateTryOtherwiseTypes` re-runs the
 				// otherwise-type-mismatch check after resolution completes.
 				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: re-read OOB after rewrite")
-				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp)
+				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp, opIdx: lastIdx)
 				// E3059: void-returning function cannot be used as an assignment expression.
 				// Throws ParserError.unhandledToken after reporting so the unsupported
 				// otherwise block is never parsed. Kept in the parser because the
@@ -7784,6 +8258,16 @@ export type Parser
 				let lastIdx = opCountAfter - 1
 				let lastOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: ops.get OOB at last idx={lastIdx} (count={opCountAfter})")
 				rewroteMethodCall = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
+				if rewroteMethodCall 'resolveMethodThrows'
+					// Mirror the tryCall path's throws-clause lookup: resolve
+					// the receiver-qualified callee via the parser-time
+					// op-scan so a bare-enum `(e)` binding gets the right
+					// MaxonType (E3005 in match would otherwise fire because
+					// the binding falls back to `integer`).
+					let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseTryExpression: re-read OOB after method rewrite")
+					let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp, opIdx: lastIdx)
+					calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
+				end 'resolveMethodThrows'
 			end 'haveLastOpForMethodRewrite'
 			if not rewroteMethodCall 'noMethodRewrite'
 				// Inner expression is neither a call nor a methodCall - cannot bind
@@ -8144,18 +8628,251 @@ export type Parser
 	// Callers may have rewritten either a `call` (→ `tryCall`) or a
 	// `methodCall` (→ `tryMethodCall`) so we accept both shapes. For
 	// `tryCall` we apply the parser's qualifier rules (namespace, current
-	// file). For `tryMethodCall` the receiver-qualified callee isn't known
-	// until TypeResolution populates `project.resolvedCallees`, so at parse
-	// time we return the bare method name — sufficient for the parser's
-	// return-type refinement, which only needs to detect void-returning
-	// callees.
-	function qualifiedCalleeFromTryCall(op MaxonOp) returns String
+	// file). For `tryMethodCall` we walk back through recently-emitted ops
+	// to recover the receiver's MaxonType — when the receiver is a
+	// local-scope varLoad (or chains through one) the slotType on that op
+	// gives the concrete receiver type, which combined with the method name
+	// yields the qualified callee key that `project.funcThrowsTypes` uses.
+	// Returns the bare method name when the receiver's type cannot be
+	// recovered at parse time (e.g. the receiver is a methodCall result
+	// whose return type stays unresolved until TR runs); the caller falls
+	// through to a `ThrowsClause.none` binding, mirroring the pre-walkback
+	// behaviour for that case.
+	function qualifiedCalleeFromTryCall(op MaxonOp, opIdx OpIndex) returns String
 		return match op 'extract'
 			tryCall(_, callee, callContext, _, _, _, _, _, _) gives qualifyCalleeForContext(project, bare: String.from(callee), callContext: callContext, currentNamespace: namespace, readerFilePath: filePath)
-			tryMethodCall(_, _, methodName, _, _, _, _, _, _) gives String.from(methodName)
+			tryMethodCall(_, receiver, methodName, _, _, _, _, _, _) gives qualifyMethodCalleeFromReceiver(receiver: receiver, methodName: String.from(methodName), scanFrom: opIdx)
 			default panic("qualifiedCalleeFromTryCall: expected tryCall or tryMethodCall op, got '{op.name}'")
 		end 'extract'
 	end 'qualifiedCalleeFromTryCall'
+
+	// Recover the receiver's MaxonType for a tryMethodCall at parse time by
+	// scanning backward from `scanFrom` (exclusive) for the op that
+	// produced `receiverName`. Returns the bare method name unchanged when
+	// the receiver's type cannot be resolved — that yields a miss against
+	// `project.funcThrowsTypes`, which is the correct conservative answer
+	// for not-yet-resolvable shapes (call results, chained postfix
+	// expressions whose intermediate types are still unresolved).
+	function qualifyMethodCalleeFromReceiver(receiver ByteArray, methodName String, scanFrom OpIndex) returns String
+		let receiverType = scanProducerTypeForName(receiver, scanFrom: scanFrom)
+		logTrace(LogCategory.parser, message: () gives "qualifyMethodCalleeFromReceiver: receiver='{String.from(receiver)}' methodName='{methodName}' scanFrom={scanFrom} receiverType.kind='{receiverType.name}'")
+		if isUnresolvedMaxonType(receiverType) 'unresolved'
+			return methodName
+		end 'unresolved'
+		let structName = try maxonTypeStructName(project, t: receiverType) otherwise return methodName
+		logTrace(LogCategory.parser, message: () gives "qualifyMethodCalleeFromReceiver: structName='{structName}' -> '{structName}.{methodName}'")
+		return "{structName}.{methodName}"
+	end 'qualifyMethodCalleeFromReceiver'
+
+	// Walk module.ops backward from `scanFrom - 1` looking for the op that
+	// produced `targetName`. Returns the producer's MaxonType when it can
+	// be read directly off the op (varLoad's slotType, selfFieldLoad's
+	// implicit self-type, structAlloc's named result type) or
+	// `MaxonType.unresolved` when no such producer is found in range or
+	// the producer's result type isn't recoverable without running TR.
+	// Bounded by the current function's first op so we don't accidentally
+	// cross into another function's op slice.
+	//
+	// When a producer is a `varLoad` whose `slotType` is `unresolved`, fall
+	// back to recovering the slot's value by scanning further back for its
+	// `varDecl` and recursing on the varDecl's value (a `call` to a stdlib
+	// function like `Map.init` or `Array.create` has a registered return
+	// type, so the chain resolves even when the surface-level slot type
+	// was inferred-from-initializer). Without this, `var m = [1: 10]`'s
+	// slot stays unresolved at parse time and the `m.insert` qualified
+	// callee lookup misses funcThrowsTypes for `Map.insert`, breaking the
+	// `otherwise (e) ... match e` binding-type plumbing for map literals.
+	function scanProducerTypeForName(targetName ByteArray, scanFrom OpIndex) returns MaxonType
+		return scanProducerTypeForNameWithDepth(targetName, scanFrom: scanFrom, depth: 0)
+	end 'scanProducerTypeForName'
+
+	// Bounded-depth recursion: at most 3 levels of varLoad→varDecl→producer
+	// chain (one for the receiver's varLoad, one for the initializer's call
+	// result, one safety margin). Self-referential or cyclic IR shapes are
+	// not possible in well-formed parser output, but the depth cap keeps
+	// pathological inputs from infinite recursion.
+	function scanProducerTypeForNameWithDepth(targetName ByteArray, scanFrom OpIndex, depth ScanDepth) returns MaxonType
+		if depth >= 3 'maxDepth'
+			return MaxonType.unresolved
+		end 'maxDepth'
+		if scanFrom == 0 'noOps'
+			return MaxonType.unresolved
+		end 'noOps'
+		var idx = scanFrom - 1
+		while true 'scan'
+			let op = try module.ops.get(idx) otherwise return MaxonType.unresolved
+			let producerType = producerTypeIfNameMatches(op, targetName: targetName)
+			if not isUnresolvedMaxonType(producerType) 'haveType'
+				return producerType
+			end 'haveType'
+			if op.name == "varLoad" 'isVarLoadMatch'
+				let chainedType = chaseVarLoadProducerType(op, targetName: targetName, scanFrom: idx, depth: depth)
+				if not isUnresolvedMaxonType(chainedType) 'chained'
+					return chainedType
+				end 'chained'
+			end 'isVarLoadMatch'
+			if op.name == "call" or op.name == "tryCall" 'isCallMatch'
+				let callType = callResultTypeIfNameMatches(op, targetName: targetName)
+				if not isUnresolvedMaxonType(callType) 'haveCallType'
+					return callType
+				end 'haveCallType'
+			end 'isCallMatch'
+			if idx == 0 'atStart'
+				return MaxonType.unresolved
+			end 'atStart'
+			idx = idx - 1
+		end 'scan'
+		return MaxonType.unresolved
+	end 'scanProducerTypeForNameWithDepth'
+
+	// When `op` is a `varLoad` whose result name equals `targetName` but
+	// whose `slotType` is `unresolved`, recover the slot's true type by
+	// walking back for its `varDecl` and recursing on the varDecl's value.
+	// Returns `unresolved` when the op shape doesn't match, the result name
+	// doesn't match, or the slot's varDecl can't be located.
+	function chaseVarLoadProducerType(op MaxonOp, targetName ByteArray, scanFrom OpIndex, depth ScanDepth) returns MaxonType
+		let slotInfo = extractVarLoadSlotIfMatch(op, targetName: targetName)
+		if not slotInfo.matched 'noMatch'
+			return MaxonType.unresolved
+		end 'noMatch'
+		if not isUnresolvedMaxonType(slotInfo.slotType) 'haveSlotType'
+			return slotInfo.slotType
+		end 'haveSlotType'
+		if scanFrom == 0 'noPrev'
+			return MaxonType.unresolved
+		end 'noPrev'
+		var declIdx = scanFrom - 1
+		while true 'findDecl'
+			let prevOp = try module.ops.get(declIdx) otherwise return MaxonType.unresolved
+			if prevOp.name == "varDecl" 'isDecl'
+				let declMatch = extractVarDeclValueIfSlot(prevOp, slotId: slotInfo.slot)
+				if declMatch.matched 'found'
+					return scanProducerTypeForNameWithDepth(declMatch.value, scanFrom: declIdx, depth: depth + 1)
+				end 'found'
+			end 'isDecl'
+			if declIdx == 0 'atStart'
+				return MaxonType.unresolved
+			end 'atStart'
+			declIdx = declIdx - 1
+		end 'findDecl'
+		return MaxonType.unresolved
+	end 'chaseVarLoadProducerType'
+
+	function extractVarLoadSlotIfMatch(op MaxonOp, targetName ByteArray) returns VarLoadSlotInfo
+		return match op 'shape'
+			varLoad(name, slotId, slotType, _) gives nameMatchSlotInfo(name, target: targetName, slot: slotId, slotType: slotType)
+			default panic("extractVarLoadSlotIfMatch: op.name == 'varLoad' but match did not extract")
+		end 'shape'
+	end 'extractVarLoadSlotIfMatch'
+
+	function nameMatchSlotInfo(name ByteArray, target ByteArray, slot VarSlot, slotType MaxonType) returns VarLoadSlotInfo
+		if name.equals(target) 'isMatch'
+			return VarLoadSlotInfo.matchedAt(slot, slotType: slotType)
+		end 'isMatch'
+		return VarLoadSlotInfo.notMatched()
+	end 'nameMatchSlotInfo'
+
+	function extractVarDeclValueIfSlot(op MaxonOp, slotId VarSlot) returns VarDeclValueInfo
+		return match op 'shape'
+			varDecl(declSlot, value, _, _) gives slotMatchValueInfo(declSlot, target: slotId, value: value)
+			default panic("extractVarDeclValueIfSlot: op.name == 'varDecl' but match did not extract")
+		end 'shape'
+	end 'extractVarDeclValueIfSlot'
+
+	function slotMatchValueInfo(declSlot VarSlot, target VarSlot, value ByteArray) returns VarDeclValueInfo
+		if declSlot == target 'isMatch'
+			return VarDeclValueInfo.matchedWith(value)
+		end 'isMatch'
+		return VarDeclValueInfo.notMatched()
+	end 'slotMatchValueInfo'
+
+	// Return the result type for a `call`/`tryCall` op when its result name
+	// matches `targetName` — looks up the callee in `project.funcReturnTypes`
+	// so the parser can chase `var m = MapInit()` through to `Map<...>`. Free
+	// calls qualify via `CallContext` + namespace; method calls handle their
+	// own qualification in `qualifyMethodCalleeFromReceiver`, so this helper
+	// stays focused on the call-context-qualified shape.
+	function callResultTypeIfNameMatches(op MaxonOp, targetName ByteArray) returns MaxonType
+		let info = extractCallProducerInfo(op, targetName: targetName)
+		if not info.matched 'noMatch'
+			return MaxonType.unresolved
+		end 'noMatch'
+		let bare = String.from(info.callee)
+		let qualified = qualifyCalleeForContext(project, bare: bare, callContext: info.callContext, currentNamespace: namespace, readerFilePath: filePath)
+		let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
+		return maxonReturnTypeValueOrUnresolved(returnType)
+	end 'callResultTypeIfNameMatches'
+
+	function extractCallProducerInfo(op MaxonOp, targetName ByteArray) returns CallProducerInfo
+		if op.name == "call" 'isCall'
+			return match op 'shape'
+				call(result, calleeName, ctx, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
+				default panic("extractCallProducerInfo: op.name == 'call' but match did not extract")
+			end 'shape'
+		end 'isCall'
+		if op.name == "tryCall" 'isTryCall'
+			return match op 'tryShape'
+				tryCall(result, calleeName, ctx, _, _, _, _, _, _) gives callProducerInfoIfResultMatch(result, target: targetName, callee: calleeName, callContext: ctx)
+				default panic("extractCallProducerInfo: op.name == 'tryCall' but match did not extract")
+			end 'tryShape'
+		end 'isTryCall'
+		return CallProducerInfo.notMatched()
+	end 'extractCallProducerInfo'
+
+	function callProducerInfoIfResultMatch(result ByteArray, target ByteArray, callee ByteArray, callContext CallContext) returns CallProducerInfo
+		if result.equals(target) 'isMatch'
+			return CallProducerInfo.matched(callee, callContext: callContext)
+		end 'isMatch'
+		return CallProducerInfo.notMatched()
+	end 'callProducerInfoIfResultMatch'
+
+	// Inspect a single op: when its result name equals `targetName`, return
+	// the op-stamped type for that result. Only the op shapes whose result
+	// type is parser-knowable participate; anything else returns unresolved
+	// so the scan keeps walking. Dispatch on `op.name` first so the inner
+	// `match` only needs to extract the variants we care about — avoids
+	// enumerating every MaxonOp constructor while still complying with the
+	// "no silent default" invariant.
+	function producerTypeIfNameMatches(op MaxonOp, targetName ByteArray) returns MaxonType
+		if op.name == "varLoad" 'isVarLoad'
+			return match op 'shape'
+				varLoad(name, _, slotType, _) gives typeIfNamesEqual(name, target: targetName, t: slotType)
+				default panic("producerTypeIfNameMatches: op.name == 'varLoad' but match did not extract")
+			end 'shape'
+		end 'isVarLoad'
+		if op.name == "structAlloc" 'isStructAlloc'
+			return match op 'shape'
+				structAlloc(result, structName, _) gives typeIfNamesEqual(result, target: targetName, t: MaxonType.named(project.typeNames.intern(String.from(structName))))
+				default panic("producerTypeIfNameMatches: op.name == 'structAlloc' but match did not extract")
+			end 'shape'
+		end 'isStructAlloc'
+		if op.name == "literal" 'isLiteral'
+			return match op 'shape'
+				literal(result, _, valueType, _) gives typeIfNamesEqual(result, target: targetName, t: valueType)
+				default panic("producerTypeIfNameMatches: op.name == 'literal' but match did not extract")
+			end 'shape'
+		end 'isLiteral'
+		if op.name == "convert" 'isConvert'
+			return match op 'shape'
+				convert(result, _, _, toType, _, _) gives typeIfNamesEqual(result, target: targetName, t: toType)
+				default panic("producerTypeIfNameMatches: op.name == 'convert' but match did not extract")
+			end 'shape'
+		end 'isConvert'
+		if op.name == "globalLoad" 'isGlobalLoad'
+			return match op 'shape'
+				globalLoad(result, _, slotType, _) gives typeIfNamesEqual(result, target: targetName, t: slotType)
+				default panic("producerTypeIfNameMatches: op.name == 'globalLoad' but match did not extract")
+			end 'shape'
+		end 'isGlobalLoad'
+		return MaxonType.unresolved
+	end 'producerTypeIfNameMatches'
+
+	function typeIfNamesEqual(name ByteArray, target ByteArray, t MaxonType) returns MaxonType
+		if name.equals(target) 'match'
+			return t
+		end 'match'
+		return MaxonType.unresolved
+	end 'typeIfNamesEqual'
 
 	// E3059 guard: if the qualified callee is registered as void-returning,
 	// emit E3059 "does not return a value" and throw so the rest of the
@@ -8195,6 +8912,7 @@ export type Parser
 			integer gives MaxonType.integer
 			string to unresolved gives MaxonType.integer
 			typeParameter to interface gives MaxonType.integer
+			constInt gives MaxonType.integer
 		end 'pick'
 	end 'defaultLiteralTypeOfInner'
 
@@ -8275,6 +8993,43 @@ export type Parser
 
 	// --- Postfix expression chain ---
 
+	// Translate a member-access RHS token into a field name. Identifier tokens
+	// pass through verbatim; integer-literal tokens become tuple positional
+	// names `_0`/`_1`/... matching the `__TupleN` struct shape that
+	// parseParenExpr emits for `(e0, e1, ...)` literals.
+	function computeFieldNameForMemberToken(token Token) returns String
+		if token.kind == TokenKind.intLiteral 'isTuple'
+			return "_{token.value}"
+		end 'isTuple'
+		return token.value
+	end 'computeFieldNameForMemberToken'
+
+	// Phase 15e: parser-time test for the "can intern a specialised
+	// `genericInstance(__TupleN, args)` right now" case. Only primitive arms
+	// and `named` MaxonTypes qualify — those are pinned at parse time without
+	// further substitution. typeParameter/unresolved/genericInstance/function
+	// /interface arms are left to TypeResolution's `refineTupleStructAlloc`
+	// post-pass.
+	function tupleElemTypesAllConcreteAtParse(elemTypes MaxonTypeArray) returns bool
+		for i in 0 upto elemTypes.count() 'each'
+			let t = try elemTypes.get(i) otherwise return false
+			let ok = match t 'check'
+				boolean to string gives true
+				named gives true
+				function gives false
+				unresolved gives false
+				typeParameter gives false
+				genericInstance gives false
+				interface gives false
+				constInt gives false
+			end 'check'
+			if not ok 'reject'
+				return false
+			end 'reject'
+		end 'each'
+		return true
+	end 'tupleElemTypesAllConcreteAtParse'
+
 	// Chain continuation is purely token-driven: as long as the next token is
 	// `.`, we emit the next chain segment without consulting the receiver's
 	// struct type. Lowering performs the receiver-type lookup when it sees
@@ -8308,15 +9063,29 @@ export type Parser
 
 		while at(TokenKind.dot) 'postfixLoop'
 			try eat(TokenKind.dot)
-			if not at(TokenKind.identifier) 'noMember'
+			// Phase 15e: `t.0` / `t.1` / ... is positional tuple-field syntax
+			// sugar; the synthetic `__TupleN` struct names its fields `_0`, `_1`
+			// (see parseParenExpr's tuple-literal lowering), so rewrite the
+			// integer-literal field name to `_<N>` here and continue as a
+			// normal field access.
+			if not at(TokenKind.identifier) and not at(TokenKind.intLiteral) 'noMember'
 				reportTokenMismatch(cursor.current(), expectedDisplay: "identifier")
 				synchronize()
 				return result
 			end 'noMember'
 			let memberToken = try consume()
-			let memberName = memberToken.value
+			let memberName = computeFieldNameForMemberToken(memberToken)
 			let memberNameBytes = memberName.toByteArray()
 
+			// Materialize a stringConst receiver before referencing it — the
+			// fast-path stringConst ExprResult carries a synth name with no
+			// backing op (parseStringLiteral defers emission), so the bare
+			// `exprName` would point at an unbound name. The methodCall arm
+			// of parsePostfix is the first site that needs the receiver's SSA
+			// name (call-arg sites all use `materializeStringConstIfNeeded`
+			// in parseCallArgsRaw; field access has its own primitive-receiver
+			// guard).
+			result = materializeStringConstIfNeeded(block, expr: result, range: SourceRange.ofToken(memberToken))
 			let receiverName = exprName(result)
 
 			if accept(TokenKind.leftParen) 'isMethodCall'
@@ -8329,7 +9098,10 @@ export type Parser
 				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
 				let methodResultName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
+				// Emit into `currentBlock` — argument parsing may have moved
+				// control flow (e.g. a nested `try EXPR otherwise FB`), so the
+				// methodCall must live where its args' defining ops dominate.
+				module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
 				// Method-call result type is filled in by TypeResolution from
 				// the resolved callee signature — the parser doesn't peek
 				// into `project.funcReturnTypes`.
@@ -8367,6 +9139,19 @@ export type Parser
 		// inspects that follower; tolerates EOF (falls through to the bare-
 		// variable-read tail when nothing follows).
 
+		// `TypeName from "literal"` / `TypeName from 'c'` / `TypeName from [..]`
+		// — initialize a type conforming to InitableFromStringLiteral /
+		// InitableFromCharLiteral / InitableFromArrayLiteral via its
+		// `init(value)` static method. Lowered to a qualified call on
+		// `TypeName.init`; TypeResolution validates the conformance against
+		// the resolved struct.
+		if at(TokenKind.from) 'maybeFromLiteral'
+			let nextTok = try cursor.peek(1) otherwise Token.eof()
+			if nextTok.kind == TokenKind.stringLiteral or nextTok.kind == TokenKind.charLiteral or nextTok.kind == TokenKind.leftBracket 'isFromLiteral'
+				return try parseFromLiteralCall(block, typeToken: token)
+			end 'isFromLiteral'
+		end 'maybeFromLiteral'
+
 		// Ident.Ident(args) — disambiguated using local-scope membership only:
 		//   - `c.method(...)` where `c` is a known local var: emit methodCall
 		//     and let lowering resolve `{receiverType}.method` from the value-
@@ -8397,7 +9182,8 @@ export type Parser
 					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 					let rparenToken = previousToken()
 					let methodResultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+					// Emit into `currentBlock` — see emitCallAndResult for rationale.
+					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
 					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
 				end 'isMethodOnGlobal'
 				if scope.contains(token.value) 'isMethodOnLocal'
@@ -8423,7 +9209,8 @@ export type Parser
 					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 					let rparenToken = previousToken()
 					let methodResultName = freshSynthName()
-					module.appendOp(block, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+					// Emit into `currentBlock` — see emitCallAndResult for rationale.
+					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
 					// methodCall result type is filled in by TypeResolution
 					// from `funcReturnTypes` once registries are populated.
 					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
@@ -8479,7 +9266,7 @@ export type Parser
 				try eat(TokenKind.leftParen)
 				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
-				return emitCallAndResult(block, calleeName: calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
+				return emitCallAndResult(calleeName: calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
 			end 'isDotCall'
 		end 'maybeDotCall'
 
@@ -8531,6 +9318,19 @@ export type Parser
 				end 'haveCaseAlias'
 			end 'isChain'
 		end 'maybeLocalStructBacking'
+
+		// Closure capture of an outer-scope local that's the receiver of a
+		// postfix chain (`outer.field`, `outer.method(...)`). Without this
+		// branch, the next block (`maybeQualifiedRead`) would treat `outer`
+		// as a type qualifier and emit `unresolvedRead("outer.field")`
+		// because the lifted body's fresh scope doesn't contain `outer`.
+		// Emitting the env-load now lets parsePostfix handle the trailing
+		// chain on the captured value, identical to a plain local receiver.
+		if inClosure and at(TokenKind.dot) and not scope.contains(token.value) and closureOuterScope.contains(token.value) and not closureOuterScope.isSelfField(token.value) 'captureOuterReceiver'
+			let captureType = closureOuterScope.getType(token.value)
+			let captureName = emitClosureCapture(block, name: token.value, captureType: captureType, range: SourceRange.ofToken(token))
+			return ExprResult.direct(captureName, valueType: captureType)
+		end 'captureOuterReceiver'
 
 		// Qualified static-field read: TypeName.field, where the qualified name
 		// names a registered static var (.data slot) or static let
@@ -8614,7 +9414,8 @@ export type Parser
 								end 'redirectCompanionFN'
 								let calleeName = project.calleeNames.intern(calleeStr)
 								let callResultName = freshSynthName()
-								module.appendOp(block, op: MaxonOp.call(callResultName, callee: calleeName, callContext: CallContext.qualified, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+								// Emit into `currentBlock` — see emitCallAndResult for rationale.
+								module.appendOp(currentBlock, op: MaxonOp.call(callResultName, callee: calleeName, callContext: CallContext.qualified, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
 								return ExprResult.direct(callResultName, valueType: MaxonType.unresolved)
 							end 'isCompanionCall'
 							// Static member: allCases / allCaseNames / caseName
@@ -8697,21 +9498,30 @@ export type Parser
 				let calleeType = scope.getType(bareCallee)
 				let calleeLoadName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.varLoad(calleeLoadName, slotId: calleeSlot, slotType: calleeType, range: SourceRange.ofToken(token)))
-				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+				// Function-typed locals carry no source-level param names —
+				// the function type registry stores positional types only —
+				// so the named-arg-required check (E3005) doesn't apply.
+				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
 				let fnTypeId = functionMaxonTypeId(calleeType)
 				let resultName = freshSynthName()
 				let returnType = functionMaxonReturnType(project, t: calleeType)
-				module.appendOp(block, op: MaxonOp.indirectCall(resultName, callee: calleeLoadName, fnTypeId: fnTypeId, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
+				// Emit into `currentBlock` — see emitCallAndResult for rationale.
+				module.appendOp(currentBlock, op: MaxonOp.indirectCall(resultName, callee: calleeLoadName, fnTypeId: fnTypeId, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
 				return ExprResult.direct(resultName, valueType: maxonReturnTypeValueOrUnresolved(returnType))
 			end 'isIndirect'
-			let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block)
+			// Math intrinsics (`min(a, b)`, `max(a, b)`, plus the unary ones)
+			// accept positional args by design — they're built into the
+			// compiler and have no source-level param names that could anchor a
+			// label. Suppress the parse-time E3005 named-arg check for them.
+			let allowPositional = isMathIntrinsic(bareCallee)
+			let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: not allowPositional)
 			let rparenToken = previousToken()
 			var ctx = CallContext.free
 			if not currentTypeName.isEmpty() 'inMethod'
 				ctx = CallContext.sibling(currentTypeName)
 			end 'inMethod'
-			return emitCallAndResult(block, calleeName: bareCallee, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
+			return emitCallAndResult(calleeName: bareCallee, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: ctx, range: SourceRange.between(token, last: rparenToken))
 		end 'isCall'
 
 		// Struct construction: TypeName{field: value, ...}
@@ -8737,6 +9547,44 @@ export type Parser
 			let captureName = emitClosureCapture(block, name: token.value, captureType: captureType, range: SourceRange.ofToken(token))
 			return ExprResult.direct(captureName, valueType: captureType)
 		end 'captureOuter'
+
+		// Bare function reference: `let f = double`, `apply(triple, ...)`.
+		// When the unbound name resolves to a known free function (after the
+		// same context-aware qualification a bare call would do), emit a
+		// `functionRef` op carrying the resolved fnTypeId so the surrounding
+		// context (varDecl, arg position) sees a function-typed value
+		// instead of an `unresolvedRead`. Sibling instance methods aren't
+		// included here — they need an implicit `__self` receiver that the
+		// reference syntax can't provide, and the parser leaves them as
+		// `unresolvedRead` to surface as a clean E2004.
+		if not scope.contains(token.value) 'maybeFunctionRef'
+			var fnRefCtx = CallContext.free
+			if not currentTypeName.isEmpty() 'inMethodFnRef'
+				fnRefCtx = CallContext.sibling(currentTypeName)
+			end 'inMethodFnRef'
+			let qualified = qualifyCalleeForContext(project, bare: token.value, callContext: fnRefCtx, currentNamespace: namespace, readerFilePath: filePath)
+			if project.funcSignatures.contains(qualified) and project.funcReturnTypes.contains(qualified) 'isFnRef'
+				let sig = try project.funcSignatures.get(qualified) otherwise panic("parseIdentifierExpr.maybeFunctionRef: funcSignatures.contains(true) but get() failed for '{qualified}'")
+				let returnType = try project.funcReturnTypes.get(qualified) otherwise panic("parseIdentifierExpr.maybeFunctionRef: funcReturnTypes.contains(true) but get() failed for '{qualified}'")
+				// Instance methods take an implicit `__self` as their first
+				// parameter; referencing them by bare name has no receiver
+				// to thread through. Skip these and let `unresolvedRead`
+				// surface the expected E2004 below.
+				var isInstanceMethod = false
+				if sig.paramNames.count() > 0 'hasParams'
+					let firstParam = try sig.paramNames.get(0) otherwise panic("parseIdentifierExpr.maybeFunctionRef: paramNames.get(0) failed after count guard")
+					if firstParam == "__self" 'isSelf'
+						isInstanceMethod = true
+					end 'isSelf'
+				end 'hasParams'
+				if not isInstanceMethod 'freeFunction'
+					let fnTypeId = internFunctionType(project, paramTypes: sig.paramTypes, returnType: returnType)
+					let resultName = freshSynthName()
+					module.appendOp(block, op: MaxonOp.functionRef(resultName, funcName: qualified, fnTypeId: fnTypeId, range: SourceRange.ofToken(token)))
+					return ExprResult.direct(resultName, valueType: MaxonType.function(fnTypeId))
+				end 'freeFunction'
+			end 'isFnRef'
+		end 'maybeFunctionRef'
 
 		// Bare identifier that isn't bound as a local: defer name resolution
 		// to TypeResolution. The `unresolvedRead` op is rewritten to
@@ -8766,6 +9614,131 @@ export type Parser
 		end 'localRead'
 		return ExprResult.direct(name, valueType: varType)
 	end 'parseIdentifierExpr'
+
+	// `TypeName from <literal>` — initialize a type that conforms to
+	// InitableFromStringLiteral or InitableFromCharLiteral by calling its
+	// static `init(value)` method. The cursor is AT the `from` keyword on
+	// entry; on exit, it sits past the literal token.
+	//
+	// Lowered as a qualified call to `TypeName.init` with the literal as the
+	// single positional argument. The literal is emitted via the existing
+	// parseStringLiteral / parseCharLiteralExpr path so escape decoding and
+	// interpolation handling stay shared. Conformance / arity checking
+	// happens in TypeResolution once the struct's interfaces are resolved.
+	function parseFromLiteralCall(block IrBlock, typeToken Token) returns ExprResult throws ParserError
+		try eat(TokenKind.from)
+		let litToken = cursor.current()
+
+		// `T from [...]` where T conforms to `BuiltinArrayLiteral` (e.g.
+		// `Vector from [1,2,3]`): the destination type IS the array-literal
+		// wrapper, so we lower directly to `T.init(__mm)` rather than first
+		// wrapping the literal in the canonical `Array.init(__mm)` and then
+		// trying to call `T.init(Array)` — which would fail at type
+		// resolution (param expects `__ManagedMemory with Element`, not
+		// `Array with Element`). Mirrors the C# bootstrap's BAL fast path
+		// in `ParseFromExpression`. The non-array literal forms (string /
+		// char) fall through to the InitableFromXxxLiteral path below.
+		if litToken.kind == TokenKind.leftBracket and typeConformsToBuiltinArrayLiteral(typeToken.value) 'isBalArray'
+			return try parseBalFromArrayLiteral(block, typeToken: typeToken)
+		end 'isBalArray'
+
+		let literalResult = match litToken.kind 'parseLit'
+			stringLiteral gives try parseStringLiteral(block)
+			charLiteral gives try parseCharLiteralExpr(block)
+			leftBracket gives try parseArrayLiteralExpr(block)
+			default panic("parseFromLiteralCall: caller proved literal kind, got {litToken.kind.name}")
+		end 'parseLit'
+
+		// Force the literal into an emitted op so we can name it as a call
+		// argument — stringConst-shaped ExprResults carry a synth name with
+		// no backing op until they're materialized.
+		let materialized = materializeStringConstIfNeeded(block, expr: literalResult, range: SourceRange.ofToken(litToken))
+		let argName = exprName(materialized)
+		let argType = exprType(materialized)
+
+		var args = ByteArrayArray.create()
+		args.push(argName)
+		var argLabels = StringArray.create()
+		argLabels.push("")
+		var argTypes = MaxonTypeArray.create()
+		argTypes.push(argType)
+		var argRanges = SourceRangeArray.create()
+		argRanges.push(SourceRange.ofToken(litToken))
+
+		usedTypeAliases.insert(element: typeToken.value)
+		let calleeName = "{typeToken.value}.init"
+		return emitCallAndResult(calleeName: calleeName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(typeToken, last: litToken))
+	end 'parseFromLiteralCall'
+
+	// True when `typeName` is a known struct declaring conformance to
+	// `BuiltinArrayLiteral`. Reads against `unresolvedStructTypes` so the
+	// check fires correctly during the parser's initial sweep (before
+	// `resolveAllStructTypes` has drained the staging map). Empty struct
+	// entries / unknown names yield false; the caller falls back to the
+	// InitableFromArrayLiteral path which will surface a clearer
+	// diagnostic if the type doesn't conform to either interface.
+	function typeConformsToBuiltinArrayLiteral(typeName String) returns bool
+		if let entry = try project.unresolvedStructTypes.get(typeName) 'isUnresolved'
+			return structDeclaresBuiltinArrayLiteral(entry)
+		end 'isUnresolved'
+		// Stdlib-cache restore path: by the time user code is parsed, Vector /
+		// Array have moved out of `unresolvedStructTypes` and their
+		// conformances are recorded in `project.conformances`.
+		return project.conformances.contains(typeName, interfaceName: "BuiltinArrayLiteral")
+	end 'typeConformsToBuiltinArrayLiteral'
+
+	// `T from [...]` for `T` conforming to `BuiltinArrayLiteral`: parse
+	// the bracketed literal, build the __ManagedMemory backing buffer, and
+	// emit `T.init(__mm)` so the call's parameter (declared as
+	// `__ManagedMemory with Element`) sees the right shape. The
+	// arrayLiteralProducer entry is registered under both names so
+	// TypeResolution's `arrayLiteralResultType` lookup recovers
+	// `genericInstance(T, [InferredElement])` for the result. Mirrors
+	// `emitArrayLiteralResult` but pinned to a user-chosen destination
+	// type rather than the canonical BAL discovery.
+	function parseBalFromArrayLiteral(block IrBlock, typeToken Token) returns ExprResult throws ParserError
+		let bracketToken = cursor.current()
+		try eat(TokenKind.leftBracket)
+		try skipNewlines()
+		var elemNames = ByteArrayArray.create()
+		var elemRanges = SourceRangeArray.create()
+		if at(TokenKind.rightBracket) 'emptyLit'
+			try eat(TokenKind.rightBracket)
+		end 'emptyLit' else 'nonEmpty'
+			let firstStartPos = cursor.index()
+			let firstFirstToken = cursor.current()
+			let firstParsed = try parseExpression(block)
+			let firstLastToken = previousToken()
+			let firstRange = SourceRange.between(firstFirstToken, last: firstLastToken)
+			let firstMaterialized = materializeStringConstIfNeeded(block, expr: firstParsed, range: firstRange)
+			elemNames.push(exprName(firstMaterialized))
+			elemRanges.push(firstRange)
+			try parseRemainingArrayElements(block, elemNames: elemNames, elemRanges: elemRanges, firstStartPos: firstStartPos)
+			try expect(TokenKind.rightBracket)
+		end 'nonEmpty'
+
+		let literalRange = SourceRange.between(bracketToken, last: previousToken())
+		let mmName = emitManagedMemoryFromElements(block, elemNames: elemNames, elemRanges: elemRanges, literalRange: literalRange)
+
+		let arrName = freshSynthName()
+		var initArgs = ByteArrayArray.create()
+		initArgs.push(mmName)
+		var initLabels = StringArray.create()
+		initLabels.push("")
+		var initArgTypes = MaxonTypeArray.create()
+		initArgTypes.push(MaxonType.unresolved)
+		var initArgRanges = SourceRangeArray.create()
+		initArgRanges.push(literalRange)
+		let initCallee = "{typeToken.value}.init"
+		module.appendOp(currentBlock, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+
+		let producer = ArrayLiteralProducer.create(typeToken.value, mmResultName: mmName, initResultName: arrName, elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: filePath)
+		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmName), value: producer) otherwise ignore
+		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName), value: producer) otherwise ignore
+		usedTypeAliases.insert(element: typeToken.value)
+
+		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
+	end 'parseBalFromArrayLiteral'
 
 	// Parse call arguments, validating named args for 2nd+ arguments.
 	// When calleeName resolves to a registered function signature, the first
@@ -8879,9 +9852,13 @@ export type Parser
 	// `callContext` tells lowering how to qualify the bare callee name:
 	// CallContext.qualified for already-qualified names, .sibling(typeName)
 	// for bare names inside a method body, .free for everything else.
-	function emitCallAndResult(block IrBlock, calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
+	// Emits into `currentBlock` rather than a caller-supplied block —
+	// argument parsing may have moved control flow (e.g. a nested
+	// `try EXPR otherwise FB` lands its merge in a fresh block), and the
+	// call op must live in the same block as its defining args.
+	function emitCallAndResult(calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
+		module.appendOp(currentBlock, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
 		// Call result type is filled in by TypeResolution from
 		// `funcReturnTypes` once registries are fully populated.
 		return ExprResult.direct(callName, valueType: MaxonType.unresolved)
@@ -8975,6 +9952,20 @@ export type Parser
 		if cur.kind != TokenKind.identifier and tokenIsIdentifierLike(cur) and scope.contains(cur.value) 'isKeywordVar'
 			return try parseIdentifierExpr(block)
 		end 'isKeywordVar'
+		// Primitive-type static method call: `int.method(...)`, `float.method(...)`,
+		// `bool.method(...)`. The primitive-type keyword (`int`/`float`/`bool`)
+		// is NOT a valid primary on its own, so without this hook the
+		// `default throws unhandledToken` arm below fires and emits an E2004
+		// "Expected expression". Mirrors `TryRewritePrimitiveStaticMethod` in
+		// the C# bootstrap parser (Parser.cs:18826) — both compilers map
+		// `<primtype>.<method>(args)` to the stdlib `__<primtype>_<method>`
+		// free function. Today only `fromString` is registered (in
+		// stdlib/Builtins.maxon), but any unrecognized method name falls
+		// through to the same unresolved-callee diagnostic the rest of the
+		// pipeline emits for free calls.
+		if isPrimitiveTypeStaticCallStart(cur) 'isPrimStaticCall'
+			return try parsePrimitiveTypeStaticCall(block)
+		end 'isPrimStaticCall'
 		match cur.kind 'primary'
 			intLiteral then return try parseIntLiteral(block)
 			floatLiteral then return try parseFloatLiteral(block)
@@ -8992,6 +9983,54 @@ export type Parser
 			default throws ParserError.unhandledToken
 		end 'primary'
 	end 'parsePrimaryMatch'
+
+	// True when the cursor is sitting on a primitive-type keyword (`int`,
+	// `float`, `bool`) followed by `.<ident>(`. The byte-primitive lost its
+	// keyword in commit 1c1aec4c6 (folded into `int(0 to u8.max)`), so it's
+	// reached as an identifier through the regular qualified-call path and
+	// doesn't need a token-kind branch here. Caller (parsePrimaryMatch)
+	// peeks via the same 3-lookahead window the C# bootstrap uses.
+	function isPrimitiveTypeStaticCallStart(cur Token) returns bool
+		let kind = cur.kind
+		let isPrimType = kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool
+		if not isPrimType 'notPrim'
+			return false
+		end 'notPrim'
+		let dotTok = try cursor.peek(1) otherwise return false
+		if dotTok.kind != TokenKind.dot 'notDot'
+			return false
+		end 'notDot'
+		let memberTok = try cursor.peek(2) otherwise return false
+		if memberTok.kind != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		let openTok = try cursor.peek(3) otherwise return false
+		return openTok.kind == TokenKind.leftParen
+	end 'isPrimitiveTypeStaticCallStart'
+
+	// Parse `<primtype>.<method>(<args>)` as a static call into the
+	// stdlib's `__<primtype>_<method>` free function. Caller has already
+	// verified the shape via `isPrimitiveTypeStaticCallStart`; we just
+	// stream-consume the four anchor tokens and parse the arg list.
+	//
+	// We emit the callee as a pre-qualified `stdlib.__<primtype>_<method>`
+	// with `CallContext.qualified` so the call survives
+	// `qualifyCalleeForContext`'s `__`-prefix gate (the qualified-callee
+	// branch chases typealiases only; the gate that rejects bare `__`
+	// references from non-internals files lives in the free/sibling probe
+	// chain). Returning the unqualified `__<primtype>_<method>` with
+	// `CallContext.free` would be silently rewritten to a `<namespace>.__…`
+	// stub that doesn't exist.
+	function parsePrimitiveTypeStaticCall(block IrBlock) returns ExprResult throws ParserError
+		let typeToken = try consume()
+		try eat(TokenKind.dot)
+		let methodToken = try consume()
+		try eat(TokenKind.leftParen)
+		let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+		let rparenToken = previousToken()
+		let calleeName = "stdlib.__{typeToken.value}_{methodToken.value}"
+		return emitCallAndResult(calleeName: calleeName, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(typeToken, last: rparenToken))
+	end 'parsePrimitiveTypeStaticCall'
 
 	// Discover (once per process) the stdlib type that implements the
 	// `BuiltinArrayLiteral` interface. The compiler knows nothing about
@@ -9079,6 +10118,11 @@ export type Parser
 		consumeExpectedDisplay = "expression"
 		let bracketToken = cursor.current()
 		try eat(TokenKind.leftBracket)
+		// Permit a newline immediately after `[` so multi-line array/map
+		// literals (`[\n\t1: 100,\n\t2: 200,\n]`) parse the same as their
+		// single-line forms. parseExpression doesn't skip leading newlines
+		// itself; without this the first element parse trips E2004.
+		try skipNewlines()
 
 		// Phase 1: peek for the empty-literal shape. `[]` always desugars to
 		// an empty array (a `Map.init` call with two empty managed-memory
@@ -9121,6 +10165,9 @@ export type Parser
 	// break out so the trailing `expect(rightBracket)` reports the cascade
 	// instead of looping.
 	function parseRemainingArrayElements(block IrBlock, elemNames ByteArrayArray, elemRanges SourceRangeArray, firstStartPos ParsedInt) throws ParserError
+		// Multi-line literal: tolerate a trailing newline after the first
+		// element so `[\n\t1,\n\t2,\n\t3\n]` reaches the `]` cleanly.
+		try skipNewlines()
 		if at(TokenKind.rightBracket) 'doneAfterFirst'
 			return
 		end 'doneAfterFirst'
@@ -9129,6 +10176,7 @@ export type Parser
 		end 'stuckOnFirst'
 		try expect(TokenKind.comma)
 		while true 'elemLoop'
+			try skipNewlines()
 			if at(TokenKind.rightBracket) 'trailingComma'
 				return
 			end 'trailingComma'
@@ -9140,6 +10188,7 @@ export type Parser
 			let elemResult = materializeStringConstIfNeeded(block, expr: parsedElem, range: elemRange)
 			elemNames.push(exprName(elemResult))
 			elemRanges.push(elemRange)
+			try skipNewlines()
 			if at(TokenKind.rightBracket) 'doneList'
 				break
 			end 'doneList'
@@ -9171,8 +10220,10 @@ export type Parser
 		valueNames.push(exprName(firstValueResult))
 		valueRanges.push(firstValueRange)
 
+		try skipNewlines()
 		while at(TokenKind.comma) 'morePairs'
 			try eat(TokenKind.comma)
+			try skipNewlines()
 			if at(TokenKind.rightBracket) 'trailing'
 				break
 			end 'trailing'
@@ -9193,6 +10244,7 @@ export type Parser
 			let valResult = materializeStringConstIfNeeded(block, expr: valExpr, range: valRange)
 			valueNames.push(exprName(valResult))
 			valueRanges.push(valRange)
+			try skipNewlines()
 
 			if cursor.index() <= pairStartPos 'stuckPair'
 				break
@@ -9241,7 +10293,8 @@ export type Parser
 		initArgRanges.push(literalRange)
 		initArgRanges.push(literalRange)
 		let initCallee = "{mapTypeName}.init"
-		module.appendOp(block, op: MaxonOp.call(initResultName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+		// Emit into `currentBlock` — see emitCallAndResult for rationale.
+		module.appendOp(currentBlock, op: MaxonOp.call(initResultName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
 
 		let producer = MapLiteralProducer.create(mapTypeName, initResultName: initResultName, keyMmResultName: keyMmName, valueMmResultName: valueMmName, sourceRange: literalRange, sourceFilePath: filePath)
 		try project.mapLiteralProducers.insert(mapLiteralProducerKey(funcName: currentFunc.name, valueName: initResultName), value: producer) otherwise ignore
@@ -9281,7 +10334,8 @@ export type Parser
 		var createArgRanges = SourceRangeArray.create()
 		createArgRanges.push(literalRange)
 		createArgRanges.push(literalRange)
-		module.appendOp(block, op: MaxonOp.call(mmName, callee: project.calleeNames.intern("__ManagedMemory.create"), callContext: CallContext.qualified, args: createArgs, argLabels: createLabels, argTypes: createArgTypes, argRanges: createArgRanges, range: literalRange))
+		// Emit into `currentBlock` — see emitCallAndResult for rationale.
+		module.appendOp(currentBlock, op: MaxonOp.call(mmName, callee: project.calleeNames.intern("__ManagedMemory.create"), callContext: CallContext.qualified, args: createArgs, argLabels: createLabels, argTypes: createArgTypes, argRanges: createArgRanges, range: literalRange))
 		// __ManagedMemory.create signals OOM via the error flag; drain it so a
 		// subsequent `try` doesn't see a stale flag. By construction (capacity
 		// = elemCount, no other concurrent allocations) the only failure mode
@@ -9311,7 +10365,8 @@ export type Parser
 			var setArgRanges = SourceRangeArray.create()
 			setArgRanges.push(elemRange)
 			setArgRanges.push(elemRange)
-			module.appendOp(block, op: MaxonOp.methodCall(setResultName, receiver: mmName, methodName: setMethodName, args: setArgs, argLabels: setLabels, argTypes: setArgTypes, argRanges: setArgRanges, range: elemRange))
+			// Emit into `currentBlock` — see emitCallAndResult for rationale.
+			module.appendOp(currentBlock, op: MaxonOp.methodCall(setResultName, receiver: mmName, methodName: setMethodName, args: setArgs, argLabels: setLabels, argTypes: setArgTypes, argRanges: setArgRanges, range: elemRange))
 			emitErrorFlagDrain(range: elemRange)
 		end 'eachElem'
 
@@ -9327,7 +10382,8 @@ export type Parser
 		var setLenArgRanges = SourceRangeArray.create()
 		setLenArgRanges.push(literalRange)
 		let setLenMethodName = "setLength".toByteArray()
-		module.appendOp(block, op: MaxonOp.methodCall(setLenResultName, receiver: mmName, methodName: setLenMethodName, args: setLenArgs, argLabels: setLenLabels, argTypes: setLenArgTypes, argRanges: setLenArgRanges, range: literalRange))
+		// Emit into `currentBlock` — see emitCallAndResult for rationale.
+		module.appendOp(currentBlock, op: MaxonOp.methodCall(setLenResultName, receiver: mmName, methodName: setLenMethodName, args: setLenArgs, argLabels: setLenLabels, argTypes: setLenArgTypes, argRanges: setLenArgRanges, range: literalRange))
 		emitErrorFlagDrain(range: literalRange)
 
 		return mmName
@@ -9364,7 +10420,8 @@ export type Parser
 		var initArgRanges = SourceRangeArray.create()
 		initArgRanges.push(literalRange)
 		let initCallee = "{arrayTypeName}.init"
-		module.appendOp(block, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
+		// Emit into `currentBlock` — see emitCallAndResult for rationale.
+		module.appendOp(currentBlock, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
 
 		// Hand the structural pieces off to TypeResolution, which unifies
 		// the elements' producer types and writes the matching
@@ -9520,9 +10577,14 @@ export type Parser
 			// Single-byte (ASCII) fast path. Stays as an integer literal so
 			// the lexer/parser's many `b == 'a'` style byte comparisons keep
 			// compiling without coercions. Multi-byte chars take the
-			// charLiteral path (real Character struct).
+			// charLiteral path (real Character struct). The literal's value
+			// name is recorded in `project.charByteLiterals` so consumers
+			// that need char-ness (overload disambiguation, interpolation
+			// lowering) can recover it without the type system having to
+			// distinguish int from byte-char everywhere.
 			let byteVal = try decoded.get(0) otherwise panic("parseCharLiteralExpr: count==1 but get(0) failed")
 			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: range)
+			project.charByteLiterals.insert(charByteLiteralKey(funcName: currentFunc.name, valueName: name))
 			return ExprResult.direct(name, valueType: MaxonType.integer)
 		end 'singleByte'
 		// Phase 7 step 6: multi-byte character literal — intern the decoded
@@ -9685,7 +10747,8 @@ export type Parser
 			let materializedExpr = materializeStringConstIfNeeded(block, expr: exprResult, range: SourceRange.ofToken(interpStartTok))
 			let exprNameSlice = exprName(materializedExpr)
 			let kind = inferInterpKind(exprType(materializedExpr))
-			parts.push(StringInterpPart.expr(exprNameSlice, kind: kind))
+			let formatSpecId = try parseInterpFormatSpec()
+			parts.push(StringInterpPart.expr(exprNameSlice, kind: kind, formatSpecId: formatSpecId))
 			try expect(TokenKind.stringInterpEnd)
 			if not at(TokenKind.stringLiteral) 'recoveredFromInterp'
 				// Parser recovery may have left us past the closing quote on
@@ -9702,9 +10765,47 @@ export type Parser
 		let lastTok = previousToken()
 		let interpRange = SourceRange.between(leadToken, last: lastTok)
 		let resultName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
+		// Emit into `currentBlock` — an inner interp expression with short-
+		// circuit `and`/`or` or a nested `try ... otherwise` moves control
+		// flow, and the stringInterp op must reference its parts from the
+		// block where they were defined.
+		module.appendOp(currentBlock, op: MaxonOp.stringInterp(resultName, parts: parts, range: interpRange))
 		return ExprResult.direct(resultName, valueType: MaxonType.named(project.typeNames.intern("String")))
 	end 'parseStringLiteral'
+
+	// Phase 7 step 5 — format-spec capture. Called immediately after the
+	// interpolation subexpression has parsed; cursor is on either `:` (format
+	// spec present) or `stringInterpEnd` (no format spec). When present, the
+	// tokens between `:` and `stringInterpEnd` are concatenated into a raw
+	// format-spec string (e.g. `04x`, `.3`, `6.2`, `verbose`) and interned via
+	// `project.strings`. Returns the empty-string id when no `:` is present so
+	// downstream code can branch on `isEmpty()` instead of an extra flag.
+	//
+	// The lexer pre-tokenizes the spec body (e.g. `:6.2` lexes as `colon`
+	// + `floatLiteral("6.2")`; `:04x` lexes as `colon` + `intLiteral("04")`
+	// + `identifier("x")`; `:.3` lexes as `colon` + `dot` + `intLiteral("3")`).
+	// Concatenating token.value preserves the original spec text losslessly
+	// because each format-spec token's value field carries the source-aligned
+	// byte sequence the lexer recognized.
+	function parseInterpFormatSpec() returns StringId throws ParserError
+		if not at(TokenKind.colon) 'noFmt'
+			return project.strings.intern("")
+		end 'noFmt'
+		try eat(TokenKind.colon)
+		var formatBytes = ByteArray.create()
+		while not at(TokenKind.stringInterpEnd) 'collect'
+			if at(TokenKind.eof) 'fmtEof'
+				break
+			end 'fmtEof'
+			let tok = try consume()
+			let valBytes = tok.value.toByteArray()
+			for i in 0 upto valBytes.count() 'eachByte'
+				let b = try valBytes.get(i) otherwise panic("parseInterpFormatSpec: valBytes.get OOB at {i}")
+				formatBytes.push(b)
+			end 'eachByte'
+		end 'collect'
+		return project.strings.intern(String.from(formatBytes))
+	end 'parseInterpFormatSpec'
 
 	// Phase 7 step 5: classify the parser-inferred MaxonType of an
 	// interpolated subexpression so lowering knows which runtime helper
@@ -9721,6 +10822,7 @@ export type Parser
 			named(id) gives interpKindForNamed(project.typeNames.get(id))
 			function to unresolved gives InterpExprKind.i64
 			typeParameter to interface gives InterpExprKind.i64
+			constInt gives InterpExprKind.i64
 		end 'k'
 	end 'inferInterpKind'
 
@@ -9878,13 +10980,21 @@ export type Parser
 		// for the synthetic `__TupleN` base struct (arity from element
 		// count). Fields are named `_0`, `_1`, etc. Elements are
 		// comma-separated; the leading `(`, first element, and comma have
-		// already been consumed.
+		// already been consumed. String-literal elements need to be
+		// materialised through the lazy-stringConst path before being
+		// referenced by the fieldStore op (otherwise their producer name
+		// is never bound — see materializeStringConstIfNeeded).
 		var elemNames = ByteArrayArray.create()
-		elemNames.push(exprName(inner))
+		var elemTypes = MaxonTypeArray.create()
+		let innerMat = materializeStringConstIfNeeded(block, expr: inner, range: SourceRange.ofToken(openToken))
+		elemNames.push(exprName(innerMat))
+		elemTypes.push(exprType(innerMat))
 		while accept(TokenKind.comma) 'tupleLoop'
 			let loopStart = cursor.index()
 			let nextElem = try parseExpression(block)
-			elemNames.push(exprName(nextElem))
+			let nextMat = materializeStringConstIfNeeded(block, expr: nextElem, range: SourceRange.ofToken(openToken))
+			elemNames.push(exprName(nextMat))
+			elemTypes.push(exprType(nextMat))
 			// Stuck-guard mirrors parseCallArgsRaw: a failed inner parse
 			// may park the cursor on a synchronization-stop token; without
 			// this we'd spin in place.
@@ -9903,6 +11013,20 @@ export type Parser
 			let fieldName = "_{i}".toByteArray()
 			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldName, value: elemValue, isInit: true, range: SourceRange.ofToken(openToken)))
 		end 'eachField'
+		// Phase 15e: when every element has a concrete parse-time type (literal
+		// int/float/bool/string/char and named structs all qualify), intern a
+		// specialised `genericInstance(__TupleN, [T0..TN])` and pin it under
+		// the allocation's result name so lowerStructAlloc can recover the
+		// receiver-context the parser inferred. Tuples whose element types
+		// stay unresolved at parse time (e.g. method-call results — type
+		// pinned by TypeResolution) fall back to the bare named form; the
+		// `refineTupleStructAlloc` post-pass picks them up via producer-types.
+		if tupleElemTypesAllConcreteAtParse(elemTypes) 'concreteAtParse'
+			let baseId = project.typeNames.intern(baseName)
+			let giid = project.genericInstances.intern(baseId, args: elemTypes)
+			project.tupleAllocGids.upsert(ptrName, value: giid)
+			return ExprResult.direct(ptrName, valueType: MaxonType.genericInstance(giid))
+		end 'concreteAtParse'
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: baseName))
 	end 'parseParenExpr'
 
@@ -10102,10 +11226,18 @@ export type Parser
 			userParamTypes.push(pt)
 			userParamNames.push(pn)
 		end 'snapshotUserParams'
-		if captureCount > 0 'hasCaptures'
-			liftedFunc.maxonParamTypes.push(MaxonType.integer)
-			liftedFunc.paramCount = liftedFunc.paramCount + 1
-		end 'hasCaptures'
+		// Every lifted closure body — capturing or not — must accept the
+		// hidden `__env` param. Non-capturing closures still flow through
+		// the indirect-call ABI (`apply(f, x)` where `f` came from a
+		// `functionRef`), and wasm's `call_indirect` requires the table
+		// element's signature to match the call site's expected signature
+		// exactly, env arg included. Without this, a non-capturing closure
+		// table entry has shape `(args) -> R` while the call site pushes
+		// `[args, env]` and call_indirect traps with "indirect call type
+		// mismatch". For capturing closures, body lowering reads the env
+		// via `closureEnvLoad`; for non-capturing ones it stays unused.
+		liftedFunc.maxonParamTypes.push(MaxonType.integer)
+		liftedFunc.paramCount = liftedFunc.paramCount + 1
 
 		// Patch the lifted function's return type now that the body type
 		// is known, and rewrite the function-type registry entry to match.
@@ -10688,6 +11820,137 @@ export type Parser
 	end 'parseScopedStatements'
 end 'Parser'
 
+// Result for the parser-time varLoad lookup in `chaseVarLoadProducerType`.
+// `matched` is true when the varLoad's result name equals the target name;
+// callers must ignore `slot` and `slotType` when `matched` is false.
+type VarLoadSlotInfo
+	export var matched bool
+	export var slot VarSlot
+	export var slotType MaxonType
+
+	export static function notMatched() returns VarLoadSlotInfo
+		return Self{matched: false, slot: 0 as VarSlot, slotType: MaxonType.unresolved}
+	end 'notMatched'
+
+	export static function matchedAt(slot VarSlot, slotType MaxonType) returns VarLoadSlotInfo
+		return Self{matched: true, slot: slot, slotType: slotType}
+	end 'matchedAt'
+end 'VarLoadSlotInfo'
+
+// Result for the parser-time call/tryCall lookup in
+// `callResultTypeIfNameMatches`. `matched` is true when the call/tryCall's
+// result name equals the target name; callers must ignore `callee` and
+// `callContext` when `matched` is false.
+type CallProducerInfo
+	export var matched bool
+	export var callee ByteArray
+	export var callContext CallContext
+
+	export static function notMatched() returns CallProducerInfo
+		return Self{matched: false, callee: ByteArray.create(), callContext: CallContext.qualified}
+	end 'notMatched'
+
+	export static function matched(callee ByteArray, callContext CallContext) returns CallProducerInfo
+		return Self{matched: true, callee: callee, callContext: callContext}
+	end 'matched'
+end 'CallProducerInfo'
+
+// Result for the parser-time varDecl lookup in `chaseVarLoadProducerType`.
+// `matched` is true when a varDecl's slotId equals the target slot; callers
+// must ignore `value` when `matched` is false.
+type VarDeclValueInfo
+	export var matched bool
+	export var value ByteArray
+
+	export static function notMatched() returns VarDeclValueInfo
+		return Self{matched: false, value: ByteArray.create()}
+	end 'notMatched'
+
+	export static function matchedWith(value ByteArray) returns VarDeclValueInfo
+		return Self{matched: true, value: value}
+	end 'matchedWith'
+end 'VarDeclValueInfo'
+
+// Per-function set type used by `propagateCharByteThroughVarChains` to flow
+// char-byte taint from `varDecl(slot, value)` to subsequent `varLoad(result,
+// slot)` ops. Lives stack-local to one function's walk; the project-level
+// `charByteLiterals` set accumulates the result names so consumers
+// downstream don't need any per-function tracking.
+typealias CharByteSlotSet = Set with VarSlot
+
+// Walk every function in `module` once, in op-emission order, extending
+// `project.charByteLiterals` with every `varLoad` result that reads a slot
+// previously bound to a char-byte value. The literal-emission site already
+// recorded raw literal value names at the char-literal parse site; this
+// helper picks up the indirect-through-binding case (`let c = 'A'; print
+// ("{c}")`) by maintaining a per-function `charByteSlots` set keyed on
+// VarSlot.
+//
+// Semantics:
+//   - `varDecl(slot, value, _)` taints `slot` when `value` is a char-byte.
+//   - `varLoad(result, slot, _)` against a tainted slot records `result`.
+//   - `varStore(slot, value)` re-taints when `value` is char-byte, clears
+//     the taint otherwise (overwriting a char-byte var with an unrelated
+//     int loses the provenance).
+//
+// All keys go through `charByteLiteralKey` so the per-function value-name
+// space matches the `arrayLiteralProducerKey` scheme used elsewhere.
+function propagateCharByteThroughVarChains(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		var charByteSlots = CharByteSlotSet.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("propagateCharByteThroughVarChains: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("propagateCharByteThroughVarChains: opIdx OOB")
+				propagateCharByteForOp(project, op: op, funcName: func.name, charByteSlots: charByteSlots)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termIdx = block.terminatorIndex()
+				let termOp = try module.ops.get(termIdx) otherwise panic("propagateCharByteThroughVarChains: terminator OOB")
+				propagateCharByteForOp(project, op: termOp, funcName: func.name, charByteSlots: charByteSlots)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'propagateCharByteThroughVarChains'
+
+function propagateCharByteForOp(project Project, op MaxonOp, funcName String, charByteSlots CharByteSlotSet)
+	// Cheap pre-filter on op tag avoids exhaustively listing every other
+	// MaxonOp arm just to skip them. The three arms below are the only ones
+	// that participate in char-byte slot taint flow.
+	if op.name != "varDecl" and op.name != "varLoad" and op.name != "varStore" 'unrelated'
+		return
+	end 'unrelated'
+	match op 'rec'
+		varDecl(slotId, value, _, _) then handleCharByteVarDecl(project, funcName: funcName, slotId: slotId, value: value, charByteSlots: charByteSlots)
+		varLoad(result, slotId, _, _) then handleCharByteVarLoad(project, funcName: funcName, result: result, slotId: slotId, charByteSlots: charByteSlots)
+		varStore(slotId, value, _) then handleCharByteVarStore(project, funcName: funcName, slotId: slotId, value: value, charByteSlots: charByteSlots)
+		default panic("propagateCharByteForOp: pre-filter let through op.name={op.name}")
+	end 'rec'
+end 'propagateCharByteForOp'
+
+function handleCharByteVarDecl(project Project, funcName String, slotId VarSlot, value ByteArray, charByteSlots CharByteSlotSet)
+	if project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: value)) 'inherit'
+		charByteSlots.insert(slotId)
+	end 'inherit'
+end 'handleCharByteVarDecl'
+
+function handleCharByteVarLoad(project Project, funcName String, result ByteArray, slotId VarSlot, charByteSlots CharByteSlotSet)
+	if charByteSlots.contains(slotId) 'tainted'
+		project.charByteLiterals.insert(charByteLiteralKey(funcName: funcName, valueName: result))
+	end 'tainted'
+end 'handleCharByteVarLoad'
+
+function handleCharByteVarStore(project Project, funcName String, slotId VarSlot, value ByteArray, charByteSlots CharByteSlotSet)
+	let valueIsCharByte = project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: value))
+	if valueIsCharByte 'taintNow'
+		charByteSlots.insert(slotId)
+		return
+	end 'taintNow'
+	if charByteSlots.contains(slotId) 'wasTainted'
+		_ = charByteSlots.remove(slotId)
+	end 'wasTainted'
+end 'handleCharByteVarStore'
+
 // --- Standalone pure functions ---
 
 // --- MaxonType predicates for parser use ---
@@ -10701,6 +11964,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 		boolean to integer gives false
 		string to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -10721,6 +11985,7 @@ function maxonTypeIsPrimitive(t MaxonType) returns bool
 		string gives false
 		named to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsPrimitive'
 
@@ -10729,6 +11994,7 @@ function maxonTypeIsBool(t MaxonType) returns bool
 		boolean gives true
 		integer to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsBool'
 
@@ -10738,6 +12004,7 @@ function maxonTypeIsInt(t MaxonType) returns bool
 		boolean gives false
 		float to unresolved gives false
 		typeParameter to interface gives false
+		constInt gives false
 	end 'check'
 end 'maxonTypeIsInt'
 
@@ -10985,6 +12252,7 @@ export function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
 		rangedFloat gives false
 		aliasName gives false
 		genericAlias gives false
+		sizedGenericAlias gives false
 	end 'check'
 end 'isInvalidTypealiasExpr'
 

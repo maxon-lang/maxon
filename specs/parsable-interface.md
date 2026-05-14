@@ -338,10 +338,14 @@ end 'main'
 function main() returns ExitCode
 	let f = try float.fromString("3.14") otherwise 0.0
 	let check = f * 100.0
-	return trunc(check)
+	print("{trunc(check)}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
+0
+```
+```stdout
 314
 ```
 

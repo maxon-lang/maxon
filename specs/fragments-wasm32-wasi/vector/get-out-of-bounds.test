@@ -1,0 +1,129 @@
+// Test: get-out-of-bounds
+typealias Int = int(i64.min to i64.max)
+typealias Vec2 = Vector with 2 Int
+
+function main() returns ExitCode
+	var v = Vec2.create()
+	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
+	let result = try v.get(5) otherwise -1
+	print("{result}\n")
+	return 0
+end 'main'
+---
+Stdout: ```
+-1
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %60 = mir.mov_imm 8 : i64
+    %61 = mir.call @mrt_alloc(%60)
+    %62 = mir.mov_imm 40 : i64
+    %63 = mir.call @mrt_alloc(%62)
+    %64 = mir.mov_imm 0 : i64
+    mir.store %64, %63, 0 width: qword
+    %65 = mir.mov_imm 0 : i64
+    mir.store %65, %63, 8 width: qword
+    %66 = mir.mov_imm 0 : i64
+    mir.store %66, %63, 16 width: qword
+    %67 = mir.mov_imm 8 : i64
+    mir.store %67, %63, 24 width: qword
+    %68 = mir.mov_imm 0 : i64
+    mir.store %68, %63, 32 width: qword
+    mir.store %63, %61, 0 width: qword
+    %2 = mir.load %61, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    mir.store %3, %2, 16 width: qword
+    %4 = mir.mov_imm 8 : i64
+    mir.store %4, %2, 24 width: qword
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %6, %2, 0 width: qword
+    %7 = mir.mov_imm 2 : i64
+    mir.store %7, %2, 8 width: qword
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 10 : i64
+    mir.br inlined_Vector.set_0()
+  inlined_Vector.set_0:
+    %69 = mir.load %61, 0 width: qword
+    %70, %71 = mir.try_call @stdlib.__managed_mem_set(%69, %9, %10)
+    %72 = mir.mov_imm 0 : i64
+    %73 = mir.cmp ne, %71, %72
+    mir.cond_br %73 [then: inlined_Vector.set_1(), else: inlined_Vector.set_2()]
+  inlined_Vector.set_1:
+    %74 = mir.mov_imm 0 : i64
+    %75 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%74, %75)
+  inlined_Vector.set_2:
+    %76 = mir.mov_imm 0 : i64
+    %77 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%76, %77)
+  inline_cont_main_0:
+    %15 = mir.cmp ne, %79, %9
+    mir.cond_br %15 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+    mir.ret %9
+  try_0.merge:
+    %22 = mir.mov_imm 5 : i64
+    mir.br inlined_Vector.get_0()
+  inlined_Vector.get_0:
+    %80 = mir.load %61, 0 width: qword
+    %81, %82 = mir.try_call @stdlib.__managed_mem_get(%80, %22)
+    %83 = mir.mov_imm 0 : i64
+    %84 = mir.cmp ne, %82, %83
+    mir.cond_br %84 [then: inlined_Vector.get_1(), else: inlined_Vector.get_2()]
+  inlined_Vector.get_1:
+    %85 = mir.mov_imm 0 : i64
+    %86 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%85, %86)
+  inlined_Vector.get_2:
+    %87 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%81, %87)
+  inline_cont_main_1:
+    %27 = mir.cmp ne, %89, %9
+    mir.cond_br %27 [then: try_1.otherwise(), else: try_1.merge(%88)]
+  try_1.otherwise:
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.neg.i64 %29
+    mir.br try_1.merge(%30)
+  try_1.merge:
+    %33 = mir.global_addr @__istr_0
+    %35 = mir.mov_imm 21 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    %37 = mir.call @mrt_i64_to_string(%59, %36)
+    %38 = mir.global_addr @__istr_1
+    %39 = mir.mov_imm 1 : i64
+    %42 = mir.add.i64 %9, %37
+    %43 = mir.add.i64 %42, %39
+    %44 = mir.mov_imm 1 : i64
+    %45 = mir.add.i64 %43, %44
+    %46 = mir.call @mrt_alloc(%45)
+    mir.memcpy %46, %33, %9
+    %47 = mir.add.i64 %46, %9
+    mir.memcpy %47, %36, %37
+    %48 = mir.add.i64 %47, %37
+    mir.memcpy %48, %38, %39
+    %50 = mir.mov_imm 40 : i64
+    %51 = mir.call @mrt_alloc(%50)
+    mir.store %46, %51, 0 width: qword
+    mir.store %43, %51, 8 width: qword
+    mir.store %43, %51, 16 width: qword
+    %52 = mir.mov_imm 1 : i64
+    mir.store %52, %51, 24 width: qword
+    mir.store %9, %51, 32 width: qword
+    %54 = mir.mov_imm 16 : i64
+    %55 = mir.call @mrt_alloc(%54)
+    mir.store %51, %55, 0 width: qword
+    mir.store %9, %55, 8 width: qword
+    %90 = mir.load %55, 0 width: qword
+    %91 = mir.load %90, 0 width: qword
+    %92 = mir.load %90, 8 width: qword
+    %93 = mir.call @mrt_write_stdout(%91, %92)
+    mir.ret %9
+  }
+}
+---

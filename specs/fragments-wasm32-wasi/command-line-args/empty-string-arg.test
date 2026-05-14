@@ -1,0 +1,76 @@
+// Test: empty-string-arg
+function main() returns ExitCode
+	let args = CommandLine.args()
+	// Empty quoted arg is at index 1 (index 0 is argv[0])
+	let arg = try args.get(1) otherwise "x"
+	if arg == "" 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+Args: ""
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @CommandLine.args()
+    %2 = mir.mov_imm 1 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %35 = mir.load %0, 0 width: qword
+    %36, %37 = mir.try_call @stdlib.__managed_mem_get(%35, %2)
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.cmp ne, %37, %38
+    mir.cond_br %39 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %40 = mir.mov_imm 0 : i64
+    %41 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%40, %41)
+  inlined_Array.get_2:
+    %42 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%36, %42)
+  inline_cont_main_0:
+    %6 = mir.mov_imm 0 : i64
+    %7 = mir.cmp ne, %44, %6
+    mir.cond_br %7 [then: try_0.otherwise(), else: try_0.merge(%43)]
+  try_0.otherwise:
+    %9 = mir.global_addr @__istr_0
+    %10 = mir.mov_imm 40 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %9, %11, 0 width: qword
+    mir.store %2, %11, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %11, 16 width: qword
+    mir.store %2, %11, 24 width: qword
+    mir.store %6, %11, 32 width: qword
+    %16 = mir.mov_imm 16 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    mir.store %11, %17, 0 width: qword
+    mir.store %2, %17, 8 width: qword
+    mir.br try_0.merge(%17)
+  try_0.merge:
+    %21 = mir.global_addr @__istr_1
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %21, %23, 0 width: qword
+    mir.store %6, %23, 8 width: qword
+    %25 = mir.mov_imm -2 : i64
+    mir.store %25, %23, 16 width: qword
+    mir.store %2, %23, 24 width: qword
+    mir.store %6, %23, 32 width: qword
+    %28 = mir.mov_imm 16 : i64
+    %29 = mir.call @mrt_alloc(%28)
+    mir.store %23, %29, 0 width: qword
+    mir.store %2, %29, 8 width: qword
+    %31 = mir.call @String.equals(%34, %29)
+    mir.cond_br %31 [then: check_0(), else: check_0.after()]
+  check_0:
+    mir.ret %6
+  check_0.after:
+    mir.ret %2
+  }
+}
+---

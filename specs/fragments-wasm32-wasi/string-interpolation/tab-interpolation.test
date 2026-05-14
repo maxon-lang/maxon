@@ -1,0 +1,67 @@
+// Test: tab-interpolation
+function main() returns ExitCode
+	let a = 1
+	let b = 2
+	print("{a}\t{b}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1	2
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 21 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    %8 = mir.call @mrt_i64_to_string(%0, %7)
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.mov_imm 21 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    %13 = mir.call @mrt_i64_to_string(%1, %12)
+    %14 = mir.global_addr @__istr_2
+    %15 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %5, %8
+    %19 = mir.add.i64 %18, %10
+    %20 = mir.add.i64 %19, %13
+    %21 = mir.add.i64 %20, %15
+    %22 = mir.mov_imm 1 : i64
+    %23 = mir.add.i64 %21, %22
+    %24 = mir.call @mrt_alloc(%23)
+    mir.memcpy %24, %4, %5
+    %25 = mir.add.i64 %24, %5
+    mir.memcpy %25, %7, %8
+    %26 = mir.add.i64 %25, %8
+    mir.memcpy %26, %9, %10
+    %27 = mir.add.i64 %26, %10
+    mir.memcpy %27, %12, %13
+    %28 = mir.add.i64 %27, %13
+    mir.memcpy %28, %14, %15
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %24, %31, 0 width: qword
+    mir.store %21, %31, 8 width: qword
+    mir.store %21, %31, 16 width: qword
+    %32 = mir.mov_imm 1 : i64
+    mir.store %32, %31, 24 width: qword
+    mir.store %5, %31, 32 width: qword
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %31, %35, 0 width: qword
+    mir.store %5, %35, 8 width: qword
+    %38 = mir.load %35, 0 width: qword
+    %39 = mir.load %38, 0 width: qword
+    %40 = mir.load %38, 8 width: qword
+    %41 = mir.call @mrt_write_stdout(%39, %40)
+    mir.ret %5
+  }
+}
+---

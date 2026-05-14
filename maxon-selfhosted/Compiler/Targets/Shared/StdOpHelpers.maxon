@@ -271,3 +271,126 @@ export function registerFloatConstant(rawBits ParsedInt, globalData GlobalDataTa
 	end 'register'
 	return label
 end 'registerFloatConstant'
+
+// Register a 128-bit XMM mask (low/high 64-bit halves) in globalData and
+// return the label. The `__xmmmask_` name prefix is recognized by the rdata
+// emission pass which aligns the entry to 16 bytes — required because SSE
+// packed instructions like `ANDPD xmm, m128` raise #GP on misaligned memory
+// operands.
+export function registerXmmMaskConstant(rawBitsLo ParsedInt, rawBitsHi ParsedInt, globalData GlobalDataTable) returns String
+	let label = "__xmmmask_{rawBitsLo}_{rawBitsHi}"
+	let existing = lookupGlobalData(globalData, name: label)
+	if existing.count() == 0 'register'
+		var data = ByteArray.create()
+		writeQword(data, value: rawBitsLo)
+		writeQword(data, value: rawBitsHi)
+		addNamedGlobalData(globalData, name: label, data: data)
+	end 'register'
+	return label
+end 'registerXmmMaskConstant'
+
+// ============================================================
+// MIR ValueId ceiling scan (MIR phase)
+// ============================================================
+
+// Highest ValueId referenced (defined or used) in an entire function. Used by
+// target lowering to seed a per-function scratch-id allocator one past the
+// MIR's ceiling so synthetic virtuals can't collide with MIR-numbered ones.
+export function scanMaxMirValueId(module MirModule, func IrFunction) returns ValueId
+	var maxId = 0
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("scanMaxMirValueId: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			if arg.valueId > maxId 'updateArg'
+				maxId = arg.valueId
+			end 'updateArg'
+		end 'eachArg'
+		for opIdx in block.opRefs 'eachOp'
+			let opMax = scanMaxMirValueIdForOp(module, packed: opIdx)
+			if opMax > maxId 'updateOp'
+				maxId = opMax
+			end 'updateOp'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termMax = scanMaxMirValueIdForOp(module, packed: block.terminatorIndex())
+			if termMax > maxId 'updateTerm'
+				maxId = termMax
+			end 'updateTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+	return maxId
+end 'scanMaxMirValueId'
+
+export function scanMaxMirValueIdForOp(module MirModule, packed OpIndex) returns ValueId
+	let op = try module.ops.get(packed) otherwise panic("scanMaxMirValueIdForOp: packed opIdx not in module.ops")
+	return mirOpMaxValueId(op)
+end 'scanMaxMirValueIdForOp'
+
+// Compute the maximum ValueId defined or used by a single MIR op. Operates
+// directly on `MirOp`, so callers that already hold the op (e.g. ISel
+// dispatchers) can skip the module.ops indirection.
+export function mirOpMaxValueId(op MirOp) returns ValueId
+	return match op 'pick'
+		movImm(resultId, _, _) gives resultId
+		movReg(resultId, srcId) gives maxOfTwoValueIds(a: resultId, b: srcId)
+		binOp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(a: resultId, b: leftId, c: rightId)
+		unaryOp(resultId, operandId, _) gives maxOfTwoValueIds(a: resultId, b: operandId)
+		cmp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(a: resultId, b: leftId, c: rightId)
+		condBranch(condId, _, thenArgs, _, elseArgs) gives maxOfThreeValueIds(a: condId, b: maxValueIdInArray(thenArgs), c: maxValueIdInArray(elseArgs))
+		branch(_, args) gives maxValueIdInArray(args)
+		call(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
+		indirectCall(resultId, calleeId, argIds) gives maxOfThreeValueIds(a: resultId, b: calleeId, c: maxValueIdInArray(argIds))
+		witnessCall(resultId, witnessAddrId, _, _, argIds) gives maxOfThreeValueIds(a: resultId, b: witnessAddrId, c: maxValueIdInArray(argIds))
+		ret(retValId) gives retValId
+		param(resultId, _, _) gives resultId
+		load(resultId, baseId, _, _, _, _) gives maxOfTwoValueIds(a: resultId, b: baseId)
+		store(valueId, baseId, _, _, _) gives maxOfTwoValueIds(a: valueId, b: baseId)
+		loadSlot(resultId, _) gives resultId
+		storeSlot(_, valueId) gives valueId
+		stackSlotAddr(resultId, _) gives resultId
+		globalAddr(resultId, _) gives resultId
+		funcAddr(resultId, _) gives resultId
+		loadFramePtr(resultId) gives resultId
+		syscall(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
+		iatCall(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
+		osExit(codeId) gives codeId
+		osWrite(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
+		osWriteErr(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThreeValueIds(a: resultId, b: pathPtrId, c: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) gives maxOfThreeValueIds(a: fdId, b: ptrId, c: lenId)
+		osClose(fdId) gives fdId
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwoValueIds(a: maxOfThreeValueIds(a: resultId, b: namePtrId, c: nameLenId), b: maxOfTwoValueIds(a: outBufPtrId, b: outBufLenId))
+		memcpy(dstId, srcId, lenId) gives maxOfThreeValueIds(a: dstId, b: srcId, c: lenId)
+		storeByte(baseId, offsetId, byteId) gives maxOfThreeValueIds(a: baseId, b: offsetId, c: byteId)
+		loadByte(resultId, baseId, offsetId) gives maxOfThreeValueIds(a: resultId, b: baseId, c: offsetId)
+		osAllocPages(resultId, sizeId) gives maxOfTwoValueIds(a: resultId, b: sizeId)
+		osAllocPagesLarge(resultId, sizeId) gives maxOfTwoValueIds(a: resultId, b: sizeId)
+		osFreePages(ptrId, sizeId) gives maxOfTwoValueIds(a: ptrId, b: sizeId)
+		atomicInc(addrId) gives addrId
+		atomicDec(addrId) gives addrId
+		atomicXadd(resultId, addrId, valId) gives maxOfThreeValueIds(a: resultId, b: addrId, c: valId)
+		osLockInit(addrId) gives addrId
+		osLockAcquire(addrId) gives addrId
+		osLockRelease(addrId) gives addrId
+		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThreeValueIds(a: resultId, b: maxValueIdInArray(argIds), c: errorFlagId)
+		errorReturn(retValId, errorFlagId) gives maxOfTwoValueIds(a: retValId, b: errorFlagId)
+	end 'pick'
+end 'mirOpMaxValueId'
+
+export function maxOfTwoValueIds(a ValueId, b ValueId) returns ValueId
+	return a if a >= b else b
+end 'maxOfTwoValueIds'
+
+export function maxOfThreeValueIds(a ValueId, b ValueId, c ValueId) returns ValueId
+	return maxOfTwoValueIds(a: maxOfTwoValueIds(a: a, b: b), b: c)
+end 'maxOfThreeValueIds'
+
+export function maxValueIdInArray(ids ValueIdArray) returns ValueId
+	var m = 0
+	for id in ids 'each'
+		if id > m 'update'
+			m = id
+		end 'update'
+	end 'each'
+	return m
+end 'maxValueIdInArray'

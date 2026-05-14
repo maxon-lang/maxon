@@ -12,10 +12,35 @@ ExitCode: 10
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @match-simple.main() -> u32 {
   entry:
-    x64.mov r8d, 10
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.jmp match-simple.main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 10
+    x64.epilogue
     x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.check_0.case2
+  check_0.case1:
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
+  check_0.case2:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
   }
 }
 ---

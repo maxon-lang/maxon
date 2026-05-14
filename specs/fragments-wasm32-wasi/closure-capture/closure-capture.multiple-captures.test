@@ -1,0 +1,45 @@
+// Test: closure-capture.multiple-captures
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let a = 10
+	let b = 20
+	let result = apply(f: (x Integer) gives x + a + b, x: 5)
+	return result
+end 'main'
+---
+ExitCode: 35
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.mov_imm 20 : i64
+    mir.store_slot slot_1, %1
+    %2 = mir.func_addr @_$closure_3
+    %3 = mir.stack_slot_addr slot_0
+    %4 = mir.stack_slot_addr slot_1
+    %5 = mir.mov_imm 16 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %3, %6, 0 width: qword
+    mir.store %4, %6, 8 width: qword
+    %7 = mir.mov_imm 5 : i64
+    %9 = mir.indirect_call %2(%7, %6)
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %9, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_0
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %9
+  }
+}
+---

@@ -103,6 +103,9 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		typeParameter(id) gives subst.lookup(id)
 		interface gives t
 		genericInstance(gid) gives substituteGenericInstance(project, gid: gid, subst: subst)
+		// `constInt` arm appears only inside a genericInstance's arg list
+		// (sized typealiases); it is never substituted as a top-level type.
+		constInt gives t
 	end 'sub'
 end 'substituteType'
 
@@ -176,6 +179,7 @@ export function buildSubstitutionForInstance(project Project, t MaxonType) retur
 		genericInstance(gid) gives buildSubstitutionFromGenericInstance(project, gid: gid)
 		boolean to typeParameter gives TypeSubstitution.create()
 		interface gives TypeSubstitution.create()
+		constInt gives TypeSubstitution.create()
 	end 'pick'
 end 'buildSubstitutionForInstance'
 

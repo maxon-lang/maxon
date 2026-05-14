@@ -1,0 +1,65 @@
+// Test: remove.nonexistent
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(99)
+	if removed 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %5, %7)
+    %9 = mir.global_addr @__rdata_arr_set_main_7
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 3 : i64
+    mir.store %10, %8, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %8, 16 width: qword
+    %12 = mir.mov_imm 8 : i64
+    mir.store %12, %8, 24 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %8, 32 width: qword
+    %34 = mir.mov_imm 8 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    %36 = mir.mov_imm 40 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    %38 = mir.mov_imm 0 : i64
+    mir.store %38, %37, 0 width: qword
+    %39 = mir.mov_imm 0 : i64
+    mir.store %39, %37, 8 width: qword
+    %40 = mir.mov_imm 0 : i64
+    mir.store %40, %37, 16 width: qword
+    %41 = mir.mov_imm 8 : i64
+    mir.store %41, %37, 24 width: qword
+    %42 = mir.mov_imm 0 : i64
+    mir.store %42, %37, 32 width: qword
+    mir.store %37, %35, 0 width: qword
+    mir.store %8, %35, 0 width: qword
+    %21 = mir.global_addr @__layout_Set_Int
+    %22 = mir.global_addr @__witness_int_Hashable
+    %23 = mir.global_addr @__witness_int_Equatable
+    %24 = mir.call @Set.init(%35, %21, %22, %23)
+    %26 = mir.mov_imm 99 : i64
+    %27 = mir.global_addr @__layout_Set_Int
+    %28 = mir.global_addr @__witness_int_Hashable
+    %29 = mir.global_addr @__witness_int_Equatable
+    %30 = mir.call @Set.remove(%24, %26, %27, %28, %29)
+    mir.cond_br %30 [then: check_0(), else: check_0.after()]
+  check_0:
+    %32 = mir.mov_imm 1 : i64
+    mir.ret %32
+  check_0.after:
+    %33 = mir.mov_imm 0 : i64
+    mir.ret %33
+  }
+}
+---

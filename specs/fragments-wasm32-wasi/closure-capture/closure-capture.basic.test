@@ -1,0 +1,40 @@
+// Test: closure-capture.basic
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let offset = 7
+	let result = apply(f: (n Integer) gives n + offset, x: 10)
+	return result
+end 'main'
+---
+ExitCode: 17
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    mir.store_slot slot_0, %0
+    %1 = mir.func_addr @_$closure_0
+    %2 = mir.stack_slot_addr slot_0
+    %3 = mir.mov_imm 8 : i64
+    %4 = mir.call @mrt_alloc(%3)
+    mir.store %2, %4, 0 width: qword
+    %5 = mir.mov_imm 10 : i64
+    %7 = mir.indirect_call %1(%5, %4)
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

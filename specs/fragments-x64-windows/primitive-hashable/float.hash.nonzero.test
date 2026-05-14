@@ -12,31 +12,21 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @primitive-hashable.main() -> u32 {
   entry:
-    x64.movsd xmm0, [rip+__float_4614253070214989087]
-  inlined_float.hash_0:
-    x64.mov r8, 9223372036854775807
-    x64.neg r8
-    x64.sub r8, 1
-    x64.movq r9, xmm0
-    x64.cmp r9, r8
-    x64.jne inlined_float.hash_2
-  inlined_float.hash_1:
-    x64.xor r8d, r8d
-    x64.jmp inline_cont_main_0
-  inlined_float.hash_2:
-    x64.mov r8d, 4294967295
-    x64.and r9, r8
-    x64.mov r8, r9
-  inline_cont_main_0:
-    x64.test r8, r8
-    x64.je check_0.after
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.call stdlib.float.hash
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je primitive-hashable.main.check_0.after
   check_0:
-    x64.mov r8d, 1
+    x64.mov rax, 1
+    x64.epilogue
     x64.ret
   check_0.after:
-    x64.xor r8d, r8d
+    x64.xor eax, eax
+    x64.epilogue
     x64.ret
   }
 }

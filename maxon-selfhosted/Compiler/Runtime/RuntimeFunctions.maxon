@@ -280,6 +280,16 @@ function emitRdataPass(rdata ByteArray, table GlobalDataTable, map RdataOffsetMa
 			continue
 		end 'skipPass'
 		var data = try table.values.get(i) otherwise panic("emitRdataPass: names and values kept parallel but values.get({i}) failed (values.count={table.values.count()})")
+		// `__xmmmask_*` entries hold 128-bit constants that SSE packed
+		// instructions (ANDPD / PCMPEQD with m128 operand) require to be
+		// 16-byte aligned. The PE rdata section starts on a SECTION_ALIGNMENT
+		// (4KB) boundary, so a 16-byte aligned offset within rdata is
+		// 16-byte aligned at runtime.
+		if name.startsWith("__xmmmask_") 'mask16'
+			while rdata.count() mod 16 != 0 'align16'
+				rdata.push(0)
+			end 'align16'
+		end 'mask16'
 		map.record(name, offset: rdata.count())
 		rdata.append(data)
 		// Pad to 8-byte alignment

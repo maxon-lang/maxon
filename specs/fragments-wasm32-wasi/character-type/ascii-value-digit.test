@@ -1,0 +1,71 @@
+// Test: ascii-value-digit
+function main() returns ExitCode
+	let c = '0'
+	let val = try c.asciiValue() otherwise 0
+	print("{val}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+48
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 48 : i64
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.call @mrt_alloc(%2)
+    mir.store %0, %3, 0 width: byte
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    mir.store %2, %5, 8 width: qword
+    mir.store %2, %5, 16 width: qword
+    mir.store %2, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    %12, %13 = mir.try_call @Character.asciiValue(%11)
+    %15 = mir.cmp ne, %13, %9
+    mir.cond_br %15 [then: try_0.merge(%9), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%12)
+  try_0.merge:
+    %20 = mir.global_addr @__istr_0
+    %22 = mir.mov_imm 21 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    %24 = mir.call @mrt_i64_to_string(%46, %23)
+    %25 = mir.global_addr @__istr_1
+    %29 = mir.add.i64 %9, %24
+    %30 = mir.add.i64 %29, %2
+    %32 = mir.add.i64 %30, %2
+    %33 = mir.call @mrt_alloc(%32)
+    mir.memcpy %33, %20, %9
+    %34 = mir.add.i64 %33, %9
+    mir.memcpy %34, %23, %24
+    %35 = mir.add.i64 %34, %24
+    mir.memcpy %35, %25, %2
+    %37 = mir.mov_imm 40 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    mir.store %33, %38, 0 width: qword
+    mir.store %30, %38, 8 width: qword
+    mir.store %30, %38, 16 width: qword
+    mir.store %2, %38, 24 width: qword
+    mir.store %9, %38, 32 width: qword
+    %41 = mir.mov_imm 16 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %38, %42, 0 width: qword
+    mir.store %9, %42, 8 width: qword
+    %47 = mir.load %42, 0 width: qword
+    %48 = mir.load %47, 0 width: qword
+    %49 = mir.load %47, 8 width: qword
+    %50 = mir.call @mrt_write_stdout(%48, %49)
+    mir.ret %9
+  }
+}
+---

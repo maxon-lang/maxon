@@ -1,0 +1,191 @@
+// Test: for-in.nested
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function innerSum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'inner'
+		total = total + v
+	end 'inner'
+	return total
+end 'innerSum'
+
+function main() returns ExitCode
+	let m = [1: 1, 2: 2, 3: 3]
+	var outerTotal = 0
+	for (_, v) in m 'outer'
+		outerTotal = outerTotal + v + innerSum(m)
+	end 'outer'
+	// Each outer iteration: v + innerSum = v + 6
+	// (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @innerSum(local0: i64) -> i64 {
+  entry:
+    %31 = mir.param local0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %3 = mir.global_addr @__layout_Map_Integer_Integer
+    %4 = mir.global_addr @__witness_int_Hashable
+    %5 = mir.global_addr @__witness_int_Equatable
+    mir.br inlined_Map.createIterator_0()
+  inlined_Map.createIterator_0:
+    %32 = mir.load %31, 0 width: qword
+    %33 = mir.load %31, 8 width: qword
+    %34 = mir.load %31, 16 width: qword
+    %35 = mir.load %31, 32 width: qword
+    %36, %37 = mir.try_call @MapIterator.create(%32, %33, %34, %35, %3, %4, %5)
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.cmp ne, %37, %38
+    mir.cond_br %39 [then: inlined_Map.createIterator_1(), else: inlined_Map.createIterator_2()]
+  inlined_Map.createIterator_1:
+    %40 = mir.mov_imm 0 : i64
+    mir.br inline_cont_innerSum_0(%40, %37)
+  inlined_Map.createIterator_2:
+    %41 = mir.mov_imm 0 : i64
+    mir.br inline_cont_innerSum_0(%36, %41)
+  inline_cont_innerSum_0:
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.cmp ne, %43, %8
+    mir.cond_br %9 [then: inner_0.exit(%1), else: inner_0(%1)]
+  inlined_MapIterator.advance_0:
+    %44 = mir.load %42, 16 width: qword
+    %45 = mir.load %42, 24 width: qword
+    %46 = mir.load %42, 32 width: qword
+    %47 = mir.mov_imm 1 : i64
+    %48 = mir.add.i64 %46, %47
+    %49, %50 = mir.try_call @stdlib.findNextOccupied(%44, %45, %48)
+    %51 = mir.mov_imm 0 : i64
+    %52 = mir.cmp ne, %50, %51
+    mir.cond_br %52 [then: inlined_MapIterator.advance_1(), else: inlined_MapIterator.advance_2()]
+  inlined_MapIterator.advance_1:
+    %53 = mir.mov_imm 0 : i64
+    %54 = mir.mov_imm 1 : i64
+    mir.br inline_cont_innerSum_1(%53, %54)
+  inlined_MapIterator.advance_2:
+    mir.store %49, %42, 32 width: qword
+    %55 = mir.mov_imm 0 : i64
+    %56 = mir.mov_imm 0 : i64
+    mir.br inline_cont_innerSum_1(%55, %56)
+  inline_cont_innerSum_1:
+    %16 = mir.mov_imm 0 : i64
+    %17 = mir.cmp ne, %58, %16
+    mir.cond_br %17 [then: inner_0.exit(%27), else: inner_0(%27)]
+  inner_0:
+    %19 = mir.global_addr @__layout_MapIterator_Integer_Integer
+    %20 = mir.global_addr @__witness_int_Hashable
+    %21 = mir.global_addr @__witness_int_Equatable
+    %22 = mir.call @MapIterator.current(%42, %19, %20, %21)
+    %23 = mir.load %22, 0 width: qword
+    %24 = mir.load %22, 8 width: qword
+    %27 = mir.add.i64 %29, %24
+    mir.br inlined_MapIterator.advance_0()
+  inner_0.exit:
+    mir.ret %30
+  }
+  func @main() -> u8 {
+  entry:
+    %4 = mir.mov_imm 3 : i64
+    %8 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %9 = mir.mov_imm 40 : i64
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.call @stdlib.__mm_alloc(%9, %8, %10)
+    %12 = mir.global_addr @__rdata_arr_map_main_54
+    mir.store %12, %11, 0 width: qword
+    mir.store %4, %11, 8 width: qword
+    %14 = mir.mov_imm -2 : i64
+    mir.store %14, %11, 16 width: qword
+    %15 = mir.mov_imm 8 : i64
+    mir.store %15, %11, 24 width: qword
+    %16 = mir.mov_imm -2 : i64
+    mir.store %16, %11, 32 width: qword
+    %24 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %25 = mir.mov_imm 40 : i64
+    %27 = mir.call @stdlib.__mm_alloc(%25, %24, %10)
+    %28 = mir.global_addr @__rdata_arr_map_main_55
+    mir.store %28, %27, 0 width: qword
+    mir.store %4, %27, 8 width: qword
+    %30 = mir.mov_imm -2 : i64
+    mir.store %30, %27, 16 width: qword
+    %31 = mir.mov_imm 8 : i64
+    mir.store %31, %27, 24 width: qword
+    %32 = mir.mov_imm -2 : i64
+    mir.store %32, %27, 32 width: qword
+    %38 = mir.global_addr @__layout_Map_Int_Int
+    %39 = mir.global_addr @__witness_int_Hashable
+    %40 = mir.global_addr @__witness_int_Equatable
+    %41 = mir.call @Map.init(%11, %27, %38, %39, %40)
+    %44 = mir.global_addr @__layout_Map_Int_Int
+    %45 = mir.global_addr @__witness_int_Hashable
+    %46 = mir.global_addr @__witness_int_Equatable
+    mir.br inlined_Map.createIterator_0()
+  inlined_Map.createIterator_0:
+    %79 = mir.load %41, 0 width: qword
+    %80 = mir.load %41, 8 width: qword
+    %81 = mir.load %41, 16 width: qword
+    %82 = mir.load %41, 32 width: qword
+    %83, %84 = mir.try_call @MapIterator.create(%79, %80, %81, %82, %44, %45, %46)
+    %85 = mir.mov_imm 0 : i64
+    %86 = mir.cmp ne, %84, %85
+    mir.cond_br %86 [then: inlined_Map.createIterator_1(), else: inlined_Map.createIterator_2()]
+  inlined_Map.createIterator_1:
+    %87 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%87, %84)
+  inlined_Map.createIterator_2:
+    %88 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%83, %88)
+  inline_cont_main_0:
+    %50 = mir.cmp ne, %90, %10
+    mir.cond_br %50 [then: outer_0.exit(%10), else: outer_0(%10)]
+  inlined_MapIterator.advance_0:
+    %91 = mir.load %89, 16 width: qword
+    %92 = mir.load %89, 24 width: qword
+    %93 = mir.load %89, 32 width: qword
+    %94 = mir.mov_imm 1 : i64
+    %95 = mir.add.i64 %93, %94
+    %96, %97 = mir.try_call @stdlib.findNextOccupied(%91, %92, %95)
+    %98 = mir.mov_imm 0 : i64
+    %99 = mir.cmp ne, %97, %98
+    mir.cond_br %99 [then: inlined_MapIterator.advance_1(), else: inlined_MapIterator.advance_2()]
+  inlined_MapIterator.advance_1:
+    %100 = mir.mov_imm 0 : i64
+    %101 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%100, %101)
+  inlined_MapIterator.advance_2:
+    mir.store %96, %89, 32 width: qword
+    %102 = mir.mov_imm 0 : i64
+    %103 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%102, %103)
+  inline_cont_main_1:
+    %58 = mir.cmp ne, %105, %10
+    mir.cond_br %58 [then: outer_0.exit(%71), else: outer_0(%71)]
+  outer_0:
+    %60 = mir.global_addr @__layout_MapIterator_Int_Int
+    %61 = mir.global_addr @__witness_int_Hashable
+    %62 = mir.global_addr @__witness_int_Equatable
+    %63 = mir.call @MapIterator.current(%89, %60, %61, %62)
+    %64 = mir.load %63, 0 width: qword
+    %65 = mir.load %63, 8 width: qword
+    %68 = mir.add.i64 %77, %65
+    %70 = mir.call @innerSum(%41)
+    %71 = mir.add.i64 %68, %70
+    mir.br inlined_MapIterator.advance_0()
+  outer_0.exit:
+    %73 = mir.mov_imm 24 : i64
+    %74 = mir.cmp eq, %78, %73
+    mir.cond_br %74 [then: check_0(), else: check_0.after()]
+  check_0:
+    mir.ret %10
+  check_0.after:
+    %76 = mir.mov_imm 1 : i64
+    mir.ret %76
+  }
+}
+---

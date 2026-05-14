@@ -1,0 +1,70 @@
+// Test: complex-expression
+function main() returns ExitCode
+	let x = 10
+	print("Double: {x * 2}, Triple: {x * 3}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Double: 20, Triple: 30
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 20 : i64
+    %6 = mir.mov_imm 30 : i64
+    %7 = mir.global_addr @__istr_0
+    %8 = mir.mov_imm 8 : i64
+    %9 = mir.mov_imm 21 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    %11 = mir.call @mrt_i64_to_string(%3, %10)
+    %12 = mir.global_addr @__istr_1
+    %13 = mir.mov_imm 10 : i64
+    %14 = mir.mov_imm 21 : i64
+    %15 = mir.call @mrt_alloc(%14)
+    %16 = mir.call @mrt_i64_to_string(%6, %15)
+    %17 = mir.global_addr @__istr_2
+    %18 = mir.mov_imm 1 : i64
+    %20 = mir.mov_imm 8 : i64
+    %21 = mir.add.i64 %20, %11
+    %22 = mir.add.i64 %21, %13
+    %23 = mir.add.i64 %22, %16
+    %24 = mir.add.i64 %23, %18
+    %25 = mir.mov_imm 1 : i64
+    %26 = mir.add.i64 %24, %25
+    %27 = mir.call @mrt_alloc(%26)
+    mir.memcpy %27, %7, %8
+    %28 = mir.add.i64 %27, %8
+    mir.memcpy %28, %10, %11
+    %29 = mir.add.i64 %28, %11
+    mir.memcpy %29, %12, %13
+    %30 = mir.add.i64 %29, %13
+    mir.memcpy %30, %15, %16
+    %31 = mir.add.i64 %30, %16
+    mir.memcpy %31, %17, %18
+    %33 = mir.mov_imm 40 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %27, %34, 0 width: qword
+    mir.store %24, %34, 8 width: qword
+    mir.store %24, %34, 16 width: qword
+    %35 = mir.mov_imm 1 : i64
+    mir.store %35, %34, 24 width: qword
+    %36 = mir.mov_imm 0 : i64
+    mir.store %36, %34, 32 width: qword
+    %37 = mir.mov_imm 16 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    mir.store %34, %38, 0 width: qword
+    %39 = mir.mov_imm 0 : i64
+    mir.store %39, %38, 8 width: qword
+    %42 = mir.load %38, 0 width: qword
+    %43 = mir.load %42, 0 width: qword
+    %44 = mir.load %42, 8 width: qword
+    %45 = mir.call @mrt_write_stdout(%43, %44)
+    %41 = mir.mov_imm 0 : i64
+    mir.ret %41
+  }
+}
+---

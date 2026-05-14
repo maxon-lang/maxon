@@ -1,0 +1,68 @@
+// Test: enum-allcasenames.single-case
+enum Singleton
+	only
+end 'Singleton'
+
+function main() returns ExitCode
+	let count = Singleton.allCaseNames.count()
+	if count == 1 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 4 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.call @stdlib.__managed_mem_create(%5, %11)
+    %14 = mir.mov_imm 0 : i64
+    %15, %16 = mir.try_call @stdlib.__managed_mem_set(%12, %14, %8)
+    %18, %19 = mir.try_call @stdlib.__managed_mem_set_length(%12, %5)
+    %29 = mir.mov_imm 8 : i64
+    %30 = mir.call @mrt_alloc(%29)
+    %31 = mir.mov_imm 40 : i64
+    %32 = mir.call @mrt_alloc(%31)
+    %33 = mir.mov_imm 0 : i64
+    mir.store %33, %32, 0 width: qword
+    %34 = mir.mov_imm 0 : i64
+    mir.store %34, %32, 8 width: qword
+    %35 = mir.mov_imm 0 : i64
+    mir.store %35, %32, 16 width: qword
+    %36 = mir.mov_imm 8 : i64
+    mir.store %36, %32, 24 width: qword
+    %37 = mir.mov_imm 0 : i64
+    mir.store %37, %32, 32 width: qword
+    mir.store %32, %30, 0 width: qword
+    mir.store %12, %30, 0 width: qword
+    %22 = mir.global_addr @__layout_Array_String
+    %23 = mir.call @Array.count(%30, %22)
+    %26 = mir.cmp eq, %23, %5
+    mir.cond_br %26 [then: check_0(), else: check_0.after()]
+  check_0:
+    mir.ret %5
+  check_0.after:
+    %28 = mir.mov_imm 0 : i64
+    mir.ret %28
+  }
+}
+---

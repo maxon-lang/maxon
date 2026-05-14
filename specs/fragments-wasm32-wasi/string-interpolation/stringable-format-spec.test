@@ -1,0 +1,241 @@
+// Test: stringable-format-spec
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter implements Stringable, FormattedStringable
+	var value Integer
+
+	function toString() returns String
+		return "{value}"
+	end 'toString'
+
+	function toString(format String) returns String
+		if format == "verbose" 'verbose'
+			return "Counter(value={value})"
+		end 'verbose'
+		return "{value}"
+	end 'toString'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create(value: 42)
+	print("{c}\n")
+	print("{c:verbose}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+42
+Counter(value=42)
+```
+---
+// CompiledIR
+module {
+  func @Counter.toString$(local0: i64) -> i64 {
+  entry:
+    %27 = mir.param local0 : i64
+    %1 = mir.load %27, 0 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 21 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    %7 = mir.call @mrt_i64_to_string(%1, %6)
+    %8 = mir.global_addr @__istr_0
+    %12 = mir.add.i64 %4, %7
+    %13 = mir.add.i64 %12, %4
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %13, %14
+    %16 = mir.call @mrt_alloc(%15)
+    mir.memcpy %16, %3, %4
+    %17 = mir.add.i64 %16, %4
+    mir.memcpy %17, %6, %7
+    %18 = mir.add.i64 %17, %7
+    mir.memcpy %18, %8, %4
+    %20 = mir.mov_imm 40 : i64
+    %21 = mir.call @mrt_alloc(%20)
+    mir.store %16, %21, 0 width: qword
+    mir.store %13, %21, 8 width: qword
+    mir.store %13, %21, 16 width: qword
+    %22 = mir.mov_imm 1 : i64
+    mir.store %22, %21, 24 width: qword
+    mir.store %4, %21, 32 width: qword
+    %24 = mir.mov_imm 16 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    mir.store %21, %25, 0 width: qword
+    mir.store %4, %25, 8 width: qword
+    mir.ret %25
+  }
+  func @Counter.toString$String(local0: i64, local1: i64) -> i64 {
+  entry:
+    %66 = mir.param local0 : i64
+    %67 = mir.param local1 : i64
+    %3 = mir.global_addr @__istr_1
+    %4 = mir.mov_imm 40 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %3, %5, 0 width: qword
+    %6 = mir.mov_imm 7 : i64
+    mir.store %6, %5, 8 width: qword
+    %7 = mir.mov_imm -2 : i64
+    mir.store %7, %5, 16 width: qword
+    %8 = mir.mov_imm 1 : i64
+    mir.store %8, %5, 24 width: qword
+    %9 = mir.mov_imm 0 : i64
+    mir.store %9, %5, 32 width: qword
+    %10 = mir.mov_imm 16 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %5, %11, 0 width: qword
+    mir.store %8, %11, 8 width: qword
+    %13 = mir.call @String.equals(%67, %11)
+    mir.cond_br %13 [then: verbose_0(), else: verbose_0.after()]
+  verbose_0:
+    %14 = mir.load %66, 0 width: qword
+    %16 = mir.global_addr @__istr_2
+    %17 = mir.mov_imm 14 : i64
+    %18 = mir.mov_imm 21 : i64
+    %19 = mir.call @mrt_alloc(%18)
+    %20 = mir.call @mrt_i64_to_string(%14, %19)
+    %21 = mir.global_addr @__istr_3
+    %24 = mir.mov_imm 14 : i64
+    %25 = mir.add.i64 %24, %20
+    %26 = mir.add.i64 %25, %8
+    %28 = mir.add.i64 %26, %8
+    %29 = mir.call @mrt_alloc(%28)
+    mir.memcpy %29, %16, %17
+    %30 = mir.add.i64 %29, %17
+    mir.memcpy %30, %19, %20
+    %31 = mir.add.i64 %30, %20
+    mir.memcpy %31, %21, %8
+    %33 = mir.mov_imm 40 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %29, %34, 0 width: qword
+    mir.store %26, %34, 8 width: qword
+    mir.store %26, %34, 16 width: qword
+    mir.store %8, %34, 24 width: qword
+    mir.store %9, %34, 32 width: qword
+    %37 = mir.mov_imm 16 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    mir.store %34, %38, 0 width: qword
+    mir.store %9, %38, 8 width: qword
+    mir.ret %38
+  verbose_0.after:
+    %40 = mir.load %66, 0 width: qword
+    %42 = mir.global_addr @__istr_0
+    %44 = mir.mov_imm 21 : i64
+    %45 = mir.call @mrt_alloc(%44)
+    %46 = mir.call @mrt_i64_to_string(%40, %45)
+    %47 = mir.global_addr @__istr_0
+    %51 = mir.add.i64 %9, %46
+    %52 = mir.add.i64 %51, %9
+    %54 = mir.add.i64 %52, %8
+    %55 = mir.call @mrt_alloc(%54)
+    mir.memcpy %55, %42, %9
+    %56 = mir.add.i64 %55, %9
+    mir.memcpy %56, %45, %46
+    %57 = mir.add.i64 %56, %46
+    mir.memcpy %57, %47, %9
+    %59 = mir.mov_imm 40 : i64
+    %60 = mir.call @mrt_alloc(%59)
+    mir.store %55, %60, 0 width: qword
+    mir.store %52, %60, 8 width: qword
+    mir.store %52, %60, 16 width: qword
+    mir.store %8, %60, 24 width: qword
+    mir.store %9, %60, 32 width: qword
+    %63 = mir.mov_imm 16 : i64
+    %64 = mir.call @mrt_alloc(%63)
+    mir.store %60, %64, 0 width: qword
+    mir.store %9, %64, 8 width: qword
+    mir.ret %64
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %68 = mir.mov_imm 8 : i64
+    %69 = mir.call @mrt_alloc(%68)
+    mir.store %0, %69, 0 width: qword
+    %3 = mir.global_addr @__istr_0
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.global_addr @__witness_Counter_Stringable
+    %6 = mir.witness_call %5, [0](%69)
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.load %7, 8 width: qword
+    %10 = mir.global_addr @__istr_4
+    %11 = mir.mov_imm 1 : i64
+    %14 = mir.add.i64 %4, %9
+    %15 = mir.add.i64 %14, %11
+    %17 = mir.add.i64 %15, %11
+    %18 = mir.call @mrt_alloc(%17)
+    mir.memcpy %18, %3, %4
+    %19 = mir.add.i64 %18, %4
+    mir.memcpy %19, %8, %9
+    %20 = mir.add.i64 %19, %9
+    mir.memcpy %20, %10, %11
+    %22 = mir.mov_imm 40 : i64
+    %23 = mir.call @mrt_alloc(%22)
+    mir.store %18, %23, 0 width: qword
+    mir.store %15, %23, 8 width: qword
+    mir.store %15, %23, 16 width: qword
+    mir.store %11, %23, 24 width: qword
+    mir.store %4, %23, 32 width: qword
+    %26 = mir.mov_imm 16 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %23, %27, 0 width: qword
+    mir.store %4, %27, 8 width: qword
+    %70 = mir.load %27, 0 width: qword
+    %71 = mir.load %70, 0 width: qword
+    %72 = mir.load %70, 8 width: qword
+    %73 = mir.call @mrt_write_stdout(%71, %72)
+    %31 = mir.global_addr @__istr_0
+    %33 = mir.global_addr @__witness_Counter_FormattedStringable
+    %34 = mir.global_addr @__istr_1
+    %35 = mir.mov_imm 7 : i64
+    %36 = mir.mov_imm 40 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    mir.store %34, %37, 0 width: qword
+    mir.store %35, %37, 8 width: qword
+    %38 = mir.mov_imm -2 : i64
+    mir.store %38, %37, 16 width: qword
+    mir.store %11, %37, 24 width: qword
+    mir.store %4, %37, 32 width: qword
+    %41 = mir.mov_imm 16 : i64
+    %42 = mir.call @mrt_alloc(%41)
+    mir.store %37, %42, 0 width: qword
+    mir.store %4, %42, 8 width: qword
+    %44 = mir.witness_call %33, [0](%69, %42)
+    %45 = mir.load %44, 0 width: qword
+    %46 = mir.load %45, 0 width: qword
+    %47 = mir.load %45, 8 width: qword
+    %48 = mir.global_addr @__istr_4
+    %52 = mir.add.i64 %4, %47
+    %53 = mir.add.i64 %52, %11
+    %55 = mir.add.i64 %53, %11
+    %56 = mir.call @mrt_alloc(%55)
+    mir.memcpy %56, %31, %4
+    %57 = mir.add.i64 %56, %4
+    mir.memcpy %57, %46, %47
+    %58 = mir.add.i64 %57, %47
+    mir.memcpy %58, %48, %11
+    %60 = mir.mov_imm 40 : i64
+    %61 = mir.call @mrt_alloc(%60)
+    mir.store %56, %61, 0 width: qword
+    mir.store %53, %61, 8 width: qword
+    mir.store %53, %61, 16 width: qword
+    mir.store %11, %61, 24 width: qword
+    mir.store %4, %61, 32 width: qword
+    %64 = mir.mov_imm 16 : i64
+    %65 = mir.call @mrt_alloc(%64)
+    mir.store %61, %65, 0 width: qword
+    mir.store %4, %65, 8 width: qword
+    %74 = mir.load %65, 0 width: qword
+    %75 = mir.load %74, 0 width: qword
+    %76 = mir.load %74, 8 width: qword
+    %77 = mir.call @mrt_write_stdout(%75, %76)
+    mir.ret %4
+  }
+}
+---

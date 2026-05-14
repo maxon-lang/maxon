@@ -1,0 +1,54 @@
+// Test: module-struct-nested-method-call
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+type State
+		export var items ByteArray
+
+		static function create(items ByteArray) returns Self
+			return Self{items: items}
+		end 'create'
+end 'State'
+
+var state = State.create(items: ByteArray.create())
+
+function main() returns ExitCode
+		state.items.push(10)
+		state.items.push(20)
+		return state.items.count()
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_state
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 0 width: qword
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.global_addr @__layout_Array_Byte
+    %5 = mir.call @Array.push(%2, %3, %4)
+    %6 = mir.global_addr @__data_state
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.mov_imm 20 : i64
+    %10 = mir.global_addr @__layout_Array_Byte
+    %11 = mir.call @Array.push(%8, %9, %10)
+    %12 = mir.global_addr @__data_state
+    %13 = mir.load %12, 0 width: qword
+    %14 = mir.load %13, 0 width: qword
+    %15 = mir.global_addr @__layout_Array_Byte
+    %16 = mir.call @Array.count(%14, %15)
+    %17 = mir.mov_imm 125 : i64
+    %18 = mir.cmp ugt, %16, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

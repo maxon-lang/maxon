@@ -1,0 +1,45 @@
+// Test: enum-ordinal.float-backed
+enum Threshold
+	low = 0.1
+	medium = 0.5
+	high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+	let t = Threshold.high
+	if t.ordinal == 2 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4606281698874543309 : f64
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.mov_imm 4602678819172646912 : f64
+    %5 = mir.cmp feq, %0, %4
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.mul.i64 %5, %6
+    %8 = mir.add.i64 %3, %7
+    %9 = mir.mov_imm 4606281698874543309 : f64
+    %10 = mir.cmp feq, %0, %9
+    %11 = mir.mov_imm 2 : i64
+    %12 = mir.mul.i64 %10, %11
+    %13 = mir.add.i64 %8, %12
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.cmp eq, %13, %14
+    mir.cond_br %15 [then: check_0(), else: check_0.after()]
+  check_0:
+    %16 = mir.mov_imm 1 : i64
+    mir.ret %16
+  check_0.after:
+    %17 = mir.mov_imm 0 : i64
+    mir.ret %17
+  }
+}
+---

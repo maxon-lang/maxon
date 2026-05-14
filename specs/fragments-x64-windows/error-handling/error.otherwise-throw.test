@@ -29,24 +29,63 @@ ExitCode: 77
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @error-handling.inner() -> i64 {
+  entry:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  }
+  func @error-handling.outer() -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.xor r8d, r8d
-  inlined_error-handling.outer_0:
-    x64.mov edx, 1
-    x64.xor r8d, r8d
-  inline_cont_main_0:
-    x64.test rdx, rdx
-    x64.je try_0.merge
-  try_0.otherwise:
-    x64.mov r8d, 77
-  try_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.call error-handling.inner
+    x64.mov [rbp-8], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je error-handling.outer.otherwise_continue_0
+  otherwise_stmt_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call error-handling.outer
+    x64.mov rcx, 77
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je error-handling.main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp error-handling.main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg error-handling.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl error-handling.main.__range_panic_0
+    x64.jmp error-handling.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

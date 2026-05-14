@@ -1,0 +1,31 @@
+// Test: tan.with-int-promotion
+function main() returns ExitCode
+	let x = 0  // int
+	let result = Math.tan(x)  // x promoted to 0.0
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %2 = mir.sitofp.f64 %0
+    %3 = mir.call @Math.tan(%2)
+    %5 = mir.mov_imm 0 : f64
+    %6 = mir.cmp feq, %3, %5
+    mir.cond_br %6 [then: check_0(), else: check_0.after()]
+  check_0:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  check_0.after:
+    %8 = mir.mov_imm 1 : i64
+    mir.ret %8
+  }
+}
+---

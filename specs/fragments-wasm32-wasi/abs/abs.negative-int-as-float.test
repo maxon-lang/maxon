@@ -1,0 +1,29 @@
+// Test: abs.negative-int-as-float
+function main() returns ExitCode
+	let neg = -42.0
+	let x = abs(neg)
+	return trunc(x)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4631107791820423168 : f64
+    %1 = mir.mov_imm 0 : f64
+    %2 = mir.sub.f64 %1, %0
+    %4 = mir.f64 %2
+    %6 = mir.fptosi.i64 %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

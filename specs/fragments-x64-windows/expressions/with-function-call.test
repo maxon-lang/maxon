@@ -15,9 +15,34 @@ ExitCode: 12
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @expressions.main() -> u32 {
   entry:
-    x64.mov r8d, 12
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.call expressions.add
+    x64.mov rcx, 5
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg expressions.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl expressions.main.__range_panic_0
+    x64.jmp expressions.main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @expressions.add(a: i64, b: i64) -> i64 {
+  entry:
+    x64.lea rax, [rcx + rdx]
     x64.ret
   }
 }

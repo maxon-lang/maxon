@@ -20,6 +20,8 @@ union Arm64FloatBinKind
 	sub
 	mul
 	div
+	min
+	max
 end 'Arm64FloatBinKind'
 
 export type Arm64Backend implements TargetBackend
@@ -428,7 +430,7 @@ export type Arm64Backend implements TargetBackend
 			branch then result = nextTempSlot  // handled as terminator
 			call(resultId, callee, argIds) then lowerCallArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
 			indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
-			witnessCall(resultId, witnessAddrId, methodIndex, argIds) then lowerWitnessCallArm64(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddrId, methodIndex, _, argIds) then lowerWitnessCallArm64(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then result = nextTempSlot  // handled as terminator
 			param(resultId, paramIndex, paramType) then lowerParamArm64(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
 			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirectArm64(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
@@ -617,6 +619,8 @@ export type Arm64Backend implements TargetBackend
 			subF64 then lowerFloatBinOpArm64(resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.sub, dstBlock: dstBlock)
 			mulF64 then lowerFloatBinOpArm64(resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.mul, dstBlock: dstBlock)
 			divF64 then lowerFloatBinOpArm64(resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.div, dstBlock: dstBlock)
+			minF64 then lowerFloatBinOpArm64(resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.min, dstBlock: dstBlock)
+			maxF64 then lowerFloatBinOpArm64(resultId, leftId: leftId, rightId: rightId, kind: Arm64FloatBinKind.max, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBinOpArm64'
 
@@ -650,6 +654,8 @@ export type Arm64Backend implements TargetBackend
 			sub then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fsub(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
 			mul then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmul(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
 			div then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fdiv(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+			min then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmin(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
+			max then appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.fmax(dest, src1: lhs, src2: rhs, precision: FloatPrecision.f64))
 		end 'emit'
 	end 'lowerFloatBinOpArm64'
 

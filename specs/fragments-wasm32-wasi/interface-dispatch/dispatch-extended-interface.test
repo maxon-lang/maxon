@@ -1,0 +1,103 @@
+// Test: dispatch-extended-interface
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function base() returns Integer
+end 'Base'
+
+interface Derived extends Base
+	function derived() returns Integer
+end 'Derived'
+
+type Impl implements Derived
+	let n Integer
+
+	function base() returns Integer
+		return n
+	end 'base'
+
+	function derived() returns Integer
+		return n * 2
+	end 'derived'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Impl'
+
+function callBase(b Base) returns Integer
+	return b.base()
+end 'callBase'
+
+function callDerived(d Derived) returns Integer
+	return d.derived()
+end 'callDerived'
+
+function main() returns ExitCode
+	let i = Impl.create(n: 10)
+	return callBase(i) + callDerived(i)
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @Impl.base(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @Impl.derived(local0: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %1 = mir.load %5, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    %4 = mir.mul.i64 %1, %3
+    mir.ret %4
+  }
+  func @callBase(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    mir.ret %4
+  }
+  func @callDerived(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    mir.store_slot slot_0, %5
+    %6 = mir.param local1 : i64
+    mir.store_slot slot_1, %6
+    %2 = mir.load_slot slot_0
+    %3 = mir.load_slot slot_1
+    %4 = mir.witness_call %3, [0](%2)
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %0, %10, 0 width: qword
+    %3 = mir.global_addr @__witness_Impl_Base
+    %4 = mir.call @callBase(%10, %3)
+    %6 = mir.global_addr @__witness_Impl_Derived
+    %7 = mir.call @callDerived(%10, %6)
+    %8 = mir.add.i64 %4, %7
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %8, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

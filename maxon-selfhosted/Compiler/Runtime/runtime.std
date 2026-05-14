@@ -362,6 +362,848 @@ func mrt_f64_to_string 2 i64
 
 end
 
+// mrt_i64_to_string_fmt(value, buffer, fmt_ptr, fmt_len) -> length.
+// Converts a signed i64 to a formatted decimal/hex/octal/binary string in
+// `buffer`. Format-spec mini-grammar matches the C# bootstrap:
+//   [0][width][type]
+// where leading `0` toggles zero-pad, `width` is a decimal integer, and
+// `type` is one of x/X/b/o (defaults to decimal). Returns the byte count
+// written (excluding the null terminator). `buffer` must be >= 72 bytes —
+// the implementation writes digits backwards into the upper half (offsets
+// 16..64) then assembles the final padded output starting at offset 0.
+//
+// Slot layout:
+//   slot 0  = value (arg, i64)
+//   slot 1  = buffer (arg, i64)
+//   slot 2  = fmt_ptr (arg, i64)
+//   slot 3  = fmt_len (arg, i64)
+//   slot 4  = fill_char (' ' or '0')
+//   slot 5  = width
+//   slot 6  = type_char (0/'d'/'x'/'X'/'b'/'o')
+//   slot 7  = base (10/16/8/2)
+//   slot 8  = upper_hex (0 or 1)
+//   slot 9  = is_negative (0 or 1)
+//   slot 10 = abs_val
+//   slot 11 = digits_end_offset (offset into buffer; one past last digit)
+//   slot 12 = digits_start_offset (offset into buffer; first digit)
+//   slot 13 = parse_idx
+//   slot 14 = scratch / loop counter
+func mrt_i64_to_string_fmt 4 i64
+  block entry:
+    v0 = std param 0 i64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+    v3 = std param 3 i64
+    std storeSlot 3 v3
+    // Defaults: fill=' ', width=0, type=0 (decimal), base=10, upper=0
+    v4 = std constI64 0x20
+    std storeSlot 4 v4
+    v5 = std constI64 0
+    std storeSlot 5 v5
+    v6 = std constI64 0
+    std storeSlot 6 v6
+    v7 = std constI64 10
+    std storeSlot 7 v7
+    v8 = std constI64 0
+    std storeSlot 8 v8
+    // Skip parse if fmt_len == 0
+    v9 = std constI64 0
+    v10 = std cmpI64Eq v3 v9
+    std condBr v10 do_convert parse_fill
+
+  block parse_fill:
+    // If fmt_ptr[0] == '0' set fill='0' and advance parse_idx by 1.
+    v11 = std loadSlot 2
+    v12 = std constI64 0
+    v13 = std loadByte v11 v12
+    v14 = std constI64 0x30
+    v15 = std cmpI64Eq v13 v14
+    std condBr v15 set_zero_fill init_width
+
+  block set_zero_fill:
+    v16 = std constI64 0x30
+    std storeSlot 4 v16
+    v17 = std constI64 1
+    std storeSlot 13 v17
+    std br width_loop
+
+  block init_width:
+    v18 = std constI64 0
+    std storeSlot 13 v18
+    std br width_loop
+
+  block width_loop:
+    // While parse_idx < fmt_len and fmt_ptr[parse_idx] is a digit:
+    //   width = width * 10 + (digit - '0')
+    v19 = std loadSlot 13
+    v20 = std loadSlot 3
+    v21 = std cmpI64Ge v19 v20
+    std condBr v21 parse_done width_loop_body
+
+  block width_loop_body:
+    v22 = std loadSlot 2
+    v23 = std loadSlot 13
+    v24 = std loadByte v22 v23
+    v25 = std constI64 0x30
+    v26 = std cmpI64Lt v24 v25
+    std condBr v26 check_type_char width_check_high
+
+  block width_check_high:
+    v27 = std constI64 0x39
+    v28 = std cmpI64Gt v24 v27
+    std condBr v28 check_type_char width_accum
+
+  block width_accum:
+    v29 = std loadSlot 5
+    v30 = std constI64 10
+    v31 = std mulI64 v29 v30
+    v32 = std constI64 0x30
+    v33 = std subI64 v24 v32
+    v34 = std addI64 v31 v33
+    std storeSlot 5 v34
+    v35 = std loadSlot 13
+    v36 = std constI64 1
+    v37 = std addI64 v35 v36
+    std storeSlot 13 v37
+    std br width_loop
+
+  block check_type_char:
+    // parse_idx points at a non-digit. If parse_idx < fmt_len, capture
+    // type_char and pick the appropriate base.
+    v38 = std loadSlot 13
+    v39 = std loadSlot 3
+    v40 = std cmpI64Lt v38 v39
+    std condBr v40 read_type_char parse_done
+
+  block read_type_char:
+    v41 = std loadSlot 2
+    v42 = std loadSlot 13
+    v43 = std loadByte v41 v42
+    std storeSlot 6 v43
+    // Pick base/upper based on type_char: 'x'(0x78) hex-lower, 'X'(0x58)
+    // hex-upper, 'b'(0x62) binary, 'o'(0x6F) octal; anything else = decimal.
+    v44 = std constI64 0x78
+    v45 = std cmpI64Eq v43 v44
+    std condBr v45 set_hex_lower check_upper_hex
+
+  block set_hex_lower:
+    v46 = std constI64 16
+    std storeSlot 7 v46
+    v47 = std constI64 0
+    std storeSlot 8 v47
+    std br parse_done
+
+  block check_upper_hex:
+    v48 = std constI64 0x58
+    v49 = std cmpI64Eq v43 v48
+    std condBr v49 set_hex_upper check_binary
+
+  block set_hex_upper:
+    v50 = std constI64 16
+    std storeSlot 7 v50
+    v51 = std constI64 1
+    std storeSlot 8 v51
+    std br parse_done
+
+  block check_binary:
+    v52 = std constI64 0x62
+    v53 = std cmpI64Eq v43 v52
+    std condBr v53 set_binary check_octal
+
+  block set_binary:
+    v54 = std constI64 2
+    std storeSlot 7 v54
+    std br parse_done
+
+  block check_octal:
+    v55 = std constI64 0x6F
+    v56 = std cmpI64Eq v43 v55
+    std condBr v56 set_octal parse_done
+
+  block set_octal:
+    v57 = std constI64 8
+    std storeSlot 7 v57
+    std br parse_done
+
+  block parse_done:
+    std br do_convert
+
+  block do_convert:
+    // Sign-handling: only for base 10. For other bases, value is treated
+    // as unsigned bits — matches the C# bootstrap.
+    v58 = std constI64 0
+    std storeSlot 9 v58
+    v59 = std loadSlot 7
+    v60 = std constI64 10
+    v61 = std cmpI64Eq v59 v60
+    std condBr v61 dec_sign_check unsigned_path
+
+  block dec_sign_check:
+    v62 = std loadSlot 0
+    v63 = std constI64 0
+    v64 = std cmpI64Lt v62 v63
+    std condBr v64 negate_value abs_done
+
+  block negate_value:
+    v65 = std loadSlot 0
+    v66 = std negI64 v65
+    std storeSlot 10 v66
+    v67 = std constI64 1
+    std storeSlot 9 v67
+    std br abs_done
+
+  block unsigned_path:
+    v68 = std loadSlot 0
+    std storeSlot 10 v68
+    std br abs_done
+
+  block abs_done:
+    // For the decimal sign-check path, slot 10 wasn't set on the positive
+    // branch (where slot 9 stayed 0). Fix that here.
+    v69 = std loadSlot 9
+    v70 = std constI64 0
+    v71 = std cmpI64Eq v69 v70
+    std condBr v71 copy_abs_value digits_init
+
+  block copy_abs_value:
+    v72 = std loadSlot 0
+    std storeSlot 10 v72
+    std br digits_init
+
+  block digits_init:
+    // Initialize digits_end_offset = 64 (write backwards from buffer[64]).
+    v73 = std constI64 64
+    std storeSlot 11 v73
+    std storeSlot 12 v73
+    // Special case zero
+    v74 = std loadSlot 10
+    v75 = std constI64 0
+    v76 = std cmpI64Eq v74 v75
+    std condBr v76 write_zero digit_loop
+
+  block write_zero:
+    v77 = std loadSlot 12
+    v78 = std constI64 1
+    v79 = std subI64 v77 v78
+    std storeSlot 12 v79
+    v80 = std loadSlot 1
+    v81 = std constI64 0x30
+    std storeByte v80 v79 v81
+    std br pad_setup
+
+  block digit_loop:
+    v82 = std loadSlot 10
+    v83 = std constI64 0
+    v84 = std cmpI64Le v82 v83
+    std condBr v84 pad_setup write_digit
+
+  block write_digit:
+    // digit = abs_val % base; abs_val = abs_val / base
+    v85 = std loadSlot 10
+    v86 = std loadSlot 7
+    v87 = std remI64 v85 v86
+    v88 = std divI64 v85 v86
+    std storeSlot 10 v88
+    // ch = digit < 10 ? digit + '0' : digit - 10 + ('a' or 'A')
+    v89 = std constI64 10
+    v90 = std cmpI64Lt v87 v89
+    std condBr v90 digit_low digit_high
+
+  block digit_low:
+    v91 = std constI64 0x30
+    v92 = std addI64 v87 v91
+    std storeSlot 14 v92
+    std br emit_digit
+
+  block digit_high:
+    v93 = std loadSlot 8
+    v94 = std constI64 0
+    v95 = std cmpI64Eq v93 v94
+    std condBr v95 hex_lower hex_upper
+
+  block hex_lower:
+    v96 = std constI64 87
+    v97 = std addI64 v87 v96
+    std storeSlot 14 v97
+    std br emit_digit
+
+  block hex_upper:
+    v98 = std constI64 55
+    v99 = std addI64 v87 v98
+    std storeSlot 14 v99
+    std br emit_digit
+
+  block emit_digit:
+    v100 = std loadSlot 12
+    v101 = std constI64 1
+    v102 = std subI64 v100 v101
+    std storeSlot 12 v102
+    v103 = std loadSlot 1
+    v104 = std loadSlot 14
+    std storeByte v103 v102 v104
+    std br digit_loop
+
+  block pad_setup:
+    // digit_count = digits_end - digits_start
+    // content_len = sign_len + digit_count
+    // pad_count = max(0, width - content_len)
+    v105 = std loadSlot 11
+    v106 = std loadSlot 12
+    v107 = std subI64 v105 v106
+    // digit_count -> slot 14 (reuse scratch)
+    std storeSlot 14 v107
+    v108 = std loadSlot 9
+    v109 = std addI64 v108 v107
+    // content_len -> slot 15 (new)
+    std storeSlot 15 v109
+    v110 = std loadSlot 5
+    v111 = std subI64 v110 v109
+    v112 = std constI64 0
+    v113 = std cmpI64Lt v111 v112
+    std condBr v113 zero_pad pad_positive
+
+  block zero_pad:
+    v114 = std constI64 0
+    std storeSlot 16 v114
+    std br choose_fill
+
+  block pad_positive:
+    std storeSlot 16 v111
+    std br choose_fill
+
+  block choose_fill:
+    // If fill is '0' AND base == 10 AND negative, write '-' first; otherwise
+    // standard branches.
+    v115 = std loadSlot 4
+    v116 = std constI64 0x30
+    v117 = std cmpI64Eq v115 v116
+    std condBr v117 zero_fill_path space_fill_path
+
+  block space_fill_path:
+    // out_pos = 0; write pad_count spaces, then sign (if any), then digits.
+    v118 = std constI64 0
+    std storeSlot 13 v118
+    std br space_pad_loop
+
+  block space_pad_loop:
+    v119 = std loadSlot 13
+    v120 = std loadSlot 16
+    v121 = std cmpI64Ge v119 v120
+    std condBr v121 space_write_sign space_pad_body
+
+  block space_pad_body:
+    v122 = std loadSlot 1
+    v123 = std constI64 0x20
+    std storeByte v122 v119 v123
+    v124 = std constI64 1
+    v125 = std addI64 v119 v124
+    std storeSlot 13 v125
+    std br space_pad_loop
+
+  block space_write_sign:
+    v126 = std loadSlot 9
+    v127 = std constI64 0
+    v128 = std cmpI64Eq v126 v127
+    std condBr v128 copy_digits_setup space_write_minus
+
+  block space_write_minus:
+    v129 = std loadSlot 1
+    v130 = std loadSlot 13
+    v131 = std constI64 0x2D
+    std storeByte v129 v130 v131
+    v132 = std loadSlot 13
+    v133 = std constI64 1
+    v134 = std addI64 v132 v133
+    std storeSlot 13 v134
+    std br copy_digits_setup
+
+  block zero_fill_path:
+    // out_pos = 0; if negative, write '-' first; then write pad_count zeros;
+    // then copy digits.
+    v135 = std constI64 0
+    std storeSlot 13 v135
+    v136 = std loadSlot 9
+    v137 = std constI64 0
+    v138 = std cmpI64Eq v136 v137
+    std condBr v138 zero_pad_init zero_write_minus
+
+  block zero_write_minus:
+    v139 = std loadSlot 1
+    v140 = std constI64 0
+    v141 = std constI64 0x2D
+    std storeByte v139 v140 v141
+    v142 = std constI64 1
+    std storeSlot 13 v142
+    std br zero_pad_init
+
+  block zero_pad_init:
+    // Slot 14 doubles as a private pad counter for this loop; the digit
+    // count gets re-derived in `copy_digits_setup` after we've finished
+    // emitting the zero-pad run.
+    v143 = std constI64 0
+    std storeSlot 14 v143
+    std br zero_pad_body
+
+  block zero_pad_body:
+    v144 = std loadSlot 14
+    v145 = std loadSlot 16
+    v146 = std cmpI64Ge v144 v145
+    std condBr v146 copy_digits_setup zero_pad_write
+
+  block zero_pad_write:
+    v147 = std loadSlot 1
+    v148 = std loadSlot 13
+    v149 = std constI64 0x30
+    std storeByte v147 v148 v149
+    v150 = std loadSlot 13
+    v151 = std constI64 1
+    v152 = std addI64 v150 v151
+    std storeSlot 13 v152
+    v153 = std loadSlot 14
+    v154 = std addI64 v153 v151
+    std storeSlot 14 v154
+    std br zero_pad_body
+
+  block copy_digits_setup:
+    // Re-derive digit_count from digits_end - digits_start.
+    v155 = std loadSlot 11
+    v156 = std loadSlot 12
+    v157 = std subI64 v155 v156
+    std storeSlot 14 v157
+    v158 = std constI64 0
+    std storeSlot 11 v158
+    std br copy_digits_loop
+
+  block copy_digits_loop:
+    // Iterate from 0..digit_count, copying buffer[digits_start + i] to
+    // buffer[out_pos + i]. Slot 11 has been repurposed as the copy index.
+    v159 = std loadSlot 11
+    v160 = std loadSlot 14
+    v161 = std cmpI64Ge v159 v160
+    std condBr v161 finalize_len copy_one_byte
+
+  block copy_one_byte:
+    v162 = std loadSlot 12
+    v163 = std loadSlot 11
+    v164 = std addI64 v162 v163
+    v165 = std loadSlot 1
+    v166 = std loadByte v165 v164
+    v167 = std loadSlot 13
+    v168 = std addI64 v167 v163
+    std storeByte v165 v168 v166
+    v169 = std constI64 1
+    v170 = std addI64 v163 v169
+    std storeSlot 11 v170
+    std br copy_digits_loop
+
+  block finalize_len:
+    // Total length = out_pos + digit_count
+    v171 = std loadSlot 13
+    v172 = std loadSlot 14
+    v173 = std addI64 v171 v172
+    std ret v173
+
+end
+
+// mrt_u64_to_string_fmt(value, buffer, fmt_ptr, fmt_len) -> length.
+// Unsigned variant — tail-calls into the signed implementation. Safe
+// because our unsigned types (byte, u16, u32) are zero-extended to 64
+// bits before reaching here, so the sign-bit check in the signed code
+// path is a no-op.
+func mrt_u64_to_string_fmt 4 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std param 3 i64
+    v4 = std call mrt_i64_to_string_fmt v0 v1 v2 v3
+    std ret v4
+end
+
+// mrt_f64_to_string_fmt(value, buffer, fmt_ptr, fmt_len) -> length.
+// Format-spec grammar: [width][.precision]. Width pads the result with
+// spaces to the left. Precision sets the number of decimal places (no
+// trailing-zero stripping — `:.3` on 2.0 prints `2.000`). Without either
+// component, falls through to `mrt_f64_to_string`. Buffer must be >= 72
+// bytes.
+//
+// Slot layout:
+//   slot 0  = value (f64)
+//   slot 1  = buffer (i64)
+//   slot 2  = fmt_ptr
+//   slot 3  = fmt_len
+//   slot 4  = width
+//   slot 5  = precision (-1 = unset)
+//   slot 6  = parse_idx
+//   slot 7  = is_negative
+//   slot 8  = abs_val (f64)
+//   slot 9  = int_part (i64)
+//   slot 10 = content_len
+//   slot 11 = pad_count
+//   slot 12 = frac_digits (i64)
+//   slot 13 = frac_loop_i
+//   slot 14 = scratch / loop counter
+func mrt_f64_to_string_fmt 4 i64
+  block entry:
+    v0 = std param 0 f64
+    std storeSlot 0 v0
+    v1 = std param 1 i64
+    std storeSlot 1 v1
+    v2 = std param 2 i64
+    std storeSlot 2 v2
+    v3 = std param 3 i64
+    std storeSlot 3 v3
+    // Defaults
+    v4 = std constI64 0
+    std storeSlot 4 v4
+    v5 = std constI64 -1
+    std storeSlot 5 v5
+    v6 = std constI64 0
+    std storeSlot 6 v6
+    // If fmt_len == 0, delegate to plain mrt_f64_to_string.
+    v7 = std constI64 0
+    v8 = std cmpI64Eq v3 v7
+    std condBr v8 delegate_default parse_width
+
+  block delegate_default:
+    v9 = std loadSlot 0
+    v10 = std loadSlot 1
+    v11 = std call mrt_f64_to_string v9 v10
+    std ret v11
+
+  block parse_width:
+    v12 = std loadSlot 6
+    v13 = std loadSlot 3
+    v14 = std cmpI64Ge v12 v13
+    std condBr v14 width_done parse_width_body
+
+  block parse_width_body:
+    v15 = std loadSlot 2
+    v16 = std loadSlot 6
+    v17 = std loadByte v15 v16
+    v18 = std constI64 0x2E
+    v19 = std cmpI64Eq v17 v18
+    std condBr v19 parse_prec_advance check_width_digit
+
+  block check_width_digit:
+    v20 = std constI64 0x30
+    v21 = std cmpI64Lt v17 v20
+    std condBr v21 width_done width_check_high
+
+  block width_check_high:
+    v22 = std constI64 0x39
+    v23 = std cmpI64Gt v17 v22
+    std condBr v23 width_done width_accum
+
+  block width_accum:
+    v24 = std loadSlot 4
+    v25 = std constI64 10
+    v26 = std mulI64 v24 v25
+    v27 = std constI64 0x30
+    v28 = std subI64 v17 v27
+    v29 = std addI64 v26 v28
+    std storeSlot 4 v29
+    v30 = std loadSlot 6
+    v31 = std constI64 1
+    v32 = std addI64 v30 v31
+    std storeSlot 6 v32
+    std br parse_width
+
+  block parse_prec_advance:
+    // Skip the '.'
+    v33 = std loadSlot 6
+    v34 = std constI64 1
+    v35 = std addI64 v33 v34
+    std storeSlot 6 v35
+    v36 = std constI64 0
+    std storeSlot 5 v36
+    std br parse_prec
+
+  block parse_prec:
+    v37 = std loadSlot 6
+    v38 = std loadSlot 3
+    v39 = std cmpI64Ge v37 v38
+    std condBr v39 width_done parse_prec_body
+
+  block parse_prec_body:
+    v40 = std loadSlot 2
+    v41 = std loadSlot 6
+    v42 = std loadByte v40 v41
+    v43 = std constI64 0x30
+    v44 = std cmpI64Lt v42 v43
+    std condBr v44 width_done prec_check_high
+
+  block prec_check_high:
+    v45 = std constI64 0x39
+    v46 = std cmpI64Gt v42 v45
+    std condBr v46 width_done prec_accum
+
+  block prec_accum:
+    v47 = std loadSlot 5
+    v48 = std constI64 10
+    v49 = std mulI64 v47 v48
+    v50 = std constI64 0x30
+    v51 = std subI64 v42 v50
+    v52 = std addI64 v49 v51
+    std storeSlot 5 v52
+    v53 = std loadSlot 6
+    v54 = std constI64 1
+    v55 = std addI64 v53 v54
+    std storeSlot 6 v55
+    std br parse_prec
+
+  block width_done:
+    // If precision == -1 and width == 0, delegate.
+    v56 = std loadSlot 5
+    v57 = std constI64 -1
+    v58 = std cmpI64Eq v56 v57
+    std condBr v58 width_has_no_prec convert_with_prec
+
+  block width_has_no_prec:
+    v59 = std loadSlot 4
+    v60 = std constI64 0
+    v61 = std cmpI64Eq v59 v60
+    std condBr v61 delegate_default default_then_pad
+
+  block default_then_pad:
+    // No precision, but width set — call default f64 conversion at offset 0,
+    // then shift right and left-pad with spaces.
+    v62 = std loadSlot 0
+    v63 = std loadSlot 1
+    v64 = std call mrt_f64_to_string v62 v63
+    std storeSlot 10 v64
+    std br apply_width
+
+  block convert_with_prec:
+    // Clamp precision to 20 max to avoid runaway loops.
+    v65 = std loadSlot 5
+    v66 = std constI64 20
+    v67 = std cmpI64Gt v65 v66
+    std condBr v67 clamp_prec sign_check
+
+  block clamp_prec:
+    v68 = std constI64 20
+    std storeSlot 5 v68
+    std br sign_check
+
+  block sign_check:
+    v69 = std constI64 0
+    std storeSlot 7 v69
+    v70 = std loadSlot 0
+    v71 = std constF64 0
+    v72 = std cmpF64Lt v70 v71
+    std condBr v72 negate_float store_abs
+
+  block negate_float:
+    v73 = std loadSlot 0
+    v74 = std constF64 0
+    v75 = std subF64 v74 v73
+    std storeSlot 8 v75
+    v76 = std constI64 1
+    std storeSlot 7 v76
+    std br write_int_part
+
+  block store_abs:
+    v77 = std loadSlot 0
+    std storeSlot 8 v77
+    std br write_int_part
+
+  block write_int_part:
+    // int_part = trunc(abs_val); write to buffer at offset (1 if negative else 0).
+    v78 = std loadSlot 8
+    v79 = std fpToSiI64 v78
+    std storeSlot 9 v79
+    v80 = std loadSlot 1
+    v81 = std loadSlot 7
+    v82 = std addI64 v80 v81
+    v83 = std loadSlot 9
+    v84 = std call mrt_i64_to_string v83 v82
+    // int_part_len_with_sign = is_negative + int_part_len
+    v85 = std loadSlot 7
+    v86 = std addI64 v84 v85
+    std storeSlot 10 v86
+    // Write '-' at buffer[0] if negative.
+    v87 = std loadSlot 7
+    v88 = std constI64 0
+    v89 = std cmpI64Eq v87 v88
+    std condBr v89 check_prec_zero write_minus
+
+  block write_minus:
+    v90 = std loadSlot 1
+    v91 = std constI64 0
+    v92 = std constI64 0x2D
+    std storeByte v90 v91 v92
+    std br check_prec_zero
+
+  block check_prec_zero:
+    // If precision == 0, skip writing '.' and fractional digits.
+    v93 = std loadSlot 5
+    v94 = std constI64 0
+    v95 = std cmpI64Eq v93 v94
+    std condBr v95 apply_width write_dot
+
+  block write_dot:
+    // Write '.' at buffer[content_len], then compute frac digits.
+    v96 = std loadSlot 1
+    v97 = std loadSlot 10
+    v98 = std constI64 0x2E
+    std storeByte v96 v97 v98
+    // content_len += 1
+    v99 = std loadSlot 10
+    v100 = std constI64 1
+    v101 = std addI64 v99 v100
+    std storeSlot 10 v101
+    // frac_accum = abs_val - int_part; multiply by 10 precision times,
+    // then add 0.5 and truncate.
+    v102 = std loadSlot 8
+    v103 = std loadSlot 9
+    v104 = std siToFpF64 v103
+    v105 = std subF64 v102 v104
+    std storeSlot 14 v105
+    v106 = std constI64 0
+    std storeSlot 13 v106
+    std br mul_loop_real
+
+  block mul_loop_real:
+    v120 = std loadSlot 13
+    v121 = std loadSlot 5
+    v122 = std cmpI64Ge v120 v121
+    std condBr v122 mul_done mul_step_real
+
+  block mul_step_real:
+    v123 = std loadSlot 14
+    v124 = std constF64 0x4024000000000000
+    v125 = std mulF64 v123 v124
+    std storeSlot 14 v125
+    v126 = std loadSlot 13
+    v127 = std constI64 1
+    v128 = std addI64 v126 v127
+    std storeSlot 13 v128
+    std br mul_loop_real
+
+  block mul_done:
+    v129 = std loadSlot 14
+    v130 = std constF64 0x3fe0000000000000
+    v131 = std addF64 v129 v130
+    v132 = std fpToSiI64 v131
+    std storeSlot 12 v132
+    // Write the frac digits starting at buffer[content_len], padded to
+    // precision digits.
+    v133 = std loadSlot 5
+    v134 = std constI64 1
+    v135 = std subI64 v133 v134
+    std storeSlot 13 v135
+    std br frac_write_loop
+
+  block frac_write_loop:
+    v136 = std loadSlot 13
+    v137 = std constI64 0
+    v138 = std cmpI64Lt v136 v137
+    std condBr v138 frac_done frac_write_one
+
+  block frac_write_one:
+    v139 = std loadSlot 12
+    v140 = std constI64 10
+    v141 = std remI64 v139 v140
+    v142 = std divI64 v139 v140
+    std storeSlot 12 v142
+    v143 = std constI64 0x30
+    v144 = std addI64 v141 v143
+    v145 = std loadSlot 1
+    v146 = std loadSlot 10
+    v147 = std loadSlot 13
+    v148 = std addI64 v146 v147
+    std storeByte v145 v148 v144
+    v149 = std loadSlot 13
+    v150 = std constI64 1
+    v151 = std subI64 v149 v150
+    std storeSlot 13 v151
+    std br frac_write_loop
+
+  block frac_done:
+    v152 = std loadSlot 10
+    v153 = std loadSlot 5
+    v154 = std addI64 v152 v153
+    std storeSlot 10 v154
+    std br apply_width
+
+  block apply_width:
+    // pad_count = width - content_len; if <= 0, return content_len.
+    v155 = std loadSlot 4
+    v156 = std loadSlot 10
+    v157 = std subI64 v155 v156
+    v158 = std constI64 0
+    v159 = std cmpI64Le v157 v158
+    std condBr v159 no_pad do_pad
+
+  block no_pad:
+    v160 = std loadSlot 10
+    std ret v160
+
+  block do_pad:
+    std storeSlot 11 v157
+    // Shift bytes right by pad_count (work backwards from end).
+    // dst_end = buffer + width - 1; src_end = buffer + content_len - 1;
+    // copy content_len bytes downward.
+    // Use slot 13 as the loop counter from 0..content_len.
+    v161 = std constI64 0
+    std storeSlot 13 v161
+    std br shift_loop
+
+  block shift_loop:
+    v162 = std loadSlot 13
+    v163 = std loadSlot 10
+    v164 = std cmpI64Ge v162 v163
+    std condBr v164 fill_pad shift_one
+
+  block shift_one:
+    // src_pos = content_len - 1 - i
+    // dst_pos = width - 1 - i
+    v165 = std loadSlot 10
+    v166 = std constI64 1
+    v167 = std subI64 v165 v166
+    v168 = std subI64 v167 v162
+    v169 = std loadSlot 1
+    v170 = std loadByte v169 v168
+    v171 = std loadSlot 4
+    v172 = std subI64 v171 v166
+    v173 = std subI64 v172 v162
+    std storeByte v169 v173 v170
+    v174 = std addI64 v162 v166
+    std storeSlot 13 v174
+    std br shift_loop
+
+  block fill_pad:
+    // Fill buffer[0..pad_count] with ' '.
+    v175 = std constI64 0
+    std storeSlot 13 v175
+    std br fill_pad_loop
+
+  block fill_pad_loop:
+    v176 = std loadSlot 13
+    v177 = std loadSlot 11
+    v178 = std cmpI64Ge v176 v177
+    std condBr v178 padded_done fill_pad_one
+
+  block fill_pad_one:
+    v179 = std loadSlot 1
+    v180 = std constI64 0x20
+    std storeByte v179 v176 v180
+    v181 = std loadSlot 13
+    v182 = std constI64 1
+    v183 = std addI64 v181 v182
+    std storeSlot 13 v183
+    std br fill_pad_loop
+
+  block padded_done:
+    v184 = std loadSlot 4
+    std ret v184
+
+end
+
 // mrt_write_cstr_stderr(ptr): scans for null terminator, then writes to stderr.
 func mrt_write_cstr_stderr 1 void
   block entry:
@@ -625,6 +1467,279 @@ func mrt_alloc 1 i64
     v2 = std constI64 0
     v3 = std call mm_alloc v0 v1 v2
     std ret v3
+end
+
+// =============================================================================
+// Phase 15b — command-line argument retrieval.
+//
+// `mrt_command_line_count` returns argc as an i64. `mrt_command_line_arg(idx)`
+// returns a fresh `__ManagedMemory` pointer (40-byte struct) whose buffer
+// holds the UTF-8-encoded bytes of `argv[idx]` (length excludes the trailing
+// NUL byte). Both are Windows-specific: the bodies use `iatCall` ops with
+// slot indices defined in `Compiler/Targets/Windows/PeWriter.maxon`. On
+// non-Windows targets these slots don't exist so the functions would be
+// emitted but never called — `augmentWithRuntime` filters them out and
+// substitutes stub bodies (see `filterRuntimeForOs`).
+//
+// IAT slot mapping (must stay in lockstep with PeWriter):
+//   11 = kernel32!GetCommandLineW  () -> LPWSTR
+//   12 = kernel32!LocalFree        (HLOCAL) -> HLOCAL
+//   13 = kernel32!WideCharToMultiByte (codepage, flags, wstr, wlen, buf, bufLen,
+//                                       defChar, usedDefChar) -> int
+//   14 = kernel32!GetModuleFileNameW (hModule, lpFilename, nSize) -> DWORD
+//   15 = shell32!CommandLineToArgvW (LPCWSTR, &argc) -> LPWSTR*
+//
+// Slot usage (function-local stack slots, each 8 bytes):
+//   slot 0 = argc (CommandLineToArgvW out-param; widened by i32-into-i64 store)
+//   slot 1 = wargv pointer (LocalFree input)
+//   slot 2 = wstr (argv[index] LPWSTR)
+//   slot 3 = byte_size_with_nul (WideCharToMultiByte return)
+//   slot 4 = mm pointer (the __ManagedMemory we return)
+//   slot 5 = buffer (mm[0])
+//   slot 6 = index (parameter)
+func mrt_command_line_count 0 i64
+  block entry:
+    // GetCommandLineW() -> RAX
+    v0 = std iatCall 11
+    // CommandLineToArgvW(rax, &argc) -> wargv
+    // CommandLineToArgvW writes 4-byte argc through the second arg. Zero the
+    // slot via a constI64 store + stackAddr so the upper 32 bits read clean.
+    v1 = std constI64 0
+    std storeSlot 0 v1
+    v2 = std stackAddr 0
+    v3 = std iatCall 15 v0 v2
+    std storeSlot 1 v3
+    // LocalFree(wargv) — we only wanted the count.
+    v4 = std loadSlot 1
+    v5 = std iatCall 12 v4
+    // Return argc.
+    v6 = std loadSlot 0
+    std ret v6
+end
+
+func mrt_command_line_arg 1 i64
+  block entry:
+    // Stash the index parameter into slot 6 for repeated use across blocks.
+    v0 = std param 0 i64
+    std storeSlot 6 v0
+
+    // GetCommandLineW() -> LPWSTR
+    v1 = std iatCall 11
+    // CommandLineToArgvW(cmdLine, &argc) -> wargv
+    v2 = std constI64 0
+    std storeSlot 0 v2
+    v3 = std stackAddr 0
+    v4 = std iatCall 15 v1 v3
+    std storeSlot 1 v4
+
+    // Bounds check: if index < 0 OR index >= argc, jump to oob path.
+    v5 = std loadSlot 6
+    v6 = std constI64 0
+    v7 = std cmpI64Lt v5 v6
+    std condBr v7 oob_path inbounds_check
+
+  block inbounds_check:
+    v8 = std loadSlot 6
+    v9 = std loadSlot 0
+    v10 = std cmpI64Lt v8 v9
+    std condBr v10 in_bounds oob_path
+
+  block in_bounds:
+    // wargv is a pointer to LPWSTR; load wargv[index] (8 bytes per pointer).
+    v11 = std loadSlot 1
+    v12 = std loadSlot 6
+    v13 = std constI64 3
+    v14 = std shlI64 v12 v13
+    v15 = std addI64 v11 v14
+    v16 = std loadIndirect v15 0
+    std storeSlot 2 v16
+
+    // WideCharToMultiByte size query: CP_UTF8=65001, flags=0, wstr, -1,
+    // buf=NULL, bufSize=0, defChar=NULL, usedDefChar=NULL. Returns byte
+    // count INCLUDING the NUL terminator.
+    v17 = std constI64 65001
+    v18 = std constI64 0
+    v19 = std loadSlot 2
+    v20 = std constI64 -1
+    v21 = std constI64 0
+    v22 = std constI64 0
+    v23 = std constI64 0
+    v24 = std constI64 0
+    v25 = std iatCall 13 v17 v18 v19 v20 v21 v22 v23 v24
+    std storeSlot 3 v25
+
+    // Allocate a __ManagedMemory with byte-buffer of capacity = bytesWithNul.
+    // __managed_mem_create(count, elemSize) -> mm pointer.
+    v26 = std loadSlot 3
+    v27 = std constI64 1
+    v28 = std call __managed_mem_create v26 v27
+    std storeSlot 4 v28
+
+    // Load buffer = mm[0].
+    v29 = std loadSlot 4
+    v30 = std loadIndirect v29 0
+    std storeSlot 5 v30
+
+    // WideCharToMultiByte conversion: same args but buf=buffer, bufSize=size.
+    v31 = std constI64 65001
+    v32 = std constI64 0
+    v33 = std loadSlot 2
+    v34 = std constI64 -1
+    v35 = std loadSlot 5
+    v36 = std loadSlot 3
+    v37 = std constI64 0
+    v38 = std constI64 0
+    v39 = std iatCall 13 v31 v32 v33 v34 v35 v36 v37 v38
+
+    // Store length = bytesWithNul - 1 (drop trailing NUL) at mm[8].
+    v40 = std loadSlot 3
+    v41 = std constI64 1
+    v42 = std subI64 v40 v41
+    v43 = std loadSlot 4
+    std storeIndirect v43 8 v42
+
+    // LocalFree(wargv).
+    v44 = std loadSlot 1
+    v45 = std iatCall 12 v44
+
+    // Return mm pointer.
+    v46 = std loadSlot 4
+    std ret v46
+
+  block oob_path:
+    // Out-of-bounds: allocate an empty 1-byte buffer (0x00) and return it.
+    // __managed_mem_create(1, 1) gives a 1-byte buffer; we leave length=0 so
+    // the caller reads an empty String.
+    v47 = std constI64 1
+    v48 = std constI64 1
+    v49 = std call __managed_mem_create v47 v48
+
+    // Still need to LocalFree(wargv) on this path so we don't leak the
+    // CommandLineToArgvW allocation.
+    v50 = std loadSlot 1
+    v51 = std iatCall 12 v50
+
+    std ret v49
+end
+
+// Phase 15b stubs for non-Windows targets. `augmentWithRuntime` renames these
+// to the public `mrt_command_line_count` / `mrt_command_line_arg` names when
+// the target's OS is not Windows, replacing the iatCall-based bodies which
+// reference IAT slots that only exist in PE images. Stubs return argc=1 (just
+// the executable path) and an empty buffer for every argument; spec tests
+// that rely on Args pass through the spec runner's `--args` mechanism, which
+// supplies a synthetic command line — wasm/Linux/macOS implementations of
+// the full path are deferred to a follow-up phase.
+func mrt_command_line_count_stub 0 i64
+  block entry:
+    v0 = std constI64 1
+    std ret v0
+end
+
+func mrt_command_line_arg_stub 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std constI64 1
+    v3 = std call __managed_mem_create v1 v2
+    std ret v3
+end
+
+// =============================================================================
+// Phase 15f — executable-path retrieval.
+//
+// `mrt_executable_path()` returns a `__ManagedMemory` pointer whose buffer
+// holds the UTF-8-encoded absolute path of the running module. The body
+// uses GetModuleFileNameW (kernel32 IAT slot 14) to fetch the wide-char
+// path, then WideCharToMultiByte (slot 13) to re-encode as UTF-8. The
+// wide buffer lives in stack slots 10..267 (256 qwords = 2048 bytes,
+// room for ~1023 wchars + NUL — well past PATH_MAX on every supported
+// system, including extended-prefix Windows paths up to 4 KiB if the
+// linker ever enables long-path support).
+//
+// Slot usage (function-local stack slots, each 8 bytes):
+//   slot 0 = wlen (GetModuleFileNameW return; excludes the NUL)
+//   slot 1 = byte_size_with_nul (WideCharToMultiByte size-query return)
+//   slot 2 = mm pointer (the __ManagedMemory we return)
+//   slot 3 = buffer (mm[0])
+//   slots 10..267 = 2048-byte wide buffer (256 qword slots)
+func mrt_executable_path 0 i64
+  block entry:
+    // GetModuleFileNameW(NULL, &wbuf, 1024). The lowest-address slot of
+    // the wide buffer is slot 267 (stack grows down, slot index grows
+    // up), so passing stackAddr 267 makes the API write FORWARD through
+    // slots 267..10. nSize is in wchars, not bytes.
+    v0 = std constI64 0
+    v1 = std stackAddr 267
+    v2 = std constI64 1024
+    v3 = std iatCall 14 v0 v1 v2
+    std storeSlot 0 v3
+
+    // WideCharToMultiByte size query: CP_UTF8=65001, flags=0, wstr,
+    // wlen=-1 (use the in-buffer NUL terminator), buf=NULL, bufSize=0,
+    // defChar=NULL, usedDefChar=NULL. Returns the byte count INCLUDING
+    // the NUL terminator.
+    v4 = std constI64 65001
+    v5 = std constI64 0
+    v6 = std stackAddr 267
+    v7 = std constI64 -1
+    v8 = std constI64 0
+    v9 = std constI64 0
+    v10 = std constI64 0
+    v11 = std constI64 0
+    v12 = std iatCall 13 v4 v5 v6 v7 v8 v9 v10 v11
+    std storeSlot 1 v12
+
+    // Allocate a __ManagedMemory with a byte buffer sized for the full
+    // UTF-8 encoding plus NUL. __managed_mem_create(count, elemSize).
+    v13 = std loadSlot 1
+    v14 = std constI64 1
+    v15 = std call __managed_mem_create v13 v14
+    std storeSlot 2 v15
+
+    // Load buffer = mm[0].
+    v16 = std loadSlot 2
+    v17 = std loadIndirect v16 0
+    std storeSlot 3 v17
+
+    // WideCharToMultiByte conversion: same flags + source pointer; this
+    // time pass buffer = mm[0], bufSize = byte_size_with_nul.
+    v18 = std constI64 65001
+    v19 = std constI64 0
+    v20 = std stackAddr 267
+    v21 = std constI64 -1
+    v22 = std loadSlot 3
+    v23 = std loadSlot 1
+    v24 = std constI64 0
+    v25 = std constI64 0
+    v26 = std iatCall 13 v18 v19 v20 v21 v22 v23 v24 v25
+
+    // Store length = byte_size_with_nul - 1 (drop trailing NUL) at mm[8].
+    v27 = std loadSlot 1
+    v28 = std constI64 1
+    v29 = std subI64 v27 v28
+    v30 = std loadSlot 2
+    std storeIndirect v30 8 v29
+
+    // Return mm pointer.
+    v31 = std loadSlot 2
+    std ret v31
+end
+
+// Phase 15f stub for non-Windows targets. `filterRuntimeForOs` renames this
+// to the public `mrt_executable_path` name when the target's OS is not
+// Windows, replacing the iatCall-based body which references IAT slots
+// that only exist in PE images. The stub returns an empty __ManagedMemory
+// (length=0); spec runners on Linux/macOS/WASI that care about the
+// executable path supply it through other channels — a full implementation
+// (readlink("/proc/self/exe") on Linux, _NSGetExecutablePath on macOS,
+// args[0] on WASI) is deferred to a follow-up phase.
+func mrt_executable_path_stub 0 i64
+  block entry:
+    v0 = std constI64 1
+    v1 = std constI64 1
+    v2 = std call __managed_mem_create v0 v1
+    std ret v2
 end
 
 // mrt_cov_hit(siteId): increments __data_cov_counters[siteId].

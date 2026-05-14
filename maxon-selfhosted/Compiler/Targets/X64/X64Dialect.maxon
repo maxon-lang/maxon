@@ -35,6 +35,8 @@ export union X64SetccCondition
 	ae
 	b
 	be
+	p
+	np
 end 'X64SetccCondition'
 
 export union X64CmovCondition
@@ -241,6 +243,8 @@ export union X64Op
 	subXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpTwoAddr, implicitGprReads: 0, implicitGprDefs: 0}
 	mulXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpTwoAddr, implicitGprReads: 0, implicitGprDefs: 0}
 	divXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 15, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpTwoAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	minXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpTwoAddr, implicitGprReads: 0, implicitGprDefs: 0}
+	maxXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpTwoAddr, implicitGprReads: 0, implicitGprDefs: 0}
 	sqrtXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 20, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpDefUse, implicitGprReads: 0, implicitGprDefs: 0}
 	roundXmm(dest X64FpVReg, src X64FpVReg, mode MachineWord, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false, pattern: OpPattern.fpDefUse, implicitGprReads: 0, implicitGprDefs: 0}
 	ucomisXmm(src1 X64FpVReg, src2 X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: true, pattern: OpPattern.fpTwoUse, implicitGprReads: 0, implicitGprDefs: 0}
@@ -380,6 +384,8 @@ export function x64OpToString(op X64Op, blocks IrBlockArray) returns String
 		subXmm(dest, src, prec) gives "x64.sub{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		mulXmm(dest, src, prec) gives "x64.mul{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		divXmm(dest, src, prec) gives "x64.div{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		minXmm(dest, src, prec) gives "x64.min{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		maxXmm(dest, src, prec) gives "x64.max{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		sqrtXmm(dest, src, prec) gives "x64.sqrt{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		roundXmm(dest, src, mode, prec) gives "x64.round{fpSuffix(prec)} {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}, {mode}"
 		ucomisXmm(src1, src2, prec) gives "x64.ucomi{fpSuffix(prec)} {x64FpVRegToString(src1)}, {x64FpVRegToString(src2)}"

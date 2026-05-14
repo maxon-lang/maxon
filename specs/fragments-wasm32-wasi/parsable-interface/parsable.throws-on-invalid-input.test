@@ -1,0 +1,89 @@
+// Test: parsable.throws-on-invalid-input
+
+typealias Integer = int(i64.min to i64.max)
+
+// Parsable.fromString throws error on invalid input
+enum ParseError implements Error
+	Empty = 1
+end 'ParseError'
+
+type Value implements Parsable
+	export var n Integer
+
+	static function fromString(input String) returns Self throws ParseError
+		if input.byteLength() == 0 'check'
+			throw ParseError.Empty
+		end 'check'
+		return Value{n: input.byteLength()}
+	end 'fromString'
+end 'Value'
+
+function main() returns ExitCode
+	let v = try Value.fromString("") otherwise 'err'
+		return 42
+	end 'err'
+	return v.n
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Value.fromString(local0: i64) -> i64 {
+  entry:
+    %12 = mir.param local0 : i64
+    %2 = mir.call @String.byteLength(%12)
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 1 : i64
+    mir.error_return %5, %6
+  check_0.after:
+    %7 = mir.mov_imm 8 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    %10 = mir.call @String.byteLength(%12)
+    mir.store %10, %8, 0 width: qword
+    %11 = mir.mov_imm 0 : i64
+    mir.error_return %8, %11
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 0 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    mir.store %9, %8, 8 width: qword
+    %10, %11 = mir.try_call @Value.fromString(%8)
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.cmp ne, %11, %12
+    mir.cond_br %13 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %15 = mir.mov_imm 42 : i64
+    mir.ret %15
+  try_0.merge:
+    %18 = mir.load %10, 0 width: qword
+    %19 = mir.mov_imm 125 : i64
+    %20 = mir.cmp ugt, %18, %19
+    mir.cond_br %20 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %21 = mir.global_addr @__panic_msg_0
+    %22 = mir.call @mrt_panic(%21)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

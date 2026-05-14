@@ -39,12 +39,31 @@ let whitelist = ["basics",
 	"stdlib-basic",
 	"stdlib-autodiscovery",
 	"pow",
+	"abs",
+	"sqrt",
+	"floor",
+	"ceil",
+	"round",
+	"trunc",
+	"min",
+	"max",
+	"sin",
+	"cos",
+	"tan",
+	"atan2",
+	"exp",
+	"log",
+	"log2",
+	"log10",
 	"enums-simple",
 	"match-simple",
 	"module-keyword",
 	"lexer-parser-robustness",
 	"try-otherwise-value-flow",
+	"if-try",
 	"closure-self",
+	"first-class-functions",
+	"closure-capture",
 	"reserved-double-underscore",
 	"managed-memory-builtin",
 	// "ranges", — 20/22 fragments pass after expression-position `to`/`upto`
@@ -56,7 +75,7 @@ let whitelist = ["basics",
 	"arrays",
 	"export-keyword",
 	"static-variables",
-	// "vector", — needs sized `Vector with N` type
+	"vector",
 	"bitwise-operators",
 	"interface-conformance",
 	"interfaces",
@@ -66,8 +85,7 @@ let whitelist = ["basics",
 	// "where-clauses", — disabled: Phase 11.x in-progress failures
 	// "associated-types", — disabled: Phase 11.x in-progress failures
 	"ranged-typealias",
-	// "set",
-	// "first-class-functions",
+	"set",
 	"challenge-struct-field-assign",
 	"challenge-nested-structs",
 	"challenge-array-of-structs",
@@ -79,6 +97,7 @@ let whitelist = ["basics",
 	//                          unresolved-name parser bug
 	"error-handling",
 	"interface-dispatch-throws-match",
+	"interface-dispatch",
 	"initablefromarrayliteral",
 	"array-managed-elements",
 	// "array-realloc-dangling-ref", — needs E3070 borrow-check diagnostics
@@ -96,27 +115,32 @@ let whitelist = ["basics",
 	// struct with many arrays; orthogonal to unions.
 	// "init-from-literal",
 	// "interfaces",
-	// "interface-extensions", — 5/9 pass after the extension-callee redirect
-	//                          and per-receiver witness pairing. Remaining 4
-	//                          need stdlib-side parser features: `Set from`,
-	//                          map-literal, and for-pair iteration on Map.
-	// "conditional-extensions",
+	// "interface-extensions", — 5/9 pass; 4 stdlib-map-on-* fragments need
+	// `stdlib/Interfaces.maxon` whitelisted (Iterable.map / .filter
+	// extension monomorphization) plus parser features for `Set from`,
+	// map-literal, and `gives`-closure inside arg position. Re-enable when
+	// Iterable extensions land alongside Phase 13.
+	// "conditional-extensions", — J.4 work in progress (Element substitution in extension methods)
 	// "associated-types",
 	// "collection",
 	"primitive-hashable",
 	"primitive-cloneable",
-	// "primitive-comparable", — 26/28 pass after Phase 11.4 multi-witness
-	//                          dispatch; remaining 2 are float-NaN ordering
-	//                          edge cases (`compare(nan, nan)` returns wrong
-	//                          arm) — pre-existing bug, not the dispatch path.
+	"primitive-comparable",
+	"string-type",
+	"string-interpolation",
+	"character-type",
 	// "exp",
 	// "type-checking",
 	// "ownership",
-	// "map",
+	"map",
+	"map-struct-bytearray",
+	"map-try-otherwise-block",
+	"array-hashable",
 	// "stdlib-array",
 	// "stdlib-set",
 	// "enums",
-	// "top-level-let",
+	"top-level-let",
+	"module-level-struct-var",
 	// Partial-pass specs are kept OFF the whitelist so a green run is fully
 	// green. Each is listed with its current pass count and the gating
 	// feature; re-enable when the residual fragment(s) are addressable.
@@ -128,10 +152,17 @@ let whitelist = ["basics",
 	//                              hits an unexpected-op panic in lowering;
 	//                              separate range-arm cleanup.
 	// "enum-allcases" (5/8) — `error-enum` needs Phase-11 Hashable witness;
-	//                              `string-backed` / `char-backed` need the
-	//                              non-numeric-raw-value parser feature.
-	// "enum-allcasenames" (7/8) — `string-backed` (same parser gap).
-	// "enum-ordinal" (7/9) — `string-backed` / `char-backed` (same parser gap).
+	//                              `string-backed` / `char-backed` parse now
+	//                              but need `.rawValue` to return a String /
+	//                              char rather than the ordinal int (separate
+	//                              accessor work).
+	// `enum-allcasenames` re-enabled 2026-05-13: all 8 fragments green —
+	// the previously-blocking `string-backed` parser gap is closed.
+	"enum-allcasenames",
+	// `enum-ordinal` re-enabled 2026-05-13: string/char-backed enums
+	// parse correctly now, and `.ordinal` is the runtime representation
+	// regardless of declared backing.
+	"enum-ordinal",
 	"match-range-single-value",
 	// `enum-match-exhaustive` re-enabled 2026-05-12: now 17/17 on both
 	// x64-windows and wasm32-wasi (the previous wasm float-backed-enum
@@ -169,7 +200,11 @@ let whitelist = ["basics",
 	// "challenge-array-of-structs",
 	// "optimizations",
 	// "export-var-fields",
-	// "parsable-interface",
+	"parsable-interface",
+	"function-overloads",
+	"tuples",
+	"panic-stack-trace",
+	"command-line-args",
 ]
 
 // Signed elapsed time in milliseconds (deltas between Process.currentTimeMs() reads).
@@ -307,14 +342,18 @@ function buildRunCommand(outputPath FilePath, target Target, testArgs String) re
 	return outputPath.toString()
 end 'buildRunCommand'
 
-// Build the command to run a WASM binary via vendored wasmtime.
+// Build the command to run a WASM binary via vendored wasmtime. wasmtime's
+// `run <WASM>...` takes the wasm module and every positional argument that
+// follows as wasi argv — there is no shell-style `--` separator (any literal
+// `--` in argv is forwarded verbatim and lands as argv[1] inside the module).
+// Spec tests that declare `Args: ...` therefore have to pass the args raw.
 function buildWasmRunCommand(outputPath FilePath, testArgs String) returns String
 	let wasmtimePath = findWasmtimePath()
 	if wasmtimePath.isEmpty() 'noWasmtime'
 		panic("wasmtime not found in vendor/wasmtime/")
 	end 'noWasmtime'
 	if not testArgs.isEmpty() 'hasArgs'
-		return "{wasmtimePath} run {outputPath} -- {testArgs}"
+		return "{wasmtimePath} run {outputPath} {testArgs}"
 	end 'hasArgs'
 	return "{wasmtimePath} run {outputPath}"
 end 'buildWasmRunCommand'

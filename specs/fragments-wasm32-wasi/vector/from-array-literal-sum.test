@@ -1,0 +1,120 @@
+// Test: from-array-literal-sum
+function main() returns ExitCode
+	let v = Vector from [10, 20, 30]
+	let a = try v.get(0) otherwise 0
+	let b = try v.get(1) otherwise 0
+	let c = try v.get(2) otherwise 0
+	return a + b + c
+end 'main'
+---
+ExitCode: 60
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %6 = mir.mov_imm 40 : i64
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.call @stdlib.__mm_alloc(%6, %5, %7)
+    %9 = mir.global_addr @__rdata_arr_vector_main_1
+    mir.store %9, %8, 0 width: qword
+    %10 = mir.mov_imm 3 : i64
+    mir.store %10, %8, 8 width: qword
+    %11 = mir.mov_imm -2 : i64
+    mir.store %11, %8, 16 width: qword
+    %12 = mir.mov_imm 8 : i64
+    mir.store %12, %8, 24 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %8, 32 width: qword
+    %59 = mir.mov_imm 8 : i64
+    %60 = mir.call @mrt_alloc(%59)
+    %61 = mir.mov_imm 40 : i64
+    %62 = mir.call @mrt_alloc(%61)
+    %63 = mir.mov_imm 0 : i64
+    mir.store %63, %62, 0 width: qword
+    %64 = mir.mov_imm 0 : i64
+    mir.store %64, %62, 8 width: qword
+    %65 = mir.mov_imm 0 : i64
+    mir.store %65, %62, 16 width: qword
+    %66 = mir.mov_imm 8 : i64
+    mir.store %66, %62, 24 width: qword
+    %67 = mir.mov_imm 0 : i64
+    mir.store %67, %62, 32 width: qword
+    mir.store %62, %60, 0 width: qword
+    mir.store %8, %60, 0 width: qword
+    mir.br inlined_Vector.get_0()
+  inlined_Vector.get_0:
+    %68 = mir.load %60, 0 width: qword
+    %69, %70 = mir.try_call @stdlib.__managed_mem_get(%68, %7)
+    %71 = mir.mov_imm 0 : i64
+    %72 = mir.cmp ne, %70, %71
+    mir.cond_br %72 [then: inlined_Vector.get_1(), else: inlined_Vector.get_2()]
+  inlined_Vector.get_1:
+    %73 = mir.mov_imm 0 : i64
+    %74 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%73, %74)
+  inlined_Vector.get_2:
+    %75 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%69, %75)
+  inline_cont_main_0:
+    %27 = mir.cmp ne, %77, %7
+    mir.cond_br %27 [then: try_0.merge(%7), else: try_0.ok()]
+  try_0.ok:
+    mir.br try_0.merge(%76)
+  try_0.merge:
+    %32 = mir.mov_imm 1 : i64
+    mir.br inlined_Vector.get_0()
+  inlined_Vector.get_0:
+    %78 = mir.load %60, 0 width: qword
+    %79, %80 = mir.try_call @stdlib.__managed_mem_get(%78, %32)
+    %81 = mir.mov_imm 0 : i64
+    %82 = mir.cmp ne, %80, %81
+    mir.cond_br %82 [then: inlined_Vector.get_1(), else: inlined_Vector.get_2()]
+  inlined_Vector.get_1:
+    %83 = mir.mov_imm 0 : i64
+    %84 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%83, %84)
+  inlined_Vector.get_2:
+    %85 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%79, %85)
+  inline_cont_main_1:
+    %37 = mir.cmp ne, %87, %7
+    mir.cond_br %37 [then: try_1.merge(%7), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%86)
+  try_1.merge:
+    %42 = mir.mov_imm 2 : i64
+    mir.br inlined_Vector.get_0()
+  inlined_Vector.get_0:
+    %88 = mir.load %60, 0 width: qword
+    %89, %90 = mir.try_call @stdlib.__managed_mem_get(%88, %42)
+    %91 = mir.mov_imm 0 : i64
+    %92 = mir.cmp ne, %90, %91
+    mir.cond_br %92 [then: inlined_Vector.get_1(), else: inlined_Vector.get_2()]
+  inlined_Vector.get_1:
+    %93 = mir.mov_imm 0 : i64
+    %94 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_2(%93, %94)
+  inlined_Vector.get_2:
+    %95 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_2(%89, %95)
+  inline_cont_main_2:
+    %47 = mir.cmp ne, %97, %7
+    mir.cond_br %47 [then: try_2.merge(%7), else: try_2.ok()]
+  try_2.ok:
+    mir.br try_2.merge(%96)
+  try_2.merge:
+    %53 = mir.add.i64 %56, %57
+    %55 = mir.add.i64 %53, %58
+    %98 = mir.mov_imm 125 : i64
+    %99 = mir.cmp ugt, %55, %98
+    mir.cond_br %99 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %100 = mir.global_addr @__panic_msg_0
+    %101 = mir.call @mrt_panic(%100)
+  __range_ok_0:
+    mir.ret %55
+  }
+}
+---

@@ -1,0 +1,47 @@
+// Test: bool-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+function check(value Integer) returns Integer
+	return value
+end 'check'
+
+function check(value bool) returns Integer
+	if value 'branch'
+		return 1
+	end 'branch' else 'other'
+		return 0
+	end 'other'
+end 'check'
+
+function main() returns ExitCode
+	return check(true)
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br inlined_function-overloads.check$bool_0()
+  inlined_function-overloads.check$bool_0:
+    mir.cond_br %0 [then: inlined_function-overloads.check$bool_1(), else: inlined_function-overloads.check$bool_2()]
+  inlined_function-overloads.check$bool_1:
+    %2 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%2)
+  inlined_function-overloads.check$bool_2:
+    %3 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%3)
+  inline_cont_main_0:
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

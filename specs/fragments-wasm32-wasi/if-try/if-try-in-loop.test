@@ -1,0 +1,74 @@
+// Test: if-try-in-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(n Integer) returns Integer throws MyError
+	if n < 3 'check'
+		throw MyError.failed
+	end 'check'
+	return n
+end 'mayFail'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		if let val = try mayFail(i) 'check'
+			sum = sum + val
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.cmp lt, %19, %3
+    mir.cond_br %4 [then: inlined_mayFail_0(), else: loop_0.exit()]
+  inlined_mayFail_0:
+    %20 = mir.mov_imm 3 : i64
+    %21 = mir.cmp lt, %19, %20
+    mir.cond_br %21 [then: inlined_mayFail_1(), else: inlined_mayFail_2()]
+  inlined_mayFail_1:
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%22, %23)
+  inlined_mayFail_2:
+    %24 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%19, %24)
+  inline_cont_main_0:
+    %8 = mir.mov_imm 0 : i64
+    %9 = mir.cmp eq, %26, %8
+    mir.cond_br %9 [then: check_0(), else: check_0.after(%18)]
+  loop_0.exit:
+    %27 = mir.mov_imm 125 : i64
+    %28 = mir.cmp ugt, %18, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0:
+    %13 = mir.add.i64 %18, %25
+    mir.br check_0.after(%13)
+  check_0.after:
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.add.i64 %19, %15
+    mir.br loop_0.header(%17, %16)
+  __range_panic_0:
+    %29 = mir.global_addr @__panic_msg_0
+    %30 = mir.call @mrt_panic(%29)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

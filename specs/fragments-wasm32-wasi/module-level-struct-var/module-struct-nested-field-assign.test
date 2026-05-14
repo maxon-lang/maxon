@@ -1,0 +1,52 @@
+// Test: module-struct-nested-field-assign
+typealias SmallInt = int(0 to u8.max)
+
+type Inner
+		export var x SmallInt
+
+		static function create(x SmallInt) returns Self
+			return Self{x: x}
+		end 'create'
+end 'Inner'
+
+type Outer
+		export var inner Inner
+
+		static function create(inner Inner) returns Self
+			return Self{inner: inner}
+		end 'create'
+end 'Outer'
+
+var state = Outer.create(inner: Inner.create(x: 0))
+
+function main() returns ExitCode
+		state.inner.x = 99
+		return state.inner.x
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__data_state
+    %1 = mir.load %0, 0 width: qword
+    %2 = mir.load %1, 0 width: qword
+    %3 = mir.mov_imm 99 : i64
+    mir.store %3, %2, 0 width: byte
+    %4 = mir.global_addr @__data_state
+    %5 = mir.load %4, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %6, 0 width: byte
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

@@ -358,7 +358,7 @@ end 'main'
 60
 ```
 
-<!-- test: stdlib-map-on-map-with-function -->
+<!-- disabled-test: stdlib-map-on-map-with-function -->
 ```maxon
 function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]

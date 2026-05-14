@@ -194,6 +194,8 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		fsub(dest, src1, src2, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src1) or isVirtualArm64FpReg(src2)
 		fmul(dest, src1, src2, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src1) or isVirtualArm64FpReg(src2)
 		fdiv(dest, src1, src2, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src1) or isVirtualArm64FpReg(src2)
+		fmin(dest, src1, src2, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src1) or isVirtualArm64FpReg(src2)
+		fmax(dest, src1, src2, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src1) or isVirtualArm64FpReg(src2)
 		fsqrt(dest, src, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src)
 		fabs(dest, src, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src)
 		fneg(dest, src, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src)
@@ -284,6 +286,8 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		fsub(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
 		fmul(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
 		fdiv(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fmin(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fmax(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
 		fsqrt(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
 		fabs(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
 		fneg(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
@@ -538,6 +542,8 @@ export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opId
 		fsub(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
 		fmul(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
 		fdiv(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fmin(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fmax(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
 		fsqrt(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
 		fabs(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
 		fneg(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
@@ -808,6 +814,8 @@ function arm64OpFpThreeAddrOperands(op Arm64Op) returns (Arm64FpVReg, Arm64FpVRe
 		fsub(dest, src1, src2, _) gives(dest, src1, src2)
 		fmul(dest, src1, src2, _) gives(dest, src1, src2)
 		fdiv(dest, src1, src2, _) gives(dest, src1, src2)
+		fmin(dest, src1, src2, _) gives(dest, src1, src2)
+		fmax(dest, src1, src2, _) gives(dest, src1, src2)
 		default panic("arm64OpFpThreeAddrOperands: unexpected op")
 	end 'get'
 end 'arm64OpFpThreeAddrOperands'
@@ -821,6 +829,8 @@ function arm64OpWithPhysFpThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 
 		fsub(_, _, _, precision) gives Arm64Op.fsub(dp, src1: s1p, src2: s2p, precision: precision)
 		fmul(_, _, _, precision) gives Arm64Op.fmul(dp, src1: s1p, src2: s2p, precision: precision)
 		fdiv(_, _, _, precision) gives Arm64Op.fdiv(dp, src1: s1p, src2: s2p, precision: precision)
+		fmin(_, _, _, precision) gives Arm64Op.fmin(dp, src1: s1p, src2: s2p, precision: precision)
+		fmax(_, _, _, precision) gives Arm64Op.fmax(dp, src1: s1p, src2: s2p, precision: precision)
 		default panic("arm64OpWithPhysFpThreeAddr: not an fpThreeAddr op")
 	end 'rebuild'
 end 'arm64OpWithPhysFpThreeAddr'
@@ -1445,6 +1455,8 @@ function remapA64FpThreeAddr(a64Op Arm64Op, remap RegIntArray) returns Arm64Op
 		fsub(dest, src1, src2, precision) gives Arm64Op.fsub(remapArm64FpVReg(dest, remap: remap), src1: remapArm64FpVReg(src1, remap: remap), src2: remapArm64FpVReg(src2, remap: remap), precision: precision)
 		fmul(dest, src1, src2, precision) gives Arm64Op.fmul(remapArm64FpVReg(dest, remap: remap), src1: remapArm64FpVReg(src1, remap: remap), src2: remapArm64FpVReg(src2, remap: remap), precision: precision)
 		fdiv(dest, src1, src2, precision) gives Arm64Op.fdiv(remapArm64FpVReg(dest, remap: remap), src1: remapArm64FpVReg(src1, remap: remap), src2: remapArm64FpVReg(src2, remap: remap), precision: precision)
+		fmin(dest, src1, src2, precision) gives Arm64Op.fmin(remapArm64FpVReg(dest, remap: remap), src1: remapArm64FpVReg(src1, remap: remap), src2: remapArm64FpVReg(src2, remap: remap), precision: precision)
+		fmax(dest, src1, src2, precision) gives Arm64Op.fmax(remapArm64FpVReg(dest, remap: remap), src1: remapArm64FpVReg(src1, remap: remap), src2: remapArm64FpVReg(src2, remap: remap), precision: precision)
 		default panic("remapArm64: unexpected op for pattern")
 	end 'remap'
 end 'remapA64FpThreeAddr'

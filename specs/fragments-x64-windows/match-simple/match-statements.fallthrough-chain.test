@@ -15,25 +15,63 @@ ExitCode: 60
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @match-simple.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor r8d, r8d
-    x64.jmp cascade_0.case0
-  cascade_0.merge:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
-    x64.jmp __range_panic_0
+    x64.mov rax, 1
+    x64.xor ecx, ecx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.jmp match-simple.main.cascade_0.cmp0
+  cascade_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.cascade_0.cmp1
   cascade_0.case0:
-    x64.add r8, 10
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.cascade_0.case1
+  cascade_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.cascade_0.cmp2
   cascade_0.case1:
-    x64.add r8, 20
+    x64.mov rax, 20
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.cascade_0.case2
+  cascade_0.cmp2:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.jne match-simple.main.cascade_0.case3
   cascade_0.case2:
-    x64.add r8, 30
-    x64.jmp cascade_0.merge
+    x64.mov rax, 30
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp match-simple.main.cascade_0.merge
+  cascade_0.case3:
+    x64.mov rax, 100
+    x64.mov [rbp-8], rax
+    x64.jmp match-simple.main.cascade_0.merge
+  cascade_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg match-simple.main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl match-simple.main.__range_panic_0
+    x64.jmp match-simple.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

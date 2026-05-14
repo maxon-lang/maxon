@@ -950,7 +950,6 @@ Operators: `and`, `or`, `not`.
 ```bash
 ./bin/maxon.exe spec-test                            # all tests
 ./bin/maxon.exe spec-test --filter=arithmetic        # filter
-./bin/maxon.exe spec-test --filter=arrays --verbose  # verbose failures
 ./bin/maxon.exe spec-test --update-required          # regenerate RequiredIR
 ./bin/maxon.exe spec-test --target=x64-linux         # cross-compile
 ```
@@ -960,7 +959,6 @@ Operators: `and`, `or`, `not`.
 ```bash
 ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test                           # all tests
 ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --filter=arithmetic       # filter
-./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --verbose                 # verbose failures
 ./maxon-selfhosted/.maxon/maxon-selfhosted.exe spec-test --target=x64-linux        # cross-compile
 ```
 

@@ -1,0 +1,64 @@
+// Test: if-try-var-binding-failure
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	if var value = try mayFail(false) 'check'
+		value = value + 10
+		return value
+	end 'check'
+	return 99
+end 'main'
+---
+ExitCode: 99
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined_mayFail_0()
+  inlined_mayFail_0:
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.xor.i64 %0, %10
+    mir.cond_br %11 [then: inlined_mayFail_1(), else: inlined_mayFail_2()]
+  inlined_mayFail_1:
+    %12 = mir.mov_imm 0 : i64
+    %13 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%12, %13)
+  inlined_mayFail_2:
+    %14 = mir.mov_imm 42 : i64
+    %15 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%14, %15)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp eq, %17, %3
+    mir.cond_br %4 [then: check_0(), else: check_0.after()]
+  check_0:
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.add.i64 %16, %6
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %7, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  check_0.after:
+    %9 = mir.mov_imm 99 : i64
+    mir.ret %9
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_0
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

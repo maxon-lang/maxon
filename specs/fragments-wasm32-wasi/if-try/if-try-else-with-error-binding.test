@@ -1,0 +1,79 @@
+// Test: if-try-else-with-error-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	first
+	second
+end 'MyError'
+
+function mayFail(which Integer) returns Integer throws MyError
+	if which == 1 'check1'
+		throw MyError.first
+	end 'check1'
+	if which == 2 'check2'
+		throw MyError.second
+	end 'check2'
+	return 42
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	if try mayFail(1) 'check'
+		result = 100
+	end 'check' else (e) 'err'
+		result = 50
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 50
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 1 : i64
+    mir.br inlined_mayFail_0()
+  inlined_mayFail_0:
+    %12 = mir.mov_imm 1 : i64
+    %13 = mir.cmp eq, %1, %12
+    mir.cond_br %13 [then: inlined_mayFail_1(), else: inlined_mayFail_2()]
+  inlined_mayFail_1:
+    %14 = mir.mov_imm 0 : i64
+    %15 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%14, %15)
+  inlined_mayFail_2:
+    %16 = mir.mov_imm 2 : i64
+    %17 = mir.cmp eq, %1, %16
+    mir.cond_br %17 [then: inlined_mayFail_3(), else: inlined_mayFail_4()]
+  inlined_mayFail_3:
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_0(%18, %19)
+  inlined_mayFail_4:
+    %20 = mir.mov_imm 42 : i64
+    %21 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%20, %21)
+  inline_cont_main_0:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.cmp eq, %23, %4
+    mir.cond_br %5 [then: check_0(), else: err_0()]
+  check_0:
+    %6 = mir.mov_imm 100 : i64
+    mir.br check_0.merge(%6)
+  err_0:
+    %9 = mir.mov_imm 50 : i64
+    mir.br check_0.merge(%9)
+  check_0.merge:
+    %24 = mir.mov_imm 125 : i64
+    %25 = mir.cmp ugt, %11, %24
+    mir.cond_br %25 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %26 = mir.global_addr @__panic_msg_0
+    %27 = mir.call @mrt_panic(%26)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

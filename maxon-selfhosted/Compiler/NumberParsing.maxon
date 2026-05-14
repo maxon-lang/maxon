@@ -12,17 +12,28 @@ end 'ParserError'
 
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Throws ParserError.overflow if the value exceeds float64 range.
+//
+// Accumulator strategy: keep all significant digits in `intPart` (regardless of
+// where the decimal point falls), and track the implicit decimal exponent
+// separately in `decExp` (≤0 for fractional shifts, ≥0 for trailing-zero
+// shifts). After parsing, the literal's value is `intPart * 10^decExp` times
+// the user-supplied scientific exponent. This keeps the int64 cells from
+// overflowing on long literals like `3.14159265358979323846` (21 sig digits)
+// and `0.0000000000000000001` (1e-19) — significant digits past the 18-digit
+// budget are silently dropped exactly like strtod, but their position is
+// preserved so the magnitude stays correct.
 export function parseFloatBits(s String) returns ParsedInt throws ParserError
+	let DIGIT_BUDGET = 18
 	let bytes = s.toByteArray()
-	var intPart = 0
-	var fracPart = 0
-	var fracDigits = 0
+	var intPart = 0           // accumulated significant digits (capped at budget)
+	var decExp = 0            // implicit decimal exponent for intPart
 	var pastDot = false
 	var sciExp = 0
 	var sciExpNeg = false
 	var inExponent = false
-	var intDigits = 0
 	var hasNonZeroDigit = false
+	var sigDigits = 0
+	var leadingFracZeros = 0  // count of fractional zeros before the first non-zero significant digit
 
 	var pi = 0
 	while pi < bytes.count() 'parse'
@@ -57,16 +68,33 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 					pastDot = true
 				end 'isDot' else 'notDot'
 					if b >= '0' and b <= '9' 'isDigit'
-						if b != '0' 'nonZero'
+						let digitVal = b - '0'
+						if not hasNonZeroDigit and digitVal == 0 'leading'
+							// Leading zeros: skip mantissa accumulation entirely;
+							// just count them so we know how much to shift the
+							// decimal exponent later for fractional leading-zero
+							// runs (e.g. "0.0001" → leadingFracZeros=3).
+							if pastDot 'leadFrac'
+								leadingFracZeros = leadingFracZeros + 1
+							end 'leadFrac'
+						end 'leading' else 'normalDigit'
 							hasNonZeroDigit = true
-						end 'nonZero'
-						if pastDot 'frac'
-							fracPart = fracPart * 10 + (b - '0')
-							fracDigits = fracDigits + 1
-						end 'frac' else 'int'
-							intPart = intPart * 10 + (b - '0')
-							intDigits = intDigits + 1
-						end 'int'
+							if sigDigits < DIGIT_BUDGET 'inBudget'
+								intPart = intPart * 10 + digitVal
+								sigDigits = sigDigits + 1
+								if pastDot 'fracSig'
+									decExp = decExp - 1
+								end 'fracSig'
+							end 'inBudget' else 'overBudget'
+								// Drop digits past the budget. Integer-part
+								// excess bumps the decimal exponent; fractional
+								// excess just gets dropped (its scale is
+								// already encoded in decExp from prior digits).
+								if not pastDot 'intExcess'
+									decExp = decExp + 1
+								end 'intExcess'
+							end 'overBudget'
+						end 'normalDigit'
 					end 'isDigit'
 				end 'notDot'
 			end 'notExp'
@@ -74,34 +102,44 @@ export function parseFloatBits(s String) returns ParsedInt throws ParserError
 		pi = pi + 1
 	end 'parse'
 
-	// float64 max is ~1.8e308; effective magnitude ~ 10^(intDigits - 1 + sciExp).
-	if hasNonZeroDigit and not sciExpNeg 'checkOverflow'
-		let effectiveExp = intDigits - 1 + sciExp
+	// Fold the leading-zero fractional run into decExp now (was kept separate
+	// to avoid mixing magnitude-tracking with mantissa accumulation above).
+	decExp = decExp - leadingFracZeros
+
+	// Combine the user-supplied scientific exponent with the implicit decimal
+	// exponent we accumulated. totalExp is the signed power of 10 by which
+	// intPart must be scaled to recover the literal's value.
+	var signedSciExp = sciExp
+	if sciExpNeg 'negSci'
+		signedSciExp = -signedSciExp
+	end 'negSci'
+	let totalExp = decExp + signedSciExp
+
+	// float64 range: max ~1.8e308. Approximate magnitude exponent = (sigDigits-1) + totalExp.
+	if hasNonZeroDigit 'checkOverflow'
+		let effectiveExp = sigDigits - 1 + totalExp
 		if effectiveExp > 308 'overflow'
 			throw ParserError.overflow
 		end 'overflow'
 	end 'checkOverflow'
 
-	// Compute fracDivisor = 10^fracDigits
-	var fracDivisor = 1
-	for _ in 0 upto fracDigits 'powLoop'
-		fracDivisor = fracDivisor * 10
-	end 'powLoop'
+	var numerator = intPart
+	var denominator = 1
 
-	var numerator = intPart * fracDivisor + fracPart
-	var denominator = fracDivisor
-
-	if sciExp > 0 'applySciExp'
-		if sciExpNeg 'divByTen'
-			for _ in 0 upto sciExp 'divLoop'
-				denominator = denominator * 10
-			end 'divLoop'
-		end 'divByTen' else 'mulByTen'
-			for _ in 0 upto sciExp 'mulLoop'
-				numerator = numerator * 10
-			end 'mulLoop'
-		end 'mulByTen'
-	end 'applySciExp'
+	// Apply totalExp by scaling numerator (positive exp) or denominator (negative).
+	if totalExp > 0 'positiveExp'
+		var i = 0
+		while i < totalExp 'mulLoop'
+			numerator = numerator * 10
+			i = i + 1
+		end 'mulLoop'
+	end 'positiveExp' else if totalExp < 0 'negativeExp'
+		var i = 0
+		while i < -totalExp 'divLoop'
+			denominator = denominator * 10
+			i = i + 1
+		end 'divLoop'
+	end 'negativeExp'
 
 	if numerator == 0 'isZero'
 		return 0

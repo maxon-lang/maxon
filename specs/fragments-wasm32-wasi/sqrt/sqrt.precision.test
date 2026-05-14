@@ -1,0 +1,30 @@
+// Test: sqrt.precision
+function main() returns ExitCode
+	let x = sqrt(2.0)
+	// sqrt(2) * sqrt(2) should be approximately 2
+	let check = x * x
+	// Trunc to get integer 2
+	return trunc(check)
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4611686018427387904 : f64
+    %1 = mir.f64 %0
+    %4 = mir.mul.f64 %1, %1
+    %6 = mir.fptosi.i64 %4
+    %7 = mir.mov_imm 125 : i64
+    %8 = mir.cmp ugt, %6, %7
+    mir.cond_br %8 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %9 = mir.global_addr @__panic_msg_0
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---
