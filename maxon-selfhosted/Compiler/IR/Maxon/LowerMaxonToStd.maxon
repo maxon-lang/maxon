@@ -3544,6 +3544,13 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		end 'plainCall'
 		self.recordCallResultType(resultId, callee: qualifiedCallee, receiverContext: receiverContext)
+		// Hybrid-generics ABI bridge (read side). When the callee's declared
+		// return type is `typeParameter(...)` but the call-site substitution
+		// binds it to a float-class concrete type, the runtime ABI hands the
+		// result back in a GPR (RAX/X0) — the callee body's int-channel ABI
+		// for generic returns. Reinterpret to f64 here so the caller's
+		// float-typed slot reads the right register class.
+		self.maybeBitcastCallResultToFloat(result, callee: qualifiedCallee, receiverContext: receiverContext, dstBlock: dstBlock)
 		// Sign-extend narrow signed return values. When the callee's
 		// declared return type is `typeParameter(...)` and the call site's
 		// receiverContext binds that parameter to a signed narrow type
@@ -5696,7 +5703,18 @@ type MaxonToStdLowering
 			let paramType = try resolvedParamTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
 			let paramName = try signature.paramNames.get(slot + paramStartIndex) otherwise ""
 			let coercedId = self.coerceArgToParam(argName: arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
-			try self.slotIdsScratch.set(slot, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
+			// Hybrid-generics ABI bridge (write side). The callee's signature
+			// (`signature.paramTypes`) keeps the raw `typeParameter(Element)`
+			// for generic params; substitution only refines the type at the
+			// resolved-param-types snapshot. Methods are NOT monomorphized
+			// per Phase 11 — a single body handles every Element type by
+			// treating the slot as an opaque 8-byte int-channel. So when
+			// the caller hands us a float-class SSA at a typeParameter slot,
+			// we bitcast f64→i64 so the call ABI passes via GPR, matching
+			// the callee's int-channel param prologue.
+			let rawParamType = try signature.paramTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
+			let bridgedId = self.bridgeFloatArgToTypeParam(coercedId, rawParamType: rawParamType, substitutedParamType: paramType, dstBlock: dstBlock)
+			try self.slotIdsScratch.set(slot, value: bridgedId) otherwise panic("invariant: slotIds.set OOB")
 			try self.slotFilledScratch.set(slot, value: true) otherwise panic("invariant: slotFilled.set OOB")
 		end 'placeArgs'
 		// Fill unfilled slots from signature defaults.
@@ -5855,6 +5873,61 @@ type MaxonToStdLowering
 		// before codegen, so this id never reaches a backend.
 		return allocValueId(self.funcIdRef)
 	end 'coerceArgToParam'
+
+	// Hybrid-generics ABI bridge. Maxon Phase 11 does NOT monomorphize
+	// methods — a generic body declared with `typeParameter(Element)`
+	// params is compiled once and passes every Element through an opaque
+	// 8-byte int-channel slot. Substitution at the call site refines the
+	// paramType for type checking (so `Vector with Float`'s `v.set(0, 2.5)`
+	// type-checks without coercion), but the callee body's prologue still
+	// loads the param from a GPR. When the caller hands us a float-class
+	// SSA at such a slot, we bitcast it to int so the call ABI uses GPR;
+	// the symmetric read-side bitcast lives in `maybeBitcastCallResultToFloat`.
+	//
+	// No-op unless: rawParamType is `typeParameter` AND the resolved/
+	// substituted paramType has CastCategory.float. The first check
+	// avoids triggering on concrete float params (which already pass via
+	// XMM correctly); the second avoids spuriously bitcasting int-channel
+	// args at int-typed type-parameter slots (which is the common case).
+	function bridgeFloatArgToTypeParam(coercedId ValueId, rawParamType MaxonType, substitutedParamType MaxonType, dstBlock IrBlock) returns ValueId
+		if not maxonTypeIsTypeParameter(rawParamType) 'notTypeParam'
+			return coercedId
+		end 'notTypeParam'
+		if isUnresolvedType(substitutedParamType) 'substUnresolved'
+			return coercedId
+		end 'substUnresolved'
+		if convertCastCategory(self.project, t: substitutedParamType) != CastCategory.float 'notFloatBind'
+			return coercedId
+		end 'notFloatBind'
+		return self.emitUnaryConvert(coercedId, opcode: StdArithUnaryOpcode.bitcastF64ToI64, resultType: MaxonType.integer, dstBlock: dstBlock)
+	end 'bridgeFloatArgToTypeParam'
+
+	// Hybrid-generics ABI bridge (read side). Symmetric to
+	// `bridgeFloatArgToTypeParam`: when the callee's declared return type
+	// is `typeParameter` and the call-site substitution binds it to a
+	// float-class type, the runtime ABI hands back the result in a GPR
+	// (RAX/X0). Reinterpret to f64 and rebind the result name so the
+	// caller's float-typed slot reads from XMM.
+	function maybeBitcastCallResultToFloat(result ByteArray, callee String, receiverContext MaxonType, dstBlock IrBlock)
+		let returnType = try self.project.funcReturnTypes.get(callee) otherwise return
+		let raw = match returnType 'unwrap'
+			void gives MaxonType.integer
+			value(inner) gives inner
+		end 'unwrap'
+		if not maxonTypeIsTypeParameter(raw) 'notTypeParam'
+			return
+		end 'notTypeParam'
+		let concrete = substituteReturnTypeViaReceiver(self.project, raw: raw, receiverContext: receiverContext)
+		if isUnresolvedType(concrete) 'substUnresolved'
+			return
+		end 'substUnresolved'
+		if convertCastCategory(self.project, t: concrete) != CastCategory.float 'notFloatBind'
+			return
+		end 'notFloatBind'
+		let intResultId = self.resolveName(result)
+		let floatResultId = self.emitUnaryConvert(intResultId, opcode: StdArithUnaryOpcode.bitcastI64ToF64, resultType: concrete, dstBlock: dstBlock)
+		self.aliasName(result, toId: floatResultId)
+	end 'maybeBitcastCallResultToFloat'
 
 	// Like coerceArgToParam but for compiler-emitted SSA values (e.g. a
 	// just-emitted constI64 for a default). No diagnostic path because the

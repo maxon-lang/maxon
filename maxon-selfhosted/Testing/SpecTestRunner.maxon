@@ -3136,16 +3136,17 @@ export typealias SpecWorkUnitArray = Array with SpecWorkUnit
 // the bootstrap test count. Empty list when self-hosted parity matches
 // bootstrap.
 function isSelfHostedKnownBroken(specName String, testName String) returns bool
+	// J.4e introduced this filter for tests passing in bootstrap but missing
+	// in self-hosted. J.4f.1 emptied the list after fixing the stdlib-cache
+	// disk-read path so where-clause constraints survive the cache round
+	// trip (decodeStdlibCache used to wipe `data.typeParameters` and rebuild
+	// it from `project.typeParameters`, which holds no constraints at that
+	// point). The hook stays so future transient gaps can be tagged here
+	// without retrofitting every call site.
 	let path = "{specName}/{testName}"
-	// J.4e: the cloned `Set.map` body's call to `Set.createIterator`
-	// requires a `(Element, Hashable)` witness that the cloner doesn't
-	// forward into the cloned body's argument list. Bootstrap monomorphizes
-	// at a different stage, so the witness lands naturally there.
-	// Re-enable once the cloner threads receiver-conformance witnesses
-	// through nested generic call sites.
-	if path == "interface-extensions/stdlib-map-on-set" 'mapOnSet'
+	if path == "" 'unreachable'
 		return true
-	end 'mapOnSet'
+	end 'unreachable'
 	return false
 end 'isSelfHostedKnownBroken'
 

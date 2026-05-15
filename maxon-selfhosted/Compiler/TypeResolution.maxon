@@ -2519,6 +2519,24 @@ export function maxonTypeIsGenericInstance(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeIsGenericInstance'
 
+// True when `t` is a free type-parameter (the parser/TR shape for a
+// generic body's `Element`-like binding). Used by the hybrid-generics
+// call-boundary bridges in LowerMaxonToStd: a typeParameter param/return
+// indicates the callee was compiled with an int-channel ABI for that
+// slot regardless of how the call site substitutes the parameter, so
+// float-class args/returns need an f64↔i64 bitcast at the boundary.
+export function maxonTypeIsTypeParameter(t MaxonType) returns bool
+	return match t 'check'
+		typeParameter gives true
+		boolean to string gives false
+		named gives false
+		function to unresolved gives false
+		genericInstance gives false
+		interface gives false
+		constInt gives false
+	end 'check'
+end 'maxonTypeIsTypeParameter'
+
 // Promote `named(X)` → `genericInstance(X, [...])` when `candidate`
 // carries the binding `raw` was missing — i.e. their base names match.
 // Returns `candidate` on a match, `raw` otherwise. The parser collapses
@@ -2658,9 +2676,140 @@ function methodCallResultType(project Project, receiverType MaxonType, methodNam
 	// `iter.advance()` on a non-generic caller (e.g. `main`) hits
 	// `forwardCallerLayout` with nothing to forward.
 	let scopeResolved = promoteBareGenericReturnToScope(project, t: selfResolved, enclosingStructName: structName)
+	// J.4f.2: when the method is declared on an interface extension
+	// (`extension Iterable ... function map(...) returns ElementArray`),
+	// the return type references the interface's own typeParameter
+	// (`Iterable.Element`). Map/Set/etc. bind that typeParameter through
+	// their `implements Iterable with (Entry, MapIterator)` clause, which
+	// the receiver-typed substitution built below DOES NOT know about
+	// (it only carries the receiver's own typeParameters → concrete-args
+	// map). Pre-resolve interface typeParameters against the receiver's
+	// conformance row first so the downstream `substituteType` can finish
+	// the job with the receiver's own bindings. Without this pass,
+	// `m.map(...)`'s return type lands as `Array with unresolved` and
+	// downstream layout materialization for `for pair in mapped` panics
+	// at `forwardCallerLayout`.
+	let ifaceResolved = resolveInterfaceTypeParamsViaConformance(project, t: scopeResolved, receiverType: normReceiver)
 	let subst = buildSubstitutionForInstance(project, t: normReceiver)
-	return substituteType(project, t: scopeResolved, subst: subst)
+	return substituteType(project, t: ifaceResolved, subst: subst)
 end 'methodCallResultType'
+
+// J.4f.2: walk `t` and replace every `typeParameter(id)` whose declaring
+// scope is an interface the receiver implements with the type that the
+// receiver's `implements I with (...)` clause binds to that param. This
+// turns `Array with Iterable.Element` (declared on Map's
+// `extension Iterable`) into `Array with (Key, Value)` for a Map
+// receiver, so the receiver-substitution that follows finds the bare
+// Map.Key / Map.Value typeParameters it knows how to resolve.
+function resolveInterfaceTypeParamsViaConformance(project Project, t MaxonType, receiverType MaxonType) returns MaxonType
+	return match t 'walk'
+		boolean to string gives t
+		named gives chaseReceiverInnerAlias(project, t: t, receiverType: receiverType)
+		function(id) gives resolveInterfaceTypeParamsInFunction(project, id: id, receiverType: receiverType)
+		unresolved gives t
+		typeParameter(id) gives resolveSingleInterfaceTypeParam(project, paramId: id, receiverType: receiverType, fallback: t)
+		genericInstance(gid) gives resolveInterfaceTypeParamsInGenericInstance(project, gid: gid, receiverType: receiverType)
+		interface gives t
+		constInt gives t
+	end 'walk'
+end 'resolveInterfaceTypeParamsViaConformance'
+
+// Substitute one `typeParameter(id)` arm via the receiver's conformance.
+// Skipped when the param's declaring scope isn't an interface (the
+// receiver's own typeParameter — left for `buildSubstitutionForInstance`
+// to handle) or the receiver doesn't conform to that interface. After a
+// successful conformance lookup, the raw withArg may still be a bare
+// `named(InnerAlias)` (e.g. Map's conformance entry stores Element as
+// `named(Entry)` because the parser interns conformance args by name
+// without chasing inner aliases). Re-walk through `chaseReceiverInnerAlias`
+// so an unwrappable alias on the receiver expands into its underlying
+// generic instance.
+function resolveSingleInterfaceTypeParam(project Project, paramId TypeParamId, receiverType MaxonType, fallback MaxonType) returns MaxonType
+	let declaringScope = project.typeParameters.getDeclaringTypeName(paramId)
+	if not project.interfaces.contains(declaringScope) and not project.unresolvedInterfaces.contains(declaringScope) 'notIface'
+		return fallback
+	end 'notIface'
+	let paramName = project.typeParameters.getName(paramId)
+	let resolved = try resolveInterfaceUsesParamThroughConformance(project, selfType: receiverType, interfaceName: declaringScope, paramName: paramName) otherwise return fallback
+	return resolveInterfaceTypeParamsViaConformance(project, t: resolved, receiverType: receiverType)
+end 'resolveSingleInterfaceTypeParam'
+
+// Chase one `named(X)` arm through the receiver's inner-aliases (the
+// receiver's own struct, then each interface it implements). When the
+// alias expands, recurse on the result so a chain like
+// `Entry → (Key, Value) → __Tuple2 with (typeParameter(Map, Key), typeParameter(Map, Value))`
+// fully unwraps. Returns `t` unchanged when no alias matches.
+function chaseReceiverInnerAlias(project Project, t MaxonType, receiverType MaxonType) returns MaxonType
+	let receiverStructName = baseNameOfReceiverType(project, selfType: receiverType)
+	if receiverStructName.isEmpty() 'noRecv'
+		return t
+	end 'noRecv'
+	let expanded = applyInnerAliasFromReceiver(project, t: t, receiverStructName: receiverStructName)
+	if maxonTypesStructurallyEqual(expanded, b: t) 'noChange'
+		return t
+	end 'noChange'
+	// Recurse so a typeParameter inside the expanded form (e.g. the
+	// `typeParameter(Map, Key)` arms inside `__Tuple2 with (Key, Value)`)
+	// can be resolved on the next pass — though those are receiver
+	// typeParameters and will be left for `substituteType` to handle in
+	// `methodCallResultType`. This walk only chases further named-aliases.
+	return resolveInterfaceTypeParamsViaConformance(project, t: expanded, receiverType: receiverType)
+end 'chaseReceiverInnerAlias'
+
+// Recursive case for `resolveInterfaceTypeParamsViaConformance`: walk a
+// genericInstance's args, resolving each in turn, then re-intern through
+// the registry so the result keeps the same baseId.
+function resolveInterfaceTypeParamsInGenericInstance(project Project, gid GenericInstanceId, receiverType MaxonType) returns MaxonType
+	let (baseId, args) = project.genericInstances.get(gid)
+	var newArgs = MaxonTypeArray.create()
+	var changed = false
+	for i in 0 upto args.count() 'each'
+		let a = try args.get(i) otherwise panic("resolveInterfaceTypeParamsInGenericInstance: args.get OOB at {i}")
+		let na = resolveInterfaceTypeParamsViaConformance(project, t: a, receiverType: receiverType)
+		if not maxonTypesStructurallyEqual(a, b: na) 'diff'
+			changed = true
+		end 'diff'
+		newArgs.push(na)
+	end 'each'
+	if not changed 'unchanged'
+		return MaxonType.genericInstance(gid)
+	end 'unchanged'
+	let newGid = project.genericInstances.intern(baseId, args: newArgs)
+	return MaxonType.genericInstance(newGid)
+end 'resolveInterfaceTypeParamsInGenericInstance'
+
+// Recursive case for `resolveInterfaceTypeParamsViaConformance` on a
+// function type. Walks param types + return type, resolves each, and
+// re-interns to preserve registry identity.
+function resolveInterfaceTypeParamsInFunction(project Project, id FunctionTypeId, receiverType MaxonType) returns MaxonType
+	let (paramTypes, returnType) = project.functionTypes.get(id)
+	var newParamTypes = MaxonTypeArray.create()
+	var changed = false
+	for i in 0 upto paramTypes.count() 'each'
+		let p = try paramTypes.get(i) otherwise panic("resolveInterfaceTypeParamsInFunction: paramTypes.get OOB at {i}")
+		let np = resolveInterfaceTypeParamsViaConformance(project, t: p, receiverType: receiverType)
+		if not maxonTypesStructurallyEqual(p, b: np) 'diff'
+			changed = true
+		end 'diff'
+		newParamTypes.push(np)
+	end 'each'
+	let newReturn = match returnType 'r'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(resolveInterfaceTypeParamsViaConformance(project, t: inner, receiverType: receiverType))
+	end 'r'
+	let returnChanged = match returnType 'rcmp'
+		void gives false
+		value(inner) gives not maxonTypesStructurallyEqual(inner, b: match newReturn 'unwrap'
+			void gives MaxonType.unresolved
+			value(ni) gives ni
+		end 'unwrap')
+	end 'rcmp'
+	if not changed and not returnChanged 'unchanged'
+		return MaxonType.function(id)
+	end 'unchanged'
+	let newId = internFunctionType(project, paramTypes: newParamTypes, returnType: newReturn)
+	return MaxonType.function(newId)
+end 'resolveInterfaceTypeParamsInFunction'
 
 // Promote `named(X)` to `genericInstance(X, [typeParameter(<scope>, p)...])`
 // when X is generic and the enclosing scope declares the same param names.
@@ -2849,12 +2998,48 @@ function applyInnerAliasFromReceiver(project Project, t MaxonType, receiverStruc
 	if receiverStructName.isEmpty() 'noStruct'
 		return t
 	end 'noStruct'
-	let st = try project.structTypes.get(receiverStructName) otherwise return t
+	let st = try project.structTypes.get(receiverStructName) otherwise return applyInnerAliasFromInterfaces(project, t: t, receiverStructName: receiverStructName)
 	if st.innerAliases.count() == 0 'noAliases'
-		return t
+		return applyInnerAliasFromInterfaces(project, t: t, receiverStructName: receiverStructName)
 	end 'noAliases'
-	return applyInnerAliasIfNamed(project, t: t, innerAliases: st.innerAliases)
+	let viaStruct = applyInnerAliasIfNamed(project, t: t, innerAliases: st.innerAliases)
+	if not maxonTypesStructurallyEqual(viaStruct, b: t) 'structHit'
+		return viaStruct
+	end 'structHit'
+	// J.4f.2: aliases declared inside `extension Iface ...` blocks land on
+	// the *interface*'s innerAliases, not the conformer's. When the
+	// receiver is a conformer (`Map<K,V>` for `Iterable.map` → returns
+	// `ElementArray`), the per-struct lookup above misses; fall back to
+	// the receiver's `implements` chain so the alias resolves via the
+	// interface's body.
+	return applyInnerAliasFromInterfaces(project, t: t, receiverStructName: receiverStructName)
 end 'applyInnerAliasFromReceiver'
+
+// J.4f.2: walk each interface the receiver implements and apply that
+// interface's inner-aliases. The global `project.conformances` registry
+// lists every recorded `(implementer, interface)` pair; for each match
+// on `receiverStructName`, look up the interface's `innerAliases` map
+// and try to apply it to `t`. First hit wins — alias names are
+// project-wide unique within the stdlib so there's no ambiguity in
+// practice. Returns `t` unchanged when no conformance hit.
+function applyInnerAliasFromInterfaces(project Project, t MaxonType, receiverStructName String) returns MaxonType
+	for confId in 0 upto project.conformances.typeNames.count() 'scan'
+		let implementerName = try project.conformances.typeNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: typeNames.get OOB at {confId}")
+		if implementerName != receiverStructName 'skip'
+			continue
+		end 'skip'
+		let interfaceName = try project.conformances.interfaceNames.get(confId) otherwise panic("applyInnerAliasFromInterfaces: interfaceNames.get OOB at {confId}")
+		let iface = try project.interfaces.get(interfaceName) otherwise continue
+		if iface.innerAliases.count() == 0 'noAliases'
+			continue
+		end 'noAliases'
+		let resolved = applyInnerAliasIfNamed(project, t: t, innerAliases: iface.innerAliases)
+		if not maxonTypesStructurallyEqual(resolved, b: t) 'hit'
+			return resolved
+		end 'hit'
+	end 'scan'
+	return t
+end 'applyInnerAliasFromInterfaces'
 
 // Phase 11.0 Step 8a: normalize a receiver type by chasing per-struct inner
 // typealiases (via the current method's enclosing namespace) and project-
@@ -6115,6 +6300,17 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// (so arity errors are reported before any panic tripwire could fire).
 	resolveAllCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
 
+	// J.4f.2: closure literals with untyped parameters (`m.map((p) gives p)`)
+	// stamp `MaxonType.unresolved` on the lifted function's param slot at
+	// parse time — the parser cannot peek the callee's signature to learn
+	// what `p` should be. Now that `resolveAllCalls` has filled
+	// `callParamTypes` for every call site, walk methodCall/call ops whose
+	// closure-typed argument's lifted function still has unresolved param
+	// types and copy the concrete signature in. Without this, downstream
+	// lowering would see `varLoad(slotType: unresolved)` inside the lifted
+	// body and trip the `resolveMaxonTypeToStd` sentinel guard.
+	propagateClosureArgTypesFromCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
 	for opIdx in 0 upto module.ops.count() 'validateOps'
 		let op = try module.ops.get(opIdx) otherwise panic("invariant: opIdx < module.ops.count() but get failed")
 		if op.name == "cmp" 'isCmp'
@@ -7032,6 +7228,357 @@ function substituteParamTypes(project Project, signature FuncSignature, qualifie
 	end 'eachParam'
 	return substituted
 end 'substituteParamTypes'
+
+// J.4f.2: name → opIdx lookup table for a single function. Built by
+// `propagateClosureArgTypesFromCalls` on demand so the lookup that connects
+// `methodCall(args=[...])` to the matching `functionRef`/`closureCreate`
+// producer doesn't have to re-scan the function for every argument.
+typealias NameToOpIdxMap = Map with(ByteArray, OpIndex)
+
+// J.4f.2 implementation: walk every methodCall/call/tryMethodCall/tryCall
+// op in `module`. For each closure-typed argument whose lifted-function
+// `paramTypes` still contain `MaxonType.unresolved`, copy the concrete
+// signature from the call's `callParamTypes` substitution, patch the
+// lifted function's scope/varLoad slotTypes/FuncSignature, re-intern the
+// FunctionTypeId, update the producer op, and re-run the affected lifted
+// body's producer-type pass + return-type resolution so downstream
+// consumers see the now-concrete types.
+function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
+	var liftedToRebuild = StringArray.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: funcIdx OOB")
+		var producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: producerTypesPerFunc.get({funcIdx}) failed")
+		let nameToOpIdx = buildNameToOpIdxMap(module, func: func)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("propagateClosureArgTypesFromCalls: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("propagateClosureArgTypesFromCalls: opIdx OOB")
+				maybePropagateForCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, nameToOpIdx: nameToOpIdx, liftedToRebuild: liftedToRebuild)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	// Rebuild producer types + slot types for each lifted body we patched,
+	// then re-stamp the lifted function's return type from the new
+	// producers. Mirrors `patchClosureEnvLoadCaptureTypes`'s rebuild
+	// epilogue so downstream consumers (fieldLoad / methodCall result
+	// types) see the refreshed slot info.
+	for funcIdx in 0 upto module.functions.count() 'rebuildLoop'
+		var func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: rebuild funcIdx OOB")
+		if not liftedToRebuild.contains(func.name) 'skipFunc'
+			continue
+		end 'skipFunc'
+		var freshProducers = ProducerTypeMap.create()
+		var freshSlots = SlotTypeMap.create()
+		recordFuncOpResults(project, module: module, func: func, producerTypes: freshProducers, slotTypes: freshSlots)
+		try producerTypesPerFunc.set(funcIdx, value: freshProducers) otherwise panic("propagateClosureArgTypesFromCalls: producerTypesPerFunc.set OOB")
+		try slotTypesPerFunc.set(funcIdx, value: freshSlots) otherwise panic("propagateClosureArgTypesFromCalls: slotTypesPerFunc.set OOB")
+
+		// If the lifted function's return type was left at
+		// `value(unresolved)` by the parser (it always is for an
+		// untyped-param closure), stamp it from the ret value's freshly-
+		// recorded producer type.
+		let needsReturnResolve = match func.maxonReturnType 'check'
+			void gives false
+			value(inner) gives isUnresolvedType(inner)
+		end 'check'
+		if needsReturnResolve 'resolveRet'
+			let resolved = findRetTypeFromProducers(module, func: func, producerTypes: freshProducers)
+			if not isUnresolvedType(resolved) 'haveResolved'
+				let newReturn = MaxonReturnType.value(resolved)
+				func.maxonReturnType = newReturn
+				project.funcReturnTypes.upsert(func.name, value: newReturn)
+			end 'haveResolved'
+		end 'resolveRet'
+	end 'rebuildLoop'
+
+	// After the lifted return types are concrete, walk closureCreate /
+	// functionRef ops one more time so any FunctionTypeRegistry entry
+	// whose return type was placeholder-unresolved gets re-stamped — the
+	// param-patch above re-interned the registry entry with the
+	// then-still-unresolved return type, so the registry entry for the
+	// new id has a fresh-but-stale return field until this final patch.
+	patchFunctionTypeRegistryReturns(project, module: module)
+end 'propagateClosureArgTypesFromCalls'
+
+// Build a result-name → opIdx index that covers ONLY the two op kinds
+// that can produce a closure-literal value: `functionRef` and
+// `closureCreate`. The propagation pass only needs to recover producer
+// ops for these — every other op kind's result is irrelevant for closure
+// arg-type inference, so a partial index keeps this pass cheap and avoids
+// having to track the (large, churn-prone) full MaxonOp variant list.
+function buildNameToOpIdxMap(module MaxonModule, func IrFunction) returns NameToOpIdxMap
+	var nameToOpIdx = NameToOpIdxMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildNameToOpIdxMap: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("buildNameToOpIdxMap: opIdx OOB")
+			if op.name != "functionRef" and op.name != "closureCreate" 'skipKind'
+				continue
+			end 'skipKind'
+			let result = match op 'extract'
+				functionRef(r, _, _, _) gives r
+				closureCreate(r, _, _, _, _, _) gives r
+				default panic("buildNameToOpIdxMap: op.name in [functionRef, closureCreate] but match arm not picked up")
+			end 'extract'
+			if not result.isEmpty() 'recordIt'
+				nameToOpIdx.upsert(result, value: opIdx)
+			end 'recordIt'
+		end 'eachOp'
+	end 'eachBlock'
+	return nameToOpIdx
+end 'buildNameToOpIdxMap'
+
+// Inspect one op in a caller function. If it's a methodCall/call (or its
+// `try*` variant) with substituted callParamTypes registered, walk each
+// argument; closure-typed args whose lifted function has unresolved param
+// slots get patched from the substituted target signature.
+function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, nameToOpIdx NameToOpIdxMap, liftedToRebuild StringArray)
+	// Pre-filter on op.name so the destructuring match below only handles
+	// the four call shapes that participate in callParamTypes; a wildcard
+	// `default` arm on the union would have to choose between throwing
+	// and panicking, neither of which fits "skip this op".
+	if op.name != "methodCall" and op.name != "tryMethodCall" and op.name != "call" and op.name != "tryCall" 'notACall'
+		return
+	end 'notACall'
+	let (args, argTypes) = match op 'extract'
+		methodCall(_, _, _, a, _, at, _, _) gives (a, at)
+		tryMethodCall(_, _, _, a, _, at, _, _, _) gives (a, at)
+		call(_, _, _, a, _, at, _, _) gives (a, at)
+		tryCall(_, _, _, a, _, at, _, _, _) gives (a, at)
+		default panic("maybePropagateForCallOp: op.name in [methodCall, tryMethodCall, call, tryCall] but match arm not picked up — variant drift?")
+	end 'extract'
+	if args.count() == 0 'noArgs'
+		return
+	end 'noArgs'
+	if not project.callParamTypes.contains(opIdx) 'noParams'
+		return
+	end 'noParams'
+	let substituted = try project.callParamTypes.get(opIdx) otherwise panic("maybePropagateForCallOp: callParamTypes.get failed after contains check at opIdx={opIdx}")
+	// Substituted vector may include a leading `self` slot for instance
+	// methods; pair against the trailing user-arg slots from the right
+	// end so a Phase-7 receiver-prefixed signature matches the
+	// argument-without-receiver vector that methodCall ops carry.
+	let argCount = args.count()
+	let subCount = substituted.count()
+	if subCount < argCount 'shorter'
+		return
+	end 'shorter'
+	let offset = subCount - argCount
+	for i in 0 upto argCount 'eachArg'
+		let argName = try args.get(i) otherwise panic("maybePropagateForCallOp: args.get({i}) failed")
+		let argType = try argTypes.get(i) otherwise panic("maybePropagateForCallOp: argTypes.get({i}) failed")
+		let expected = try substituted.get(i + offset) otherwise panic("maybePropagateForCallOp: substituted.get({i + offset}) failed")
+		if not isFunctionMaxonType(expected) 'expectedNotFn'
+			continue
+		end 'expectedNotFn'
+		if not isFunctionMaxonType(argType) 'argNotFn'
+			continue
+		end 'argNotFn'
+		let srcFnId = functionMaxonTypeId(argType)
+		let (srcParams, _) = project.functionTypes.get(srcFnId)
+		if not functionTypeHasUnresolved(srcParams) 'alreadyConcrete'
+			continue
+		end 'alreadyConcrete'
+		let producerOpIdx = try nameToOpIdx.get(argName) otherwise continue
+		patchOneClosureArg(project, module: module, producerOpIdx: producerOpIdx, expectedFn: expected, producerTypes: producerTypes, liftedToRebuild: liftedToRebuild)
+	end 'eachArg'
+end 'maybePropagateForCallOp'
+
+// True iff `paramTypes` contains at least one `MaxonType.unresolved`. The
+// FunctionTypeRegistry encodes a closure literal's signature; if any param
+// slot is still unresolved here the closure was the untyped-param shape.
+function functionTypeHasUnresolved(paramTypes MaxonTypeArray) returns bool
+	for i in 0 upto paramTypes.count() 'each'
+		let t = try paramTypes.get(i) otherwise panic("functionTypeHasUnresolved: paramTypes.get OOB at {i}")
+		if isUnresolvedType(t) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'functionTypeHasUnresolved'
+
+// Patch a single closure-arg site: locate the lifted IrFunction by name,
+// substitute its unresolved user-param types from `expectedFn`'s signature,
+// update FuncSignature.paramTypes, scope's VarInfo, every varLoad's
+// slotType, re-intern the FunctionTypeId, and rewrite the
+// functionRef/closureCreate op + the producerTypes entry to carry the new id.
+function patchOneClosureArg(project Project, module MaxonModule, producerOpIdx OpIndex, expectedFn MaxonType, producerTypes ProducerTypeMap, liftedToRebuild StringArray)
+	let producerOp = try module.ops.get(producerOpIdx) otherwise panic("patchOneClosureArg: ops.get({producerOpIdx}) failed")
+	// Only `functionRef` and `closureCreate` produce a `function(_)` SSA
+	// value at this stage. Anything else means the call site's arg was
+	// e.g. a varLoad of a function-typed local — patching the original
+	// closure literal would have already happened when its source call
+	// site was visited, so there's nothing to do here.
+	if producerOp.name != "functionRef" and producerOp.name != "closureCreate" 'notAClosure'
+		return
+	end 'notAClosure'
+	let (result, liftedName) = match producerOp 'extractClosure'
+		functionRef(r, n, _, _) gives (r, n)
+		closureCreate(r, n, _, _, _, _) gives (r, n)
+		default panic("patchOneClosureArg: producer op kind drift — pre-filter said functionRef/closureCreate but match didn't bind")
+	end 'extractClosure'
+
+	// Locate the lifted IrFunction.
+	var liftedIdx = -1
+	for fIdx in 0 upto module.functions.count() 'find'
+		let candidate = try module.functions.get(fIdx) otherwise panic("patchOneClosureArg: functions.get({fIdx}) failed")
+		if candidate.name == liftedName 'match'
+			liftedIdx = fIdx
+			break
+		end 'match'
+	end 'find'
+	if liftedIdx < 0 'notFound'
+		return
+	end 'notFound'
+	var liftedFunc = try module.functions.get(liftedIdx) otherwise panic("patchOneClosureArg: functions.get({liftedIdx}) failed after locate")
+
+	let targetFnId = functionMaxonTypeId(expectedFn)
+	let (targetParams, targetReturn) = project.functionTypes.get(targetFnId)
+	if not project.funcSignatures.contains(liftedName) 'noSig'
+		return
+	end 'noSig'
+	let signature = try project.funcSignatures.get(liftedName) otherwise panic("patchOneClosureArg: funcSignatures.get({liftedName}) failed after contains check")
+	let userParamCount = signature.paramTypes.count()
+	if userParamCount > targetParams.count() 'mismatchedArity'
+		return
+	end 'mismatchedArity'
+
+	// Build the new user-param types: replace each unresolved slot from
+	// the target's matching slot; preserve any that the parser already
+	// resolved (in the mixed-typed-and-untyped case).
+	var newUserParams = MaxonTypeArray.create()
+	var anyChanged = false
+	for i in 0 upto userParamCount 'eachParam'
+		let cur = try signature.paramTypes.get(i) otherwise panic("patchOneClosureArg: signature.paramTypes.get({i}) failed")
+		let next = try targetParams.get(i) otherwise panic("patchOneClosureArg: targetParams.get({i}) failed")
+		if isUnresolvedType(cur) and not isUnresolvedType(next) 'patch'
+			newUserParams.push(next)
+			anyChanged = true
+		end 'patch' else 'keep'
+			newUserParams.push(cur)
+		end 'keep'
+	end 'eachParam'
+	if not anyChanged 'nothingToDo'
+		return
+	end 'nothingToDo'
+
+	// Replace the lifted FuncSignature.
+	let newSig = FuncSignature.create(signature.paramNames, paramTypes: newUserParams, paramDefaults: signature.paramDefaults)
+	project.funcSignatures.upsert(liftedName, value: newSig)
+
+	// Patch the lifted IrFunction's maxonParamTypes — same layout as the
+	// signature plus the trailing `__env` slot (parser always appends one
+	// `MaxonType.integer` to every closure body). Preserve the env slot
+	// verbatim.
+	var newIrParams = MaxonTypeArray.create()
+	for i in 0 upto userParamCount 'newUserSlot'
+		let t = try newUserParams.get(i) otherwise panic("patchOneClosureArg: newUserParams.get({i}) failed")
+		newIrParams.push(t)
+	end 'newUserSlot'
+	for i in userParamCount upto liftedFunc.maxonParamTypes.count() 'envTail'
+		let t = try liftedFunc.maxonParamTypes.get(i) otherwise panic("patchOneClosureArg: liftedFunc.maxonParamTypes.get({i}) failed")
+		newIrParams.push(t)
+	end 'envTail'
+	liftedFunc.maxonParamTypes = newIrParams
+
+	// Patch the lifted function's scope: for each user param name, install
+	// a VarInfo with the new MaxonType while preserving slot id + mutable.
+	for i in 0 upto userParamCount 'patchScope'
+		let pName = try signature.paramNames.get(i) otherwise panic("patchOneClosureArg: paramNames.get({i}) failed")
+		if pName == "_" 'discardParam'
+			continue
+		end 'discardParam'
+		if not liftedFunc.scope.contains(pName) 'notInScope'
+			continue
+		end 'notInScope'
+		let info = liftedFunc.scope.getInfo(pName)
+		let newType = try newUserParams.get(i) otherwise panic("patchOneClosureArg: newUserParams.get({i}) failed during scope patch")
+		let newInfo = VarInfo.create(pName, varType: newType, mutable: info.mutable, slot: info.slot)
+		liftedFunc.scope.installVerbatim(newInfo)
+	end 'patchScope'
+
+	// Patch every varLoad op in the lifted body whose slotId matches a
+	// user-param slot AND whose slotType is unresolved. Slot ids 0..N-1
+	// correspond to user params in declaration order — parseClosure
+	// declares params first in a fresh scope, so the mapping is direct.
+	for blockRef in liftedFunc.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("patchOneClosureArg: blockRef OOB on lifted body")
+		for bodyOpIdx in block.opRefs 'eachOp'
+			let bodyOp = try module.ops.get(bodyOpIdx) otherwise panic("patchOneClosureArg: bodyOp opIdx OOB")
+			patchVarLoadSlotTypeIfMatches(module, opIdx: bodyOpIdx, op: bodyOp, newUserParams: newUserParams)
+		end 'eachOp'
+	end 'eachBlock'
+
+	// Re-intern the FunctionTypeId for the new signature. The captured
+	// return type stays as it was — the rebuild epilogue re-stamps it
+	// from the body's producers once we know it.
+	let newFnTypeId = internFunctionType(project, paramTypes: newUserParams, returnType: targetReturn)
+	let newFnType = MaxonType.function(newFnTypeId)
+
+	// Rewrite the producer op so downstream consumers (lowering's
+	// indirect-call sites) read the patched fnTypeId. Keep the same
+	// result name and source range; the closureCreate variant additionally
+	// preserves the captured-names/types arrays.
+	match producerOp 'rewriteOp'
+		functionRef(r, n, _, range) then rewriteFunctionRef(module, opIdx: producerOpIdx, result: r, funcName: n, fnTypeId: newFnTypeId, range: range)
+		closureCreate(r, n, _, names, types, range) then rewriteClosureCreate(module, opIdx: producerOpIdx, result: r, funcName: n, fnTypeId: newFnTypeId, capturedNames: names, capturedTypes: types, range: range)
+		default panic("patchOneClosureArg: producer op no longer functionRef/closureCreate")
+	end 'rewriteOp'
+
+	// Refresh the closure's producer type so consumers that already
+	// queried `lookupProducerType(closureResult)` re-read the new fnId.
+	recordResultType(producerTypes, name: result, t: newFnType)
+
+	if not liftedToRebuild.contains(liftedName) 'addOnce'
+		liftedToRebuild.push(liftedName)
+	end 'addOnce'
+end 'patchOneClosureArg'
+
+// Patch one body-op's varLoad slotType when its slotId is a user-param
+// slot AND the parser-stamped slotType was unresolved. Other ops pass
+// through untouched.
+function patchVarLoadSlotTypeIfMatches(module MaxonModule, opIdx OpIndex, op MaxonOp, newUserParams MaxonTypeArray)
+	if op.name != "varLoad" 'notVarLoad'
+		return
+	end 'notVarLoad'
+	match op 'check'
+		varLoad(r, slotId, slotType, range) then patchVarLoadIfParamSlot(module, opIdx: opIdx, result: r, slotId: slotId, slotType: slotType, range: range, newUserParams: newUserParams)
+		default panic("patchVarLoadSlotTypeIfMatches: op.name was varLoad but match arm didn't bind — variant drift?")
+	end 'check'
+end 'patchVarLoadSlotTypeIfMatches'
+
+// Apply the patch if the varLoad's slotId falls in the user-param range
+// and its slotType is currently unresolved. User-param slot ids are
+// 0..userParamCount-1 — parseClosure declares params first in a fresh
+// scope so this mapping is stable.
+function patchVarLoadIfParamSlot(module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, newUserParams MaxonTypeArray)
+	let userParamCount = newUserParams.count()
+	if slotId >= userParamCount 'notAParamSlot'
+		return
+	end 'notAParamSlot'
+	if not isUnresolvedType(slotType) 'alreadyConcrete'
+		return
+	end 'alreadyConcrete'
+	let newType = try newUserParams.get(slotId) otherwise panic("patchVarLoadIfParamSlot: newUserParams.get({slotId}) failed after bound check")
+	if isUnresolvedType(newType) 'noNewType'
+		return
+	end 'noNewType'
+	try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: newType, range: range)) otherwise panic("patchVarLoadIfParamSlot: ops.set OOB at idx={opIdx}")
+end 'patchVarLoadIfParamSlot'
+
+// Rewrite a `functionRef` op with a new `fnTypeId`. Used after re-interning
+// the closure's signature so the indirect-call producer-op carries the
+// updated id.
+function rewriteFunctionRef(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, range SourceRange)
+	try module.ops.set(opIdx, value: MaxonOp.functionRef(result, funcName: funcName, fnTypeId: fnTypeId, range: range)) otherwise panic("rewriteFunctionRef: ops.set OOB at idx={opIdx}")
+end 'rewriteFunctionRef'
+
+// Rewrite a `closureCreate` op with a new `fnTypeId`, preserving captured
+// names + types. Mirror of `rewriteFunctionRef` for the capturing variant.
+function rewriteClosureCreate(module MaxonModule, opIdx OpIndex, result ByteArray, funcName String, fnTypeId FunctionTypeId, capturedNames StringArray, capturedTypes MaxonTypeArray, range SourceRange)
+	try module.ops.set(opIdx, value: MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: capturedTypes, range: range)) otherwise panic("rewriteClosureCreate: ops.set OOB at idx={opIdx}")
+end 'rewriteClosureCreate'
 
 // `call` ops we skip entirely — these never reach `slotArgsForCall` in
 // lowering, so caching their resolution is wasted work. The list mirrors

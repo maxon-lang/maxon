@@ -9,6 +9,10 @@
 export typealias CacheChecksum = int(0 to u64.max)
 export typealias StdlibFuncIndexMap = Map with(String, MachineWord)
 export typealias StdlibFuncNameSet = Set with String
+// `decodeStdlibCache`'s id-space rebuild snapshots per-(declaringType,param)
+// constraints into a flat lookup so the rebuild can re-attach them at the
+// project-aligned ids without mutating the cached registry.
+typealias CachedConstraintMap = Map with(String, StringArray)
 
 let CACHE_MAGIC_0 = 0x4D  // 'M'
 let CACHE_MAGIC_1 = 0x58  // 'X'
@@ -133,7 +137,10 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // `project.extensionMethodWhereClauses` so cache-hit user builds see the
 // stdlib's struct- and interface-extension metadata (including where-clauses)
 // for the per-receiver monomorphizer's gating + diagnostic paths.
-let CACHE_FORMAT_VERSION = 50
+// v51: Stage J.4f.3 — added StdArithUnaryOpcode.bitcastI64ToF64 (the codec
+// must learn its lifted/encoded raw value) so float-typed reads from
+// type-erased managed memory can recover the float bits.
+let CACHE_FORMAT_VERSION = 51
 
 // ============================================================
 // Types
@@ -1489,23 +1496,62 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		let (baseId, args) = project.genericInstances.get(i)
 		_ = data.genericInstances.intern(baseId, args: args)
 	end 'mirrorGenericInstances'
-	// Preserve the source-declaration-ordered param-name lists that
-	// `readTypeParamRegistry` populated. The id-space rebuild below reuses
-	// the registry's existing intern map (intern is idempotent for an
-	// existing key); creating a fresh registry would discard the lists
-	// because the destination project hasn't re-parsed the stdlib yet and
-	// has nothing to mirror back from. Keep the cache-side lists intact.
-	let savedParamLists = data.typeParameters.declaringTypeParamLists
+	// Rebuild `data.typeParameters` in `project.typeParameters`'s id space
+	// (so cached MaxonType.typeParameter(id) payloads round-trip identity)
+	// while preserving the constraints originally read from disk. The disk
+	// blob is the only source of those constraints — `project.typeParameters`
+	// at this point holds bootstrap + readMaxonType-interned entries with no
+	// constraints attached, so a naive mirror from `project.typeParameters`
+	// would drop every `where T is Hashable` clause. Snapshotting the cached
+	// registry as a flat `(declName, paramName) -> constraints` view first
+	// and consulting it during the id-space rebuild preserves the payload
+	// at the new ids.
+	var cachedConstraints = CachedConstraintMap.create()
+	let cachedTypeParams = data.typeParameters
+	for ci in 0 upto cachedTypeParams.count() 'snapshotCached'
+		let cDecl = cachedTypeParams.getDeclaringTypeName(ci)
+		let cParam = cachedTypeParams.getName(ci)
+		let cs = cachedTypeParams.getConstraints(ci)
+		if cs.count() == 0 'noneToSnapshot'
+			continue
+		end 'noneToSnapshot'
+		var copy = StringArray.create()
+		for c in cs 'eachTrait'
+			copy.push(c)
+		end 'eachTrait'
+		try cachedConstraints.insert("{cDecl}::{cParam}", value: copy) otherwise ignore
+	end 'snapshotCached'
+	let savedParamLists = cachedTypeParams.declaringTypeParamLists
 	data.typeParameters = TypeParamRegistry.create()
 	for i in 0 upto project.typeParameters.count() 'mirrorTypeParams'
 		let declName = project.typeParameters.getDeclaringTypeName(i)
 		let paramName = project.typeParameters.getName(i)
 		let destId = data.typeParameters.intern(declName, paramName: paramName)
-		let cs = project.typeParameters.getConstraints(i)
+		if let cs = try cachedConstraints.get("{declName}::{paramName}") 'haveCached'
+			for c in cs 'eachConstraint'
+				data.typeParameters.addConstraint(destId, traitName: c)
+			end 'eachConstraint'
+		end 'haveCached'
+	end 'mirrorTypeParams'
+	// The cached registry may carry (declName, paramName) entries that
+	// `project.typeParameters` hasn't yet seen — typically constrained
+	// generic types whose declarations only become live once user code
+	// references them. Intern those into `data.typeParameters` too so the
+	// constraint payload survives the cache round-trip; `restoreRegistries`
+	// will then thread them onto `project.typeParameters` when user code
+	// triggers the lookup.
+	for i in 0 upto cachedTypeParams.count() 'carryCachedExtras'
+		let declName = cachedTypeParams.getDeclaringTypeName(i)
+		let paramName = cachedTypeParams.getName(i)
+		if data.typeParameters.contains(declName, paramName: paramName) 'alreadyMirrored'
+			continue
+		end 'alreadyMirrored'
+		let destId = data.typeParameters.intern(declName, paramName: paramName)
+		let cs = cachedTypeParams.getConstraints(i)
 		for c in cs 'eachConstraint'
 			data.typeParameters.addConstraint(destId, traitName: c)
 		end 'eachConstraint'
-	end 'mirrorTypeParams'
+	end 'carryCachedExtras'
 	for (declName, paramNames) in savedParamLists 'restoreParamLists'
 		var copy = StringArray.create()
 		for n in paramNames 'eachName'
@@ -3062,6 +3108,7 @@ function liftStdArithUnaryOpcode(raw MachineWord) returns StdArithUnaryOpcode th
 		bitNotI64 gives StdArithUnaryOpcode.bitNotI64
 		fpToSiI64 gives StdArithUnaryOpcode.fpToSiI64
 		bitcastF64ToI64 gives StdArithUnaryOpcode.bitcastF64ToI64
+		bitcastI64ToF64 gives StdArithUnaryOpcode.bitcastI64ToF64
 		siToFpF64 gives StdArithUnaryOpcode.siToFpF64
 		sqrtF64 gives StdArithUnaryOpcode.sqrtF64
 		floorF64 gives StdArithUnaryOpcode.floorF64

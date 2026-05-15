@@ -434,6 +434,8 @@ function propagateFloatForArithUnary(op StdArithUnaryOp, info SlotInfo) returns 
 		fpToSiI64 gives false
 		// bitcastF64ToI64 reinterprets float bits as int, so result is int.
 		bitcastF64ToI64 gives false
+		// bitcastI64ToF64 reinterprets int bits as float, so result is float.
+		bitcastI64ToF64 gives flipValueToFloat(op.resultId, info: info)
 		// siToFpF64 converts int → float, result is float.
 		siToFpF64 gives flipValueToFloat(op.resultId, info: info)
 		// sqrtF64 .. absF64 all produce a float.
@@ -576,6 +578,7 @@ function markFloatUnaryOperands(op StdArithUnaryOp, info SlotInfo)
 		negI64 to bitNotI64 then break 'check'
 		fpToSiI64 then markOperandSlotAsFloat(op.operandId, info: info)
 		bitcastF64ToI64 then markOperandSlotAsFloat(op.operandId, info: info)
+		bitcastI64ToF64 then break 'check'
 		siToFpF64 then break 'check'
 		sqrtF64 to absF64 then markOperandSlotAsFloat(op.operandId, info: info)
 	end 'check'

@@ -197,14 +197,41 @@ export function buildSubstitution(project Project, declaringTypeName String, arg
 	let paramNames = project.typeParameters.getParamNames(declaringTypeName)
 	let count = paramNames.count()
 	let argCount = args.count()
+	// Sized generic typealiases (`Vector with N Element`) prepend a
+	// `constInt(N)` to the args list to make distinct sizes intern as
+	// distinct gids. The base type's `uses` clause only declares the
+	// element params (`uses Element`), so the args list is one longer
+	// than `paramNames`. Skip the leading `constInt` arm(s) so positional
+	// pairing lines `paramName[0] = Element` up with the first non-size
+	// arg rather than the size constant itself. Without this, every
+	// substitution on a sized-generic instance binds `Element` to
+	// `constInt(N)` — which silently round-trips through the cast-
+	// category validator as `int` (because `convertCastCategory(constInt)`
+	// returns `int`), masking the bug for integer-element vectors but
+	// erroring with E3059 for float-element vectors.
+	var argOffset = 0
+	var stopSkipping = false
+	while not stopSkipping and argOffset < argCount and (argCount - argOffset) > count 'skipSizePrefix'
+		let a = try args.get(argOffset) otherwise panic("buildSubstitution: args.get OOB at {argOffset} while skipping size prefix")
+		let isConst = match a 'check'
+			constInt gives true
+			boolean to interface gives false
+		end 'check'
+		if isConst 'skip'
+			argOffset = argOffset + 1
+		end 'skip' else 'stop'
+			stopSkipping = true
+		end 'stop'
+	end 'skipSizePrefix'
+	let remaining = argCount - argOffset
 	var limit = count
-	if argCount < limit 'pickArg'
-		limit = argCount
+	if remaining < limit 'pickArg'
+		limit = remaining
 	end 'pickArg'
 	for i in 0 upto limit 'bindLoop'
 		let paramName = try paramNames.get(i) otherwise panic("buildSubstitution: paramNames.get OOB at {i}")
 		let paramId = project.typeParameters.intern(declaringTypeName, paramName: paramName)
-		let concrete = try args.get(i) otherwise panic("buildSubstitution: args.get OOB at {i}")
+		let concrete = try args.get(argOffset + i) otherwise panic("buildSubstitution: args.get OOB at {argOffset + i}")
 		subst.bind(paramId, concrete: concrete)
 	end 'bindLoop'
 	return subst

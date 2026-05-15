@@ -1427,7 +1427,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: float-vector — `try v.set(0, value: 2.5) otherwise panic(...)` reports E3059 because the call site flows the otherwise branch as float but the resolved param routes through an int slot. Needs float-aware monomorphization for generic Vector<Float>. -->
+<!-- test: float-vector -->
 ```maxon
 typealias Float = float(f64.min to f64.max)
 typealias Vec2F = Vector with 2 Float
@@ -1591,7 +1591,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: from-array-literal-float — float-typed array literal inferred as `Vector<float>` returns 0.0 from `get(0)` instead of 1.5, indicating float values aren't stored correctly through the generic `__mm.set/get` path. Needs float-aware element routing in the BAL fast path. -->
+<!-- test: from-array-literal-float -->
 ```maxon
 function main() returns ExitCode
 	let v = Vector from [1.5, 2.5]
@@ -1657,18 +1657,18 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: accumulate-sum — expected ExitCode 150 exceeds WASI's `int(0 to 125)` ExitCode range, so the wasm self-hosted run trips a Range check. x64 ExitCode is u32-max and accepts 150. Re-enable once the WASI ExitCode upper bound is raised or the test is restructured to fit. -->
+<!-- test: accumulate-sum -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec5 = Vector with 5 Int
 
 function main() returns ExitCode
 	var v = Vec5.create()
-	try v.set(0, value: 10) otherwise panic("test invariant: set OOB")
-	try v.set(1, value: 20) otherwise panic("test invariant: set OOB")
-	try v.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	try v.set(3, value: 40) otherwise panic("test invariant: set OOB")
-	try v.set(4, value: 50) otherwise panic("test invariant: set OOB")
+	try v.set(0, value: 1) otherwise panic("test invariant: set OOB")
+	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
+	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
+	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
+	try v.set(4, value: 5) otherwise panic("test invariant: set OOB")
 	var sum = 0
 	var i = 0
 	while i < v.count() 'loop'
@@ -1679,5 +1679,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-150
+15
 ```

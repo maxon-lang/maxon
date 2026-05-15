@@ -11125,12 +11125,17 @@ export type Parser
 	// Recognized shapes:
 	//   `()` `gives`                          → empty-param closure
 	//   `(` ident TYPE_STARTER                → typed closure (≥1 param)
+	//   `(` ident `)` `gives`                 → untyped single-param closure
+	//   `(` ident `,` ...balanced-`)`... `gives` → multi-param closure
 	// where TYPE_STARTER is the start of a `parseTypeRef` form: an
 	// identifier (named type like `Integer`) or `(` (nested function type).
 	//
-	// Untyped closure parameters (`(name) gives expr`) are NOT recognized
-	// here — Stage E adds them. The three closure-self tests use the
-	// typed-and-empty forms only.
+	// Untyped closure parameters take their concrete types from the call-site
+	// signature during TypeResolution (see propagateCallArgClosureTypes) —
+	// at parse time their slots are stamped `MaxonType.unresolved` and the
+	// body parses with that placeholder. Multi-param disambiguation against a
+	// tuple expression requires scanning to a balanced `)` and checking that
+	// `gives` follows; without `gives`, `(a, b)` remains a tuple.
 	//
 	// EOF on any peek bails to false rather than throwing; the caller falls
 	// back to the parenthesized-expression path which will surface the
@@ -11155,6 +11160,35 @@ export type Parser
 		if p2.kind == TokenKind.identifier or p2.kind == TokenKind.leftParen 'isTypeStart'
 			return true
 		end 'isTypeStart'
+		// `(name)` followed by `gives` — untyped single-param closure.
+		if p2.kind == TokenKind.rightParen 'noTypeOneParam'
+			let p3 = try cursor.peek(3) otherwise return false
+			return p3.kind == TokenKind.gives
+		end 'noTypeOneParam'
+		// `(name,` — possibly an untyped multi-param closure OR a tuple
+		// expression. Scan past balanced parens to the matching `)` and
+		// check whether `gives` follows; this is the only way to
+		// distinguish `(a, b) gives a` from the tuple `(a, b)`.
+		if p2.kind == TokenKind.comma 'maybeMultiUntyped'
+			var depth = 1
+			var offset = 2
+			while depth > 0 'scanBalanced'
+				let tok = try cursor.peek(offset) otherwise return false
+				if tok.kind == TokenKind.leftParen 'lp'
+					depth = depth + 1
+				end 'lp' else if tok.kind == TokenKind.rightParen 'rp'
+					depth = depth - 1
+				end 'rp'
+				offset = offset + 1
+				// Safety bound — closure headers should not exceed this in
+				// practice; bail rather than scanning the entire stream.
+				if offset > 128 'tooFar'
+					return false
+				end 'tooFar'
+			end 'scanBalanced'
+			let after = try cursor.peek(offset) otherwise return false
+			return after.kind == TokenKind.gives
+		end 'maybeMultiUntyped'
 		return false
 	end 'isClosure'
 
@@ -11193,7 +11227,19 @@ export type Parser
 				checkReservedDeclName(nameToken)
 			end 'notDiscard'
 
-			let paramType = try parseTypeRef()
+			// Untyped closure params (`(p) gives ...` / `(a, b) gives ...`)
+			// stamp slots `MaxonType.unresolved`; the concrete type is
+			// inferred at TypeResolution from the call-arg slot the closure
+			// flows into (see propagateClosureArgTypesFromCall). A type-ref
+			// is expected only when the next token starts one — an
+			// identifier or `(` — so that untyped params followed by `,` or
+			// `)` skip straight to the next slot without consuming the
+			// trailing punctuation.
+			let nextTok = cursor.current()
+			var paramType = MaxonType.unresolved
+			if nextTok.kind == TokenKind.identifier or nextTok.kind == TokenKind.leftParen 'hasType'
+				paramType = try parseTypeRef()
+			end 'hasType'
 			paramNames.push(nameToken.value)
 			paramTypes.push(paramType)
 			paramCount = paramCount + 1

@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **108 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1290 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2719/2719. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **108 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1295 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2723/2723 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -1342,14 +1342,56 @@ but need self-hosted-specific cloner-completion work. Single entry today:
 `(Element, Hashable)` witness chain through `Set.map`'s nested
 `Set.createIterator` call — J.4f scope).
 
-**Residuals** (deferred to future work, not Stage J):
-- `interface-extensions/stdlib-map-on-set` — needs receiver-conformance witness
-  forwarding into nested generic calls in cloned bodies.
-- `interface-extensions/stdlib-map-on-map-with-function` — parser doesn't yet
-  infer untyped-closure-param types from callee signature.
-- 3 `vector` fragments tagged with documented reasons (float-routing through
-  BAL fast path, float-aware otherwise-type-match in generic params, WASI
-  ExitCode 0..125 range vs spec ExitCode 150).
+**Residuals — ALL RESOLVED in Stage J.4f** (2026-05-14, four sub-stages):
+
+**J.4f.1 — stdlib-map-on-set** (+1): root cause was deeper than expected.
+`decodeStdlibCache` was wiping `data.typeParameters` and rebuilding from
+`project.typeParameters` — but the cached on-disk where-clause constraints
+(e.g. `Set.Element: Hashable, Equatable`) lived only in the registry, not in
+`project.typeParameters`. The wipe-and-rebuild dropped them. Fix: snapshot
+the registry's constraint map into a `CachedConstraintMap` before wipe;
+re-attach to each entry during the id-space rebuild
+([`StdlibCache.maxon:1500-1556`](Compiler/StdlibCache.maxon)). No cache version
+bump needed — on-disk format unchanged.
+
+**J.4f.2 — stdlib-map-on-map-with-function** (+1): two coupled gaps.
+(1) Parser/TR: untyped closure params (`(p) gives p.value`) parked as
+`MaxonType.unresolved` at parse time, patched at TypeResolution via new
+`propagateClosureArgTypesFromCalls` pass that walks call args and copies
+concrete signatures from `callParamTypes` into the lifted function's
+signature + scope + body slot types.
+(2) Result-type substitution: `methodCallResultType` for `Map<K,V>.map(...)`
+(via `Iterable.map`) had three latent gaps — receiver inner alias
+`ElementArray` lives on Iterable's body (not Map's), `Iterable.Element`
+typeParameter not resolved through Map's conformance row, conformance withArg
+`Entry` is a `named(Entry)` reference that needs to chase Map's own inner
+alias. All three fixed via new helpers in `TypeResolution.maxon` +
+`MaxonDialect.maxon` (`chaseTypealiasViaConformingInterfaces`).
+
+**J.4f.3 — vector accumulate-sum** (+1) + sized-generic substitution bug fix:
+test rewritten to fit WASI ExitCode range (1..125 instead of 150). Plus a real
+compiler fix: `buildSubstitution` was binding `Element` to `constInt(N)` for
+sized typealiases like `Vector with N Element` because `args` carries a leading
+`constInt(size)` prefix; fix skips leading constInt arms when `argCount > count`.
+Preparatory infrastructure: new `bitcastI64ToF64` opcode threaded across
+StdDialect/MIR/X64 (`movqGprToXmm`)/ARM64 (`fmovToFloat`)/Wasm
+(`opF64ReinterpretI64`). `CACHE_FORMAT_VERSION` 50 → 51.
+
+**J.4f.4 — vector float-vector + from-array-literal-float** (+2): the
+architecturally-correct hybrid-generics fix. **Methods are not monomorphized**
+(per Phase 11 design); the bridge between int-channel ABI and float-class SSA
+is at the call-site, not in cloned bodies. New helpers in `LowerMaxonToStd.maxon`:
+- `bridgeFloatArgToTypeParam` — emits `bitcastF64ToI64` when raw paramType is
+  `typeParameter` and substituted paramType has `CastCategory.float`.
+- `maybeBitcastCallResultToFloat` — emits `bitcastI64ToF64` when raw return
+  type is `typeParameter` and substituted return resolves to float-class.
+Wired into `slotArgsForCall` (after `coerceArgToParam`) and `emitCallWithArgs`
+(after `recordCallResultType`). The bridge fires only when raw=typeParameter
+AND substituted=float — int paths are byte-identical to the prior baseline.
+
+**Net Stage J + J.4f**: +19 fragments over the 1276 pre-J baseline, +61 over
+Stage I's 1234. Final state: **1295/1295 x64-windows, 1295/1295 wasm32-wasi,
+2723/2723 C# bootstrap.** Zero remaining stage-tracked residuals.
 
 ## Verification
 
