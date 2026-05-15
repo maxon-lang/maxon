@@ -20,57 +20,24 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Counter.create(value: i64) -> i64 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 1
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @module-level-struct-var.main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, qword [rip+state]
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 42
-    x64.mov rdx, [rbp-8]
-    x64.mov [rdx+0], rcx
-    x64.mov rbx, qword [rip+state]
-    x64.mov [rbp-16], rbx
-    x64.mov rsi, [rbp-16]
-    x64.mov rdi, [rsi+0]
-    x64.xor r8d, r8d
-    x64.mov r9, 4294967295
-    x64.cmp rdi, r9
-    x64.jg module-level-struct-var.main.__range_panic_0
-    x64.cmp rdi, r8
-    x64.jl module-level-struct-var.main.__range_panic_0
-    x64.jmp module-level-struct-var.main.__range_ok_0
+    x64.lea r8, [rip+__data_state]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov r8d, 42
+    x64.mov [r9+0], r8 (1b)
+    x64.lea r8, [rip+__data_state]
+    x64.mov r9, [r8+0] (8b)
+    x64.movzx r8, [r9+0] (1b)
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdi
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Counter(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Counter.done
-  done:
     x64.ret
   }
 }

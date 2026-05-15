@@ -512,6 +512,22 @@ export type Project
 	// chains so consumers can recover char-ness at use sites.
 	export var charByteLiterals CharByteLiteralSet
 
+	// J.4b: per-receiver monomorphization cache for user-declared
+	// interface-extension methods. Keyed by `{receiverType}::{ifaceCallee}`
+	// so a repeated `intList.has(...)` site picks up the already-cloned
+	// `IntList.has` function instead of synthesizing a duplicate.
+	export var monomorphCache MonomorphCache
+
+	// J.4b: per-method where-clause sidecar. Keyed by `<iface>.<method>`
+	// (the qualified callee name used everywhere else); value is the
+	// extension block's `whereClauses` snapshot recorded at parse time.
+	// An empty array means the method was declared by an unconditional
+	// extension (or an interface body that doesn't carry constraints).
+	// Used by `resolveMethodCallSite` to surface E4006 when a conditional
+	// extension's constraints aren't satisfied by the call site's
+	// receiver bindings.
+	export var extensionMethodWhereClauses WhereClauseMapByName
+
 	// Stage B (closures): hand out the next unique `_$closure_<N>` suffix
 	// and bump the counter. Called by the parser at every closure
 	// expression to keep lifted-function names disjoint.
@@ -582,7 +598,9 @@ export type Project
 			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create(),
-			charByteLiterals: CharByteLiteralSet.create()
+			charByteLiterals: CharByteLiteralSet.create(),
+			monomorphCache: MonomorphCache.create(),
+			extensionMethodWhereClauses: WhereClauseMapByName.create()
 		}
 	end 'create'
 end 'Project'
@@ -1130,6 +1148,12 @@ end 'ConformanceRegistry'
 
 export typealias ConformanceId = int(0 to u64.max)
 export typealias ConformanceWithArgsArray = Array with MaxonTypeArray
+
+// J.4b: extension-method → where-clauses map. Populated by the parser
+// at the end of every `extension Iface where ... function M ... end`
+// body so the call-site resolver can recover the gating constraints in
+// O(1) when emitting E4006 for an unsatisfied conditional extension.
+export typealias WhereClauseMapByName = Map with(String, WhereClauseArray)
 
 // Phase 11.0: registry of interface-typed values for the
 // `MaxonType.interface(id)` arm. Maintains a String name table indexed by

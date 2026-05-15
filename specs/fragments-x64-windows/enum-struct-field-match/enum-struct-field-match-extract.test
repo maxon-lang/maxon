@@ -31,175 +31,64 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @Container.create(item: i64) -> i64 {
+  func @getNumber(rcx: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_Container]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 5
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @enum-struct-field-match.getNumber(c: i64) -> u8 {
-  entry:
-    x64.prologue stack_size=48
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-16], rdx
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rcx+0]
-    x64.mov rbx, [rbp-16]
-    x64.mov [rbp-24], rbx
-    x64.mov rsi, [rbp-24]
-    x64.mov [rbp-40], rdx
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov rdi, [rbp-40]
-    x64.mov [rbp-32], rdi
-    x64.jmp enum-struct-field-match.getNumber.mv_0.cmp0
-  mv_0.cmp0:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne enum-struct-field-match.getNumber.mv_0.cmp1
+    x64.mov r9, [rcx+0] (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.test r8, r8
+    x64.jne mv_0.next0
   mv_0.case0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, [rax+8]
-    x64.xor edx, edx
-    x64.mov rbx, 255
-    x64.cmp rcx, rbx
-    x64.jg enum-struct-field-match.getNumber.__range_panic_0
-    x64.cmp rcx, rdx
-    x64.jl enum-struct-field-match.getNumber.__range_panic_0
-    x64.jmp enum-struct-field-match.getNumber.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, [rbp-24]
-    x64.mov [rbp-40], rcx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-40]
-    x64.epilogue
-    x64.ret
-  mv_0.cmp1:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne enum-struct-field-match.getNumber.mv_0.merge
+    x64.mov r8, [r9+8] (8b)
+    x64.cmp r8, 255
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  mv_0.next0:
+    x64.mov r8, [r9+0] (8b)
+    x64.cmp r8, 1
+    x64.jne mv_0.next1
   mv_0.case1:
-    x64.mov rax, [rbp-24]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rcx, [rbp-16]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.xor eax, eax
+    x64.xor r8d, r8d
     x64.epilogue
     x64.ret
-  mv_0.merge:
-  }
-  func @enum-struct-field-match.main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov rax, 42
-    x64.mov rcx, 16
-    x64.xor edx, edx
-    x64.mov r8, 6
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.xor ecx, ecx
-    x64.mov [rax+0], rcx
-    x64.mov rdx, 42
-    x64.mov [rax+8], rdx
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rbx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call Container.create
-    x64.mov [rbp-16], rax
-    x64.mov rsi, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call enum-struct-field-match.getNumber
-    x64.xor edi, edi
-    x64.mov r8, 4294967295
-    x64.cmp rax, r8
-    x64.jg enum-struct-field-match.main.__range_panic_0
-    x64.cmp rax, rdi
-    x64.jl enum-struct-field-match.main.__range_panic_0
-    x64.jmp enum-struct-field-match.main.__range_ok_0
+  mv_0.next1:
+    x64.lea rcx, [rip+__panic_msg_0]
+    x64.call mrt_panic
+    x64.xor r8d, r8d
+    x64.epilogue
+    x64.ret
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_1]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
     x64.epilogue
     x64.ret
   }
-  func @__destruct_Container(ptr: i64) {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Container.done
-  done:
+    x64.xor r12d, r12d
+    x64.xor edx, edx
+    x64.mov ecx, 16
+    x64.mov rax, r12
+    x64.call stdlib.__mm_alloc
+    x64.mov r13, r8
+    x64.mov [r13+0], r12 (8b)
+    x64.mov r8d, 42
+    x64.mov [r13+8], r8 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov [r8+0], r13 (8b)
+    x64.mov rcx, r8
+    x64.call getNumber
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_2]
+    x64.call mrt_panic
+  __range_ok_0:
     x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Value(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Value.done
-  done:
     x64.ret
   }
 }

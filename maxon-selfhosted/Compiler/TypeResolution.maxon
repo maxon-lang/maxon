@@ -111,7 +111,7 @@ end 'declaredCastCategoryFor'
 // Used by `drainResolvableTypealiases` to short-circuit into the
 // `project.genericTypealiases` storage path before the StdType-typed
 // resolver runs.
-function isGenericAliasExpr(expr UnresolvedTypeExpr) returns bool
+export function isGenericAliasExpr(expr UnresolvedTypeExpr) returns bool
 	return match expr 'check'
 		genericAlias gives true
 		sizedGenericAlias gives true
@@ -145,7 +145,7 @@ end 'resolveGenericAliasArgName'
 // type-decl name when this expression came from an inner-typealias slot
 // (used to look up in-scope type parameters); empty for top-level
 // generic aliases. Caller guarantees `expr` is a `genericAlias` arm.
-function resolveGenericAliasExpr(project Project, expr UnresolvedTypeExpr, declaringTypeName String) returns MaxonType
+export function resolveGenericAliasExpr(project Project, expr UnresolvedTypeExpr, declaringTypeName String) returns MaxonType
 	match expr 'extract'
 		genericAlias(baseName, args) then return buildGenericInstanceType(project, baseName: baseName, args: args, declaringTypeName: declaringTypeName)
 		sizedGenericAlias(baseName, size, args) then return buildSizedGenericInstanceType(project, baseName: baseName, size: size, args: args, declaringTypeName: declaringTypeName)
@@ -524,7 +524,24 @@ function resolveAllInterfaces(project Project)
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedInterfaces 'sweep'
-		let iface = IrInterface.create(entry.name, extendsNames: entry.extendsNames, usesParams: entry.usesParams, methods: entry.methods, visibility: entry.visibility, line: entry.line, column: entry.column, filePath: entry.filePath)
+		// Phase 11.0 mirror of `resolveAllStructTypes`: promote inner-typealias
+		// declarations harvested by `mergeExtensionInnerAliases` into a
+		// per-interface table of resolved MaxonTypes. Generic-form aliases
+		// resolve through `resolveGenericAliasExpr` so `Element` in
+		// `__ManagedMemory with Element` becomes a `MaxonType.typeParameter`
+		// scoped to this interface; non-generic aliases fall back to a named
+		// placeholder until full StdType chaining is wired up.
+		var resolvedInnerAliases = ResolvedInnerAliasMap.create()
+		for (aliasName, aliasExpr) in entry.innerAliases 'eachInner'
+			if isGenericAliasExpr(aliasExpr) 'isGeneric'
+				let resolvedType = resolveGenericAliasExpr(project, expr: aliasExpr, declaringTypeName: entry.name)
+				try resolvedInnerAliases.insert(aliasName, value: resolvedType) otherwise ignore
+			end 'isGeneric' else 'nonGeneric'
+				try resolvedInnerAliases.insert(aliasName, value: internMaxonType(project, name: aliasName)) otherwise ignore
+			end 'nonGeneric'
+		end 'eachInner'
+
+		let iface = IrInterface.create(entry.name, extendsNames: entry.extendsNames, usesParams: entry.usesParams, methods: entry.methods, visibility: entry.visibility, line: entry.line, column: entry.column, filePath: entry.filePath, innerAliases: resolvedInnerAliases)
 		// Parser rejects duplicate interfaces against the unresolved map
 		// before inserting. Collisions with the resolved map (e.g. stdlib-
 		// cached interfaces reusing a name) are silently ignored here so
@@ -563,9 +580,13 @@ function inheritInterfaceUsesParams(project Project)
 	end 'scan'
 
 	for upd in updates 'apply'
-		if let existing = try project.unresolvedInterfaces.get(upd.name) 'haveEntry'
-			let updated = UnresolvedInterfaceType.create(existing.name, extendsNames: existing.extendsNames, usesParams: upd.params, methods: existing.methods, visibility: existing.visibility, line: existing.line, column: existing.column, filePath: existing.filePath)
-			project.unresolvedInterfaces.upsert(upd.name, value: updated)
+		// Mutate in place so any state attached after parsing (e.g.
+		// extension-merged `innerAliases`) survives the usesParams refresh.
+		// Recreating via `UnresolvedInterfaceType.create` would zero those
+		// fields back to their defaults.
+		if var existing = try project.unresolvedInterfaces.get(upd.name) 'haveEntry'
+			existing.usesParams = upd.params
+			project.unresolvedInterfaces.upsert(upd.name, value: existing)
 		end 'haveEntry'
 	end 'apply'
 end 'inheritInterfaceUsesParams'
@@ -661,6 +682,12 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 			continue
 		end 'noIface'
 
+		// Resolve the parser-time bare names into MaxonTypes, applying the
+		// parenthesized-tuple collapse when the interface has exactly one
+		// `uses` param. This lets `Iterator with(Source, Element)` bind
+		// `Element = __Tuple2(Source, Element)` instead of erroring on arity.
+		var resolvedWithArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: iface.usesParams.count())
+
 		// Phase 9.7: when a conformance lists 0 args but the interface
 		// inherits its `usesParams` from an `extends` parent, allow the
 		// bindings to come from a sibling conformance to that parent in
@@ -670,21 +697,17 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		// BidirectionalIterator's inherited `Element` slot — the explicit
 		// re-declaration `BidirectionalIterator with RangeBound` is also
 		// accepted via the standard arity-matched path below.
-		var effectiveWithArgs = StringArray.create()
-		for arg in conf.withArgs 'copyArgs'
-			effectiveWithArgs.push(arg)
-		end 'copyArgs'
 		if conf.withArgs.count() == 0 and iface.usesParams.count() > 0 'maybeInherit'
 			let inherited = findInheritedBindings(project, iface: iface, siblings: conformances)
 			if inherited.count() == iface.usesParams.count() 'gotInherit'
-				effectiveWithArgs = StringArray.create()
+				resolvedWithArgs = MaxonTypeArray.create()
 				for arg in inherited 'copyInherit'
-					effectiveWithArgs.push(arg)
+					resolvedWithArgs.push(internMaxonType(project, name: arg))
 				end 'copyInherit'
 			end 'gotInherit'
 		end 'maybeInherit'
 
-		if effectiveWithArgs.count() != iface.usesParams.count() 'arityMismatch'
+		if resolvedWithArgs.count() != iface.usesParams.count() 'arityMismatch'
 			reportCompileError(project, code: ErrorCode.semanticUnknownInterface, message: "interface '{conf.interfaceName}' expects {iface.usesParams.count()} type parameter(s), got {conf.withArgs.count()}", line: conf.line, column: conf.column, filePath: declFilePath)
 			continue
 		end 'arityMismatch'
@@ -704,9 +727,9 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		var bindingTypes = MaxonTypeArray.create()
 		for i in 0 upto iface.usesParams.count() 'buildBindings'
 			let paramName = try iface.usesParams.get(i) otherwise panic("computeExpectedMethodsForConformances: usesParams.get OOB at {i}")
-			let argName = try effectiveWithArgs.get(i) otherwise panic("computeExpectedMethodsForConformances: withArgs.get OOB at {i}")
+			let argType = try resolvedWithArgs.get(i) otherwise panic("computeExpectedMethodsForConformances: resolvedWithArgs.get OOB at {i}")
 			bindingNames.push(paramName)
-			bindingTypes.push(internMaxonType(project, name: argName))
+			bindingTypes.push(argType)
 		end 'buildBindings'
 		bindingNames.push(conf.interfaceName)
 		bindingTypes.push(internMaxonType(project, name: declName))
@@ -1087,6 +1110,45 @@ function validateConformancesForResolved(project Project, typeName String, conf 
 	recordConformance(project, typeName: typeName, conf: conf)
 end 'validateConformancesForResolved'
 
+// Resolve a `Conformance`'s parser-time bare-name args into the canonical
+// `MaxonTypeArray` shape stored on `project.conformances`. Two cases:
+//
+//   1. `usesCount == 1` and `parenForm` is true with `withArgs.count() >= 2`:
+//      collapse the parenthesized comma list into a single `__TupleN`
+//      generic-instance. Mirrors maxon-sharp's `ParseWithTypeArgs`
+//      `expectedCount == 1` branch — `Iterator with(Source, Element)` against
+//      `Iterator uses Element` binds `Element = (Source, Element)`.
+//
+//   2. Otherwise: each bare name interns into its own `MaxonType.named(...)`
+//      placeholder. Unknown names stay placeholders here and get upgraded
+//      later by the lowering layer; the conformance entry only needs shape.
+//
+// `usesCount` arrives from the caller's already-performed interface lookup
+// so we don't repeat the resolved-vs-unresolved branching. Callers that
+// don't have the interface in scope (because it's missing — diagnostic
+// already emitted) pass `withArgs.count()` to disable collapse.
+function resolveConformanceWithArgs(project Project, conf Conformance, usesCount ElementCount) returns MaxonTypeArray
+	var result = MaxonTypeArray.create()
+	if conf.parenForm and usesCount == 1 and conf.withArgs.count() >= 2 'tupleCollapse'
+		var tupleArgs = MaxonTypeArray.create()
+		for i in 0 upto conf.withArgs.count() 'eachTupleArg'
+			let argName = try conf.withArgs.get(i) otherwise panic("resolveConformanceWithArgs: withArgs.get OOB at {i}")
+			tupleArgs.push(internMaxonType(project, name: argName))
+		end 'eachTupleArg'
+		let baseName = "__Tuple{conf.withArgs.count()}"
+		let baseId = project.typeNames.intern(baseName)
+		let giid = project.genericInstances.intern(baseId, args: tupleArgs)
+		result.push(MaxonType.genericInstance(giid))
+		return result
+	end 'tupleCollapse'
+
+	for i in 0 upto conf.withArgs.count() 'eachArg'
+		let argName = try conf.withArgs.get(i) otherwise panic("resolveConformanceWithArgs: withArgs.get OOB at {i}")
+		result.push(internMaxonType(project, name: argName))
+	end 'eachArg'
+	return result
+end 'resolveConformanceWithArgs'
+
 // Record a (typeName, interfaceName, withArgs) entry in
 // `project.conformances`. The withArgs list arrives as bare strings
 // from the parser; we resolve each one to a MaxonType via the type-name
@@ -1102,11 +1164,8 @@ end 'validateConformancesForResolved'
 // `Impl` to a `Base`-typed parameter materialize a null witness pointer
 // (interface-method-via-extended-interface segfaults at runtime).
 function recordConformance(project Project, typeName String, conf Conformance)
-	var withArgs = MaxonTypeArray.create()
-	for i in 0 upto conf.withArgs.count() 'eachArg'
-		let argName = try conf.withArgs.get(i) otherwise panic("recordConformance: withArgs.get OOB at {i}")
-		withArgs.push(internMaxonType(project, name: argName))
-	end 'eachArg'
+	let usesCount = lookupInterfaceUsesParams(project, name: conf.interfaceName).count()
+	let withArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: usesCount)
 	_ = project.conformances.intern(typeName, interfaceName: conf.interfaceName, withArgs: withArgs)
 	var visited = StringArray.create()
 	recordParentConformancesHelper(project, typeName: typeName, interfaceName: conf.interfaceName, withArgs: withArgs, visited: visited)
@@ -3160,8 +3219,13 @@ end 'resolveCalleeParamTypeInContext'
 // Split `Type.method` into `Type`. Method bodies are registered as
 // `TypeName.methodName` (`Array.push`, `__ManagedMemory.length`, ...).
 // Throws `EnclosingTypeError.notAMethod` when the callee is a free function
-// (no dot) or the prefix isn't a registered struct (e.g. namespace-qualified
-// `stdlib.foo`); callers use `if let` to take the method-on-struct path.
+// (no dot) or the prefix isn't a registered type (e.g. namespace-qualified
+// `stdlib.foo`); callers use `if let` to take the method-on-type path.
+//
+// The head is matched against structs, resolved interfaces, and not-yet-drained
+// interfaces. The interface paths exist so methods declared inside an
+// `extension <SomeInterface> ... end` block get their enclosing type
+// resolved the same way a method declared on a struct does.
 export function enclosingTypeNameForCallee(project Project, callee String) returns String throws EnclosingTypeError
 	let bytes = callee.toByteArray()
 	let count = bytes.count()
@@ -3170,10 +3234,16 @@ export function enclosingTypeNameForCallee(project Project, callee String) retur
 		throw EnclosingTypeError.notAMethod
 	end 'noDot'
 	let head = byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
-	if not project.structTypes.contains(head) 'notStruct'
-		throw EnclosingTypeError.notAMethod
-	end 'notStruct'
-	return head
+	if project.structTypes.contains(head) 'isStruct'
+		return head
+	end 'isStruct'
+	if project.interfaces.contains(head) 'isIface'
+		return head
+	end 'isIface'
+	if project.unresolvedInterfaces.contains(head) 'isUnresolvedIface'
+		return head
+	end 'isUnresolvedIface'
+	throw EnclosingTypeError.notAMethod
 end 'enclosingTypeNameForCallee'
 
 export enum EnclosingTypeError implements Error
@@ -4275,20 +4345,29 @@ function fillUnresolvedTypes(project Project, module MaxonModule, producerTypesP
 		let func = try module.functions.get(funcIdx) otherwise panic("fillUnresolvedTypes: funcIdx < count but get failed")
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: producerTypesPerFunc.get({funcIdx}) failed")
 		let slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: slotTypesPerFunc.get({funcIdx}) failed")
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("fillUnresolvedTypes: blockRef OOB")
-			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("fillUnresolvedTypes: opIdx OOB")
-				fillUnresolvedTypesForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, slotTypes: slotTypes)
-			end 'eachOp'
-			if block.hasTerminatorOp() 'hasTerm'
-				let termIdx = block.terminatorIndex()
-				let termOp = try module.ops.get(termIdx) otherwise panic("fillUnresolvedTypes: terminator OOB")
-				fillUnresolvedTypesForOp(project, module: module, opIdx: termIdx, op: termOp, producerTypes: producerTypes, slotTypes: slotTypes)
-			end 'hasTerm'
-		end 'eachBlock'
+		runFillUnresolvedTypesForFunc(project, module: module, func: func, producerTypes: producerTypes, slotTypes: slotTypes)
 	end 'eachFunc'
 end 'fillUnresolvedTypes'
+
+// Apply `fillUnresolvedTypesForOp` to every op + terminator in `func`. Pulled
+// out of `fillUnresolvedTypes` so the on-demand path in `resolveAllCalls`
+// (which discovers newly-cloned monomorphization bodies after the module-wide
+// fill has already run) can reuse the same per-op fill discipline without
+// rebuilding the perFunc maps just to dispatch into the inner walk.
+export function runFillUnresolvedTypesForFunc(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("runFillUnresolvedTypesForFunc: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("runFillUnresolvedTypesForFunc: opIdx OOB")
+			fillUnresolvedTypesForOp(project, module: module, opIdx: opIdx, op: op, producerTypes: producerTypes, slotTypes: slotTypes)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termIdx = block.terminatorIndex()
+			let termOp = try module.ops.get(termIdx) otherwise panic("runFillUnresolvedTypesForFunc: terminator OOB")
+			fillUnresolvedTypesForOp(project, module: module, opIdx: termIdx, op: termOp, producerTypes: producerTypes, slotTypes: slotTypes)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'runFillUnresolvedTypesForFunc'
 
 function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	match op 'fill'
@@ -6459,17 +6538,51 @@ end 'checkNamedTypeVisibility'
 // lowering, where it would surface as a less-actionable cast-category
 // failure deep inside `coerceArgToParam`.
 function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray)
-	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+	// Walk by index rather than iterator because the body may append new
+	// monomorphized clones onto `module.functions` (J.4b user-extension
+	// monomorphization); iterating by index lets the loop pick them up on
+	// the same pass so their internal calls resolve through the same
+	// machinery the original bodies use. Newly-appended functions get
+	// per-call producer types built on-demand inside the loop so their
+	// `receiver.method(...)` calls resolve against substituted slot types.
+	var funcIdx = 0
+	while funcIdx < module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("resolveAllCalls: funcIdx < count but get failed")
-		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveAllCalls: producerTypesPerFunc.get({funcIdx}) failed")
+		// Freshly synthesized functions (e.g. J.4b/c/d monomorphized clones)
+		// don't have prebuilt producer-type entries; build them on demand
+		// before they're consumed below so cloned receivers carry the right
+		// slot types into methodCall resolution. We also run the same
+		// unresolved-slot-fill backfill that the per-function walk runs for
+		// originally-parsed bodies: clones inherit parser-stamped
+		// `slotType: unresolved` on every varDecl / varLoad / globalStore,
+		// and lowering reads the OP's slotType — not the producer-type map
+		// — when stamping value-types. Without the backfill, `iter.current()`
+		// on a cloned `Iterable.map` body sees the iter varLoad's slotType as
+		// `unresolved`, the methodCall resolver finds no struct, and lowering
+		// falls through to the interface-dispatch stub.
+		if funcIdx >= producerTypesPerFunc.count() 'onDemand'
+			var fresh = ProducerTypeMap.create()
+			var slotTypes = SlotTypeMap.create()
+			recordFuncOpResults(project, module: module, func: func, producerTypes: fresh, slotTypes: slotTypes)
+			runFillUnresolvedTypesForFunc(project, module: module, func: func, producerTypes: fresh, slotTypes: slotTypes)
+			// Re-record after fill so producer types pick up the now-filled
+			// varDecl / varLoad slotTypes; the second pass is cheap because
+			// the producer-type map is per-function and small.
+			fresh = ProducerTypeMap.create()
+			slotTypes = SlotTypeMap.create()
+			recordFuncOpResults(project, module: module, func: func, producerTypes: fresh, slotTypes: slotTypes)
+			producerTypesPerFunc.push(fresh)
+		end 'onDemand'
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveAllCalls: producerTypesPerFunc.get({funcIdx}) failed after on-demand build")
 		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCalls: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("resolveAllCalls: opIdx OOB")
-				resolveOneCallOp(project, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType, funcName: func.name)
+				resolveOneCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType, funcName: func.name)
 			end 'eachOp'
 		end 'eachBlock'
+		funcIdx = funcIdx + 1
 	end 'eachFunc'
 end 'resolveAllCalls'
 
@@ -6477,7 +6590,7 @@ end 'resolveAllCalls'
 // passes other ops through. Centralising here keeps the per-function
 // walker above shape-agnostic and lets future op shapes (Stage E
 // indirect calls) hook in with a single arm.
-function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String)
+function resolveOneCallOp(project Project, module MaxonModule, op MaxonOp, opIdx OpIndex, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String)
 	if op.name == "call" 'isCall'
 		match op 'extract'
 			call(result, callee, callContext, args, argLabels, argTypes, _, range) then resolveCallSite(project, opIdx: opIdx, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, result: result, producerTypes: producerTypes, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingTypeName: enclosingTypeName, funcName: funcName, range: range)
@@ -6487,7 +6600,7 @@ function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTy
 	end 'isCall'
 	if op.name == "methodCall" 'isMethodCall'
 		match op 'extract'
-			methodCall(_, receiver, methodName, args, argLabels, argTypes, _, range) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
+			methodCall(_, receiver, methodName, args, argLabels, argTypes, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == methodCall")
 		end 'extract'
 		return
@@ -6507,7 +6620,7 @@ function resolveOneCallOp(project Project, op MaxonOp, opIdx OpIndex, producerTy
 	// it needs the same sidetable entries.
 	if op.name == "tryMethodCall" 'isTryMethodCall'
 		match op 'extract'
-			tryMethodCall(_, receiver, methodName, args, argLabels, argTypes, _, _, range) then resolveMethodCallSite(project, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
+			tryMethodCall(_, receiver, methodName, args, argLabels, argTypes, _, _, range) then resolveMethodCallSite(project, module: module, opIdx: opIdx, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, producerTypes: producerTypes, enclosingTypeName: enclosingTypeName, readerFilePath: readerFilePath, funcName: funcName, range: range)
 			default panic("unreachable: already checked op.name == tryMethodCall")
 		end 'extract'
 		return
@@ -6713,7 +6826,7 @@ end 'renderSignatureParams'
 // extract the receiver's struct name; an empty result indicates an
 // interface-dispatch site that lowering will route through its stub
 // emitter, so we skip both the resolved-name and paramTypes inserts.
-function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String, readerFilePath FilePath, funcName String, range SourceRange)
+function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpIndex, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String, readerFilePath FilePath, funcName String, range SourceRange)
 	let rawReceiverType = retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName)
 	let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingTypeName)
 	// Phase 11.4 / Phase 7: primitive receiver (`int.toString()`,
@@ -6760,11 +6873,59 @@ function resolveMethodCallSite(project Project, opIdx OpIndex, receiver ByteArra
 			resolved = extensionCallee
 		end 'foundExt'
 	end 'noDirectSig'
+	// J.4b: when the resolved callee is an interface-extension method
+	// whose `where Item is Trait` constraints aren't satisfied by the
+	// receiver's conformance bindings, surface E4006 with the conditional-
+	// availability message rather than letting the call silently resolve
+	// against the un-satisfied body. Mirrors the C# bootstrap's
+	// `irInvalidFieldAccess` path. Skipped for unconditional extensions
+	// (empty `whereClauses`) and for stdlib-declared interfaces (the
+	// existing fat-pointer dispatch handles those today).
+	if not unresolvedExtensionWhereClausesSatisfiedForCallee(project, callee: resolved, receiverType: receiverType) 'whereFailed'
+		reportConditionalExtensionUnsatisfied(project, callee: resolved, receiverType: receiverType, methodName: bareMethodName, range: range, filePath: readerFilePath)
+		return
+	end 'whereFailed'
+	// J.4b: per-receiver monomorphization for user-declared interface
+	// extensions. When the resolved callee belongs to a user-declared
+	// interface (i.e. `extension SomeInterface where ...`) and the receiver
+	// is a concrete named/genericInstance type, clone the body with the
+	// receiver's `withArgs` substituted in and re-point the resolved
+	// callee at the monomorphized name. Stdlib-defined interface
+	// extensions (Iterable.map / .filter etc.) are J.4c work; we restrict
+	// to user-source declarations by skipping any interface whose
+	// declaring file is the stdlib cache bootstrap path.
+	let monoCallee = try maybeMonomorphizeUserExtension(project, module: module, calleeQualified: resolved, receiverType: receiverType) otherwise resolved
+	resolved = monoCallee
 	try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
 	let signature = try project.funcSignatures.get(resolved) otherwise return
 	let substituted = substituteParamTypes(project, signature: signature, qualifiedCallee: resolved, receiverType: receiverType)
 	try project.callParamTypes.insert(opIdx, value: substituted) otherwise ignore
 end 'resolveMethodCallSite'
+
+// J.4b gate: attempt to monomorphize the call site's resolved callee
+// against the concrete receiver type. Skips when the callee isn't an
+// interface extension method, when the receiver isn't a concrete named /
+// generic-instance type, or when the interface was declared in a stdlib
+// source (stdlib-extension monomorphization is J.4c's scope). Returns
+// the monomorphized name on success; throws the same error union the
+// underlying cloner uses so callers can drop back to the un-monomorphized
+// callee with a single `try ... otherwise` without a separate sentinel.
+function maybeMonomorphizeUserExtension(project Project, module MaxonModule, calleeQualified String, receiverType MaxonType) returns String throws MonomorphError
+	let calleeBytes = calleeQualified.toByteArray()
+	let dotIdx = lastIndexOfDotByte(calleeBytes)
+	if dotIdx >= calleeBytes.count() 'noDot'
+		throw MonomorphError.notInterfaceCallee
+	end 'noDot'
+	let ifaceName = byteSliceToString(calleeBytes, startIndex: 0, endIndex: dotIdx)
+	if not (project.interfaces.contains(ifaceName) or project.unresolvedInterfaces.contains(ifaceName)) 'notIface'
+		throw MonomorphError.notInterfaceCallee
+	end 'notIface'
+	// J.4d: stdlib-declared interfaces (Iterable.map / .filter / .contains)
+	// are now monomorphized too. The cloner falls back to the in-process
+	// `stdlibParsedModule` when the source body isn't in the user module.
+	return try monomorphizeInterfaceExtension(project, module: module, calleeQualified: calleeQualified, receiverType: receiverType) otherwise throw MonomorphError.notInterfaceCallee
+end 'maybeMonomorphizeUserExtension'
+
 
 // Walk every conformance whose typeName matches the receiver and probe
 // `<InterfaceName>.<methodName>` against `funcSignatures`. Returns the
@@ -6793,6 +6954,66 @@ end 'findInterfaceExtensionCallee'
 enum InterfaceExtensionLookupError implements Error
 	notFound
 end 'InterfaceExtensionLookupError'
+
+// J.4b: true when the resolved callee is *not* an interface-extension
+// method, OR is one whose `where` constraints are satisfied by the
+// receiver's conformance bindings. Returns false only when we identify
+// an interface-extension callee AND a constraint fails — so callers
+// fall through to E4006 only on genuine availability misses, not on
+// every methodCall that happens to pass through this branch.
+function unresolvedExtensionWhereClausesSatisfiedForCallee(project Project, callee String, receiverType MaxonType) returns bool
+	let calleeBytes = callee.toByteArray()
+	let dotIdx = lastIndexOfDotByte(calleeBytes)
+	if dotIdx >= calleeBytes.count() 'noDot'
+		return true
+	end 'noDot'
+	let ifaceName = byteSliceToString(calleeBytes, startIndex: 0, endIndex: dotIdx)
+	if not (project.interfaces.contains(ifaceName) or project.unresolvedInterfaces.contains(ifaceName)) 'notIface'
+		return true
+	end 'notIface'
+	// Look up the extension's whereClauses for this specific
+	// (interface, method) via the parser-recorded sidecar; absent
+	// means the method was declared by an unconditional extension
+	// (or wasn't declared in an extension at all). Either case is
+	// "no constraints to check".
+	let whereClauses = try project.extensionMethodWhereClauses.get(callee) otherwise return true
+	if whereClauses.count() == 0 'noWhere'
+		return true
+	end 'noWhere'
+	let subst = buildExtensionUsesParamSubstitution(project, receiverType: receiverType, ifaceName: ifaceName)
+	return whereClauseSatisfied(project, constraints: whereClauses, subst: subst)
+end 'unresolvedExtensionWhereClausesSatisfiedForCallee'
+
+
+// J.4b: emit E4006 with the C#-bootstrap-compatible message for a
+// methodCall site whose interface-extension `where` constraints aren't
+// satisfied by the receiver's bindings. The message lists the
+// constraint that failed and the concrete type that doesn't implement
+// the required trait.
+function reportConditionalExtensionUnsatisfied(project Project, callee String, receiverType MaxonType, methodName String, range SourceRange, filePath FilePath)
+	let receiverName = baseNameOfReceiverType(project, selfType: receiverType)
+	let calleeBytes = callee.toByteArray()
+	let dotIdx = lastIndexOfDotByte(calleeBytes)
+	let ifaceName = byteSliceToString(calleeBytes, startIndex: 0, endIndex: dotIdx) if dotIdx < calleeBytes.count() else ""
+	var failedParam = ""
+	var failedTrait = ""
+	var failedConcreteName = ""
+	let whereClauses = try project.extensionMethodWhereClauses.get(callee) otherwise WhereClauseArray.create()
+	let subst = buildExtensionUsesParamSubstitution(project, receiverType: receiverType, ifaceName: ifaceName)
+	for i in 0 upto whereClauses.count() 'eachClause'
+		let c = try whereClauses.get(i) otherwise panic("reportConditionalExtensionUnsatisfied: whereClauses.get OOB at {i}")
+		let paramId = project.typeParameters.intern(c.declaringTypeName, paramName: c.paramName)
+		let concrete = subst.lookup(paramId)
+		if not typeConformsTo(project, t: concrete, interfaceName: c.requiredTraitName) 'fail'
+			failedParam = c.paramName
+			failedTrait = c.requiredTraitName
+			failedConcreteName = concrete.toString(project)
+			break
+		end 'fail'
+	end 'eachClause'
+	let msg = "Type '{receiverName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension where {failedParam} is {failedTrait}, but '{failedConcreteName}' does not implement '{failedTrait}')"
+	reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: msg, line: range.line, column: range.column, filePath: filePath)
+end 'reportConditionalExtensionUnsatisfied'
 
 // Build the substituted paramTypes vector for one call site by running
 // every signature paramType through the existing

@@ -1,0 +1,88 @@
+// Test: closure-capture.map-with-capture
+
+typealias Integer = int(i64.min to i64.max)
+
+type Level
+	export var rawValue Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
+end 'Level'
+
+function main() returns ExitCode
+	let level = Level.create(rawValue: 5)
+	let arr = [1, 2, 3]
+	let result = arr.map((_ Integer) gives level.rawValue)
+	return result.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r9d, 5
+    x64.mov [r8+0], r9 (8b)
+    x64.mov [rbp-8], r8
+    x64.xor eax, eax
+    x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
+    x64.mov ecx, 40
+    x64.call stdlib.__mm_alloc
+    x64.mov r12, r8
+    x64.lea r8, [rip+__rdata_arr_closure-capture_main_0]
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r8d, 3
+    x64.mov [r12+8], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+16], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov [r12+24], r8 (8b)
+    x64.mov r8, -2
+    x64.mov [r12+32], r8 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9d, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.mov [r13+0], r8 (8b)
+    x64.mov [r13+0], r12 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.lea rax, [rbp-8]
+    x64.mov r9, [rbp-16]
+    x64.mov [r8+0], r9 (8b)
+    x64.lea r9, [rip+__layout_Array_Int]
+    x64.lea rdx, [rip+_$closure_0]
+    x64.mov rcx, r13
+    x64.mov rax, r8
+    x64.call Array.map
+    x64.lea rdx, [rip+__layout_Array_Int]
+    x64.mov rcx, r8
+    x64.call Array.count
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_0]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -23,49 +23,31 @@ ExitCode: 100
 ---
 // CompiledIR
 module {
-  func @error-handling.mayFail(shouldFail: i1) -> i64 {
-  entry:
-    x64.test rcx, rcx
-    x64.je error-handling.mayFail.check_0.after
-  check_0:
-    x64.xor eax, eax
-    x64.mov rcx, 1
-    x64.add rax, rcx
-    x64.mov rdx, rax
-    x64.xor eax, eax
-    x64.ret
-  check_0.after:
-    x64.mov rax, 100
-    x64.xor edx, edx
-    x64.ret
-  }
-  func @error-handling.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor ecx, ecx
-    x64.call error-handling.mayFail
-    x64.mov rcx, 42
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je error-handling.main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-16], rax
-    x64.jmp error-handling.main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg error-handling.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl error-handling.main.__range_panic_0
-    x64.jmp error-handling.main.__range_ok_0
+    x64.xor r8d, r8d
+  inlined_mayFail_0:
+    x64.test r8, r8
+    x64.je inlined_mayFail_2
+  inlined_mayFail_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_mayFail_2:
+    x64.xor edx, edx
+    x64.mov r8d, 100
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov r8d, 42
+  try_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

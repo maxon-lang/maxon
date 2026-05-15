@@ -122,7 +122,18 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // types register fresh `Process.executablePath`/`FilePath` signatures into
 // the cached stdlib metadata; v44 caches lack those entries and would miss
 // the wrap-MM-in-FilePath call lowered into user code.
-let CACHE_FORMAT_VERSION = 47
+// v49: Stage J.4a — whitelist `stdlib/Interfaces.maxon` and drop the
+// cross-cutting interface family (`Error`, `Iterator`, `Iterable`, etc.) +
+// `Ordering`/`IterationError`/`HashValue`/`IterStep` from the bootstrap synth.
+// The real interface signatures (notably `Iterable.createIterator() returns
+// Iter` with NO `throws` clause) differ from the bootstrap stubs, and the
+// interface now carries extension methods (`Iterable.map/filter/contains/
+// withIterator`) that v48 caches don't know about.
+// v50: Stage J.4c — persist `project.unresolvedExtensions` and
+// `project.extensionMethodWhereClauses` so cache-hit user builds see the
+// stdlib's struct- and interface-extension metadata (including where-clauses)
+// for the per-receiver monomorphizer's gating + diagnostic paths.
+let CACHE_FORMAT_VERSION = 50
 
 // ============================================================
 // Types
@@ -258,6 +269,15 @@ export type StdlibCacheData
 	export var conformances ConformanceRegistry
 	export var typeParameters TypeParamRegistry
 	export var interfaceRegistry InterfaceTypeRegistry
+	// Cache v49: snapshot of the cache-build project's `functionTypes` so the
+	// in-process restore path can translate captured `MaxonType.function(id)`
+	// values into the destination project's id space. The disk-cache decode
+	// path interns function-types directly into `project.functionTypes` via
+	// `readMaxonType`, then mirrors the result here in lockstep so
+	// `translateMaxonType`'s identity round-trip returns the same id. Required
+	// because `stdlib/Interfaces.maxon` declares `Iterable.map`/`filter`/
+	// `contains` with function-typed parameters.
+	export var functionTypes FunctionTypeRegistry
 	export var genericInstances GenericInstanceRegistry
 	export var genericTypealiases GenericTypealiasMap
 	export var layoutDescriptors LayoutDescriptorRegistry
@@ -271,6 +291,20 @@ export type StdlibCacheData
 	// call op — silent ABI corruption on x64, validator rejection on wasm.
 	export var genericFunctionImplicitArity GenericFunctionImplicitArityMap
 	export var staticRdataValues StaticRdataValueMap
+	// Cache v50 (J.4c): persisted `project.unresolvedExtensions` so cache-hit
+	// user builds see the stdlib's struct- / interface-extension metadata
+	// (target type name, type-param rebindings, added conformances, where-
+	// clauses, visibility, decl position). Required by `Constraints.
+	// conditionalConformanceWhereClauseSatisfied` so a user-code call that
+	// instantiates a stdlib generic (`Array with Int`) gates correctly
+	// against the conditional conformance's where-clauses.
+	export var unresolvedExtensions UnresolvedExtensionArray
+	// Cache v50 (J.4c): parser-recorded `extension <T>.<method>` where-
+	// clause map. Mirrors `project.extensionMethodWhereClauses`. Used by
+	// `unresolvedExtensionWhereClausesSatisfiedForCallee` to surface E4006
+	// when a conditional-extension method's constraints aren't met by the
+	// receiver's bindings.
+	export var extensionMethodWhereClauses WhereClauseMapByName
 	// Phase 11.6 (cache v10): the stdlib's StdModule at the post-dce
 	// point of its build pipeline. The user-code pipeline merges this
 	// into its own StdModule for the inliner pass so stdlib accessor
@@ -312,6 +346,7 @@ export type StdlibCacheData
 			conformances: ConformanceRegistry.create(),
 			typeParameters: TypeParamRegistry.create(),
 			interfaceRegistry: InterfaceTypeRegistry.create(),
+			functionTypes: FunctionTypeRegistry.create(),
 			genericInstances: GenericInstanceRegistry.create(),
 			genericTypealiases: GenericTypealiasMap.create(),
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
@@ -319,6 +354,8 @@ export type StdlibCacheData
 			livenessRoots: StringArray.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
+			unresolvedExtensions: UnresolvedExtensionArray.create(),
+			extensionMethodWhereClauses: WhereClauseMapByName.create(),
 			inlinerStdModule: StdModule.create(),
 			writerGidToProjectGid: GenericInstanceIdArray.create()
 		}
@@ -825,6 +862,11 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 	try writeStringArray(buf, arr: data.livenessRoots)
 	try writeGenericFunctionImplicitArityMap(buf, m: data.genericFunctionImplicitArity)
 	try writeStaticRdataValueMap(buf, m: data.staticRdataValues)
+	// Cache v50 (J.4c): stdlib-side extension metadata. Written before the
+	// StdModule blob so the decoder's pos chain stays straightforward and the
+	// expensive StdModule decode happens last.
+	try writeUnresolvedExtensionArray(buf, arr: data.unresolvedExtensions)
+	try writeWhereClauseMapByName(buf, m: data.extensionMethodWhereClauses)
 	// Cache v10: the stdlib's post-dce StdModule snapshot for cross-
 	// module inlining at user pipeline time.
 	try writeStdModule(buf, module: data.inlinerStdModule)
@@ -1400,6 +1442,14 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	let (srv, pSrv) = try readStaticRdataValueMap(buf, offset: pos)
 	pos = pSrv
 	data.staticRdataValues = srv
+	// Cache v50 (J.4c): read the persisted stdlib-side extension metadata
+	// before the StdModule blob — mirrors the encode order above.
+	let (ue, pUe) = try readUnresolvedExtensionArray(buf, offset: pos)
+	pos = pUe
+	data.unresolvedExtensions = ue
+	let (emwc, pEmwc) = try readWhereClauseMapByName(buf, offset: pos)
+	pos = pEmwc
+	data.extensionMethodWhereClauses = emwc
 	// Cache v10: read the stdlib's post-dce StdModule for the user
 	// pipeline's inliner pass.
 	let (inlinerMod, pIm2) = try readStdModule(buf, offset: pos)
@@ -1467,6 +1517,19 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 	for i in 0 upto project.interfaceRegistry.count() 'mirrorInterfaces'
 		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
 	end 'mirrorInterfaces'
+
+	// Cache v49: identity-mirror the function-type registry. `readMaxonType`
+	// interns each cached `function(id)` payload directly into
+	// `project.functionTypes`, so we mirror project.* into data.* here.
+	// `translateCapturedFunctionType` then walks data.functionTypes,
+	// translates the params/return through the identity-mirrored named /
+	// generic / interface tables, and re-interns to recover the same
+	// project-space id.
+	data.functionTypes = FunctionTypeRegistry.create()
+	for i in 0 upto project.functionTypes.count() 'mirrorFunctionTypes'
+		let (params, returnType) = project.functionTypes.get(i)
+		_ = data.functionTypes.append(params, returnType: returnType)
+	end 'mirrorFunctionTypes'
 
 	return StdlibCacheResult.create(data, valid: true)
 end 'decodeStdlibCache'
@@ -1576,14 +1639,6 @@ end 'mergeStdlibGlobalData'
 // keyed by the warmup project's id space — neither matches the per-test
 // destination project's id space.
 function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) returns MaxonType
-	// No stdlib function takes a function-typed parameter today, so the
-	// `function` arm should never fire in practice. The match below is
-	// preceded by an explicit panic guard so the round-trip stays loud
-	// rather than silently corrupting the translated type if a future
-	// stdlib function adds one.
-	if isFunctionMaxonType(t) 'unsupported'
-		panic("translateMaxonType: function types are not cached yet (Stage A scope)")
-	end 'unsupported'
 	return match t 'translate'
 		boolean gives MaxonType.boolean
 		integer gives MaxonType.integer
@@ -1591,7 +1646,7 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		string gives MaxonType.string
 		unresolved gives MaxonType.unresolved
 		named(id) gives translateNamedTypeId(project, table: data.typeNameTable, id: id)
-		function gives MaxonType.unresolved
+		function(id) gives translateCapturedFunctionType(project, data: data, id: id)
 		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
 		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
 		interface (id) gives translateCapturedInterface(project, data: data, id: id)
@@ -1600,6 +1655,21 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		constInt gives t
 	end 'translate'
 end 'translateMaxonType'
+
+// Cache v49: translate a captured `function(id)` arm into the destination
+// project's id space. Walks the captured signature from `data.functionTypes`,
+// translates each param + return type through `translateMaxonType` /
+// `translateMaxonReturnType` (which recurse into nested generic/function
+// arms), then re-interns the resulting (params, returnType) via
+// `internFunctionType` in the destination project. The returned id may
+// differ from the captured one but the structural signature is preserved.
+function translateCapturedFunctionType(project Project, data StdlibCacheData, id FunctionTypeId) returns MaxonType
+	let (sourceParams, sourceReturn) = data.functionTypes.get(id)
+	let translatedParams = translateCapturedTypeArray(project, data: data, src: sourceParams)
+	let translatedReturn = translateMaxonReturnType(project, data: data, rt: sourceReturn)
+	let newId = internFunctionType(project, paramTypes: translatedParams, returnType: translatedReturn)
+	return MaxonType.function(newId)
+end 'translateCapturedFunctionType'
 
 function translateNamedTypeId(project Project, table StringArray, id TypeNameId) returns MaxonType
 	let name = try table.get(id) otherwise panic("translateNamedTypeId: captured id {id} out of range (table count={table.count()}) — captureStdlibMetadata snapshot is missing entries")
@@ -1693,15 +1763,22 @@ function translateInterfaceMethodSig(project Project, data StdlibCacheData, sig 
 end 'translateInterfaceMethodSig'
 
 // Translate a captured IrInterface: each method sig's paramTypes / returnType
-// MaxonTypes are reinterned through the destination project. Other fields
-// (name / extendsNames / usesParams / visibility / filePath / line / column)
-// pass through unchanged because they're name- or position-keyed.
+// MaxonTypes are reinterned through the destination project. innerAliases
+// values are translated for the same reason as `translateStructType` — they
+// embed `named` / `genericInstance` ids that index the producing run's
+// typeNames table. Other fields (name / extendsNames / usesParams /
+// visibility / filePath / line / column) pass through unchanged because
+// they're name- or position-keyed.
 function translateIrInterface(project Project, data StdlibCacheData, iface IrInterface) returns IrInterface
 	var destMethods = InterfaceMethodSigArray.create()
 	for m in iface.methods 'eachM'
 		destMethods.push(translateInterfaceMethodSig(project, data: data, sig: m))
 	end 'eachM'
-	return IrInterface.create(iface.name, extendsNames: iface.extendsNames, usesParams: iface.usesParams, methods: destMethods, visibility: iface.visibility, line: iface.line, column: iface.column, filePath: iface.filePath)
+	var translatedInner = ResolvedInnerAliasMap.create()
+	for (aliasName, aliasType) in iface.innerAliases 'eachInner'
+		try translatedInner.insert(aliasName, value: translateMaxonType(project, data: data, t: aliasType)) otherwise ignore
+	end 'eachInner'
+	return IrInterface.create(iface.name, extendsNames: iface.extendsNames, usesParams: iface.usesParams, methods: destMethods, visibility: iface.visibility, line: iface.line, column: iface.column, filePath: iface.filePath, innerAliases: translatedInner)
 end 'translateIrInterface'
 
 // Translate a captured StructType: every field's MaxonType has its captured
@@ -1855,6 +1932,16 @@ function captureRegistries(project Project, data StdlibCacheData)
 		_ = data.interfaceRegistry.intern(project.interfaceRegistry.getName(i))
 	end 'eachIface'
 
+	// Cache v49: capture each function-type signature so `translateMaxonType`
+	// can resolve a captured `function(id)` arm by reading the params + return
+	// type and re-interning them in the destination project. Captured params
+	// keep the cache-build project's id space — they are translated lazily
+	// during `translateMaxonType` recursion before re-interning.
+	for i in 0 upto project.functionTypes.count() 'eachFt'
+		let (params, returnType) = project.functionTypes.get(i)
+		_ = data.functionTypes.append(params, returnType: returnType)
+	end 'eachFt'
+
 	for i in 0 upto project.genericInstances.count() 'eachGi'
 		let (baseId, args) = project.genericInstances.get(i)
 		_ = data.genericInstances.intern(baseId, args: args)
@@ -1899,6 +1986,19 @@ function captureRegistries(project Project, data StdlibCacheData)
 	for (label, bytes) in project.staticRdataValues 'eachRdata'
 		try data.staticRdataValues.insert(label, value: bytes) otherwise ignore
 	end 'eachRdata'
+
+	// Cache v50 (J.4c): snapshot stdlib-side extension metadata. The
+	// `UnresolvedExtension` value-shape interns no project-local ids — its
+	// fields are bare strings, the conformance/where-clause sub-arrays
+	// likewise carry bare names — so a direct push preserves identity
+	// across the cache boundary without a translation step.
+	for ext in project.unresolvedExtensions 'eachExt'
+		data.unresolvedExtensions.push(ext)
+	end 'eachExt'
+
+	for (methodKey, clauses) in project.extensionMethodWhereClauses 'eachExtWhere'
+		try data.extensionMethodWhereClauses.insert(methodKey, value: clauses) otherwise ignore
+	end 'eachExtWhere'
 end 'captureRegistries'
 
 export function restoreStdlibMetadata(project Project, data StdlibCacheData)
@@ -2159,6 +2259,18 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	for (label, bytes) in data.staticRdataValues 'eachRdata'
 		try project.staticRdataValues.insert(label, value: bytes) otherwise ignore
 	end 'eachRdata'
+
+	// Cache v50 (J.4c): replay stdlib-side extension metadata so the
+	// conditional-conformance check + E4006 diagnostic see the same
+	// `project.unresolvedExtensions` / `extensionMethodWhereClauses` a
+	// from-source build would have populated.
+	for ext in data.unresolvedExtensions 'eachExt'
+		project.unresolvedExtensions.push(ext)
+	end 'eachExt'
+
+	for (methodKey, clauses) in data.extensionMethodWhereClauses 'eachExtWhere'
+		try project.extensionMethodWhereClauses.insert(methodKey, value: clauses) otherwise ignore
+	end 'eachExtWhere'
 end 'restoreRegistries'
 
 // ============================================================
@@ -2449,6 +2561,15 @@ function writeInterfaceMap(project Project, buf ByteArray, m IrInterfaceMap) thr
 		writeDword(buf, value: iface.line)
 		writeDword(buf, value: iface.column)
 		try writeFilePath(buf, p: iface.filePath)
+		// Cache v48: persist the per-interface inner-typealias map so
+		// cache-hit method-body lowering can resolve names declared inside
+		// an `extension <ThisInterface>` block the same way a cache-miss
+		// parse would. Mirrors the struct innerAliases write loop above.
+		writeDword(buf, value: iface.innerAliases.count())
+		for (aliasName, aliasType) in iface.innerAliases 'eachInnerAlias'
+			try writeString(buf, s: aliasName)
+			try writeMaxonType(project, buf: buf, t: aliasType)
+		end 'eachInnerAlias'
 	end 'eachIface'
 end 'writeInterfaceMap'
 
@@ -2481,7 +2602,19 @@ function readInterfaceMap(project Project, buf ByteArray, offset ByteOffset) ret
 		pos = pos + 4
 		let (filePath, p7) = try readFilePath(buf, offset: pos)
 		pos = p7
-		let iface = IrInterface.create(ifaceName, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath)
+		// Cache v48: read the per-interface inner-typealias map. Same
+		// shape as the struct innerAliases reader.
+		let innerCount = readDword(buf, offset: pos)
+		pos = pos + 4
+		var innerAliases = ResolvedInnerAliasMap.create()
+		for _ in 0 upto innerCount 'eachInner'
+			let (aliasName, p8) = try readString(buf, offset: pos)
+			pos = p8
+			let (aliasType, p9) = try readMaxonType(project, buf: buf, offset: pos)
+			pos = p9
+			try innerAliases.insert(aliasName, value: aliasType) otherwise ignore
+		end 'eachInner'
+		let iface = IrInterface.create(ifaceName, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath, innerAliases: innerAliases)
 		try m.insert(key, value: iface) otherwise ignore
 	end 'eachIface'
 	return (m, pos)
@@ -2514,6 +2647,120 @@ function readConformanceRegistry(project Project, buf ByteArray, offset ByteOffs
 	end 'eachConf'
 	return (registry, pos)
 end 'readConformanceRegistry'
+
+// --- ConformanceArray (per-extension) ---
+//
+// Used by `UnresolvedExtension.addedConformances`. Distinct from
+// `ConformanceRegistry`: each entry is a parser-recorded `Conformance` with
+// `(interfaceName, withArgs StringArray, parenForm bool, line, column)`. The
+// withArgs are bare identifier names captured at parse time, NOT MaxonType
+// values — Phase 11.0 step 5+ resolves them later through the receiver's
+// `typeParameters` registry. Round-tripping as strings keeps the persisted
+// shape stable across MaxonType-id remapping.
+function writeConformanceArray(buf ByteArray, arr ConformanceArray) throws CacheCorruption
+	writeDword(buf, value: arr.count())
+	for c in arr 'eachConf'
+		try writeString(buf, s: c.interfaceName)
+		try writeStringArray(buf, arr: c.withArgs)
+		writeBoolByte(buf, b: c.parenForm)
+		writeDword(buf, value: c.line)
+		writeDword(buf, value: c.column)
+	end 'eachConf'
+end 'writeConformanceArray'
+
+function readConformanceArray(buf ByteArray, offset ByteOffset) returns (ConformanceArray, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = ConformanceArray.create()
+	for _ in 0 upto count 'eachConf'
+		let (interfaceName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (withArgs, p2) = try readStringArray(buf, offset: pos)
+		pos = p2
+		let (parenForm, p3) = readBoolByte(buf, offset: pos)
+		pos = p3
+		let line = readDword(buf, offset: pos)
+		pos = pos + 4
+		let column = readDword(buf, offset: pos)
+		pos = pos + 4
+		arr.push(Conformance.create(interfaceName, withArgs: withArgs, parenForm: parenForm, line: line, column: column))
+	end 'eachConf'
+	return (arr, pos)
+end 'readConformanceArray'
+
+// --- UnresolvedExtensionArray ---
+//
+// Cache v50 (J.4c): round-trips `project.unresolvedExtensions` so cache-hit
+// user builds see the stdlib's struct- and interface-extension metadata. Each
+// entry's fields are bare strings + plain enums — no MaxonType ids are
+// embedded, so the codec needs no captured-id translation.
+function writeUnresolvedExtensionArray(buf ByteArray, arr UnresolvedExtensionArray) throws CacheCorruption
+	writeDword(buf, value: arr.count())
+	for ext in arr 'eachExt'
+		try writeString(buf, s: ext.targetTypeName)
+		try writeStringArray(buf, arr: ext.targetTypeParams)
+		try writeConformanceArray(buf, arr: ext.addedConformances)
+		try writeWhereClauseArray(buf, arr: ext.whereClauses)
+		writeVisibility(buf, v: ext.visibility)
+		writeDword(buf, value: ext.line)
+		writeDword(buf, value: ext.column)
+		try writeFilePath(buf, p: ext.filePath)
+	end 'eachExt'
+end 'writeUnresolvedExtensionArray'
+
+function readUnresolvedExtensionArray(buf ByteArray, offset ByteOffset) returns (UnresolvedExtensionArray, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var arr = UnresolvedExtensionArray.create()
+	for _ in 0 upto count 'eachExt'
+		let (targetTypeName, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (targetTypeParams, p2) = try readStringArray(buf, offset: pos)
+		pos = p2
+		let (addedConformances, p3) = try readConformanceArray(buf, offset: pos)
+		pos = p3
+		let (whereClauses, p4) = try readWhereClauseArray(buf, offset: pos)
+		pos = p4
+		let (visibility, p5) = try readVisibility(buf, offset: pos)
+		pos = p5
+		let line = readDword(buf, offset: pos)
+		pos = pos + 4
+		let column = readDword(buf, offset: pos)
+		pos = pos + 4
+		let (filePath, p6) = try readFilePath(buf, offset: pos)
+		pos = p6
+		arr.push(UnresolvedExtension.create(targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: line, column: column, filePath: filePath))
+	end 'eachExt'
+	return (arr, pos)
+end 'readUnresolvedExtensionArray'
+
+// --- WhereClauseMapByName ---
+//
+// Cache v50 (J.4c): round-trips `project.extensionMethodWhereClauses`. Each
+// entry is `(methodKey String, clauses WhereClauseArray)`. The methodKey is
+// the fully-qualified callee name; the clauses are the enclosing extension's
+// where-clauses stamped on every method in the block at parse time.
+function writeWhereClauseMapByName(buf ByteArray, m WhereClauseMapByName) throws CacheCorruption
+	writeDword(buf, value: m.count())
+	for (methodKey, clauses) in m 'eachEntry'
+		try writeString(buf, s: methodKey)
+		try writeWhereClauseArray(buf, arr: clauses)
+	end 'eachEntry'
+end 'writeWhereClauseMapByName'
+
+function readWhereClauseMapByName(buf ByteArray, offset ByteOffset) returns (WhereClauseMapByName, ByteOffset) throws CacheCorruption
+	let count = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var m = WhereClauseMapByName.create()
+	for _ in 0 upto count 'eachEntry'
+		let (methodKey, p1) = try readString(buf, offset: pos)
+		pos = p1
+		let (clauses, p2) = try readWhereClauseArray(buf, offset: pos)
+		pos = p2
+		try m.insert(methodKey, value: clauses) otherwise ignore
+	end 'eachEntry'
+	return (m, pos)
+end 'readWhereClauseMapByName'
 
 // --- GenericTypealiasMap ---
 

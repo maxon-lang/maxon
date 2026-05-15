@@ -97,7 +97,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: closure-capture.map-with-capture -->
+<!-- test: closure-capture.map-with-capture -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

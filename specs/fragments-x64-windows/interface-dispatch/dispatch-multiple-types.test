@@ -44,139 +44,63 @@ ExitCode: 50
 ---
 // CompiledIR
 module {
-  func @Alpha.score(__self_ptr: i64) -> i64 {
+  func @Alpha.score(rcx: i64) -> i64 {
+  entry:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov r9d, 2
+    x64.imul r8, r9
+    x64.ret
+  }
+  func @Beta.score(rcx: i64) -> i64 {
+  entry:
+    x64.mov r8, [rcx+0] (8b)
+    x64.mov r9d, 3
+    x64.imul r8, r9
+    x64.ret
+  }
+  func @getScore(rcx: i64, rdx: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov rax, 2
-    x64.imul rdx, rax
-    x64.mov rax, rdx
+    x64.mov [rbp-16], rdx
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov r10, [r8+24] (8b)
+    x64.call r10
     x64.epilogue
     x64.ret
   }
-  func @Alpha.create(n: i64) -> i64 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @Beta.score(__self_ptr: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rdx, [rax+0]
-    x64.mov rax, 3
-    x64.imul rdx, rax
-    x64.mov rax, rdx
-    x64.epilogue
-    x64.ret
-  }
-  func @Beta.create(n: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-16], rcx
-    x64.mov rcx, 8
-    x64.xor edx, edx
-    x64.mov r8, 3
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rax+0], rcx
-    x64.mov rdx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rax, [rbp-8]
-    x64.epilogue
-    x64.ret
-  }
-  func @interface-dispatch.main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov rcx, 10
-    x64.call Alpha.create
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 10
-    x64.call Beta.create
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call interface-dispatch.getScore$Alpha
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.call interface-dispatch.getScore$Beta
-    x64.mov rdx, [rbp-24]
-    x64.add rdx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rdx, rsi
-    x64.jg interface-dispatch.main.__range_panic_0
-    x64.cmp rdx, rbx
-    x64.jl interface-dispatch.main.__range_panic_0
-    x64.jmp interface-dispatch.main.__range_ok_0
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov r8d, 10
+    x64.mov [r12+0], r8 (8b)
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r13, r8
+    x64.mov r8d, 10
+    x64.mov [r13+0], r8 (8b)
+    x64.lea rdx, [rip+__witness_Alpha_Scorer]
+    x64.mov rcx, r12
+    x64.call getScore
+    x64.mov r12, r8
+    x64.lea rdx, [rip+__witness_Beta_Scorer]
+    x64.mov rcx, r13
+    x64.call getScore
+    x64.mov r9d, 4294967295
+    x64.mov rsi, r12
+    x64.add rsi, r8
+    x64.cmp rsi, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-32], rdx
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-32]
+    x64.mov r8, rsi
     x64.epilogue
-    x64.ret
-  }
-  func @interface-dispatch.getScore$Alpha(s: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, [rbp-8]
-    x64.epilogue
-    x64.jmp Alpha.score
-  }
-  func @interface-dispatch.getScore$Beta(s: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, [rbp-8]
-    x64.epilogue
-    x64.jmp Beta.score
-  }
-  func @__destruct_Alpha(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Alpha.done
-  done:
-    x64.ret
-  }
-  func @__destruct_Beta(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Beta.done
-  done:
     x64.ret
   }
 }

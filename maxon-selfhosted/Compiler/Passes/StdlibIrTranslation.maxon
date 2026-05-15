@@ -1,0 +1,272 @@
+// Bundle of (Project, MaxonModule) used to stash the sandbox parse output.
+// Stored process-wide as a singleton-array element (`StdlibParseSnapshotArray`)
+// because top-level var initializers only accept constant constructors;
+// putting the snapshot inside an Array lets the array start empty and grow
+// to one entry on first parse.
+export type StdlibParseSnapshot
+	export var project Project
+	export var module MaxonModule
+
+	export static function create(project Project, module MaxonModule) returns StdlibParseSnapshot
+		return Self{project: project, module: module}
+	end 'create'
+end 'StdlibParseSnapshot'
+
+export typealias StdlibParseSnapshotArray = Array with StdlibParseSnapshot
+
+// Stage J.4e: cross-project IR translation for stdlibParsedModule.
+//
+// The stdlib MaxonModule used by `MonomorphizeExtensions` carries MaxonType
+// values whose embedded ids index into the project that originally parsed
+// stdlib. When the cloner consumes that module from a different project (a
+// fresh spec compile, a worker subprocess), the embedded ids are meaningless.
+//
+// `translateStdlibParsedModule` walks every IrFunction, IrBlock, MaxonOp and
+// re-binds every MaxonType / StringId / FunctionTypeId against the consuming
+// project's interners. The translation is name-based: each registry-id in the
+// sandbox project is resolved back to its logical key (name / param-name /
+// arg list / signature) and re-interned into the destination project.
+//
+// Output is a fresh MaxonModule whose blocks/ops/functions are deep-copied
+// with translated payloads. The original sandbox module is left untouched so
+// it can be re-translated against the next consuming project.
+
+// Translate a MaxonType from `sandbox` project's id-space into `user`
+// project's id-space. Names / param keys / interface keys / generic-instance
+// args / function-type signatures all round-trip through their string keys —
+// no shared registry assumption between the two projects.
+export function translateMaxonTypeAcrossProjects(sandbox Project, user Project, t MaxonType) returns MaxonType
+	return match t 'tr'
+		boolean gives MaxonType.boolean
+		integer gives MaxonType.integer
+		float gives MaxonType.float
+		string gives MaxonType.string
+		unresolved gives MaxonType.unresolved
+		named(id) gives MaxonType.named(user.typeNames.intern(sandbox.typeNames.get(id)))
+		typeParameter(id) gives translateTypeParameterAcross(sandbox, user: user, id: id)
+		interface (id) gives MaxonType.interface(user.interfaceRegistry.intern(sandbox.interfaceRegistry.getName(id)))
+		genericInstance(gid) gives translateGenericInstanceAcross(sandbox, user: user, gid: gid)
+		function(id) gives translateFunctionTypeAcross(sandbox, user: user, id: id)
+		constInt gives t
+	end 'tr'
+end 'translateMaxonTypeAcrossProjects'
+
+function translateTypeParameterAcross(sandbox Project, user Project, id TypeParamId) returns MaxonType
+	let declName = sandbox.typeParameters.getOwner(id)
+	let paramName = sandbox.typeParameters.getName(id)
+	return MaxonType.typeParameter(user.typeParameters.intern(declName, paramName: paramName))
+end 'translateTypeParameterAcross'
+
+function translateGenericInstanceAcross(sandbox Project, user Project, gid GenericInstanceId) returns MaxonType
+	let (baseId, args) = sandbox.genericInstances.get(gid)
+	let baseName = sandbox.typeNames.get(baseId)
+	let destBaseId = user.typeNames.intern(baseName)
+	var destArgs = MaxonTypeArray.create()
+	for a in args 'eachArg'
+		destArgs.push(translateMaxonTypeAcrossProjects(sandbox, user: user, t: a))
+	end 'eachArg'
+	return MaxonType.genericInstance(user.genericInstances.intern(destBaseId, args: destArgs))
+end 'translateGenericInstanceAcross'
+
+function translateFunctionTypeAcross(sandbox Project, user Project, id FunctionTypeId) returns MaxonType
+	let (params, ret) = sandbox.functionTypes.get(id)
+	var destParams = MaxonTypeArray.create()
+	for p in params 'eachParam'
+		destParams.push(translateMaxonTypeAcrossProjects(sandbox, user: user, t: p))
+	end 'eachParam'
+	let destReturn = translateMaxonReturnTypeAcross(sandbox, user: user, rt: ret)
+	return MaxonType.function(internFunctionType(user, paramTypes: destParams, returnType: destReturn))
+end 'translateFunctionTypeAcross'
+
+function translateMaxonReturnTypeAcross(sandbox Project, user Project, rt MaxonReturnType) returns MaxonReturnType
+	return match rt 'tr'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(translateMaxonTypeAcrossProjects(sandbox, user: user, t: inner))
+	end 'tr'
+end 'translateMaxonReturnTypeAcross'
+
+function translateMaxonTypeArrayAcross(sandbox Project, user Project, src MaxonTypeArray) returns MaxonTypeArray
+	var dst = MaxonTypeArray.create()
+	for t in src 'each'
+		dst.push(translateMaxonTypeAcrossProjects(sandbox, user: user, t: t))
+	end 'each'
+	return dst
+end 'translateMaxonTypeArrayAcross'
+
+// Translate a StringId by re-interning the underlying bytes. The sandbox
+// parse interned strings into its own `strings` table; the consumer pipeline
+// reads StringIds via `user.strings.get(...)`, so they must reference the
+// user project's id-space.
+function translateStringIdAcross(sandbox Project, user Project, id StringId) returns StringId
+	return user.strings.intern(sandbox.strings.get(id))
+end 'translateStringIdAcross'
+
+function translateStringInterpPartAcross(sandbox Project, user Project, part StringInterpPart) returns StringInterpPart
+	return match part 'tr'
+		literal(stringId) gives StringInterpPart.literal(translateStringIdAcross(sandbox, user: user, id: stringId))
+		expr(valueName, kind, formatSpecId) gives StringInterpPart.expr(valueName, kind: kind, formatSpecId: translateStringIdAcross(sandbox, user: user, id: formatSpecId))
+	end 'tr'
+end 'translateStringInterpPartAcross'
+
+function translateStringInterpPartsAcross(sandbox Project, user Project, parts StringInterpPartArray) returns StringInterpPartArray
+	var dst = StringInterpPartArray.create()
+	for p in parts 'each'
+		dst.push(translateStringInterpPartAcross(sandbox, user: user, part: p))
+	end 'each'
+	return dst
+end 'translateStringInterpPartsAcross'
+
+// Translate a single MaxonOp, re-binding every embedded MaxonType /
+// StringId / FunctionTypeId / StringInterpPart against the user project's
+// interners. Mirrors `substituteOp` in MonomorphizeExtensions: one explicit
+// arm per variant so a future MaxonOp addition surfaces an unhandled-arm
+// compiler error rather than silently passing through stale ids.
+function translateOpAcross(sandbox Project, user Project, op MaxonOp) returns MaxonOp
+	return match op 'k'
+		literal(result, value, valueType, range) gives MaxonOp.literal(result, value: value, valueType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: valueType), range: range)
+		stringConst(result, stringId, range) gives MaxonOp.stringConst(result, stringId: translateStringIdAcross(sandbox, user: user, id: stringId), range: range)
+		charLiteral(result, stringId, range) gives MaxonOp.charLiteral(result, stringId: translateStringIdAcross(sandbox, user: user, id: stringId), range: range)
+		byteStringLiteral(result, stringId, range) gives MaxonOp.byteStringLiteral(result, stringId: translateStringIdAcross(sandbox, user: user, id: stringId), range: range)
+		stringInterp(result, parts, range) gives MaxonOp.stringInterp(result, parts: translateStringInterpPartsAcross(sandbox, user: user, parts: parts), range: range)
+		varDecl(slotId, value, slotType, range) gives MaxonOp.varDecl(slotId, value: value, slotType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: slotType), range: range)
+		varLoad(result, slotId, slotType, range) gives MaxonOp.varLoad(result, slotId: slotId, slotType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: slotType), range: range)
+		varStore gives op
+		globalLoad(result, name, slotType, range) gives MaxonOp.globalLoad(result, name: name, slotType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: slotType), range: range)
+		globalStore(name, value, slotType, range) gives MaxonOp.globalStore(name, value: value, slotType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: slotType), range: range)
+		binop(result, left, right, opKind, operandType, range) gives MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: operandType), range: range)
+		unop(result, operand, opKind, operandType, range) gives MaxonOp.unop(result, operand: operand, opKind: opKind, operandType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: operandType), range: range)
+		convert(result, operand, fromType, toType, implicit, range) gives MaxonOp.convert(result, operand: operand, fromType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: fromType), toType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: toType), implicit: implicit, range: range)
+		castCheck gives op
+		cmp(result, left, right, predicate, leftType, rightType, operandType, range) gives MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: leftType), rightType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: rightType), operandType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: operandType), range: range)
+		refEq gives op
+		condBr gives op
+		br gives op
+		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) gives MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: argTypes), argRanges: argRanges, range: range)
+		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) gives MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: argTypes), argRanges: argRanges, range: range)
+		ret gives op
+		panic(stringId, range) gives MaxonOp.panic(translateStringIdAcross(sandbox, user: user, id: stringId), range: range)
+		structAlloc gives op
+		fieldLoad gives op
+		fieldStore gives op
+		selfFieldLoad gives op
+		selfFieldStore gives op
+		unresolvedRead gives op
+		unresolvedAssign gives op
+		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) gives MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: scrutineeType), rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)
+		enumConstruct gives op
+		enumTag gives op
+		enumPayloadRead(result, enumValName, caseName, fieldIndex, fieldType, range) gives MaxonOp.enumPayloadRead(result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: fieldType), range: range)
+		enumPayloadStore(enumValName, caseName, fieldIndex, fieldType, newValueName, range) gives MaxonOp.enumPayloadStore(enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: fieldType), newValueName: newValueName, range: range)
+		rangeMatchArm gives op
+		error gives op
+		throw gives op
+		tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: argTypes), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
+		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: argTypes), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
+		rethrow gives op
+		functionRef(result, funcName, fnTypeId, range) gives MaxonOp.functionRef(result, funcName: funcName, fnTypeId: translateFunctionTypeIdAcross(sandbox, user: user, id: fnTypeId), range: range)
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: translateFunctionTypeIdAcross(sandbox, user: user, id: fnTypeId), capturedNames: capturedNames, capturedTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: capturedTypes), range: range)
+		closureEnvLoad(result, captureIndex, captureName, captureType, range) gives MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: captureType), range: range)
+		indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) gives MaxonOp.indirectCall(result, callee: callee, fnTypeId: translateFunctionTypeIdAcross(sandbox, user: user, id: fnTypeId), args: args, argLabels: argLabels, argTypes: translateMaxonTypeArrayAcross(sandbox, user: user, src: argTypes), argRanges: argRanges, range: range)
+		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: iterSlot, iterType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: iterType), sourceValue: sourceValue, sourceType: translateMaxonTypeAcrossProjects(sandbox, user: user, t: sourceType), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)
+	end 'k'
+end 'translateOpAcross'
+
+// Translate a bare FunctionTypeId between projects. The MaxonOp arms that
+// carry an unwrapped FunctionTypeId (functionRef, closureCreate,
+// indirectCall) need this helper rather than the MaxonType arm.
+function translateFunctionTypeIdAcross(sandbox Project, user Project, id FunctionTypeId) returns FunctionTypeId
+	let (params, ret) = sandbox.functionTypes.get(id)
+	var destParams = MaxonTypeArray.create()
+	for p in params 'eachParam'
+		destParams.push(translateMaxonTypeAcrossProjects(sandbox, user: user, t: p))
+	end 'eachParam'
+	let destReturn = translateMaxonReturnTypeAcross(sandbox, user: user, rt: ret)
+	return internFunctionType(user, paramTypes: destParams, returnType: destReturn)
+end 'translateFunctionTypeIdAcross'
+
+// Translate a VarInfo across projects. Carries one MaxonType (`varType`)
+// plus a fistful of scalar / String fields that pass through unchanged.
+function translateVarInfoAcross(sandbox Project, user Project, info VarInfo) returns VarInfo
+	let destType = translateMaxonTypeAcrossProjects(sandbox, user: user, t: info.varType)
+	var out = VarInfo.create(info.name, varType: destType, mutable: info.mutable, slot: info.slot)
+	out.isSelfField = info.isSelfField
+	out.fieldOffset = info.fieldOffset
+	out.isPayloadBinding = info.isPayloadBinding
+	out.payloadScrutineeName = info.payloadScrutineeName
+	out.payloadFieldIndex = info.payloadFieldIndex
+	out.payloadCaseName = info.payloadCaseName
+	return out
+end 'translateVarInfoAcross'
+
+// Translate a Scope across projects. Each VarInfo carries a MaxonType; the
+// frame stack is empty at end-of-parse so we can skip it. `nextSlot` and
+// raw slot ids pass through unchanged — they index a per-function slot
+// space, not a project registry.
+function translateScopeAcross(sandbox Project, user Project, srcScope Scope) returns Scope
+	var dstScope = Scope.create()
+	for (_, info) in srcScope.allVars() 'eachVar'
+		dstScope.installVerbatim(translateVarInfoAcross(sandbox, user: user, info: info))
+	end 'eachVar'
+	dstScope.setNextSlot(srcScope.nextSlot)
+	return dstScope
+end 'translateScopeAcross'
+
+// Translate one IrFunction across projects. Maxon-phase fields
+// (`maxonReturnType`, `maxonParamTypes`, `scope.vars[*].varType`,
+// `slotMaxonTypes`) carry MaxonTypes that need re-interning. Std-phase
+// fields are untouched — the sandbox parse never runs lowerMaxonToStd, so
+// they're at their defaults.
+function translateFunctionAcross(sandbox Project, user Project, src IrFunction) returns IrFunction
+	let destReturn = translateMaxonReturnTypeAcross(sandbox, user: user, rt: src.maxonReturnType)
+	let destParamTypes = translateMaxonTypeArrayAcross(sandbox, user: user, src: src.maxonParamTypes)
+	var dst = IrFunction.create(src.name, maxonReturnType: destReturn, paramCount: src.paramCount, maxonParamTypes: destParamTypes, returnLine: src.returnLine, throwsTypeName: src.throwsTypeName)
+	dst.namespace = src.namespace
+	dst.visibility = src.visibility
+	dst.sourceFilePath = src.sourceFilePath
+	dst.nameLine = src.nameLine
+	dst.nameColumn = src.nameColumn
+	dst.nextBlockId = src.nextBlockId
+	dst.scope = translateScopeAcross(sandbox, user: user, srcScope: src.scope)
+	dst.slotMaxonTypes = translateMaxonTypeArrayAcross(sandbox, user: user, src: src.slotMaxonTypes)
+	// blockRefs are filled by `translateStdlibParsedModule` once the
+	// destination module's block offsets are known.
+	return dst
+end 'translateFunctionAcross'
+
+// Translate the whole stdlib-parsed MaxonModule across projects. Walks every
+// function, its blockRefs, its ops; produces a fresh MaxonModule whose
+// blocks/ops indices match the new flattening order (which is identical to
+// the source's because the walk preserves order). Returned module is
+// self-contained and safe to consume from the user project.
+export function translateStdlibParsedModule(sandbox Project, user Project, src MaxonModule) returns MaxonModule
+	var dst = MaxonModule.create()
+	// First pass: append translated ops in source-flat order so opRefs land
+	// at the same flat indices in `dst.ops` as they have in `src.ops`. The
+	// source ops array is the underlying flat store; each block's opRefs
+	// index into it.
+	for op in src.ops 'eachOp'
+		dst.ops.push(translateOpAcross(sandbox, user: user, op: op))
+	end 'eachOp'
+	// Second pass: clone blocks. Each block's opRefs and terminator stay
+	// numerically the same because we preserved op order above.
+	for block in src.blocks 'eachBlock'
+		var newBlock = IrBlock.create(block.id, label: block.label)
+		for refIdx in block.opRefs 'eachRef'
+			newBlock.opRefs.append(refIdx)
+		end 'eachRef'
+		newBlock.terminator = block.terminator
+		dst.blocks.push(newBlock)
+		dst.blockSourceInfo.push(BlockSourceInfo.empty())
+	end 'eachBlock'
+	// Third pass: clone functions, copying blockRefs verbatim. Function
+	// indices remain stable across translation so callers that pre-cached
+	// `findFunctionIndexByName` results stay valid.
+	for func in src.functions 'eachFunc'
+		var dstFunc = translateFunctionAcross(sandbox, user: user, src: func)
+		for blockRef in func.blockRefs 'eachRef'
+			dstFunc.blockRefs.append(blockRef)
+		end 'eachRef'
+		dst.functions.push(dstFunc)
+	end 'eachFunc'
+	return dst
+end 'translateStdlibParsedModule'

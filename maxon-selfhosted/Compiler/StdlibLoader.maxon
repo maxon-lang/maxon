@@ -1,5 +1,10 @@
 var cachedStdlibModule = MaxonModule.create()
-var stdlibParsedModule = MaxonModule.create()
+// J.4e: stdlibParsedModuleArr holds the parsed stdlib MaxonModule and its
+// owning sandbox Project as a singleton array. Empty when no parse has
+// happened in this process; the array form sidesteps the "top-level var
+// initializer must be a compile-time constant" restriction that prevents
+// stashing a Project / MaxonModule value directly.
+var stdlibParsedModuleArr = StdlibParseSnapshotArray.create()
 var stdlibLoaded = false
 var stdlibTypealiases = TypealiasMap.create()
 // Cache v17 in-process companion to `stdlibTypealiases`. The disk cache now
@@ -30,6 +35,75 @@ var cachedStdlibStdModule = StdModule.create()
 export function getCachedStdlibStdModule() returns StdModule
 	return cachedStdlibStdModule
 end 'getCachedStdlibStdModule'
+
+// Process-wide accessor for the parsed stdlib MaxonModule (the Maxon-IR
+// shape of every stdlib function body whitelisted by `stdlibWhitelist`).
+// Consumers — today only `MonomorphizeExtensions` falling back when a
+// stdlib-declared interface-extension callee isn't in the user module —
+// read this to discover Maxon-IR bodies that the codegen cache doesn't
+// persist.
+//
+// J.4e: the underlying sandbox parse uses its own dedicated `Project` so
+// the parse never collides with user-code project state (E2001 duplicate
+// names). MaxonType / StringId / FunctionTypeId payloads in the parsed
+// IR reference the sandbox project's registries; we translate them into
+// the caller's project on every call via `translateStdlibParsedModule`.
+// The first call in a process triggers the lazy parse; subsequent calls
+// re-use the cached sandbox snapshot.
+export function getStdlibParsedModule(userProject Project) returns MaxonModule
+	if stdlibParsedModuleArr.count() == 0 'needsParse'
+		ensureStdlibSandboxParsed(target: userProject.target)
+	end 'needsParse'
+	let snapshot = try stdlibParsedModuleArr.get(0) otherwise panic("getStdlibParsedModule: sandbox snapshot not present after ensure")
+	return translateStdlibParsedModule(snapshot.project, user: userProject, src: snapshot.module)
+end 'getStdlibParsedModule'
+
+// Build the sandbox snapshot if it hasn't been populated yet. The sandbox
+// project is a dedicated empty Project with the same target as the user's
+// pipeline; the parse runs against it so user-code projects' registries
+// stay pristine. The bootstrap source + every whitelisted stdlib file are
+// parsed into a single fresh MaxonModule, then stashed alongside the
+// sandbox project for the cross-project translator to consume on demand.
+function ensureStdlibSandboxParsed(target Target)
+	if stdlibParsedModuleArr.count() > 0 'alreadyDone'
+		return
+	end 'alreadyDone'
+	let stdlibPath = findStdlibPath()
+	if stdlibPath.isEmpty() 'noStdlib'
+		return
+	end 'noStdlib'
+	let projectRoot = try stdlibPath.parent() otherwise FilePath from ""
+	if projectRoot.isEmpty() 'noRoot'
+		return
+	end 'noRoot'
+	var sandbox = createProject(projectRoot, target: target)
+	registerMmIntrinsicSignatures(sandbox)
+	registerManagedMemoryType(sandbox)
+	registerBuiltinsIntrinsicSignatures(sandbox)
+	registerInternalsIntrinsicSignatures(sandbox)
+	var module = MaxonModule.create()
+	parseStdlibSource(sandbox, allModule: module, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("ensureStdlibSandboxParsed: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(target))
+	for fp in collectStdlibFiles() 'eachFile'
+		if File.exists(fp) 'exists'
+			let content = try File.readText(fp) otherwise 'readErr'
+				continue
+			end 'readErr'
+			parseStdlibSource(sandbox, allModule: module, filePath: fp, content: content)
+		end 'exists'
+	end 'eachFile'
+	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(sandbox, module: module))
+end 'ensureStdlibSandboxParsed'
+
+// Stash the sandbox snapshot from an already-parsed MaxonModule + Project
+// pair. Used by the cache-miss / cache-hit warmup paths so the project
+// that's about to be discarded leaves behind a live reference to its
+// stdlib IR + registries.
+function recordStdlibSandboxSnapshot(project Project, module MaxonModule)
+	if stdlibParsedModuleArr.count() > 0 'alreadyDone'
+		return
+	end 'alreadyDone'
+	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(project, module: module))
+end 'recordStdlibSandboxSnapshot'
 
 // Pre-compiled stdlib cache (machine code level, per-target)
 var cachedStdlibCacheData = StdlibCacheData.create()
@@ -82,6 +156,8 @@ end 'setCachedBuiltinDictionaryLiteralTypeName'
 // `stdlib/`).
 let stdlibWhitelist = [
 	"stdlib/Internals.maxon",
+	"stdlib/Interfaces.maxon",
+	"stdlib/helpers/itertools/withIterator.maxon",
 	"stdlib/Math.maxon",
 	"stdlib/Range.maxon",
 	"stdlib/Array.maxon",
@@ -135,18 +211,30 @@ function exitCodeRangeForOs(os Os) returns String
 end 'exitCodeRangeForOs'
 
 function stdlibBootstrapSourceForTarget(target Target) returns String
+	// Declarations kept here are those that the self-hosted compiler still
+	// can't parse out of the real stdlib sources, plus the target-specific
+	// `ExitCode` typealias which the real `Process.maxon` gates behind
+	// `#if os(...)` (a directive form the parser doesn't yet understand).
+	//
 	// `Parsable`, `__BuiltinParseError`, `ParsedInt`, `ParsedFloat`, and the four
 	// `__*_fromString` helpers mirror the declarations in
 	// `stdlib/Builtins.maxon`. We can't whitelist `Builtins.maxon` directly
 	// yet — the file declares `InitableFromArrayLiteral.init(value
 	// ElementArray)` whose generic-shape interaction with the parser's
 	// `BuiltinArrayLiteral` discovery confuses `Array.init` paramTypes during
-	// stdlib cache lowering (see Stage A3 of the parser-fix cascade). Once
-	// the parser handles those interfaces, switch to whitelisting the file
-	// and drop the inline copies here. Keep the `throws Error` clause and
-	// `int(i64.min to i64.max)` / `float(f64.min to f64.max)` ranges in sync
-	// with the real `Builtins.maxon`.
-	return "export typealias ExitCode = int({exitCodeRangeForOs(target.os)})\nexport typealias HashValue = int(0 to u32.max)\nexport typealias IterStep = int(i64.min to i64.max)\nexport interface Error\nend 'Error'\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface InitableFromArrayLiteral uses Element\nend 'InitableFromArrayLiteral'\nexport interface InitableFromStringLiteral\nend 'InitableFromStringLiteral'\nexport interface InitableFromCharLiteral\nend 'InitableFromCharLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Parsable\n\tstatic function fromString(input String) returns Self throws Error\nend 'Parsable'\nexport enum __BuiltinParseError implements Error\n\tinvalidFormat\nend '__BuiltinParseError'\nexport typealias ParsedInt = int(i64.min to i64.max)\nexport typealias ParsedFloat = float(f64.min to f64.max)\nexport function __int_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tvar result = 0\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '-' 'minus'\n\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'minus_after_digits'\n\t\t\tnegative = true\n\t\tend 'minus' else 'not_minus'\n\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\thasDigits = true\n\t\t\t\t\tresult = result * 10 + (cp - '0')\n\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'not_digit'\n\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'below_zero'\n\t\tend 'not_minus'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tif negative 'negate'\n\t\tresult = 0 - result\n\tend 'negate'\n\treturn result\nend '__int_fromString'\nexport function __float_fromString(input String) returns ParsedFloat throws __BuiltinParseError\n\tvar intPart = 0\n\tvar fracPart = 0.0\n\tvar fracDiv = 1.0\n\tvar pastDot = false\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '.' 'dot'\n\t\t\tif pastDot 'double_dot'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'double_dot'\n\t\t\tpastDot = true\n\t\tend 'dot' else 'not_dot'\n\t\t\tif cp == '-' 'minus'\n\t\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_digits'\n\t\t\t\tif pastDot 'minus_after_dot'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_dot'\n\t\t\t\tnegative = true\n\t\t\tend 'minus' else 'not_minus'\n\t\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\t\thasDigits = true\n\t\t\t\t\t\tlet digit = cp - '0'\n\t\t\t\t\t\tif pastDot 'after_dot'\n\t\t\t\t\t\t\tfracDiv = fracDiv * 10.0\n\t\t\t\t\t\t\tfracPart = fracPart + (digit as float) / fracDiv\n\t\t\t\t\t\tend 'after_dot' else 'before_dot'\n\t\t\t\t\t\t\tintPart = intPart * 10 + digit\n\t\t\t\t\t\tend 'before_dot'\n\t\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\t\tend 'not_digit'\n\t\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'below_zero'\n\t\t\tend 'not_minus'\n\t\tend 'not_dot'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tvar result = (intPart as float) + fracPart\n\tif negative 'negate'\n\t\tresult = 0.0 - result\n\tend 'negate'\n\treturn result\nend '__float_fromString'\nexport function __bool_fromString(input String) returns bool throws __BuiltinParseError\n\tif input == \"true\" 'is_true'\n\t\treturn true\n\tend 'is_true'\n\tif input == \"false\" 'is_false'\n\t\treturn false\n\tend 'is_false'\n\tthrow __BuiltinParseError.invalidFormat\nend '__bool_fromString'\nexport function __byte_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tlet result = try __int_fromString(input) otherwise 'err'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'err'\n\tif result < 0 'too_low'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_low'\n\tif result > 255 'too_high'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_high'\n\treturn result\nend '__byte_fromString'\nexport interface Iterator uses Element\n\tfunction current() returns Element\n\tfunction advance() throws IterationError\nend 'Iterator'\nexport interface BidirectionalIterator extends Iterator\n\tfunction retreat() throws IterationError\nend 'BidirectionalIterator'\nexport interface Iterable uses Element, Iter\n\tfunction createIterator() returns Iter throws IterationError\nend 'Iterable'\nexport interface Hashable\n\tfunction hash() returns HashValue\nend 'Hashable'\nexport interface Equatable\n\tfunction equals(other Self) returns bool\nend 'Equatable'\nexport interface Cloneable\n\tfunction clone() returns Self\nend 'Cloneable'\nexport interface Stringable\n\tfunction toString() returns String\nend 'Stringable'\nexport interface FormattedStringable\n\tfunction toString(format String) returns String\nend 'FormattedStringable'\nexport enum Ordering\n\tlessThan\n\tequalTo\n\tgreaterThan\nend 'Ordering'\nexport interface Comparable\n\tfunction compare(other Self) returns Ordering\nend 'Comparable'\nexport enum IterationError implements Error\n\texhausted\n\tatStart\nend 'IterationError'\nexport type __Tuple2 uses _T0, _T1\n\texport var _0 _T0\n\texport var _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\texport var _0 _T0\n\texport var _1 _T1\n\texport var _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\nexport type FilePath implements InitableFromStringLiteral, Stringable\n\texport let path String\n\texport static function init(value String) returns FilePath\n\t\treturn FilePath\{path: value\}\n\tend 'init'\n\texport function toString() returns String\n\t\treturn path\n\tend 'toString'\nend 'FilePath'\nexport type Process\n\texport static function executablePath() returns FilePath\n\t\tlet managed = __Builtins.executablePath()\n\t\treturn FilePath\{path: String.init(managed)\}\n\tend 'executablePath'\nend 'Process'\n"
+	// stdlib cache lowering. Once the parser handles those interfaces, switch
+	// to whitelisting the file and drop the inline copies here. Keep the
+	// `throws Error` clause and `int(i64.min to i64.max)` /
+	// `float(f64.min to f64.max)` ranges in sync with `Builtins.maxon`.
+	//
+	// The cross-cutting interface family (`Error`, `Iterator`,
+	// `BidirectionalIterator`, `Iterable`, `Hashable`, `Equatable`,
+	// `Cloneable`, `Stringable`, `FormattedStringable`, `Comparable`) plus
+	// `Ordering`, `IterationError`, `HashValue`, and `IterStep` are now
+	// provided by the whitelisted `stdlib/Interfaces.maxon` and must NOT be
+	// synthesized here — duplicating them would trigger E2001 duplicate-name
+	// errors at parse time.
+	return "export typealias ExitCode = int({exitCodeRangeForOs(target.os)})\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface InitableFromArrayLiteral uses Element\nend 'InitableFromArrayLiteral'\nexport interface InitableFromStringLiteral\nend 'InitableFromStringLiteral'\nexport interface InitableFromCharLiteral\nend 'InitableFromCharLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Parsable\n\tstatic function fromString(input String) returns Self throws Error\nend 'Parsable'\nexport enum __BuiltinParseError implements Error\n\tinvalidFormat\nend '__BuiltinParseError'\nexport typealias ParsedInt = int(i64.min to i64.max)\nexport typealias ParsedFloat = float(f64.min to f64.max)\nexport function __int_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tvar result = 0\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '-' 'minus'\n\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'minus_after_digits'\n\t\t\tnegative = true\n\t\tend 'minus' else 'not_minus'\n\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\thasDigits = true\n\t\t\t\t\tresult = result * 10 + (cp - '0')\n\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'not_digit'\n\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'below_zero'\n\t\tend 'not_minus'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tif negative 'negate'\n\t\tresult = 0 - result\n\tend 'negate'\n\treturn result\nend '__int_fromString'\nexport function __float_fromString(input String) returns ParsedFloat throws __BuiltinParseError\n\tvar intPart = 0\n\tvar fracPart = 0.0\n\tvar fracDiv = 1.0\n\tvar pastDot = false\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '.' 'dot'\n\t\t\tif pastDot 'double_dot'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'double_dot'\n\t\t\tpastDot = true\n\t\tend 'dot' else 'not_dot'\n\t\t\tif cp == '-' 'minus'\n\t\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_digits'\n\t\t\t\tif pastDot 'minus_after_dot'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_dot'\n\t\t\t\tnegative = true\n\t\t\tend 'minus' else 'not_minus'\n\t\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\t\thasDigits = true\n\t\t\t\t\t\tlet digit = cp - '0'\n\t\t\t\t\t\tif pastDot 'after_dot'\n\t\t\t\t\t\t\tfracDiv = fracDiv * 10.0\n\t\t\t\t\t\t\tfracPart = fracPart + (digit as float) / fracDiv\n\t\t\t\t\t\tend 'after_dot' else 'before_dot'\n\t\t\t\t\t\t\tintPart = intPart * 10 + digit\n\t\t\t\t\t\tend 'before_dot'\n\t\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\t\tend 'not_digit'\n\t\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'below_zero'\n\t\t\tend 'not_minus'\n\t\tend 'not_dot'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tvar result = (intPart as float) + fracPart\n\tif negative 'negate'\n\t\tresult = 0.0 - result\n\tend 'negate'\n\treturn result\nend '__float_fromString'\nexport function __bool_fromString(input String) returns bool throws __BuiltinParseError\n\tif input == \"true\" 'is_true'\n\t\treturn true\n\tend 'is_true'\n\tif input == \"false\" 'is_false'\n\t\treturn false\n\tend 'is_false'\n\tthrow __BuiltinParseError.invalidFormat\nend '__bool_fromString'\nexport function __byte_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tlet result = try __int_fromString(input) otherwise 'err'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'err'\n\tif result < 0 'too_low'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_low'\n\tif result > 255 'too_high'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_high'\n\treturn result\nend '__byte_fromString'\nexport type __Tuple2 uses _T0, _T1\n\texport var _0 _T0\n\texport var _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\texport var _0 _T0\n\texport var _1 _T1\n\texport var _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\nexport type FilePath implements InitableFromStringLiteral, Stringable\n\texport let path String\n\texport static function init(value String) returns FilePath\n\t\treturn FilePath\{path: value\}\n\tend 'init'\n\texport function toString() returns String\n\t\treturn path\n\tend 'toString'\nend 'FilePath'\nexport type Process\n\texport static function executablePath() returns FilePath\n\t\tlet managed = __Builtins.executablePath()\n\t\treturn FilePath\{path: String.init(managed)\}\n\tend 'executablePath'\nend 'Process'\n"
 end 'stdlibBootstrapSourceForTarget'
 
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"
@@ -357,7 +445,11 @@ export function getStdlibModule(project Project) returns MaxonModule
 	end 'eachFile'
 
 	cachedStdlibModule = allModule
-	stdlibParsedModule = allModule
+	// J.4e: stash the just-parsed module + its owning project for the
+	// cross-project translator. The warmup project is about to be discarded
+	// (warmStdlibCache returns) but the snapshot keeps it alive so its
+	// registries remain queryable when later spec compiles ask for stdlib IR.
+	recordStdlibSandboxSnapshot(project, module: allModule)
 
 	// Snapshot stdlib typealiases into separate maps
 	for (name, baseType) in project.typealiases 'cacheAliases'
@@ -619,23 +711,24 @@ function loadCacheForTarget(project Project)
 		return
 	end 'cacheHit'
 
-	// Cache miss for this target — need the parsed module to compile
-	if stdlibParsedModule.functions.count() == 0 'needsParsing'
-		// First load was from cache, so we never parsed. Parse now.
-		let stdlibFiles = collectStdlibFiles()
-		var allModule = MaxonModule.create()
-		parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
-		for fp in stdlibFiles 'iter'
-			if File.exists(fp) 'exists'
-				let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")
-				parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
-			end 'exists'
-		end 'iter'
-		stdlibParsedModule = allModule
-	end 'needsParsing'
+	// Cache miss for this target — parse fresh into the destination project
+	// so its registries / interners hold the same entries a from-source
+	// build would. `loadCacheForTarget` runs after the in-process fast path
+	// already restored stdlib metadata for *another* target, so we can't
+	// re-use the cross-project sandbox snapshot here without conflating its
+	// id-space with `project`'s.
+	let stdlibFiles = collectStdlibFiles()
+	var allModule = MaxonModule.create()
+	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
+	for fp in stdlibFiles 'iter'
+		if File.exists(fp) 'exists'
+			let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")
+			parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
+		end 'exists'
+	end 'iter'
 
 	logInfo(LogCategory.compiler, message: () gives "Stdlib cache miss for {targetToString(project.target)}: building")
-	buildAndWriteStdlibCache(project, allModule: stdlibParsedModule, cachePath: cachePath, contentChecksum: contentChecksum)
+	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
 end 'loadCacheForTarget'
 
 export function getStdlibCacheData() returns StdlibCacheData

@@ -1,0 +1,61 @@
+// Test: extension-with-params
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Scalable
+	function base() returns Integer
+end 'Scalable'
+
+extension Scalable
+	function scale(factor Integer) returns Integer
+		return self.base() * factor
+	end 'scale'
+end 'Scalable'
+
+type Amount implements Scalable
+	let amount Integer
+
+	function base() returns Integer
+		return amount
+	end 'base'
+
+	static function create(amount Integer) returns Self
+		return Self{amount: amount}
+	end 'create'
+end 'Amount'
+
+function main() returns ExitCode
+	let a = Amount.create(amount: 7)
+	return a.scale(6)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Amount.base(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %5 = mir.mov_imm 8 : i64
+    %6 = mir.call @mrt_alloc(%5)
+    mir.store %0, %6, 0 width: qword
+    %3 = mir.mov_imm 6 : i64
+    %9 = mir.load %6, 0 width: qword
+    %8 = mir.mul.i64 %9, %3
+    %10 = mir.mov_imm 125 : i64
+    %11 = mir.cmp ugt, %8, %10
+    mir.cond_br %11 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_0
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

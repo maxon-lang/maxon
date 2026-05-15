@@ -1,0 +1,570 @@
+// J.4b: per-receiver monomorphization of user-declared interface-extension
+// methods. When a call site like `intList.has(20)` resolves to
+// `HasItems.has` (an interface-extension method) and the receiver is a
+// concrete struct/named type, we synthesize a dedicated
+// `{ReceiverType}.{methodName}` function by cloning the extension's body
+// with the interface's `usesParam` typeParameters substituted to the
+// receiver's `implements <Iface> with [args]` arguments and
+// `interface(<Iface>)`-typed values rewritten to `named(<ReceiverType>)`.
+//
+// The cloned function is registered alongside the original in
+// `project.funcSignatures` / `funcReturnTypes` / `funcVisibilities` /
+// `funcThrowsTypes`, its body is appended to the MaxonModule, and the
+// triggering call site's `resolvedCallees` entry is rewritten to the new
+// qualified name so lowering takes the direct-call path instead of
+// fat-pointer dispatch.
+//
+// Why this lives in a dedicated pass and not as a Maxon-IR-level inlining:
+// the extension body references the interface's typeParameters (`Element`)
+// and may call other interface methods (`current()`, `advance()`) that
+// re-resolve through the concrete receiver's conformance. Monomorphization
+// makes the body's iterator-protocol calls dispatch directly via
+// `{ReceiverType}.current` / `{ReceiverType}.advance` (the conformance's
+// declared methods), avoiding the fat-pointer indirection.
+
+// One-stop result of monomorphizing a single (receiverType, ifaceCallee)
+// pair. The `qualifiedName` is the registered key for the new function;
+// callers re-point `resolvedCallees[opIdx]` at it.
+export type MonomorphResult
+	export var qualifiedName String
+
+	export static function create(qualifiedName String) returns MonomorphResult
+		return Self{qualifiedName: qualifiedName}
+	end 'create'
+end 'MonomorphResult'
+
+export enum MonomorphError implements Error
+	notInterfaceCallee
+	noSourceFunction
+	noConformance
+	receiverNotNamed
+end 'MonomorphError'
+
+// Per-project monomorphization cache. Keyed by `{receiverType}::{ifaceCallee}`
+// so the second call site that asks for the same pair short-circuits to the
+// already-registered name. Lives on Project alongside other compile-state
+// sidecars; see `Project.maxon`.
+export type MonomorphCache
+	export var keys StringArray
+	export var values StringArray
+
+	export static function create() returns MonomorphCache
+		return Self{keys: StringArray.create(), values: StringArray.create()}
+	end 'create'
+
+	export function contains(key String) returns bool
+		for i in 0 upto keys.count() 'scan'
+			let k = try keys.get(i) otherwise panic("MonomorphCache.contains: keys.get OOB at {i}")
+			if k == key 'hit'
+				return true
+			end 'hit'
+		end 'scan'
+		return false
+	end 'contains'
+
+	export function get(key String) returns String
+		for i in 0 upto keys.count() 'scan'
+			let k = try keys.get(i) otherwise panic("MonomorphCache.get: keys.get OOB at {i}")
+			if k == key 'hit'
+				return try values.get(i) otherwise panic("MonomorphCache.get: values desync at {i}")
+			end 'hit'
+		end 'scan'
+		panic("MonomorphCache.get: missing key '{key}' — caller must check contains() first")
+	end 'get'
+
+	export function set(key String, value String)
+		keys.push(key)
+		values.push(value)
+	end 'set'
+end 'MonomorphCache'
+
+// Entry point. Given a call site whose `resolvedCallee` is an
+// interface-extension method (e.g. `HasItems.has`) and a concrete receiver
+// type (e.g. `IntList`), clone the source body into a dedicated
+// `{receiverType}.{methodName}` function. Returns the new qualified name
+// on success; throws on any structural reason the clone can't proceed
+// (missing source function, no conformance, etc.).
+//
+// Idempotent: subsequent calls with the same (receiverType, calleeQualified)
+// pair return the cached name without re-emitting the body.
+export function monomorphizeInterfaceExtension(project Project, module MaxonModule, calleeQualified String, receiverType MaxonType) returns String throws MonomorphError
+	let receiverTypeName = baseNameOfReceiverType(project, selfType: receiverType)
+	if receiverTypeName.isEmpty() 'noName'
+		throw MonomorphError.receiverNotNamed
+	end 'noName'
+
+	let calleeBytes = calleeQualified.toByteArray()
+	let dotIdx = lastIndexOfDotByte(calleeBytes)
+	if dotIdx >= calleeBytes.count() 'noDot'
+		throw MonomorphError.notInterfaceCallee
+	end 'noDot'
+	let ifaceName = byteSliceToString(calleeBytes, startIndex: 0, endIndex: dotIdx)
+	let methodName = byteSliceToString(calleeBytes, startIndex: dotIdx + 1, endIndex: calleeBytes.count())
+	if not (project.interfaces.contains(ifaceName) or project.unresolvedInterfaces.contains(ifaceName)) 'notIface'
+		throw MonomorphError.notInterfaceCallee
+	end 'notIface'
+
+	let monoQualified = "{receiverTypeName}.{methodName}"
+	let cacheKey = "{receiverTypeName}::{calleeQualified}"
+
+	if project.monomorphCache.contains(cacheKey) 'cached'
+		return project.monomorphCache.get(cacheKey)
+	end 'cached'
+
+	// Pre-register the cache entry to break recursive monomorphization
+	// (a method body that calls itself transitively must see the new
+	// name during its own clone). The body is appended below, but the
+	// registry entry is enough for any nested resolution.
+	project.monomorphCache.set(cacheKey, value: monoQualified)
+
+	// Locate the source IrFunction. User-declared interface extensions live in
+	// the user module; stdlib-declared ones (`Iterable.map`, `Iterable.filter`,
+	// `Iterable.contains`, ...) live in the process-wide `stdlibParsedModule`
+	// snapshot. Try the user module first so an interface extension shadowed
+	// in user code resolves to the user copy. If found in the stdlib module,
+	// hand the cloner that source module's `blocks` / `ops` storage too —
+	// `cloneAndAppendMonomorph` walks `srcBlock.opRefs` against the source's
+	// module, then appends to the destination user module.
+	var srcModule = module
+	var srcFuncIdx = 0 as FuncIndex
+	if let userFuncIdx = try findFunctionIndexByName(module, name: calleeQualified) 'userHit'
+		srcFuncIdx = userFuncIdx
+	end 'userHit' else 'tryStdlib'
+		// J.4e: getStdlibParsedModule returns a fresh MaxonModule whose
+		// MaxonType ids live in `project`'s id-space — the cross-project
+		// translator handles the sandbox-to-user re-interning so the cloner
+		// can substitute and walk types without an additional translation
+		// step. Cache the translated snapshot per project so back-to-back
+		// monomorphizations don't redo the walk.
+		let stdlibModule = getStdlibParsedModule(project)
+		srcFuncIdx = try findFunctionIndexByName(stdlibModule, name: calleeQualified) otherwise throw MonomorphError.noSourceFunction
+		srcModule = stdlibModule
+	end 'tryStdlib'
+
+	// Build the type substitution: each interface usesParam → the
+	// conformance's matching `with` arg. The conformance's withArgs are
+	// resolved through the receiver's own substitution (a generic
+	// receiver carries its typeParams through its conformance row).
+	let subst = buildExtensionUsesParamSubstitution(project, receiverType: receiverType, ifaceName: ifaceName)
+
+	let srcFunc = try srcModule.functions.get(srcFuncIdx) otherwise panic("monomorphizeInterfaceExtension: srcFuncIdx OOB after find")
+
+	// Clone the source IrFunction with substituted types. `srcModule` supplies
+	// the blocks/ops backing the source body; the cloned blocks/ops are
+	// appended onto the destination user `module` so the new function flows
+	// through every later compile pass alongside user-declared callees.
+	cloneAndAppendMonomorph(project, dstModule: module, srcModule: srcModule, srcFunc: srcFunc, monoQualified: monoQualified, receiverTypeName: receiverTypeName, ifaceName: ifaceName, subst: subst)
+
+	return monoQualified
+end 'monomorphizeInterfaceExtension'
+
+// Linear scan over module.functions to find a function by qualified name.
+// Returns the index; throws when not found.
+export function findFunctionIndexByName(module MaxonModule, name String) returns FuncIndex throws MonomorphError
+	for i in 0 upto module.functions.count() 'scan'
+		let f = try module.functions.get(i) otherwise panic("findFunctionIndexByName: functions.get OOB at {i}")
+		if f.name == name 'hit'
+			return i
+		end 'hit'
+	end 'scan'
+	throw MonomorphError.noSourceFunction
+end 'findFunctionIndexByName'
+
+// Clone `srcFunc` into a fresh IrFunction registered as `monoQualified`,
+// appending its blocks and ops onto `module` with appropriate offsets and
+// type substitution applied to every embedded MaxonType. Registers the
+// new function in `project.funcSignatures` / `funcReturnTypes` /
+// `funcVisibilities` / `funcThrowsTypes` and pushes it onto
+// `module.functions`.
+function cloneAndAppendMonomorph(project Project, dstModule MaxonModule, srcModule MaxonModule, srcFunc IrFunction, monoQualified String, receiverTypeName String, ifaceName String, subst TypeSubstitution)
+	let ifaceTypeId = project.interfaceRegistry.intern(ifaceName)
+	let ifaceType = MaxonType.interface(ifaceTypeId)
+	let receiverNamed = MaxonType.named(project.typeNames.intern(receiverTypeName))
+
+	// Build the slot-id remap. The source function may have hidden
+	// `__witness_<param>` slots that the parser pre-allocated for
+	// interface-typed params (the parser's ABI expansion). After
+	// substitution those interfaces vanish, so we drop the witness slots
+	// and renumber every remaining slot consecutively. Cloned ops walk
+	// through `remapSlot` so every `varDecl` / `varLoad` / `varStore` /
+	// `forInIterable.iterSlot` references the new dense slot space.
+	let slotRemap = buildSlotRemap(srcFunc)
+
+	// Substituted user-arity paramTypes (drives `FuncSignature` registration)
+	// and the ABI-expanded shape that lands on `IrFunction.maxonParamTypes`.
+	// The signature keeps the source-level shape so default-insertion +
+	// overload resolution see the declared params. The ABI shape mirrors
+	// Parser.maxon's expansion in `parseFunction`: after every function-typed
+	// param we append an `i64` env-pointer slot, and after every fat
+	// interface-typed param an `i64` witness slot. Lowering's per-function
+	// slot-walk at LowerMaxonToStd.maxon:1609 reads `maxonParamTypes` directly
+	// so the (fn, env) pairing in `fnEnvVarNames` materializes correctly.
+	var newSigParamTypes = MaxonTypeArray.create()
+	var newAbiParamTypes = MaxonTypeArray.create()
+	var newParamNamesForSig = StringArray.create()
+	var newParamDefaults = ParamDefaultArray.create()
+	let srcSig = try project.funcSignatures.get(srcFunc.name) otherwise panic("cloneAndAppendMonomorph: source signature '{srcFunc.name}' missing")
+	for i in 0 upto srcSig.paramTypes.count() 'eachUserParam'
+		let pt = try srcSig.paramTypes.get(i) otherwise panic("cloneAndAppendMonomorph: srcSig.paramTypes.get OOB at {i}")
+		let pn = try srcSig.paramNames.get(i) otherwise panic("cloneAndAppendMonomorph: srcSig.paramNames.get OOB at {i}")
+		let pd = try srcSig.paramDefaults.get(i) otherwise ParamDefault.none
+		let substituted = substituteWithIfaceFold(project, t: pt, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
+		newSigParamTypes.push(substituted)
+		newParamNamesForSig.push(pn)
+		newParamDefaults.push(pd)
+		newAbiParamTypes.push(substituted)
+		// Mirror parser ABI expansion: function-typed param expands to
+		// (fn, env-i64) and fat interface-typed param to (value, witness-i64).
+		if isFunctionMaxonType(substituted) 'addEnv'
+			newAbiParamTypes.push(MaxonType.integer)
+		end 'addEnv'
+		if interfaceTypeIsFat(substituted) 'addWitnessSlot'
+			newAbiParamTypes.push(MaxonType.integer)
+		end 'addWitnessSlot'
+	end 'eachUserParam'
+
+	// Substitute the return type.
+	let newReturnType = substituteReturnType(project, raw: srcFunc.maxonReturnType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
+
+	// Allocate the new IrFunction. paramCount is the ABI-expanded count so
+	// the Std-level param ABI sees the env/witness companions; the user-
+	// visible signature stays at `newSigParamTypes.count()`.
+	let paramCount = newAbiParamTypes.count() as ParamCount
+	var newFunc = IrFunction.create(monoQualified, maxonReturnType: newReturnType, paramCount: paramCount, maxonParamTypes: newAbiParamTypes, returnLine: srcFunc.returnLine, throwsTypeName: srcFunc.throwsTypeName)
+	newFunc.namespace = srcFunc.namespace
+	newFunc.visibility = srcFunc.visibility
+	newFunc.sourceFilePath = srcFunc.sourceFilePath
+	newFunc.nameLine = srcFunc.nameLine
+	newFunc.nameColumn = srcFunc.nameColumn
+	newFunc.nextBlockId = srcFunc.nextBlockId
+
+	// Rebuild Scope with substituted varTypes. Slot ids are remapped
+	// through `slotRemap` so the cloned scope's slots are dense (no
+	// witness gaps) and every op that references a slotId in the cloned
+	// body still resolves correctly. Self-field aliases are re-declared
+	// against the receiver type's field offsets recovered from
+	// `project.structTypes`.
+	let newScope = cloneScopeWithSubst(project, srcScope: srcFunc.scope, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, receiverTypeName: receiverTypeName, slotRemap: slotRemap)
+	newFunc.scope = newScope
+
+	// Clone blocks + ops. The clone walks the source function's blockRefs
+	// in order; for each block we allocate a brand-new IrBlock and append
+	// substituted clones of every op onto `module.ops`. The new
+	// blockRefs index into `module.blocks` at the freshly appended slots.
+	for blockRefIdx in 0 upto srcFunc.blockRefs.count() 'eachBlockRef'
+		let srcBlockIdx = try srcFunc.blockRefs.get(blockRefIdx) otherwise panic("cloneAndAppendMonomorph: blockRefs.get OOB at {blockRefIdx}")
+		let srcBlock = try srcModule.blocks.get(srcBlockIdx) otherwise panic("cloneAndAppendMonomorph: blocks.get OOB at {srcBlockIdx}")
+		var newBlock = IrBlock.create(srcBlock.id, label: srcBlock.label)
+		// Clone each op with substitution and append it to module.ops.
+		for srcOpIdx in srcBlock.opRefs 'eachOp'
+			let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("cloneAndAppendMonomorph: ops.get OOB at {srcOpIdx}")
+			let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
+			let newOpIdx = dstModule.ops.count()
+			dstModule.ops.push(clonedOp)
+			newBlock.opRefs.append(newOpIdx)
+		end 'eachOp'
+		newBlock.terminator = match srcBlock.terminator 'relocate'
+			unset gives Terminator.unset
+			dead gives Terminator.dead
+			fallthrough gives Terminator.fallthrough
+			opIndex gives relocateTerminator(project, srcModule: srcModule, dstModule: dstModule, srcOpIdx: srcBlock.terminatorIndex(), subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
+		end 'relocate'
+		let newBlockIdx = dstModule.blocks.count()
+		dstModule.blocks.push(newBlock)
+		dstModule.blockSourceInfo.push(BlockSourceInfo.empty())
+		newFunc.blockRefs.append(newBlockIdx)
+	end 'eachBlockRef'
+
+	// Register the new function's signature so resolver / lowering /
+	// inliner can look it up via the same path a parser-declared method
+	// uses.
+	let newSig = FuncSignature.create(newParamNamesForSig, paramTypes: newSigParamTypes, paramDefaults: newParamDefaults)
+	try project.funcReturnTypes.insert(monoQualified, value: newReturnType) otherwise ignore
+	try project.funcSignatures.insert(monoQualified, value: newSig) otherwise ignore
+	project.methodNameIndex.record(monoQualified)
+	try project.funcVisibilities.insert(monoQualified, value: FuncVisibilityInfo.create(srcFunc.visibility, sourceFilePath: srcFunc.sourceFilePath)) otherwise ignore
+	try project.funcThrowsTypes.insert(monoQualified, value: srcFunc.throwsTypeName) otherwise ignore
+
+	dstModule.functions.push(newFunc)
+end 'cloneAndAppendMonomorph'
+
+// Materialize the cloned terminator op AFTER cloning the block's regular
+// ops so the source terminator's op index has already been visited by
+// the regular `eachOp` loop above. Returns the relocated Terminator.
+// The src terminator's op was already pushed into module.ops during the
+// op walk; this helper just computes the new op-index for that position.
+function relocateTerminator(project Project, srcModule MaxonModule, dstModule MaxonModule, srcOpIdx OpIndex, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap) returns Terminator
+	// The block's terminator op index points at a position in `srcModule.ops`
+	// that we already processed in the op walk: each op gets a brand-new
+	// trailing entry in `dstModule.ops`. Clone+append the terminator op afresh
+	// against the destination module and return the appended index — keeps the
+	// terminator referent inside the destination's op-table even when the
+	// source body came from `stdlibParsedModule`.
+	let srcOp = try srcModule.ops.get(srcOpIdx) otherwise panic("relocateTerminator: ops.get OOB at {srcOpIdx}")
+	let clonedOp = substituteOp(project, op: srcOp, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed, slotRemap: slotRemap)
+	let newOpIdx = dstModule.ops.count()
+	dstModule.ops.push(clonedOp)
+	return Terminator.opIndex(newOpIdx)
+end 'relocateTerminator'
+
+// Map from source-function slot id → cloned-function slot id. The clone
+// drops every `__witness_<param>` slot the parser pre-allocated for
+// interface-typed params, so consecutive slots above the witness
+// renumber down by the count of witness slots dropped to their left.
+// Implemented as a parallel-array since per-function slot counts are
+// small.
+export type SlotRemap
+	export var srcIds VarSlotArray
+	export var dstIds VarSlotArray
+
+	export static function create() returns SlotRemap
+		return Self{srcIds: VarSlotArray.create(), dstIds: VarSlotArray.create()}
+	end 'create'
+
+	export function add(srcId VarSlot, dstId VarSlot)
+		srcIds.push(srcId)
+		dstIds.push(dstId)
+	end 'add'
+
+	export function isDropped(srcId VarSlot) returns bool
+		for i in 0 upto srcIds.count() 'scan'
+			let s = try srcIds.get(i) otherwise panic("SlotRemap.isDropped: srcIds.get OOB at {i}")
+			if s == srcId 'hit'
+				return false
+			end 'hit'
+		end 'scan'
+		return true
+	end 'isDropped'
+
+	// Resolve a source slot to the cloned slot. Returns the source id
+	// unchanged when no mapping is registered — most slots don't need
+	// remapping (the witness drop only shifts ids past the witness).
+	// This sentinel-passthrough behaviour is safe because cloned ops
+	// never see a dropped slot directly (they reference user-declared
+	// names, not the parser's hidden witness companion).
+	export function resolve(srcId VarSlot) returns VarSlot
+		for i in 0 upto srcIds.count() 'scan'
+			let s = try srcIds.get(i) otherwise panic("SlotRemap.resolve: srcIds.get OOB at {i}")
+			if s == srcId 'hit'
+				return try dstIds.get(i) otherwise panic("SlotRemap.resolve: dstIds desync at {i}")
+			end 'hit'
+		end 'scan'
+		return srcId
+	end 'resolve'
+end 'SlotRemap'
+
+export typealias VarSlotArray = Array with VarSlot
+
+// Walk srcFunc.scope.allVars() in slot-id order, dropping any
+// `__witness_<param>` synthetic slot, and assign each surviving slot
+// a fresh dense slot id starting at 0. The resulting map drives every
+// op-clone's slot renumber and the rebuilt scope's `nextSlot`.
+function buildSlotRemap(srcFunc IrFunction) returns SlotRemap
+	var remap = SlotRemap.create()
+	let total = srcFunc.scope.nextSlot
+	if total == 0 'empty'
+		return remap
+	end 'empty'
+	let allVars = srcFunc.scope.allVars()
+	// Build a parallel slot→name array so we can iterate in slot order.
+	// The Maxon Map iterator doesn't guarantee insertion order, so a
+	// straight `for (k, v) in allVars` could shuffle slot ids; explicit
+	// per-slot lookup keeps the renumber deterministic.
+	var dstSlot = 0 as VarSlot
+	for srcSlot in 0 upto total 'eachSlot'
+		var foundName = ""
+		for (name, info) in allVars 'lookupBySlot'
+			if info.slot == srcSlot 'hit'
+				foundName = name
+				break
+			end 'hit'
+		end 'lookupBySlot'
+		if foundName.isEmpty() 'unmapped'
+			continue
+		end 'unmapped'
+		if foundName == "__witness___self" 'dropWitness'
+			continue
+		end 'dropWitness'
+		// Also drop any `__witness_<otherParam>` slot the parser added
+		// for interface-typed user params (Phase 11.4 ABI expansion).
+		// Today only `__self` ever ends up interface-typed inside a
+		// monomorphizable extension, but the prefix check keeps the
+		// drop conservative against future shapes.
+		if foundName.startsWith("__witness_") 'dropWitnessGeneric'
+			continue
+		end 'dropWitnessGeneric'
+		remap.add(srcSlot, dstId: dstSlot)
+		dstSlot = dstSlot + 1
+	end 'eachSlot'
+	return remap
+end 'buildSlotRemap'
+
+// Apply substitution + interface→named folding to a MaxonType. Centralized
+// so every call site rewrites types through a single helper.
+export function substituteWithIfaceFold(project Project, t MaxonType, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonType
+	let substituted = substituteType(project, t: t, subst: subst)
+	return foldInterfaceToReceiver(substituted, ifaceType: ifaceType, receiverNamed: receiverNamed)
+end 'substituteWithIfaceFold'
+
+// Rewrite `interface(Iface)` to the concrete receiver's `named(...)` arm.
+// All other arms pass through unchanged.
+function foldInterfaceToReceiver(t MaxonType, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonType
+	return match t 'fold'
+		interface gives receiverNamed if maxonTypesStructurallyEqual(t, b: ifaceType) else t
+		boolean to function gives t
+		unresolved gives t
+		typeParameter gives t
+		genericInstance gives t
+		constInt gives t
+	end 'fold'
+end 'foldInterfaceToReceiver'
+
+// Substitute a MaxonReturnType.
+function substituteReturnType(project Project, raw MaxonReturnType, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonReturnType
+	return match raw 'k'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(substituteWithIfaceFold(project, t: inner, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed))
+	end 'k'
+end 'substituteReturnType'
+
+// Clone the source function's Scope, walking every VarInfo and rewriting
+// its varType through the substitution. Self-field aliases are re-declared
+// from the receiver type's fields so a `self.x` reference (which lowers
+// through fieldLoad with the offset stored on the VarInfo) resolves
+// against the receiver's struct layout rather than the extension's
+// abstract Self.
+function cloneScopeWithSubst(project Project, srcScope Scope, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, receiverTypeName String, slotRemap SlotRemap) returns Scope
+	var dst = Scope.create()
+	let srcVars = srcScope.allVars()
+	var maxDstSlot = 0 as VarSlot
+	for (name, info) in srcVars 'eachVar'
+		if slotRemap.isDropped(info.slot) 'skipDropped'
+			continue
+		end 'skipDropped'
+		let dstSlot = slotRemap.resolve(info.slot)
+		if dstSlot >= maxDstSlot 'updateMax'
+			maxDstSlot = dstSlot + 1
+		end 'updateMax'
+		var newType = substituteWithIfaceFold(project, t: info.varType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
+		if info.isSelfField 'selfField'
+			// Self-field aliases need the receiver type's field offset, not the
+			// interface's (interfaces have no fields). Re-resolve through the
+			// receiver's struct type record so the cloned op stream's
+			// `selfFieldLoad`/`selfFieldStore` ops still find the right slot.
+			// If the receiver isn't a registered struct (e.g. generic instance
+			// whose base stayed unresolved) or the field name isn't on the
+			// struct, drop the alias — lowering will surface a clean diagnostic
+			// rather than us carrying the interface's offset-of-zero forward.
+			if let receiverStruct = try project.structTypes.get(receiverTypeName) 'haveStruct'
+				if let resolvedField = try findFieldOnStruct(receiverStruct, fieldName: name) 'haveField'
+					newType = substituteWithIfaceFold(project, t: resolvedField.fieldType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed)
+					dst.installVerbatim(VarInfo.createSelfField(name, varType: newType, slot: dstSlot, offset: resolvedField.offset))
+				end 'haveField'
+				continue
+			end 'haveStruct'
+			continue
+		end 'selfField'
+		if info.isPayloadBinding 'payload'
+			dst.installVerbatim(VarInfo.createPayloadBinding(name, varType: newType, mutable: info.mutable, slot: dstSlot, scrutineeName: info.payloadScrutineeName, fieldIndex: info.payloadFieldIndex, caseName: info.payloadCaseName))
+			continue
+		end 'payload'
+		dst.installVerbatim(VarInfo.create(name, varType: newType, mutable: info.mutable, slot: dstSlot))
+	end 'eachVar'
+	dst.setNextSlot(maxDstSlot)
+	return dst
+end 'cloneScopeWithSubst'
+
+// Result shape for `findFieldOnStruct`: the field's substituted type plus
+// the receiver-struct offset that `selfFieldLoad`/`selfFieldStore` need.
+export type FieldInfoForClone
+	export var fieldType MaxonType
+	export var offset FieldOffset
+
+	export static function create(fieldType MaxonType, offset FieldOffset) returns FieldInfoForClone
+		return Self{fieldType: fieldType, offset: offset}
+	end 'create'
+end 'FieldInfoForClone'
+
+export enum MonomorphFieldLookupError implements Error
+	notFound
+end 'MonomorphFieldLookupError'
+
+// Lookup-by-name on a struct's fields. Pulled out of `cloneScopeWithSubst`
+// so the cloner stays focused on substitution while still surfacing a
+// throwing miss the caller can turn into "drop the alias".
+function findFieldOnStruct(structType StructType, fieldName String) returns FieldInfoForClone throws MonomorphFieldLookupError
+	for f in structType.fields 'eachField'
+		if f.name == fieldName 'hit'
+			return FieldInfoForClone.create(f.fieldType, offset: f.offset)
+		end 'hit'
+	end 'eachField'
+	throw MonomorphFieldLookupError.notFound
+end 'findFieldOnStruct'
+
+// Clone a MaxonOp with the supplied substitution applied to every
+// embedded MaxonType field. Centralised arm-by-arm transform so every op
+// shape is handled explicitly — a missing arm raises an unhandled-arm
+// compiler error rather than silently passing through an op with stale
+// generic types.
+function substituteOp(project Project, op MaxonOp, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType, slotRemap SlotRemap) returns MaxonOp
+	return match op 'k'
+		literal(result, value, valueType, range) gives MaxonOp.literal(result, value: value, valueType: substituteWithIfaceFold(project, t: valueType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		stringConst gives op
+		charLiteral gives op
+		byteStringLiteral gives op
+		stringInterp gives op
+		varDecl(slotId, value, slotType, range) gives MaxonOp.varDecl(slotRemap.resolve(slotId), value: value, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		varLoad(result, slotId, slotType, range) gives MaxonOp.varLoad(result, slotId: slotRemap.resolve(slotId), slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		varStore(slotId, value, range) gives MaxonOp.varStore(slotRemap.resolve(slotId), value: value, range: range)
+		globalLoad(result, name, slotType, range) gives MaxonOp.globalLoad(result, name: name, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		globalStore(name, value, slotType, range) gives MaxonOp.globalStore(name, value: value, slotType: substituteWithIfaceFold(project, t: slotType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		binop(result, left, right, opKind, operandType, range) gives MaxonOp.binop(result, left: left, right: right, opKind: opKind, operandType: substituteWithIfaceFold(project, t: operandType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		unop(result, operand, opKind, operandType, range) gives MaxonOp.unop(result, operand: operand, opKind: opKind, operandType: substituteWithIfaceFold(project, t: operandType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		convert(result, operand, fromType, toType, implicit, range) gives MaxonOp.convert(result, operand: operand, fromType: substituteWithIfaceFold(project, t: fromType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), toType: substituteWithIfaceFold(project, t: toType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), implicit: implicit, range: range)
+		castCheck gives op
+		cmp(result, left, right, predicate, leftType, rightType, operandType, range) gives MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: substituteWithIfaceFold(project, t: leftType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), rightType: substituteWithIfaceFold(project, t: rightType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), operandType: substituteWithIfaceFold(project, t: operandType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		refEq gives op
+		condBr gives op
+		br gives op
+		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) gives MaxonOp.call(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
+		methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, range) gives MaxonOp.methodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
+		ret gives op
+		panic gives op
+		structAlloc gives op
+		fieldLoad gives op
+		fieldStore gives op
+		selfFieldLoad gives op
+		selfFieldStore gives op
+		unresolvedRead gives op
+		unresolvedAssign gives op
+		enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, bindingNames, range) gives MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: substituteWithIfaceFold(project, t: scrutineeType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)
+		enumConstruct gives op
+		enumTag gives op
+		enumPayloadRead(result, enumValName, caseName, fieldIndex, fieldType, range) gives MaxonOp.enumPayloadRead(result, enumValName: enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: substituteWithIfaceFold(project, t: fieldType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		enumPayloadStore(enumValName, caseName, fieldIndex, fieldType, newValueName, range) gives MaxonOp.enumPayloadStore(enumValName, caseName: caseName, fieldIndex: fieldIndex, fieldType: substituteWithIfaceFold(project, t: fieldType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), newValueName: newValueName, range: range)
+		rangeMatchArm gives op
+		error gives op
+		throw gives op
+		tryCall(result, callee, callContext, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryCall(result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
+		tryMethodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, errorBoundName, range) gives MaxonOp.tryMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, errorBoundName: errorBoundName, range: range)
+		rethrow gives op
+		functionRef gives op
+		closureCreate(result, funcName, fnTypeId, capturedNames, capturedTypes, range) gives MaxonOp.closureCreate(result, funcName: funcName, fnTypeId: fnTypeId, capturedNames: capturedNames, capturedTypes: substituteTypeArray(project, types: capturedTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		closureEnvLoad(result, captureIndex, captureName, captureType, range) gives MaxonOp.closureEnvLoad(result, captureIndex: captureIndex, captureName: captureName, captureType: substituteWithIfaceFold(project, t: captureType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), range: range)
+		indirectCall(result, callee, fnTypeId, args, argLabels, argTypes, argRanges, range) gives MaxonOp.indirectCall(result, callee: callee, fnTypeId: fnTypeId, args: args, argLabels: argLabels, argTypes: substituteTypeArray(project, types: argTypes, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), argRanges: argRanges, range: range)
+		forInIterable(iterName, iterSlot, iterType, sourceValue, sourceType, bodyBlockId, exitBlockId, label, range) gives MaxonOp.forInIterable(iterName, iterSlot: slotRemap.resolve(iterSlot), iterType: substituteWithIfaceFold(project, t: iterType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), sourceValue: sourceValue, sourceType: substituteWithIfaceFold(project, t: sourceType, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed), bodyBlockId: bodyBlockId, exitBlockId: exitBlockId, label: label, range: range)
+	end 'k'
+end 'substituteOp'
+
+// Apply substitution to each entry of a MaxonTypeArray, producing a fresh
+// array. Used by ops that carry `argTypes` / `capturedTypes` parallel-to-
+// args lists. Always returns a new array even when no entry changed —
+// downstream consumers may mutate the array in place (today they don't,
+// but defensive ownership avoids future aliasing bugs at low cost).
+function substituteTypeArray(project Project, types MaxonTypeArray, subst TypeSubstitution, ifaceType MaxonType, receiverNamed MaxonType) returns MaxonTypeArray
+	var fresh = MaxonTypeArray.create()
+	for t in types 'each'
+		fresh.push(substituteWithIfaceFold(project, t: t, subst: subst, ifaceType: ifaceType, receiverNamed: receiverNamed))
+	end 'each'
+	return fresh
+end 'substituteTypeArray'

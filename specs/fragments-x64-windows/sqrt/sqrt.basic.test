@@ -8,22 +8,17 @@ ExitCode: 4
 ---
 // CompiledIR
 module {
-  func @sqrt.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_16]
+    x64.movsd xmm0, [rip+__float_4625196817309499392]
     x64.sqrtsd xmm1, xmm0
-    x64.cvttsd2si rax, xmm1
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg sqrt.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl sqrt.main.__range_panic_0
-    x64.jmp sqrt.main.__range_ok_0
+    x64.mov r9d, 4294967295
+    x64.cvttsd2si r8, xmm1
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

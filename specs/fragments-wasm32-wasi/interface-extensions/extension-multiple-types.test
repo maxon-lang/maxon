@@ -1,0 +1,90 @@
+// Test: extension-multiple-types
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Valued
+	function val() returns Integer
+end 'Valued'
+
+extension Valued
+	function valPlusTen() returns Integer
+		return self.val() + 10
+	end 'valPlusTen'
+end 'Valued'
+
+type TypeA implements Valued
+	let a Integer
+	function val() returns Integer
+		return a
+	end 'val'
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'TypeA'
+
+type TypeB implements Valued
+	var b Integer
+	function val() returns Integer
+		return b * 2
+	end 'val'
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
+end 'TypeB'
+
+function main() returns ExitCode
+	let ta = TypeA.create(a: 5)
+	let tb = TypeB.create(b: 10)
+	return ta.valPlusTen() + tb.valPlusTen()
+end 'main'
+---
+ExitCode: 45
+---
+// CompiledIR
+module {
+  func @TypeA.val(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @TypeB.val(local0: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %1 = mir.load %5, 0 width: qword
+    %3 = mir.mov_imm 2 : i64
+    %4 = mir.mul.i64 %1, %3
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %0, %10, 0 width: qword
+    %2 = mir.mov_imm 10 : i64
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %2, %12, 0 width: qword
+    %19 = mir.load %10, 0 width: qword
+    %14 = mir.mov_imm 10 : i64
+    %15 = mir.add.i64 %19, %14
+    %20 = mir.load %12, 0 width: qword
+    %21 = mir.mov_imm 2 : i64
+    %22 = mir.mul.i64 %20, %21
+    %17 = mir.mov_imm 10 : i64
+    %18 = mir.add.i64 %22, %17
+    %8 = mir.add.i64 %15, %18
+    %23 = mir.mov_imm 125 : i64
+    %24 = mir.cmp ugt, %8, %23
+    mir.cond_br %24 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %25 = mir.global_addr @__panic_msg_0
+    %26 = mir.call @mrt_panic(%25)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

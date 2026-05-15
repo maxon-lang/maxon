@@ -15,129 +15,107 @@ ExitCode: 7
 ---
 // CompiledIR
 module {
-  func @vector.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.call Vec2.create
-    x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
+    x64.prologue stack_size=16
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r12, r8
+    x64.mov ecx, 40
+    x64.call mrt_alloc
+    x64.xor r9d, r9d
+    x64.mov [r8+0], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+8], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+16], r9 (8b)
+    x64.mov r9d, 8
+    x64.mov [r8+24], r9 (8b)
+    x64.xor r9d, r9d
+    x64.mov [r8+32], r9 (8b)
+    x64.mov [r12+0], r8 (8b)
+    x64.mov r13, [r12+0] (8b)
+    x64.mov r8d, 2
+    x64.mov [r13+16], r8 (8b)
+    x64.mov r8d, 8
+    x64.mov [r13+24], r8 (8b)
+    x64.mov ecx, 16
+    x64.call mrt_alloc
+    x64.mov [r13+0], r8 (8b)
+    x64.mov r8d, 2
+    x64.mov [r13+8], r8 (8b)
+    x64.mov eax, 10
+    x64.xor r13d, r13d
+  inlined_Vector.set_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je inlined_Vector.set_2
+  inlined_Vector.set_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_0
+  inlined_Vector.set_2:
     x64.xor edx, edx
-    x64.mov r8, 10
-    x64.call Vec2.set
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.je vector.main.otherwise_continue_0
-  otherwise_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.xor r8d, r8d
+  inline_cont_main_0:
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
-  otherwise_continue_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 5
-    x64.mov r8, 99
-    x64.call Vec2.set
-    x64.xor ecx, ecx
-    x64.cmp rdx, rcx
-    x64.je vector.main.otherwise_continue_1
-  otherwise_error_0:
-    x64.mov rax, [rbp-8]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, 7
+    x64.mov r8, r13
     x64.epilogue
     x64.ret
-  otherwise_continue_1:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
+  try_0.merge:
+    x64.mov eax, 99
+    x64.mov edx, 5
+  inlined_Vector.set_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je inlined_Vector.set_2
+  inlined_Vector.set_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_1
+  inlined_Vector.set_2:
     x64.xor edx, edx
-    x64.call Vec2.get
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je vector.main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-16]
-    x64.mov [rbp-24], rax
-    x64.jmp vector.main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-24]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg vector.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl vector.main.__range_panic_0
-    x64.jmp vector.main.__range_ok_0
+    x64.xor r8d, r8d
+  inline_cont_main_1:
+    x64.test rdx, rdx
+    x64.je inlined_Vector.get_0
+  try_1.otherwise:
+    x64.mov r8d, 7
+    x64.epilogue
+    x64.ret
+  inlined_Vector.get_0:
+    x64.mov rcx, [r12+0] (8b)
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_get
+    x64.test rdx, rdx
+    x64.je inlined_Vector.get_2
+  inlined_Vector.get_1:
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+    x64.jmp inline_cont_main_2
+  inlined_Vector.get_2:
+    x64.xor edx, edx
+  inline_cont_main_2:
+    x64.test rdx, rdx
+    x64.je try_2.ok
+    x64.mov r8, r13
+    x64.jmp try_2.merge
+  try_2.ok:
+  try_2.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_1]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-8]
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-24]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Int(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Int.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Int.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Int.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Vec2(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Vec2.done
-  done:
     x64.epilogue
     x64.ret
   }

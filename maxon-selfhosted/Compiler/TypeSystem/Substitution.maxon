@@ -75,14 +75,18 @@ export typealias TypeParamIdArray = Array with TypeParamId
 // Walk `t` and substitute every `MaxonType.typeParameter(id)` with its
 // bound concrete from `subst`. Recurses into `genericInstance` argument
 // lists so a `Array with (Pair with Element)` properly becomes
-// `Array with (Pair with Int)` when `Element -> Int`. Other arms
-// (primitives, named, interface, function, unresolved) pass through
-// unchanged: function types are structural and Phase 11 does not yet
-// substitute through them; named types resolve to concrete struct/enum
-// names that don't carry type-parameter slots; interface arms refer to
-// existential value-types whose own parameter substitution is handled
-// when the existential is constructed, not when the value type is
-// referenced.
+// `Array with (Pair with Int)` when `Element -> Int`. The `function` arm
+// (function-typed values like a `transform(Element) returns Element`
+// closure parameter) recurses into its param/return type list and
+// re-interns through `Project.functionTypes` so the cloned body sees a
+// substituted function-type id — same identity discipline the parser
+// uses when interning function types at declaration time.
+//
+// Other arms (primitives, named, interface, unresolved) pass through
+// unchanged: named types resolve to concrete struct/enum names that
+// don't carry type-parameter slots; interface arms refer to existential
+// value-types whose own parameter substitution is handled when the
+// existential is constructed, not when the value type is referenced.
 //
 // An unbound type-parameter (`subst.lookup` returns `unresolved`) is
 // rewritten to `unresolved` rather than left as `typeParameter(id)` —
@@ -98,7 +102,7 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		float gives MaxonType.float
 		string gives MaxonType.string
 		named gives t
-		function gives t
+		function(id) gives substituteFunctionType(project, id: id, subst: subst)
 		unresolved gives MaxonType.unresolved
 		typeParameter(id) gives subst.lookup(id)
 		interface gives t
@@ -108,6 +112,43 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		constInt gives t
 	end 'sub'
 end 'substituteType'
+
+// Recursive case for `substituteType`: walks a function-type's param-type
+// list + return type, substitutes each, and re-interns through
+// `internFunctionType` so structural identity (same params + same return ⇒
+// same id) holds for the substituted shape. Used when a cloned interface
+// extension body carries a function-typed param like
+// `transform(Element) returns Element` and the receiver's conformance
+// pins `Element` to a concrete arm (e.g. `Integer`).
+function substituteFunctionType(project Project, id FunctionTypeId, subst TypeSubstitution) returns MaxonType
+	let (paramTypes, returnType) = project.functionTypes.get(id)
+	var newParamTypes = MaxonTypeArray.create()
+	var changed = false
+	for i in 0 upto paramTypes.count() 'eachParam'
+		let p = try paramTypes.get(i) otherwise panic("substituteFunctionType: paramTypes.get OOB at {i}")
+		let np = substituteType(project, t: p, subst: subst)
+		if not maxonTypesStructurallyEqual(p, b: np) 'diff'
+			changed = true
+		end 'diff'
+		newParamTypes.push(np)
+	end 'eachParam'
+	let newReturnType = match returnType 'sub'
+		void gives MaxonReturnType.void
+		value(inner) gives MaxonReturnType.value(substituteType(project, t: inner, subst: subst))
+	end 'sub'
+	let returnChanged = match returnType 'cmp'
+		void gives false
+		value(inner) gives not maxonTypesStructurallyEqual(inner, b: match newReturnType 'unwrap'
+			void gives MaxonType.unresolved
+			value(ni) gives ni
+		end 'unwrap')
+	end 'cmp'
+	if not changed and not returnChanged 'unchanged'
+		return MaxonType.function(id)
+	end 'unchanged'
+	let newId = internFunctionType(project, paramTypes: newParamTypes, returnType: newReturnType)
+	return MaxonType.function(newId)
+end 'substituteFunctionType'
 
 // Recursive case for `substituteType`: walks the genericInstance's arg
 // list, substitutes each arg, and re-interns the result so structural
@@ -188,3 +229,190 @@ function buildSubstitutionFromGenericInstance(project Project, gid GenericInstan
 	let baseName = project.typeNames.get(baseId)
 	return buildSubstitution(project, declaringTypeName: baseName, args: args)
 end 'buildSubstitutionFromGenericInstance'
+
+// J.4a prereq.3: error arms surfaced by `resolveInterfaceUsesParamThroughConformance`.
+//   - notInterface: `interfaceName` isn't in `project.interfaces` (or
+//     `unresolvedInterfaces`). Callers in lowering paths use this to detect
+//     a non-interface callee prefix and fall back to the receiver-typed path.
+//   - noConformance: the (selfTypeName, interfaceName) pair isn't recorded.
+//     A type that doesn't implement the interface can't carry usesParam
+//     bindings for it.
+//   - paramNotInUses: `paramName` isn't one of the interface's `usesParams`.
+//     Either a typo in the caller or a stale name from before an interface's
+//     `uses` list changed.
+//   - withArgsArity: the recorded `withArgs.count()` doesn't match the
+//     interface's `usesParams.count()`. Signals a parser/TypeResolution gap
+//     — every `implements I with (A, B)` clause should have arity-matched
+//     args, but a parser-recovery path may record a partial conformance.
+//   - notAStructReceiver: `selfType` is neither a `named` nor a
+//     `genericInstance` — primitives / interface values can't carry an
+//     `implements` clause, so the lookup is unanswerable.
+export enum ConformanceUsesParamLookupError implements Error
+	notInterface
+	noConformance
+	paramNotInUses
+	withArgsArity
+	notAStructReceiver
+end 'ConformanceUsesParamLookupError'
+
+// J.4a prereq.3: resolve an interface's `usesParam` to the concrete
+// MaxonType bound by the receiver's `implements <Interface> with (...)`
+// clause.
+//
+// Scenario the helper exists to answer: an interface-extension method body
+// (e.g. `Iterable.map`) references one of the interface's uses-parameters
+// (e.g. `Element`). The body's `Element` is a typeParameter under the
+// `Iterable` declaring scope; at any concrete call site, that scope is
+// bound through the receiver's conformance row. For
+// `Array<Integer> implements Iterable with (Element, ArrayIterator)`, this
+// helper returns `Integer` when asked for `Iterable.Element`. When the
+// receiver is a generic instance, the conformance's `withArgs` are
+// substituted through the receiver's own type-param bindings — so
+// `Array<Integer>` (whose conformance withArgs list is
+// `[Element-of-Array, ArrayIterator<Element-of-Array>]`) yields
+// `Integer` / `ArrayIterator<Integer>` for `Iterable.{Element, Iter}`.
+//
+// Layered on top of the existing TypeSubstitution primitives:
+//   1. `buildSubstitutionForInstance` -> receiver's typeParam->concrete map.
+//   2. project.conformances entry -> raw withArgs list (parser-resolved).
+//   3. interface.usesParams -> position lookup by paramName.
+//   4. substituteType -> walk withArgs[index] under the receiver's subst.
+//
+// Subsequent J.4 stages (monomorphization 4b/4c/4d) consume this helper at
+// the OUTER call site that targets an interface-extension method:
+//   - When emitting per-conformer specializations (J.4b/c).
+//   - When materializing per-usesParam layout/witness slots that the body
+//     receives in addition to Self's (J.4d). Prereq.3 lands the lookup so
+//     those stages can be implemented without re-deriving the substitution
+//     logic each time.
+export function resolveInterfaceUsesParamThroughConformance(project Project, selfType MaxonType, interfaceName String, paramName String) returns MaxonType throws ConformanceUsesParamLookupError
+	if not (project.interfaces.contains(interfaceName) or project.unresolvedInterfaces.contains(interfaceName)) 'notIface'
+		throw ConformanceUsesParamLookupError.notInterface
+	end 'notIface'
+	let usesParams = interfaceUsesParams(project, interfaceName: interfaceName)
+	var paramIndex = usesParams.count()
+	var found = false
+	for i in 0 upto usesParams.count() 'scanParams'
+		let p = try usesParams.get(i) otherwise panic("resolveInterfaceUsesParamThroughConformance: usesParams.get OOB at {i}")
+		if p == paramName 'hit'
+			paramIndex = i
+			found = true
+			break
+		end 'hit'
+	end 'scanParams'
+	if not found 'noParam'
+		throw ConformanceUsesParamLookupError.paramNotInUses
+	end 'noParam'
+	let baseName = baseNameOfReceiverType(project, selfType: selfType)
+	if baseName.isEmpty() 'notStruct'
+		throw ConformanceUsesParamLookupError.notAStructReceiver
+	end 'notStruct'
+	let confSearch = try findConformanceEntry(project, implementerName: baseName, interfaceName: interfaceName) otherwise throw ConformanceUsesParamLookupError.noConformance
+	let withArgs = try project.conformances.withArgsList.get(confSearch) otherwise panic("resolveInterfaceUsesParamThroughConformance: withArgsList.get OOB at {confSearch}")
+	if withArgs.count() != usesParams.count() 'arity'
+		throw ConformanceUsesParamLookupError.withArgsArity
+	end 'arity'
+	let raw = try withArgs.get(paramIndex) otherwise panic("resolveInterfaceUsesParamThroughConformance: withArgs.get OOB at {paramIndex}")
+	let subst = buildSubstitutionForInstance(project, t: selfType)
+	return substituteType(project, t: raw, subst: subst)
+end 'resolveInterfaceUsesParamThroughConformance'
+
+// Build a TypeSubstitution mapping every interface `usesParam` typeParam to
+// the conformance's matching `withArgs[i]`. The withArgs are further
+// substituted through the receiver's own typeParam->concrete map so a
+// generic receiver (`Array with X`) whose conformance withArgs reference
+// Array's `Element` resolves through to `X`.
+//
+// Returns an empty substitution when:
+//   - the receiver has no base type name (interface/primitive/function/...).
+//   - no conformance row exists for `(receiverBase, ifaceName)`.
+// Used by both the monomorphizer (when cloning a body) and the diagnostic
+// path in `resolveMethodCallSite` (when checking conditional-availability
+// where-clauses).
+export function buildExtensionUsesParamSubstitution(project Project, receiverType MaxonType, ifaceName String) returns TypeSubstitution
+	var subst = TypeSubstitution.create()
+	let receiverName = baseNameOfReceiverType(project, selfType: receiverType)
+	if receiverName.isEmpty() 'noName'
+		return subst
+	end 'noName'
+	let confSearch = try findConformanceEntry(project, implementerName: receiverName, interfaceName: ifaceName) otherwise return subst
+	let withArgs = try project.conformances.withArgsList.get(confSearch) otherwise return subst
+	let usesParams = interfaceUsesParams(project, interfaceName: ifaceName)
+	let receiverSubst = buildSubstitutionForInstance(project, t: receiverType)
+	let limit = withArgs.count() if withArgs.count() < usesParams.count() else usesParams.count()
+	for i in 0 upto limit 'bindParams'
+		let paramName = try usesParams.get(i) otherwise panic("buildExtensionUsesParamSubstitution: usesParams.get OOB at {i}")
+		let paramId = project.typeParameters.intern(ifaceName, paramName: paramName)
+		let rawArg = try withArgs.get(i) otherwise panic("buildExtensionUsesParamSubstitution: withArgs.get OOB at {i}")
+		subst.bind(paramId, concrete: substituteType(project, t: rawArg, subst: receiverSubst))
+	end 'bindParams'
+	return subst
+end 'buildExtensionUsesParamSubstitution'
+
+// Read the interface's `uses` parameter-name list. Mirrors
+// `lookupTypeParamsForBase` (TypeResolution) for the interface arms only —
+// uses-parameters live directly on the IR record, not in the
+// TypeParamRegistry, so a bare registry probe would miss them. Exported so
+// MonomorphizeExtensions and TypeResolution share this lookup instead of
+// re-implementing the resolved/unresolved fallback chain.
+export function interfaceUsesParams(project Project, interfaceName String) returns StringArray
+	if let iface = try project.interfaces.get(interfaceName) 'resolvedHit'
+		return iface.usesParams
+	end 'resolvedHit'
+	if let unresolved = try project.unresolvedInterfaces.get(interfaceName) 'unresolvedHit'
+		return unresolved.usesParams
+	end 'unresolvedHit'
+	return StringArray.create()
+end 'interfaceUsesParams'
+
+// Reduce a receiver `MaxonType` to its declaring base-type name (the name
+// under which `project.conformances` records `implements` clauses). For a
+// `genericInstance` the base is the parent of the gid; for a bare `named`
+// we return the name. Other arms (primitives, interface, function, …)
+// can't carry an `implements` clause; the caller's `notAStructReceiver`
+// throw fires when this returns "". Exported so MonomorphizeExtensions
+// and TypeResolution share the same arm-by-arm match instead of
+// re-implementing it.
+export function baseNameOfReceiverType(project Project, selfType MaxonType) returns String
+	return match selfType 'pick'
+		genericInstance(gid) gives baseNameOfGid(project, gid: gid)
+		named(id) gives project.typeNames.get(id)
+		boolean to string gives ""
+		typeParameter gives ""
+		interface gives ""
+		function gives ""
+		unresolved gives ""
+		constInt gives ""
+	end 'pick'
+end 'baseNameOfReceiverType'
+
+function baseNameOfGid(project Project, gid GenericInstanceId) returns String
+	let (baseId, _) = project.genericInstances.get(gid)
+	return project.typeNames.get(baseId)
+end 'baseNameOfGid'
+
+// Locate the `project.conformances` entry id for `(implementerName,
+// interfaceName)`. Linear scan matches the existing
+// `tryMaterializeLayoutFromConformance` walk; the registry is small in
+// practice (one entry per `implements` clause across the whole project).
+// Exported so the layout-side conformance lookup in lowering reuses the
+// same walk instead of re-implementing the (typeName, interfaceName) scan.
+export function findConformanceEntry(project Project, implementerName String, interfaceName String) returns ConformanceId throws ConformanceLookupError
+	let total = project.conformances.count()
+	for i in 0 upto total 'scan'
+		let confType = try project.conformances.typeNames.get(i) otherwise panic("findConformanceEntry: typeNames.get OOB at {i}")
+		if confType != implementerName 'skipType'
+			continue
+		end 'skipType'
+		let confIface = try project.conformances.interfaceNames.get(i) otherwise panic("findConformanceEntry: interfaceNames.get OOB at {i}")
+		if confIface != interfaceName 'skipIface'
+			continue
+		end 'skipIface'
+		return i
+	end 'scan'
+	throw ConformanceLookupError.notFound
+end 'findConformanceEntry'
+
+export enum ConformanceLookupError implements Error
+	notFound
+end 'ConformanceLookupError'

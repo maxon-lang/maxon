@@ -14,44 +14,36 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @ranged-typealias.clampedPct(x: f64) -> f64 {
+  func @clampedPct(xmm0: f64) -> f64 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm1, [rip+__float_0]
+    x64.movsd xmm1, [rip+__float_4636737291354636288]
     x64.ucomisd xmm0, xmm1
-    x64.setb rax
-    x64.movzx rax, raxb
-    x64.movsd xmm1, [rip+__float_100]
-    x64.ucomisd xmm0, xmm1
-    x64.seta rcx
-    x64.movzx rcx, rcxb
-    x64.or rax, rcx
-    x64.test rax, rax
-    x64.je ranged-typealias.clampedPct.__range_ok_0
+    x64.ja __range_panic_0
+    x64.jmp __range_check_lo_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
+  __range_check_lo_0:
+    x64.movsd xmm1, [rip+__float_0]
+    x64.ucomisd xmm0, xmm1
+    x64.jae __range_ok_0
+    x64.jmp __range_panic_0
   }
-  func @ranged-typealias.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_42.5]
-    x64.call ranged-typealias.clampedPct
-    x64.cvttsd2si rax, xmm0
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg ranged-typealias.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl ranged-typealias.main.__range_panic_0
-    x64.jmp ranged-typealias.main.__range_ok_0
+    x64.movsd xmm0, [rip+__float_4631178160564600832]
+    x64.call clampedPct
+    x64.mov r9d, 4294967295
+    x64.cvttsd2si r8, xmm0
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_1]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

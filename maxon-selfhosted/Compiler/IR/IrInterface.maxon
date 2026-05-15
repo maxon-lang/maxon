@@ -56,6 +56,16 @@ export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
 // against `project.interfaces` (parents) and use them to substitute
 // associated-type bindings into method signatures. `methods` holds the body
 // in declaration order.
+//
+// `innerAliases` carries the inner-typealias entries collected from any
+// `extension <ThisInterface> ... typealias Name = ... end` block whose
+// target is this interface. Interface bodies themselves cannot declare
+// inner aliases (interface bodies are signature-only), so this map is
+// always populated post-hoc by `mergeExtensionInnerAliases` and stays
+// empty for the parsed declaration itself. The map is read by Phase 11
+// type-resolution when resolving names inside an extension's method
+// bodies whose receiver type is the interface — see
+// `tryAnyStructInnerAlias` for the parallel struct path.
 export type UnresolvedInterfaceType
 	export var name String
 	export var extendsNames StringArray
@@ -65,9 +75,10 @@ export type UnresolvedInterfaceType
 	export var line LineNumber
 	export var column ColumnNumber
 	export var filePath FilePath
+	export var innerAliases InnerAliasMap
 
 	export static function create(name String, extendsNames StringArray, usesParams StringArray, methods InterfaceMethodSigArray, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns UnresolvedInterfaceType
-		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath}
+		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath, innerAliases: InnerAliasMap.create()}
 	end 'create'
 end 'UnresolvedInterfaceType'
 
@@ -84,6 +95,16 @@ export typealias UnresolvedInterfaceMap = Map with(String, UnresolvedInterfaceTy
 // A conforming `type T implements I with X` reads its expected method set
 // off the conforming type, never off the interface, so the interface's own
 // signatures stay generic in the parameter names.
+//
+// `innerAliases` mirrors `StructType.innerAliases` — a per-interface table
+// of resolved inner-typealias names promoted from
+// `UnresolvedInterfaceType.innerAliases` by the drain pass. Interface
+// bodies themselves cannot declare inner typealiases (interface bodies are
+// signature-only), so this map is populated only by `mergeExtensionInnerAliases`
+// on the parser side and surfaces here so the chase helpers
+// (`chaseTypealiasNameToStruct` / `chaseTypealiasNameToType`) can resolve
+// names that appear inside extension method bodies whose receiver is the
+// interface.
 export type IrInterface
 	export var name String
 	export var extendsNames StringArray
@@ -93,9 +114,10 @@ export type IrInterface
 	export var line LineNumber
 	export var column ColumnNumber
 	export var filePath FilePath
+	export var innerAliases ResolvedInnerAliasMap
 
-	export static function create(name String, extendsNames StringArray, usesParams StringArray, methods InterfaceMethodSigArray, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath) returns IrInterface
-		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath}
+	export static function create(name String, extendsNames StringArray, usesParams StringArray, methods InterfaceMethodSigArray, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, innerAliases ResolvedInnerAliasMap) returns IrInterface
+		return Self{name: name, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: line, column: column, filePath: filePath, innerAliases: innerAliases}
 	end 'create'
 end 'IrInterface'
 
@@ -108,14 +130,23 @@ export typealias IrInterfaceMap = Map with(String, IrInterface)
 // into the inherited method signatures. `interfaceName` is also a bare name;
 // resolution to a concrete `MaxonType` is deferred. Source location anchors
 // any future per-conformance diagnostics back to the interface-name token.
+//
+// `parenForm` records whether the source used the parenthesized form
+// `with(A, B)` vs the bare `with A, B` form. The flag lets TypeResolution
+// collapse a paren-wrapped comma list into a single `__TupleN` arg when the
+// target interface has exactly one `uses` parameter (mirrors maxon-sharp's
+// `ParseWithTypeArgs` `expectedCount == 1` tuple-coercion branch). The bare
+// form never collapses — every identifier becomes its own arg, matching
+// `WithIterIterator with Iter, Element` against `uses Source, Element`.
 export type Conformance
 	export var interfaceName String
 	export var withArgs StringArray
+	export var parenForm bool
 	export var line LineNumber
 	export var column ColumnNumber
 
-	export static function create(interfaceName String, withArgs StringArray, line LineNumber, column ColumnNumber) returns Conformance
-		return Self{interfaceName: interfaceName, withArgs: withArgs, line: line, column: column}
+	export static function create(interfaceName String, withArgs StringArray, parenForm bool, line LineNumber, column ColumnNumber) returns Conformance
+		return Self{interfaceName: interfaceName, withArgs: withArgs, parenForm: parenForm, line: line, column: column}
 	end 'create'
 end 'Conformance'
 

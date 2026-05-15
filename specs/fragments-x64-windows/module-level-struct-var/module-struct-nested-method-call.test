@@ -22,162 +22,33 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @State.create(items: i64) -> i64 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.lea_func rax, [__destruct_State]
-    x64.mov rdx, rax
-    x64.mov rcx, 8
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
-    x64.mov [rdx+0], rcx
-    x64.call mm_incref
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.epilogue
-    x64.ret
-  }
-  func @module-level-struct-var.main() -> u32 {
-  entry:
-    x64.prologue stack_size=64
-    x64.mov rax, qword [rip+state]
-    x64.mov [rbp-8], rax
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rdx, [rbp-8]
-    x64.mov rbx, [rdx+0]
-    x64.mov [rbp-16], rbx
-    x64.mov rsi, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.mov rdx, 10
-    x64.call ByteArray.push
-    x64.mov rdi, qword [rip+state]
-    x64.mov [rbp-24], rdi
-    x64.mov r8, [rbp-24]
-    x64.mov rcx, [rbp-24]
-    x64.call mm_incref
-    x64.mov r9, [rbp-24]
-    x64.mov rax, [r9+0]
-    x64.mov [rbp-32], rax
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-32]
-    x64.mov rdx, 20
-    x64.call ByteArray.push
-    x64.mov rax, qword [rip+state]
-    x64.mov [rbp-40], rax
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-40]
-    x64.call mm_incref
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-48], rcx
-    x64.mov rax, [rbp-48]
-    x64.mov rcx, [rbp-48]
-    x64.call ByteArray.count
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg module-level-struct-var.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl module-level-struct-var.main.__range_panic_0
-    x64.jmp module-level-struct-var.main.__range_ok_0
+    x64.lea r8, [rip+__data_state]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rcx, [r9+0] (8b)
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 10
+    x64.call Array.push
+    x64.lea r8, [rip+__data_state]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rcx, [r9+0] (8b)
+    x64.lea rax, [rip+__layout_Array_Byte]
+    x64.mov edx, 20
+    x64.call Array.push
+    x64.lea r8, [rip+__data_state]
+    x64.mov r9, [r8+0] (8b)
+    x64.mov rcx, [r9+0] (8b)
+    x64.lea rdx, [rip+__layout_Array_Byte]
+    x64.call Array.count
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rbx, [rbp-8]
-    x64.mov [rbp-56], rax
-    x64.test rbx, rbx
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-24]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-24]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rcx, [rbp-40]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_2
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rax, [rbp-56]
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_State(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_State.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_Byte(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Byte.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Byte.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Byte.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ByteArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_ByteArray.done
-  done:
     x64.epilogue
     x64.ret
   }

@@ -1,0 +1,116 @@
+// Test: setlength-then-get
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	try mm.setLength(3) otherwise return 2
+	try mm.set(0, value: 100) otherwise return 3
+	try mm.set(1, value: 200) otherwise return 3
+	try mm.set(2, value: 300) otherwise return 3
+	if mm.length() != 3 'badLen'
+		return 4
+	end 'badLen'
+	if mm.capacity() != 8 'badCap'
+		return 5
+	end 'badCap'
+	let v = try mm.get(2) otherwise return 6
+	if v != 300 'badVal'
+		return 7
+	end 'badVal'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov edx, 8
+    x64.mov ecx, 8
+    x64.call stdlib.__managed_mem_create
+    x64.mov r12, r8
+    x64.xor r13d, r13d
+  try_0.merge:
+    x64.mov edx, 3
+    x64.mov rcx, r12
+    x64.call stdlib.__managed_mem_set_length
+    x64.test rdx, rdx
+    x64.je try_1.merge
+  try_1.otherwise:
+    x64.mov r8d, 2
+    x64.epilogue
+    x64.ret
+  try_1.merge:
+    x64.mov eax, 100
+    x64.mov rcx, r12
+    x64.mov rdx, r13
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je try_2.merge
+  try_2.otherwise:
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  try_2.merge:
+    x64.mov eax, 200
+    x64.mov edx, 1
+    x64.mov rcx, r12
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je try_3.merge
+  try_3.otherwise:
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  try_3.merge:
+    x64.mov eax, 300
+    x64.mov edx, 2
+    x64.mov rcx, r12
+    x64.call stdlib.__managed_mem_set
+    x64.test rdx, rdx
+    x64.je try_4.merge
+  try_4.otherwise:
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  try_4.merge:
+    x64.mov r8, [r12+8] (8b)
+    x64.cmp r8, 3
+    x64.je badLen_0.after
+  badLen_0:
+    x64.mov r8d, 4
+    x64.epilogue
+    x64.ret
+  badLen_0.after:
+    x64.mov r8, [r12+16] (8b)
+    x64.cmp r8, 8
+    x64.je badCap_0.after
+  badCap_0:
+    x64.mov r8d, 5
+    x64.epilogue
+    x64.ret
+  badCap_0.after:
+    x64.mov edx, 2
+    x64.mov rcx, r12
+    x64.call stdlib.__managed_mem_get
+    x64.mov r9, r8
+    x64.test rdx, rdx
+    x64.je try_5.merge
+  try_5.otherwise:
+    x64.mov r8d, 6
+    x64.epilogue
+    x64.ret
+  try_5.merge:
+    x64.cmp r9, 300
+    x64.je badVal_0.after
+  badVal_0:
+    x64.mov r8d, 7
+    x64.epilogue
+    x64.ret
+  badVal_0.after:
+    x64.mov r8, r13
+    x64.epilogue
+    x64.ret
+  }
+}
+---

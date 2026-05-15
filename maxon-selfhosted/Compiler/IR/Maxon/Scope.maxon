@@ -135,6 +135,23 @@ export type Scope
 		return info.varType
 	end 'getType'
 
+	// J.4b clone hook: install a VarInfo verbatim, preserving its slot id.
+	// Used by the per-receiver monomorphizer to rebuild a function's
+	// symbol table with substituted types while keeping slot ids stable
+	// (so cloned ops still resolve every `slotId` reference correctly).
+	// Unlike `declare`, this does NOT bump `nextSlot` — the caller is
+	// responsible for setting `nextSlot` explicitly via `setNextSlot`.
+	export function installVerbatim(info VarInfo)
+		vars.upsert(info.name, value: info)
+	end 'installVerbatim'
+
+	// J.4b clone hook: pin `nextSlot` to a chosen value. Used after a
+	// batch of `installVerbatim` calls so subsequent `declare` calls (if
+	// any) allocate fresh slot ids past the highest cloned slot.
+	export function setNextSlot(slot VarSlot)
+		nextSlot = slot
+	end 'setNextSlot'
+
 	// Open a fresh scope frame. O(1): just pushes an empty name list onto
 	// the stack — declarations in this frame append to it.
 	export function pushScope()

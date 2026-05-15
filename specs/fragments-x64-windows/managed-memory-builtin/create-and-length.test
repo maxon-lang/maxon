@@ -1,0 +1,47 @@
+// Test: create-and-length
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	if mm.length() != 0 'badLen'
+		return 2
+	end 'badLen'
+	if mm.capacity() != 4 'badCap'
+		return 3
+	end 'badCap'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov edx, 8
+    x64.mov ecx, 4
+    x64.call stdlib.__managed_mem_create
+    x64.mov r9, r8
+    x64.xor esi, esi
+  try_0.merge:
+    x64.mov r8, [r9+8] (8b)
+    x64.test r8, r8
+    x64.je badLen_0.after
+  badLen_0:
+    x64.mov r8d, 2
+    x64.epilogue
+    x64.ret
+  badLen_0.after:
+    x64.mov r8, [r9+16] (8b)
+    x64.cmp r8, 4
+    x64.je badCap_0.after
+  badCap_0:
+    x64.mov r8d, 3
+    x64.epilogue
+    x64.ret
+  badCap_0.after:
+    x64.mov r8, rsi
+    x64.epilogue
+    x64.ret
+  }
+}
+---

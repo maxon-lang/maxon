@@ -28,82 +28,43 @@ ExitCode: 30
 ---
 // CompiledIR
 module {
-  func @if-try.mayFail() -> i64 {
+  func @helper(rcx: i64) -> i64 {
   entry:
-    x64.xor eax, eax
-    x64.mov rcx, 1
-    x64.add rax, rcx
-    x64.mov rdx, rax
-    x64.xor eax, eax
-    x64.ret
-  }
-  func @if-try.helper(x: i64) -> i64 {
-  entry:
-    x64.prologue stack_size=32
-    x64.mov [rbp-8], rcx
-    x64.mov rax, 1
-    x64.cmp rcx, rax
-    x64.jne if-try.helper.case1_0.elseif
+    x64.cmp rcx, 1
+    x64.jne case1_0.else
   case1_0:
-    x64.mov rax, 10
     x64.xor edx, edx
-    x64.epilogue
+    x64.mov r8d, 10
     x64.ret
-  case1_0.elseif:
-    x64.mov rax, 2
-    x64.mov rcx, [rbp-8]
-    x64.cmp rcx, rax
-    x64.jne if-try.helper.default_0
+  case1_0.else:
+    x64.cmp rcx, 2
+    x64.jne default_0
   case2_0:
-    x64.call if-try.mayFail
-    x64.mov [rbp-16], rdx
-    x64.mov [rbp-24], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je if-try.helper.try_continue_0
-  propagate_error_0:
-    x64.mov rdx, [rbp-16]
-    x64.xor eax, eax
-    x64.epilogue
-    x64.ret
-  try_continue_0:
-    x64.mov rax, [rbp-24]
-    x64.xor edx, edx
-    x64.epilogue
+    x64.mov edx, 1
+    x64.xor r8d, r8d
+  try_0.err:
+    x64.xor r8d, r8d
     x64.ret
   default_0:
-    x64.mov rax, 30
     x64.xor edx, edx
-    x64.epilogue
+    x64.mov r8d, 30
     x64.ret
   }
-  func @if-try.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 3
-    x64.call if-try.helper
-    x64.mov rcx, 99
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rax
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.je if-try.main.otherwise_default_continue_0
-  otherwise_default_error_0:
-    x64.mov rax, [rbp-8]
-    x64.mov [rbp-16], rax
-    x64.jmp if-try.main.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg if-try.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl if-try.main.__range_panic_0
-    x64.jmp if-try.main.__range_ok_0
+    x64.mov ecx, 3
+    x64.call helper
+    x64.test rdx, rdx
+    x64.je try_0.merge
+  try_0.otherwise:
+    x64.mov r8d, 99
+  try_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

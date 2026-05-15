@@ -328,6 +328,32 @@ export function interfaceDeclaresMethodTransitive(project Project, interfaceName
 	return interfaceDeclaresMethodTransitiveHelper(project, interfaceName: interfaceName, methodName: methodName, visited: visited)
 end 'interfaceDeclaresMethodTransitive'
 
+// J.4b: true when `receiverTypeName` conforms to at least one
+// iterator-shaped interface (declares `current` + `advance` and no
+// `createIterator`). Used by `for x in self` inside a monomorphized
+// extension body: the receiver is now the concrete conformer, but the
+// extension body's `createIterator` tryMethodCall is still there because
+// the parser emitted it unconditionally. Without this check the call
+// would fall through to a missing `<ReceiverType>.createIterator`
+// dispatch and panic in lowering. The struct-side mirror of the
+// interface-receiver passthrough in `lowerMethodCall`.
+export function receiverImplementsIteratorShapedInterface(project Project, receiverTypeName String) returns bool
+	let total = project.conformances.count()
+	for i in 0 upto total 'eachConf'
+		let (confType, ifaceName, _) = project.conformances.get(i)
+		if confType != receiverTypeName 'skipOther'
+			continue
+		end 'skipOther'
+		let declaresCreateIterator = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "createIterator")
+		let declaresCurrent = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "current")
+		let declaresAdvance = interfaceDeclaresMethodTransitive(project, interfaceName: ifaceName, methodName: "advance")
+		if not declaresCreateIterator and declaresCurrent and declaresAdvance 'isIteratorShape'
+			return true
+		end 'isIteratorShape'
+	end 'eachConf'
+	return false
+end 'receiverImplementsIteratorShapedInterface'
+
 function interfaceDeclaresMethodTransitiveHelper(project Project, interfaceName String, methodName String, visited StringArray) returns bool
 	for v in visited 'cycleGuard'
 		if v == interfaceName 'seen'
@@ -2884,6 +2910,18 @@ type MaxonToStdLowering
 				return
 			end 'didDispatch'
 		end 'witnessEq'
+		// J.4b: when the operand resolves to a concrete struct that implements
+		// Equatable (post-monomorphization of an interface-extension method
+		// whose body did `a == b` against an Element-typed pair), dispatch
+		// `a == b` to `<StructName>.equals` directly. The non-monomorphized
+		// code path still uses the typeParam witness above; this struct-direct
+		// path covers the substituted shape where the typeParam has already
+		// been replaced with `named(...)`.
+		if isEqOrNe 'maybeNamedEq'
+			if self.tryLowerNamedEqualityViaEquals(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock) 'didNamedEq'
+				return
+			end 'didNamedEq'
+		end 'maybeNamedEq'
 		var leftId = self.resolveName(left)
 		var rightId = self.resolveName(right)
 		let operandIsFloat = stdTypeIsFloat(maxonTypeToStdType(self.project, ref: operandType))
@@ -2939,6 +2977,52 @@ type MaxonToStdLowering
 			return false
 		end 'noMatch'
 	end 'tryLowerTypeParamEquality'
+
+	// J.4b: dispatch `a == b` / `a != b` to `<TypeName>.equals(a, b)` when
+	// the operand resolves to a concrete named type whose conformance set
+	// includes `Equatable`. Used inside monomorphized interface-extension
+	// bodies after the typeParameter Element has been substituted to a
+	// concrete struct name. The matching primitive case is handled by
+	// cmpPredicateToArithOpcode (int/float compare); pointer-shaped struct
+	// receivers need the user's `equals` method to honour the user's
+	// semantic equality definition.
+	function tryLowerNamedEqualityViaEquals(result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, operandType MaxonType, dstBlock IrBlock) returns bool
+		let typeName = operandType.nameOrEmpty(self.project)
+		if typeName.isEmpty() 'notNamed'
+			return false
+		end 'notNamed'
+		if not project.structTypes.contains(typeName) 'notStruct'
+			return false
+		end 'notStruct'
+		if not project.conformances.contains(typeName, interfaceName: "Equatable") 'notEquatable'
+			return false
+		end 'notEquatable'
+		let equalsName = "{typeName}.equals"
+		if not project.funcSignatures.contains(equalsName) 'noEquals'
+			return false
+		end 'noEquals'
+		var argIds = ValueIdArray.create()
+		argIds.push(self.resolveName(left))
+		argIds.push(self.resolveName(right))
+		let isNe = predicateIsNe(predicate)
+		if isNe 'negate'
+			let eqResultId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(eqResultId, callee: equalsName, argIds: argIds)))
+			self.setValueType(eqResultId, t: MaxonType.boolean)
+			let resultId = self.defineName(result)
+			let oneId = allocValueId(self.funcIdRef)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: oneId, value: 1))))
+			self.setValueType(oneId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.xorI64, resultId: resultId, leftId: eqResultId, rightId: oneId))))
+			self.setIsFloat(resultId, isFloat: false)
+			self.setValueType(resultId, t: MaxonType.boolean)
+		end 'negate' else 'plain'
+			let resultId = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: equalsName, argIds: argIds)))
+			self.setValueType(resultId, t: MaxonType.boolean)
+		end 'plain'
+		return true
+	end 'tryLowerNamedEqualityViaEquals'
 
 	function lowerRefEq(result ByteArray, left ByteArray, right ByteArray, negate bool, dstBlock IrBlock)
 		let leftId = self.resolveName(left)
@@ -3354,6 +3438,13 @@ type MaxonToStdLowering
 		// result to the receiver and binding the error flag to zero. Used by
 		// `for v in (1 upto 4).createIterator() ...` (RangeIterator) and any
 		// other "iterate the iterator directly" pattern.
+		//
+		// J.4b: also fire when the receiver implements a user-declared
+		// iterator-shaped interface (declares `current` + `advance`, no
+		// `createIterator`) — `extension HasItems` bodies (monomorphized for a
+		// concrete conformer like `IntList`) iterate over `self` directly, the
+		// same way the interface-receiver passthrough at the top of this
+		// function does for `MaxonType.interface(...)`.
 		if String.from(methodName) == "createIterator" 'maybeIteratorPassthrough'
 			let createIteratorCallee = "{receiverStructName}.createIterator"
 			let receiverHasCreateIterator = self.project.funcSignatures.contains(createIteratorCallee)
@@ -3363,6 +3454,11 @@ type MaxonToStdLowering
 				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
 				return
 			end 'isIteratorPassthrough'
+			if not receiverHasCreateIterator and receiverImplementsIteratorShapedInterface(self.project, receiverTypeName: receiverStructName) 'isIteratorShaped'
+				self.aliasName(result, toId: receiverId)
+				self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+				return
+			end 'isIteratorShaped'
 		end 'maybeIteratorPassthrough'
 		// Resolved callee name (post-overload disambiguation) was stashed by
 		// `resolveAllCalls` during TypeResolution. Same invariant as
@@ -3588,6 +3684,9 @@ type MaxonToStdLowering
 	// concrete (non-generic) type. Resolves through the receiver's
 	// `implements <Interface> with [args]` clause: the withArgs supply
 	// the per-typeParam bindings the interface's extension method needs.
+	// Shares the `(implementer, interface)` registry walk with the
+	// substitution-side helper `resolveInterfaceUsesParamThroughConformance`
+	// via `findConformanceEntry` so both lookup paths stay in sync.
 	function tryMaterializeLayoutFromConformance(receiverTypeName String, qualifiedCallee String, dstBlock IrBlock) returns ValueId throws ConformanceLayoutLookupError
 		let calleeBytes = qualifiedCallee.toByteArray()
 		let calleeLen = calleeBytes.count()
@@ -3599,25 +3698,14 @@ type MaxonToStdLowering
 		if not self.project.interfaces.contains(interfaceName) 'notInterface'
 			throw ConformanceLayoutLookupError.notInterfaceCallee
 		end 'notInterface'
-		let total = self.project.conformances.count()
-		for i in 0 upto total 'scan'
-			let confType = try self.project.conformances.typeNames.get(i) otherwise panic("tryMaterializeLayoutFromConformance: typeNames.get OOB at {i}")
-			if confType != receiverTypeName 'skipOther'
-				continue
-			end 'skipOther'
-			let confIface = try self.project.conformances.interfaceNames.get(i) otherwise panic("tryMaterializeLayoutFromConformance: interfaceNames.get OOB at {i}")
-			if confIface != interfaceName 'skipIface'
-				continue
-			end 'skipIface'
-			let confArgs = try self.project.conformances.withArgsList.get(i) otherwise panic("tryMaterializeLayoutFromConformance: withArgsList.get OOB at {i}")
-			if confArgs.count() == 0 'noArgs'
-				throw ConformanceLayoutLookupError.noWithArgs
-			end 'noArgs'
-			let baseId = self.project.typeNames.intern(interfaceName)
-			let gid = self.project.genericInstances.intern(baseId, args: confArgs)
-			return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
-		end 'scan'
-		throw ConformanceLayoutLookupError.noConformance
+		let confId = try findConformanceEntry(self.project, implementerName: receiverTypeName, interfaceName: interfaceName) otherwise throw ConformanceLayoutLookupError.noConformance
+		let confArgs = try self.project.conformances.withArgsList.get(confId) otherwise panic("tryMaterializeLayoutFromConformance: withArgsList.get OOB at {confId}")
+		if confArgs.count() == 0 'noArgs'
+			throw ConformanceLayoutLookupError.noWithArgs
+		end 'noArgs'
+		let baseId = self.project.typeNames.intern(interfaceName)
+		let gid = self.project.genericInstances.intern(baseId, args: confArgs)
+		return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 	end 'tryMaterializeLayoutFromConformance'
 
 	// Materialize the layout descriptor for a `genericInstance(gid)`
@@ -3693,7 +3781,7 @@ type MaxonToStdLowering
 		match bound 'pick'
 			concrete(typeName) then return self.emitLoadWitnessTable(typeName, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
 			concreteGid(_, gid) then return self.emitLoadWitnessTableForGid(gid, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
-			forwardFromCaller then return self.forwardCallerWitness(qualifiedCallee: qualifiedCallee, constraint: constraint)
+			forwardFromCaller(callerParamName) then return self.forwardCallerWitness(qualifiedCallee: qualifiedCallee, constraint: constraint, callerParamName: callerParamName)
 		end 'pick'
 	end 'materializeWitnessArg'
 
@@ -3891,36 +3979,47 @@ type MaxonToStdLowering
 		return resultId
 	end 'emitThunkWitnessLoadForBoundType'
 
-	function forwardCallerWitness(qualifiedCallee String, constraint WhereClause) returns ValueId
-		// The caller must have an implicit witness slot for the same
-		// `(paramName, traitName)` pair that the callee's where-clause
-		// names. Match on the bare paramName + traitName: the caller's
-		// param-name space must align with the callee's because the
-		// caller is forwarding its own `T` into a callee that re-binds
-		// to the same `T`. Mismatches surface as a panic — that's a
-		// phase-ordering / TypeResolution bug, not a runtime condition.
+	function forwardCallerWitness(qualifiedCallee String, constraint WhereClause, callerParamName String) returns ValueId
+		// The caller must have an implicit witness slot whose
+		// `(paramName, traitName)` pair matches the callee's constraint.
+		// Look up by `callerParamName` first — the receiverContext-driven
+		// resolution maps the callee's paramName onto the caller's scope,
+		// so when the receiver pins `Source -> Iter` (the WithIterIterator
+		// case) we look up `(Iter, Iterator)` on the caller. Fall back to
+		// the historic same-name match when `callerParamName` is empty:
+		// that path applies to the shared-scope shape where the caller
+		// and callee inherit their type parameters from the same enclosing
+		// type, so the names align by construction.
+		var lookupParamName = callerParamName
+		if callerParamName.isEmpty() 'fallback'
+			lookupParamName = constraint.paramName
+		end 'fallback'
 		let constraints = self.currentMaxonFunc.implicitWitnessConstraints
 		for i in 0 upto constraints.count() 'scan'
 			let cc = try constraints.get(i) otherwise panic("forwardCallerWitness: constraints.get OOB at {i}")
-			if cc.paramName == constraint.paramName and cc.requiredTraitName == constraint.requiredTraitName 'hit'
+			if cc.paramName == lookupParamName and cc.requiredTraitName == constraint.requiredTraitName 'hit'
 				return try self.implicitWitnessValueIds.get(i) otherwise panic("forwardCallerWitness: implicitWitnessValueIds desync at {i}")
 			end 'hit'
 		end 'scan'
-		panic("forwardCallerWitness: caller '{self.currentMaxonFunc.name}' has no witness for ({constraint.paramName}, {constraint.requiredTraitName}) but call to '{qualifiedCallee}' needs one — TypeResolution should have either pinned a concrete receiver or matched the constraint shape")
+		panic("forwardCallerWitness: caller '{self.currentMaxonFunc.name}' has no witness for ({lookupParamName}, {constraint.requiredTraitName}) but call to '{qualifiedCallee}' needs one — TypeResolution should have either pinned a concrete receiver or matched the constraint shape")
 	end 'forwardCallerWitness'
 
 	// Resolve the callee's bare type-parameter name to a concrete type at
 	// this call site. Returns `concrete(name)` when the receiverContext
 	// supplies a fully-resolved binding, `forwardFromCaller` when the
 	// binding is itself a type-parameter (caller is generic and forwards
-	// `T`).
+	// `T`). The `callerParamName` payload pins which caller paramName
+	// supplies the binding when it's recoverable; an empty string falls
+	// back to the historic "use the callee's paramName as the lookup key"
+	// path that holds whenever the caller and callee share a type-parameter
+	// scope.
 	function resolveCalleeParamToConcreteType(receiverContext MaxonType, qualifiedCallee String, paramName String) returns ResolvedCalleeParam
 		match receiverContext 'pick'
 			genericInstance(gid) then break 'pick'
-			typeParameter then return ResolvedCalleeParam.forwardFromCaller
-			interface then return ResolvedCalleeParam.forwardFromCaller
-			unresolved then return ResolvedCalleeParam.forwardFromCaller
-			named then return ResolvedCalleeParam.forwardFromCaller
+			typeParameter then return ResolvedCalleeParam.forwardFromCaller("")
+			interface then return ResolvedCalleeParam.forwardFromCaller("")
+			unresolved then return ResolvedCalleeParam.forwardFromCaller("")
+			named then return ResolvedCalleeParam.forwardFromCaller("")
 			boolean then return ResolvedCalleeParam.concrete("bool")
 			integer then return ResolvedCalleeParam.concrete("int")
 			float then return ResolvedCalleeParam.concrete("float")
@@ -3950,7 +4049,7 @@ type MaxonToStdLowering
 		// param that doesn't appear on the receiver (e.g. a free generic
 		// fn). Fall back to forwarding; the body will load whatever the
 		// caller's current scope provides.
-		return ResolvedCalleeParam.forwardFromCaller
+		return ResolvedCalleeParam.forwardFromCaller("")
 	end 'resolveCalleeParamToConcreteType'
 
 	// Convenience wrapper for the no-signature fallback in lowerCall: resolve
@@ -7774,6 +7873,13 @@ end 'implicitlyConvertible'
 // Phase 11.4: a function counts as "generic" if any of its declared
 // parameter types is a `MaxonType.typeParameter`, OR its receiver type
 // is a generic struct (one with type parameters declared via `uses`).
+// J.4a prereq.2: interface-extension methods (`Iterable.map`,
+// `Iterator.advanceBy`, ...) are equally generic — the parser stamps
+// the interface's `uses Element` params into the typeParameters
+// registry under the interface name, and the body may call other
+// generic methods like `Array.push` which need an `__layout_param`
+// forwarded. Recognizing them here is the gate that triggers synthetic
+// `__layout_param` / `__witness_*` insertion for those bodies.
 // Matches the spine spec from the Phase-11.4 plan and is the gate that
 // triggers synthetic `__layout_param` insertion.
 function functionIsGenericForLowering(project Project, func IrFunction) returns bool
@@ -7784,6 +7890,13 @@ function functionIsGenericForLowering(project Project, func IrFunction) returns 
 		end 'hit'
 	end 'eachParam'
 	if let recvType = try enclosingTypeName(project, name: func.name) 'haveRecv'
+		// Mirrors `lookupTypeParamsForBase` (TypeResolution.maxon): for
+		// interface receivers the `uses` params live on the IrInterface
+		// record itself, not in TypeParamRegistry, so a bare
+		// `getParamNames` lookup would miss them.
+		if let iface = try project.interfaces.get(recvType) 'ifaceParams'
+			return iface.usesParams.count() > 0
+		end 'ifaceParams'
 		let params = project.typeParameters.getParamNames(recvType)
 		return params.count() > 0
 	end 'haveRecv'
@@ -7814,11 +7927,20 @@ end 'maxonTypeMentionsTypeParam'
 // reference the thunks BuildWitnessTables synthesized for this exact
 // instantiation; `forwardFromCaller` means the binding is itself a
 // type-parameter from the caller's scope — the witness should ride the
-// caller's own implicit witness slot.
+// caller's own implicit witness slot. `callerParamName` is empty when the
+// binding shape (interface/unresolved/named) doesn't expose a concrete
+// caller paramName, falling back to "match the callee's paramName" — the
+// historic alignment assumption that holds whenever the caller and callee
+// share a type-parameter scope (e.g. two methods on the same generic type).
+// When the receiver pins the binding to a specific caller paramName (the
+// `WithIterIterator<Iter, Element>` case where the callee's `Source` is
+// bound to the caller's `Iter`), `callerParamName` carries that name so
+// `forwardCallerWitness` can look up the correct caller slot without
+// requiring the names to match.
 union ResolvedCalleeParam
 	concrete(typeName String)
 	concreteGid(typeName String, gid GenericInstanceId)
-	forwardFromCaller
+	forwardFromCaller(callerParamName String)
 end 'ResolvedCalleeParam'
 
 // Phase 11.4: result of locating a where-clause witness slot covering a
@@ -7853,11 +7975,11 @@ function resolvedCalleeParamFromMaxonType(project Project, t MaxonType) returns 
 		string gives ResolvedCalleeParam.concrete("String")
 		named(id) gives resolvedCalleeParamFromNamed(project, id: id)
 		genericInstance(gid) gives resolvedCalleeParamFromGenericInstance(project, gid: gid)
-		typeParameter gives ResolvedCalleeParam.forwardFromCaller
-		interface gives ResolvedCalleeParam.forwardFromCaller
-		unresolved gives ResolvedCalleeParam.forwardFromCaller
-		function gives ResolvedCalleeParam.forwardFromCaller
-		constInt gives ResolvedCalleeParam.forwardFromCaller
+		typeParameter(id) gives ResolvedCalleeParam.forwardFromCaller(project.typeParameters.getName(id))
+		interface gives ResolvedCalleeParam.forwardFromCaller("")
+		unresolved gives ResolvedCalleeParam.forwardFromCaller("")
+		function gives ResolvedCalleeParam.forwardFromCaller("")
+		constInt gives ResolvedCalleeParam.forwardFromCaller("")
 	end 'pick'
 end 'resolvedCalleeParamFromMaxonType'
 
@@ -8000,10 +8122,102 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 				end 'eachTrait'
 			end 'match'
 		end 'scan'
+		inferImplicitWitnessConstraints(project, recvType: recvType, out: out)
 	end 'haveRecv'
 	return out
 end 'collectFunctionWitnessConstraints'
 
+// J.4a prereq.5: append structurally-implied constraints that the source
+// doesn't write down explicitly but the language semantics guarantee.
+//
+// Today's single rule covers the Iterable contract: when interface `I`
+// declares `function createIterator() returns T` and `T` is one of `I`'s
+// `uses` parameters, the language uses `T` as an iterator (for-in expands
+// to `iter.current()` / `iter.advance()`), so every conformer of `I` must
+// supply a `T : Iterator` witness. The C# bootstrap recovers this via
+// monomorphization; the dictionary-passing self-hosted compiler needs an
+// explicit witness slot so methods like `Iterable.withIterator` (whose body
+// instantiates `WithIterIterator with Iter, Element where Source is Iterator`)
+// can forward the witness without panicking in `forwardCallerWitness`.
+//
+// Skip the inference when the user already wrote `where T is Iterator`
+// (don't double-slot the same constraint), and only fire on actual
+// interface receivers — struct receivers with `createIterator` follow the
+// concrete-conformer path that goes through `BuildWitnessTables` and
+// doesn't need the slot.
+function inferImplicitWitnessConstraints(project Project, recvType String, out WhereClauseArray)
+	let iface = try project.interfaces.get(recvType) otherwise return
+	for i in 0 upto iface.methods.count() 'eachMethod'
+		let m = try iface.methods.get(i) otherwise panic("inferImplicitWitnessConstraints: methods.get OOB at {i}")
+		if m.name != "createIterator" 'notCreate'
+			continue
+		end 'notCreate'
+		let returnedName = try returnTypeNamedName(project, ref: m.returnType) otherwise continue
+		if not stringArrayContains(iface.usesParams, value: returnedName) 'notUsesParam'
+			continue
+		end 'notUsesParam'
+		let existing = WhereClause.createScoped(returnedName, requiredTraitName: "Iterator", declaringTypeName: recvType)
+		if whereClauseArrayContains(out, clause: existing) 'alreadyHave'
+			continue
+		end 'alreadyHave'
+		out.push(existing)
+	end 'eachMethod'
+end 'inferImplicitWitnessConstraints'
+
+// Extract the bare named-type name from a `MaxonReturnType`, or throw when
+// the return is `void` or a non-named MaxonType shape (genericInstance,
+// typeParameter, interface, ...). Inference rules above only need to
+// recognize the parser's `MaxonType.named(<usesParam>)` shape that
+// interface-method return positions emit when the source writes a bare
+// uses-param name.
+function returnTypeNamedName(project Project, ref MaxonReturnType) returns String throws NamedReturnError
+	let inner = match ref 'unwrap'
+		void gives MaxonType.unresolved
+		value(t) gives t
+	end 'unwrap'
+	match inner 'pick'
+		named(id) then return project.typeNames.get(id)
+		boolean to string then throw NamedReturnError.notNamed
+		function then throw NamedReturnError.notNamed
+		unresolved then throw NamedReturnError.notNamed
+		typeParameter then throw NamedReturnError.notNamed
+		genericInstance then throw NamedReturnError.notNamed
+		interface then throw NamedReturnError.notNamed
+		constInt then throw NamedReturnError.notNamed
+	end 'pick'
+end 'returnTypeNamedName'
+
+enum NamedReturnError implements Error
+	notNamed
+end 'NamedReturnError'
+
+function stringArrayContains(arr StringArray, value String) returns bool
+	for i in 0 upto arr.count() 'scan'
+		let item = try arr.get(i) otherwise panic("stringArrayContains: arr.get OOB at {i}")
+		if item == value 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'stringArrayContains'
+
+function whereClauseArrayContains(arr WhereClauseArray, clause WhereClause) returns bool
+	for i in 0 upto arr.count() 'scan'
+		let item = try arr.get(i) otherwise panic("whereClauseArrayContains: arr.get OOB at {i}")
+		if item.paramName == clause.paramName and item.requiredTraitName == clause.requiredTraitName and item.declaringTypeName == clause.declaringTypeName 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'whereClauseArrayContains'
+
+// J.4a prereq.2: also accept interface prefixes so extension methods on
+// generic interfaces (`Iterable.map`, `Iterator.advanceBy`, ...) are
+// recognized as methods whose enclosing type carries type parameters.
+// `project.interfaces` is populated by TypeResolution's
+// `resolveAllInterfaces` drain before lowering runs; the unresolved map
+// is consulted as a belt-and-braces fallback for stdlib-cache paths that
+// may have skipped the drain for a particular interface.
 function enclosingTypeName(project Project, name String) returns String throws EnclosingTypeError
 	let bytes = name.toByteArray()
 	let dotByte = 0x2E
@@ -8022,10 +8236,16 @@ function enclosingTypeName(project Project, name String) returns String throws E
 	end 'noDot'
 	let prefixBytes = try bytes.slice(0, endIndex: lastDot) otherwise panic("invariant: 0 <= lastDot <= bytes.count() but slice failed")
 	let prefix = String.from(prefixBytes)
-	if not project.structTypes.contains(prefix) 'notRegistered'
-		throw EnclosingTypeError.notAMethod
-	end 'notRegistered'
-	return prefix
+	if project.structTypes.contains(prefix) 'structHit'
+		return prefix
+	end 'structHit'
+	if project.interfaces.contains(prefix) 'ifaceHit'
+		return prefix
+	end 'ifaceHit'
+	if project.unresolvedInterfaces.contains(prefix) 'unresolvedIfaceHit'
+		return prefix
+	end 'unresolvedIfaceHit'
+	throw EnclosingTypeError.notAMethod
 end 'enclosingTypeName'
 
 // Return the runtime helper-function name for a `__ManagedMemory.METHOD`

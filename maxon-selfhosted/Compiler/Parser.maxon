@@ -734,12 +734,10 @@ export type Parser
 
 	// Parse an optional `implements I1, I2 with X, I3 with (X, Y)` clause on a
 	// `type` or `enum` declaration. Returns an empty array when the keyword
-	// isn't present. Commas are stripped at the lexer (see actionTable's
-	// skipOther) so a single conformance separates from the next purely by the
-	// next token's kind: another identifier opens a new conformance, anything
-	// else terminates the clause. Bare-name capture only — Phase 3 of the
-	// interfaces plan resolves these against `project.unresolvedInterfaces`
-	// and validates the type-parameter arity.
+	// isn't present. Commas come through as real `TokenKind.comma` tokens; the
+	// loop consumes one per conformance separator. Bare-name capture only —
+	// Phase 3 of the interfaces plan resolves these against
+	// `project.unresolvedInterfaces` and validates the type-parameter arity.
 	//
 	// Grammar:
 	//     implementsClause = 'implements' conformance (',' conformance)*
@@ -750,6 +748,12 @@ export type Parser
 	// conformances (`Iterator with RangeBound` and `BidirectionalIterator`):
 	// the bare-identifier `with` form takes exactly one type argument; the
 	// next identifier opens the next conformance.
+	//
+	// `parenForm` on each `Conformance` records whether the `with(...)` arg
+	// list used parens. TypeResolution uses this to collapse a parenthesized
+	// multi-arg list against a single-`uses` interface into one `__TupleN`
+	// generic-instance (mirrors maxon-sharp's `ParseWithTypeArgs`
+	// `expectedCount == 1` branch).
 	function parseImplementsClause() returns ConformanceArray throws ParserError
 		var list = ConformanceArray.create()
 		if not accept(TokenKind.implements) 'noImpl'
@@ -762,8 +766,10 @@ export type Parser
 		while at(TokenKind.identifier) 'list'
 			let nameToken = try consumeExpecting("interface name")
 			var withArgs = StringArray.create()
+			var parenForm = false
 			if accept(TokenKind.with) 'hasWith'
 				if accept(TokenKind.leftParen) 'parenList'
+					parenForm = true
 					while at(TokenKind.identifier) 'argLoop'
 						let argToken = try consumeExpecting("type parameter name")
 						withArgs.push(argToken.value)
@@ -778,7 +784,7 @@ export type Parser
 					withArgs.push(argToken.value)
 				end 'singleArg'
 			end 'hasWith'
-			list.push(Conformance.create(nameToken.value, withArgs: withArgs, line: nameToken.line, column: nameToken.column))
+			list.push(Conformance.create(nameToken.value, withArgs: withArgs, parenForm: parenForm, line: nameToken.line, column: nameToken.column))
 			if not accept(TokenKind.comma) 'noMoreConf'
 				break
 			end 'noMoreConf'
@@ -3077,17 +3083,41 @@ export type Parser
 						try expect(TokenKind.comma)
 					end 'argLoop'
 					try expect(TokenKind.rightParen)
-				end 'parenList' else 'singleArg'
-					let argToken = cursor.current()
-					if not isTypeNameToken(argToken) 'badSingle'
-						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '{targetToken.value} with' requires a type-name argument, got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
-						skipToNextLine()
-						throw ParserError.unhandledToken
-					end 'badSingle'
-					_ = try consume()
-					usedTypeAliases.insert(element: argToken.value)
-					argNames.push(argToken.value)
-				end 'singleArg'
+				end 'parenList' else 'bareArgs'
+					// Bare (no-paren) `with` arg form. The first identifier is
+					// mandatory; subsequent comma-separated identifiers are
+					// captured greedily so a multi-`uses` target like
+					// `typealias WithIterSelf = WithIterIterator with Iter, Element`
+					// produces both `Iter` and `Element` as separate args.
+					// Mirrors maxon-sharp `ParseWithTypeArgs`'s no-paren branch
+					// (greedy comma consumption up to expectedCount; we don't
+					// know expectedCount at parse time and stop on the first
+					// non-identifier token, which is functionally equivalent
+					// for the legal forms).
+					var firstBareArg = true
+					while firstBareArg or accept(TokenKind.comma) 'bareLoop'
+						let argToken = cursor.current()
+						if not isTypeNameToken(argToken) 'badBare'
+							if firstBareArg 'mustHaveOne'
+								reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': '{targetToken.value} with' requires a type-name argument, got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
+								skipToNextLine()
+								throw ParserError.unhandledToken
+							end 'mustHaveOne'
+							// A consumed comma followed by a non-type-name
+							// is malformed source (`with A, ,` or `with A, end`).
+							// Report and stop — the comma has already been
+							// consumed, so silently bailing would mis-position
+							// the recovery cursor.
+							reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': expected type-name argument after ',' in '{targetToken.value} with', got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
+							skipToNextLine()
+							throw ParserError.unhandledToken
+						end 'badBare'
+						_ = try consume()
+						usedTypeAliases.insert(element: argToken.value)
+						argNames.push(argToken.value)
+						firstBareArg = false
+					end 'bareLoop'
+				end 'bareArgs'
 
 				if targetToken.value == "__ManagedMemory" 'isMmWith'
 					// Preserve the legacy seeding so `__ManagedMemory` resolves
@@ -4566,6 +4596,19 @@ export type Parser
 	//
 	// entry: cursor AT the token AFTER `extension` (the target-type name).
 	// Caller (dispatchInner) has already consumed the `extension` keyword.
+	// J.4b: peek the upcoming `function` body's method-name token without
+	// consuming it. parseFunction will consume the identifier itself; we
+	// just snapshot the bare name so the outer extension can record the
+	// `<targetType>.<methodName>` mapping. Returns "" on a malformed
+	// extension body so the caller can skip the registration silently.
+	function peekIdentifierForExtensionMethod() returns String
+		let tok = cursor.current()
+		if tok.kind == TokenKind.identifier 'isIdent'
+			return tok.value
+		end 'isIdent'
+		return ""
+	end 'peekIdentifierForExtensionMethod'
+
 	function parseExtension(visibility Visibility) throws ParserError
 		let targetNameToken = try consumeExpecting("type name")
 		let targetTypeName = targetNameToken.value
@@ -4664,6 +4707,15 @@ export type Parser
 		// target struct's `innerAliases` during resolution.
 		var extInnerAliases = InnerAliasMap.create()
 
+		// J.4b: collect the qualified names of methods parsed inside this
+		// extension body. parseFunction registers each method's identifier
+		// token; we peek at it before consuming so the captured names are
+		// the same `<targetType>.<methodName>` keys used in funcSignatures
+		// / funcReturnTypes. After the body loop, we walk this list and
+		// stamp the extension's whereClauses into
+		// `project.extensionMethodWhereClauses` for the E4006 lookup.
+		var extensionMethodNames = StringArray.create()
+
 		while true 'body'
 			let bodyPrevPos = cursor.index()
 			let memberToken = cursor.current()
@@ -4686,11 +4738,19 @@ export type Parser
 			end 'isInnerAlias' else if kindToken.kind == TokenKind.static 'isStatic'
 				try eat(TokenKind.static)
 				try eat(TokenKind.function)
+				let methodName = peekIdentifierForExtensionMethod()
 				try parseFunction(targetTypeName, isInstance: false, fields: fields, visibility: currentTypeVisibility)
+				if not methodName.isEmpty() 'recordStatic'
+					extensionMethodNames.push("{targetTypeName}.{methodName}")
+				end 'recordStatic'
 				try skipNewlines()
 			end 'isStatic' else if kindToken.kind == TokenKind.function 'isFn'
 				try eat(TokenKind.function)
+				let methodName = peekIdentifierForExtensionMethod()
 				try parseFunction(targetTypeName, isInstance: true, fields: fields, visibility: currentTypeVisibility)
+				if not methodName.isEmpty() 'recordFn'
+					extensionMethodNames.push("{targetTypeName}.{methodName}")
+				end 'recordFn'
 				try skipNewlines()
 			end 'isFn' else 'unknown'
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token in extension body: '{tokenValueToString(kindToken.value)}' (expected 'function', 'static', or 'typealias')", line: kindToken.line, column: kindToken.column, filePath: filePath)
@@ -4716,6 +4776,14 @@ export type Parser
 		let unresolvedExt = UnresolvedExtension.create(targetTypeName, targetTypeParams: targetTypeParams, addedConformances: addedConformances, whereClauses: whereClauses, visibility: visibility, line: targetNameToken.line, column: targetNameToken.column, filePath: filePath)
 		project.unresolvedExtensions.push(unresolvedExt)
 
+		// J.4b: stamp each method declared inside this extension body with
+		// the extension's whereClauses so resolveMethodCallSite can issue
+		// E4006 for un-satisfied conditional availability without rescanning
+		// the unresolvedExtensions list at every call site.
+		for methodKey in extensionMethodNames 'recordWhere'
+			try project.extensionMethodWhereClauses.insert(methodKey, value: whereClauses) otherwise ignore
+		end 'recordWhere'
+
 		// Phase 11.0 step 8a: merge inner-typealias entries declared inside
 		// the extension body into the target's UnresolvedStructType so the
 		// post-parse resolver promotes them through the same path as the
@@ -4732,14 +4800,34 @@ export type Parser
 	// Phase 11.0 step 8a helper: lift the mutating-call out of `parseExtension`
 	// so the `try ... otherwise return` form skips silently when the target
 	// type isn't declared yet (or was already drained).
+	//
+	// Targets fall into two buckets: `extension SomeStruct` writes into the
+	// struct's `innerAliases`; `extension SomeInterface` writes into the
+	// interface's. Without the interface branch, the parser would silently
+	// drop the alias for interface targets, breaking method bodies that
+	// reference it. The "neither bucket has the target" path stays silent —
+	// the extension's methods themselves will surface the missing-target
+	// diagnostic.
 	function mergeExtensionInnerAliases(targetTypeName String, extInnerAliases InnerAliasMap)
-		var target = try project.unresolvedStructTypes.get(targetTypeName) otherwise return
-		for (aliasName, aliasExpr) in extInnerAliases 'eachAlias'
-			if not target.innerAliases.contains(aliasName) 'novel'
-				target.innerAliases.upsert(aliasName, value: aliasExpr)
-			end 'novel'
-		end 'eachAlias'
-		project.unresolvedStructTypes.upsert(targetTypeName, value: target)
+		if var target = try project.unresolvedStructTypes.get(targetTypeName) 'structTarget'
+			for (aliasName, aliasExpr) in extInnerAliases 'eachAlias'
+				if not target.innerAliases.contains(aliasName) 'novel'
+					target.innerAliases.upsert(aliasName, value: aliasExpr)
+				end 'novel'
+			end 'eachAlias'
+			project.unresolvedStructTypes.upsert(targetTypeName, value: target)
+			return
+		end 'structTarget'
+
+		if var iface = try project.unresolvedInterfaces.get(targetTypeName) 'ifaceTarget'
+			for (aliasName, aliasExpr) in extInnerAliases 'eachIfaceAlias'
+				if not iface.innerAliases.contains(aliasName) 'novelIface'
+					iface.innerAliases.upsert(aliasName, value: aliasExpr)
+				end 'novelIface'
+			end 'eachIfaceAlias'
+			project.unresolvedInterfaces.upsert(targetTypeName, value: iface)
+			return
+		end 'ifaceTarget'
 	end 'mergeExtensionInnerAliases'
 
 	// True when the cursor is positioned on `end` *followed by* the

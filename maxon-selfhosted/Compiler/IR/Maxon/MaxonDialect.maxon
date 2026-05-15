@@ -677,12 +677,12 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		float then break
 		string then break
 		named(id) then try writeString(buf, s: project.typeNames.get(id))
-		// TODO Stage E (closures): persist function-type signatures so a
-		// stdlib function with a function-typed parameter can survive cache
-		// round-trip. No stdlib function takes a function-typed param today,
-		// so the cache never sees this arm. If we ever try to cache one we
-		// want a loud failure rather than silent corruption.
-		function then panic("writeMaxonType: function types are not cached yet (Stage A scope)")
+		// Cache v49: persist function-type signatures so stdlib functions with
+		// function-typed parameters (e.g. `Iterable.map(transform(Element)
+		// returns Element)`) survive cache round-trip. The reader re-interns
+		// the (paramTypes, returnType) pair in the destination project's
+		// `functionTypes` registry, reproducing a structurally equal id.
+		function(id) then try writeFunctionTypePayload(project, buf: buf, id: id)
 		// Phase 11.0 (cache v7): persist generic-aware MaxonType arms with
 		// enough payload that the read side can re-intern into the
 		// destination project's registries and reproduce the *same* MaxonType
@@ -729,6 +729,36 @@ function writeGenericInstancePayload(project Project, buf ByteArray, id GenericI
 		try writeMaxonType(project, buf: buf, t: a)
 	end 'eachArg'
 end 'writeGenericInstancePayload'
+
+// Cache v49: persist a function-type payload as (paramCount, paramType*,
+// returnType). The reader walks the params + return type and re-interns
+// through `internFunctionType`, which is content-addressed so structurally
+// equal signatures round-trip to the same FunctionTypeId in the destination
+// project. Bounded recursion: param/return types may themselves be function
+// types but only the stdlib's hand-written signatures reach the codec.
+function writeFunctionTypePayload(project Project, buf ByteArray, id FunctionTypeId) throws CacheCorruption
+	let (paramTypes, returnType) = project.functionTypes.get(id)
+	writeDword(buf, value: paramTypes.count())
+	for i in 0 upto paramTypes.count() 'eachParam'
+		let p = try paramTypes.get(i) otherwise panic("writeFunctionTypePayload: paramTypes.get OOB at {i}")
+		try writeMaxonType(project, buf: buf, t: p)
+	end 'eachParam'
+	try writeMaxonReturnType(project, buf: buf, rt: returnType)
+end 'writeFunctionTypePayload'
+
+function readMaxonFunctionType(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
+	let paramCount = readDword(buf, offset: offset)
+	var pos = offset + 4
+	var paramTypes = MaxonTypeArray.create()
+	for _ in 0 upto paramCount 'eachParam'
+		let (p, nextPos) = try readMaxonType(project, buf: buf, offset: pos)
+		paramTypes.push(p)
+		pos = nextPos
+	end 'eachParam'
+	let (returnType, endPos) = try readMaxonReturnType(project, buf: buf, offset: pos)
+	let id = internFunctionType(project, paramTypes: paramTypes, returnType: returnType)
+	return (MaxonType.function(id), endPos)
+end 'readMaxonFunctionType'
 
 function readMaxonTypeNamed(project Project, buf ByteArray, offset ByteOffset) returns (MaxonType, ByteOffset) throws CacheCorruption
 	let (name, nextPos) = try readString(buf, offset: offset)
@@ -788,8 +818,9 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		float then return (MaxonType.float, pos)
 		string then return (MaxonType.string, pos)
 		named then return try readMaxonTypeNamed(project, buf: buf, offset: pos)
-		// Symmetric with the writer above — function types aren't cached yet.
-		function then panic("readMaxonType: function types are not cached yet (Stage A scope)")
+		// Cache v49: round-trip function-type signatures (param list +
+		// return type). Symmetric with the `function(id)` writer arm.
+		function then return try readMaxonFunctionType(project, buf: buf, offset: pos)
 		unresolved then return (MaxonType.unresolved, pos)
 		// Phase 11 cache v7: round-trip generic-aware arms with their full
 		// payload so the reader rebuilds the same MaxonType the writer saw.
@@ -1820,6 +1851,13 @@ end 'lookupUnionCasePayloadArity'
 // than collapsing to the base struct's bare name — so generic instances
 // keep their `with` arg list, which the call-site receiver-context plumbing
 // needs.
+//
+// `enclosingType` may name a struct (`project.structTypes`), a resolved
+// interface (`project.interfaces`), or an interface that hasn't yet been
+// drained (`project.unresolvedInterfaces`). The interface paths exist so a
+// method declared inside `extension <SomeInterface> ... end` can resolve
+// inner-typealias names captured by `mergeExtensionInnerAliases` the same
+// way a struct extension does.
 export function chaseTypealiasNameToType(project Project, name String, enclosingType String) returns MaxonType throws TypealiasChaseError
 	if not enclosingType.isEmpty() 'tryInner'
 		if let st = try project.structTypes.get(enclosingType) 'haveStruct'
@@ -1827,9 +1865,33 @@ export function chaseTypealiasNameToType(project Project, name String, enclosing
 				return inner
 			end 'haveInner'
 		end 'haveStruct'
+		if let iface = try project.interfaces.get(enclosingType) 'haveIface'
+			if let inner = try iface.innerAliases.get(name) 'haveIfaceInner'
+				return inner
+			end 'haveIfaceInner'
+		end 'haveIface'
+		if let unresolvedIface = try project.unresolvedInterfaces.get(enclosingType) 'haveUnresolvedIface'
+			if let expr = try unresolvedIface.innerAliases.get(name) 'haveExpr'
+				return resolveInterfaceInnerAliasExpr(project, declaringTypeName: enclosingType, aliasName: name, expr: expr)
+			end 'haveExpr'
+		end 'haveUnresolvedIface'
 	end 'tryInner'
 	return try project.genericTypealiases.get(name) otherwise throw TypealiasChaseError.unresolved
 end 'chaseTypealiasNameToType'
+
+// On-demand resolver mirroring the drain-pass logic in
+// `resolveAllInterfaces`: generic-form aliases resolve through
+// `resolveGenericAliasExpr` so type-parameter args (`Element`, ...) scope
+// correctly to the declaring interface, and non-generic aliases fall back to
+// a named placeholder. Used by the chase helpers so a chase fired before the
+// interface drain has run still returns the same MaxonType the drain would
+// have stored.
+function resolveInterfaceInnerAliasExpr(project Project, declaringTypeName String, aliasName String, expr UnresolvedTypeExpr) returns MaxonType
+	if isGenericAliasExpr(expr) 'isGeneric'
+		return resolveGenericAliasExpr(project, expr: expr, declaringTypeName: declaringTypeName)
+	end 'isGeneric'
+	return internMaxonType(project, name: aliasName)
+end 'resolveInterfaceInnerAliasExpr'
 
 export typealias ByteSliceIndex = int(0 to u64.max)
 
@@ -1873,6 +1935,11 @@ end 'lastIndexOfDotByte'
 // `baseNameOfMaxonType` can render — callers should use `if let` to take
 // the resolved-struct path and fall through to their alternate handling on
 // throw.
+//
+// `enclosingType` may name a struct, a resolved interface, or an interface
+// that hasn't yet been drained from `unresolvedInterfaces`. The interface
+// paths exist so a method declared inside `extension <SomeInterface>` can
+// chase inner-typealias names the same way a struct extension does.
 export function chaseTypealiasNameToStruct(project Project, name String, enclosingType String) returns String throws TypealiasChaseError
 	if not enclosingType.isEmpty() 'tryInner'
 		if let st = try project.structTypes.get(enclosingType) 'haveStruct'
@@ -1880,6 +1947,17 @@ export function chaseTypealiasNameToStruct(project Project, name String, enclosi
 				return try baseNameOfMaxonType(project, t: inner) otherwise throw TypealiasChaseError.unresolved
 			end 'haveInner'
 		end 'haveStruct'
+		if let iface = try project.interfaces.get(enclosingType) 'haveIface'
+			if let inner = try iface.innerAliases.get(name) 'haveIfaceInner'
+				return try baseNameOfMaxonType(project, t: inner) otherwise throw TypealiasChaseError.unresolved
+			end 'haveIfaceInner'
+		end 'haveIface'
+		if let unresolvedIface = try project.unresolvedInterfaces.get(enclosingType) 'haveUnresolvedIface'
+			if let expr = try unresolvedIface.innerAliases.get(name) 'haveExpr'
+				let resolved = resolveInterfaceInnerAliasExpr(project, declaringTypeName: enclosingType, aliasName: name, expr: expr)
+				return try baseNameOfMaxonType(project, t: resolved) otherwise throw TypealiasChaseError.unresolved
+			end 'haveExpr'
+		end 'haveUnresolvedIface'
 	end 'tryInner'
 	return try chaseTypealiasNameThroughGeneric(project, name: name)
 end 'chaseTypealiasNameToStruct'
@@ -2175,12 +2253,22 @@ export function resolveOverloadedCallee(project Project, bareQualifiedName Strin
 	// caller's so `contains(Element)` and `contains(Array<Element>)` route
 	// to the right monomorph: scalar args prefer the typeParameter variant,
 	// genericInstance args prefer the genericInstance variant.
+	//
+	// J.4c: a variant whose first param is declared via an inner-typealias
+	// (e.g. `sequence ElementArray` where `typealias ElementArray = Array
+	// with Element`) parses as `named("ElementArray")` — neither
+	// `paramTypeMentionsTypeParam` nor `paramTypeShape` see the underlying
+	// `Array with Element` shape without first chasing the alias through
+	// the enclosing type's `innerAliases`. The enclosing type name is the
+	// prefix of `bareQualifiedName` before the last `.`.
+	let enclosingForChase = enclosingTypeNameFromBareQualified(bareQualifiedName)
 	let argShape = paramTypeShape(firstArgType)
 	var firstParamMatch = ""
 	for v in variants 'scanGeneric'
 		let sig = try project.funcSignatures.get(v) otherwise continue
 		let userParamIdx = signatureFirstUserParamIndex(sig)
-		let paramType = try sig.paramTypes.get(userParamIdx) otherwise continue
+		let rawParamType = try sig.paramTypes.get(userParamIdx) otherwise continue
+		let paramType = chaseParamTypeThroughInnerAlias(project, t: rawParamType, enclosingType: enclosingForChase)
 		if not paramTypeMentionsTypeParam(project, t: paramType) 'concreteOnly'
 			continue
 		end 'concreteOnly'
@@ -2283,6 +2371,46 @@ end 'signatureFirstUserParamIndex'
 // through (e.g. `Array.contains(sequence: ElementArray)` where
 // `ElementArray = Array with Element`); a fully concrete generic instance
 // would have been caught by the exact-suffix scan before reaching here.
+// J.4c: split `<Type>.<method>` on the last `.` and return `<Type>`. Used by
+// `resolveOverloadedCallee` to drive the inner-typealias chase through the
+// receiver type's `innerAliases`. Returns "" for non-qualified bucket keys
+// (`free.function`-style names that don't have a `.`).
+function enclosingTypeNameFromBareQualified(bareQualifiedName String) returns String
+	let bytes = bareQualifiedName.toByteArray()
+	let dotIdx = lastIndexOfDotByte(bytes)
+	if dotIdx >= bytes.count() 'noDot'
+		return ""
+	end 'noDot'
+	return byteSliceToString(bytes, startIndex: 0, endIndex: dotIdx)
+end 'enclosingTypeNameFromBareQualified'
+
+// J.4c: when `t` is a `named(...)` arm that matches an inner-typealias on
+// `enclosingType` (e.g. `Array.contains(sequence ElementArray)` where
+// `typealias ElementArray = Array with Element`), return the alias's
+// resolved underlying type. Otherwise return `t` unchanged. Used so the
+// overload resolver sees the underlying `Array with Element` shape and
+// `paramTypeMentionsTypeParam` / `paramTypeShape` correctly route the
+// genericInstance-shaped variant.
+function chaseParamTypeThroughInnerAlias(project Project, t MaxonType, enclosingType String) returns MaxonType
+	if enclosingType.isEmpty() 'noEnclosing'
+		return t
+	end 'noEnclosing'
+	return match t 'check'
+		named(id) gives chaseNamedThroughInnerAlias(project, name: project.typeNames.get(id), enclosingType: enclosingType, fallback: t)
+		boolean to string gives t
+		typeParameter gives t
+		genericInstance gives t
+		function gives t
+		interface gives t
+		unresolved gives t
+		constInt gives t
+	end 'check'
+end 'chaseParamTypeThroughInnerAlias'
+
+function chaseNamedThroughInnerAlias(project Project, name String, enclosingType String, fallback MaxonType) returns MaxonType
+	return try chaseTypealiasNameToType(project, name: name, enclosingType: enclosingType) otherwise fallback
+end 'chaseNamedThroughInnerAlias'
+
 function paramTypeMentionsTypeParam(project Project, t MaxonType) returns bool
 	return match t 'check'
 		typeParameter gives true

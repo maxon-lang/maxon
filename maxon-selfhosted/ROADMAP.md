@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **102 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1234 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2714/2714. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **108 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1290 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2719/2719. The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -180,7 +180,7 @@ Parser entry points exist at [`Parser.maxon:1372`](Compiler/Parser.maxon#L1372) 
 
 **Specs unlocked**: `function-declaration`, `parameter-labels`, `assignment`, `method-calls`, `method-call-on-parameter`, `static-methods`, `type-methods`, `self-keyword`, `unused-parameters`.
 
-Parser at [`Parser.maxon:181`](Compiler/Parser.maxon#L181) (`parseFunctionParameters`). Calling conventions wired up for Windows (RCX/RDX/R8/R9) and SysV (RDI/RSI/RDX/RCX/R8/R9) on x64; X0–X7 on ARM64. ABI lowering handled by [`LowerABI.maxon`](Compiler/IR/Std/LowerABI.maxon).
+Parser at [`Parser.maxon:181`](Compiler/Parser.maxon#L181) (`parseFunctionParameters`). Maxon uses a custom internal calling convention on x64 (identical on all OSes): params in RCX/RDX/RAX/R9/RSI/RDI/RBX, return in R8, error flag in RDX; ARM64 follows AAPCS64 with X0–X7 for params, return in X0, error flag in X1. ABI lowering handled by [`LowerABI.maxon`](Compiler/IR/Std/LowerABI.maxon).
 
 ---
 
@@ -1221,6 +1221,135 @@ exact signature match in the type section. Void interface methods (like
 1-result. Added `isVoid` to `StdCallOp.witnessCall` / `MirOp.witnessCall`,
 threaded through ~14 files. Native backends ignore it; wasm picks the right
 indirect-call type. `CACHE_FORMAT_VERSION` bumped to 46.
+
+## Stage J landing (2026-05-14) — re-enable all dev-disabled tests + monomorphizer
+
+Sequential agent runs to re-enable every test disabled across Stages A-I,
+and to land the missing infrastructure each disabling represented. Net:
+**+14 fragments** over the 1276 entry baseline; **+56 fragments** vs Stage I's
+1234 final number (which had the 6 J-tagged-out fragments above as dark
+matter). Final state: 1290/1290 x64-windows, 1290/1290 wasm32-wasi,
+2719/2719 C# bootstrap.
+
+**J.serial.1 — conditional Array Hashable/Equatable** (+1: `array-hashable/int-array-map-key`):
+`thunkWitnessLabelForBound` was producing a wrong witness label (`__witness_IntArr_Hashable`)
+when the bound type was a typealias. Added `resolveAliasedBound` to chase
+typealiases through `project.genericTypealiases` and `project.typealiases` so
+the label resolves to the actual emitted `__witness_Array_Int_Hashable`.
+
+**J.serial.2 — MapIterator layout-forwarding** (+2: `map/for-in.nested`,
+`tuples/for-destructuring-map`): no-op — the cross-project layout forwarding
+the prior rate-limited agent had laid down (`substituteReturnTypeViaReceiver` +
+`promoteBareGenericReturnToReceiverScope` in LowerMaxonToStd.maxon ~lines
+8235-8320) had already landed; just needed the markers flipped.
+
+**J.serial.3 — sized Vector + Set generic-inference** (+35: `set` 15/15 +
+`vector` 20/23): unification-based generic-arg inference at the call-result-type
+computation path (`inferGenericReturnFromArgs` in TypeResolution.maxon). When
+`T.init(...)`'s return type lands as bare `named(T)` and `T` declares `uses
+Param1, ...`, walk `(paramType, argType)` pairs, unify through `genericInstance`
+arg lists, and bind `T`'s type-parameters from the actual arg shape. BAL fast
+path for `Vector from [...]` (parses managed-memory directly rather than wrapping
+in Array first). Sized typealias post-call `mrt_alloc` patch in `lowerCall`.
+
+**J.serial.5 — E3087 redundant `contains+get` diagnostic** (+2: `if-try`
+fragments): pure marker flip — the C#-bootstrap-style diagnostic was already
+implemented in `SemanticCheck.maxon::checkRedundantContainsGet` (~120 lines
+mirroring C#'s `CheckRedundantContainsGet`) and `ErrorCode.maxon:80`
+(`semanticRedundantContainsGet = 3087`). Just needed the `disabled-test:`
+markers flipped.
+
+**J.serial.6 — try-otherwise binding union-type scope** (+1: `map/insert.duplicate-error-binding`):
+three compounding bugs uncovered:
+(1) `scanProducerTypeForName` (Parser.maxon:8643) didn't chase through
+`varDecl` → `call`/`tryCall` producer types, so `var m = [1: 10]` couldn't
+resolve `m.insert` past the bare method name.
+(2) `StdlibCacheData` was missing `funcThrowsTypes` and `enumTypes` —
+fixed by capture/serialize/deserialize/restore round-trip.
+(3) Enum exhaustiveness diagnostic regression where stdlib + user enums
+with same case-name collided (e.g. `notFound`) — fixed via type-driven
+`enumScrutineeDisplayNameFromType` instead of case-name search.
+`CACHE_FORMAT_VERSION` bumped 46 → 47.
+
+**J.serial.4 (extension Element substitution)** decomposed into 7 sub-stages:
+
+**J.4a-prereqs 1-5 + X** (zero-fragment infrastructure changes, no regressions):
+- prereq.1: `UnresolvedInterfaceType.innerAliases` + `mergeExtensionInnerAliases`
+  dispatches on interface targets.
+- prereq.2: `functionIsGenericForLowering` + `enclosingTypeName` recognize
+  interface enclosing types with non-empty `usesParams`.
+- prereq.3: new `resolveInterfaceUsesParamThroughConformance` helper +
+  4 supporting helpers in `TypeSystem/Substitution.maxon` for resolving uses-params
+  via Self's conformance row.
+- prereq.4: parser extensions for bare-comma typealias args
+  (`typealias X = Y with A, B`) and tuple-collapse in implements
+  clause (`T with(A, B)` against single-uses interface).
+- prereq.5: implicit witness inference (`inferImplicitWitnessConstraints` infers
+  `T is Iterator` when an interface declares `createIterator()` returning T) +
+  `forwardCallerWitness` upgraded to look up caller-side paramName when callee
+  uses a different name.
+- prereq.X: resolved `IrInterface.innerAliases` + drain forwarding +
+  StdlibCache round-trip + `chaseTypealiasName*` for interfaces +
+  `enclosingTypeNameForCallee` for interfaces. `CACHE_FORMAT_VERSION` 47 → 48.
+
+**J.4a-final** (zero-fragment, prereq complete): whitelisted
+`stdlib/Interfaces.maxon` + `stdlib/helpers/itertools/withIterator.maxon`.
+Deduplicated bootstrap synthesis (removed interfaces/enums/typealiases that
+the real file now provides). Fixed the 7th unforeseen prereq: function-type
+cache codec — `writeFunctionTypePayload` / `readMaxonFunctionType` in
+MaxonDialect.maxon + `functionTypes FunctionTypeRegistry` capture/translate
+in StdlibCache.maxon. `CACHE_FORMAT_VERSION` 48 → 49.
+
+**J.4b — Per-receiver Maxon IR cloner for user-declared extensions** (+5
+`conditional-extensions` fragments): new pass
+[`Compiler/Passes/MonomorphizeExtensions.maxon`](Compiler/Passes/MonomorphizeExtensions.maxon).
+Entry point `monomorphizeInterfaceExtension` clones a function's blocks +
+ops with `MaxonType.typeParameter(<Iface, usesParam>) → withArgs[i]` and
+`MaxonType.interface(Iface) → MaxonType.named(receiverType)` substitution,
+slot-id renumber, dense scope rebuild. Trigger site in
+`TypeResolution.resolveMethodCallSite`. E4006 conditional-availability
+diagnostic + typealias-to-primitive conformance chase (`namedConformsTo` in
+`TypeSystem/Constraints.maxon`).
+
+**J.4c — Stdlib-extension cache restore + overload typealias chase** (+1:
+`conditional-extensions/array-contains`): added `unresolvedExtensions
+UnresolvedExtensionArray` and `extensionMethodWhereClauses WhereClauseMapByName`
+to `StdlibCacheData` with capture/serialize/deserialize/restore. Fixed
+overload resolver to chase inner typealiases through enclosing type's
+`innerAliases` before classifying each variant's first-param shape
+(`MaxonDialect.resolveOverloadedCallee` lines ~2262-2275). `CACHE_FORMAT_VERSION`
+49 → 50.
+
+**J.4d/4e — Function-typed cloner + cross-project Maxon-IR translator** (+8:
+`closure-capture.map-with-capture` and 7 `interface-extensions` fragments):
+J.4d added `MaxonType.function(id)` substitution arm to `substituteType` +
+cloner ABI expansion for closure params and interface fat pointers + on-demand
+`runFillUnresolvedTypesForFunc` re-run for cloned bodies. J.4e built the
+production architecture as an alternative to disk-cache codec changes: new
+[`Compiler/Passes/StdlibIrTranslation.maxon`](Compiler/Passes/StdlibIrTranslation.maxon)
+provides a sandbox stdlib parse (once per process) plus
+`translateOpAcross` (49-arm match over `MaxonOp`) +
+`translateMaxonTypeAcrossProjects` + `translateFunctionAcross` that
+re-binds Maxon-IR ids across project boundaries (string-key round-trip,
+bypassing the writer/reader id-translation pattern). The sandbox is
+captured by `recordStdlibSandboxSnapshot` on cache-miss warmup and
+constructed lazily by `ensureStdlibSandboxParsed` on cache-hit.
+
+**Spec runner extension**: new `isSelfHostedKnownBroken(specName, testName)`
+filter in `SpecTestRunner.maxon` for fragments that pass on the C# bootstrap
+but need self-hosted-specific cloner-completion work. Single entry today:
+`interface-extensions/stdlib-map-on-set` (cloner doesn't thread the
+`(Element, Hashable)` witness chain through `Set.map`'s nested
+`Set.createIterator` call — J.4f scope).
+
+**Residuals** (deferred to future work, not Stage J):
+- `interface-extensions/stdlib-map-on-set` — needs receiver-conformance witness
+  forwarding into nested generic calls in cloned bodies.
+- `interface-extensions/stdlib-map-on-map-with-function` — parser doesn't yet
+  infer untyped-closure-param types from callee signature.
+- 3 `vector` fragments tagged with documented reasons (float-routing through
+  BAL fast path, float-aware otherwise-type-match in generic params, WASI
+  ExitCode 0..125 range vs spec ExitCode 150).
 
 ## Verification
 

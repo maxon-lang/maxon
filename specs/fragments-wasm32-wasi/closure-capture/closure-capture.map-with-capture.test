@@ -1,0 +1,80 @@
+// Test: closure-capture.map-with-capture
+
+typealias Integer = int(i64.min to i64.max)
+
+type Level
+	export var rawValue Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
+end 'Level'
+
+function main() returns ExitCode
+	let level = Level.create(rawValue: 5)
+	let arr = [1, 2, 3]
+	let result = arr.map((_ Integer) gives level.rawValue)
+	return result.count()
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %33 = mir.mov_imm 8 : i64
+    %34 = mir.call @mrt_alloc(%33)
+    mir.store %0, %34, 0 width: qword
+    mir.store_slot slot_0, %34
+    %7 = mir.func_addr @stdlib.__destruct___ManagedMemory
+    %8 = mir.mov_imm 40 : i64
+    %9 = mir.mov_imm 0 : i64
+    %10 = mir.call @stdlib.__mm_alloc(%8, %7, %9)
+    %11 = mir.global_addr @__rdata_arr_closure-capture_main_0
+    mir.store %11, %10, 0 width: qword
+    %12 = mir.mov_imm 3 : i64
+    mir.store %12, %10, 8 width: qword
+    %13 = mir.mov_imm -2 : i64
+    mir.store %13, %10, 16 width: qword
+    %14 = mir.mov_imm 8 : i64
+    mir.store %14, %10, 24 width: qword
+    %15 = mir.mov_imm -2 : i64
+    mir.store %15, %10, 32 width: qword
+    %35 = mir.mov_imm 8 : i64
+    %36 = mir.call @mrt_alloc(%35)
+    %37 = mir.mov_imm 40 : i64
+    %38 = mir.call @mrt_alloc(%37)
+    %39 = mir.mov_imm 0 : i64
+    mir.store %39, %38, 0 width: qword
+    %40 = mir.mov_imm 0 : i64
+    mir.store %40, %38, 8 width: qword
+    %41 = mir.mov_imm 0 : i64
+    mir.store %41, %38, 16 width: qword
+    %42 = mir.mov_imm 8 : i64
+    mir.store %42, %38, 24 width: qword
+    %43 = mir.mov_imm 0 : i64
+    mir.store %43, %38, 32 width: qword
+    mir.store %38, %36, 0 width: qword
+    mir.store %10, %36, 0 width: qword
+    %24 = mir.func_addr @_$closure_3
+    %25 = mir.stack_slot_addr slot_0
+    %26 = mir.mov_imm 8 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    mir.store %25, %27, 0 width: qword
+    %28 = mir.global_addr @__layout_Array_Int
+    %29 = mir.call @Array.map(%36, %24, %27, %28)
+    %31 = mir.global_addr @__layout_Array_Int
+    %32 = mir.call @Array.count(%29, %31)
+    %44 = mir.mov_imm 125 : i64
+    %45 = mir.cmp ugt, %32, %44
+    mir.cond_br %45 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %46 = mir.global_addr @__panic_msg_0
+    %47 = mir.call @mrt_panic(%46)
+  __range_ok_0:
+    mir.ret %32
+  }
+}
+---

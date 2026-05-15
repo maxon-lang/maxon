@@ -95,8 +95,30 @@ function namedConformsTo(project Project, id TypeNameId, interfaceName String) r
 	if let aliasTarget = try project.genericTypealiases.get(typeName) 'isGenericAlias'
 		return typeConformsTo(project, t: aliasTarget, interfaceName: interfaceName)
 	end 'isGenericAlias'
+	// Ranged-primitive typealiases (`typealias Integer = int(...)`) resolve
+	// to a StdType primitive; chase through the typealias registry so the
+	// builtin-conformance check at the primitive arm fires. Without this,
+	// `Integer` would never satisfy `Equatable` even though `int` does.
+	if let aliasStdType = try project.typealiases.get(typeName) 'isPrimAlias'
+		let primitive = stdTypeToMaxonPrimitive(aliasStdType)
+		return typeConformsTo(project, t: primitive, interfaceName: interfaceName)
+	end 'isPrimAlias'
 	return project.conformances.contains(typeName, interfaceName: interfaceName)
 end 'namedConformsTo'
+
+// Map a StdType primitive back to its corresponding MaxonType arm so the
+// recursion in `namedConformsTo` can hit the primitive auto-conformance
+// branch. The mapping mirrors the StdType enum order in
+// `IR/Std/StdDialect.maxon`: `i1` → boolean, `i8..u64` → integer,
+// `f32`/`f64` → float.
+function stdTypeToMaxonPrimitive(t StdType) returns MaxonType
+	return match t 'pick'
+		i1 gives MaxonType.boolean
+		i8 to u64 gives MaxonType.integer
+		f32 gives MaxonType.float
+		f64 gives MaxonType.float
+	end 'pick'
+end 'stdTypeToMaxonPrimitive'
 
 // Generic instance: structural conformance lookup against the base type
 // gated by any conditional where-clause on the matching extension.

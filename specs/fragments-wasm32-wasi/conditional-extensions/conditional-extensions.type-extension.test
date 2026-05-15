@@ -1,0 +1,49 @@
+// Test: conditional-extensions.type-extension
+type Box uses Item
+	export var item Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+extension Box where Item is Equatable
+	function matches(other Item) returns bool
+		return item == other
+	end 'matches'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+	let b = IntBox.create(item: 42)
+	if b.matches(42) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %9 = mir.mov_imm 8 : i64
+    %10 = mir.call @mrt_alloc(%9)
+    mir.store %0, %10, 0 width: qword
+    %4 = mir.mov_imm 42 : i64
+    %11 = mir.load %10, 0 width: qword
+    %12 = mir.cmp eq, %11, %4
+    mir.cond_br %12 [then: yes_0(), else: yes_0.after()]
+  yes_0:
+    %7 = mir.mov_imm 1 : i64
+    mir.ret %7
+  yes_0.after:
+    %8 = mir.mov_imm 0 : i64
+    mir.ret %8
+  }
+}
+---

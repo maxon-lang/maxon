@@ -1,0 +1,52 @@
+// Test: basic-extension-on-array
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Countable
+	function value() returns Integer
+end 'Countable'
+
+extension Countable
+	function count() returns Integer
+		return 42
+	end 'count'
+end 'Countable'
+
+type IntList implements Countable
+	let data Integer
+
+	function value() returns Integer
+		return data
+	end 'value'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'IntList'
+
+function main() returns ExitCode
+	let list = IntList.create(data: 5)
+	return list.count()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @IntList.value(local0: i64) -> i64 {
+  entry:
+    %3 = mir.param local0 : i64
+    %1 = mir.load %3, 0 width: qword
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %4 = mir.mov_imm 8 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %0, %5, 0 width: qword
+    %6 = mir.mov_imm 42 : i64
+    mir.ret %6
+  }
+}
+---
