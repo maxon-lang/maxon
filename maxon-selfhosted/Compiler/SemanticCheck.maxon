@@ -7,10 +7,11 @@
 // files isn't supported yet.
 typealias StringSet = Set with String
 
-// Op-index domain widened with a "no producer found" sentinel of -1.
-// Parser doesn't accept `int(-1 to u64.max)` at param-type position, so the
-// range needs to be declared via a typealias.
-typealias OpIndexOrMissing = int(-1 to u64.max)
+// Op-index domain widened with a "no producer found" sentinel of -1. A
+// single 64-bit type cannot represent both -1 and u64.max, so we widen the
+// upper bound to i64.max — matches the SchedInt / DefMapIndex workaround
+// in InstructionScheduler and CommuteForCoalescing.
+typealias OpIndexOrMissing = int(i64.min to i64.max)
 
 export function runSemanticChecks(project Project, module MaxonModule)
 	logDebug(LogCategory.semantic, message: () gives "semcheck: functions={module.functions.count()}")

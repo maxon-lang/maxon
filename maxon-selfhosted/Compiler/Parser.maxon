@@ -5112,6 +5112,15 @@ export type Parser
 			return UnresolvedTypeExpr.invalid
 		end 'mismatched'
 
+		// A negative lower paired with `u64.max` upper would need a 65-bit
+		// type to represent — the i64 storage wraps `u64.max` to -1 and
+		// silently collapses the range. Reject before the order check so the
+		// user sees the unrepresentable-range diagnostic, not "Invalid range".
+		if not isFloat and lowerBound.value < 0 and upperBound.qualifier == "u64" 'unrepresentable'
+			reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({lowerBound.value} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: baseToken.line, column: baseToken.column, filePath: filePath)
+			return UnresolvedTypeExpr.invalid
+		end 'unrepresentable'
+
 		// Range ordering. For ints, treat non-negative lower as unsigned for
 		// the comparison so `0 to u64.max` (where u64.max wraps to -1 signed)
 		// is valid.

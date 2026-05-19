@@ -3970,6 +3970,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
           var (upper, upperQualifier) = ParseIntRangeBound();
           Expect(TokenType.RightParen);
+          // Mismatched type qualifiers — both sides explicitly named a type
+          // and they disagree. Checked before the negative-low/u64.max check
+          // below so `int(i64.min to u64.max)` continues to surface the
+          // qualifier-mismatch diagnostic rather than the more specific
+          // unrepresentable-range one.
+          if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
+          // A negative lower paired with `u64.max` upper would need a 65-bit
+          // type to represent — the `long` storage wraps `u64.max` to -1 and
+          // silently collapses the range. Reject before the order check so the
+          // user sees the unrepresentable-range diagnostic, not "Invalid range".
+          if (lower < 0 && upperQualifier == "u64")
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Integer range cannot span both negative values and above i64.max: 'int({lower} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", primitiveToken.Line, primitiveToken.Column);
           // Use unsigned comparison when lower is non-negative (e.g. 0 to u64.max where u64.max is -1 as signed)
           bool invalidRange = lower >= 0
             ? (ulong)lower > (ulong)upper || ((ulong)lower == (ulong)upper && !upperInclusive)
@@ -3979,8 +3992,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           // byte ranges must fit within 0..255
           if (baseType == IrType.I8 && (lower < 0 || upper > 255))
             throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to u8.max", primitiveToken.Line, primitiveToken.Column);
-          if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
-            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
           rangedType = new IrRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         }
         _typeRegistry[aliasName] = rangedType;

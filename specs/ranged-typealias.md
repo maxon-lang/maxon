@@ -713,6 +713,22 @@ end 'main'
 error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2:17: Mismatched type bounds: 'i64.min' and 'u64.max' must reference the same type
 ```
 
+### Error: negative literal lower with u64.max upper
+
+A negative-literal lower paired with `u64.max` upper cannot be represented in 64 bits — the upper bound exceeds `i64.max`, so no single 64-bit type can hold both ends. Without this check the parser would silently collapse the range to `-1..-1` (because `u64.max` is stored as the signed long `-1`).
+
+<!-- test: error.negative-low-u64-max -->
+```maxon
+typealias Bad = int(-1 to u64.max)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.negative-low-u64-max.test:2:17: Integer range cannot span both negative values and above i64.max: 'int(-1 to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead
+```
+
 ### Error: mismatched type bounds
 
 <!-- test: error.mismatched-type-bounds -->
