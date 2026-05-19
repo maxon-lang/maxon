@@ -490,21 +490,33 @@ end 'targetEmitXchgOrSwap'
 // Create the target-specific register allocator implementation.
 // This is the single dispatch point that selects the concrete type.
 
-// Check whether any op in the module contains virtual registers.
-// Returns true if standalone register allocation is needed.
-function moduleHasVirtualRegs(module TargetModule, regTarget RegAllocTarget) returns bool
-	for func in module.functions 'eachFunc'
-		if functionHasVirtualRegs(module, func: func, regTarget: regTarget) 'fHasVirtual'
-			return true
-		end 'fHasVirtual'
-	end 'eachFunc'
-	return false
-end 'moduleHasVirtualRegs'
+typealias FuncIdx = int(0 to u64.max)
+typealias FuncIdxArray = Array with FuncIdx
 
-// Per-function virtual-register check. Used to skip individual functions in
-// the all-physical fast path: hand-written runtime / coverage stubs use
-// physical registers directly, so re-running SSA regalloc on them is wasted
-// work proportional to runtime size on every user compile.
+// Walk every function once and collect the indices of those carrying virtual
+// registers. Used by `allocateRegistersWithTarget` to drive both the
+// all-physical fast path (empty result → no-op) and the per-function regalloc
+// loop on the slow path — fusing what used to be a `moduleHasVirtualRegs`
+// pre-pass plus a per-function re-check into a single op-walk.
+//
+// Hand-written runtime / coverage stubs use physical registers directly, so
+// re-running SSA regalloc on them is wasted work proportional to runtime size
+// on every user compile — they fall out of this list by construction.
+function collectFuncsNeedingRegalloc(module TargetModule, regTarget RegAllocTarget) returns FuncIdxArray
+	var needs = FuncIdxArray.create()
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("collectFuncsNeedingRegalloc: functions.get OOB at {funcIdx}")
+		if functionHasVirtualRegs(module, func: func, regTarget: regTarget) 'needsRegalloc'
+			needs.push(funcIdx as FuncIdx)
+		end 'needsRegalloc'
+	end 'eachFunc'
+	return needs
+end 'collectFuncsNeedingRegalloc'
+
+// Per-function virtual-register check. Returns on the first virtual operand,
+// so unallocated functions short-circuit quickly; fully-physical bodies pay
+// the full op-walk but that's also when the function is being SKIPPED, so the
+// cost is bounded by the runtime stub size, not by user IR size.
 function functionHasVirtualRegs(module TargetModule, func IrFunction, regTarget RegAllocTarget) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
@@ -547,22 +559,16 @@ function allocateWithArm64(module TargetModule)
 end 'allocateWithArm64'
 
 function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
-	let hasVirtual = moduleHasVirtualRegs(module, regTarget: regTarget)
+	let needsRegalloc = collectFuncsNeedingRegalloc(module, regTarget: regTarget)
 
-	if not hasVirtual 'allPhysical'
+	if needsRegalloc.count() == 0 'allPhysical'
 		logDebug(LogCategory.ir, message: () gives "allocateRegisters: all registers physical, pass-through")
 		return
 	end 'allPhysical'
 
-	// Virtual registers detected somewhere — but the user pipeline merges in
-	// the runtime module's hand-written stubs (~50 functions on every compile)
-	// that use physical registers directly. Skipping them here turns the
-	// per-compile regalloc cost from O(user + runtime) into O(user).
 	logDebug(LogCategory.ir, message: () gives "allocateRegisters: virtual registers detected, running standalone regalloc")
-	for func in module.functions 'eachFunc'
-		if not functionHasVirtualRegs(module, func: func, regTarget: regTarget) 'allPhysicalFunc'
-			continue
-		end 'allPhysicalFunc'
+	for funcIdx in needsRegalloc 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("allocateRegistersWithTarget: functions.get OOB at {funcIdx}")
 		let funcStart = passTimerStart()
 		allocateRegistersForFunc(func, module: module, regTarget: regTarget, desc: desc, opQuery: opQuery)
 		// Defer the classify call so its string-format cost is only paid when

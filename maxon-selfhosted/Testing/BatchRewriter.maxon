@@ -227,16 +227,16 @@ export function buildBatchSource(specName String, tests SpecTestArray) returns B
 			continue
 		end 'wasRejected'
 
-		body = "{body}{rr.rewrittenSource}\n\n"
+		body.append("{rr.rewrittenSource}\n\n")
 
 		// Per-test dispatcher block: print BEGIN marker, run test, print END
 		// marker with exit code. Each marker on its own line so the parser
 		// can anchor on line boundaries even if a test's stdout doesn't end
 		// with a newline.
 		let localVar = "ec_{sanitizeTestName(test.name)}"
-		dispatcherCases = "{dispatcherCases}\tprint(\"\\n{batchTestBeginMarker}{test.name}{batchMarkerSuffix}\\n\")\n"
-		dispatcherCases = "{dispatcherCases}\tlet {localVar} = {rr.mangledMainName}()\n"
-		dispatcherCases = "{dispatcherCases}\tprint(\"\\n{batchTestEndMarker}{test.name}:\{{localVar}\}{batchMarkerSuffix}\\n\")\n"
+		dispatcherCases.append("\tprint(\"\\n{batchTestBeginMarker}{test.name}{batchMarkerSuffix}\\n\")\n")
+		dispatcherCases.append("\tlet {localVar} = {rr.mangledMainName}()\n")
+		dispatcherCases.append("\tprint(\"\\n{batchTestEndMarker}{test.name}:\{{localVar}\}{batchMarkerSuffix}\\n\")\n")
 		anyKept = true
 	end 'eachTest'
 
@@ -245,13 +245,13 @@ export function buildBatchSource(specName String, tests SpecTestArray) returns B
 	end 'noneKept'
 
 	var dispatcher = "// --- batch dispatcher for {specName} ---\n"
-	dispatcher = "{dispatcher}function main() returns ExitCode\n"
-	dispatcher = "{dispatcher}{dispatcherCases}"
-	dispatcher = "{dispatcher}\treturn 0 as ExitCode\n"
-	dispatcher = "{dispatcher}end 'main'\n"
+	dispatcher.append("function main() returns ExitCode\n")
+	dispatcher.append(dispatcherCases)
+	dispatcher.append("\treturn 0 as ExitCode\n")
+	dispatcher.append("end 'main'\n")
 
-	let source = "{body}{dispatcher}"
-	return BatchBuildResult.ok(source, skippedNames: skippedNames, skippedReasons: skippedReasons)
+	body.append(dispatcher)
+	return BatchBuildResult.ok(body, skippedNames: skippedNames, skippedReasons: skippedReasons)
 end 'buildBatchSource'
 
 export typealias RenameArray = Array with RenameEntry
@@ -339,9 +339,9 @@ export function splitBatchedIr(archIr String, tests SpecTestArray, specName Stri
 	for entry in perTest 'eachTest'
 		var sb = "module \{\n"
 		for part in entry.parts 'eachPart'
-			sb = "{sb}{part}"
+			sb.append(part)
 		end 'eachPart'
-		sb = "{sb}\}"
+		sb.append("\}")
 		// Re-stabilize counter-based label numbering against this test's slice
 		// of functions only. The batched IR uses module-wide counters (e.g.
 		// `__panic_msg_47`) that depend on every other test in the batch;
@@ -458,7 +458,8 @@ function splitTopLevelFunctions(ir String) returns BatchIrFunctionArray
 			i = i + 1
 			while i < lineCount 'collectBody'
 				let bl = try lines.get(i) otherwise break
-				body = "{body}{bl}\n"
+				body.append(bl)
+				body.append("\n")
 				if bl == "  }" 'endFunc'
 					i = i + 1
 					break
@@ -491,7 +492,7 @@ function extractFuncName(headerLine String) returns String
 	var name = ""
 	for c in rest 'eachChar'
 		if Ascii.isAlphanumeric(c) or c == '_' or c == '.' or c == '-' 'isIdent'
-			name = "{name}{c}"
+			name.append(c.toString())
 		end 'isIdent' else 'notIdent'
 			break
 		end 'notIdent'
@@ -512,9 +513,9 @@ function sanitizeTestName(testName String) returns String
 	var result = ""
 	for c in testName 'eachChar'
 		if Ascii.isAlphanumeric(c) or c == '_' 'isWord'
-			result = "{result}{c}"
+			result.append(c.toString())
 		end 'isWord' else 'replace'
-			result = "{result}_"
+			result.append("_")
 		end 'replace'
 	end 'eachChar'
 	return result
@@ -654,7 +655,7 @@ function readNameAfter(line String, charCount GraphemeCount, requireParen bool) 
 	for c in rest 'eachChar'
 		if inName 'collecting'
 			if Ascii.isAlphanumeric(c) or c == '_' 'isIdent'
-				name = "{name}{c}"
+				name.append(c.toString())
 				continue
 			end 'isIdent'
 			// Identifier ended.
@@ -718,7 +719,7 @@ function applyRenames(source String, renames RenameArray) returns String
 
 	for c in source 'eachChar'
 		if inString 'inStr'
-			result = "{result}{c}"
+			result.append(c.toString())
 			if escapeNext 'escaped'
 				escapeNext = false
 			end 'escaped' else 'notEscaped'
@@ -740,7 +741,7 @@ function applyRenames(source String, renames RenameArray) returns String
 		// identifier started and don't update it while extending.
 		if not pendingIdent.isEmpty() 'haveIdent'
 			if Ascii.isAlphanumeric(c) or c == '_' 'extendIdent'
-				pendingIdent = "{pendingIdent}{c}"
+				pendingIdent.append(c.toString())
 				continue
 			end 'extendIdent'
 
@@ -749,9 +750,9 @@ function applyRenames(source String, renames RenameArray) returns String
 			let mangled = lookupRename(renames, name: pendingIdent)
 			let canRewrite = not mangled.isEmpty() and prevChar != '.' and not isWordChar(prevChar)
 			if canRewrite 'doRewrite'
-				result = "{result}{mangled}"
+				result.append(mangled)
 			end 'doRewrite' else 'keepIdent'
-				result = "{result}{pendingIdent}"
+				result.append(pendingIdent)
 			end 'keepIdent'
 			pendingIdent = ""
 			// Fall through to process `c` as a non-identifier character.
@@ -765,12 +766,12 @@ function applyRenames(source String, renames RenameArray) returns String
 
 		if c == '"' 'openStr'
 			inString = true
-			result = "{result}{c}"
+			result.append(c.toString())
 			prevChar = c
 			continue
 		end 'openStr'
 
-		result = "{result}{c}"
+		result.append(c.toString())
 		prevChar = c
 	end 'eachChar'
 
@@ -779,9 +780,9 @@ function applyRenames(source String, renames RenameArray) returns String
 		let mangled = lookupRename(renames, name: pendingIdent)
 		let canRewrite = not mangled.isEmpty() and prevChar != '.' and not isWordChar(prevChar)
 		if canRewrite 'doRewriteTail'
-			result = "{result}{mangled}"
+			result.append(mangled)
 		end 'doRewriteTail' else 'keepIdentTail'
-			result = "{result}{pendingIdent}"
+			result.append(pendingIdent)
 		end 'keepIdentTail'
 	end 'flushTail'
 
@@ -803,12 +804,12 @@ function findStringLiteralCollision(source String, renames RenameArray) returns 
 		if inString 'inStr'
 			if escapeNext 'escaped'
 				escapeNext = false
-				stringBody = "{stringBody}{c}"
+				stringBody.append(c.toString())
 				continue
 			end 'escaped'
 			if c == '\\' 'startEsc'
 				escapeNext = true
-				stringBody = "{stringBody}{c}"
+				stringBody.append(c.toString())
 				continue
 			end 'startEsc'
 			if c == '"' 'closeStr'
@@ -820,7 +821,7 @@ function findStringLiteralCollision(source String, renames RenameArray) returns 
 				inString = false
 				continue
 			end 'closeStr'
-			stringBody = "{stringBody}{c}"
+			stringBody.append(c.toString())
 			continue
 		end 'inStr'
 
@@ -838,7 +839,7 @@ function findRenamedWordIn(body String, renames RenameArray) returns String
 	var word = ""
 	for c in body 'eachChar'
 		if Ascii.isAlphanumeric(c) or c == '_' 'inWord'
-			word = "{word}{c}"
+			word.append(c.toString())
 		end 'inWord' else 'wordEnd'
 			if not word.isEmpty() 'haveWord'
 				if hasRename(renames, name: word) 'isMatch'

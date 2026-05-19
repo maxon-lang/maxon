@@ -27,6 +27,25 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private static long _totalCompileMs;
 
   /// <summary>
+  /// Runner-lifetime job object. Every test binary we spawn is enrolled here
+  /// so that if the test runner dies for any reason (Ctrl-C, crash, debugger
+  /// detach, OS forcibly terminating the process), the OS closes our handle
+  /// to the job, which — because of `KILL_ON_JOB_CLOSE` — terminates every
+  /// child still in the job. This is what prevents zombie test binaries from
+  /// surviving a runner crash and holding file locks on their cached .exe
+  /// (which would then fail the next compile with `E9001: The process cannot
+  /// access the file ... because it is being used by another process`).
+  ///
+  /// Lazy-initialized so non-Windows hosts (where the job is a no-op) and
+  /// non-test commands don't allocate it. Process-wide because multiple
+  /// TestRunner instances in the same process should share the safety net,
+  /// and because static lifetime matches "runner crash → handle freed" most
+  /// cleanly: the field is reachable until the process ends.
+  /// </summary>
+  private static readonly Lazy<WindowsJobObject> _runnerJobLazy = new(() => new WindowsJobObject());
+  private static WindowsJobObject _runnerJob => _runnerJobLazy.Value;
+
+  /// <summary>
   /// Run all tests and return summary.
   /// Uses Zig-style worker threads with atomic work-stealing for maximum parallelism.
   /// Each worker handles the full pipeline: regenerate fragment → compile → run → check.
@@ -929,12 +948,17 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       StandardErrorEncoding = Encoding.UTF8
     };
 
-    // Use a job object to ensure child processes are killed on timeout (Windows only, no-op elsewhere)
-    using var job = new WindowsJobObject();
+    // Enroll the child in the runner-lifetime job (Windows only, no-op
+    // elsewhere). The job is configured with KILL_ON_JOB_CLOSE: when the
+    // last handle to the job is closed — including by the OS on parent-
+    // process termination — every assigned child is killed too. This is
+    // what guarantees that a Ctrl-C / crash / debugger-detach of the test
+    // runner doesn't leave zombie test binaries holding file locks on
+    // their cached .exe.
     using var process = Process.Start(psi)!;
-
-    // Assign process to job object for guaranteed cleanup
-    job.AssignProcess(process.Handle);
+    if (!_runnerJob.AssignProcess(process.Handle)) {
+      Logger.Debug(LogCategory.Testing, $"AssignProcessToJobObject failed for {exePath} (errno {Marshal.GetLastWin32Error()})");
+    }
 
     // Read stdout/stderr asynchronously to avoid deadlocks
     var stdoutTask = process.StandardOutput.ReadToEndAsync();

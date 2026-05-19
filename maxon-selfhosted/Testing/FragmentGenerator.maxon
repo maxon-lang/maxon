@@ -5,67 +5,70 @@
 // Generate fragment file content for a test case.
 // Format matches C# FragmentGenerator.GenerateFragmentContent().
 export function generateFragmentContent(test SpecTest, compileIr String) returns String
+	// `append` for incremental builds; `body = "{body}{...}"` is O(n²) due to
+	// the fresh-buffer alloc inside every string interp (each one sizes the
+	// new buffer to the full prefix).
 	var sb = "// Test: {test.name}\n{test.source}\n---\n"
 
 	// Metadata section
 	if not test.args.isEmpty() 'hasArgs'
-		sb = "{sb}Args: {test.args}\n"
+		sb.append("Args: {test.args}\n")
 	end 'hasArgs'
 
 	if test.mmTrace 'hasMmTrace'
-		sb = "{sb}MmTrace: true\n"
+		sb.append("MmTrace: true\n")
 	end 'hasMmTrace'
 
 	if test.asyncTrace 'hasAsyncTrace'
-		sb = "{sb}AsyncTrace: true\n"
+		sb.append("AsyncTrace: true\n")
 	end 'hasAsyncTrace'
 
 	if test.includeStdlibIr 'hasIncludeStdlibIr'
-		sb = "{sb}IncludeStdlibIr: true\n"
+		sb.append("IncludeStdlibIr: true\n")
 	end 'hasIncludeStdlibIr'
 
 	if test.cacheParity 'hasCacheParity'
-		sb = "{sb}CacheParity: true\n"
+		sb.append("CacheParity: true\n")
 	end 'hasCacheParity'
 
 	if test.expectation.hasCompilerStderr 'hasCompilerErr'
-		sb = "{sb}MaxoncStderr: ```\n{test.expectation.compilerStderr}\n```\n"
+		sb.append("MaxoncStderr: ```\n{test.expectation.compilerStderr}\n```\n")
 	end 'hasCompilerErr' else 'isSuccess'
 		if test.expectation.hasExitCode 'hasEc'
-			sb = "{sb}ExitCode: {test.expectation.exitCode}\n"
+			sb.append("ExitCode: {test.expectation.exitCode}\n")
 		end 'hasEc'
 
 		if test.expectation.hasStdout 'hasStdout'
-			sb = "{sb}Stdout: ```\n{test.expectation.stdout}\n```\n"
+			sb.append("Stdout: ```\n{test.expectation.stdout}\n```\n")
 		end 'hasStdout'
 
 		if test.expectation.hasRuntimeStderr 'hasStderr'
-			sb = "{sb}Stderr: ```\n{test.expectation.runtimeStderr}\n```\n"
+			sb.append("Stderr: ```\n{test.expectation.runtimeStderr}\n```\n")
 		end 'hasStderr'
 
 		if test.expectation.hasRequiredLowering 'hasLowering'
-			sb = "{sb}RequiredLowering: ```\n{test.expectation.requiredLowering}\n```\n"
+			sb.append("RequiredLowering: ```\n{test.expectation.requiredLowering}\n```\n")
 		end 'hasLowering'
 
 		if test.expectation.hasRequiredRdata 'hasRdata'
-			sb = "{sb}RequiredRdata: ```\n{test.expectation.requiredRdata}\n```\n"
+			sb.append("RequiredRdata: ```\n{test.expectation.requiredRdata}\n```\n")
 		end 'hasRdata'
 
 		if test.expectation.hasRequiredData 'hasData'
-			sb = "{sb}RequiredData: ```\n{test.expectation.requiredData}\n```\n"
+			sb.append("RequiredData: ```\n{test.expectation.requiredData}\n```\n")
 		end 'hasData'
 	end 'isSuccess'
 
-	sb = "{sb}---\n"
+	sb.append("---\n")
 
 	// Compiled IR section (may be empty). When non-empty, prefix with a
 	// "// CompiledIR" header so section 3 can never be confused with the
 	// RequiredLowering/RequiredIR expectation blocks in section 2.
 	if not compileIr.isEmpty() 'hasIr'
-		sb = "{sb}// CompiledIR\n{compileIr.trim()}\n"
+		sb.append("// CompiledIR\n{compileIr.trim()}\n")
 	end 'hasIr'
 
-	sb = "{sb}---\n"
+	sb.append("---\n")
 
 	return sb
 end 'generateFragmentContent'
@@ -130,15 +133,12 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	// the C# bootstrap's `Trim()` on the joined lines so spec error positions
 	// (which reference the trimmed source) line up with what the parser sees.
 	var source = ""
-	var firstSourceLine = true
 	for i in 0 upto firstSep 'buildSource'
 		let line = try lines.get(i) otherwise panic("parseFragment.buildSource: i < firstSep <= lineCount but lines.get({i}) failed")
-		if firstSourceLine 'isFirst'
-			source = line
-			firstSourceLine = false
-		end 'isFirst' else 'notFirst'
-			source = "{source}\n{line}"
-		end 'notFirst'
+		if i > 0 'addSep'
+			source.append("\n")
+		end 'addSep'
+		source.append(line)
 	end 'buildSource'
 	// Trim trailing whitespace/newlines (mirrors C#'s `Trim()` after string-join)
 	// without disturbing the leading comment line that the test runner depends
@@ -321,15 +321,13 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			// the existing "// Compilation failed:" check — a failure marker
 			// means no usable IR was captured, so leave generatedIR empty.
 			var irLines = ""
-			var firstIr = true
-			for m in (headerLineIdx + 1) upto thirdSep 'buildIr'
+			let irStart = headerLineIdx + 1
+			for m in irStart upto thirdSep 'buildIr'
 				let mLine = try lines.get(m) otherwise panic("parseFragment.buildIr: m < thirdSep <= lineCount but lines.get({m}) failed")
-				if firstIr 'isFirstIr'
-					irLines = mLine
-					firstIr = false
-				end 'isFirstIr' else 'notFirstIr'
-					irLines = "{irLines}\n{mLine}"
-				end 'notFirstIr'
+				if m > irStart 'addSep'
+					irLines.append("\n")
+				end 'addSep'
+				irLines.append(mLine)
 			end 'buildIr'
 
 			let trimmedIr = trimWhitespace(irLines)
@@ -361,7 +359,6 @@ end 'MultiLineResult'
 
 function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, endLine LineNumber) returns MultiLineResult
 	var result = ""
-	var first = true
 	var i = startLine
 
 	while i < endLine 'read'
@@ -370,12 +367,10 @@ function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, e
 		if trimmedLine == "```" 'endBlock'
 			return MultiLineResult.create(result, nextLine: i + 1)
 		end 'endBlock'
-		if first 'isFirst'
-			result = line
-			first = false
-		end 'isFirst' else 'notFirst'
-			result = "{result}\n{line}"
-		end 'notFirst'
+		if i > startLine 'addSep'
+			result.append("\n")
+		end 'addSep'
+		result.append(line)
 		i = i + 1
 	end 'read'
 

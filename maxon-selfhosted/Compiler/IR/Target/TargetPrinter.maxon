@@ -9,7 +9,11 @@ export function targetModuleToString(module TargetModule, skipStdlib bool, cpu C
 				continue
 			end 'isRuntime'
 		end 'filter'
-		body = "{body}{targetFunctionToString(module, func: func, cpu: cpu)}"
+		// `append` mutates the String buffer with amortized-O(1) doubling growth,
+		// keeping the printer O(total bytes) instead of the O(n²) shape you get
+		// from `body = "{body}{...}"` (each interp allocs a fresh buffer sized
+		// for the whole prefix).
+		body.append(targetFunctionToString(module, func: func, cpu: cpu))
 	end 'eachFunc'
 	return formatModuleWrapper(body)
 end 'targetModuleToString'
@@ -21,38 +25,38 @@ function targetFunctionToString(module TargetModule, func IrFunction, cpu CpuArc
 
 	for i in 0 upto func.paramCount 'eachParam'
 		if i > 0 'comma'
-			sb = "{sb}, "
+			sb.append(", ")
 		end 'comma'
 		let regName = paramRegName(i, paramTypes: func.paramTypes, cpu: cpu)
 		let paramType = try func.paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
-		sb = "{sb}{regName}: {paramType.name}"
+		sb.append("{regName}: {paramType.name}")
 	end 'eachParam'
 
-	sb = "{sb})"
+	sb.append(")")
 	match func.returnType 'hasReturn'
 		void then break 'hasReturn'
-		value(inner) then sb = "{sb} -> {inner.name}"
+		value(inner) then sb.append(" -> {inner.name}")
 	end 'hasReturn'
-	sb = "{sb} {lb}\n"
+	sb.append(" {lb}\n")
 
 	// Resolve function's block refs to blocks for label resolution
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
 
 	for block in funcBlocks 'eachBlock'
-		sb = "{sb}  {block.label}:\n"
+		sb.append("  {block.label}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
 			let opText = targetOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks, cpu: cpu)
-			sb = "{sb}    {opText}\n"
+			sb.append("    {opText}\n")
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termText = targetOpIdxToString(module, opIdx: block.terminatorIndex(), blocks: funcBlocks, cpu: cpu)
-			sb = "{sb}    {termText}\n"
+			sb.append("    {termText}\n")
 		end 'hasTerm'
 	end 'eachBlock'
 
-	sb = "{sb}  {rb}\n"
+	sb.append("  {rb}\n")
 	return sb
 end 'targetFunctionToString'
 

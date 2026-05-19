@@ -24,18 +24,19 @@ export function formatStdFuncHeader(func IrFunction) returns String
 
 	for i in 0 upto func.paramCount 'eachParam'
 		if i > 0 'comma'
-			sb = "{sb}, "
+			sb.append(", ")
 		end 'comma'
 		let paramType = try func.paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
-		sb = "{sb}local{i}: {paramType.name}"
+		sb.append("local{i}: {paramType.name}")
 	end 'eachParam'
 
-	sb = "{sb})"
+	sb.append(")")
 	match func.returnType 'hasReturn'
 		void then break 'hasReturn'
-		value(inner) then sb = "{sb} -> {inner.name}"
+		value(inner) then sb.append(" -> {inner.name}")
 	end 'hasReturn'
-	return "{sb} {lb}\n"
+	sb.append(" {lb}\n")
+	return sb
 end 'formatStdFuncHeader'
 
 // --- Stable label renumbering ---

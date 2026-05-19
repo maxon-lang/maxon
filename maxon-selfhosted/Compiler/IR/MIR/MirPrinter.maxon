@@ -16,7 +16,9 @@ export function mirModuleToString(module MirModule, skipStdlib bool) returns Str
 				continue
 			end 'isRuntime'
 		end 'filter'
-		body = "{body}{mirFunctionToString(module, func: func)}"
+		// O(1)-amortized `append`, not O(n) interp reallocation — see the
+		// note in TargetPrinter.targetModuleToString.
+		body.append(mirFunctionToString(module, func: func))
 	end 'eachFunc'
 	return formatModuleWrapper(body)
 end 'mirModuleToString'
@@ -29,20 +31,20 @@ function mirFunctionToString(module MirModule, func IrFunction) returns String
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
 
 	for block in funcBlocks 'eachBlock'
-		sb = "{sb}  {block.label}:\n"
+		sb.append("  {block.label}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
 			let opText = mirOpIdxToString(module, opIdx: opIdx, blocks: funcBlocks)
-			sb = "{sb}    {opText}\n"
+			sb.append("    {opText}\n")
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termText = mirOpIdxToString(module, opIdx: block.terminatorIndex(), blocks: funcBlocks)
-			sb = "{sb}    {termText}\n"
+			sb.append("    {termText}\n")
 		end 'hasTerm'
 	end 'eachBlock'
 
-	sb = "{sb}  {rb}\n"
+	sb.append("  {rb}\n")
 	return sb
 end 'mirFunctionToString'
 
