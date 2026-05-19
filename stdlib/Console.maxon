@@ -1,0 +1,207 @@
+/// Buffered line-oriented stdin reading.
+/// @category System
+///
+/// `Console.stdin()` returns a `Stdin` reader that buffers OS reads. Successive
+/// `readLine()` calls return one line each (terminator stripped). `readBytes(n)`
+/// drains exactly n bytes (or fewer, on EOF). The reader is stateful — keep a
+/// single instance for the lifetime of the program; constructing a new one
+/// silently drops anything already buffered from a prior read syscall.
+
+/// Errors emitted by buffered stdin reads
+enum ConsoleError implements Error
+	endOfFile
+end 'ConsoleError'
+
+// Internal lookup error. Distinct from ConsoleError because "no newline in
+// buffer yet" is a routine intermediate state during line assembly, not a
+// failure the public API surfaces.
+enum NotFound implements Error
+	notFound
+end 'NotFound'
+
+// File-private byte aliases — mirrors the trick in stdlib/String.maxon, since
+// the self-hosted compiler's stdlib whitelist may not yet pull in File.maxon.
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+// Byte counts into the buffered-pending array. The buffer is bounded only by
+// available memory, so the range is the full unsigned 64-bit span (matches
+// `Array.count()`).
+typealias ByteCount = int(0 to u64.max)
+
+// Chunk size for each underlying __Builtins.readStdin call. 4 KiB balances
+// syscall overhead against memory footprint for typical line-oriented input.
+let chunkSize = 4096
+
+// `Console.stdin()` constructs a Stdin via Stdin.create(), so the static
+// factory stays `export`-marked. The instance methods don't need export —
+// Maxon resolves method calls through inferred receiver types regardless of
+// the type's own export status. `Stdin` itself is unexported; callers bind
+// it through inference (`let stdin = Console.stdin()`).
+type Stdin
+	var pending ByteArray
+	var eofSeen bool
+
+	export static function create() returns Stdin
+		return Self{pending: ByteArray.create(), eofSeen: false}
+	end 'create'
+
+	/// True when the last underlying read returned 0 AND no buffered bytes remain.
+	/// `readLine` / `readBytes` can still drain buffered content after EOF; this
+	/// only flips when there is genuinely nothing left.
+	function eof() returns bool
+		return eofSeen and pending.count() == 0
+	end 'eof'
+
+	/// Pull one chunk from `__Builtins.readStdin` and append it to `pending`.
+	/// Sets `eofSeen` if the OS returns 0 bytes. Idempotent at EOF — repeat
+	/// calls are no-ops.
+	function fillOnce()
+		if eofSeen 'alreadyEof'
+			return
+		end 'alreadyEof'
+		let mm = __Builtins.readStdin(chunkSize)
+		let len = mm.length()
+		if len == 0 'eofNow'
+			eofSeen = true
+			return
+		end 'eofNow'
+		let chunk = ByteArray.init(mm)
+		pending.append(chunk)
+	end 'fillOnce'
+
+	/// Read one line, returning the bytes up to (but not including) the next
+	/// `\n`. A trailing `\r` before the `\n` is also stripped, so callers see
+	/// the same line content whether the source uses LF or CRLF terminators.
+	///
+	/// Throws `ConsoleError.endOfFile` when nothing is left and the underlying
+	/// stream has reached EOF. At a final partial line with no terminator
+	/// before EOF, the partial line is returned and the next call throws.
+	function readLine() returns String throws ConsoleError
+		// Pull chunks until we either find a newline or hit EOF. `findNewline`
+		// throws when no `\n` is in the buffer; the simple `try ... otherwise`
+		// form below catches that and converts it into "need more input".
+		while not eofSeen 'fillLoop'
+			let nl = try findNewline() otherwise 'keepFilling'
+				fillOnce()
+				continue
+			end 'keepFilling'
+			let lineBytes = takePrefix(nl)
+			discardOne()
+			return String.from(stripTrailingCR(lineBytes))
+		end 'fillLoop'
+
+		// EOF reached. Surface any trailing partial line; subsequent calls throw.
+		let nl = try findNewline() otherwise 'noTerminator'
+			if pending.count() == 0 'empty'
+				throw ConsoleError.endOfFile
+			end 'empty'
+			let rest = takePrefix(pending.count())
+			return String.from(rest)
+		end 'noTerminator'
+		let lineBytes = takePrefix(nl)
+		discardOne()
+		return String.from(stripTrailingCR(lineBytes))
+	end 'readLine'
+
+	/// Read up to `n` bytes. Returns fewer than `n` only when EOF is reached
+	/// before the count is satisfied. Returns an empty array at EOF.
+	function readBytes(n ByteCount) returns ByteArray
+		while pending.count() < n and not eofSeen 'fillLoop'
+			fillOnce()
+		end 'fillLoop'
+
+		let available = pending.count()
+		var take = n
+		if available < n 'cap'
+			take = available
+		end 'cap'
+		return takePrefix(take)
+	end 'readBytes'
+
+	// Index of the first '\n' byte in `pending`. Throws `NotFound.notFound`
+	// when no newline is in the buffer yet — the caller decides whether to
+	// fill more or stop.
+	function findNewline() returns ByteCount throws NotFound
+		let len = pending.count()
+		var i = 0
+		while i < len 'scan'
+			let b = try pending.get(i) otherwise 'getErr'
+				panic("Stdin.findNewline: index just bounds-checked")
+			end 'getErr'
+			if b == 10 'nl'
+				return i
+			end 'nl'
+			i = i + 1
+		end 'scan'
+		throw NotFound.notFound
+	end 'findNewline'
+
+	// Remove and return the first `n` bytes of `pending`. Caller must ensure
+	// `n <= pending.count()`.
+	function takePrefix(n ByteCount) returns ByteArray
+		var out = ByteArray.create()
+		var i = 0
+		while i < n 'copy'
+			let b = try pending.get(i) otherwise 'getErr'
+				panic("Stdin.takePrefix: index just bounds-checked by caller")
+			end 'getErr'
+			out.push(b)
+			i = i + 1
+		end 'copy'
+		shiftLeft(n)
+		return out
+	end 'takePrefix'
+
+	// Drop one byte from the front of `pending`. Caller must ensure non-empty.
+	function discardOne()
+		shiftLeft(1)
+	end 'discardOne'
+
+	// Shift `pending` left by `n`, discarding the first `n` bytes.
+	function shiftLeft(n ByteCount)
+		let len = pending.count()
+		var rebuilt = ByteArray.create()
+		var i = n
+		while i < len 'copy'
+			let b = try pending.get(i) otherwise 'getErr'
+				panic("Stdin.shiftLeft: index just bounds-checked")
+			end 'getErr'
+			rebuilt.push(b)
+			i = i + 1
+		end 'copy'
+		pending = rebuilt
+	end 'shiftLeft'
+end 'Stdin'
+
+// Strip a single trailing '\r' (byte value 13) so CRLF inputs come back as
+// just the line content. LF-terminated lines pass through unchanged.
+function stripTrailingCR(bytes ByteArray) returns ByteArray
+	let len = bytes.count()
+	if len == 0 'empty'
+		return bytes
+	end 'empty'
+	let last = try bytes.get(len - 1) otherwise 'getErr'
+		panic("stripTrailingCR: len-1 bounds-checked by len > 0")
+	end 'getErr'
+	if last != 13 'noCR'
+		return bytes
+	end 'noCR'
+	var out = ByteArray.create()
+	var i = 0
+	while i < len - 1 'copy'
+		let b = try bytes.get(i) otherwise 'getErr'
+			panic("stripTrailingCR: index bounds-checked by loop guard")
+		end 'getErr'
+		out.push(b)
+		i = i + 1
+	end 'copy'
+	return out
+end 'stripTrailingCR'
+
+/// Convenience factory namespace. `Console.stdin()` is the typical entry point.
+export type Console
+	export static function stdin() returns Stdin
+		return Stdin.create()
+	end 'stdin'
+end 'Console'

@@ -10,14 +10,15 @@
 let IAT_SLOT_EXIT_PROCESS = 0
 let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
-let IAT_SLOT_CREATE_FILE_A = 3
-let IAT_SLOT_CLOSE_HANDLE = 4
-let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
-let IAT_SLOT_VIRTUAL_ALLOC = 6
-let IAT_SLOT_VIRTUAL_FREE = 7
-let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 8
-let IAT_SLOT_ENTER_CRITICAL_SECTION = 9
-let IAT_SLOT_LEAVE_CRITICAL_SECTION = 10
+let IAT_SLOT_READ_FILE = 3
+let IAT_SLOT_CREATE_FILE_A = 4
+let IAT_SLOT_CLOSE_HANDLE = 5
+let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 6
+let IAT_SLOT_VIRTUAL_ALLOC = 7
+let IAT_SLOT_VIRTUAL_FREE = 8
+let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 9
+let IAT_SLOT_ENTER_CRITICAL_SECTION = 10
+let IAT_SLOT_LEAVE_CRITICAL_SECTION = 11
 
 // Constant map: tracks valueId -> immediate value for integer movImm ops.
 // Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
@@ -161,6 +162,7 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		osRead(_, ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osOpenWrite(_, pathPtrId, pathLenId) then ucIncrementTwo(uc, a: pathPtrId, b: pathLenId)
 		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
@@ -316,6 +318,7 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osExit(codeId) then ucIncrement(uc, valueId: codeId)
 		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		osRead(_, ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
 		osOpenWrite(_, pathPtrId, pathLenId) then ucIncrementTwo(uc, a: pathPtrId, b: pathLenId)
 		osWriteFd(fdId, ptrId, lenId) then ucIncrementThree(uc, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then ucIncrement(uc, valueId: fdId)
@@ -385,6 +388,8 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osExit gives 1
 		osWrite gives 6
 		osWriteErr gives 6
+		// osRead: scratch bytesRead slot + 5 iatCall args (ReadFile) on Windows; mirror osWriteFd budget.
+		osRead gives 8
 		// osOpenWrite: 7 iatCall args (CreateFileA) + path buffer slot + null-term temps
 		osOpenWrite gives 12
 		// osWriteFd: scratch bytesWritten slot + 5 iatCall args (WriteFile)
@@ -460,6 +465,16 @@ end 'predicateToSetcc'
 
 // Internal calling convention: GPR args in rcx, rdx, rax, r9, rsi, rdi, rbx
 // R8 is reserved for return values. FP args in xmm0-xmm7. GPR and FP use separate index counters.
+// Functions with more than X64_CALLCONV_GPR_COUNT GPR args (or 8 FP args) pass
+// the overflow on the stack — caller writes `[rsp + (slotIdx - threshold) * 8]`
+// before the call, callee reads `[rbp + 0x10 + (slotIdx - threshold) * 8]` (the
+// 0x10 skips the saved-rbp + return-address pair sitting between rbp and the
+// first stack arg).
+let X64_CALLCONV_GPR_COUNT = 7
+let X64_CALLCONV_FP_COUNT = 8
+// First incoming stack arg sits at `[rbp + X64_STACK_ARG_RBP_BASE]`; subsequent
+// args follow at 8-byte strides. 0x10 = saved RBP (8) + return address (8).
+let X64_STACK_ARG_RBP_BASE = 0x10
 function getCallConvGpr(index VarSlot) returns X64Register
 	let regs = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rbx]
 	return try regs.get(index) otherwise panic("getCallConvGpr: param index {index} exceeds register count")
@@ -586,6 +601,12 @@ type X64FunctionLowering
 	var globalData GlobalDataTable
 	var funcParamTypes StdTypeArray
 	var currentFuncName String
+	// Outgoing-stack-arg budget for the function currently being lowered.
+	// `emitDirectCall` bumps this each time a call site needs more space than
+	// previously seen; `lowerFunction` reads it back at the end and folds it
+	// into the destination `IrFunction`'s `outgoingArgSize` so the prologue/
+	// epilogue lay out callee-save slots above the outgoing-arg block.
+	var currentOutgoingArgSize StackSize
 	var stdlibFunctions ObjectFunctionArray
 	var constMap ConstMap
 	var useCounts UseCountMap
@@ -600,7 +621,7 @@ type X64FunctionLowering
 	var scratchValueIdCursor ValueId
 
 	static function create(module MirModule, target TargetModule, osDesc OsDescriptor, allFunctions IrFunctionArray, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns X64FunctionLowering
-		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}
+		return Self{module: module, target: target, osDesc: osDesc, allFunctions: allFunctions, globalData: globalData, stdlibFunctions: stdlibFunctions, funcParamTypes: StdTypeArray.create(), currentFuncName: "", currentOutgoingArgSize: 0, constMap: ConstMap.create(), useCounts: UseCountMap.create(), absorbedConsts: AbsorbedConstSet.create(), valueSlots: ValueSlotMap.create(), nextTempSlot: 0, condBrCondId: NOT_CONDBR, scratchValueIdCursor: 0}
 	end 'create'
 
 	// ============================================================
@@ -641,6 +662,10 @@ type X64FunctionLowering
 		useCounts = buildUseCountMap(module, func: srcFunc)
 		absorbedConsts = buildAbsorbedConsts(module, func: srcFunc, constMap: constMap)
 		scratchValueIdCursor = scanMaxMirValueId(module, func: srcFunc) + 1
+		// Reset outgoing-stack-arg accumulator; emitDirectCall bumps this as
+		// each call site is lowered, and the final value is folded into
+		// targetFunc.outgoingArgSize below for the prologue/epilogue to read.
+		currentOutgoingArgSize = 0
 
 		// Create the destination IrFunction and its blocks up front so terminator
 		// block IDs from MIR still refer to valid blocks.
@@ -710,8 +735,12 @@ type X64FunctionLowering
 		end 'usePrecomputed'
 		// Bump the running stack-size tally for each slot ISel allocated. The
 		// regalloc and prologue passes will add their own contributions later;
-		// the prologue pass just reads func.stackSize and aligns it.
-		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8
+		// the prologue pass just reads func.stackSize and aligns it. Also
+		// reserve outgoing-stack-arg space at the bottom of the frame so each
+		// call site can write its overflow args into `[rsp+0..outgoingArgSize)`
+		// without per-call adjustment of RSP.
+		targetFunc.outgoingArgSize = currentOutgoingArgSize
+		targetFunc.stackSize = targetFunc.stackSize + targetFunc.varSlotCount * 8 + targetFunc.outgoingArgSize
 
 		renumberX64SlotsForFunction(target, func: targetFunc)
 
@@ -1187,29 +1216,55 @@ type X64FunctionLowering
 	// registers (GPR/FP counters), emits the direct call, captures the
 	// primary R8/XMM0 result for non-void callees, and (when captureErrorFlag
 	// is set) captures the secondary RDX error-flag register.
+	//
+	// Args beyond the per-domain register file (X64_CALLCONV_GPR_COUNT for
+	// ints, X64_CALLCONV_FP_COUNT for floats) spill to caller-allocated stack
+	// slots. The first overflow GPR / FP arg lands at `[rsp + 0]`, the next at
+	// `[rsp + 8]`, etc. The function-level `targetFunc.outgoingArgSize` records
+	// the largest such block across every call site so the prologue can
+	// pre-reserve space — that way each call site only writes the bytes
+	// (no per-call `sub rsp` / `add rsp` pair).
 	function emitDirectCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, captureErrorFlag bool, dstBlock IrBlock)
 		let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 
 		var argIdx = 0
 		var gprIdx = 0
 		var fpIdx = 0
+		var stackSlotIdx = 0
 		while argIdx < argIds.count() 'moveArgs'
 			let argId = try argIds.get(argIdx) otherwise 'skipArg'
 				argIdx = argIdx + 1
 				continue
 			end 'skipArg'
 			let paramType = try paramTypes.get(argIdx) otherwise panic("X64 emitDirectCall: paramTypes too short for callee '{callee}' at argIdx={argIdx} (paramTypes.count={paramTypes.count()})")
-			if stdTypeIsFloat(paramType) and fpIdx < 8 'fpRegArg'
+			if stdTypeIsFloat(paramType) and fpIdx < X64_CALLCONV_FP_COUNT 'fpRegArg'
 				let xmmReg = getCallConvXmm(fpIdx)
 				appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(physFpReg(xmmReg), src: X64FpVReg.virtual(argId), precision: FloatPrecision.f64))
 				fpIdx = fpIdx + 1
-			end 'fpRegArg' else if gprIdx < 8 'gprRegArg'
+			end 'fpRegArg' else if (not stdTypeIsFloat(paramType)) and gprIdx < X64_CALLCONV_GPR_COUNT 'gprRegArg'
 				let ccReg = getCallConvGpr(gprIdx)
 				appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(ccReg), srcReg: X64VReg.virtual(argId)))
 				gprIdx = gprIdx + 1
-			end 'gprRegArg'
+			end 'gprRegArg' else 'stackArg'
+				// Out-of-register arg — store to `[rsp + stackSlotIdx * 8]`.
+				// All overflow args share the same 8-byte stride regardless of
+				// type domain because we maintain a single outgoing-stack-arg
+				// area shared by both GPR and FP overflow.
+				appendX64Op(target, block: dstBlock, op: X64Op.movRspOffsetReg(stackSlotIdx * 8, srcReg: X64VReg.virtual(argId)))
+				stackSlotIdx = stackSlotIdx + 1
+			end 'stackArg'
 			argIdx = argIdx + 1
 		end 'moveArgs'
+
+		// Reserve outgoing stack-arg space at the function level. The prologue
+		// pre-allocates the largest block seen, so every call site lands its
+		// stores in already-reserved bytes (the alternative — `sub rsp` /
+		// `add rsp` per call — fights the frame pointer chain and the
+		// regalloc's spill addressing).
+		let bytesForThisCall = stackSlotIdx * 8
+		if bytesForThisCall > currentOutgoingArgSize 'recordMaxOutgoing'
+			currentOutgoingArgSize = bytesForThisCall
+		end 'recordMaxOutgoing'
 
 		appendX64Op(target, block: dstBlock, op: X64Op.callDirect(callee))
 
@@ -1289,20 +1344,38 @@ type X64FunctionLowering
 
 	// Move from calling convention register to virtual register.
 	// Float params arrive in XMM registers, int params in GPR registers.
+	// Overflow params past the per-domain register file land on the caller's
+	// stack and are loaded from `[rbp + 0x10 + overflowIdx*8]` (the 0x10
+	// skips saved-rbp + return-address). `computeParamStackOffset` walks the
+	// preceding params and skips every one that fits in a register, mirroring
+	// the caller-side packing in `emitDirectCall`.
 	function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock IrBlock)
 		if paramIndex >= funcParamTypes.count() 'paramOob'
 			panic("lowerParam: paramIndex {paramIndex} out of bounds (paramTypes has {funcParamTypes.count()} entries) in function '{currentFuncName}'")
 		end 'paramOob'
 		let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
-		if stdTypeIsFloat(paramType) and slotIdx < 8 'fpRegParam'
+		if stdTypeIsFloat(paramType) and slotIdx < X64_CALLCONV_FP_COUNT 'fpRegParam'
 			let xmmReg = getCallConvXmm(slotIdx)
 			appendX64Op(target, block: dstBlock, op: X64Op.movXmmXmm(X64FpVReg.virtual(resultId), src: physFpReg(xmmReg), precision: FloatPrecision.f64))
-		end 'fpRegParam' else if slotIdx < 8 'gprRegParam'
+		end 'fpRegParam' else if (not stdTypeIsFloat(paramType)) and slotIdx < X64_CALLCONV_GPR_COUNT 'gprRegParam'
 			let ccReg = getCallConvGpr(slotIdx)
 			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(ccReg)))
-		end 'gprRegParam' else 'slotOob'
-			panic("lowerParam: slotIdx {slotIdx} exceeds register count for function '{currentFuncName}'")
-		end 'slotOob'
+		end 'gprRegParam' else 'stackParam'
+			// Compute the overflow stack offset for THIS param by counting how
+			// many preceding params also overflowed their domain — mirrors the
+			// caller-side packing.
+			let stackOffset = computeOverflowStackOffset(paramIndex, paramTypes: funcParamTypes)
+			if stdTypeIsFloat(paramType) 'fpStackParam'
+				// FP stack args travel as 8-byte loads into a GPR followed by a
+				// movq to XMM — the existing X64 op set doesn't have a single
+				// "load 8 bytes from [rbp+offset] into XMM" form. Self-hosted
+				// runtime stubs never overflow FP args (all current stubs are
+				// int-typed), so reaching this arm before that helper exists is
+				// a backend gap rather than a user-input error.
+				panic("lowerParam: FP overflow params not yet supported in self-hosted X64 (function '{currentFuncName}', paramIndex {paramIndex})")
+			end 'fpStackParam'
+			appendX64Op(target, block: dstBlock, op: X64Op.loadRegRbpOffset(X64VReg.virtual(resultId), offset: stackOffset))
+		end 'stackParam'
 	end 'lowerParam'
 
 	// ============================================================
@@ -1465,6 +1538,7 @@ type X64FunctionLowering
 			osExit(codeId) then lowerOsExit(codeId: codeId, dstBlock: dstBlock)
 			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
 			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
+			osRead(resultId, ptrId, lenId) then lowerOsReadWithStrategy(resultId: resultId, ptrId: ptrId, lenId: lenId, strategy: osDesc.read, dstBlock: dstBlock)
 			osOpenWrite(resultId, pathPtrId, pathLenId) then lowerOsOpenWrite(resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
 			osWriteFd(fdId, ptrId, lenId) then lowerOsWriteFd(fdId: fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
 			osClose(fdId) then lowerOsClose(fdId: fdId, dstBlock: dstBlock)
@@ -1674,6 +1748,85 @@ type X64FunctionLowering
 			libcall then panic("x64 does not support libcall write strategy")
 		end 'dispatch'
 	end 'lowerOsWriteWithStrategy'
+
+	// POSIX read syscall: writeNum=read syscall #, args rcx=ptr, rdx=len map to
+	// syscall(num, fd, ptr, len) — fd in rax-staged temp, ptr/len follow.
+	// Returns the read count in resultId.
+	function lowerOsReadSyscall(resultId ValueId, ptrSlot VarSlot, lenSlot VarSlot, readNum MachineWord, fd MachineWord, dstBlock IrBlock)
+		let fdSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: fd))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(fdSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		let resultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: readNum, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
+		nextTempSlot = nextTempSlot + 1
+	end 'lowerOsReadSyscall'
+
+	// Windows ReadFile via IAT: ReadFile(GetStdHandle(STD_INPUT_HANDLE), buf, len, &bytesRead, NULL).
+	// The BOOL return is discarded; bytesRead is loaded into resultId so user code
+	// observes the actual count (matches the POSIX read return).
+	function lowerOsReadWinApi(resultId ValueId, ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, readFileSlot MachineWord, dstBlock IrBlock)
+		// GetStdHandle(STD_INPUT_HANDLE)
+		let handleConstSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegImm(physReg(X64Register.rax), value: handleConstant))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(handleConstSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+		var getHandleArgs = VarSlotArray.create()
+		getHandleArgs.push(handleConstSlot)
+		let handleResultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
+		nextTempSlot = nextTempSlot + 1
+
+		// bytesRead = 0 stored to a slot (ReadFile writes a DWORD; pre-zero keeps the
+		// upper 4 bytes clean).
+		let readSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(readSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+
+		// Get address of bytesRead slot
+		let readAddrSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.stackAddrOp(readAddrSlot, targetSlot: readSlot))
+		nextTempSlot = nextTempSlot + 1
+
+		// NULL for lpOverlapped
+		let nullSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.xorRegRegSelf(physReg(X64Register.rax)))
+		appendX64Op(target, block: dstBlock, op: X64Op.movSlot(nullSlot, srcReg: physReg(X64Register.rax)))
+		nextTempSlot = nextTempSlot + 1
+
+		// ReadFile(handle, buf, len, &bytesRead, NULL)
+		var readArgs = VarSlotArray.create()
+		readArgs.push(handleResultSlot)
+		readArgs.push(ptrSlot)
+		readArgs.push(lenSlot)
+		readArgs.push(readAddrSlot)
+		readArgs.push(nullSlot)
+		let readResultSlot = nextTempSlot
+		appendX64Op(target, block: dstBlock, op: X64Op.iatCall(readResultSlot, slotIndex: readFileSlot, argSlots: readArgs))
+		nextTempSlot = nextTempSlot + 1
+
+		// Materialize bytesRead into the resultId virtual. We surface the bytes-read
+		// count rather than the BOOL so caller code sees the same shape as POSIX read.
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: readSlot)
+		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: readSlot))
+	end 'lowerOsReadWinApi'
+
+	function lowerOsReadWithStrategy(resultId ValueId, ptrId ValueId, lenId ValueId, strategy ReadStrategy, dstBlock IrBlock)
+		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		match strategy 'dispatch'
+			syscall(readNum, fd) then lowerOsReadSyscall(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, readNum: readNum, fd: fd, dstBlock: dstBlock)
+			winApi(getHandleSlot, handleConstant, readFileSlot) then lowerOsReadWinApi(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot, dstBlock: dstBlock)
+			libcall then panic("x64 does not support libcall read strategy")
+		end 'dispatch'
+	end 'lowerOsReadWithStrategy'
 
 	function lowerLoadFramePtr(resultId ValueId, dstBlock IrBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: physReg(X64Register.rbp)))

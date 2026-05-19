@@ -20,9 +20,15 @@ public static partial class MaxonToStandardConversion {
 
     int argCount = asyncOp.Args.Count;
 
-    // Allocate arg buffer: (argCount + 1) * 8 bytes
-    // Layout: [count | arg0 | arg1 | ...]
-    var bufSizeConst = new StdConstI64Op((argCount + 1) * 8);
+    // Allocate arg buffer: (argCount + 2) * 8 bytes
+    // Layout: [count | managed_mask | arg0 | arg1 | ...]
+    //
+    // managed_mask is a bitmap (LSB = arg0) of which args are refcounted heap
+    // pointers (Struct / Enum / Function kinds). For each set bit we incref
+    // here at the spawn site and the trampoline decrefs the matching arg
+    // after the spawned function returns. Without this, a managed arg could
+    // be freed by the caller's scope-end decref before the GT actually runs.
+    var bufSizeConst = new StdConstI64Op((argCount + 2) * 8);
     block.AddOp(bufSizeConst);
     var argBuf = EmitRawAlloc(block, bufSizeConst.Result, label: "async.args", scopeName: _currentFuncName);
 
@@ -32,17 +38,37 @@ public static partial class MaxonToStandardConversion {
     var storeCount = new StdStoreIndirectOp(countConst.Result, argBuf, 0, IrType.I64);
     block.AddOp(storeCount);
 
-    // Store each arg at [buf + 8 + i*8]
+    // Compute the managed-mask while we're already walking the args.
+    long managedMask = 0;
     for (int i = 0; i < argCount; i++) {
-      var argVal = valueMap[asyncOp.Args[i]];
+      if (IsManagedAsyncArg(asyncOp.Args[i]))
+        managedMask |= 1L << i;
+    }
+    var maskConst = new StdConstI64Op(managedMask);
+    block.AddOp(maskConst);
+    var storeMask = new StdStoreIndirectOp(maskConst.Result, argBuf, 8, IrType.I64);
+    block.AddOp(storeMask);
+
+    // Store each arg at [buf + 16 + i*8]. For managed (refcounted) args we also
+    // incref so the value survives across any scope-end decrefs the caller
+    // emits between the `async X(...)` site and the moment the spawned GT
+    // actually runs. The GT's body owns its own ref and decrefs at scope-end
+    // (cleanup unchanged); the trampoline drops the spawn-time incref after
+    // the function returns by walking the managed_mask.
+    for (int i = 0; i < argCount; i++) {
+      var maxonArg = asyncOp.Args[i];
+      var argVal = valueMap[maxonArg];
       // StdHeapPtr is a deferred reference (variable name, not a loaded value).
       // We must emit a load from the variable's stack home to get the actual
       // heap pointer before storing it into the arg buffer.
       if (argVal is StdHeapPtr hp && hp.VarName != null) {
         argVal = EmitLoad(block, hp.VarName, varTypes);
       }
-      var storeArg = new StdStoreIndirectOp(argVal, argBuf, 8 + i * 8, IrType.I64);
+      var storeArg = new StdStoreIndirectOp(argVal, argBuf, 16 + i * 8, IrType.I64);
       block.AddOp(storeArg);
+
+      if (IsManagedAsyncArg(maxonArg) && argVal is StdI64 heapPtr)
+        EmitIncrefValueIfNonnull(block, heapPtr, scopeName: $"async.arg.{i}");
     }
 
     // Get function pointer
@@ -92,6 +118,15 @@ public static partial class MaxonToStandardConversion {
     MaxonValueKind.Function => new StdI64(IrContext.Current.NextStdId()),
     _ => kind.CreateStdValue(),
   };
+
+  /// <summary>
+  /// True if a MaxonValue is a refcounted heap pointer. Async args of these
+  /// kinds need an extra mm_incref at spawn time so the producer scope's
+  /// decref doesn't free the object before the consumer GT runs.
+  /// MaxonStruct, MaxonEnum, MaxonFunctionPtr are all heap-allocated.
+  /// </summary>
+  private static bool IsManagedAsyncArg(MaxonValue value) =>
+    value is MaxonStruct or MaxonEnum or MaxonFunctionPtr;
 
   /// <summary>
   /// Lowers MaxonCancelPromiseOp to a __gt_cancel(gt_ptr) call.

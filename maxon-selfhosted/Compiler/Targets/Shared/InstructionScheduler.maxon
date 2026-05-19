@@ -614,6 +614,7 @@ function extractMirDef(op MirOp) returns SchedInt
 		osExit gives SCHED_NONE
 		osWrite gives SCHED_NONE
 		osWriteErr gives SCHED_NONE
+		osRead(resultId, _, _) gives resultId
 		osOpenWrite(resultId, _, _) gives resultId
 		osWriteFd gives SCHED_NONE
 		osClose gives SCHED_NONE
@@ -673,6 +674,7 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osExit(codeId) then result.push(codeId)
 		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		osRead(_, ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		osOpenWrite(_, pathPtrId, pathLenId) then pushTwo(result, a: pathPtrId, b: pathLenId)
 		osWriteFd(fdId, ptrId, lenId) then pushThree(result, a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) then result.push(fdId)
@@ -730,6 +732,7 @@ function isMirMemoryOp(op MirOp) returns bool
 		osExit gives true
 		osWrite gives true
 		osWriteErr gives true
+		osRead gives true
 		osOpenWrite gives true
 		osWriteFd gives true
 		osClose gives true
@@ -821,6 +824,7 @@ function isMirCallOp(op MirOp) returns bool
 		osExit gives true
 		osWrite gives true
 		osWriteErr gives true
+		osRead gives true
 		osOpenWrite gives true
 		osWriteFd gives true
 		osClose gives true
@@ -895,6 +899,7 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		osExit gives false
 		osWrite gives false
 		osWriteErr gives false
+		osRead gives false
 		osOpenWrite gives false
 		osWriteFd gives false
 		osClose gives false

@@ -1414,6 +1414,41 @@ public static partial class MaxonToStandardConversion {
     LowerManagedWrite("maxon_managed_write_stderr", op.Managed, op.Result, block, valueMap, varTypes);
 
   /// <summary>
+  /// __Builtins.readStdin(maxBytes): allocate a __ManagedMemory of byte-elements
+  /// with capacity maxBytes, read up to maxBytes bytes from stdin into the MM's
+  /// buffer via the runtime helper, set the MM's length to the bytes actually
+  /// read, and yield the MM. Binary-safe: unlike the cstring-returning helpers,
+  /// the MM length comes from the OS read return rather than a NUL scan.
+  /// </summary>
+  private static void LowerManagedReadStdin(
+    MaxonManagedReadStdinOp op,
+    IrBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps) {
+    // 1. Allocate the MM with elementSize=1 (byte buffer) and capacity=maxBytes.
+    var createOp = new MaxonManagedMemCreateOp(op.MaxBytes, elementSize: 1);
+    LowerManagedMemCreate(createOp, block, valueMap, varTypes, temps, inlineTarget: null);
+
+    // The created MM lives behind valueMap[createOp.Result] as a StdHeapPtr
+    // whose VarName is the temp slot holding the MM pointer. Resolve once.
+    var managedVarName = ResolveManagedVarName(createOp.Result, valueMap);
+    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    var maxBytes = (StdI64)valueMap[op.MaxBytes];
+
+    // 2. Call the runtime read helper. Returns bytes-read as i64.
+    var bytesRead = new StdI64(IrContext.Current.NextStdId());
+    block.AddOp(new StdCallRuntimeOp("maxon_managed_read_stdin", [buffer, maxBytes], bytesRead));
+
+    // 3. Stash the count into the MM's length field. Capacity / element_size /
+    //    parent fields were initialized by LowerManagedMemCreate.
+    EmitStructFieldStore(block, bytesRead, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
+
+    // 4. Hand the freshly-built MM out to the caller.
+    valueMap[op.Result] = valueMap[createOp.Result];
+  }
+
+  /// <summary>
   /// Set length with capacity validation: panics if newLength > capacity.
   /// </summary>
   private static void LowerManagedMemSetLength(

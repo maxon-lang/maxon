@@ -1,0 +1,570 @@
+// MCP server dispatch loop. Reads requests, routes by method name, writes
+// responses. Tools are registered in `registerTools()` below; in Phase 1
+// each tool returns a "not yet implemented" error so the wire protocol can
+// be exercised end-to-end before the real tool bodies are wired in.
+
+// Outcome of a tool invocation. A clean union keeps the response writer
+// uniform: it always either splices a result doc into the envelope or emits
+// a typed error.
+//
+// Exported because the per-tool handlers in `BuildTool.maxon`, etc., return
+// values of this type.
+export union ToolOutcome
+	success(doc JsonDoc, root JsonNodeId)
+	error(code RpcErrorCode, message String)
+end 'ToolOutcome'
+
+// Names of all registered tools, in the order shown in `tools/list`. Kept as
+// a flat array because Maxon's compiler currently crashes (E9001) on a
+// `Map<String, FunctionType>` typealias — once that's resolved we can switch
+// to a real registry. Dispatch happens through `invokeTool` below, a hand-
+// written if/else chain keyed by the same names.
+typealias ToolNameArray = Array with String
+
+export function runServer()
+	var stdin = Console.stdin()
+	let toolNames = toolRegistry()
+
+	while true 'mainLoop'
+		let result = readRpcRequest(stdin)
+		match result 'r'
+			request(req) then handleRequest(req, toolNames: toolNames)
+			eof then return
+			protocolError(msg) then writeRpcParseError(msg)
+		end 'r'
+	end 'mainLoop'
+end 'runServer'
+
+function handleRequest(req RpcRequest, toolNames ToolNameArray)
+	let idIsNull = isJsonNull(req.doc, id: req.idNodeId)
+
+	if req.method.equals("initialize") 'init'
+		let resultDoc = buildInitializeResult()
+		writeRpcResult(req.doc, idNodeId: req.idNodeId, resultDoc: resultDoc, resultRoot: resultDoc.root)
+		return
+	end 'init'
+
+	if req.method.equals("notifications/initialized") 'initd'
+		return
+	end 'initd'
+
+	if req.method.equals("tools/list") 'tl'
+		let resultDoc = buildToolsListResult(toolNames)
+		writeRpcResult(req.doc, idNodeId: req.idNodeId, resultDoc: resultDoc, resultRoot: resultDoc.root)
+		return
+	end 'tl'
+
+	if req.method.equals("tools/call") 'tc'
+		dispatchToolCall(req, toolNames: toolNames)
+		return
+	end 'tc'
+
+	if idIsNull 'ignoreNotif'
+		return
+	end 'ignoreNotif'
+	writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "method not found: {req.method}")
+end 'handleRequest'
+
+function isJsonNull(doc JsonDoc, id JsonNodeId) returns bool
+	let node = doc.get(id)
+	return match node.kind 'k'
+		jsonNull gives true
+		jsonBool gives false
+		jsonNumber gives false
+		jsonString gives false
+		jsonArray gives false
+		jsonObject gives false
+	end 'k'
+end 'isJsonNull'
+
+// =============================================================================
+// initialize
+// =============================================================================
+
+function buildInitializeResult() returns JsonDoc
+	var doc = JsonDoc.create()
+	let protocolVersion = doc.add(JsonNode.stringNode("2024-11-05"))
+
+	// Capabilities: { "tools": {} } — we only advertise tools in v1.
+	var emptyKeys = StringArray.create()
+	var emptyChildren = JsonNodeIdArray.create()
+	let emptyToolsObj = doc.add(JsonNode.objectNode(emptyKeys, children: emptyChildren))
+
+	var capKeys = StringArray.create()
+	var capChildren = JsonNodeIdArray.create()
+	capKeys.push("tools")
+	capChildren.push(emptyToolsObj)
+	let capabilities = doc.add(JsonNode.objectNode(capKeys, children: capChildren))
+
+	let serverName = doc.add(JsonNode.stringNode("maxon-dev-mcp"))
+	let serverVersion = doc.add(JsonNode.stringNode("0.1.0"))
+	var infoKeys = StringArray.create()
+	var infoChildren = JsonNodeIdArray.create()
+	infoKeys.push("name")
+	infoChildren.push(serverName)
+	infoKeys.push("version")
+	infoChildren.push(serverVersion)
+	let serverInfo = doc.add(JsonNode.objectNode(infoKeys, children: infoChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("protocolVersion")
+	children.push(protocolVersion)
+	keys.push("capabilities")
+	children.push(capabilities)
+	keys.push("serverInfo")
+	children.push(serverInfo)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return doc
+end 'buildInitializeResult'
+
+// =============================================================================
+// tools/list
+// =============================================================================
+
+function buildToolsListResult(toolNames ToolNameArray) returns JsonDoc
+	var doc = JsonDoc.create()
+	var toolNodes = JsonNodeIdArray.create()
+
+	let n = toolNames.count()
+	for i in 0 upto n 'each'
+		let name = try toolNames.get(i) otherwise 'getErr'
+			panic("buildToolsListResult: toolNames.get OOB — i bounds-checked")
+		end 'getErr'
+		let toolNode = buildToolDescriptor(doc, name: name)
+		toolNodes.push(toolNode)
+	end 'each'
+
+	let toolsArr = doc.add(JsonNode.arrayNode(toolNodes))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("tools")
+	children.push(toolsArr)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return doc
+end 'buildToolsListResult'
+
+// Tool descriptor: name + human description + JSON Schema describing the
+// shape of `arguments` for tools/call. Clients (Claude Code, MCP Inspector)
+// use the schema to populate completion and validate arguments before they
+// hit our handler.
+function buildToolDescriptor(doc JsonDoc, name String) returns JsonNodeId
+	let description = doc.add(JsonNode.stringNode(toolDescription(name)))
+	let nameId = doc.add(JsonNode.stringNode(name))
+	let schemaId = toolSchema(doc, name: name)
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("name")
+	children.push(nameId)
+	keys.push("description")
+	children.push(description)
+	keys.push("inputSchema")
+	children.push(schemaId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'buildToolDescriptor'
+
+// Hand-written schema table. Mirrors the structure of `toolDescription`
+// and `invokeTool` — adding a new tool means touching three sites, which
+// is good: the schema MUST stay in sync with the handler's actual arg
+// parsing, and divergence between them is the whole reason we surface
+// schemas at all.
+function toolSchema(doc JsonDoc, name String) returns JsonNodeId
+	if name.equals("build") 'b'
+		return schemaForBuild(doc)
+	end 'b'
+	if name.equals("run_spec_test") 'rst'
+		return schemaForRunSpecTest(doc)
+	end 'rst'
+	if name.equals("lookup_error_code") 'lec'
+		return schemaForLookupErrorCode(doc)
+	end 'lec'
+	if name.equals("dump_ir") 'di'
+		return schemaForSourceOnly(doc, withDumpStages: true)
+	end 'di'
+	if name.equals("run_program") 'rp'
+		return schemaForRunProgram(doc)
+	end 'rp'
+	if name.equals("fmt") 'fm'
+		return schemaForSourceOnly(doc, withDumpStages: false)
+	end 'fm'
+	if name.equals("run_self_hosted_test") 'rsht'
+		return schemaForSelfHostedSpecTest(doc)
+	end 'rsht'
+	if name.equals("spec_test_outcome") 'sto'
+		return schemaForSpecTestOutcome(doc)
+	end 'sto'
+	if name.equals("mm_trace_analyze") 'mta'
+		return schemaForMmTraceAnalyze(doc)
+	end 'mta'
+	// Unknown tool — fall back to the permissive empty-object schema so
+	// the descriptor still validates against the MCP spec.
+	return schemaEmptyObject(doc)
+end 'toolSchema'
+
+function schemaEmptyObject(doc JsonDoc) returns JsonNodeId
+	let typeId = doc.add(JsonNode.stringNode("object"))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(typeId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaEmptyObject'
+
+// -----------------------------------------------------------------------------
+// build
+// -----------------------------------------------------------------------------
+function schemaForBuild(doc JsonDoc) returns JsonNodeId
+	var targetChoices = StringArray.create()
+	targetChoices.push("csharp")
+	targetChoices.push("selfhosted")
+	targetChoices.push("both")
+	let targetSchema = schemaStringEnum(doc, choices: targetChoices, description: "Which compiler to build. `both` chains csharp then selfhosted.")
+	let cleanSchema = schemaBoolean(doc, description: "When true, force a clean rebuild (deletes intermediate caches). Default false.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("target", schemaId: targetSchema, required: true))
+	fields.push(SchemaField.create("clean", schemaId: cleanSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Build the Maxon compiler.")
+end 'schemaForBuild'
+
+// -----------------------------------------------------------------------------
+// run_spec_test (and self-hosted alias)
+// -----------------------------------------------------------------------------
+function schemaForRunSpecTest(doc JsonDoc) returns JsonNodeId
+	var compilerChoices = StringArray.create()
+	compilerChoices.push("csharp")
+	compilerChoices.push("selfhosted")
+	let compilerSchema = schemaStringEnum(doc, choices: compilerChoices, description: "Which compiler's spec-test runner to invoke. Default csharp.")
+	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>; matches test names.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks in place.")
+	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
+	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
+	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
+	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
+	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
+	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Run the spec-test suite and return structured pass/fail counts.")
+end 'schemaForRunSpecTest'
+
+function schemaForSelfHostedSpecTest(doc JsonDoc) returns JsonNodeId
+	// Same shape as run_spec_test minus the `compiler` field — fixed to selfhosted.
+	let filterSchema = schemaString(doc, description: "Optional pattern passed to --filter=<pattern>.")
+	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required.")
+	let logSchema = schemaString(doc, description: "Optional logging spec.")
+	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: false))
+	fields.push(SchemaField.create("updateRequired", schemaId: updateRequiredSchema, required: false))
+	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
+	fields.push(SchemaField.create("mmTrace", schemaId: mmTraceSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Run the self-hosted compiler's spec-test suite.")
+end 'schemaForSelfHostedSpecTest'
+
+// -----------------------------------------------------------------------------
+// spec_test_outcome
+// -----------------------------------------------------------------------------
+function schemaForSpecTestOutcome(doc JsonDoc) returns JsonNodeId
+	let filterSchema = schemaString(doc, description: "Pattern passed to --filter=<pattern>. Typically a single test name like `arithmetic/addition`.")
+	var compilerChoices = StringArray.create()
+	compilerChoices.push("csharp")
+	compilerChoices.push("selfhosted")
+	let compilerSchema = schemaStringEnum(doc, choices: compilerChoices, description: "Which compiler. Default csharp.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
+	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Run spec-tests with --verbose and return per-test PASS/FAIL entries.")
+end 'schemaForSpecTestOutcome'
+
+// -----------------------------------------------------------------------------
+// lookup_error_code
+// -----------------------------------------------------------------------------
+function schemaForLookupErrorCode(doc JsonDoc) returns JsonNodeId
+	let intAlt = schemaInteger(doc, description: "Numeric error code, e.g. 3014.")
+	let strAlt = schemaString(doc, description: "Error code as a string, e.g. \"E3014\" or \"3014\".")
+	var alts = JsonNodeIdArray.create()
+	alts.push(intAlt)
+	alts.push(strAlt)
+	let codeSchema = schemaOneOf(doc, alternatives: alts, description: "4-digit error code, given as either a number or a string with optional E prefix.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("code", schemaId: codeSchema, required: true))
+	return schemaObject(doc, fields: fields, description: "Look up a Maxon error code's definition and the spec files that exercise it.")
+end 'schemaForLookupErrorCode'
+
+// -----------------------------------------------------------------------------
+// dump_ir / fmt — both take a `source` block; dump_ir adds dumpStages
+// -----------------------------------------------------------------------------
+function schemaForSourceOnly(doc JsonDoc, withDumpStages bool) returns JsonNodeId
+	let sourceSchema = schemaSource(doc)
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	if withDumpStages 'stages'
+		let dumpStagesSchema = schemaBoolean(doc, description: "When true, also emit per-stage IR artifacts (.1-maxon.ir, .2-hir.ir, etc.).")
+		fields.push(SchemaField.create("dumpStages", schemaId: dumpStagesSchema, required: false))
+	end 'stages'
+	let description = "Operate on a Maxon source: either a file/project or an inline snippet." if withDumpStages else "Format a Maxon source: either a file/project or an inline snippet."
+	return schemaObject(doc, fields: fields, description: description)
+end 'schemaForSourceOnly'
+
+// -----------------------------------------------------------------------------
+// run_program
+// -----------------------------------------------------------------------------
+function schemaForRunProgram(doc JsonDoc) returns JsonNodeId
+	let sourceSchema = schemaSource(doc)
+	let argvItemSchema = schemaString(doc, description: "One argv entry.")
+	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
+	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
+	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 30000.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
+	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
+	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Compile and execute a Maxon snippet or file; returns build+run exit codes, durations, and stdout/stderr.")
+end 'schemaForRunProgram'
+
+// -----------------------------------------------------------------------------
+// mm_trace_analyze
+// -----------------------------------------------------------------------------
+function schemaForMmTraceAnalyze(doc JsonDoc) returns JsonNodeId
+	let sourceSchema = schemaSource(doc)
+	let argvItemSchema = schemaString(doc, description: "One argv entry.")
+	let argsSchema = schemaArrayOf(doc, itemSchema: argvItemSchema, description: "Optional argv to pass to the compiled program.")
+	let stdinSchema = schemaString(doc, description: "Optional bytes piped to the program's stdin.")
+	let timeoutSchema = schemaInteger(doc, description: "Per-run timeout in milliseconds. Default 60000.")
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("source", schemaId: sourceSchema, required: true))
+	fields.push(SchemaField.create("args", schemaId: argsSchema, required: false))
+	fields.push(SchemaField.create("stdin", schemaId: stdinSchema, required: false))
+	fields.push(SchemaField.create("timeoutMs", schemaId: timeoutSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Build a snippet/file with --mm-trace, run it, then pipe the trace through scripts/analyze_mm_trace.py and return the structured report.")
+end 'schemaForMmTraceAnalyze'
+
+function toolDescription(name String) returns String
+	if name.equals("build") 'b'
+		return "Build the Maxon compiler. Target is csharp | selfhosted | both."
+	end 'b'
+	if name.equals("run_spec_test") 'rst'
+		return "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts."
+	end 'rst'
+	if name.equals("lookup_error_code") 'lec'
+		return "Look up a 4-digit Maxon error code (e.g. E3014) by its numeric value, returning the source-of-truth doc comment and the spec files that exercise it."
+	end 'lec'
+	if name.equals("dump_ir") 'di'
+		return "Compile a snippet or file with --emit-ir and return the resulting .ir text (optionally per-stage when dumpStages=true)."
+	end 'di'
+	if name.equals("run_program") 'rp'
+		return "Compile and execute a Maxon snippet or file, returning build + run exit codes, durations, and stdout/stderr."
+	end 'rp'
+	if name.equals("fmt") 'fm'
+		return "Format a Maxon snippet or file via `maxon fmt`. Files are formatted in-place; snippets return the formatted text."
+	end 'fm'
+	if name.equals("run_self_hosted_test") 'rsht'
+		return "Run the self-hosted compiler's spec-test suite (equivalent to run_spec_test with compiler=selfhosted)."
+	end 'rsht'
+	if name.equals("spec_test_outcome") 'sto'
+		return "Run spec-tests with a filter and --verbose, returning structured per-test PASS/FAIL entries plus a per-spec failure summary."
+	end 'sto'
+	if name.equals("mm_trace_analyze") 'mta'
+		return "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
+	end 'mta'
+	return "(no description)"
+end 'toolDescription'
+
+// =============================================================================
+// tools/call
+// =============================================================================
+
+function dispatchToolCall(req RpcRequest, toolNames ToolNameArray)
+	if not req.paramsPresent 'noPar'
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call requires `params`")
+		return
+	end 'noPar'
+
+	let toolName = try req.doc.getString(req.paramsNodeId, key: "name") otherwise 'noName'
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.invalidParams.rawValue, message: "tools/call params missing `name`")
+		return
+	end 'noName'
+
+	if not toolNameRegistered(toolName, toolNames: toolNames) 'unknown'
+		writeRpcError(req.doc, idNodeId: req.idNodeId, code: RpcStandardErrorCode.methodNotFound.rawValue, message: "unknown tool: {toolName}")
+		return
+	end 'unknown'
+
+	let argumentsId = try req.doc.getChild(req.paramsNodeId, key: "arguments") otherwise 'noArgs'
+		let nullId = req.doc.add(JsonNode.nullNode())
+		let outcome = invokeTool(toolName, argsDoc: req.doc, argsId: nullId)
+		emitOutcome(outcome, req: req)
+		return
+	end 'noArgs'
+	let outcome = invokeTool(toolName, argsDoc: req.doc, argsId: argumentsId)
+	emitOutcome(outcome, req: req)
+end 'dispatchToolCall'
+
+function toolNameRegistered(name String, toolNames ToolNameArray) returns bool
+	let n = toolNames.count()
+	for i in 0 upto n 'scan'
+		let registered = try toolNames.get(i) otherwise 'gErr'
+			panic("toolNameRegistered: get OOB — i bounds-checked")
+		end 'gErr'
+		if registered.equals(name) 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'toolNameRegistered'
+
+// Hand-written dispatch table. Each branch calls the named tool's handler;
+// because Maxon currently can't hold a function reference in a map, the
+// dispatch is spelled out here.
+function invokeTool(name String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	if name.equals("build") 'b'
+		return buildToolHandler(argsDoc, argsId: argsId)
+	end 'b'
+	if name.equals("run_spec_test") 'rst'
+		return specTestHandler(argsDoc, argsId: argsId)
+	end 'rst'
+	if name.equals("lookup_error_code") 'lec'
+		return lookupErrorCodeHandler(argsDoc, argsId: argsId)
+	end 'lec'
+	if name.equals("dump_ir") 'di'
+		return dumpIrHandler(argsDoc, argsId: argsId)
+	end 'di'
+	if name.equals("run_program") 'rp'
+		return runProgramHandler(argsDoc, argsId: argsId)
+	end 'rp'
+	if name.equals("fmt") 'fm'
+		return fmtHandler(argsDoc, argsId: argsId)
+	end 'fm'
+	if name.equals("run_self_hosted_test") 'rsht'
+		return selfHostedSpecTestHandler(argsDoc, argsId: argsId)
+	end 'rsht'
+	if name.equals("spec_test_outcome") 'sto'
+		return specOutcomeHandler(argsDoc, argsId: argsId)
+	end 'sto'
+	if name.equals("mm_trace_analyze") 'mta'
+		return mmTraceAnalyzeHandler(argsDoc, argsId: argsId)
+	end 'mta'
+	panic("invokeTool: tool name '{name}' passed registration check but no dispatch branch matched")
+end 'invokeTool'
+
+function emitOutcome(outcome ToolOutcome, req RpcRequest)
+	match outcome 'o'
+		success(doc, root) then emitToolSuccess(doc, root: root, req: req)
+		error(code, message) then writeRpcError(req.doc, idNodeId: req.idNodeId, code: code, message: message)
+	end 'o'
+end 'emitOutcome'
+
+// MCP's `tools/call` response shape is `{ content: [{type, text}], isError? }`,
+// not the bare structured result a JSON-RPC envelope would otherwise carry.
+// We wrap the tool's result doc by stringifying it and shipping it as one
+// `type: "text"` content block — that's how MCP clients render structured
+// JSON output today.
+function emitToolSuccess(resultDoc JsonDoc, root JsonNodeId, req RpcRequest)
+	let payload = Json.stringify(rootedSubDoc(resultDoc, root: root))
+	var envelope = JsonDoc.create()
+	let textId = envelope.add(JsonNode.stringNode(payload))
+	let typeId = envelope.add(JsonNode.stringNode("text"))
+
+	var contentItemKeys = StringArray.create()
+	var contentItemChildren = JsonNodeIdArray.create()
+	contentItemKeys.push("type")
+	contentItemChildren.push(typeId)
+	contentItemKeys.push("text")
+	contentItemChildren.push(textId)
+	let contentItem = envelope.add(JsonNode.objectNode(contentItemKeys, children: contentItemChildren))
+
+	var contentArr = JsonNodeIdArray.create()
+	contentArr.push(contentItem)
+	let contentArrId = envelope.add(JsonNode.arrayNode(contentArr))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("content")
+	children.push(contentArrId)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	writeRpcResult(req.doc, idNodeId: req.idNodeId, resultDoc: envelope, resultRoot: envelope.root)
+end 'emitToolSuccess'
+
+// Build a fresh JsonDoc whose `root` is a copy of `srcRoot` from `src`.
+// Lets us stringify just a subtree without dragging the surrounding arena
+// along (which would otherwise serialize whichever node happened to be at
+// `doc.root`, not the subtree the tool meant to return).
+function rootedSubDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
+	var out = JsonDoc.create()
+	out.root = copyJsonNode(src: src, srcId: root, dst: out)
+	return out
+end 'rootedSubDoc'
+
+/// Deep-copy a JSON subtree across arenas. Used to assemble responses
+/// whose pieces were built in different `JsonDoc`s (e.g. an analyzer's
+/// reply that needs to be embedded in the wrapper outcome doc).
+export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	match node.kind 'k'
+		jsonNull then return dst.add(JsonNode.nullNode())
+		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray then return copyJsonArray(src: src, node: node, dst: dst)
+		jsonObject then return copyJsonObject(src: src, node: node, dst: dst)
+	end 'k'
+end 'copyJsonNode'
+
+function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let childId = try node.children.get(i) otherwise 'gErr'
+			panic("copyJsonArray: children.get OOB — i bounded by n")
+		end 'gErr'
+		ids.push(copyJsonNode(src: src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyJsonArray'
+
+function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise 'kErr'
+			panic("copyJsonObject: keys.get OOB — i bounded by n")
+		end 'kErr'
+		let childId = try node.children.get(i) otherwise 'cErr'
+			panic("copyJsonObject: children.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		keys.push(k)
+		children.push(copyJsonNode(src: src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'copyJsonObject'
+
+// =============================================================================
+// Tool registry
+// =============================================================================
+
+function toolRegistry() returns ToolNameArray
+	var names = ToolNameArray.create()
+	names.push("build")
+	names.push("run_spec_test")
+	names.push("lookup_error_code")
+	names.push("dump_ir")
+	names.push("run_program")
+	names.push("fmt")
+	names.push("run_self_hosted_test")
+	names.push("spec_test_outcome")
+	names.push("mm_trace_analyze")
+	return names
+end 'toolRegistry'
+
+// Phase 1 placeholder. Each tool returns a structured "not implemented"
+// error so the wire protocol round-trip can be verified without Phase 2's
+// machinery in place yet.
+function notYetImplemented(doc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let argsNode = doc.get(argsId)
+	return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "tool not yet implemented (received args kind: {argsNode.kind.name})")
+end 'notYetImplemented'

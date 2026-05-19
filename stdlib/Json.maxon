@@ -1,0 +1,951 @@
+/// RFC 8259 JSON parser and serializer.
+/// @category Text
+///
+/// Maxon disallows recursive struct types (E4014), so JSON values can't be
+/// represented as a directly-recursive union. Instead, a `JsonDoc` owns a flat
+/// arena of `JsonNode`s; arrays and objects reference their children by
+/// `JsonNodeId`. Callers walk the tree through accessor methods on `JsonDoc`
+/// rather than pattern-matching a recursive union.
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BytePos = int(0 to u64.max)
+
+/// A handle into a `JsonDoc`'s node arena. The root of every parsed document
+/// is `0`; allocator order is deterministic but otherwise unspecified.
+/// Exported so callers can hold and pass node ids by name across files.
+export typealias JsonNodeId = int(0 to u64.max)
+export typealias JsonNodeIdArray = Array with JsonNodeId
+typealias ChildCount = int(0 to u64.max)
+typealias ChildIndex = int(0 to u64.max)
+
+typealias JsonInt = int(i64.min to i64.max)
+typealias JsonFloat = float(f64.min to f64.max)
+
+/// Errors emitted by `Json.parse`.
+enum JsonError implements Error
+	unexpectedChar
+	unexpectedEof
+	invalidEscape
+	invalidNumber
+	invalidSurrogate
+	trailingContent
+end 'JsonError'
+
+/// Errors emitted by typed accessors.
+enum JsonAccessError implements Error
+	notObject
+	notArray
+	missingKey
+	wrongType
+	outOfBounds
+end 'JsonAccessError'
+
+// =============================================================================
+// Node kinds and storage
+// =============================================================================
+
+/// Discriminant for `JsonNode`. Payload lives in the node's typed fields per
+/// kind; readers should `match` on the kind before reading payload fields.
+/// Exported so callers can switch on `doc.rootKind()` from outside this file.
+export enum JsonKind
+	jsonNull
+	jsonBool
+	jsonNumber
+	jsonString
+	jsonArray
+	jsonObject
+end 'JsonKind'
+
+/// One JSON value inside a `JsonDoc`'s arena. Fields are populated based on
+/// `kind`; consult one field per kind:
+///   jsonNull        → nothing
+///   jsonBool        → boolValue
+///   jsonNumber      → numberValue
+///   jsonString      → stringValue
+///   jsonArray       → children
+///   jsonObject      → keys parallel to children
+// JsonNode's fields and static constructors are `export`-marked because
+// sibling types (`JsonDoc`, the parser, the emitter) read/construct nodes
+// by field. Maxon's field visibility is type-scoped rather than file-scoped.
+// The type itself is also exported because callers in other files build
+// nodes via `JsonNode.stringNode(...)` when constructing response payloads.
+export type JsonNode
+	export var kind JsonKind
+	export var boolValue = false
+	export var numberValue = 0.0
+	export var stringValue String = ""
+	export var keys StringArray = StringArray.create()
+	export var children JsonNodeIdArray = JsonNodeIdArray.create()
+
+	export static function nullNode() returns JsonNode
+		return Self{kind: JsonKind.jsonNull}
+	end 'nullNode'
+
+	export static function boolNode(value bool) returns JsonNode
+		return Self{kind: JsonKind.jsonBool, boolValue: value}
+	end 'boolNode'
+
+	export static function numberNode(value JsonFloat) returns JsonNode
+		return Self{kind: JsonKind.jsonNumber, numberValue: value}
+	end 'numberNode'
+
+	export static function stringNode(value String) returns JsonNode
+		return Self{kind: JsonKind.jsonString, stringValue: value}
+	end 'stringNode'
+
+	export static function arrayNode(children JsonNodeIdArray) returns JsonNode
+		return Self{kind: JsonKind.jsonArray, children: children}
+	end 'arrayNode'
+
+	export static function objectNode(keys StringArray, children JsonNodeIdArray) returns JsonNode
+		return Self{kind: JsonKind.jsonObject, keys: keys, children: children}
+	end 'objectNode'
+end 'JsonNode'
+
+typealias JsonNodeArray = Array with JsonNode
+// Exported so callers building response objects can construct the parallel
+// key/child arrays for `JsonNode.objectNode(...)`.
+export typealias StringArray = Array with String
+
+/// Owns the parsed JSON tree. Cheap to pass by reference; clone via `clone()`
+/// if independent mutation is needed.
+// Field/method visibility in Maxon is type-scoped, not file-scoped. The
+// emitter functions (`writeNode` etc.) and the parser (`JsonParser`) live
+// outside `JsonDoc` but need to read `root`/`nodes` and call `get`/`add` —
+// so those are `export`-marked.
+// `JsonDoc` is exported so callers in other files can hold one (returned
+// from `Json.parse`) and pass it to other entry points. Methods on it
+// (other than `create`/`add`/`get`/`rootKind`, which the parser needs) are
+// instance-callable through inferred receiver types without an export tag.
+export type JsonDoc
+	export var nodes JsonNodeArray = JsonNodeArray.create()
+	export var root JsonNodeId = 0
+
+	export static function create() returns JsonDoc
+		return Self{}
+	end 'create'
+
+	/// Allocate a new node and return its id.
+	export function add(node JsonNode) returns JsonNodeId
+		let id = nodes.count()
+		nodes.push(node)
+		return id
+	end 'add'
+
+	export function get(id JsonNodeId) returns JsonNode
+		return try nodes.get(id) otherwise 'getErr'
+			panic("JsonDoc.get: id {id} out of arena bounds (count={nodes.count()})")
+		end 'getErr'
+	end 'get'
+
+	export function rootKind() returns JsonKind
+		return get(root).kind
+	end 'rootKind'
+
+	/// Object-key lookup. Throws if `parent` isn't a jsonObject, or if the
+	/// key is absent. Returns the child node id; use the typed `getString` /
+	/// `getInt` / `getBool` helpers when you want the leaf value directly.
+	function getChild(parent JsonNodeId, key String) returns JsonNodeId throws JsonAccessError
+		let node = get(parent)
+		match node.kind 'k'
+			jsonObject then return try findKeyInNode(node, key: key)
+			default throws JsonAccessError.notObject
+		end 'k'
+	end 'getChild'
+
+	function getString(parent JsonNodeId, key String) returns String throws JsonAccessError
+		let childId = try getChild(parent, key: key)
+		let child = get(childId)
+		match child.kind 'k'
+			jsonString then return child.stringValue
+			default throws JsonAccessError.wrongType
+		end 'k'
+	end 'getString'
+
+	function getInt(parent JsonNodeId, key String) returns JsonInt throws JsonAccessError
+		let childId = try getChild(parent, key: key)
+		let child = get(childId)
+		match child.kind 'k'
+			jsonNumber then return trunc(child.numberValue)
+			default throws JsonAccessError.wrongType
+		end 'k'
+	end 'getInt'
+
+	function getBool(parent JsonNodeId, key String) returns bool throws JsonAccessError
+		let childId = try getChild(parent, key: key)
+		let child = get(childId)
+		match child.kind 'k'
+			jsonBool then return child.boolValue
+			default throws JsonAccessError.wrongType
+		end 'k'
+	end 'getBool'
+
+	/// Array length. Throws if the node isn't an array.
+	function arrayLength(id JsonNodeId) returns ChildCount throws JsonAccessError
+		let node = get(id)
+		match node.kind 'k'
+			jsonArray then return node.children.count()
+			default throws JsonAccessError.notArray
+		end 'k'
+	end 'arrayLength'
+
+	/// Array element by index.
+	function arrayAt(id JsonNodeId, index ChildIndex) returns JsonNodeId throws JsonAccessError
+		let node = get(id)
+		match node.kind 'k'
+			jsonArray then return try node.children.get(index) otherwise throw JsonAccessError.outOfBounds
+			default throws JsonAccessError.notArray
+		end 'k'
+	end 'arrayAt'
+end 'JsonDoc'
+
+// =============================================================================
+// Public entry points
+// =============================================================================
+
+/// Static namespace for JSON parse / stringify. Call sites read as
+/// `Json.parse(text)` / `Json.stringify(doc)`. The free-function form would
+/// clash with other stdlib parsers (e.g. `URL.parse`), so this is the
+/// canonical entry point.
+export type Json
+	/// Parse a JSON document. The returned `JsonDoc` owns the full node arena;
+	/// `doc.root` is the top-level value's id.
+	export static function parse(text String) returns JsonDoc throws JsonError
+		var doc = JsonDoc.create()
+		var parser = JsonParser.create(text.toByteArray(), doc: doc)
+		parser.skipWhitespace()
+		let rootId = try parser.parseValue()
+		parser.skipWhitespace()
+		if not parser.atEnd() 'trailing'
+			throw JsonError.trailingContent
+		end 'trailing'
+		parser.commitRoot(rootId)
+		return parser.doc
+	end 'parse'
+
+	/// Serialize a `JsonDoc` rooted at `doc.root` to compact RFC 8259 output.
+	/// Non-finite numbers (NaN, Infinity) are emitted as `null` to stay valid JSON.
+	export static function stringify(doc JsonDoc) returns String
+		var out = ByteArray.create()
+		writeNode(doc, id: doc.root, out: out)
+		return String.from(out)
+	end 'stringify'
+end 'Json'
+
+// =============================================================================
+// Accessor helper
+// =============================================================================
+
+function findKeyInNode(node JsonNode, key String) returns JsonNodeId throws JsonAccessError
+	let n = node.keys.count()
+	for i in 0 upto n 'scan'
+		let k = try node.keys.get(i) otherwise 'kErr'
+			panic("findKeyInNode: keys.get OOB — i < count by loop bound")
+		end 'kErr'
+		if k.equals(key) 'hit'
+			return try node.children.get(i) otherwise 'cErr'
+				panic("findKeyInNode: children.get OOB — parallel arrays out of sync")
+			end 'cErr'
+		end 'hit'
+	end 'scan'
+	throw JsonAccessError.missingKey
+end 'findKeyInNode'
+
+// =============================================================================
+// Parser
+// =============================================================================
+
+type JsonParser
+	var bytes ByteArray
+	var pos BytePos = 0
+	export var doc JsonDoc
+
+	static function create(bytes ByteArray, doc JsonDoc) returns JsonParser
+		return Self{bytes: bytes, doc: doc}
+	end 'create'
+
+	function commitRoot(rootId JsonNodeId)
+		doc.root = rootId
+	end 'commitRoot'
+
+	function atEnd() returns bool
+		return pos >= bytes.count()
+	end 'atEnd'
+
+	function peek() returns Byte throws JsonError
+		if pos >= bytes.count() 'eof'
+			throw JsonError.unexpectedEof
+		end 'eof'
+		return try bytes.get(pos) otherwise 'getErr'
+			panic("JsonParser.peek: pos < count just checked")
+		end 'getErr'
+	end 'peek'
+
+	function advance() throws JsonError
+		if pos >= bytes.count() 'eof'
+			throw JsonError.unexpectedEof
+		end 'eof'
+		pos = pos + 1
+	end 'advance'
+
+	function skipWhitespace()
+		let len = bytes.count()
+		while pos < len 'scan'
+			let b = try bytes.get(pos) otherwise 'getErr'
+				panic("JsonParser.skipWhitespace: pos < len just checked")
+			end 'getErr'
+			if b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D 'isWs'
+				pos = pos + 1
+			end 'isWs' else 'notWs'
+				return
+			end 'notWs'
+		end 'scan'
+	end 'skipWhitespace'
+
+	function expect(expected Byte) throws JsonError
+		let b = try peek()
+		if b != expected 'mismatch'
+			throw JsonError.unexpectedChar
+		end 'mismatch'
+		try advance()
+	end 'expect'
+
+	function parseValue() returns JsonNodeId throws JsonError
+		skipWhitespace()
+		let b = try peek()
+		if b == 0x7B 'lbrace'
+			return try parseObject()
+		end 'lbrace'
+		if b == 0x5B 'lbracket'
+			return try parseArray()
+		end 'lbracket'
+		if b == 0x22 'quote'
+			let s = try parseString()
+			return doc.add(JsonNode.stringNode(s))
+		end 'quote'
+		if b == 0x74 'true_'
+			try matchLiteral(trueBytes())
+			return doc.add(JsonNode.boolNode(true))
+		end 'true_'
+		if b == 0x66 'false_'
+			try matchLiteral(falseBytes())
+			return doc.add(JsonNode.boolNode(false))
+		end 'false_'
+		if b == 0x6E 'null_'
+			try matchLiteral(nullBytes())
+			return doc.add(JsonNode.nullNode())
+		end 'null_'
+		if b == 0x2D 'minus'
+			let n = try parseNumber()
+			return doc.add(JsonNode.numberNode(n))
+		end 'minus'
+		if b >= 0x30 and b <= 0x39 'digit'
+			let n = try parseNumber()
+			return doc.add(JsonNode.numberNode(n))
+		end 'digit'
+		throw JsonError.unexpectedChar
+	end 'parseValue'
+
+	function matchLiteral(expected ByteArray) throws JsonError
+		let n = expected.count()
+		for i in 0 upto n 'cmp'
+			let want = try expected.get(i) otherwise 'wErr'
+				panic("matchLiteral: literal table get OOB")
+			end 'wErr'
+			let got = try peek()
+			if got != want 'ne'
+				throw JsonError.unexpectedChar
+			end 'ne'
+			try advance()
+		end 'cmp'
+	end 'matchLiteral'
+
+	function parseArray() returns JsonNodeId throws JsonError
+		try expect(0x5B)
+		var children = JsonNodeIdArray.create()
+		skipWhitespace()
+		let b = try peek()
+		if b == 0x5D 'empty'
+			try advance()
+			return doc.add(JsonNode.arrayNode(children))
+		end 'empty'
+		while true 'loop'
+			let childId = try parseValue()
+			children.push(childId)
+			skipWhitespace()
+			let sep = try peek()
+			if sep == 0x2C 'comma'
+				try advance()
+				skipWhitespace()
+				let next = try peek()
+				if next == 0x5D 'trailing'
+					throw JsonError.unexpectedChar
+				end 'trailing'
+			end 'comma' else 'notComma'
+				if sep == 0x5D 'close'
+					try advance()
+					return doc.add(JsonNode.arrayNode(children))
+				end 'close'
+				throw JsonError.unexpectedChar
+			end 'notComma'
+		end 'loop'
+		panic("parseArray: fell out of infinite loop")
+	end 'parseArray'
+
+	function parseObject() returns JsonNodeId throws JsonError
+		try expect(0x7B)
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		skipWhitespace()
+		let b = try peek()
+		if b == 0x7D 'empty'
+			try advance()
+			return doc.add(JsonNode.objectNode(keys, children: children))
+		end 'empty'
+		while true 'loop'
+			skipWhitespace()
+			let qb = try peek()
+			if qb != 0x22 'notQuote'
+				throw JsonError.unexpectedChar
+			end 'notQuote'
+			let key = try parseString()
+			skipWhitespace()
+			try expect(0x3A)
+			let valueId = try parseValue()
+			keys.push(key)
+			children.push(valueId)
+			skipWhitespace()
+			let sep = try peek()
+			if sep == 0x2C 'comma'
+				try advance()
+				skipWhitespace()
+				let next = try peek()
+				if next == 0x7D 'trailing'
+					throw JsonError.unexpectedChar
+				end 'trailing'
+			end 'comma' else 'notComma'
+				if sep == 0x7D 'close'
+					try advance()
+					return doc.add(JsonNode.objectNode(keys, children: children))
+				end 'close'
+				throw JsonError.unexpectedChar
+			end 'notComma'
+		end 'loop'
+		panic("parseObject: fell out of infinite loop")
+	end 'parseObject'
+
+	function parseString() returns String throws JsonError
+		try expect(0x22)
+		var out = ByteArray.create()
+		while true 'scan'
+			let b = try peek()
+			if b == 0x22 'closeQuote'
+				try advance()
+				return String.from(out)
+			end 'closeQuote'
+			if b == 0x5C 'backslash'
+				try advance()
+				try decodeEscape(out)
+			end 'backslash' else 'literalByte'
+				if b < 0x20 'control'
+					throw JsonError.unexpectedChar
+				end 'control'
+				out.push(b)
+				try advance()
+			end 'literalByte'
+		end 'scan'
+		panic("parseString: fell out of infinite loop")
+	end 'parseString'
+
+	function decodeEscape(out ByteArray) throws JsonError
+		let b = try peek()
+		try advance()
+		if b == 0x22 'esc_quote'
+			out.push(0x22)
+			return
+		end 'esc_quote'
+		if b == 0x5C 'esc_bs'
+			out.push(0x5C)
+			return
+		end 'esc_bs'
+		if b == 0x2F 'esc_slash'
+			out.push(0x2F)
+			return
+		end 'esc_slash'
+		if b == 0x62 'esc_b'
+			out.push(0x08)
+			return
+		end 'esc_b'
+		if b == 0x66 'esc_f'
+			out.push(0x0C)
+			return
+		end 'esc_f'
+		if b == 0x6E 'esc_n'
+			out.push(0x0A)
+			return
+		end 'esc_n'
+		if b == 0x72 'esc_r'
+			out.push(0x0D)
+			return
+		end 'esc_r'
+		if b == 0x74 'esc_t'
+			out.push(0x09)
+			return
+		end 'esc_t'
+		if b == 0x75 'esc_u'
+			try decodeUnicodeEscape(out)
+			return
+		end 'esc_u'
+		throw JsonError.invalidEscape
+	end 'decodeEscape'
+
+	function decodeUnicodeEscape(out ByteArray) throws JsonError
+		let cu = try parseHex4()
+		if cu >= 0xD800 and cu <= 0xDBFF 'high'
+			let nextSlash = try peek()
+			if nextSlash != 0x5C 'noBs'
+				throw JsonError.invalidSurrogate
+			end 'noBs'
+			try advance()
+			let nextU = try peek()
+			if nextU != 0x75 'noU'
+				throw JsonError.invalidSurrogate
+			end 'noU'
+			try advance()
+			let low = try parseHex4()
+			if low < 0xDC00 or low > 0xDFFF 'badLow'
+				throw JsonError.invalidSurrogate
+			end 'badLow'
+			let cp = 0x10000 + (cu - 0xD800) * 0x400 + (low - 0xDC00)
+			encodeCodepoint(cp, out: out)
+			return
+		end 'high'
+		// Unpaired low-surrogate is rejected outright rather than substituted —
+		// silent U+FFFD would let bad input pass round-trip checks unnoticed.
+		if cu >= 0xDC00 and cu <= 0xDFFF 'lowAlone'
+			throw JsonError.invalidSurrogate
+		end 'lowAlone'
+		encodeCodepoint(cu, out: out)
+	end 'decodeUnicodeEscape'
+
+	function parseHex4() returns JsonInt throws JsonError
+		var value = 0
+		for _ in 0 upto 4 'loop'
+			let b = try peek()
+			try advance()
+			let digit = try hexDigit(b)
+			value = value * 16 + digit
+		end 'loop'
+		return value
+	end 'parseHex4'
+
+	function parseNumber() returns JsonFloat throws JsonError
+		let start = pos
+		let first = try peek()
+		if first == 0x2D 'sign'
+			try advance()
+		end 'sign'
+		let intStart = pos
+		let firstDigit = try peek()
+		if firstDigit == 0x30 'zero'
+			try advance()
+		end 'zero' else 'nonzero'
+			if firstDigit < 0x31 or firstDigit > 0x39 'notDigit'
+				throw JsonError.invalidNumber
+			end 'notDigit'
+			try advance()
+			while not atEnd() 'intDigits'
+				let d = try peek()
+				if d < 0x30 or d > 0x39 'stop'
+					break
+				end 'stop'
+				try advance()
+			end 'intDigits'
+		end 'nonzero'
+		if pos == intStart 'noInt'
+			throw JsonError.invalidNumber
+		end 'noInt'
+		if not atEnd() 'maybeFrac'
+			let d = try peek()
+			if d == 0x2E 'dot'
+				try advance()
+				let fracStart = pos
+				while not atEnd() 'fracDigits'
+					let fd = try peek()
+					if fd < 0x30 or fd > 0x39 'stop'
+						break
+					end 'stop'
+					try advance()
+				end 'fracDigits'
+				if pos == fracStart 'noFracDigit'
+					throw JsonError.invalidNumber
+				end 'noFracDigit'
+			end 'dot'
+		end 'maybeFrac'
+		if not atEnd() 'maybeExp'
+			let d = try peek()
+			if d == 0x65 or d == 0x45 'e'
+				try advance()
+				if not atEnd() 'maybeExpSign'
+					let s = try peek()
+					if s == 0x2B or s == 0x2D 'sign'
+						try advance()
+					end 'sign'
+				end 'maybeExpSign'
+				let expStart = pos
+				while not atEnd() 'expDigits'
+					let ed = try peek()
+					if ed < 0x30 or ed > 0x39 'stop'
+						break
+					end 'stop'
+					try advance()
+				end 'expDigits'
+				if pos == expStart 'noExpDigit'
+					throw JsonError.invalidNumber
+				end 'noExpDigit'
+			end 'e'
+		end 'maybeExp'
+		return try numberFromBytes(bytes, start: start, endPos: pos)
+	end 'parseNumber'
+end 'JsonParser'
+
+// =============================================================================
+// Number helpers
+// =============================================================================
+
+function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns JsonFloat throws JsonError
+	var i = start
+	var negative = false
+	let first = try bytes.get(i) otherwise 'b1'
+		throw JsonError.invalidNumber
+	end 'b1'
+	if first == 0x2D 'neg'
+		negative = true
+		i = i + 1
+	end 'neg'
+	var intValue = 0.0
+	while i < endPos 'intLoop'
+		let b = try bytes.get(i) otherwise 'b2'
+			throw JsonError.invalidNumber
+		end 'b2'
+		if b < 0x30 or b > 0x39 'stopInt'
+			break
+		end 'stopInt'
+		intValue = intValue * 10.0 + (b - 0x30) as float
+		i = i + 1
+	end 'intLoop'
+	var fracValue = 0.0
+	var fracScale = 1.0
+	if i < endPos 'maybeDot'
+		let b = try bytes.get(i) otherwise 'b3'
+			throw JsonError.invalidNumber
+		end 'b3'
+		if b == 0x2E 'dot'
+			i = i + 1
+			while i < endPos 'fracLoop'
+				let fb = try bytes.get(i) otherwise 'b4'
+					throw JsonError.invalidNumber
+				end 'b4'
+				if fb < 0x30 or fb > 0x39 'stopFrac'
+					break
+				end 'stopFrac'
+				fracScale = fracScale * 10.0
+				fracValue = fracValue + ((fb - 0x30) as float) / fracScale
+				i = i + 1
+			end 'fracLoop'
+		end 'dot'
+	end 'maybeDot'
+	var expValue = 0
+	var expNegative = false
+	if i < endPos 'maybeExp'
+		let b = try bytes.get(i) otherwise 'b5'
+			throw JsonError.invalidNumber
+		end 'b5'
+		if b == 0x65 or b == 0x45 'e'
+			i = i + 1
+			if i < endPos 'expSign'
+				let s = try bytes.get(i) otherwise 'b6'
+					throw JsonError.invalidNumber
+				end 'b6'
+				if s == 0x2B 'plus'
+					i = i + 1
+				end 'plus'
+				if s == 0x2D 'minusExp'
+					expNegative = true
+					i = i + 1
+				end 'minusExp'
+			end 'expSign'
+			while i < endPos 'expLoop'
+				let eb = try bytes.get(i) otherwise 'b7'
+					throw JsonError.invalidNumber
+				end 'b7'
+				if eb < 0x30 or eb > 0x39 'stopExp'
+					break
+				end 'stopExp'
+				expValue = expValue * 10 + (eb - 0x30)
+				i = i + 1
+			end 'expLoop'
+		end 'e'
+	end 'maybeExp'
+
+	var result = intValue + fracValue
+	if expValue != 0 'applyExp'
+		var signedExp = expValue
+		if expNegative 'negExp'
+			signedExp = -expValue
+		end 'negExp'
+		let factor = Math.pow(10.0, exponent: signedExp as float)
+		result = result * factor
+	end 'applyExp'
+	if negative 'applyNeg'
+		result = 0.0 - result
+	end 'applyNeg'
+	return result
+end 'numberFromBytes'
+
+function hexDigit(b Byte) returns JsonInt throws JsonError
+	if b >= 0x30 and b <= 0x39 'digit'
+		return b - 0x30
+	end 'digit'
+	if b >= 0x41 and b <= 0x46 'upper'
+		return b - 0x41 + 10
+	end 'upper'
+	if b >= 0x61 and b <= 0x66 'lower'
+		return b - 0x61 + 10
+	end 'lower'
+	throw JsonError.invalidEscape
+end 'hexDigit'
+
+function encodeCodepoint(cp JsonInt, out ByteArray)
+	if cp < 0 'badCp'
+		panic("encodeCodepoint: negative codepoint")
+	end 'badCp'
+	if cp <= 0x7F 'oneByte'
+		out.push(cp)
+		return
+	end 'oneByte'
+	if cp <= 0x7FF 'twoBytes'
+		out.push(0xC0 or (cp / 0x40))
+		out.push(0x80 or (cp and 0x3F))
+		return
+	end 'twoBytes'
+	if cp <= 0xFFFF 'threeBytes'
+		out.push(0xE0 or (cp / 0x1000))
+		out.push(0x80 or ((cp / 0x40) and 0x3F))
+		out.push(0x80 or (cp and 0x3F))
+		return
+	end 'threeBytes'
+	if cp <= 0x10FFFF 'fourBytes'
+		out.push(0xF0 or (cp / 0x40000))
+		out.push(0x80 or ((cp / 0x1000) and 0x3F))
+		out.push(0x80 or ((cp / 0x40) and 0x3F))
+		out.push(0x80 or (cp and 0x3F))
+		return
+	end 'fourBytes'
+	panic("encodeCodepoint: codepoint above U+10FFFF")
+end 'encodeCodepoint'
+
+// =============================================================================
+// Stringify
+// =============================================================================
+
+function writeNode(doc JsonDoc, id JsonNodeId, out ByteArray)
+	let node = doc.get(id)
+	match node.kind 'k'
+		jsonNull then writeBytes(out, src: nullBytes())
+		jsonBool then writeBool(node.boolValue, out: out)
+		jsonNumber then writeNumber(node.numberValue, out: out)
+		jsonString then writeJsonString(node.stringValue, out: out)
+		jsonArray then writeArray(doc, ids: node.children, out: out)
+		jsonObject then writeObject(doc, keys: node.keys, ids: node.children, out: out)
+	end 'k'
+end 'writeNode'
+
+function writeBool(b bool, out ByteArray)
+	if b 'true_'
+		writeBytes(out, src: trueBytes())
+	end 'true_' else 'false_'
+		writeBytes(out, src: falseBytes())
+	end 'false_'
+end 'writeBool'
+
+function writeArray(doc JsonDoc, ids JsonNodeIdArray, out ByteArray)
+	out.push(0x5B)
+	let n = ids.count()
+	for i in 0 upto n 'each'
+		if i > 0 'sep'
+			out.push(0x2C)
+		end 'sep'
+		let childId = try ids.get(i) otherwise 'gErr'
+			panic("writeArray: ids.get OOB — i < n by loop bound")
+		end 'gErr'
+		writeNode(doc, id: childId, out: out)
+	end 'each'
+	out.push(0x5D)
+end 'writeArray'
+
+function writeObject(doc JsonDoc, keys StringArray, ids JsonNodeIdArray, out ByteArray)
+	out.push(0x7B)
+	let n = ids.count()
+	for i in 0 upto n 'each'
+		if i > 0 'sep'
+			out.push(0x2C)
+		end 'sep'
+		let key = try keys.get(i) otherwise 'kErr'
+			panic("writeObject: keys.get OOB — parallel arrays out of sync")
+		end 'kErr'
+		writeJsonString(key, out: out)
+		out.push(0x3A)
+		let childId = try ids.get(i) otherwise 'cErr'
+			panic("writeObject: ids.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		writeNode(doc, id: childId, out: out)
+	end 'each'
+	out.push(0x7D)
+end 'writeObject'
+
+function writeJsonString(s String, out ByteArray)
+	out.push(0x22)
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'each'
+		let b = try bytes.get(i) otherwise 'bErr'
+			panic("writeString: bytes.get OOB — i < n by loop bound")
+		end 'bErr'
+		writeStringByte(b, out: out)
+	end 'each'
+	out.push(0x22)
+end 'writeJsonString'
+
+function writeStringByte(b Byte, out ByteArray)
+	if b == 0x22 'quote'
+		out.push(0x5C)
+		out.push(0x22)
+		return
+	end 'quote'
+	if b == 0x5C 'backslash'
+		out.push(0x5C)
+		out.push(0x5C)
+		return
+	end 'backslash'
+	if b == 0x08 'bs'
+		out.push(0x5C)
+		out.push(0x62)
+		return
+	end 'bs'
+	if b == 0x0C 'ff'
+		out.push(0x5C)
+		out.push(0x66)
+		return
+	end 'ff'
+	if b == 0x0A 'nl'
+		out.push(0x5C)
+		out.push(0x6E)
+		return
+	end 'nl'
+	if b == 0x0D 'cr'
+		out.push(0x5C)
+		out.push(0x72)
+		return
+	end 'cr'
+	if b == 0x09 'tab'
+		out.push(0x5C)
+		out.push(0x74)
+		return
+	end 'tab'
+	if b < 0x20 'ctl'
+		writeUnicodeEscape(b, out: out)
+		return
+	end 'ctl'
+	out.push(b)
+end 'writeStringByte'
+
+function writeUnicodeEscape(value JsonInt, out ByteArray)
+	out.push(0x5C)
+	out.push(0x75)
+	out.push(hexNybble((value / 0x1000) and 0xF))
+	out.push(hexNybble((value / 0x100) and 0xF))
+	out.push(hexNybble((value / 0x10) and 0xF))
+	out.push(hexNybble(value and 0xF))
+end 'writeUnicodeEscape'
+
+function hexNybble(value JsonInt) returns Byte
+	if value < 0 or value > 15 'oob'
+		panic("hexNybble: value outside 0..15")
+	end 'oob'
+	if value < 10 'digit'
+		return 0x30 + value
+	end 'digit'
+	return 0x61 + (value - 10)
+end 'hexNybble'
+
+function writeNumber(n JsonFloat, out ByteArray)
+	// NaN: a number that's unequal to itself. Emit `null` because RFC 8259
+	// has no encoding for non-finite floats.
+	if n != n 'nan'
+		writeBytes(out, src: nullBytes())
+		return
+	end 'nan'
+	let diff = n - n
+	if diff != diff 'inf'
+		writeBytes(out, src: nullBytes())
+		return
+	end 'inf'
+	let intMax = 9223372036854775807.0
+	let intMin = -9223372036854775808.0
+	if n >= intMin and n <= intMax 'intRange'
+		let asInt = trunc(n)
+		let backToFloat = asInt as float
+		if backToFloat == n 'isInt'
+			let s = "{asInt}"
+			writeBytes(out, src: s.toByteArray())
+			return
+		end 'isInt'
+	end 'intRange'
+	let s = "{n}"
+	writeBytes(out, src: s.toByteArray())
+end 'writeNumber'
+
+function writeBytes(out ByteArray, src ByteArray)
+	let n = src.count()
+	for i in 0 upto n 'each'
+		let b = try src.get(i) otherwise 'bErr'
+			panic("writeBytes: src.get OOB — i < n by loop bound")
+		end 'bErr'
+		out.push(b)
+	end 'each'
+end 'writeBytes'
+
+// =============================================================================
+// Literal byte tables. Built per-call rather than as top-level constants
+// because top-level Array literals don't have a stable storage model.
+// =============================================================================
+
+function nullBytes() returns ByteArray
+	var b = ByteArray.create()
+	b.push(0x6E)
+	b.push(0x75)
+	b.push(0x6C)
+	b.push(0x6C)
+	return b
+end 'nullBytes'
+
+function trueBytes() returns ByteArray
+	var b = ByteArray.create()
+	b.push(0x74)
+	b.push(0x72)
+	b.push(0x75)
+	b.push(0x65)
+	return b
+end 'trueBytes'
+
+function falseBytes() returns ByteArray
+	var b = ByteArray.create()
+	b.push(0x66)
+	b.push(0x61)
+	b.push(0x6C)
+	b.push(0x73)
+	b.push(0x65)
+	return b
+end 'falseBytes'

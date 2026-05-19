@@ -110,13 +110,19 @@ maxon run spec-test-selfhosted
 maxon run build
 ```
 
+**Doc comments:** Each exported function may be preceded by one or more `///` doc-comment lines. Those lines are concatenated (joined with single spaces) and shown next to the command name when listing available commands via `maxon run`. Plain `//` comments are treated as in-source authoring notes and are NOT surfaced.
+
 **Example `build.maxon`:**
 ```maxon
-// Compile the self-hosted compiler and run its spec tests
+/// Compile the self-hosted compiler and run its spec tests.
 export function spec_test_selfhosted() returns ExitCode
 	print("Compiling...\n")
-	let result = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
-	if result != 0 'failed'
+	let exe = try FilePath.from("bin/maxon.exe") otherwise return 2
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push("maxon-selfhosted")
+	let result = try Subprocess.run(.path(exe), arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 120000) otherwise return 1
+	if not result.succeeded() 'failed'
 		return 1
 	end 'failed'
 	return 0

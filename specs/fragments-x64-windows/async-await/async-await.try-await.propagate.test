@@ -126,23 +126,25 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rax, 1
-    x64.mov rcx, 16
+    x64.mov rcx, 24
     x64.call mm_raw_alloc
     x64.mov rcx, 1
     x64.mov [rax+0], rcx
-    x64.mov rdx, 1
+    x64.xor edx, edx
     x64.mov [rax+8], rdx
-    x64.lea_func rbx, [async-await.mayFail]
+    x64.mov rbx, 1
+    x64.mov [rax+16], rbx
+    x64.lea_func rsi, [async-await.mayFail]
     x64.mov rdx, rcx
     x64.mov r8, rax
-    x64.mov rcx, rbx
+    x64.mov rcx, rsi
     x64.call __gt_spawn
     x64.mov rcx, rax
     x64.call __gt_try_await
     x64.mov [rbp-8], rdx
     x64.mov [rbp-16], rax
-    x64.xor esi, esi
-    x64.cmp rdx, rsi
+    x64.xor edi, edi
+    x64.cmp rdx, rdi
     x64.je async-await.inner.try_continue_0
   propagate_error_0:
     x64.mov rdx, [rbp-8]

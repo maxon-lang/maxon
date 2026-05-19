@@ -140,7 +140,7 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v51: Stage J.4f.3 — added StdArithUnaryOpcode.bitcastI64ToF64 (the codec
 // must learn its lifted/encoded raw value) so float-typed reads from
 // type-erased managed memory can recover the float bits.
-let CACHE_FORMAT_VERSION = 51
+let CACHE_FORMAT_VERSION = 52
 
 // ============================================================
 // Types
@@ -428,7 +428,7 @@ end 'computeStdlibChecksum'
 
 // Get compiler executable fingerprint: file size and modification time.
 export function getCompilerFingerprint() returns (MachineWord, MachineWord)
-	let exePath = Process.executablePath()
+	let exePath = try Process.executablePath() otherwise return (0, 0)
 	let info = try File.info(exePath) otherwise return (0, 0)
 
 	return (info.size, info.modifiedTime)
@@ -2241,8 +2241,26 @@ function restoreRegistries(project Project, data StdlibCacheData)
 	// MaxonType. Re-intern each through the destination project's registries
 	// (via the shared helper) so subsequent lookups return ids whose payload
 	// is meaningful in the destination id space.
+	//
+	// The `writerGidToProjectGid` table is rebuilt fresh on every restore so
+	// the layoutDescriptors / witnessTables loops below can translate
+	// writer-side gids (a writer-project index for the in-memory cache, a
+	// disk-encoded index for the on-disk cache) into the CURRENT destination
+	// project's gid space. The disk-read path populates the map inline in
+	// `readGenericInstanceRegistry`, but that's tied to a single project; a
+	// second compile reusing the cached data needs a fresh map keyed on the
+	// new project's `project.genericInstances`. Without this rebuild the
+	// in-memory cache path (activateStdlibCache after warmup) would see an
+	// empty map and panic in `translateWriterGenericInstanceId`.
+	//
+	// Mutate the existing array in-place (clear then refill) so this works
+	// when `data` is passed as a value parameter — `.push` mutates through
+	// the array reference without requiring the enclosing struct to be a
+	// `var` binding at every call site.
+	data.writerGidToProjectGid.clear()
 	for i in 0 upto data.genericInstances.count() 'eachGi'
-		_ = translateCapturedGenericInstanceId(project, data: data, id: i)
+		let destGid = translateCapturedGenericInstanceId(project, data: data, id: i)
+		data.writerGidToProjectGid.push(destGid)
 	end 'eachGi'
 
 	// IrInterface entries store method signatures whose paramTypes / returnType
@@ -3459,6 +3477,7 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osWrite(ptrId, lenId) then writeStdSysOsWrite(buf, ptrId: ptrId, lenId: lenId)
 		free(ptrId) then writeQword(buf, value: ptrId)
 		osWriteErr(ptrId, lenId) then writeStdSysOsWriteErr(buf, ptrId: ptrId, lenId: lenId)
+		osRead(resultId, ptrId, lenId) then writeStdSysOsRead(buf, resultId: resultId, ptrId: ptrId, lenId: lenId)
 		osOpenWrite(resultId, pathPtrId, pathLenId) then writeStdSysOsOpenWrite(buf, resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId)
 		osWriteFd(fdId, ptrId, lenId) then writeStdSysOsWriteFd(buf, fdId: fdId, ptrId: ptrId, lenId: lenId)
 		osClose(fdId) then writeQword(buf, value: fdId)
@@ -3536,6 +3555,12 @@ function writeStdSysOsWriteErr(buf ByteArray, ptrId ValueId, lenId ValueId)
 	writeQword(buf, value: ptrId)
 	writeQword(buf, value: lenId)
 end 'writeStdSysOsWriteErr'
+
+function writeStdSysOsRead(buf ByteArray, resultId ValueId, ptrId ValueId, lenId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: ptrId)
+	writeQword(buf, value: lenId)
+end 'writeStdSysOsRead'
 
 function writeStdSysOsOpenWrite(buf ByteArray, resultId ValueId, pathPtrId ValueId, pathLenId ValueId)
 	writeQword(buf, value: resultId)
@@ -3655,6 +3680,7 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osWrite gives readStdSysOsWrite(buf, offset: pos)
 		free gives readStdSysFree(buf, offset: pos)
 		osWriteErr gives readStdSysOsWriteErr(buf, offset: pos)
+		osRead gives readStdSysOsRead(buf, offset: pos)
 		osOpenWrite gives readStdSysOsOpenWrite(buf, offset: pos)
 		osWriteFd gives readStdSysOsWriteFd(buf, offset: pos)
 		osClose gives readStdSysOsClose(buf, offset: pos)
@@ -3751,6 +3777,13 @@ function readStdSysOsWriteErr(buf ByteArray, offset ByteOffset) returns (StdSyst
 	let lenId = readQword(buf, offset: offset + 8)
 	return (StdSystemOp.osWriteErr(ptrId, lenId: lenId), offset + 16)
 end 'readStdSysOsWriteErr'
+
+function readStdSysOsRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let ptrId = readQword(buf, offset: offset + 8)
+	let lenId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osRead(resultId, ptrId: ptrId, lenId: lenId), offset + 24)
+end 'readStdSysOsRead'
 
 function readStdSysOsOpenWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let resultId = readQword(buf, offset: offset)

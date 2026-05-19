@@ -541,6 +541,9 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	let mmReturn = MaxonReturnType.value(mmType)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStdout", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.writeStderr", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// `readStdin(maxBytes)`: reads up to maxBytes from stdin and returns a fresh
+	// __ManagedMemory whose length reflects the bytes actually read (0 on EOF).
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.readStdin", paramNames: mmParamNames1("maxBytes"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: mmReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.floatToBits", paramNames: mmParamNames1("value"), paramTypes: mmParamTypes1(MaxonType.float), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.ucdByteAt", paramNames: mmParamNames2("label", second: "offset"), paramTypes: mmParamTypes2(MaxonType.string, second: MaxonType.integer), returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.ucdI64At", paramNames: mmParamNames2("label", second: "index"), paramTypes: mmParamTypes2(MaxonType.string, second: MaxonType.integer), returnType: intReturn)
@@ -557,7 +560,81 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// path as UTF-8 bytes (length excludes trailing NUL). The stdlib's
 	// `Process.executablePath()` wraps the result in a `FilePath`.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.executablePath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
+	// Phase 3.4: monotonic clock primitive used by `stdlib/Clock.maxon`.
+	// Routes through the runtime's per-target time source — Windows
+	// QueryPerformanceCounter, POSIX clock_gettime(CLOCK_MONOTONIC), WASI
+	// `monotonic-clock` — and returns the result in milliseconds.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.currentTimeMs", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: intReturn)
+	// Phase 3.4: subprocess builtins. Each call lowers to a fixed
+	// `maxon_subprocess_*` runtime symbol that the bootstrap-emitted runtime
+	// provides; the self-hosted backend just dispatches by name. The
+	// 14-arg spawn/detach contract carries argv/cwd as __ManagedMemory and a
+	// triple-of-triples for stdin/stdout/stderr (kind, data, limit) — see
+	// `stdlib/Subprocess.maxon` for the matching call sites and the parent
+	// plan for the runtime-side argument-layout contract.
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResolveOnPath", paramNames: mmParamNames1("name"), paramTypes: mmParamTypes1(mmType), returnType: mmReturn)
+	let spawnNames = subprocessSpawnParamNames()
+	let spawnTypes = subprocessSpawnParamTypes(mmType: mmType)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSpawn", paramNames: spawnNames, paramTypes: spawnTypes, returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessDetach", paramNames: spawnNames, paramTypes: spawnTypes, returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessLastErrorMessage", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessGetPid", paramNames: mmParamNames1("handle"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessWaitCollect", paramNames: mmParamNames2("handle", second: "timeoutMs"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultStatusKind", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultStatusCode", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultStdout", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: mmReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultStderr", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: mmReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultDurationMs", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResultRelease", paramNames: mmParamNames1("resultPtr"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessKill", paramNames: mmParamNames2("handle", second: "force"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSendSignal", paramNames: mmParamNames2("handle", second: "sig"), paramTypes: mmParamTypes2(MaxonType.integer, second: MaxonType.integer), returnType: intReturn)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessReleaseHandle", paramNames: mmParamNames1("handle"), paramTypes: mmParamTypes1(MaxonType.integer), returnType: MaxonReturnType.void)
+	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.managedIsNull", paramNames: mmParamNames1("m"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 end 'registerBuiltinsIntrinsicSignatures'
+
+// 14-arg spawn/detach contract: argv (MM), argc (int), cwd (MM), envBlock (MM),
+// envInherit (int), then three (kind:int, data:MM, limit:int) stdio triples
+// for stdin/stdout/stderr — stdin has a zero limit by convention but still
+// occupies the slot — plus a final flags bitfield. Names match the stdlib
+// call site so future signature-driven error messages line up with source.
+function subprocessSpawnParamNames() returns StringArray
+	var names = StringArray.create()
+	names.push("argv")
+	names.push("argc")
+	names.push("cwd")
+	names.push("envBlock")
+	names.push("envInherit")
+	names.push("stdinKind")
+	names.push("stdinData")
+	names.push("stdoutKind")
+	names.push("stdoutData")
+	names.push("stdoutLimit")
+	names.push("stderrKind")
+	names.push("stderrData")
+	names.push("stderrLimit")
+	names.push("flags")
+	return names
+end 'subprocessSpawnParamNames'
+
+function subprocessSpawnParamTypes(mmType MaxonType) returns MaxonTypeArray
+	let intType = MaxonType.integer
+	var types = MaxonTypeArray.create()
+	types.push(mmType)
+	types.push(intType)
+	types.push(mmType)
+	types.push(mmType)
+	types.push(intType)
+	types.push(intType)
+	types.push(mmType)
+	types.push(intType)
+	types.push(mmType)
+	types.push(intType)
+	types.push(intType)
+	types.push(mmType)
+	types.push(intType)
+	types.push(intType)
+	return types
+end 'subprocessSpawnParamTypes'
 
 function registerBuiltinsIntrinsicSignature(project Project, qualifiedName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
 	var paramDefaults = ParamDefaultArray.create()
@@ -4173,6 +4250,9 @@ type MaxonToStdLowering
 		if methodName == "writeStderr" 'isStderr'
 			return self.lowerBuiltinsWriteStream(result, callee: "mrt_write_stderr", args: args, dstBlock: dstBlock)
 		end 'isStderr'
+		if methodName == "readStdin" 'isReadStdin'
+			return self.lowerBuiltinsReadStdin(result, args: args, dstBlock: dstBlock)
+		end 'isReadStdin'
 		if methodName == "floatToBits" 'isFloatToBits'
 			return self.lowerBuiltinsFloatToBits(result, args: args, dstBlock: dstBlock)
 		end 'isFloatToBits'
@@ -4191,6 +4271,16 @@ type MaxonToStdLowering
 		if methodName == "executablePath" 'isExePath'
 			return self.lowerBuiltinsExecutablePath(result, args: args, dstBlock: dstBlock)
 		end 'isExePath'
+		if methodName == "currentTimeMs" 'isCurrentTimeMs'
+			return self.lowerBuiltinsCurrentTimeMs(result, args: args, dstBlock: dstBlock)
+		end 'isCurrentTimeMs'
+		// Phase 3.4: subprocess builtins each route to a fixed `maxon_subprocess_*`
+		// runtime symbol. `lookupSubprocessBuiltin` keeps the (methodName ->
+		// callee, arity, return-shape) mapping in one place; the actual emit is
+		// shape-driven by `lowerBuiltinsSubprocessCall`.
+		if let subprocessHit = try lookupSubprocessBuiltin(methodName) 'isSubprocess'
+			return self.lowerBuiltinsSubprocessCall(result, args: args, dstBlock: dstBlock, methodName: methodName, hit: subprocessHit)
+		end 'isSubprocess'
 		return false
 	end 'lowerBuiltinsIntrinsic'
 
@@ -4774,6 +4864,22 @@ type MaxonToStdLowering
 		return true
 	end 'lowerBuiltinsExecutablePath'
 
+	// Phase 3.4: zero-arg monotonic-clock primitive. Lowers to the runtime
+	// helper that returns milliseconds since some fixed-but-platform-defined
+	// epoch — the absolute value is meaningless, but differences are
+	// meaningful (stdlib `Clock.elapsedMs` clamps to 0 on apparent skew).
+	function lowerBuiltinsCurrentTimeMs(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 0 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.currentTimeMs: expected 0 args, got {args.count()}")
+			return true
+		end 'badArity'
+		let argIds = ValueIdArray.create()
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "maxon_current_time_ms", argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.integer)
+		return true
+	end 'lowerBuiltinsCurrentTimeMs'
+
 	// Common shape for `__Builtins.writeStdout` / `__Builtins.writeStderr`:
 	// arg 0 is a `__ManagedMemory` pointer; load the buffer at offset 0
 	// and length at offset 8, then call the runtime helper with both i64
@@ -4799,6 +4905,79 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.integer)
 		return true
 	end 'lowerBuiltinsWriteStream'
+
+	// `__Builtins.readStdin(maxBytes)`: delegate to the runtime helper
+	// `mrt_read_stdin_managed`, which allocates a `__ManagedMemory` of
+	// capacity `maxBytes`, reads up to `maxBytes` bytes from stdin into the
+	// MM's buffer, sets the MM's length to the bytes actually read (0 on
+	// EOF), and returns the MM pointer. The runtime-side construction keeps
+	// the per-target MM allocation policy consistent with every other
+	// MM-returning builtin (commandLineArg / executablePath).
+	function lowerBuiltinsReadStdin(result ByteArray, args ByteArrayArray, dstBlock IrBlock) returns bool
+		if args.count() != 1 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.readStdin: expected 1 arg, got {args.count()}")
+			return true
+		end 'badArity'
+		let maxBytesName = try args.get(0) otherwise panic("invariant: args.count() == 1 just checked")
+		let maxBytesId = self.resolveName(maxBytesName)
+		var argIds = ValueIdArray.create()
+		argIds.push(maxBytesId)
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: "mrt_read_stdin_managed", argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
+		return true
+	end 'lowerBuiltinsReadStdin'
+
+	// Phase 3.4: shape-driven subprocess intrinsic lowering. All subprocess
+	// builtins are pure pass-through to a `maxon_subprocess_*` runtime symbol
+	// — the call's arg names map directly to the runtime arg slots, no
+	// per-call MM unwrap or address-of fixup. `hit.returnShape` decides how
+	// the result ValueId is bound: i64 for the integer-returning family,
+	// `__ManagedMemory` for the resolveOnPath / lastErrorMessage / result-
+	// accessor MM family, and a synthesized constI64 0 for the void
+	// `subprocessReleaseHandle` / `subprocessResultRelease` pair so any
+	// downstream read of the source-level call expression still resolves.
+	function lowerBuiltinsSubprocessCall(result ByteArray, args ByteArrayArray, dstBlock IrBlock, methodName String, hit SubprocessBuiltinHit) returns bool
+		if args.count() != hit.arity 'badArity'
+			self.reportLowerError(ErrorCode.semanticWrongArgCount, message: "__Builtins.{methodName}: expected {hit.arity} args, got {args.count()}")
+			return true
+		end 'badArity'
+		var argIds = ValueIdArray.create()
+		for i in 0 upto args.count() 'eachArg'
+			let argName = try args.get(i) otherwise panic("invariant: i < args.count() just checked")
+			argIds.push(self.resolveName(argName))
+		end 'eachArg'
+		let mmType = MaxonType.named(self.project.typeNames.intern("__ManagedMemory"))
+		let isVoid = match hit.returnShape 'pickVoid'
+			returnsVoid gives true
+			returnsInt gives false
+			returnsManaged gives false
+		end 'pickVoid'
+		if isVoid 'voidCall'
+			// The user-visible result name binds to a synthesized 0-const so
+			// downstream reads of the source-level call expression still
+			// resolve; the runtime helper has no return value. The call op's
+			// own result ValueId is a throwaway — DCE drops it after the
+			// call retires. Mirrors the void-call convention used by
+			// `lowerInternalsAtomicUnary` and friends.
+			let throwawayId = allocValueId(self.funcIdRef)
+			self.setValueType(throwawayId, t: MaxonType.integer)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(throwawayId, callee: hit.callee, argIds: argIds)))
+			let resultId = self.defineName(result)
+			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
+			self.setValueType(resultId, t: MaxonType.integer)
+			return true
+		end 'voidCall'
+		let resultType = match hit.returnShape 'pickType'
+			returnsInt gives MaxonType.integer
+			returnsManaged gives mmType
+			returnsVoid gives MaxonType.integer
+		end 'pickType'
+		let resultId = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: hit.callee, argIds: argIds)))
+		self.setValueType(resultId, t: resultType)
+		return true
+	end 'lowerBuiltinsSubprocessCall'
 
 	// Lower a 1-arg allocator intrinsic to `runtime_callee(arg)`. The
 	// runtime helpers return i64 (or "void" by always returning 0); we
@@ -7822,6 +8001,91 @@ export function lookupInternalsRuntimeCallTarget(methodName String) returns Inte
 	end 'a'
 	throw InternalsBridgeLookupError.notBridge
 end 'lookupInternalsRuntimeCallTarget'
+
+// Phase 3.4: subprocess builtins. Each entry is `(methodName -> callee,
+// arity, return-shape)`. The lowering helper consumes the shape to decide
+// whether the call's result ValueId carries i64, a __ManagedMemory pointer,
+// or is synthesized as a 0-const stand-in for a void runtime call (so any
+// downstream read of the call-result name still resolves).
+export enum SubprocessReturnShape
+	returnsInt
+	returnsManaged
+	returnsVoid
+end 'SubprocessReturnShape'
+
+export type SubprocessBuiltinHit
+	export var callee String
+	export var arity VarSlot
+	export var returnShape SubprocessReturnShape
+
+	export static function create(callee String, arity VarSlot, returnShape SubprocessReturnShape) returns SubprocessBuiltinHit
+		return Self{callee: callee, arity: arity, returnShape: returnShape}
+	end 'create'
+end 'SubprocessBuiltinHit'
+
+export enum SubprocessBuiltinLookupError implements Error
+	notSubprocess
+end 'SubprocessBuiltinLookupError'
+
+// `__Builtins.subprocess*` / `__Builtins.managedIsNull` -> (runtime callee,
+// arity, return-shape). Callers route the hit through
+// `lowerBuiltinsSubprocessCall`. Throws
+// `SubprocessBuiltinLookupError.notSubprocess` when `methodName` isn't a
+// subprocess intrinsic so the caller can fall through to the regular
+// dispatch path. The runtime-symbol names mirror the bootstrap's parser
+// table (maxon-sharp/Compiler/2-Parser.cs:8919) so any program compiled by
+// either compiler resolves to the same `maxon_*` symbol.
+export function lookupSubprocessBuiltin(methodName String) returns SubprocessBuiltinHit throws SubprocessBuiltinLookupError
+	if methodName == "subprocessResolveOnPath" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_resolve_on_path", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'a'
+	if methodName == "subprocessSpawn" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_spawn", arity: 14 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessDetach" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_detach", arity: 14 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessLastErrorMessage" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_last_error_message", arity: 0 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'a'
+	if methodName == "subprocessGetPid" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_get_pid", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessWaitCollect" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_wait_collect", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessResultStatusKind" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_status_kind", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessResultStatusCode" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_status_code", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessResultStdout" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_stdout", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'a'
+	if methodName == "subprocessResultStderr" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_stderr", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsManaged)
+	end 'a'
+	if methodName == "subprocessResultDurationMs" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_duration_ms", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessResultRelease" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_result_release", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsVoid)
+	end 'a'
+	if methodName == "subprocessKill" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_kill", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessSendSignal" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_send_signal", arity: 2 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	if methodName == "subprocessReleaseHandle" 'a'
+		return SubprocessBuiltinHit.create("maxon_subprocess_release_handle", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsVoid)
+	end 'a'
+	if methodName == "managedIsNull" 'a'
+		return SubprocessBuiltinHit.create("maxon_managed_is_null", arity: 1 as VarSlot, returnShape: SubprocessReturnShape.returnsInt)
+	end 'a'
+	throw SubprocessBuiltinLookupError.notSubprocess
+end 'lookupSubprocessBuiltin'
 
 // True when `signature`'s first formal parameter is the implicit `__self`
 // — i.e. the callee is an instance method. Lifted out of the per-call

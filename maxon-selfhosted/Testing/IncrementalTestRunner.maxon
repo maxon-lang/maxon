@@ -234,7 +234,11 @@ function cleanupIncrTest(sourcePath FilePath, exePath FilePath)
 end 'cleanupIncrTest'
 
 function verifyExeExitCode(exePath FilePath, expectedEc ExitCode) returns bool
-	let ec = Process.execute(exePath.toString(), timeoutMs: 5000)
+	let result = try Subprocess.run(Executable.path(exePath), arguments: StringArray.create(), workingDirectory: Directory.currentPath(), timeoutMs: 5000) otherwise (err) 'spawn'
+		print("  failed to run {exePath.toString()}: {err.displayReason()}\n")
+		return false
+	end 'spawn'
+	let ec = result.exitCode()
 	if ec != expectedEc 'mismatch'
 		print("  expected exit code {expectedEc}, got {ec}\n")
 		return false

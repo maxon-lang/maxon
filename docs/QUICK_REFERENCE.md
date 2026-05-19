@@ -726,6 +726,16 @@ var result = try await p otherwise 0
 // Cancellation
 var p = async longRunning()
 p.cancel()
+
+// Typed promises in collections
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+var arr = IntPromiseArray.create()
+arr.push(async compute(1))
+arr.push(async compute(2))
+for q in arr 'each'
+	let r = await q
+end 'each'
 ```
 
 - Green threads are distributed across OS worker threads (one per CPU core)

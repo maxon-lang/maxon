@@ -2034,6 +2034,9 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedWriteStderrOp managedWriteStderrOp:
               LowerManagedWriteStderr(managedWriteStderrOp, newBlock, valueMap, varTypes);
               break;
+            case MaxonManagedReadStdinOp managedReadStdinOp:
+              LowerManagedReadStdin(managedReadStdinOp, newBlock, valueMap, varTypes, temps);
+              break;
             case MaxonPanicOp panicOp:
               LowerPanic(panicOp, newBlock, result);
               break;

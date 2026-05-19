@@ -377,6 +377,9 @@ export type Arm64Backend implements TargetBackend
 			osExit gives 1
 			osWrite gives 6
 			osWriteErr gives 6
+			// osRead mirrors osWrite slot budget on POSIX; on Windows the additional
+			// bytesRead scratch slot + 5 iatCall args land within the 8-slot cap.
+			osRead gives 8
 			// osOpenWrite/osGetEnv/osWriteFd/osClose: arm64 lowering is a Phase 3 task;
 			// the slot-count figures here are placeholders to satisfy exhaustiveness
 			// and will be refined when real emitters are wired up.
@@ -880,6 +883,7 @@ export type Arm64Backend implements TargetBackend
 			osExit(codeId) then result = lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 			osWrite(ptrId, lenId) then result = lowerOsWriteWithStrategyArm64(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			osWriteErr(ptrId, lenId) then result = lowerOsWriteWithStrategyArm64(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			osRead(resultId, ptrId, lenId) then result = lowerOsReadWithStrategyArm64(resultId: resultId, ptrId: ptrId, lenId: lenId, strategy: osDesc.read, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 			osOpenWrite then panic("osOpenWrite not yet implemented for arm64 (Phase 3)")
 			osWriteFd then panic("osWriteFd not yet implemented for arm64 (Phase 3)")
 			osClose then panic("osClose not yet implemented for arm64 (Phase 3)")
@@ -1168,6 +1172,105 @@ export type Arm64Backend implements TargetBackend
 			libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot: ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
 		end 'dispatch'
 	end 'lowerOsWriteWithStrategyArm64'
+
+	// osRead: POSIX read(fd, buf, count) / Windows ReadFile(handle, buf, count, &bytesRead, NULL).
+	// Mirrors the write strategy split but loads bytes-read into the resultId virtual.
+	function lowerOsReadSyscallArm64(resultId ValueId, ptrSlot VarSlot, lenSlot VarSlot, readNum MachineWord, fd MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		let fdSlot = nextTempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		let resultSlot = nextTempSlot + 1
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.syscall(resultSlot, number: readNum, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return nextTempSlot + 2
+	end 'lowerOsReadSyscallArm64'
+
+	function lowerOsReadWinApiArm64(resultId ValueId, ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, readFileSlot MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+
+		// GetStdHandle(STD_INPUT_HANDLE)
+		let handleConstSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: handleConstant))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(handleConstSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+		var getHandleArgs = VarSlotArray.create()
+		getHandleArgs.push(handleConstSlot)
+		let handleResultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(handleResultSlot, slotIndex: getHandleSlot, argSlots: getHandleArgs))
+		tempSlot = tempSlot + 1
+
+		// bytesRead = 0 stored to a slot
+		let readSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(readSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// Address of bytesRead slot
+		let readAddrSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.stackAddrOp(readAddrSlot, targetSlot: readSlot))
+		tempSlot = tempSlot + 1
+
+		// NULL for lpOverlapped
+		let nullSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: 0))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(nullSlot, src: arm64PhysReg(Arm64Register.x0)))
+		tempSlot = tempSlot + 1
+
+		// ReadFile(handle, ptr, len, &bytesRead, NULL). BOOL return is discarded;
+		// callers consult the bytesRead slot for the actual count.
+		var readArgs = VarSlotArray.create()
+		readArgs.push(handleResultSlot)
+		readArgs.push(ptrSlot)
+		readArgs.push(lenSlot)
+		readArgs.push(readAddrSlot)
+		readArgs.push(nullSlot)
+		let readResultSlot = tempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(readResultSlot, slotIndex: readFileSlot, argSlots: readArgs))
+		tempSlot = tempSlot + 1
+
+		// Materialize bytesRead from its slot into resultId virtual.
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: readSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: readSlot))
+
+		return tempSlot
+	end 'lowerOsReadWinApiArm64'
+
+	function lowerOsReadLibcallArm64(resultId ValueId, ptrSlot VarSlot, lenSlot VarSlot, readSlot MachineWord, fd MachineWord, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		let fdSlot = nextTempSlot
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), value: fd))
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.strToSlot(fdSlot, src: arm64PhysReg(Arm64Register.x0)))
+		var argSlots = VarSlotArray.create()
+		argSlots.push(fdSlot)
+		argSlots.push(ptrSlot)
+		argSlots.push(lenSlot)
+		let resultSlot = nextTempSlot + 1
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.iatCall(resultSlot, slotIndex: readSlot, argSlots: argSlots))
+		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.ldrFromSlot(Arm64VReg.virtual(resultId), slotIndex: resultSlot))
+		return nextTempSlot + 2
+	end 'lowerOsReadLibcallArm64'
+
+	function lowerOsReadWithStrategyArm64(resultId ValueId, ptrId ValueId, lenId ValueId, strategy ReadStrategy, dstBlock IrBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+		var tempSlot = nextTempSlot
+		let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if ptrSlot == tempSlot 'usedTemp1'
+			tempSlot = tempSlot + 1
+		end 'usedTemp1'
+		let lenSlot = ensureValueInSlotArm64(lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if lenSlot == tempSlot 'usedTemp2'
+			tempSlot = tempSlot + 1
+		end 'usedTemp2'
+		match strategy 'dispatch'
+			syscall(readNum, fd) then return lowerOsReadSyscallArm64(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, readNum: readNum, fd: fd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+			winApi(getHandleSlot, handleConstant, readFileSlot) then return lowerOsReadWinApiArm64(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+			libcall(readSlot, fd) then return lowerOsReadLibcallArm64(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, readSlot: readSlot, fd: fd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+		end 'dispatch'
+	end 'lowerOsReadWithStrategyArm64'
 
 	// Page allocation via the host kernel. ARM64-Linux maps to mmap (syscall 222).
 	// Other ARM64 targets (Windows / macOS / WASI) panic for now, matching the

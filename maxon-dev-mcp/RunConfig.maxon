@@ -1,0 +1,71 @@
+// Shared parsing for the `args`, `stdin`, and `timeoutMs` fields used by
+// tools that spawn a compiled Maxon program (`run_program`,
+// `mm_trace_analyze`). Keeping the policy here (e.g. how `null`/wrong-type
+// values are treated, what the default timeout is) means both tools stay
+// in lockstep.
+
+/// Parse the optional `args` array from the tool's JSON arguments into a
+/// `StringArray` suitable for `Configuration.arguments`. Tolerates missing
+/// keys and non-array values (treats them as empty argv); scalar entries
+/// inside the array are stringified so callers can pass numbers/bools
+/// directly.
+export function parseRunArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArray
+	var out = StringArray.create()
+	let argsArrId = try argsDoc.getChild(argsId, key: "args") otherwise 'noArgs'
+		return out
+	end 'noArgs'
+	let arrNode = argsDoc.get(argsArrId)
+	let isArr = match arrNode.kind 'k'
+		jsonArray gives true
+		jsonNull gives false
+		jsonBool gives false
+		jsonNumber gives false
+		jsonString gives false
+		jsonObject gives false
+	end 'k'
+	if not isArr 'notArr'
+		// `args: null` is tolerated for symmetry with clients that emit
+		// nulls for omitted optionals. Any other wrong-typed value also
+		// degrades to empty argv — the caller's build envelope still
+		// reports the run's actual output so the mismatch is observable.
+		return out
+	end 'notArr'
+	let n = arrNode.children.count()
+	for i in 0 upto n 'each'
+		let childId = try arrNode.children.get(i) otherwise panic("parseRunArgv: children.get OOB — i bounded by n")
+		let child = argsDoc.get(childId)
+		match child.kind 'k'
+			jsonString then out.push(child.stringValue)
+			jsonNumber then out.push("{child.numberValue}")
+			jsonBool then out.push("true" if child.boolValue else "false")
+			jsonNull then out.push("null")
+			jsonArray then panic("parseRunArgv: nested arrays in `args` are not supported")
+			jsonObject then panic("parseRunArgv: object entries in `args` are not supported")
+		end 'k'
+	end 'each'
+	return out
+end 'parseRunArgv'
+
+/// Parse the optional `stdin` string into an `InputSource`. An absent or
+/// empty value becomes `InputSource.none`.
+export function parseStdin(argsDoc JsonDoc, argsId JsonNodeId) returns InputSource
+	let raw = try argsDoc.getString(argsId, key: "stdin") otherwise 'noStdin'
+		return InputSource.none
+	end 'noStdin'
+	if raw.isEmpty() 'empty'
+		return InputSource.none
+	end 'empty'
+	return InputSource.bytes(data: raw)
+end 'parseStdin'
+
+/// Parse the optional `timeoutMs` integer. Non-positive values fall back to
+/// `defaultMs` so we never spawn with a 0/negative deadline.
+export function parseTimeoutMs(argsDoc JsonDoc, argsId JsonNodeId, defaultMs DurationMs) returns DurationMs
+	let raw = try argsDoc.getInt(argsId, key: "timeoutMs") otherwise 'default'
+		return defaultMs
+	end 'default'
+	if raw <= 0 'nonPositive'
+		return defaultMs
+	end 'nonPositive'
+	return raw as DurationMs
+end 'parseTimeoutMs'

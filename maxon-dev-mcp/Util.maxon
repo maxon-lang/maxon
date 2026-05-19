@@ -1,0 +1,217 @@
+// Shared utilities used by multiple tools. Kept small — anything that grows
+// past one obvious shape (e.g. JSON-builder helpers, command-line parsing)
+// should get its own file rather than accreting here.
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+/// Byte position into a ByteArray. Used as the result type of search helpers
+/// when a match is found; absence is signalled by throwing `NotFound.notFound`.
+export typealias BytePos = int(0 to i64.max)
+
+export enum NotFound implements Error
+	notFound
+end 'NotFound'
+
+/// Search for `needle` as a byte subsequence of `haystack`. Returns the
+/// starting byte index. Throws `NotFound.notFound` if no match.
+export function findByteSequence(haystack ByteArray, needle String) returns BytePos throws NotFound
+	let needleBytes = needle.toByteArray()
+	let nLen = needleBytes.count()
+	let hLen = haystack.count()
+	if nLen == 0 'empty'
+		return 0
+	end 'empty'
+	if nLen > hLen 'tooLong'
+		throw NotFound.notFound
+	end 'tooLong'
+	let maxStart = hLen - nLen
+	for start in 0 upto maxStart + 1 'scan'
+		var matched = true
+		for k in 0 upto nLen 'inner'
+			let hb = try haystack.get(start + k) otherwise 'hErr'
+				panic("findByteSequence: haystack.get OOB — bounded by start + nLen <= hLen")
+			end 'hErr'
+			let nb = try needleBytes.get(k) otherwise 'nErr'
+				panic("findByteSequence: needleBytes.get OOB — k bounded by nLen")
+			end 'nErr'
+			if hb != nb 'ne'
+				matched = false
+				break
+			end 'ne'
+		end 'inner'
+		if matched 'hit'
+			return start
+		end 'hit'
+	end 'scan'
+	throw NotFound.notFound
+end 'findByteSequence'
+
+/// Slice a string by byte range. Caller guarantees the range is valid.
+export function sliceString(s String, from BytePos, until BytePos) returns String
+	let bytes = s.toByteArray()
+	return sliceBytes(bytes, from: from, until: until)
+end 'sliceString'
+
+/// Slice a byte array by [from, until). Caller guarantees the range is valid.
+export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
+	var out = ByteArray.create()
+	for i in from upto until 'copy'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("sliceBytes: get OOB — i bounded by `until`")
+		end 'gErr'
+		out.push(b)
+	end 'copy'
+	return String.from(out)
+end 'sliceBytes'
+
+/// Return up to the last `max` bytes of a string. Used for `rawTail` output
+/// fields where we want a bounded snippet of build/test stdout.
+export function lastBytes(s String, max BytePos) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	if n <= max 'fits'
+		return s
+	end 'fits'
+	let start = n - max
+	return sliceBytes(bytes, from: start, until: n)
+end 'lastBytes'
+
+/// Join `stdout` and `stderr` into one combined string. When either side is
+/// empty the other is returned unchanged so we don't introduce a stray
+/// separator line.
+export function combineStreams(stdout String, stderr String) returns String
+	if stderr.isEmpty() 'noErr'
+		return stdout
+	end 'noErr'
+	if stdout.isEmpty() 'noOut'
+		return stderr
+	end 'noOut'
+	return "{stdout}\n{stderr}"
+end 'combineStreams'
+
+/// Build a child FilePath by appending `segment` to `parent`. The forward
+/// slash is normalized to the platform separator by `FilePath.from`.
+export function childPath(parent FilePath, segment String) returns FilePath
+	let joined = "{parent.path}/{segment}"
+	return try FilePath.from(joined) otherwise panic("childPath: joined path '{joined}' is invalid")
+end 'childPath'
+
+// =============================================================================
+// Repo root discovery
+// =============================================================================
+
+/// Resolve the Maxon repo root from the running server's executable path.
+/// Walks up from the executable's directory looking for a `bin/maxon.exe`
+/// sibling — that's the repo root. This handles both the canonical
+/// `<repo>/maxon-dev-mcp/maxon-dev-mcp.exe` layout and any side-built location (e.g.
+/// during development when the binary lives under `temp/`).
+export function repoRootPath() returns FilePath
+	let exe = try Process.executablePath() otherwise panic("repoRootPath: cannot determine executable path")
+	var dir = parentDir(exe)
+	let maxDepth = 16
+	for _ in 0 upto maxDepth 'walk'
+		let candidate = childPath(parent: dir, segment: "bin/maxon.exe")
+		if File.exists(candidate) 'found'
+			return dir
+		end 'found'
+		let parent = parentDir(dir)
+		if parent.path.equals(dir.path) 'atRoot'
+			break
+		end 'atRoot'
+		dir = parent
+	end 'walk'
+	panic("repoRootPath: walked up from {exe.path} without finding a `bin/maxon.exe`. Ensure the C# bootstrap exists at <repo>/bin/maxon.exe before invoking MCP tools.")
+end 'repoRootPath'
+
+/// Return the parent directory of `path` (everything up to the last `/` or
+/// `\`). When `path` contains no separators, returns `.` so callers can keep
+/// walking without special-casing the root.
+export function parentDir(path FilePath) returns FilePath
+	let s = path.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("parentDir: bytes.get OOB — i bounded by n")
+		end 'gErr'
+		if b == 0x2F or b == 0x5C 'sep'
+			let parentStr = sliceBytes(bytes, from: 0, until: i)
+			return try FilePath.from(parentStr) otherwise panic("parentDir: derived parent path '{parentStr}' is invalid")
+		end 'sep'
+	end 'scan'
+	return try FilePath.from(".") otherwise panic("parentDir: '.' is always a valid path literal")
+end 'parentDir'
+
+// =============================================================================
+// Path manipulation
+// =============================================================================
+
+/// Same as `parentDir`, but throws `NotFound.notFound` when `path` has no
+/// separator at all. Use this when "no parent" is an actual error condition
+/// rather than something to absorb silently.
+export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
+	let s = path.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("parentDirOrThrow: bytes.get OOB — i bounded by n")
+		end 'gErr'
+		if b == 0x2F or b == 0x5C 'sep'
+			let parentStr = sliceBytes(bytes, from: 0, until: i)
+			return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: derived parent '{parentStr}' is invalid")
+		end 'sep'
+	end 'scan'
+	throw NotFound.notFound
+end 'parentDirOrThrow'
+
+/// Return the final path segment (basename) of `path`. If the path has no
+/// separator the whole string is returned unchanged.
+export function lastSegment(path FilePath) returns String
+	let s = path.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
+		if b == 0x2F or b == 0x5C 'sep'
+			return sliceBytes(bytes, from: i + 1, until: n)
+		end 'sep'
+	end 'scan'
+	return s
+end 'lastSegment'
+
+/// Strip the last `.<ext>` from a path's final segment. `foo/main.maxon`
+/// becomes `foo/main`; `foo/no_ext` is returned unchanged. A dot in an
+/// earlier segment is not touched.
+export function stripExtension(file FilePath) returns FilePath
+	let s = file.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("stripExtension: bytes.get OOB — i bounded by n")
+		if b == 0x2E 'dot'
+			let base = sliceBytes(bytes, from: 0, until: i)
+			return try FilePath.from(base) otherwise panic("stripExtension: derived base '{base}' is invalid")
+		end 'dot'
+		if b == 0x2F or b == 0x5C 'sep'
+			break
+		end 'sep'
+	end 'scan'
+	return file
+end 'stripExtension'
+
+/// Append `.<ext>` to a path. The caller is responsible for stripping any
+/// existing extension first (see `stripExtension`).
+export function changeExtension(base FilePath, ext String) returns FilePath
+	let joined = "{base.path}.{ext}"
+	return try FilePath.from(joined) otherwise panic("changeExtension: '{joined}' is invalid")
+end 'changeExtension'

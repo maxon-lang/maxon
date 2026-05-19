@@ -16,7 +16,11 @@ let wasiFdWrite = 1
 // then call args_get; subsequent invocations hit the cached buffer.
 let wasiArgsSizesGet = 2
 let wasiArgsGet = 3
-let wasiImportCount = 4
+// fd_read(fd, iovs, iovs_len, nread_ptr) -> errno. Mirrors fd_write's signature
+// so it shares the same wasm function-type entry; we just import it as a
+// separate function pointing at the existing (i32, i32, i32, i32) -> (i32) type.
+let wasiFdRead = 4
+let wasiImportCount = 5
 
 // --- Linear memory layout ---
 // We reserve a block of linear memory for various runtime needs. The layout is:
@@ -44,6 +48,11 @@ let wasiImportCount = 4
 
 let iovecBase = 0
 let nwrittenBase = 8
+// nread out-pointer for fd_read. fd_write and fd_read are never in flight
+// at the same time, but we keep them at separate addresses for clarity.
+// The iovec at 0..8 is reused (fd_read writes INTO the buffer, so it still
+// reads the (buf_ptr, buf_len) iovec at iovecBase).
+let nreadBase = 12
 let argvCacheArgcBase = 16
 let argvCacheBufSizeBase = 20
 let argvCacheInitFlagBase = 24
@@ -515,7 +524,7 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// --- Type section ---
 	// We need function types for:
 	// 1. WASI proc_exit: (i32) -> ()
-	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32)
+	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32) — also shared by fd_read
 	// 3. WASI args_sizes_get: (i32, i32) -> (i32)
 	// 4. WASI args_get: (i32, i32) -> (i32)
 	// 5. Each module function
@@ -542,8 +551,9 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// this shape (two i32 out-pointers, errno return). Two type-section
 	// entries occupy the slots so the function section's positional
 	// `wasiImportCount + i` lookup still resolves module-function-N's type
-	// at type-index N + 4. The dedup map only records the first entry —
-	// downstream indirect calls with the same shape will reuse type 2.
+	// at type-index N + wasiImportCount. The dedup map only records the
+	// first entry — downstream indirect calls with the same shape will
+	// reuse type 2.
 	var argsSizesGetType = ByteArray.create()
 	writeFuncType(argsSizesGetType, paramTypes: makeByteArray2(wasmTypeI32, b: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(argsSizesGetType)
@@ -551,6 +561,15 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	var argsGetType = ByteArray.create()
 	writeFuncType(argsGetType, paramTypes: makeByteArray2(wasmTypeI32, b: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
 	types.push(argsGetType)
+
+	// Type 4: (i32, i32, i32, i32) -> (i32) — fd_read. Identical shape to fd_write
+	// (type 1) but allocated its own slot so the function section's positional
+	// `wasiImportCount + i` indexing keeps module-function-0 at type index 5.
+	// The dedup map already points (i32 i32 i32 i32) -> (i32) at type 1, so any
+	// indirect call with this signature still routes there.
+	var fdReadType = ByteArray.create()
+	writeFuncType(fdReadType, paramTypes: makeByteArray4(wasmTypeI32, b: wasmTypeI32, c: wasmTypeI32, d: wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
+	types.push(fdReadType)
 
 	// Types for module functions (type index = wasiImportCount + i for each)
 	for func in module.functions 'buildTypes'
@@ -631,6 +650,10 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	// Import 3: args_get — writes the argv pointer array + the
 	// NUL-terminated argv buffer.
 	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"args_get", typeIndex: 3, countRef: importCount)
+
+	// Import 4: fd_read — same signature as fd_write but reads from a
+	// file descriptor's iovecs. Used to back __Builtins.readStdin.
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"fd_read", typeIndex: 4, countRef: importCount)
 
 	var importSection = ByteArray.create()
 	writeUleb128(importSection, value: importCount)
@@ -837,6 +860,8 @@ function emitWasmModule(module MirModule, globalData GlobalDataTable, stdlibCach
 	writeWasmName(funcNameMap, name: b"args_sizes_get")
 	writeUleb128(funcNameMap, value: 3)
 	writeWasmName(funcNameMap, name: b"args_get")
+	writeUleb128(funcNameMap, value: 4)
+	writeWasmName(funcNameMap, name: b"fd_read")
 	for i in 0 upto funcCount 'nameFuncs'
 		let name = try funcNames.get(i) otherwise "unknown"
 		writeUleb128(funcNameMap, value: (wasiImportCount + i) as Wasm32Index)
@@ -1360,6 +1385,7 @@ type WasmFunctionLowering
 			osExit(codeId) then emitOsExit(codeId: codeId)
 			osWrite(ptrId, lenId) then emitOsWrite(ptrId: ptrId, lenId: lenId, fd: 1)
 			osWriteErr(ptrId, lenId) then emitOsWrite(ptrId: ptrId, lenId: lenId, fd: 2)
+			osRead(resultId, ptrId, lenId) then emitOsRead(resultId: resultId, ptrId: ptrId, lenId: lenId, fd: 0)
 			osOpenWrite then panic("wasm: osOpenWrite not yet implemented (Phase 3)")
 			osWriteFd then panic("wasm: osWriteFd not yet implemented (Phase 3)")
 			osClose then panic("wasm: osClose not yet implemented (Phase 3)")
@@ -1749,6 +1775,62 @@ type WasmFunctionLowering
 		// Drop the i32 return value
 		body.push(opDrop)
 	end 'emitOsWrite'
+
+	function emitOsRead(resultId ValueId, ptrId ValueId, lenId ValueId, fd MachineWord)
+		// WASI fd_read(fd: i32, iovs: i32, iovs_len: i32, nread: i32) -> i32
+		// Build iovec at scratch memory:
+		// iovec[0].buf = ptr (i32 at iovecBase)
+		// iovec[0].len = len (i32 at iovecBase+4)
+
+		// Store buf_ptr at iovecBase
+		body.push(opI32Const)
+		writeSleb128(body, value: iovecBase as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: ptrId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI32Store)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+
+		// Store buf_len at iovecBase + 4
+		body.push(opI32Const)
+		writeSleb128(body, value: (iovecBase + 4) as ParsedInt)
+		body.push(opLocalGet)
+		writeUleb128(body, value: lenId as Wasm32Index)
+		body.push(opI32WrapI64)
+		body.push(opI32Store)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+
+		// Call fd_read(fd, iovs=iovecBase, iovs_len=1, nread=nreadBase)
+		body.push(opI32Const)
+		writeSleb128(body, value: fd as ParsedInt)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: iovecBase as ParsedInt)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: 1)
+
+		body.push(opI32Const)
+		writeSleb128(body, value: nreadBase as ParsedInt)
+
+		body.push(opCall)
+		writeUleb128(body, value: wasiFdRead as Wasm32Index)
+
+		// Drop the errno return value; the bytes-read count lives at [nreadBase].
+		body.push(opDrop)
+
+		// Load bytes-read (i32) at nreadBase and zero-extend to i64 into resultId.
+		body.push(opI32Const)
+		writeSleb128(body, value: nreadBase as ParsedInt)
+		body.push(opI32Load)
+		body.push(0x02)
+		writeUleb128(body, value: 0)
+		body.push(opI64ExtendI32U)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitOsRead'
 
 	function emitMemcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 		// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).

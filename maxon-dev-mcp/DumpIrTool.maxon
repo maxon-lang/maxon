@@ -1,0 +1,173 @@
+// `dump_ir` MCP tool. Compiles a snippet or file with `--emit-ir` (and
+// optionally `--dump-stages` for per-stage variants) and returns the
+// produced .ir artifact(s) inline.
+//
+// Inputs (JSON):
+//   source: { kind: "file", path } | { kind: "snippet", code }
+//   dumpStages?: bool   — when true, also returns per-stage .N-maxon.ir files
+//
+// Asm emission and `-O` toggling were originally on the wish-list, but
+// neither the C# bootstrap nor the self-hosted compiler exposes them yet.
+// The shape of this tool intentionally tracks only the flags the compiler
+// actually supports today; adding asm/optimization is a straight extension.
+
+// IR can be large (single-pass IR for a non-trivial file is easily 10s of
+// KB). Cap at 200 KiB per artifact so MCP clients don't get a megabyte of
+// text in a single response; surface a `truncated` flag when we trim.
+let irMaxBytes = 204800
+
+// Default per-build timeout: a single-file compile finishes in well under a
+// second; 30s is generous for cold-cache stdlib parses.
+let dumpIrTimeoutMs = 30000
+
+/// Entry point called by Server.maxon's dispatch table.
+export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "dump-ir") otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "dump_ir: {sourceArgErrorReason(err)}")
+	end 'badSrc'
+
+	let repoRoot = repoRootPath()
+	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	if not File.exists(csharpBinary) 'noCsharp'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "dump_ir: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
+	end 'noCsharp'
+
+	let dumpStages = try argsDoc.getBool(argsId, key: "dumpStages") otherwise false
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push(mainFile.projectDir.path)
+	argv.push("--emit-ir")
+	if dumpStages 'doStages'
+		argv.push("--dump-stages")
+	end 'doStages'
+
+	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: dumpIrTimeoutMs) otherwise (err) 'spawn'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "dump_ir: {err.displayReason()}")
+	end 'spawn'
+
+	let outcome = buildOutcome(mainFile: mainFile, result: result, dumpStages: dumpStages)
+	cleanupResolvedSource(mainFile)
+	return outcome
+end 'dumpIrHandler'
+
+// =============================================================================
+// Artifact collection
+// =============================================================================
+
+type IrArtifact
+	export var label String
+	export var content String
+	export var truncated bool = false
+
+	export static function create(label String, content String, truncated bool) returns IrArtifact
+		return Self{label: label, content: content, truncated: truncated}
+	end 'create'
+end 'IrArtifact'
+
+typealias IrArtifactArray = Array with IrArtifact
+
+function collectArtifacts(mainFile FilePath, dumpStages bool) returns IrArtifactArray
+	var out = IrArtifactArray.create()
+	let baseName = stripExtension(mainFile)
+	let mainIr = changeExtension(base: baseName, ext: "ir")
+	addArtifactIfPresent(out: out, label: "ir", path: mainIr)
+	if not dumpStages 'stagesOff'
+		return out
+	end 'stagesOff'
+	// `--dump-stages` produces files like `<base>.1-maxon.ir`,
+	// `<base>.2-hir.ir`, `<base>.3-lir.ir`, etc. The naming is stable but
+	// we don't know the exact stage count, so we walk the directory for
+	// anything matching `<base>.N-<name>.ir`.
+	let parent = try parentDirOrThrow(mainFile) otherwise 'noParent'
+		return out
+	end 'noParent'
+	let entries = try Directory.list(parent) otherwise 'listErr'
+		return out
+	end 'listErr'
+	let baseNameOnly = lastSegment(baseName)
+	let prefix = "{baseNameOnly}."
+	let n = entries.count()
+	for i in 0 upto n 'each'
+		let entry = try entries.get(i) otherwise 'gErr'
+			panic("collectArtifacts: entries.get OOB — i bounded by n")
+		end 'gErr'
+		let entryName = lastSegment(entry)
+		if not entryName.startsWith(prefix) or not entryName.endsWith(".ir") 'notStage'
+			continue
+		end 'notStage'
+		// The plain `<base>.ir` was already added above.
+		if entryName.equals("{baseNameOnly}.ir") 'isMain'
+			continue
+		end 'isMain'
+		addArtifactIfPresent(out: out, label: entryName, path: entry)
+	end 'each'
+	return out
+end 'collectArtifacts'
+
+function addArtifactIfPresent(out IrArtifactArray, label String, path FilePath)
+	if not File.exists(path) 'absent'
+		return
+	end 'absent'
+	let raw = try File.readText(path) otherwise 'readErr'
+		return
+	end 'readErr'
+	let bytes = raw.toByteArray()
+	let n = bytes.count()
+	if n <= irMaxBytes 'fits'
+		out.push(IrArtifact.create(label, content: raw, truncated: false))
+		return
+	end 'fits'
+	let trimmed = sliceBytes(bytes, from: 0, until: irMaxBytes)
+	out.push(IrArtifact.create(label, content: trimmed, truncated: true))
+end 'addArtifactIfPresent'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(mainFile ResolvedSource, result CollectedOutput, dumpStages bool) returns ToolOutcome
+	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let artifacts = collectArtifacts(mainFile: mainFile.mainFile, dumpStages: dumpStages)
+
+	var doc = JsonDoc.create()
+	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(result.succeeded()))
+	let rawTailId = doc.add(JsonNode.stringNode(combined))
+
+	var artifactNodes = JsonNodeIdArray.create()
+	let an = artifacts.count()
+	for i in 0 upto an 'each'
+		let art = try artifacts.get(i) otherwise 'gErr'
+			panic("buildOutcome: artifacts.get OOB — i bounded by an")
+		end 'gErr'
+		let labelId = doc.add(JsonNode.stringNode(art.label))
+		let contentId = doc.add(JsonNode.stringNode(art.content))
+		let truncId = doc.add(JsonNode.boolNode(art.truncated))
+		var aKeys = StringArray.create()
+		var aChildren = JsonNodeIdArray.create()
+		aKeys.push("label")
+		aChildren.push(labelId)
+		aKeys.push("content")
+		aChildren.push(contentId)
+		aKeys.push("truncated")
+		aChildren.push(truncId)
+		artifactNodes.push(doc.add(JsonNode.objectNode(aKeys, children: aChildren)))
+	end 'each'
+	let artifactsArr = doc.add(JsonNode.arrayNode(artifactNodes))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("artifacts")
+	children.push(artifactsArr)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'

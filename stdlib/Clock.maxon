@@ -1,0 +1,26 @@
+/// Monotonic time helpers. Use for measuring elapsed durations; absolute
+/// values are platform-defined (e.g. milliseconds since boot) and only
+/// meaningful when subtracted.
+/// @category System
+
+export typealias DurationMs = int(0 to u64.max)
+export typealias InstantMs = int(0 to u64.max)
+
+export type Clock
+	/// Monotonic time in milliseconds. Differences between two `nowMs()`
+	/// readings are meaningful; the absolute value is not.
+	export static function nowMs() returns InstantMs
+		return __Builtins.currentTimeMs()
+	end 'nowMs'
+
+	/// Milliseconds elapsed since a prior `nowMs()` reading. Clamps to 0 if
+	/// the system clock somehow moves backwards between the two readings
+	/// (shouldn't happen on a monotonic source, but guards against bugs).
+	export static function elapsedMs(since InstantMs) returns DurationMs
+		let now = Clock.nowMs()
+		if now < since 'clockSkew'
+			return 0
+		end 'clockSkew'
+		return now - since
+	end 'elapsedMs'
+end 'Clock'

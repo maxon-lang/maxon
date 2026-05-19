@@ -540,6 +540,68 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return ResolveMethodName(qualifiedName + "~static") ?? ResolveMethodName(qualifiedName);
   }
 
+  /// True if `structType` is the `Promise` type from stdlib/Builtins.maxon
+  /// or any concrete alias of `Promise with T`.
+  /// Both the generic source (`Promise`) and concrete instantiations
+  /// (e.g. `Promise<Integer>`, `IntPromise`) are accepted.
+  private bool IsPromiseStructType(IrStructType structType) {
+    if (structType.Name == "Promise") return true;
+    return _typeAliasSources.TryGetValue(structType.Name, out var source) && source == "Promise";
+  }
+
+  /// True if a MaxonPromise value's inner kind/struct matches the `Element`
+  /// type parameter of the given `Promise with T` (or alias) struct type.
+  /// Used at call sites and assignments to validate that a promise produced
+  /// by `async f()` can be stored where `Promise<T>` is expected.
+  private bool PromiseElementMatches(IrStructType promiseStructType, MaxonPromise argPromise) {
+    if (!promiseStructType.TypeParams.TryGetValue("Element", out var elementType))
+      return true; // Unresolved Element (bare `Promise`) — accept and defer.
+    return PromiseInnerTypeMatchesElement(argPromise, elementType);
+  }
+
+  /// Emit a `Promise{inner: <handle>, throws_: <bit>}` struct literal that
+  /// wraps a raw MaxonPromise into the user-facing Promise<T> struct type.
+  /// Used when a promise produced by `async f()` needs to flow into storage
+  /// that expects a Promise<T> struct (array elements, struct fields, named
+  /// `let p Promise with T = ...` bindings).
+  ///
+  /// Both fields are required so the inverse unbox
+  /// (ReconstructPromiseFromStruct) can re-tag the MaxonPromise with the
+  /// right throws-ness — `try await` checks that bit to decide whether the
+  /// original async call needs error handling.
+  ///
+  /// The MaxonStructLiteralOp's field-init expects a MaxonValue. The raw i64
+  /// handle already lives in `promise` (same SSA id as the underlying async
+  /// call result), so we reference it directly via MaxonInteger rather than
+  /// emitting a fresh literal.
+  private MaxonStruct BoxPromiseIntoStruct(MaxonPromise promise, IrStructType promiseStructType) {
+    var throwsLit = new MaxonLiteralOp(promise.Throws);
+    _currentBlock!.AddOp(throwsLit);
+    var fields = new List<(string, MaxonValue)> {
+      ("inner", new MaxonInteger(promise.Id)),
+      ("throws_", throwsLit.Result)
+    };
+    var structLit = new MaxonStructLiteralOp(promiseStructType.Name, fields);
+    _currentBlock!.AddOp(structLit);
+    return (MaxonStruct)structLit.Result;
+  }
+
+  /// Element/inner-kind compatibility for the Promise type check above.
+  /// Promotes the simple cases (struct/enum by name, primitive by kind) and
+  /// rejects anything else as a mismatch so the caller can issue a clean
+  /// diagnostic.
+  private bool PromiseInnerTypeMatchesElement(MaxonPromise argPromise, IrType elementType) {
+    if (elementType is IrTypeParameterType) return true; // generic context — accept
+    if (elementType is IrStructType est)
+      return argPromise.InnerStructTypeName != null
+        && (argPromise.InnerStructTypeName == est.Name
+            || IsStructTypeCompatible(argPromise.InnerStructTypeName, est.Name));
+    if (elementType is IrEnumType eet)
+      return argPromise.InnerStructTypeName == eet.Name;
+    var elementKind = elementType.ToValueKind();
+    return argPromise.InnerKind == elementKind;
+  }
+
   /// Records method names from a conditional extension block that was skipped for a type
   /// because its where-constraints weren't satisfied.
   private void RecordSkippedConditionalExtensions(
@@ -8817,6 +8879,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
+    ["readStdin"] = new(
+      "Reads up to maxBytes bytes from stdin into a fresh __ManagedMemory.\n\n`__Builtins.readStdin(maxBytes) returns __ManagedMemory`",
+      p => {
+        var maxBytes = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedReadStdinOp(maxBytes);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
     // === Command Line intrinsics ===
     ["commandLineCount"] = RuntimeCallIntrinsic(
       "Returns the number of command line arguments.\n\n`__Builtins.commandLineCount() returns int`",
@@ -8827,34 +8898,78 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ["executablePath"] = RuntimeCallToManaged(
       "Returns the absolute executable path as a __ManagedMemory.\n\n`__Builtins.executablePath() returns __ManagedMemory`",
       "maxon_executable_path", 0, freeFunc: "mm_raw_free"),
-    // === Process intrinsics ===
-    ["processCreate"] = NManagedToCStringRuntimeCall(
-      "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",
-      "maxon_process_create", 2),
-    ["processWait"] = RuntimeCallIntrinsic(
-      "Waits for process. Returns 0=completed, 1=timeout, -1=error.\n\n`__Builtins.processWait(handle, timeoutMs) returns int`",
-      "maxon_process_wait", 2, true),
-    ["processGetExitCode"] = RuntimeCallIntrinsic(
-      "Gets exit code of completed process.\n\n`__Builtins.processGetExitCode(handle) returns int`",
-      "maxon_process_get_exit_code", 1, true),
-    ["processClose"] = RuntimeCallIntrinsic(
-      "Closes a process handle.\n\n`__Builtins.processClose(handle)`",
-      "maxon_process_close", 1, false),
-    ["processCreateWithCapture"] = NManagedToCStringRuntimeCall(
-      "Creates a process with stdout/stderr capture to caller-supplied file paths. Returns capture struct pointer.\n\n`__Builtins.processCreateWithCapture(cmd_managed, cwd_managed, stdout_path_managed, stderr_path_managed) returns int`",
-      "maxon_process_create_with_capture", 4),
-    ["processGetHandle"] = RuntimeCallIntrinsic(
-      "Gets hProcess from capture struct.\n\n`__Builtins.processGetHandle(capture_ptr) returns int`",
-      "maxon_process_get_handle", 1, true),
-    ["processCloseCapture"] = RuntimeCallIntrinsic(
-      "Closes the process handle and frees the capture struct.\n\n`__Builtins.processCloseCapture(capture_ptr)`",
-      "maxon_process_close_capture", 1, false),
-    ["processReadStdout"] = RuntimeCallToManaged(
-      "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStdout(capture_ptr) returns __ManagedMemory`",
-      "maxon_process_read_stdout", 1, freeFunc: "mm_free"),
-    ["processReadStderr"] = RuntimeCallToManaged(
-      "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStderr(capture_ptr) returns __ManagedMemory`",
-      "maxon_process_read_stderr", 1, freeFunc: "mm_free"),
+    // === Subprocess intrinsics ===
+    // Each maps directly to a `maxon_subprocess_*` C runtime symbol.
+    // `stdlib/Subprocess.maxon` calls these from `runConfiguration` and
+    // `runDetachedConfiguration` after replacing the legacy `process*`
+    // family.
+    //
+    // Argument layout — see the parent plan for the full contract. MM args
+    // flow through `MaxonCallRuntimeOp` lowering which extracts the buffer
+    // pointer at offset 0; the runtime helpers also read length from the MM
+    // header when they need it. The current runtime implementations are
+    // stubs that fail spawns with -1; real OS-side implementations land
+    // alongside the runtime work.
+    ["subprocessResolveOnPath"] = RuntimeCallToManaged(
+      "Resolves an executable name against PATH (and PATHEXT on Windows). Returns the absolute path as a fresh __ManagedMemory, or null if not found.\n\n`__Builtins.subprocessResolveOnPath(name_mm) returns __ManagedMemory`",
+      "maxon_subprocess_resolve_on_path", 1, freeFunc: "mm_raw_free"),
+    // 15-arg spawn: argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind,
+    // stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind,
+    // stderrData_mm, stderrLimit, flags. Flags bit 0=hide window,
+    // bit 1=createNewProcessGroup, bit 2=detach. Returns int64 handle (-1 on
+    // error). Verified MaxonCallRuntimeOp + EmitCallShared spill stack args
+    // beyond the register ABI cap, so 15 args lower correctly on both x86 and
+    // arm64.
+    ["subprocessSpawn"] = RuntimeCallIntrinsic(
+      "Spawns a subprocess with full stdio/env/cwd control. Returns an int64 handle, or -1 on error (callers consult subprocessLastErrorMessage()).\n\n`__Builtins.subprocessSpawn(argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind, stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind, stderrData_mm, stderrLimit, flags) returns int`",
+      "maxon_subprocess_spawn", 14, true),
+    ["subprocessLastErrorMessage"] = RuntimeCallToManaged(
+      "Returns the most recent subprocess runtime error message as a __ManagedMemory (empty when no error is pending).\n\n`__Builtins.subprocessLastErrorMessage() returns __ManagedMemory`",
+      "maxon_subprocess_last_error_message", 0, freeFunc: "mm_raw_free"),
+    ["subprocessGetPid"] = RuntimeCallIntrinsic(
+      "Returns the OS process id of a live subprocess handle, or -1 if unavailable.\n\n`__Builtins.subprocessGetPid(handle) returns int`",
+      "maxon_subprocess_get_pid", 1, true),
+    ["subprocessWaitCollect"] = RuntimeCallIntrinsic(
+      "Waits for a subprocess to exit (or until timeoutMs elapses) and collects stdout/stderr into a result struct. Returns a non-negative pointer to that struct on success, -1 on error.\n\n`__Builtins.subprocessWaitCollect(handle, timeoutMs) returns int`",
+      "maxon_subprocess_wait_collect", 2, true),
+    ["subprocessKill"] = RuntimeCallIntrinsic(
+      "Force-terminates a subprocess. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessKill(handle, signal) returns int`",
+      "maxon_subprocess_kill", 2, true),
+    ["subprocessSendSignal"] = RuntimeCallIntrinsic(
+      "Sends a Unix-style signal (or Windows Ctrl event) to a subprocess. Returns 0 on success, -1 on error.\n\n`__Builtins.subprocessSendSignal(handle, signal) returns int`",
+      "maxon_subprocess_send_signal", 2, true),
+    ["subprocessReleaseHandle"] = RuntimeCallIntrinsic(
+      "Releases all OS resources associated with a subprocess handle.\n\n`__Builtins.subprocessReleaseHandle(handle)`",
+      "maxon_subprocess_release_handle", 1, false),
+    // Detach uses the same 14-arg contract as spawn; the runtime gates the
+    // detached-vs-attached path on flags bit 2.
+    ["subprocessDetach"] = RuntimeCallIntrinsic(
+      "Spawns a detached subprocess and returns its OS pid as int64 (-1 on error). Same argument layout as subprocessSpawn; the runtime gates detached behaviour through flags bit 2.\n\n`__Builtins.subprocessDetach(argv_mm, argc, cwd_mm, env_mm, envInherit, stdinKind, stdinData_mm, stdoutKind, stdoutData_mm, stdoutLimit, stderrKind, stderrData_mm, stderrLimit, flags) returns int`",
+      "maxon_subprocess_detach", 14, true),
+    ["managedIsNull"] = RuntimeCallIntrinsic(
+      "Returns 1 when the __ManagedMemory pointer is null, 0 otherwise. Used after MM-returning runtime calls (e.g. subprocessResolveOnPath) to test for the not-found sentinel.\n\n`__Builtins.managedIsNull(mm) returns int`",
+      "maxon_managed_is_null", 1, true),
+    // Result-struct accessors — read individual fields out of the pointer
+    // returned by subprocessWaitCollect. Mirrors the layout the runtime
+    // produces (described in the parent plan).
+    ["subprocessResultStatusKind"] = RuntimeCallIntrinsic(
+      "Returns the status kind of a waitCollect result (0=exited, 1=signalled, 2=timedOut).\n\n`__Builtins.subprocessResultStatusKind(resultPtr) returns int`",
+      "maxon_subprocess_result_status_kind", 1, true),
+    ["subprocessResultStatusCode"] = RuntimeCallIntrinsic(
+      "Returns the exit code or signal number from a waitCollect result.\n\n`__Builtins.subprocessResultStatusCode(resultPtr) returns int`",
+      "maxon_subprocess_result_status_code", 1, true),
+    ["subprocessResultStdout"] = RuntimeCallToManaged(
+      "Returns a fresh __ManagedMemory containing captured stdout from a waitCollect result.\n\n`__Builtins.subprocessResultStdout(resultPtr) returns __ManagedMemory`",
+      "maxon_subprocess_result_stdout", 1, freeFunc: "mm_raw_free"),
+    ["subprocessResultStderr"] = RuntimeCallToManaged(
+      "Returns a fresh __ManagedMemory containing captured stderr from a waitCollect result.\n\n`__Builtins.subprocessResultStderr(resultPtr) returns __ManagedMemory`",
+      "maxon_subprocess_result_stderr", 1, freeFunc: "mm_raw_free"),
+    ["subprocessResultDurationMs"] = RuntimeCallIntrinsic(
+      "Returns the subprocess's wall-clock duration in milliseconds from a waitCollect result.\n\n`__Builtins.subprocessResultDurationMs(resultPtr) returns int`",
+      "maxon_subprocess_result_duration_ms", 1, true),
+    ["subprocessResultRelease"] = RuntimeCallIntrinsic(
+      "Frees the result struct returned by subprocessWaitCollect.\n\n`__Builtins.subprocessResultRelease(resultPtr)`",
+      "maxon_subprocess_result_release", 1, false),
     // === Sleep intrinsic ===
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
@@ -8869,6 +8984,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     ["currentTimeMs"] = RuntimeCallIntrinsic(
       "Returns monotonic time in milliseconds.\n\n`__Builtins.currentTimeMs() returns int`",
       "maxon_current_time_ms", 0, true),
+    ["currentProcessId"] = RuntimeCallIntrinsic(
+      "Returns the OS-assigned process ID of the currently-running process. "
+      + "Stable for the process's lifetime; differs across concurrent processes. "
+      + "Used by stdlib helpers that need to disambiguate filesystem temp paths "
+      + "or other shared-resource names across sibling subprocesses spawned by a parent.\n\n"
+      + "`__Builtins.currentProcessId() returns int`",
+      "maxon_current_process_id", 0, true),
     // === Primitive type intrinsics ===
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
@@ -8991,24 +9113,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (enclosingKind == MaxonValueKind.TypeParameter)
       return (enclosingKind, "Element", null);
     return (enclosingKind, null, null);
-  }
-
-  /// Converts N managed args to cstrings, calls a runtime function, returns its result.
-  private static BuiltinInfo NManagedToCStringRuntimeCall(string doc, string runtimeName, int argCount) {
-    return new(doc, p => {
-      var cstrings = new List<MaxonValue>();
-      for (int i = 0; i < argCount; i++) {
-        if (i > 0) p.Expect(TokenType.Comma);
-        var arg = p.ResolveExprValue(p.ParseExpression());
-        var cstr = new MaxonManagedToCStringOp(arg);
-        p._currentBlock!.AddOp(cstr);
-        cstrings.Add(cstr.Result!);
-      }
-      p.Expect(TokenType.RightParen);
-      var op = new MaxonCallRuntimeOp(runtimeName, cstrings, true);
-      p._currentBlock!.AddOp(op);
-      return op.Result;
-    });
   }
 
   /// Calls a runtime function returning a cstring, converts to managed, optionally frees the cstring.
@@ -16122,7 +16226,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       MaxonStruct => MaxonValueKind.Struct,
       MaxonEnum => MaxonValueKind.Enum,
       MaxonFunctionPtr => MaxonValueKind.Function,
-      MaxonPromise => MaxonValueKind.Integer, // Promises are opaque pointers, stored as i64
+      // See the static GetValueKind for the long rationale: a MaxonPromise's
+      // logical type is `Promise<T>` (struct) but its storage representation
+      // is an i64 handle, and the bootstrap compiler reports the storage
+      // kind here because downstream consumers (assign ops, var
+      // declarations, register allocation) need the i64 size/class.
+      // Promise-aware paths gate on `value is MaxonPromise` ahead of the
+      // kind check.
+      // TODO(self-hosted): see GetValueKind comment — replace with a real
+      // Promise kind in the self-hosted compiler.
+      MaxonPromise => MaxonValueKind.Integer,
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot determine kind of {value.GetType().Name}",
         Current().Line, Current().Column)
@@ -17023,6 +17136,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       if (paramType is IrStructType paramStructType) {
+        // Promise parameter: a MaxonPromise value satisfies `Promise with T`
+        // when its InnerKind/InnerStructTypeName matches the parameter's
+        // Element type. Box the i64 handle into a Promise{inner: ...} struct
+        // literal so downstream code (array storage, struct field access,
+        // generic substitution) treats it like any other struct value. The
+        // ParseAwaitExpression `await` path knows how to unbox by loading
+        // the `inner` field back out.
+        if (IsPromiseStructType(paramStructType) && args[i] is MaxonPromise argPromise) {
+          if (!PromiseElementMatches(paramStructType, argPromise)) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramStructType.Name}' (inner type does not match the promise's result type)",
+              functionNameToken.Line, functionNameToken.Column);
+          }
+          args[i] = BoxPromiseIntoStruct(argPromise, paramStructType);
+          continue;
+        }
         // Struct parameter: arg must be a struct with matching type name
         if (args[i] is not MaxonStruct argStruct) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -18213,7 +18342,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var inner = ParsePrimary();
     var innerVal = ResolveExprValue(inner);
 
-    if (innerVal is not MaxonPromise promise) {
+    // Direct case: `await` immediately follows an `async f()` call. The inner
+    // value is a MaxonPromise carrying its full type metadata.
+    MaxonPromise? promise = innerVal as MaxonPromise;
+
+    // Indirect case: the promise came out of storage (array element, struct
+    // field, variable holding a Promise<T> struct). The static type is a
+    // `Promise`-source struct; reconstruct a MaxonPromise from the struct's
+    // Element type parameter so the await machinery has the right inner kind.
+    if (promise == null && innerVal is MaxonStruct innerStruct
+        && _typeRegistry.TryGetValue(innerStruct.TypeName, out var innerType)
+        && innerType is IrStructType innerStructType
+        && IsPromiseStructType(innerStructType)) {
+      promise = ReconstructPromiseFromStruct(innerStruct, innerStructType);
+    }
+
+    if (promise == null) {
       var kindName = DetermineValueKind(innerVal).ToString().ToLowerInvariant();
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"'await' requires a promise value from 'async', got {kindName}",
@@ -18228,6 +18372,37 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Return the (already-defined) promise value as a sentinel; any attempt to use it
     // in a value context would be a semantic error caught by type checking.
     return new ExprResult.Direct(promise);
+  }
+
+  /// Synthesize a MaxonPromise from a `Promise with T` struct value. The
+  /// struct stores its green-thread handle in the single `inner` i64 field;
+  /// we emit a MaxonFieldAccessOp to load that handle and tag the resulting
+  /// SSA value as MaxonPromise so the await machinery has the right inner
+  /// kind/struct-type drawn from the struct's Element type parameter.
+  private MaxonPromise ReconstructPromiseFromStruct(MaxonStruct structVal, IrStructType structType) {
+    MaxonValueKind? innerKind = null;
+    string? innerStructTypeName = null;
+    if (structType.TypeParams.TryGetValue("Element", out var elementType)) {
+      innerKind = elementType.ToValueKind();
+      innerStructTypeName = elementType switch {
+        IrStructType est => est.Name,
+        IrEnumType eet => eet.Name,
+        _ => null
+      };
+    }
+    var loadInner = new MaxonFieldAccessOp(structVal, structType.Name, "inner", MaxonValueKind.Integer, null);
+    _currentBlock!.AddOp(loadInner);
+    // Treat every reconstructed Promise<T> as throwing at the type level.
+    // The `throws_` field IS stored in the struct (so the runtime can branch
+    // on it) but its concrete value is only known at the boxing site — we
+    // can't preserve compile-time throws-ness through storage. Saying
+    // throws=true here means call sites must use `try await` even when the
+    // original promise came from a non-throwing async call; the runtime
+    // dispatch reads the field and routes to the non-throwing wait path,
+    // so `try await ... otherwise X` on a non-throwing promise still
+    // succeeds — it just adds an ignored error-handler the runtime never
+    // triggers.
+    return new MaxonPromise(loadInner.Result.Id, innerKind, innerStructTypeName, throws: true);
   }
 
   /// <summary>
@@ -18504,6 +18679,24 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       MaxonShort => MaxonValueKind.Short,
       MaxonStruct => MaxonValueKind.Struct,
       MaxonEnum => MaxonValueKind.Enum,
+      // Promises have no MaxonValueKind of their own in the bootstrap
+      // compiler. Logically a promise is a `Promise<T>` struct (declared in
+      // stdlib/Builtins.maxon), but a MaxonPromise carries no MaxonStruct
+      // counterpart at this point — it just wraps an i64 handle. We report
+      // `Integer` because that is the runtime *storage representation* used
+      // everywhere downstream (array element size, register class, stack
+      // home). Call sites that need to treat the value as a typed
+      // `Promise<T>` first call `BoxPromiseIntoStruct` to wrap the handle
+      // into a `Promise{inner: ...}` struct literal (see
+      // ParseAwaitExpression for the inverse unbox). The mismatch between
+      // logical and storage kind is intentional but ad-hoc — bootstrap
+      // shortcut, not the intended design.
+      //
+      // TODO(self-hosted): replace this with a proper `MaxonValueKind.Promise`
+      // (or by routing promises through the Struct kind with a matching
+      // MaxonStruct shim) so every kind switch handles them explicitly
+      // instead of via the storage-class lie.
+      MaxonPromise => MaxonValueKind.Integer,
       _ => throw new InvalidOperationException($"Unknown MaxonValue type: {value.GetType()}")
     };
   }

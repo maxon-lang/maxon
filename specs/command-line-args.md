@@ -17,8 +17,8 @@ Access command line arguments in Maxon using the `CommandLine` stdlib type.
 
 ```text
 function main() returns int
-  let args = CommandLine.args()           // All arguments (including argv[0])
-  let exe = Process.executablePath()      // The executable path (uses OS API)
+  let args = CommandLine.args()                                            // All arguments (including argv[0])
+  let exe = try Process.executablePath() otherwise return 2                // The executable path (uses OS API; throws ProcessIntrospectionError)
   return 0
 end 'main'
 ```
@@ -26,7 +26,7 @@ end 'main'
 ## API
 
 - `CommandLine.args()` - Returns `StringArray` (where `type StringArray implements Array with String`) containing all command line arguments (including argv[0])
-- `Process.executablePath()` - Returns `FilePath` containing the absolute executable path (uses GetModuleFileNameA on Windows, _NSGetExecutablePath on macOS, /proc/self/exe on Linux)
+- `Process.executablePath()` - Returns `FilePath` containing the absolute executable path (uses GetModuleFileNameA on Windows, _NSGetExecutablePath on macOS, /proc/self/exe on Linux). Throws `ProcessIntrospectionError.pathUnavailable` if the OS lookup fails.
 
 ## Properties
 
@@ -39,7 +39,7 @@ With `let args = CommandLine.args()`:
 
 ```text
 function main() returns int
-  let exe = Process.executablePath()
+  let exe = try Process.executablePath() otherwise return 2
   print("Program: ")
   print(exe.path)
   
@@ -77,7 +77,7 @@ end 'main'
 - Arguments are UTF-8 encoded strings
 - Arguments containing spaces must be quoted at the shell level
 - Each call to `args()` re-parses the command line
-- `Process.executablePath()` always returns the absolute path via OS-specific APIs
+- `Process.executablePath()` returns the absolute path via OS-specific APIs, or throws `ProcessIntrospectionError.pathUnavailable` if the lookup fails
 - Platform support: Windows (full), Linux (not yet implemented)
 
 ## Tests
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: executable-path -->
 ```maxon
 function main() returns ExitCode
-	let exe = Process.executablePath()
+	let exe = try Process.executablePath() otherwise return 2
 	// Just verify it returns something (the actual path varies)
 	if exe.path.byteLength() > 0 'check'
 		return 0

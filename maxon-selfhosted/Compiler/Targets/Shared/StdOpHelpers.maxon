@@ -167,6 +167,46 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 	return slotIdx
 end 'computeParamSlotIndex'
 
+// Compute the `[rbp + offset]` byte offset for an overflow stack param. The
+// caller has already determined that this param doesn't fit in the per-domain
+// register file. Counts how many preceding params overflowed (i.e., didn't
+// fit) and adds the X64 stack-arg base offset (saved RBP + return address).
+// `gprRegCount` / `fpRegCount` are the per-domain register-file sizes — same
+// thresholds the caller-side packing in `emitDirectCall` uses.
+export function computeOverflowStackOffset(paramIndex VarSlot, paramTypes StdTypeArray) returns StackSize
+	let baseOffset = 0x10 as StackSize
+	var overflowIdx = 0
+	var gprIdx = 0
+	var fpIdx = 0
+	let gprRegCount = 7
+	let fpRegCount = 8
+	var i = 0
+	while i <= paramIndex 'walk'
+		let pt = try paramTypes.get(i) otherwise panic("unreachable: param index out of bounds")
+		let isFloat = stdTypeIsFloat(pt)
+		var fitsInReg = false
+		if isFloat 'isFp'
+			if fpIdx < fpRegCount 'fpFits'
+				fpIdx = fpIdx + 1
+				fitsInReg = true
+			end 'fpFits'
+		end 'isFp' else 'isGpr'
+			if gprIdx < gprRegCount 'gprFits'
+				gprIdx = gprIdx + 1
+				fitsInReg = true
+			end 'gprFits'
+		end 'isGpr'
+		if not fitsInReg 'overflowSlot'
+			if i == paramIndex 'thisParam'
+				return baseOffset + overflowIdx * 8
+			end 'thisParam'
+			overflowIdx = overflowIdx + 1
+		end 'overflowSlot'
+		i = i + 1
+	end 'walk'
+	panic("computeOverflowStackOffset: paramIndex {paramIndex} fits in a register; caller must check before calling")
+end 'computeOverflowStackOffset'
+
 // Look up a callee's parameter types from the MIR-phase function list,
 // falling back to the pre-compiled stdlib function list.
 export function lookupFuncParamTypes(callee String, allFunctions IrFunctionArray, stdlibFunctions ObjectFunctionArray) returns StdTypeArray
@@ -356,6 +396,7 @@ export function mirOpMaxValueId(op MirOp) returns ValueId
 		osExit(codeId) gives codeId
 		osWrite(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
 		osWriteErr(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
+		osRead(resultId, ptrId, lenId) gives maxOfThreeValueIds(a: resultId, b: ptrId, c: lenId)
 		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThreeValueIds(a: resultId, b: pathPtrId, c: pathLenId)
 		osWriteFd(fdId, ptrId, lenId) gives maxOfThreeValueIds(a: fdId, b: ptrId, c: lenId)
 		osClose(fdId) gives fdId

@@ -1,0 +1,184 @@
+// Shared `{ kind: "file" | "snippet", path | code }` source-arg resolution
+// used by every tool that compiles a snippet or file (`dump_ir`,
+// `run_program`, `fmt`, `mm_trace_analyze`). Centralizes:
+//
+//   - the SourceArgError enum + its display strings
+//   - JSON arg parsing
+//   - snippet materialization under `<repo>/temp/<prefix>-<stamp>/`
+//   - cleanup after the tool finishes
+//
+// Per-tool the only variation is the temp-dir prefix and (for `fmt`) whether
+// a project dir is needed at all — see `materializeSnippetProject` vs
+// `materializeSnippetFile`.
+
+/// Reasons source-arg parsing can fail. Stable across tools so the wire
+/// format stays uniform; tools prefix the human message with their own name.
+export enum SourceArgError implements Error
+	missingSource
+	missingKind
+	unknownKind
+	missingPath
+	missingCode
+end 'SourceArgError'
+
+/// Human-readable reason for each `SourceArgError`. Used by tools when
+/// building the `invalidParams` error message.
+export function sourceArgErrorReason(err SourceArgError) returns String
+	return match err 'r'
+		missingSource gives "missing required `source` argument (object with kind and either path or code)"
+		missingKind gives "`source.kind` is required and must be \"file\" or \"snippet\""
+		unknownKind gives "`source.kind` must be \"file\" or \"snippet\""
+		missingPath gives "`source.path` is required when kind=\"file\""
+		missingCode gives "`source.code` is required when kind=\"snippet\""
+	end 'r'
+end 'sourceArgErrorReason'
+
+// A resolved project-style source: a directory containing one or more
+// .maxon files, the chosen "main" file, and a flag indicating whether we
+// own the directory (snippet) or the user does (file).
+export type ResolvedSource
+	export var projectDir FilePath
+	export var mainFile FilePath
+	export var isSnippet bool
+
+	export static function file(projectDir FilePath, mainFile FilePath) returns ResolvedSource
+		return Self{projectDir: projectDir, mainFile: mainFile, isSnippet: false}
+	end 'file'
+
+	export static function snippet(projectDir FilePath, mainFile FilePath) returns ResolvedSource
+		return Self{projectDir: projectDir, mainFile: mainFile, isSnippet: true}
+	end 'snippet'
+end 'ResolvedSource'
+
+/// Resolve `source` from the tool args into a `ResolvedSource`. For
+/// `kind: "snippet"`, materializes a fresh `<repo>/temp/<prefix>-<stamp>/`
+/// directory containing `main.maxon`. The caller MUST call
+/// `cleanupResolvedSource` after the tool finishes — even on the error path —
+/// to remove the temp files when `isSnippet` is true.
+export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String) returns ResolvedSource throws SourceArgError
+	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
+		throw SourceArgError.missingSource
+	end 'noSrc'
+	let kind = try argsDoc.getString(sourceId, key: "kind") otherwise 'noKind'
+		throw SourceArgError.missingKind
+	end 'noKind'
+
+	if kind.equals("file") 'fileKind'
+		let pathStr = try argsDoc.getString(sourceId, key: "path") otherwise 'noPath'
+			throw SourceArgError.missingPath
+		end 'noPath'
+		let file = try FilePath.from(pathStr) otherwise panic("resolveProjectSource: FilePath.from('{pathStr}') failed — path validation should happen upstream")
+		let parent = try parentDirOrThrow(file) otherwise 'noParent'
+			throw SourceArgError.missingPath
+		end 'noParent'
+		return ResolvedSource.file(projectDir: parent, mainFile: file)
+	end 'fileKind'
+
+	if kind.equals("snippet") 'snippetKind'
+		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
+			throw SourceArgError.missingCode
+		end 'noCode'
+		return materializeSnippetProject(code, prefix: snippetPrefix)
+	end 'snippetKind'
+
+	throw SourceArgError.unknownKind
+end 'resolveProjectSource'
+
+/// Like `resolveProjectSource`, but the snippet variant writes a single
+/// scratch file under `<repo>/temp/` rather than a per-snippet project
+/// directory. Used by tools (e.g. `fmt`) that act on the file path directly
+/// and don't need a project root.
+export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPrefix String) returns ResolvedSource throws SourceArgError
+	let sourceId = try argsDoc.getChild(argsId, key: "source") otherwise 'noSrc'
+		throw SourceArgError.missingSource
+	end 'noSrc'
+	let kind = try argsDoc.getString(sourceId, key: "kind") otherwise 'noKind'
+		throw SourceArgError.missingKind
+	end 'noKind'
+
+	if kind.equals("file") 'fileKind'
+		let pathStr = try argsDoc.getString(sourceId, key: "path") otherwise 'noPath'
+			throw SourceArgError.missingPath
+		end 'noPath'
+		let file = try FilePath.from(pathStr) otherwise panic("resolveFileSource: FilePath.from('{pathStr}') failed")
+		// projectDir is the parent if there is one; otherwise we fall back
+		// to "." since file-mode callers only consume `mainFile` anyway.
+		let parent = try parentDirOrThrow(file) otherwise try FilePath.from(".") otherwise panic("resolveFileSource: '.' must be a valid path")
+		return ResolvedSource.file(projectDir: parent, mainFile: file)
+	end 'fileKind'
+
+	if kind.equals("snippet") 'snippetKind'
+		let code = try argsDoc.getString(sourceId, key: "code") otherwise 'noCode'
+			throw SourceArgError.missingCode
+		end 'noCode'
+		return materializeSnippetFile(code, prefix: snippetPrefix)
+	end 'snippetKind'
+
+	throw SourceArgError.unknownKind
+end 'resolveFileSource'
+
+// Materialize a snippet as a directory containing `main.maxon`. The dir
+// is named `<repo>/temp/<prefix>-<stamp>/` so concurrent calls don't
+// collide. `prefix` should be a short tool identifier like "dump-ir".
+function materializeSnippetProject(code String, prefix String) returns ResolvedSource
+	let repoRoot = repoRootPath()
+	let stamp = Clock.nowMs()
+	let projectDirStr = "{repoRoot.path}/temp/{prefix}-{stamp}"
+	let projectDir = try FilePath.from(projectDirStr) otherwise panic("materializeSnippetProject: derived dir '{projectDirStr}' is invalid")
+	let created = Directory.create(projectDir)
+	if not created 'mkErr'
+		panic("materializeSnippetProject: Directory.create returned false for {projectDir.path}")
+	end 'mkErr'
+	let mainFile = childPath(parent: projectDir, segment: "main.maxon")
+	try File.writeText(mainFile, content: code) otherwise 'writeErr'
+		panic("materializeSnippetProject: cannot write snippet to {mainFile.path}")
+	end 'writeErr'
+	return ResolvedSource.snippet(projectDir: projectDir, mainFile: mainFile)
+end 'materializeSnippetProject'
+
+// Materialize a snippet as a single file under `<repo>/temp/`. Used by
+// `fmt`, which operates on the file directly without needing a project
+// directory.
+function materializeSnippetFile(code String, prefix String) returns ResolvedSource
+	let repoRoot = repoRootPath()
+	let stamp = Clock.nowMs()
+	let filename = "temp/{prefix}-{stamp}.maxon"
+	let target = childPath(parent: repoRoot, segment: filename)
+	try File.writeText(target, content: code) otherwise 'writeErr'
+		panic("materializeSnippetFile: cannot write snippet to {target.path}")
+	end 'writeErr'
+	// projectDir is unused in file mode; carry the temp dir for symmetry.
+	let tempDir = childPath(parent: repoRoot, segment: "temp")
+	return ResolvedSource.snippet(projectDir: tempDir, mainFile: target)
+end 'materializeSnippetFile'
+
+/// Clean up after a snippet-mode source. For `file`-mode sources this is
+/// a no-op. For snippet-mode sources we remove the snippet's main file and
+/// any sibling artifacts in the project dir; the (now-empty) directory is
+/// left in place since stdlib lacks a `Directory.remove`.
+export function cleanupResolvedSource(resolved ResolvedSource)
+	if not resolved.isSnippet 'keep'
+		return
+	end 'keep'
+	// Try the project dir; if it doesn't list (e.g. fmt's single-file
+	// variant points at the temp/ root, which contains other tools'
+	// scratch) fall back to deleting just the main file.
+	let projectDir = resolved.projectDir
+	let mainFile = resolved.mainFile
+	// Heuristic: if the project dir is exactly `<repo>/temp` we're in
+	// file-mode (materializeSnippetFile); only the main file is ours.
+	let repoRoot = repoRootPath()
+	let tempDir = childPath(parent: repoRoot, segment: "temp")
+	if projectDir.path.equals(tempDir.path) 'fileMode'
+		try File.delete(mainFile) otherwise ignore
+		return
+	end 'fileMode'
+	let entries = try Directory.list(projectDir) otherwise 'listErr'
+		return
+	end 'listErr'
+	let n = entries.count()
+	for i in 0 upto n 'each'
+		let entry = try entries.get(i) otherwise panic("cleanupResolvedSource: entries.get OOB — i bounded by n")
+		try File.delete(entry) otherwise ignore
+	end 'each'
+end 'cleanupResolvedSource'

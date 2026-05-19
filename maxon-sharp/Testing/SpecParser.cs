@@ -98,6 +98,17 @@ public static partial class SpecParser {
       bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection);
       bool asyncTrace = AsyncTraceDirectiveRegex().IsMatch(testSection);
 
+      int? timeoutMs = null;
+      var timeoutMatch = TimeoutMsDirectiveRegex().Match(testSection);
+      if (timeoutMatch.Success) {
+        if (!int.TryParse(timeoutMatch.Groups[1].Value.Trim(), out var parsedTimeout) || parsedTimeout <= 0) {
+          throw new Exception(
+            $"Test '{testName}' has an invalid TimeoutMs directive '{timeoutMatch.Groups[1].Value}'. " +
+            "Expected a positive integer (milliseconds).");
+        }
+        timeoutMs = parsedTimeout;
+      }
+
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
 
@@ -151,6 +162,7 @@ public static partial class SpecParser {
         SourceFiles = SplitMultiFileSource(source),
         MmTrace = mmTrace,
         AsyncTrace = asyncTrace,
+        TimeoutMs = timeoutMs,
       });
     }
 
@@ -295,6 +307,9 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*AsyncTrace\s*-->")]
   private static partial Regex AsyncTraceDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*TimeoutMs:\s*(\d+)\s*-->")]
+  private static partial Regex TimeoutMsDirectiveRegex();
 
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
   private static partial Regex FileMarkerRegex();

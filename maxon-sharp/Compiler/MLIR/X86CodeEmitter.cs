@@ -458,13 +458,14 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, "__gt_init"));
     EmitDword(0);
 
-    // Allocate a dedicated 8KB system stack for P[0] (same as P[1..N])
+    // Allocate a dedicated system stack for P[0] (same as P[1..N]).
+    // Size lives in GtLayout.PSystemStackSize.
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);     // lpAddress = NULL
-    EmitMovRegImm(X86Register.Rdx, 0x2000);               // dwSize = 8KB
+    EmitMovRegImm(X86Register.Rdx, PSystemStackSize);     // dwSize
     EmitMovRegImm(X86Register.R8, 0x3000);                 // MEM_COMMIT|MEM_RESERVE
     EmitMovRegImm(X86Register.R9, 0x04);                   // PAGE_READWRITE
     EmitCallImport("kernel32.dll", "VirtualAlloc");
-    EmitAddRegImm(X86Register.Rax, 0x2000);                // RAX = top of system stack
+    EmitAddRegImm(X86Register.Rax, PSystemStackSize);     // RAX = top of system stack
     EmitGlobalLoadReg(X86Register.R10, "__sched_tls_teb_offset");
     EmitByte(0x65); // GS prefix
     EmitMovRegIndirectMemRaw(X86Register.R10, X86Register.R10, 0); // R10 = P[0]*
@@ -622,8 +623,28 @@ public partial class X86CodeEmitter() {
     // Alignment: systemStackSP is 16-aligned, 1 push → 8-misaligned.
     // SUB 0x28 (shadow 0x20 + pad 0x08) → 16-aligned before CALL.
     EmitSubRegImm(X86Register.Rsp, 0x28);
+
+    // Repoint TIB at the system stack bounds for the call. Heavy kernel calls
+    // (CreateProcessW, CreateFileW, ...) probe TIB during their internal RPC
+    // and fault when RSP is outside [gs:[0x10], gs:[0x08]).
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R11, POffSystemStackSP);
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], RAX
+    EmitSubRegImm(X86Register.Rax, PSystemStackSize);
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], RAX
+
     EmitCallImport(dllName, functionName);
     EmitAddRegImm(X86Register.Rsp, 0x28);
+
+    // Restore TIB to the GT's saved bounds. R11 may be clobbered by the call,
+    // so re-load P* via TLS. Use RCX as scratch; preserve RAX (call result).
+    EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0);               // R11 = P*
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);      // R11 = GT
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);  // RCX = GT TIB base
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit); // RCX = GT TIB limit
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
 
     EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
     EmitMovRegReg(X86Register.Rsp, X86Register.R10); // restore GT RSP
@@ -665,11 +686,20 @@ public partial class X86CodeEmitter() {
     EmitJcc("z", skipLabel);
 
     // --- GT stack path: switch RSP to system stack ---
+    // After PUSH R10 onto the system stack (8 bytes), RSP is 8 mod 16.
+    // SUB frameSize (16-aligned by convention) keeps RSP at 8 mod 16; the +8
+    // pad restores 16-alignment before the CALL (Win64 ABI).
     EmitPushReg(X86Register.R10);      // save original R10 on GT stack
     EmitMovRegReg(X86Register.R10, X86Register.Rsp); // R10 = GT RSP (post-push)
     EmitMovRegIndirectMem(X86Register.Rsp, X86Register.R11, POffSystemStackSP);
-    EmitPushReg(X86Register.R10);      // save GT RSP on system stack
-    EmitSubRegImm(X86Register.Rsp, frameSize);
+    EmitPushReg(X86Register.R10);      // save GT RSP on system stack (RSP now 8 mod 16)
+    EmitSubRegImm(X86Register.Rsp, frameSize + 8); // +8 pad → 16-aligned pre-CALL
+
+    // Repoint TIB stack bounds at the system stack for the upcoming kernel call.
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R11, POffSystemStackSP);
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00); // MOV gs:[0x08], RAX
+    EmitSubRegImm(X86Register.Rax, PSystemStackSize);
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00); // MOV gs:[0x10], RAX
     EmitJmp(doneLabel);
 
     // --- Main thread / early init path: just SUB frameSize ---
@@ -701,8 +731,17 @@ public partial class X86CodeEmitter() {
     EmitPopReg(X86Register.R11);       // restore R11 = P*
     EmitJcc("z", skipLabel);
 
-    // --- GT stack path: undo SUB, restore GT RSP, restore R10 ---
-    EmitAddRegImm(X86Register.Rsp, frameSize);
+    // --- GT stack path: restore GT TIB, undo SUB, restore GT RSP, restore R10 ---
+    // R11 = P*. Recover GT struct via P->currentGt, then write its saved TIB
+    // bounds back into gs:[0x08]/[0x10]. Preserve RAX (kernel call return);
+    // RCX is volatile.
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);      // R11 = GT
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackBase);  // RCX = GT TIB base
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);             // MOV gs:[0x08], RCX
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, GtOffTibStackLimit); // RCX = GT TIB limit
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);             // MOV gs:[0x10], RCX
+
+    EmitAddRegImm(X86Register.Rsp, frameSize + 8);
     EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
     EmitMovRegReg(X86Register.Rsp, X86Register.R10); // restore GT RSP
     EmitPopReg(X86Register.R10);       // restore original R10
@@ -1178,6 +1217,40 @@ public partial class X86CodeEmitter() {
     Rex.W().Reg(src).Rm(dest).Emit(this);
     EmitByte(0x01);
     EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+  }
+
+  private void EmitAndRegImm(X86Register dest, long immediate) {
+    Require64BitGpr(dest, nameof(EmitAndRegImm));
+    if (immediate >= -128 && immediate <= 127) {
+      // AND r64, imm8: REX.W + 83 /4 ib
+      Rex.W().Rm(dest).Emit(this);
+      EmitByte(0x83);
+      EmitByte((byte)(0xE0 | RegCode(dest)));
+      EmitByte((byte)immediate);
+    } else {
+      // AND r64, imm32: REX.W + 81 /4 id (sign-extended)
+      Rex.W().Rm(dest).Emit(this);
+      EmitByte(0x81);
+      EmitByte((byte)(0xE0 | RegCode(dest)));
+      EmitDword((int)immediate);
+    }
+  }
+
+  private void EmitOrRegImm(X86Register dest, long immediate) {
+    Require64BitGpr(dest, nameof(EmitOrRegImm));
+    if (immediate >= -128 && immediate <= 127) {
+      // OR r64, imm8: REX.W + 83 /1 ib
+      Rex.W().Rm(dest).Emit(this);
+      EmitByte(0x83);
+      EmitByte((byte)(0xC8 | RegCode(dest)));
+      EmitByte((byte)immediate);
+    } else {
+      // OR r64, imm32: REX.W + 81 /1 id (sign-extended)
+      Rex.W().Rm(dest).Emit(this);
+      EmitByte(0x81);
+      EmitByte((byte)(0xC8 | RegCode(dest)));
+      EmitDword((int)immediate);
+    }
   }
 
   private void EmitSubRegReg(X86Register dest, X86Register src) {

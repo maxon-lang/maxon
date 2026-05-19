@@ -113,6 +113,7 @@ public static class PurityAnalysisPass {
         switch (op) {
           case MaxonManagedWriteStdoutOp:
           case MaxonManagedWriteStderrOp:
+          case MaxonManagedReadStdinOp:
           case MaxonGlobalStoreOp:
           case MaxonCallRuntimeOp:
             return true;

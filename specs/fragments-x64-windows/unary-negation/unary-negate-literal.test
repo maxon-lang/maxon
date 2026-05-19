@@ -8,19 +8,25 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @unary-negation.main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov r8d, 5
-    x64.neg r8
-    x64.mov r9d, 4294967295
-    x64.add r8, 47
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    x64.mov rax, -5
+    x64.mov rcx, 47
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg unary-negation.main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl unary-negation.main.__range_panic_0
+    x64.jmp unary-negation.main.__range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }

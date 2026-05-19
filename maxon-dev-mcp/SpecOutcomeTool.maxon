@@ -1,0 +1,405 @@
+// `spec_test_outcome` MCP tool. Runs the spec-test suite with a filter and
+// `--verbose`, then parses the per-test PASS/FAIL lines and the
+// `[FAIL] <spec> (P/T)` summary block into structured output. Useful when
+// the LLM wants "did test X pass? if not, what was the message?" without
+// re-scraping the rawTail itself.
+//
+// Inputs (JSON):
+//   filter: String          — required; passed to `--filter=<filter>`
+//   compiler?: "csharp" | "selfhosted"   (default "csharp")
+//
+// Output (JSON):
+//   compiler, filter, total, passed, failed, durationMs, memoryLeak,
+//   tests: [{spec, test, status, durationMs}],
+//   failures: [{spec, message}],   // grouped per spec from the [FAIL] block
+//   rawTail.
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias TestDurationMs = int(0 to u64.max)
+
+let specOutcomeTimeoutMs = 600000
+let rawTailMaxBytes = 4096
+let memoryLeakExitCode = 101
+
+/// Entry point called by Server.maxon's dispatch table.
+export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let filter = try argsDoc.getString(argsId, key: "filter") otherwise 'noFilter'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "spec_test_outcome: missing required `filter` argument (a pattern matching test names)")
+	end 'noFilter'
+
+	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
+	let repoRoot = repoRootPath()
+	let binary = try compilerBinary(repoRoot: repoRoot, compiler: compiler) otherwise 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler}: required binary missing. Build it first via the `build` tool.")
+	end 'noBin'
+
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("--filter={filter}")
+	argv.push("--verbose")
+
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: specOutcomeTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec_test_outcome: subprocess: {err.displayReason()}")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(since: timing)
+
+	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let memoryLeak = result.exitCode() == memoryLeakExitCode
+	let parsed = parseTests(combined)
+	let failureSummaries = parseFailureBlocks(combined)
+
+	return buildOutcome(compiler: compiler, filter: filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: parsed, failures: failureSummaries, combined: combined)
+end 'specOutcomeHandler'
+
+// =============================================================================
+// Per-test parsing
+// =============================================================================
+
+type SpecTestEntry
+	export var spec String
+	export var name String
+	export var passed bool
+	export var durationMs TestDurationMs
+
+	export static function create(spec String, name String, passed bool, durationMs TestDurationMs) returns SpecTestEntry
+		return Self{spec: spec, name: name, passed: passed, durationMs: durationMs}
+	end 'create'
+end 'SpecTestEntry'
+
+typealias SpecTestEntryArray = Array with SpecTestEntry
+
+// Parse lines like:
+//   `[TST] [W6] [PASS] float-type/float-arithmetic (743ms)`
+//   `[TST] [W1] [FAIL] arithmetic/division (820ms)`
+// Anything else (banner, summary, FAIL block messages) is ignored here —
+// those are surfaced via `parseFailureBlocks` / `parseSummary`.
+function parseTests(combined String) returns SpecTestEntryArray
+	var out = SpecTestEntryArray.create()
+	let lines = combined.split("\n")
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let raw = try lines.get(i) otherwise panic("parseTests: lines.get OOB — i bounded by n")
+		let line = raw.trim()
+		let parsed = try parseTestLine(line) otherwise 'skip'
+			continue
+		end 'skip'
+		out.push(parsed)
+	end 'each'
+	return out
+end 'parseTests'
+
+function parseTestLine(line String) returns SpecTestEntry throws NotFound
+	// Required prefix `[TST] [W<n>] [<status>] `.
+	let bytes = line.toByteArray()
+	if not line.startsWith("[TST] [W") 'notTst'
+		throw NotFound.notFound
+	end 'notTst'
+	// Skip `[TST] [W` and consume worker digits until `] `.
+	let workerStart = "[TST] [W".byteLength()
+	var i = workerStart
+	let total = bytes.count()
+	while i < total 'wDigits'
+		let b = try bytes.get(i) otherwise panic("parseTestLine: bytes.get OOB during worker digits")
+		if not isAsciiDigit(b) 'stopW'
+			break
+		end 'stopW'
+		i = i + 1
+	end 'wDigits'
+	if i == workerStart 'noDigits'
+		throw NotFound.notFound
+	end 'noDigits'
+	// Expect `] `.
+	if i + 1 >= total 'short1'
+		throw NotFound.notFound
+	end 'short1'
+	let rbracket = try bytes.get(i) otherwise panic("parseTestLine: bytes.get OOB at ']'")
+	let space = try bytes.get(i + 1) otherwise panic("parseTestLine: bytes.get OOB at ' '")
+	if rbracket != 0x5D or space != 0x20 'notClose'
+		throw NotFound.notFound
+	end 'notClose'
+	i = i + 2
+
+	// Expect `[PASS] ` or `[FAIL] `.
+	if i + 7 > total 'shortStatus'
+		throw NotFound.notFound
+	end 'shortStatus'
+	let statusSlice = sliceBytes(bytes, from: i, until: i + 7)
+	var passed = false
+	if statusSlice.equals("[PASS] ") 'p'
+		passed = true
+	end 'p' else 'maybeFail'
+		if not statusSlice.equals("[FAIL] ") 'nope'
+			throw NotFound.notFound
+		end 'nope'
+	end 'maybeFail'
+	i = i + 7
+
+	// `spec/test (<dur>ms)`. Find the trailing ` (` from the right.
+	let parenSpace = findFromRight(bytes, needle: " (", from: i)
+	if parenSpace < 0 'noParen'
+		throw NotFound.notFound
+	end 'noParen'
+	let identStart = i
+	let identEnd = parenSpace as BytePos
+	let identSlice = sliceBytes(bytes, from: identStart, until: identEnd)
+	let slashIdx = firstSlash(identSlice)
+	if slashIdx < 0 'noSlash'
+		throw NotFound.notFound
+	end 'noSlash'
+	let identBytes = identSlice.toByteArray()
+	let spec = sliceBytes(identBytes, from: 0, until: slashIdx as BytePos)
+	let name = sliceBytes(identBytes, from: (slashIdx + 1) as BytePos, until: identBytes.count())
+
+	// Duration: parse decimal between `(` and `ms)`.
+	let durStart = (parenSpace + 2) as BytePos
+	var j = durStart
+	var dur = 0
+	while j < total 'durDigits'
+		let b = try bytes.get(j) otherwise panic("parseTestLine: bytes.get OOB during duration")
+		if not isAsciiDigit(b) 'stop'
+			break
+		end 'stop'
+		dur = dur * 10 + (b - 0x30)
+		j = j + 1
+	end 'durDigits'
+
+	return SpecTestEntry.create(spec, name: name, passed: passed, durationMs: dur as TestDurationMs)
+end 'parseTestLine'
+
+function isAsciiDigit(b Byte) returns bool
+	return b >= 0x30 and b <= 0x39
+end 'isAsciiDigit'
+
+// Sentinel typealias for "no match" — kept in this file so the parser
+// helpers stay self-contained.
+typealias FindResult = int(-1 to i64.max)
+
+function findFromRight(bytes ByteArray, needle String, from BytePos) returns FindResult
+	let needleBytes = needle.toByteArray()
+	let nLen = needleBytes.count()
+	let total = bytes.count()
+	if nLen == 0 'empty'
+		return 0
+	end 'empty'
+	if total < nLen + from 'tooShort'
+		return -1
+	end 'tooShort'
+	var i = total - nLen
+	while i >= from 'scan'
+		var matched = true
+		for k in 0 upto nLen 'inner'
+			let hb = try bytes.get(i + k) otherwise panic("findFromRight: bytes.get OOB")
+			let nb = try needleBytes.get(k) otherwise panic("findFromRight: needleBytes.get OOB")
+			if hb != nb 'ne'
+				matched = false
+				break
+			end 'ne'
+		end 'inner'
+		if matched 'hit'
+			return i as FindResult
+		end 'hit'
+		if i == from 'reachedStart'
+			break
+		end 'reachedStart'
+		i = i - 1
+	end 'scan'
+	return -1
+end 'findFromRight'
+
+function firstSlash(s String) returns FindResult
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise panic("firstSlash: bytes.get OOB")
+		if b == 0x2F or b == 0x5C 'sep'
+			return i as FindResult
+		end 'sep'
+		i = i + 1
+	end 'scan'
+	return -1
+end 'firstSlash'
+
+// =============================================================================
+// Failure-block parsing
+// =============================================================================
+
+type SpecFailureSummary
+	export var spec String
+	export var message String
+
+	export static function create(spec String, message String) returns SpecFailureSummary
+		return Self{spec: spec, message: message}
+	end 'create'
+end 'SpecFailureSummary'
+
+typealias SpecFailureSummaryArray = Array with SpecFailureSummary
+
+// Capture every `[FAIL] <spec> (P/T)` line plus the contiguous block of
+// indented (`  <msg>`) message lines beneath it. The runner emits the
+// indented lines via `Logger.Error(... "  {msg}")`, then continues with
+// the next `[FAIL]` block. Lines that don't fit either shape break the
+// current block.
+function parseFailureBlocks(combined String) returns SpecFailureSummaryArray
+	var out = SpecFailureSummaryArray.create()
+	let lines = combined.split("\n")
+	let n = lines.count()
+	var i = 0
+	while i < n 'each'
+		let raw = try lines.get(i) otherwise panic("parseFailureBlocks: lines.get OOB")
+		let trimmed = raw.trim()
+		if not trimmed.startsWith("[TST] [FAIL] ") 'notFail'
+			i = i + 1
+			continue
+		end 'notFail'
+		let header = trimmed
+		var bodyLines = StringArray.create()
+		i = i + 1
+		while i < n 'body'
+			let next = try lines.get(i) otherwise panic("parseFailureBlocks: lines.get OOB (body)")
+			let nextTrim = next.trim()
+			// Body lines: `[TST]   <message>` (two leading spaces after [TST]).
+			if not nextTrim.startsWith("[TST]   ") 'stopBody'
+				break
+			end 'stopBody'
+			bodyLines.push(nextTrim)
+			i = i + 1
+		end 'body'
+		let specName = extractSpecFromFailHeader(header)
+		let message = joinLines(bodyLines)
+		out.push(SpecFailureSummary.create(specName, message: message))
+	end 'each'
+	return out
+end 'parseFailureBlocks'
+
+// Extract `<spec>` from `[TST] [FAIL] <spec> (P/T)`. The closing `(P/T)` is
+// optional from the parser's standpoint — if it's missing we return
+// everything after the prefix.
+function extractSpecFromFailHeader(line String) returns String
+	let prefix = "[TST] [FAIL] "
+	let bytes = line.toByteArray()
+	let total = bytes.count()
+	let startBp = prefix.byteLength()
+	let parenSpace = findFromRight(bytes, needle: " (", from: startBp)
+	let endBp = match parenSpace 'pick'
+		-1 gives total
+		default gives parenSpace as BytePos
+	end 'pick'
+	return sliceBytes(bytes, from: startBp, until: endBp)
+end 'extractSpecFromFailHeader'
+
+function joinLines(lines StringArray) returns String
+	var out = ""
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let line = try lines.get(i) otherwise panic("joinLines: lines.get OOB")
+		if not out.isEmpty() 'sep'
+			out.append("\n")
+		end 'sep'
+		out.append(line)
+	end 'each'
+	return out
+end 'joinLines'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(compiler String, filter String, exitCode ExitInt, durationMs DurationMs, memoryLeak bool, tests SpecTestEntryArray, failures SpecFailureSummaryArray, combined String) returns ToolOutcome
+	var passed = 0
+	var failed = 0
+	let testCount = tests.count()
+	for i in 0 upto testCount 'tally'
+		let entry = try tests.get(i) otherwise panic("buildOutcome: tests.get OOB")
+		if entry.passed 'p'
+			passed = passed + 1
+		end 'p' else 'f'
+			failed = failed + 1
+		end 'f'
+	end 'tally'
+
+	var doc = JsonDoc.create()
+	let compilerId = doc.add(JsonNode.stringNode(compiler))
+	let filterId = doc.add(JsonNode.stringNode(filter))
+	let exitCodeId = doc.add(JsonNode.numberNode(exitCode as float))
+	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let memoryLeakId = doc.add(JsonNode.boolNode(memoryLeak))
+	let totalId = doc.add(JsonNode.numberNode((passed + failed) as float))
+	let passedId = doc.add(JsonNode.numberNode(passed as float))
+	let failedId = doc.add(JsonNode.numberNode(failed as float))
+	let testsArrId = testsArrayJson(doc, tests: tests)
+	let failuresArrId = failuresArrayJson(doc, failures: failures)
+	let rawTailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: rawTailMaxBytes)))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("compiler")
+	children.push(compilerId)
+	keys.push("filter")
+	children.push(filterId)
+	keys.push("total")
+	children.push(totalId)
+	keys.push("passed")
+	children.push(passedId)
+	keys.push("failed")
+	children.push(failedId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("memoryLeak")
+	children.push(memoryLeakId)
+	keys.push("tests")
+	children.push(testsArrId)
+	keys.push("failures")
+	children.push(failuresArrId)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'
+
+function testsArrayJson(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = tests.count()
+	for i in 0 upto n 'each'
+		let t = try tests.get(i) otherwise panic("testsArrayJson: tests.get OOB")
+		let specId = doc.add(JsonNode.stringNode(t.spec))
+		let testId = doc.add(JsonNode.stringNode(t.name))
+		let statusId = doc.add(JsonNode.stringNode("PASS" if t.passed else "FAIL"))
+		let durId = doc.add(JsonNode.numberNode(t.durationMs as float))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		keys.push("spec")
+		children.push(specId)
+		keys.push("test")
+		children.push(testId)
+		keys.push("status")
+		children.push(statusId)
+		keys.push("durationMs")
+		children.push(durId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'testsArrayJson'
+
+function failuresArrayJson(doc JsonDoc, failures SpecFailureSummaryArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = failures.count()
+	for i in 0 upto n 'each'
+		let f = try failures.get(i) otherwise panic("failuresArrayJson: failures.get OOB")
+		let specId = doc.add(JsonNode.stringNode(f.spec))
+		let msgId = doc.add(JsonNode.stringNode(f.message))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		keys.push("spec")
+		children.push(specId)
+		keys.push("message")
+		children.push(msgId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'failuresArrayJson'

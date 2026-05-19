@@ -38,6 +38,21 @@ var r2 = await p2
 - Throwing async functions require `try await` to extract the result
 - `promise.cancel()` cancels the associated green thread
 
+**Typed promises:**
+Promises can be stored in collections by declaring an explicit `Promise with T` type — the compiler boxes the i64 handle into a `Promise<T>` struct at the storage site and unboxes it at the `await` site. This lets you spawn N green threads with a `for` loop, collect the promises into an `Array with (Promise with T)`, and await them in a second pass.
+
+```text
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+var arr = IntPromiseArray.create()
+arr.push(async work(1))
+arr.push(async work(2))
+for p in arr 'each'
+    let result = await p   // unboxed automatically
+end 'each'
+```
+
 ## Tests
 
 <!-- test: async-await.basic -->
@@ -343,4 +358,113 @@ await #1 [yield]
 worker_exit #1
 worker_start #2
 worker_exit #2
+```
+
+<!-- test: async-await.promise-array -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function compute(n Integer) returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return n
+end 'compute'
+
+function main() returns ExitCode
+		var arr = IntPromiseArray.create()
+		arr.push(async compute(10))
+		arr.push(async compute(20))
+		arr.push(async compute(12))
+		var sum = 0
+		for p in arr 'each'
+				sum = sum + await p
+		end 'each'
+		return sum
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-await.promise-array-throwing -->
+A stored Promise<T> is treated as throwing at the type level — its
+compile-time throws-ness is lost across storage, so `try await ... otherwise X`
+is always required at the read site. The runtime branches on a stored
+throws-bit, so awaiting a non-throwing promise via `try await ... otherwise X`
+still succeeds; the `otherwise` handler is just unused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+enum WorkError implements Error
+		failed
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		var arr = IntPromiseArray.create()
+		arr.push(async work(10))
+		arr.push(async work(20))
+		arr.push(async work(-1))
+		var sum = 0
+		for p in arr 'each'
+				sum = sum + try await p otherwise 0
+		end 'each'
+		return sum
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: async-await.managed-args-many -->
+A regression guard for the spawn-site incref of managed (Struct/Enum)
+async arguments: spawn eight green threads in a row, each receiving a
+freshly built StringArray, then await them all. Without the incref the
+caller's scope-end decref would free the StringArray before the green
+thread runs, surfacing as a SIGSEGV in `__gt_trampoline` once enough
+allocator churn pushes the freed slot into reuse.
+```maxon
+typealias StringArray = Array with String
+typealias StrPromise = Promise with String
+typealias StrPromiseArray = Array with StrPromise
+
+function joinArgs(label String, args StringArray) returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		var out = label
+		for a in args 'each'
+				out = "{out}|{a}"
+		end 'each'
+		return out
+end 'joinArgs'
+
+function main() returns ExitCode
+		var promises = StrPromiseArray.create()
+		for i in 0 upto 8 'spawn'
+				var argv = StringArray.create()
+				argv.push("arg{i}.a")
+				argv.push("arg{i}.b")
+				promises.push(async joinArgs("L{i}", args: argv))
+		end 'spawn'
+		var total = 0
+		for p in promises 'await'
+				let s = await p
+				if not s.isEmpty() 'good'
+						total = total + 1
+				end 'good'
+		end 'await'
+		return total
+end 'main'
+```
+```exitcode
+8
 ```

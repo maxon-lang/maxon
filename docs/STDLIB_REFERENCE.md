@@ -13,9 +13,12 @@
 9. [Networking (TcpClient)](#networking-tcpclient)
 10. [HttpClient](#httpclient)
 11. [Crypto](#crypto)
-12. [Range / OpenRange](#range--openrange)
-13. [ArrayIterator](#arrayiterator)
-14. [Builtin Managed Types](#builtin-managed-types)
+12. [Process](#process)
+13. [Subprocess](#subprocess)
+14. [Clock](#clock)
+15. [Range / OpenRange](#range--openrange)
+16. [ArrayIterator](#arrayiterator)
+17. [Builtin Managed Types](#builtin-managed-types)
 
 ---
 
@@ -761,6 +764,234 @@ end 'postData'
 - No chunked transfer encoding — uses `Connection: close`
 - No redirect following (returns 3xx as-is)
 - No streaming — entire response buffered in memory
+
+---
+
+## Process
+
+`Process` exposes introspection of the currently-running process. For launching child processes, see [Subprocess](#subprocess); for monotonic time, see [Clock](#clock).
+
+**Exit codes:** `Process.ExitCode` is a platform-narrowed alias that ranges over `0 .. u32.max` on Windows, `0 .. 255` on Unix, and `0 .. 125` on WASI. Use it as the return type of `main`.
+
+```maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+
+**Static Methods:**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `executablePath()` | `FilePath` | `ProcessIntrospectionError` | Absolute path to the running executable. Uses `GetModuleFileNameA` (Windows), `_NSGetExecutablePath` (macOS), `/proc/self/exe` (Linux). Throws `pathUnavailable` when the OS lookup fails. |
+
+**Errors:**
+
+```maxon
+enum ProcessIntrospectionError implements Error
+	pathUnavailable
+end 'ProcessIntrospectionError'
+```
+
+**Example:**
+
+```maxon
+let exe = try Process.executablePath() otherwise return 2
+print("Running as: {exe.path}\n")
+```
+
+---
+
+## Subprocess
+
+Launch and manage child processes. Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path is `Subprocess.run(.name("git"), arguments: argv)`, which captures stdout/stderr into a `CollectedOutput` value. For full control, build a `Configuration` and call `.run()` on it.
+
+**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Wrap callers in `#if not os(Wasi)` for portable stdlib code.
+
+### Hot path
+
+```maxon
+var argv = StringArray.create()
+argv.push("status")
+let result = try Subprocess.run(Executable.name("git"), arguments: argv) otherwise return 1
+if result.succeeded() 'ok'
+	print(result.stdout)
+end 'ok'
+```
+
+### `Executable`
+
+```maxon
+union Executable
+	name(value String)       // Bare name; resolved via PATH (and PATHEXT on Windows)
+	path(value FilePath)     // Explicit path; used verbatim
+end 'Executable'
+```
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `resolve()` | `FilePath` | `ExecutableError` | Concrete launchable path. `.path(p)` returns `p`; `.name(n)` performs a PATH lookup. |
+| `displayName()` | `String` | -- | Human-readable form for diagnostics. |
+
+**Errors:** `ExecutableError.notFound`.
+
+### `Subprocess` — top-level entry
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `run(executable, arguments)` | `CollectedOutput` | `SubprocessError` | Run with default options (inherit cwd, inherit env, no stdin, collect stdout/stderr up to 16 MiB, no timeout). |
+| `run(executable, arguments, workingDirectory)` | `CollectedOutput` | `SubprocessError` | Same as above with explicit cwd. |
+| `run(executable, arguments, workingDirectory, timeoutMs)` | `CollectedOutput` | `SubprocessError` | Same as above with a kill-after deadline. `timeoutMs = 0` means "wait forever". |
+
+All overloads route through `Configuration.run()`. From an async context (`async Subprocess.run(...)`) the spawn yields the parent green thread to the scheduler so siblings make progress while the child runs.
+
+### `Configuration` — full control
+
+```maxon
+type Configuration
+	export var executable Executable
+	export var arguments StringArray
+	export var workingDirectory FilePath      // Empty path means "inherit"
+	export var environment Environment
+	export var standardInput InputSource
+	export var standardOutput OutputDestination
+	export var standardError OutputDestination
+	export var timeoutMs DurationMs           // 0 means "wait forever"
+	export var platformOptions PlatformOptions
+end 'Configuration'
+```
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Configuration.create(executable)` | `Configuration` | -- | Build a Configuration with sensible defaults (see comments above). |
+| `run()` | `CollectedOutput` | `SubprocessError` | Run the configured subprocess and collect its output. |
+| `runDetached()` | `Pid` | `SubprocessError` | Spawn detached from the parent and return the pid. stdin/stdout/stderr are forced to `discard`. |
+
+### `Environment`
+
+```maxon
+union Environment
+	inherit                                  // Child sees the parent's env unchanged
+	inheritUpdating(overrides Map with String, String)  // Inherit + overwrite specific keys
+	custom(vars Map with String, String)     // Child sees exactly these vars
+end 'Environment'
+```
+
+### `InputSource` / `OutputDestination`
+
+```maxon
+union InputSource
+	none                                     // stdin closed immediately
+	inherit                                  // Pass through parent's stdin
+	bytes(data String)                       // Write `data` to stdin, then close
+	file(path FilePath)                      // Read stdin from a file
+end 'InputSource'
+
+union OutputDestination
+	discard                                  // Output dropped
+	inherit                                  // Pass through to parent's stream
+	collect(limitBytes ByteLimit)            // Read into CollectedOutput, truncated at limitBytes
+	file(path FilePath)                      // Redirect to a file
+end 'OutputDestination'
+```
+
+### `CollectedOutput`
+
+```maxon
+type CollectedOutput
+	export var status TerminationStatus
+	export var stdout String
+	export var stderr String
+	export var pid Pid
+	export var durationMs DurationMs
+end 'CollectedOutput'
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `succeeded()` | `bool` | `true` iff `status.isSuccess()` (exited cleanly with code 0). |
+| `exitCode()` | `ExitInt` | Raw integer status code. |
+
+### `TerminationStatus`
+
+```maxon
+union TerminationStatus
+	exited(code ExitInt)        // Child called exit(code)
+	signalled(code ExitInt)     // Unix: killed by signal. Windows: NTSTATUS abnormal exit.
+end 'TerminationStatus'
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isSuccess()` | `bool` | `true` iff `exited(0)`. |
+| `code()` | `ExitInt` | The raw integer code, regardless of termination kind. |
+
+### `PlatformOptions`
+
+```maxon
+type PlatformOptions
+	export var windowsHideWindow bool
+	export var windowsCreateNewProcessGroup bool
+end 'PlatformOptions'
+```
+
+| Static method | Returns | Description |
+|---------------|---------|-------------|
+| `defaults()` | `PlatformOptions` | All flags false. |
+
+### Errors
+
+```maxon
+union SubprocessError implements Error
+	executableNotFound(name String)
+	spawnFailed(reason String)
+	ioFailed(reason String)
+	timeout(elapsedMs DurationMs)
+	inputTooLarge
+end 'SubprocessError'
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `displayReason()` | `String` | Single-line description for diagnostics. |
+
+### Async use
+
+```maxon
+let p = async Subprocess.run(exe, arguments: argv)
+let r = try await p otherwise return 1
+```
+
+The same `Subprocess.run` is callable from sync and async contexts. From a green thread, the wait yields to the scheduler; from a plain call, it blocks the OS thread.
+
+---
+
+## Clock
+
+Monotonic time helpers. Use for measuring elapsed durations — absolute values are platform-defined (e.g. milliseconds since boot) and only meaningful when subtracted.
+
+**Type aliases:**
+
+- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the monotonic clock.
+- `Clock.DurationMs` = `int(0 to u64.max)` — a duration in milliseconds.
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `nowMs()` | `InstantMs` | Monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
+| `elapsedMs(since: instant)` | `DurationMs` | Milliseconds elapsed since a prior `nowMs()` reading. Clamps to `0` if the clock moves backwards. |
+
+**Example:**
+
+```maxon
+let start = Clock.nowMs()
+doWork()
+let elapsed = Clock.elapsedMs(since: start)
+print("Took {elapsed}ms\n")
+```
+
+Backed by `QueryPerformanceCounter` (Windows), `clock_gettime(CLOCK_MONOTONIC)` (POSIX), or the WASI `monotonic-clock` interface.
 
 ---
 

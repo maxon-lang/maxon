@@ -244,6 +244,7 @@ public static partial class FragmentGenerator {
     if (test.Args != null) sb.AppendLine($"Args: {test.Args}");
     if (test.MmTrace) sb.AppendLine("MmTrace: true");
     if (test.AsyncTrace) sb.AppendLine("AsyncTrace: true");
+    if (test.TimeoutMs.HasValue) sb.AppendLine($"TimeoutMs: {test.TimeoutMs.Value}");
 
     if (test.Expectation is SuccessExpectation success) {
       if (success.ExitCode.HasValue) sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
@@ -396,7 +397,7 @@ public static partial class FragmentGenerator {
     }
 
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
-    var (expectation, fragmentArgs, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
+    var (expectation, fragmentArgs, mmTrace, asyncTrace, timeoutMs) = ParseExpectation(expectationSection);
 
     // Parse compiled IR (between second --- and third ---).
     // Non-empty section 3 must start with the "// CompiledIR" header so it
@@ -424,6 +425,7 @@ public static partial class FragmentGenerator {
       SourceFiles = sourceFiles,
       MmTrace = mmTrace,
       AsyncTrace = asyncTrace,
+      TimeoutMs = timeoutMs,
     };
   }
 
@@ -464,7 +466,7 @@ public static partial class FragmentGenerator {
     return string.Join('\n', remainder).TrimEnd();
   }
 
-  private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace) ParseExpectation(string section) {
+  private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace, int? TimeoutMs) ParseExpectation(string section) {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
@@ -476,6 +478,7 @@ public static partial class FragmentGenerator {
     string? args = null;
     bool mmTrace = false;
     bool asyncTrace = false;
+    int? timeoutMs = null;
 
     var i = 0;
     while (i < lines.Length) {
@@ -492,6 +495,11 @@ public static partial class FragmentGenerator {
         mmTrace = line["MmTrace:".Length..].Trim() == "true";
       } else if (line.StartsWith("AsyncTrace:")) {
         asyncTrace = line["AsyncTrace:".Length..].Trim() == "true";
+      } else if (line.StartsWith("TimeoutMs:")) {
+        var value = line["TimeoutMs:".Length..].Trim();
+        if (int.TryParse(value, out var ms) && ms > 0) {
+          timeoutMs = ms;
+        }
       } else if (line.StartsWith("MaxoncStderr: ```")) {
         expectedError = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stdout: ```")) {
@@ -512,7 +520,7 @@ public static partial class FragmentGenerator {
     if (expectedError != null) {
       return (new CompilerErrorExpectation {
         ExpectedStderr = expectedError
-      }, args, mmTrace, asyncTrace);
+      }, args, mmTrace, asyncTrace, timeoutMs);
     }
 
     return (new SuccessExpectation {
@@ -524,7 +532,7 @@ public static partial class FragmentGenerator {
       RequiredData = requiredData,
       MmTrace = mmTrace,
       AsyncTrace = asyncTrace,
-    }, args, mmTrace, asyncTrace);
+    }, args, mmTrace, asyncTrace, timeoutMs);
   }
 
   private static readonly Regex FileMarkerPattern = FileMarkerRegex();

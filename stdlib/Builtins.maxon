@@ -69,6 +69,33 @@ export interface InitableFromDictionaryLiteral uses Key, Value
 	static function init(keys KeyArray, values ValueArray) returns Self
 end 'InitableFromDictionaryLiteral'
 
+// Promise - opaque handle to an in-flight async computation.
+//
+// Produced by the `async` expression on a direct function call, consumed by
+// `await` / `try await` and `.cancel()`. The compiler synthesises the
+// underlying representation (an i64 handle into the green-thread scheduler's
+// promise table) and special-cases the async/await operations; this facade
+// exists so user code can name the type — typically in a typealias to declare
+// arrays or struct fields holding promises.
+//
+//   let p = async compute(42)             // p has type `Promise with Integer`
+//   typealias IntPromiseArray = Array with (Promise with Integer)
+//   var arr = IntPromiseArray.create()
+//   arr.push(p)
+//   for q in arr 'each'
+//       let result = await q
+//   end 'each'
+export type Promise uses Element
+	// Inner representation. Opaque to user code; access goes through `await`,
+	// `try await`, and `.cancel()`. The compiler stores the green-thread
+	// handle in `inner` and a single throws-bit in `throws_` so the await
+	// site knows whether `try await` is required. Both fields are written by
+	// the compiler's promise-boxing path (BoxPromiseIntoStruct in the C#
+	// bootstrap) and read by the await unbox path.
+	let inner = 0
+	let throws_ = false
+end 'Promise'
+
 // Parsable - types that can be initialized from a string representation.
 export interface Parsable
 	static function fromString(input String) returns Self throws Error

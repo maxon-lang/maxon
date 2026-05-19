@@ -394,6 +394,15 @@ public partial class X86CodeEmitter {
         _e.EmitMovRegReg(destReg, X86Register.Rax);
     }
 
+    public void GetCurrentProcessId(VReg dest) {
+      // GetCurrentProcessId() returns a DWORD (process ID). Zero-extends
+      // into RAX naturally for the caller's i64 result.
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "GetCurrentProcessId");
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
     public void WakeWorker(VReg p) {
       // SetEvent(p->wakeEvent); POffWakeEvent = 0x38
       _e.EmitMovRegIndirectMem(X86Register.Rcx, R(p), 0x38); // rcx = p->wakeEvent

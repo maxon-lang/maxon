@@ -1,0 +1,684 @@
+// Integration test runner for the maxon-dev MCP server.
+//
+// For each `fixtures/<name>.in.json` + `fixtures/<name>.assert.json` pair:
+//   1. Spawn the MCP binary, piping the input file's contents into its stdin.
+//   2. Capture stdout.
+//   3. Split into newline-delimited JSON-RPC responses. The assert file is
+//      either a single-response shape OR an `{ "responses": [...] }` wrapper
+//      when the input contains multiple requests.
+//   4. Walk each response against its corresponding assertion tree.
+//   5. Report pass/fail. Exit 1 on any failure.
+//
+// Assertion leaves (see header comment on `walkAssertion` for the full list):
+//   {"equals": <any>}, {"isString": true}, {"isNumber": true}, {"isBool": true},
+//   {"present": true}, {"contains": "..."}, {"length": N},
+//   {"parseJsonText": <inner>}, plus bare objects/arrays which recurse.
+
+typealias TestCount = int(0 to u64.max)
+// Used wherever a subprocess exit code crosses the runner — the value comes
+// from `CollectedOutput.exitCode()` and feeds back into integer assertions
+// against the JSON `exitCode` sibling.
+typealias ExitCode64 = int(i64.min to i64.max)
+
+// Generous per-fixture timeout. Most fixtures finish in <1s, but the
+// `build`/`run_spec_test` tools shell out further and can take longer.
+let perFixtureTimeoutMs = 600000
+
+function main() returns ExitCode
+	let repoRoot = resolveRepoRoot()
+	let binary = locateBinary(repoRoot: repoRoot)
+	let fixturesDir = locateFixturesDir(repoRoot: repoRoot)
+
+	print("[mcp-test] binary: {binary.path}\n")
+	print("[mcp-test] fixtures: {fixturesDir.path}\n")
+
+	let fixtures = collectFixtures(fixturesDir)
+	let total = fixtures.count()
+	if total == 0 'noFixtures'
+		print("[mcp-test] no fixtures found under {fixturesDir.path}\n")
+		return 1
+	end 'noFixtures'
+
+	var passed = 0
+	var failed = 0
+	for i in 0 upto total 'each'
+		let fixture = try fixtures.get(i) otherwise panic("main: fixtures.get OOB — i bounded by total")
+		let ok = runFixture(fixture, binary: binary)
+		if ok 'pass'
+			passed = passed + 1
+		end 'pass' else 'fail'
+			failed = failed + 1
+		end 'fail'
+	end 'each'
+
+	print("\n[mcp-test] {passed} passed, {failed} failed (of {total})\n")
+	if failed > 0 'anyFailed'
+		return 1
+	end 'anyFailed'
+	return 0
+end 'main'
+
+// =============================================================================
+// Path / fixture discovery
+// =============================================================================
+
+// The runner binary lives at `<repo>/maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test.exe`.
+// Walk up until we find a `bin/maxon.exe` sibling — that's the repo root.
+function resolveRepoRoot() returns FilePath
+	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
+	var dir = parentDir(exe)
+	for _ in 0 upto 16 'walk'
+		let candidate = joinPath(parent: dir, segment: "bin/maxon.exe")
+		if File.exists(candidate) 'found'
+			return dir
+		end 'found'
+		let parent = parentDir(dir)
+		if parent.path.equals(dir.path) 'atFs'
+			break
+		end 'atFs'
+		dir = parent
+	end 'walk'
+	panic("resolveRepoRoot: could not locate repo root from {exe.path}")
+end 'resolveRepoRoot'
+
+function locateBinary(repoRoot FilePath) returns FilePath
+	// Allow argv[1] to override the binary path. Useful when the canonical
+	// binary is locked (e.g. held by a running MCP host) and a side-built
+	// copy needs to be exercised; also lets the build.maxon test_mcp
+	// target swap between debug/release builds without code edits.
+	let allArgs = CommandLine.args()
+	if allArgs.count() >= 2 'haveOverride'
+		let arg = try allArgs.get(1) otherwise panic("locateBinary: args.get(1) OOB after count check")
+		let overridePath = try FilePath.from(arg) otherwise panic("locateBinary: argv[1] '{arg}' is not a valid path")
+		if not File.exists(overridePath) 'missingOverride'
+			panic("locateBinary: argv[1] override `{overridePath.path}` does not exist")
+		end 'missingOverride'
+		return overridePath
+	end 'haveOverride'
+	let path = joinPath(parent: repoRoot, segment: "maxon-dev-mcp/.maxon/maxon-dev-mcp.exe")
+	if not File.exists(path) 'missing'
+		panic("locateBinary: server binary not found at {path.path}. Build it via `build_mcp` in build.maxon first.")
+	end 'missing'
+	return path
+end 'locateBinary'
+
+function locateFixturesDir(repoRoot FilePath) returns FilePath
+	return joinPath(parent: repoRoot, segment: "maxon-dev-mcp-test/fixtures")
+end 'locateFixturesDir'
+
+type Fixture
+	export var name String
+	export var inputPath FilePath
+	export var assertPath FilePath
+
+	export static function create(name String, inputPath FilePath, assertPath FilePath) returns Fixture
+		return Fixture{name: name, inputPath: inputPath, assertPath: assertPath}
+	end 'create'
+end 'Fixture'
+
+typealias FixtureArray = Array with Fixture
+
+function collectFixtures(dir FilePath) returns FixtureArray
+	var out = FixtureArray.create()
+	let entries = try Directory.list(dir) otherwise 'listErr'
+		return out
+	end 'listErr'
+	let n = entries.count()
+	for i in 0 upto n 'each'
+		let entry = try entries.get(i) otherwise panic("collectFixtures: entries.get OOB — i bounded by n")
+		if not entry.path.endsWith(".in.json") 'notInput'
+			continue
+		end 'notInput'
+		let name = stripSuffix(lastSegment(entry), suffix: ".in.json")
+		let assertPath = joinPath(parent: dir, segment: "{name}.assert.json")
+		if not File.exists(assertPath) 'noAssert'
+			print("[mcp-test] WARN: skipping {name} (no matching .assert.json)\n")
+			continue
+		end 'noAssert'
+		out.push(Fixture.create(name, inputPath: entry, assertPath: assertPath))
+	end 'each'
+	return out
+end 'collectFixtures'
+
+// =============================================================================
+// Path helpers
+// =============================================================================
+
+function parentDir(path FilePath) returns FilePath
+	let s = path.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("parentDir: bytes.get OOB — i bounded by n")
+		if b == 0x2F or b == 0x5C 'sep'
+			let parentStr = sliceBytesAsString(bytes, from: 0, until: i)
+			return try FilePath.from(parentStr) otherwise panic("parentDir: derived parent '{parentStr}' is invalid")
+		end 'sep'
+	end 'scan'
+	return path
+end 'parentDir'
+
+function lastSegment(path FilePath) returns String
+	let s = path.path
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
+		if b == 0x2F or b == 0x5C 'sep'
+			return sliceBytesAsString(bytes, from: i + 1, until: n)
+		end 'sep'
+	end 'scan'
+	return s
+end 'lastSegment'
+
+function joinPath(parent FilePath, segment String) returns FilePath
+	let joined = "{parent.path}/{segment}"
+	return try FilePath.from(joined) otherwise panic("joinPath: derived '{joined}' is invalid")
+end 'joinPath'
+
+function stripSuffix(s String, suffix String) returns String
+	if not s.endsWith(suffix) 'noMatch'
+		return s
+	end 'noMatch'
+	let bytes = s.toByteArray()
+	let cut = bytes.count() - suffix.byteLength()
+	return sliceBytesAsString(bytes, from: 0, until: cut)
+end 'stripSuffix'
+
+function sliceBytesAsString(bytes ByteArray, from BytePos, until BytePos) returns String
+	var out = ByteArray.create()
+	for i in from upto until 'copy'
+		let b = try bytes.get(i) otherwise panic("sliceBytesAsString: get OOB — i bounded by until")
+		out.push(b)
+	end 'copy'
+	return String.from(out)
+end 'sliceBytesAsString'
+
+typealias BytePos = int(0 to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+// =============================================================================
+// Per-fixture execution
+// =============================================================================
+
+function runFixture(fixture Fixture, binary FilePath) returns bool
+	print("[mcp-test] {fixture.name}: ")
+	let input = try File.readText(fixture.inputPath) otherwise 'readErr'
+		print("FAIL — cannot read {fixture.inputPath.path}\n")
+		return false
+	end 'readErr'
+
+	var c = Configuration.create(Executable.path(binary))
+	c.standardInput = InputSource.bytes(data: input)
+	c.standardOutput = OutputDestination.collect(limitBytes: 16 * 1024 * 1024)
+	c.standardError = OutputDestination.collect(limitBytes: 1024 * 1024)
+	c.timeoutMs = perFixtureTimeoutMs
+
+	let collected = try c.run() otherwise (err) 'runErr'
+		print("FAIL — subprocess: {err.displayReason()}\n")
+		return false
+	end 'runErr'
+
+	let assertText = try File.readText(fixture.assertPath) otherwise 'aErr'
+		print("FAIL — cannot read {fixture.assertPath.path}\n")
+		return false
+	end 'aErr'
+	let assertDoc = try Json.parse(assertText) otherwise (err) 'parseAErr'
+		print("FAIL — assert.json parse: {err.name}\n")
+		return false
+	end 'parseAErr'
+
+	return runAssertions(actualStdout: collected.stdout, actualStderr: collected.stderr, exitCode: collected.exitCode(), assertDoc: assertDoc)
+end 'runFixture'
+
+// `.assert.json` is either:
+//   - a bare object that asserts against the single response line, OR
+//   - `{ "responses": [<obj>, <obj>, ...] }` asserting one entry per line
+// We also accept optional `exitCode` and `stderr` siblings at the top level
+// of the wrapper form for tests that want to assert on the process result.
+function runAssertions(actualStdout String, actualStderr String, exitCode ExitCode64, assertDoc JsonDoc) returns bool
+	let responses = splitJsonLines(actualStdout)
+	let rootIsObject = jsonKindsEqual(assertDoc.rootKind(), expected: JsonKind.jsonObject)
+	let isWrapper = rootIsObject and assertHasKey(assertDoc, parent: assertDoc.root, key: "responses")
+
+	if not isWrapper 'singleResponse'
+		if responses.count() == 0 'noResp'
+			print("FAIL — server produced no JSON response. stderr: {actualStderr.trim()}\n")
+			return false
+		end 'noResp'
+		let firstResp = try responses.get(0) otherwise panic("runAssertions: responses.get(0) OOB — just checked")
+		let ok = walkAssertion(actualDoc: firstResp, actualId: firstResp.root, assertDoc: assertDoc, assertId: assertDoc.root, path: "$")
+		if ok 'pass'
+			print("OK\n")
+		end 'pass'
+		return ok
+	end 'singleResponse'
+
+	// Wrapper form. Optional siblings: exitCode, stderrContains.
+	if assertHasKey(assertDoc, parent: assertDoc.root, key: "exitCode") 'hasExit'
+		let expected = try assertDoc.getInt(assertDoc.root, key: "exitCode") otherwise panic("runAssertions: exitCode key present but not an int")
+		if expected != exitCode 'mismatch'
+			print("FAIL — expected exitCode {expected}, got {exitCode}\n")
+			return false
+		end 'mismatch'
+	end 'hasExit'
+
+	if assertHasKey(assertDoc, parent: assertDoc.root, key: "stderrContains") 'hasStderr'
+		let needle = try assertDoc.getString(assertDoc.root, key: "stderrContains") otherwise panic("runAssertions: stderrContains key present but not a string")
+		if not actualStderr.contains(needle) 'noNeedle'
+			print("FAIL — stderr missing substring {needle}. actual stderr: {actualStderr.trim()}\n")
+			return false
+		end 'noNeedle'
+	end 'hasStderr'
+
+	let responsesAssertId = try assertDoc.getChild(assertDoc.root, key: "responses") otherwise panic("runAssertions: isWrapper true but `responses` lookup failed")
+	let respNode = assertDoc.get(responsesAssertId)
+	let expectedCount = respNode.children.count()
+	if expectedCount != responses.count() 'countMismatch'
+		print("FAIL — expected {expectedCount} responses, got {responses.count()}\n")
+		return false
+	end 'countMismatch'
+	for i in 0 upto expectedCount 'each'
+		let respAssertId = try respNode.children.get(i) otherwise panic("runAssertions: responses children.get OOB")
+		let resp = try responses.get(i) otherwise panic("runAssertions: responses.get OOB after count check")
+		let ok = walkAssertion(actualDoc: resp, actualId: resp.root, assertDoc: assertDoc, assertId: respAssertId, path: "$.responses[{i}]")
+		if not ok 'fail'
+			return false
+		end 'fail'
+	end 'each'
+
+	print("OK ({expectedCount} response{plural(expectedCount)})\n")
+	return true
+end 'runAssertions'
+
+function plural(n TestCount) returns String
+	if n == 1 'one'
+		return ""
+	end 'one'
+	return "s"
+end 'plural'
+
+typealias JsonDocArray = Array with JsonDoc
+
+// Split the captured stdout into one JsonDoc per non-blank line. Blank lines
+// are skipped so a trailing newline doesn't produce a spurious empty doc.
+function splitJsonLines(s String) returns JsonDocArray
+	var out = JsonDocArray.create()
+	let lines = s.split("\n")
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let line = try lines.get(i) otherwise panic("splitJsonLines: lines.get OOB — i bounded by n")
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'blank'
+			continue
+		end 'blank'
+		let doc = try Json.parse(trimmed) otherwise 'parseErr'
+			print("\n  WARN — could not parse response line: {trimmed}\n  ")
+			continue
+		end 'parseErr'
+		out.push(doc)
+	end 'each'
+	return out
+end 'splitJsonLines'
+
+// =============================================================================
+// Assertion walker
+// =============================================================================
+
+/// Walk the assertion subtree at `assertId` against the actual subtree at
+/// `actualId`. Returns true on success. On the first mismatch prints a
+/// FAIL line describing the JSON path + reason and returns false.
+///
+/// Recognised assertion forms at the leaf:
+///   {"equals": <any>}, {"isString": true}, {"isNumber": true},
+///   {"isBool": true}, {"present": true}, {"contains": "..."},
+///   {"length": N}, {"items": [...]}, {"parseJsonText": <inner>}
+/// Plus: bare object recurses by key; bare array recurses positionally.
+function walkAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let assertNode = assertDoc.get(assertId)
+	match assertNode.kind 'k'
+		jsonObject then return walkObjectAssertion(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		jsonArray then return walkArrayAssertion(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		jsonNull then return matchExact(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		jsonBool then return matchExact(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		jsonNumber then return matchExact(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		jsonString then return matchExact(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+	end 'k'
+end 'walkAssertion'
+
+function walkObjectAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	// Distinguish "leaf operator object" from "recursive sub-object" by
+	// looking at the first key. Operator objects have exactly one of the
+	// recognised operator names as a key.
+	let opKind = detectOperator(assertDoc, assertId: assertId)
+	match opKind 'op'
+		none then return walkRecursiveObject(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		equals then return checkEquals(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		isString then return checkType(actualDoc, actualId: actualId, expected: JsonKind.jsonString, path: path)
+		isNumber then return checkType(actualDoc, actualId: actualId, expected: JsonKind.jsonNumber, path: path)
+		isBool then return checkType(actualDoc, actualId: actualId, expected: JsonKind.jsonBool, path: path)
+		present then return checkPresent(path)
+		contains then return checkContains(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		length then return checkLengthThenMaybeItems(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+		parseJsonText then return checkParseJsonText(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path)
+	end 'op'
+end 'walkObjectAssertion'
+
+enum AssertOp
+	none
+	equals
+	isString
+	isNumber
+	isBool
+	present
+	contains
+	length
+	parseJsonText
+end 'AssertOp'
+
+function detectOperator(assertDoc JsonDoc, assertId JsonNodeId) returns AssertOp
+	let node = assertDoc.get(assertId)
+	let n = node.keys.count()
+	if n == 0 'empty'
+		return AssertOp.none
+	end 'empty'
+	// We classify as an operator object iff the first key is one of the
+	// operator names. Operator objects have exactly one (or for `length`,
+	// optionally two — `length` + `items`) keys.
+	let first = try node.keys.get(0) otherwise panic("detectOperator: keys.get(0) OOB after n>0 check")
+	if first.equals("equals") 'eq'
+		return AssertOp.equals
+	end 'eq'
+	if first.equals("isString") 'isStr'
+		return AssertOp.isString
+	end 'isStr'
+	if first.equals("isNumber") 'isNum'
+		return AssertOp.isNumber
+	end 'isNum'
+	if first.equals("isBool") 'isB'
+		return AssertOp.isBool
+	end 'isB'
+	if first.equals("present") 'pres'
+		return AssertOp.present
+	end 'pres'
+	if first.equals("contains") 'cont'
+		return AssertOp.contains
+	end 'cont'
+	if first.equals("length") 'len'
+		return AssertOp.length
+	end 'len'
+	if first.equals("parseJsonText") 'pjt'
+		return AssertOp.parseJsonText
+	end 'pjt'
+	return AssertOp.none
+end 'detectOperator'
+
+function walkRecursiveObject(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let actualNode = actualDoc.get(actualId)
+	if not expectKind(actualNode, expected: JsonKind.jsonObject, what: "expected object", path: path) 'notObj'
+		return false
+	end 'notObj'
+	let assertNode = assertDoc.get(assertId)
+	let keyCount = assertNode.keys.count()
+	for i in 0 upto keyCount 'eachKey'
+		let key = try assertNode.keys.get(i) otherwise panic("walkRecursiveObject: keys.get OOB")
+		let childAssertId = try assertNode.children.get(i) otherwise panic("walkRecursiveObject: children.get OOB")
+		let childActualId = try actualDoc.getChild(actualId, key: key) otherwise 'noKey'
+			print("FAIL at {path}.{key}: missing key in actual\n")
+			return false
+		end 'noKey'
+		let subPath = "{path}.{key}"
+		let ok = walkAssertion(actualDoc: actualDoc, actualId: childActualId, assertDoc: assertDoc, assertId: childAssertId, path: subPath)
+		if not ok 'fail'
+			return false
+		end 'fail'
+	end 'eachKey'
+	return true
+end 'walkRecursiveObject'
+
+function walkArrayAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let actualNode = actualDoc.get(actualId)
+	if not expectKind(actualNode, expected: JsonKind.jsonArray, what: "expected array", path: path) 'notArr'
+		return false
+	end 'notArr'
+	let assertNode = assertDoc.get(assertId)
+	let len = assertNode.children.count()
+	if len != actualNode.children.count() 'lenMismatch'
+		print("FAIL at {path}: expected length {len}, got {actualNode.children.count()}\n")
+		return false
+	end 'lenMismatch'
+	for i in 0 upto len 'each'
+		let aId = try assertNode.children.get(i) otherwise panic("walkArrayAssertion: assert.children.get OOB")
+		let cId = try actualNode.children.get(i) otherwise panic("walkArrayAssertion: actual.children.get OOB")
+		let ok = walkAssertion(actualDoc: actualDoc, actualId: cId, assertDoc: assertDoc, assertId: aId, path: "{path}[{i}]")
+		if not ok 'fail'
+			return false
+		end 'fail'
+	end 'each'
+	return true
+end 'walkArrayAssertion'
+
+// =============================================================================
+// Leaf assertion implementations
+// =============================================================================
+
+function matchExact(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	if jsonValuesEqual(a: actualDoc, aId: actualId, b: assertDoc, bId: assertId) 'eq'
+		return true
+	end 'eq'
+	print("FAIL at {path}: value mismatch\n  expected: {Json.stringify(subDoc(assertDoc, root: assertId))}\n  actual:   {Json.stringify(subDoc(actualDoc, root: actualId))}\n")
+	return false
+end 'matchExact'
+
+function checkEquals(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let expectedId = try assertDoc.getChild(assertId, key: "equals") otherwise panic("checkEquals: `equals` key promised by detectOperator")
+	return matchExact(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: expectedId, path: path)
+end 'checkEquals'
+
+function checkType(actualDoc JsonDoc, actualId JsonNodeId, expected JsonKind, path String) returns bool
+	let actualKind = actualDoc.get(actualId).kind
+	if jsonKindsEqual(actualKind, expected: expected) 'eq'
+		return true
+	end 'eq'
+	print("FAIL at {path}: expected type {expected.name}, got {actualKind.name}\n")
+	return false
+end 'checkType'
+
+function checkPresent(_ String) returns bool
+	// If we got here at all, the key/index was looked up successfully —
+	// "present" is satisfied. (Missing keys are caught in walkRecursiveObject.)
+	// The `path` parameter is accepted for symmetry with sibling check
+	// functions but unused on the always-true success path.
+	return true
+end 'checkPresent'
+
+function checkContains(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let actualNode = actualDoc.get(actualId)
+	if not expectKind(actualNode, expected: JsonKind.jsonString, what: "`contains` requires a string field", path: path) 'notStr'
+		return false
+	end 'notStr'
+	let needle = try assertDoc.getString(assertId, key: "contains") otherwise panic("checkContains: `contains` value must be a string")
+	if actualNode.stringValue.contains(needle) 'hit'
+		return true
+	end 'hit'
+	print("FAIL at {path}: substring {needle} not found in {actualNode.stringValue}\n")
+	return false
+end 'checkContains'
+
+function checkLengthThenMaybeItems(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let actualNode = actualDoc.get(actualId)
+	if not expectKind(actualNode, expected: JsonKind.jsonArray, what: "`length` requires an array field", path: path) 'notArr'
+		return false
+	end 'notArr'
+	let expected = try assertDoc.getInt(assertId, key: "length") otherwise panic("checkLength: `length` must be a number")
+	let actualLen = actualNode.children.count()
+	if expected != actualLen 'mismatch'
+		print("FAIL at {path}: expected length {expected}, got {actualLen}\n")
+		return false
+	end 'mismatch'
+	// Optional `items` sibling: a positional array of per-element assertions.
+	if not assertHasKey(assertDoc, parent: assertId, key: "items") 'noItems'
+		return true
+	end 'noItems'
+	let itemsId = try assertDoc.getChild(assertId, key: "items") otherwise panic("checkLength: items key just confirmed present")
+	let itemsNode = assertDoc.get(itemsId)
+	let itemsLen = itemsNode.children.count()
+	if itemsLen != actualLen 'itemsCountMismatch'
+		print("FAIL at {path}: `items` array has {itemsLen} entries but `length` says {actualLen}\n")
+		return false
+	end 'itemsCountMismatch'
+	for i in 0 upto itemsLen 'each'
+		let perItemAssertId = try itemsNode.children.get(i) otherwise panic("checkLength: items.children.get OOB")
+		let perItemActualId = try actualNode.children.get(i) otherwise panic("checkLength: actual.children.get OOB after length match")
+		let ok = walkAssertion(actualDoc: actualDoc, actualId: perItemActualId, assertDoc: assertDoc, assertId: perItemAssertId, path: "{path}[{i}]")
+		if not ok 'fail'
+			return false
+		end 'fail'
+	end 'each'
+	return true
+end 'checkLengthThenMaybeItems'
+
+function checkParseJsonText(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String) returns bool
+	let actualNode = actualDoc.get(actualId)
+	if not expectKind(actualNode, expected: JsonKind.jsonString, what: "`parseJsonText` requires a string field", path: path) 'notStr'
+		return false
+	end 'notStr'
+	let parsed = try Json.parse(actualNode.stringValue) otherwise (err) 'parseErr'
+		print("FAIL at {path}: text is not valid JSON ({err.name}). Raw: {actualNode.stringValue}\n")
+		return false
+	end 'parseErr'
+	let innerAssertId = try assertDoc.getChild(assertId, key: "parseJsonText") otherwise panic("checkParseJsonText: inner key just confirmed present")
+	return walkAssertion(actualDoc: parsed, actualId: parsed.root, assertDoc: assertDoc, assertId: innerAssertId, path: "{path}(parsed)")
+end 'checkParseJsonText'
+
+// =============================================================================
+// JSON helpers
+// =============================================================================
+
+function assertHasKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+	let node = doc.get(parent)
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise panic("assertHasKey: keys.get OOB")
+		if k.equals(key) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'assertHasKey'
+
+function jsonKindsEqual(actual JsonKind, expected JsonKind) returns bool
+	return actual.ordinal == expected.ordinal
+end 'jsonKindsEqual'
+
+// Type-precondition guard shared by the assertion checks that need a
+// specific node kind (object/array/string). Returns true on match; on
+// mismatch, prints a uniform FAIL line and returns false so the caller
+// can short-circuit.
+function expectKind(node JsonNode, expected JsonKind, what String, path String) returns bool
+	if jsonKindsEqual(node.kind, expected: expected) 'ok'
+		return true
+	end 'ok'
+	print("FAIL at {path}: {what}, got {node.kind.name}\n")
+	return false
+end 'expectKind'
+
+function jsonValuesEqual(a JsonDoc, aId JsonNodeId, b JsonDoc, bId JsonNodeId) returns bool
+	let an = a.get(aId)
+	let bn = b.get(bId)
+	if not jsonKindsEqual(an.kind, expected: bn.kind) 'kindMismatch'
+		return false
+	end 'kindMismatch'
+	return match an.kind 'k'
+		jsonNull gives true
+		jsonBool gives an.boolValue == bn.boolValue
+		jsonNumber gives an.numberValue == bn.numberValue
+		jsonString gives an.stringValue.equals(bn.stringValue)
+		jsonArray gives jsonArraysEqual(a: a, an: an, b: b, bn: bn)
+		jsonObject gives jsonObjectsEqual(a: a, an: an, b: b, bn: bn)
+	end 'k'
+end 'jsonValuesEqual'
+
+function jsonArraysEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
+	let n = an.children.count()
+	if n != bn.children.count() 'lenMismatch'
+		return false
+	end 'lenMismatch'
+	for i in 0 upto n 'each'
+		let aChild = try an.children.get(i) otherwise panic("jsonArraysEqual: an.children.get OOB")
+		let bChild = try bn.children.get(i) otherwise panic("jsonArraysEqual: bn.children.get OOB")
+		if not jsonValuesEqual(a: a, aId: aChild, b: b, bId: bChild) 'mismatch'
+			return false
+		end 'mismatch'
+	end 'each'
+	return true
+end 'jsonArraysEqual'
+
+function jsonObjectsEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
+	let n = an.keys.count()
+	if n != bn.keys.count() 'lenMismatch'
+		return false
+	end 'lenMismatch'
+	for i in 0 upto n 'each'
+		let aKey = try an.keys.get(i) otherwise panic("jsonObjectsEqual: an.keys.get OOB")
+		let bKey = try bn.keys.get(i) otherwise panic("jsonObjectsEqual: bn.keys.get OOB")
+		if not aKey.equals(bKey) 'keyMismatch'
+			return false
+		end 'keyMismatch'
+		let aChild = try an.children.get(i) otherwise panic("jsonObjectsEqual: an.children.get OOB")
+		let bChild = try bn.children.get(i) otherwise panic("jsonObjectsEqual: bn.children.get OOB")
+		if not jsonValuesEqual(a: a, aId: aChild, b: b, bId: bChild) 'valMismatch'
+			return false
+		end 'valMismatch'
+	end 'each'
+	return true
+end 'jsonObjectsEqual'
+
+// Return a freshly-rooted JsonDoc containing a deep copy of one subtree from
+// `src`. Used by `matchExact` so we can stringify a single value for the
+// diff message without dragging the surrounding arena's root with it.
+function subDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
+	var out = JsonDoc.create()
+	out.root = copyNode(src: src, srcId: root, dst: out)
+	return out
+end 'subDoc'
+
+function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	match node.kind 'k'
+		jsonNull then return dst.add(JsonNode.nullNode())
+		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray then return copyArray(src: src, node: node, dst: dst)
+		jsonObject then return copyObject(src: src, node: node, dst: dst)
+	end 'k'
+end 'copyNode'
+
+function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let cId = try node.children.get(i) otherwise panic("copyArray: children.get OOB")
+		ids.push(copyNode(src: src, srcId: cId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyArray'
+
+function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise panic("copyObject: keys.get OOB")
+		let cId = try node.children.get(i) otherwise panic("copyObject: children.get OOB")
+		keys.push(k)
+		children.push(copyNode(src: src, srcId: cId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'copyObject'

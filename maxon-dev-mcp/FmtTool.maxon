@@ -1,0 +1,85 @@
+// `fmt` MCP tool. Wraps `./bin/maxon.exe fmt` so a client can format a
+// snippet (returning the formatted text inline) or a file (formatted
+// in-place, returns the new contents).
+//
+// Inputs (JSON):
+//   source: { kind: "file", path } | { kind: "snippet", code }
+//
+// Output (JSON):
+//   exitCode, success, durationMs, formatted (the formatted text),
+//   changed (true iff the formatter modified the input).
+
+let fmtTimeoutMs = 30000
+let fmtRawTailMaxBytes = 4096
+
+/// Entry point called by Server.maxon's dispatch table.
+export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let resolved = try resolveFileSource(argsDoc, argsId: argsId, snippetPrefix: "fmt") otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "fmt: {sourceArgErrorReason(err)}")
+	end 'badSrc'
+
+	let repoRoot = repoRootPath()
+	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	if not File.exists(csharpBinary) 'noCsharp'
+		cleanupResolvedSource(resolved)
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
+	end 'noCsharp'
+
+	let originalBytes = try File.readText(resolved.mainFile) otherwise 'readErr'
+		cleanupResolvedSource(resolved)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: cannot read input `{resolved.mainFile.path}` to compute before/after diff")
+	end 'readErr'
+
+	var argv = StringArray.create()
+	argv.push("fmt")
+	argv.push(resolved.mainFile.path)
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: fmtTimeoutMs) otherwise (err) 'spawn'
+		cleanupResolvedSource(resolved)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: spawn failed: {err.displayReason()}")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(since: timing)
+
+	let formatted = try File.readText(resolved.mainFile) otherwise 'readBackErr'
+		cleanupResolvedSource(resolved)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: cannot read formatted output back from `{resolved.mainFile.path}`")
+	end 'readBackErr'
+
+	let changed = not originalBytes.equals(formatted)
+	let outcome = buildFmtOutcome(formatted: formatted, changed: changed, durationMs: elapsed, exitCode: result.exitCode(), output: result)
+	cleanupResolvedSource(resolved)
+	return outcome
+end 'fmtHandler'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildFmtOutcome(formatted String, changed bool, durationMs DurationMs, exitCode ExitInt, output CollectedOutput) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let exitId = doc.add(JsonNode.numberNode(exitCode as float))
+	let successId = doc.add(JsonNode.boolNode(output.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let formattedId = doc.add(JsonNode.stringNode(formatted))
+	let changedId = doc.add(JsonNode.boolNode(changed))
+	let combined = combineStreams(stdout: output.stdout, stderr: output.stderr)
+	let rawTailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: fmtRawTailMaxBytes)))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("formatted")
+	children.push(formattedId)
+	keys.push("changed")
+	children.push(changedId)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildFmtOutcome'

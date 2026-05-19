@@ -17,25 +17,26 @@ let DATA_SECTION_VIRTUAL_SIZE = 65536
 let IAT_SLOT_EXIT_PROCESS = 0
 let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
-let IAT_SLOT_CREATE_FILE_A = 3
-let IAT_SLOT_CLOSE_HANDLE = 4
-let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 5
-let IAT_SLOT_VIRTUAL_ALLOC = 6
-let IAT_SLOT_VIRTUAL_FREE = 7
-let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 8
-let IAT_SLOT_ENTER_CRITICAL_SECTION = 9
-let IAT_SLOT_LEAVE_CRITICAL_SECTION = 10
+let IAT_SLOT_READ_FILE = 3
+let IAT_SLOT_CREATE_FILE_A = 4
+let IAT_SLOT_CLOSE_HANDLE = 5
+let IAT_SLOT_GET_ENVIRONMENT_VARIABLE_A = 6
+let IAT_SLOT_VIRTUAL_ALLOC = 7
+let IAT_SLOT_VIRTUAL_FREE = 8
+let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 9
+let IAT_SLOT_ENTER_CRITICAL_SECTION = 10
+let IAT_SLOT_LEAVE_CRITICAL_SECTION = 11
 // Phase 15b: command-line argument retrieval.
-let IAT_SLOT_GET_COMMAND_LINE_W = 11
-let IAT_SLOT_LOCAL_FREE = 12
-let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 13
+let IAT_SLOT_GET_COMMAND_LINE_W = 12
+let IAT_SLOT_LOCAL_FREE = 13
+let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 14
 // Phase 15f: executable-path retrieval. kernel32!GetModuleFileNameW writes the
 // running module's path into a caller-supplied UTF-16 buffer; the runtime
 // helper then re-encodes via WideCharToMultiByte (slot 13). Kernel32 slot.
-let IAT_SLOT_GET_MODULE_FILE_NAME_W = 14
+let IAT_SLOT_GET_MODULE_FILE_NAME_W = 15
 // shell32.dll's CommandLineToArgvW. Lives in a second DLL import directory.
-let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 15
-let IAT_SLOT_COUNT = 16
+let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 16
+let IAT_SLOT_COUNT = 17
 
 type ImportSection
 	export var data ByteArray
@@ -55,8 +56,8 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 15  // exclusive; slots 0..14 are kernel32
-let SHELL32_IAT_START = 15 // slot 15 is shell32 (CommandLineToArgvW)
+let KERNEL32_IAT_END = 16  // exclusive; slots 0..15 are kernel32
+let SHELL32_IAT_START = 16 // slot 16 is shell32 (CommandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 function buildImportSection(idataRva Rva) returns ImportSection
@@ -77,7 +78,9 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let hintExitProcess = hintNameOffset
 	let hintGetStdHandle = hintExitProcess + 14
 	let hintWriteFile = hintGetStdHandle + 16
-	let hintCreateFileA = hintWriteFile + 12
+	// "ReadFile\0" = 9; with leading 2-byte hint and pad to even → 12.
+	let hintReadFile = hintWriteFile + 12
+	let hintCreateFileA = hintReadFile + 12
 	let hintCloseHandle = hintCreateFileA + 14
 	let hintGetEnvironmentVariableA = hintCloseHandle + 14
 	let hintVirtualAlloc = hintGetEnvironmentVariableA + 26
@@ -104,6 +107,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
+	writeQword(data, value: idataRva + hintReadFile)
 	writeQword(data, value: idataRva + hintCreateFileA)
 	writeQword(data, value: idataRva + hintCloseHandle)
 	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
@@ -124,6 +128,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintExitProcess)
 	writeQword(data, value: idataRva + hintGetStdHandle)
 	writeQword(data, value: idataRva + hintWriteFile)
+	writeQword(data, value: idataRva + hintReadFile)
 	writeQword(data, value: idataRva + hintCreateFileA)
 	writeQword(data, value: idataRva + hintCloseHandle)
 	writeQword(data, value: idataRva + hintGetEnvironmentVariableA)
@@ -167,6 +172,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00ExitProcess\x00")
 	data.append(b"\x00\x00GetStdHandle\x00\x00")
 	data.append(b"\x00\x00WriteFile\x00")
+	data.append(b"\x00\x00ReadFile\x00\x00")
 	data.append(b"\x00\x00CreateFileA\x00")
 	data.append(b"\x00\x00CloseHandle\x00")
 	data.append(b"\x00\x00GetEnvironmentVariableA\x00")

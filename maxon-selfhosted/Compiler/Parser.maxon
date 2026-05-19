@@ -3507,7 +3507,19 @@ export type Parser
 			// keyword-named enum case. Method form is always followed by an
 			// identifier (the method name); case form is followed by either a
 			// newline, an `=` (for an explicit raw value), or end-of-block.
-			if memberToken.kind == TokenKind.function and lookaheadIsMethodSignature() 'isMethod'
+			// An optional leading `export` is accepted so stdlib enum bodies
+			// that explicitly spell out the visibility — `export function f`
+			// — parse the same as the unprefixed form; enum methods inherit
+			// the enclosing enum's visibility.
+			var methodTokenOffset = 0 as ChainPeekOffset
+			if memberToken.kind == TokenKind.export 'sawExport'
+				methodTokenOffset = 1 as ChainPeekOffset
+			end 'sawExport'
+			let leadingFunc = try cursor.peek(methodTokenOffset) otherwise Token.eof()
+			if leadingFunc.kind == TokenKind.function and lookaheadIsMethodSignatureAtOffset(methodTokenOffset) 'isMethod'
+				if methodTokenOffset == 1 'eatExport'
+					try eat(TokenKind.export)
+				end 'eatExport'
 				try eat(TokenKind.function)
 				try parseEnumMethod(currentTypeName)
 				try skipNewlines()
@@ -3854,8 +3866,21 @@ export type Parser
 			// `function` as method-keyword vs `function` as a keyword-named
 			// union case mirrors the enum rule: method form is always followed
 			// by an identifier (the method name); case form is followed by `(`
-			// or a newline / block end.
-			if memberToken.kind == TokenKind.function and lookaheadIsMethodSignature() 'isMethod'
+			// or a newline / block end. An optional `export` prefix on the
+			// method is accepted (and discarded) so stdlib union bodies that
+			// spell out the visibility — `export function displayName(...)` —
+			// parse the same way as the unprefixed form; union methods
+			// inherit the enclosing union's visibility, so a leading `export`
+			// here is redundant rather than wrong.
+			var methodTokenOffset = 0 as ChainPeekOffset
+			if memberToken.kind == TokenKind.export 'sawExport'
+				methodTokenOffset = 1 as ChainPeekOffset
+			end 'sawExport'
+			let leadingFunc = try cursor.peek(methodTokenOffset) otherwise Token.eof()
+			if leadingFunc.kind == TokenKind.function and lookaheadIsMethodSignatureAtOffset(methodTokenOffset) 'isMethod'
+				if methodTokenOffset == 1 'eatExport'
+					try eat(TokenKind.export)
+				end 'eatExport'
 				try eat(TokenKind.function)
 				try parseEnumMethod(currentTypeName)
 				try skipNewlines()
@@ -4878,13 +4903,21 @@ export type Parser
 	// to distinguish method declarations from `function` used as a
 	// keyword-named enum case.
 	function lookaheadIsMethodSignature() returns bool
-		let nameToken = try cursor.peek(1) otherwise return false
+		return lookaheadIsMethodSignatureAtOffset(0 as ChainPeekOffset)
+	end 'lookaheadIsMethodSignature'
+
+	// Same as `lookaheadIsMethodSignature` but with `function` expected at
+	// `cursor + funcOffset`. Lets enum/union body dispatch peek past an
+	// optional leading `export` modifier (offset 1) before deciding between
+	// method-vs-case.
+	function lookaheadIsMethodSignatureAtOffset(funcOffset ChainPeekOffset) returns bool
+		let nameToken = try cursor.peek(funcOffset + 1) otherwise return false
 		if nameToken.kind != TokenKind.identifier 'noName'
 			return false
 		end 'noName'
-		let afterName = try cursor.peek(2) otherwise return false
+		let afterName = try cursor.peek(funcOffset + 2) otherwise return false
 		return afterName.kind == TokenKind.leftParen
-	end 'lookaheadIsMethodSignature'
+	end 'lookaheadIsMethodSignatureAtOffset'
 
 	// Parse a method on the enclosing enum. Models the enum as a "type" for
 	// parsing purposes — the method gets an implicit `__self` parameter typed
@@ -6940,11 +6973,17 @@ export type Parser
 			let armResult = try parseMatchExpressionArmBody(arm.body)
 			scope.popScope()
 			rejectFallthroughInMatchExpression()
-			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(armResult), range: SourceRange.ofToken(arm.caseToken)))
+			// `parseStringLiteral`'s fast path returns a `stringConst` ExprResult
+			// without emitting a backing op. The varStore below would otherwise
+			// reference an unbound name (E3013 in lowering). Mirror every other
+			// site that threads a string-literal expression result into another
+			// op — materialize into the arm's exit block before storing.
+			let materializedArmResult = materializeStringConstIfNeeded(currentBlock, expr: armResult, range: SourceRange.ofToken(arm.caseToken))
+			module.appendOp(currentBlock, op: MaxonOp.varStore(resultSlot, value: exprName(materializedArmResult), range: SourceRange.ofToken(arm.caseToken)))
 			module.setTerminator(currentBlock, op: MaxonOp.br(mergeBlockId, range: SourceRange.none()))
 
 			if isUnresolvedMaxonType(resultType) 'firstArmType'
-				resultType = exprType(armResult)
+				resultType = exprType(materializedArmResult)
 			end 'firstArmType'
 
 			if not patterns.isDefault() 'advanceCursor'
@@ -9189,7 +9228,13 @@ export type Parser
 			// (see parseParenExpr's tuple-literal lowering), so rewrite the
 			// integer-literal field name to `_<N>` here and continue as a
 			// normal field access.
-			if not at(TokenKind.identifier) and not at(TokenKind.intLiteral) 'noMember'
+			// Member-name position after `.` accepts plain identifiers,
+			// integer literals (`t.0` tuple-positional syntax), and
+			// identifier-like keywords (e.g. `String.from(...)`, `.to(...)`)
+			// so a contextual-keyword spelling can still serve as a method
+			// or field name. Mirrors the C# bootstrap's IsIdentifierLikeToken
+			// gate at the same call site (maxon-sharp Parser.cs:19016).
+			if not tokenIsIdentifierLike(cursor.current()) and not at(TokenKind.intLiteral) 'noMember'
 				reportTokenMismatch(cursor.current(), expectedDisplay: "identifier")
 				synchronize()
 				return result
@@ -9285,7 +9330,13 @@ export type Parser
 		if at(TokenKind.dot) 'maybeDotCall'
 			let memberToken = try cursor.peek(1) otherwise Token.eof()
 			let afterMember = try cursor.peek(2) otherwise Token.eof()
-			if memberToken.kind == TokenKind.identifier and afterMember.kind == TokenKind.leftParen 'isDotCall'
+			// Accept identifier-like keywords (`from`, `to`, `with`, …) as
+			// member names alongside plain identifiers so type-qualified
+			// static calls like `FilePath.from(...)` route through the
+			// dedicated static-call path instead of being misparsed as a
+			// method call on an `unresolvedRead`'d "FilePath" boolean.
+			// Mirrors the same identifier-like gate in parsePostfix.
+			if tokenIsIdentifierLike(memberToken) and afterMember.kind == TokenKind.leftParen 'isDotCall'
 				let memberNameBytes = memberToken.value.toByteArray()
 				// `globalVar.method(...)` where `globalVar` is a registered
 				// top-level mutable var (`var x = ...` / `let xs = [...]`):
@@ -9298,7 +9349,7 @@ export type Parser
 					let receiverLoadName = freshSynthName()
 					module.appendOp(block, op: MaxonOp.unresolvedRead(receiverLoadName, name: token.value, range: SourceRange.ofToken(token)))
 					try eat(TokenKind.dot)
-					try eat(TokenKind.identifier)
+					_ = try consume()
 					try eat(TokenKind.leftParen)
 					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 					let rparenToken = previousToken()
@@ -9322,7 +9373,7 @@ export type Parser
 						module.appendOp(block, op: MaxonOp.varLoad(receiverLoadName, slotId: receiverSlot, slotType: receiverVarType, range: SourceRange.ofToken(token)))
 					end 'localReceiver'
 					try eat(TokenKind.dot)
-					try eat(TokenKind.identifier)
+					_ = try consume()
 					try eat(TokenKind.leftParen)
 					// methodCall on a local receiver — defer the named-arg-required
 					// check (E3005) to TypeResolution. See the parsePostfix
@@ -9383,7 +9434,7 @@ export type Parser
 					end 'notAssocUnionFn'
 				end 'redirectFromName'
 				try eat(TokenKind.dot)
-				try eat(TokenKind.identifier)
+				_ = try consume()
 				try eat(TokenKind.leftParen)
 				let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
 				let rparenToken = previousToken()
@@ -9883,6 +9934,14 @@ export type Parser
 		var argTypes = MaxonTypeArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argIndex = 0
+		// Per-arg expressions may shift `currentBlock` (try/otherwise merge,
+		// bool short-circuit merge, etc). Seed `currentBlock` from the
+		// caller's `block` and re-read it before each materialise / parse,
+		// so the materialised constString op lands in whatever block the
+		// previous arg's parse settled into. Without this, a `try ... otherwise
+		// panic(...)` arg leaves `currentBlock = merge` but later args /
+		// materialisations would still target the sealed entry block.
+		currentBlock = block
 		if not at(TokenKind.rightParen) 'hasArgs'
 			while true 'argLoop'
 				let argStartPos = cursor.index()
@@ -9892,7 +9951,7 @@ export type Parser
 					labelStr = labelOpt.token.value
 				end 'hasLabel'
 				let argFirstToken = cursor.current()
-				let argResult = try parseExpression(block)
+				let argResult = try parseExpression(currentBlock)
 				let argLastToken = previousToken()
 				let argRange = SourceRange.between(argFirstToken, last: argLastToken)
 				// Phase 7: a bare stringConst arg (`f("hello")`) carries
@@ -9900,7 +9959,7 @@ export type Parser
 				// which doesn't match a callee's `String`-typed parameter
 				// (`MaxonType.named("String")`). Materialize the stringConst
 				// to a real IR op + retag with the named String type.
-				let materializedArg = materializeStringConstIfNeeded(block, expr: argResult, range: argRange)
+				let materializedArg = materializeStringConstIfNeeded(currentBlock, expr: argResult, range: argRange)
 				args.push(exprName(materializedArg))
 				labels.push(labelStr)
 				argTypes.push(exprType(materializedArg))
@@ -9999,9 +10058,21 @@ export type Parser
 		try eat(TokenKind.leftBrace)
 		try skipNewlines()
 
+		// Per-field expressions may shift `currentBlock` to a fresh merge
+		// block — e.g. when a field value is `try f() otherwise panic(...)`,
+		// the parser opens a success / fallback / merge CFG triplet and
+		// leaves `currentBlock = merge` on return. Every subsequent op
+		// (fieldStore for this field, the next field's expression, the
+		// trailing `__field_init_*` calls, and the literal's overall result)
+		// must land in the post-control-flow block — not in the entry
+		// `block`, which is sealed by the condBr the try lowering installed.
+		// Without this threading, fieldStore lands in a sealed block and the
+		// merge block ends up terminator-less.
+		currentBlock = block
+
 		let typeNameBytes = typeName.toByteArray()
 		let ptrName = freshSynthName()
-		module.appendOp(block, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
+		module.appendOp(currentBlock, op: MaxonOp.structAlloc(ptrName, structName: typeNameBytes, range: SourceRange.ofToken(typeToken)))
 
 		// Track user-provided field names so we can synthesize calls to
 		// `<TypeName>.__field_init_<fieldName>` for any defaulted fields
@@ -10015,10 +10086,10 @@ export type Parser
 		while not at(TokenKind.rightBrace) 'fields'
 			let fieldNameToken = try consume()
 			try eat(TokenKind.colon)
-			let fieldValue = try parseExpression(block)
+			let fieldValue = try parseExpression(currentBlock)
 			let fieldLastToken = previousToken()
 
-			module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
+			module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 			providedFieldNames.push(fieldNameToken.value)
 
 			_ = accept(TokenKind.comma)
@@ -10044,8 +10115,8 @@ export type Parser
 				end 'userProvided'
 				let helperName = "{typeName}.__field_init_{declField.name}"
 				let initCallName = freshSynthName()
-				module.appendOp(block, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
-				module.appendOp(block, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
+				module.appendOp(currentBlock, op: MaxonOp.call(initCallName, callee: project.calleeNames.intern(helperName), callContext: CallContext.qualified, args: ByteArrayArray.create(), argLabels: StringArray.create(), argTypes: MaxonTypeArray.create(), argRanges: SourceRangeArray.create(), range: SourceRange.ofToken(typeToken)))
+				module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: declField.name.toByteArray(), value: initCallName, isInit: true, range: SourceRange.ofToken(typeToken)))
 			end 'eachField'
 		end 'haveDecl'
 

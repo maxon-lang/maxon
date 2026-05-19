@@ -115,6 +115,19 @@ public static class SemanticCheckPass {
     "maxon_net_recv",
     "maxon_net_close",
     "maxon_sleep",
+    // Phase 3 subprocess builtins — these are the I/O yield points in the
+    // new contract. Listed here so `async Subprocess.run(...)` and friends
+    // pass the async-yielding analysis once the real runtime (Phase 3.2 +
+    // 3.3) wires them to IOCP / kqueue / pidfd. The stubs landed in
+    // Phase 3.1 don't yield, but listing them now avoids a churn pass when
+    // the real implementation lands. The list intentionally excludes
+    // `subprocessResolveOnPath` and the `*Result*` accessors — those are
+    // synchronous lookups against in-memory state, not I/O.
+    "maxon_subprocess_spawn",
+    "maxon_subprocess_wait_collect",
+    "maxon_subprocess_kill",
+    "maxon_subprocess_send_signal",
+    "maxon_subprocess_detach",
     // Synthetic __ManagedSocket builtin callees (MaxonCallOp/MaxonTryCallOp names) that
     // ultimately invoke the above runtime stubs. Keep in sync with TryLowerManagedSocketBuiltin.
     "__managed_socket_send", "__managed_socket_recv", "__managed_socket_close",

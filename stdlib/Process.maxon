@@ -1,6 +1,9 @@
-/// External process execution and management.
+/// Introspection of the currently-running process.
+///
+/// For launching and managing child processes, see `stdlib/Subprocess.maxon`.
+/// For monotonic time, see `stdlib/Clock.maxon`.
+///
 /// @category System
-
 #if os(Windows)
 	export typealias ExitCode = int(0 to u32.max)
 #else
@@ -11,120 +14,19 @@
 	#endif
 #endif
 
-typealias Duration = int(0 to u64.max)
-typealias ProcessHandle = int(0 to u64.max)
-// Process.execute / Process.captureWait return either an exit code or -1 on error,
-// so the result is signed and can fall outside the platform ExitCode range.
-typealias ExitCodeOrError = int(i64.min to i64.max)
+/// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).
+export enum ProcessIntrospectionError implements Error
+	pathUnavailable
+end 'ProcessIntrospectionError'
 
-/// Process execution errors
-export enum ProcessError implements Error
-	commandNotFound
-	executionFailed
-	timeout
-	invalidArgument
-end 'ProcessError'
-
-/// Result of process execution
-export type ProcessResult
-	export var exitCode ExitCode
-	export var stdout String
-	export var stderr String
-
-	export static function create(exitCode ExitCode, stdout String, stderr String) returns ProcessResult
-		return ProcessResult{exitCode: exitCode, stdout: stdout, stderr: stderr}
-	end 'create'
-
-	/// Check if the process exited successfully (exit code 0)
-	export function succeeded() returns bool
-		return exitCode == 0
-	end 'succeeded'
-end 'ProcessResult'
-
-/// Execute external processes and capture their output
+/// Information about the currently-running process.
 export type Process
 	/// Returns the absolute path to the current executable.
 	/// Uses OS-specific APIs: GetModuleFileNameA (Windows),
 	/// _NSGetExecutablePath (macOS), /proc/self/exe (Linux).
-	export static function executablePath() returns FilePath
+	export static function executablePath() returns FilePath throws ProcessIntrospectionError
 		let managed = __Builtins.executablePath()
 		let path = String.init(managed)
-		return try FilePath.from(path) otherwise panic("Process.executablePath: invalid path")
+		return try FilePath.from(path) otherwise throw ProcessIntrospectionError.pathUnavailable
 	end 'executablePath'
-
-	/// Returns monotonic time in milliseconds (time since boot).
-	/// Useful for measuring elapsed time between two calls.
-	export static function currentTimeMs() returns Duration
-		return __Builtins.currentTimeMs()
-	end 'currentTimeMs'
-
-	/// Execute a command and return exit code.
-	/// Currently does not capture stdout/stderr.
-	/// @param command The command to execute (will be passed to cmd.exe on Windows)
-	/// @param timeoutMs Timeout in milliseconds (0 = wait forever)
-	/// @returns The process exit code, or -1 on error
-	export static function execute(command String, timeoutMs Duration) returns ExitCodeOrError
-		let empty = ""
-		let handle = __Builtins.processCreate(command.managed, empty.managed)
-		let waitResult = __Builtins.processWait(handle, timeoutMs)
-		// waitResult: 0 = completed, 1 = timeout, -1 = error
-		if waitResult != 0 'check'
-			__Builtins.processClose(handle)
-			return -1
-		end 'check'
-		let exitCode = __Builtins.processGetExitCode(handle)
-		__Builtins.processClose(handle)
-		return exitCode
-	end 'execute'
-
-	/// Start a process with stdout/stderr capture, returning a capture handle.
-	/// stdoutPath and stderrPath are the file paths the child's stdout and stderr
-	/// will be redirected to; they will be created (or truncated if they exist),
-	/// owned by the capture handle, and deleted when the capture is closed. The
-	/// caller is responsible for picking unique paths so concurrent captures don't
-	/// collide. Use captureStdout/captureStderr to read output, captureWait to wait.
-	export static function captureStart(command String, stdoutPath FilePath, stderrPath FilePath) returns ProcessHandle
-		let empty = ""
-		return __Builtins.processCreateWithCapture(command.managed, empty.managed, stdoutPath.path.managed, stderrPath.path.managed)
-	end 'captureStart'
-
-	/// Read all stdout from a capture handle as a String. Must call before captureWait.
-	export static function captureStdout(capturePtr ProcessHandle) returns String
-		let managed = __Builtins.processReadStdout(capturePtr)
-		return String.init(managed)
-	end 'captureStdout'
-
-	/// Read all stderr from a capture handle as a String. Must call before captureWait.
-	export static function captureStderr(capturePtr ProcessHandle) returns String
-		let managed = __Builtins.processReadStderr(capturePtr)
-		return String.init(managed)
-	end 'captureStderr'
-
-	/// Wait for a captured process to complete and return its exit code.
-	export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns ExitCodeOrError
-		let hProcess = __Builtins.processGetHandle(capturePtr)
-		__Builtins.processWait(hProcess, timeoutMs)
-		let ec = __Builtins.processGetExitCode(hProcess)
-		__Builtins.processCloseCapture(capturePtr)
-		return ec
-	end 'captureWait'
-
-	/// Run a command, redirecting stdout/stderr to the given files; wait for
-	/// completion, then read the files back as a ProcessResult. The temp files
-	/// are deleted as part of cleanup. Caller picks paths so that concurrent
-	/// invocations from different threads/workers can't collide.
-	export static function captureOutput(command String, stdoutPath FilePath, stderrPath FilePath, timeoutMs Duration) returns ProcessResult
-		let cap = captureStart(command, stdoutPath: stdoutPath, stderrPath: stderrPath)
-		let hProcess = __Builtins.processGetHandle(cap)
-		let waitResult = __Builtins.processWait(hProcess, timeoutMs)
-		if waitResult != 0 'timedOut'
-			__Builtins.processCloseCapture(cap)
-			return ProcessResult.create(0 as ExitCode, stdout: "", stderr: "Process timed out")
-		end 'timedOut'
-		let ec = __Builtins.processGetExitCode(hProcess)
-		let out = captureStdout(cap)
-		let err = captureStderr(cap)
-		__Builtins.processCloseCapture(cap)
-		return ProcessResult.create(ec as ExitCode, stdout: out, stderr: err)
-	end 'captureOutput'
 end 'Process'

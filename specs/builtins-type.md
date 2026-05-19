@@ -11,7 +11,7 @@ category: type-system
 
 ### Overview
 
-`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. While accessible from any code, most users should prefer the stdlib wrappers: `print()`, `File`, `Directory`, `Process`, `CommandLine`.
+`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. While accessible from any code, most users should prefer the stdlib wrappers: `print()`, `File`, `Directory`, `Subprocess`, `CommandLine`.
 
 All methods include safety checks to prevent crashes and memory corruption:
 - Buffer reads are clamped to capacity
@@ -23,20 +23,34 @@ All methods include safety checks to prevent crashes and memory corruption:
 **I/O:**
 - `__Builtins.writeStdout(managed)` returns int - Write managed buffer to stdout
 - `__Builtins.writeStderr(managed)` returns int - Write managed buffer to stderr
+- `__Builtins.readStdin(maxBytes)` returns __ManagedMemory - Read up to `maxBytes` bytes from stdin into a fresh managed-memory buffer (length reflects bytes actually read; 0 on EOF)
 
 **Command Line:**
 - `__Builtins.commandLineCount()` returns int - Get argument count
 - `__Builtins.commandLineArg(index)` returns __ManagedMemory - Get argument at index
 
-**Process:**
-- `__Builtins.processCreate(cmdManaged, cwdManaged)` returns int - Create process
-- `__Builtins.processWait(handle, timeoutMs)` returns int - Wait for process
-- `__Builtins.processGetExitCode(handle)` returns int - Get exit code
-- `__Builtins.processClose(handle)` - Close process handle
-- `__Builtins.processCreateWithCapture(cmdManaged, cwdManaged)` returns int - Create with capture
-- `__Builtins.processGetHandle(capturePtr)` returns int - Get process handle
-- `__Builtins.processReadStdout(capturePtr)` returns __ManagedMemory - Read captured stdout
-- `__Builtins.processReadStderr(capturePtr)` returns __ManagedMemory - Read captured stderr
+**Process / Subprocess:**
+
+User code should use the `Subprocess` stdlib type rather than calling these builtins directly. The `subprocess*` builtins back `stdlib/Subprocess.maxon`; the table below documents what is present today.
+
+- `__Builtins.executablePath()` returns __ManagedMemory - Absolute path to the current executable (empty buffer when unavailable; `Process.executablePath` surfaces this as `ProcessIntrospectionError.pathUnavailable`)
+- `__Builtins.currentProcessId()` returns int - Pid of the current process
+- `__Builtins.subprocessResolveOnPath(nameManaged)` returns __ManagedMemory - Resolve a bare executable name via PATH lookup; empty buffer on miss
+- `__Builtins.subprocessSpawn(argv, argc, cwd, envBlock, envInherit, stdinKind, stdinData, stdoutKind, stdoutData, stdoutLimit, stderrKind, stderrData, stderrLimit, flags)` returns int - Spawn a child process; returns a handle, -1 on failure
+- `__Builtins.subprocessDetach(... same args as spawn ...)` returns int - Like spawn but with the detach flag; returns pid, -1 on failure
+- `__Builtins.subprocessLastErrorMessage()` returns __ManagedMemory - Last spawn/wait error message from this thread
+- `__Builtins.subprocessGetPid(handle)` returns int - Pid of a spawned child
+- `__Builtins.subprocessWaitCollect(handle, timeoutMs)` returns int - Wait for the child, drain stdout/stderr, return a result-struct pointer; -1 on error
+- `__Builtins.subprocessKill(handle, force)` returns int - Terminate the child
+- `__Builtins.subprocessSendSignal(handle, signum)` returns int - Send a console-control signal (Windows: SIGINT/SIGBREAK)
+- `__Builtins.subprocessReleaseHandle(handle)` - Free the handle struct and its OS handles
+- `__Builtins.subprocessResultStatusKind(resultPtr)` returns int - 0=exited, 1=signalled, 2=timedOut
+- `__Builtins.subprocessResultStatusCode(resultPtr)` returns int - Exit/signal code from the result struct
+- `__Builtins.subprocessResultStdout(resultPtr)` returns __ManagedMemory - Captured stdout
+- `__Builtins.subprocessResultStderr(resultPtr)` returns __ManagedMemory - Captured stderr
+- `__Builtins.subprocessResultDurationMs(resultPtr)` returns int - Elapsed wall-clock time of the child
+- `__Builtins.subprocessResultRelease(resultPtr)` - Free the result struct and its captured buffers
+- `__Builtins.managedIsNull(managed)` returns int - 1 if a __ManagedMemory carries an empty (NUL-terminated) buffer, else 0
 
 **Primitive:**
 - `__Builtins.floatToBits(value)` returns int - Bitcast float to int
@@ -89,11 +103,18 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	#if os(Windows)
-	let result = Process.execute("cmd /c echo ok", timeoutMs: 5000)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo")
+	argv.push("ok")
 	#else
-	let result = Process.execute("/bin/echo ok", timeoutMs: 5000)
+	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
+	var argv = StringArray.create()
+	argv.push("ok")
 	#endif
-	if result == 0 'check'
+	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 5000) otherwise return 3
+	if result.succeeded() 'check'
 		return 0
 	end 'check'
 	return 1

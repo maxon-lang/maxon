@@ -1,0 +1,197 @@
+// `mm_trace_analyze` MCP tool. Compiles a snippet/file with `--mm-trace`,
+// runs it, then pipes the resulting trace into `scripts/analyze_mm_trace.py
+// --json` and returns the parsed analyzer output inline.
+//
+// Inputs (JSON):
+//   source: { kind: "file", path } | { kind: "snippet", code }
+//   args?: [String]    — argv to pass to the compiled program
+//   stdin?: String     — bytes piped to the program's stdin
+//   timeoutMs?: Number — per-run timeout (default: 60s)
+//
+// Output (JSON):
+//   build:   { exitCode, success, durationMs, rawTail }
+//   run:     { exitCode, success, durationMs, stdout }
+//   analyze: { exitCode, success, durationMs, report }
+//     `report` is the analyzer's full --json output parsed back in. When
+//     the analyzer itself fails (e.g. python missing) the tool returns an
+//     error envelope rather than this struct.
+
+let mmTraceDefaultTimeoutMs = 60000
+let mmBuildTimeoutMs = 60000
+let analyzeTimeoutMs = 30000
+let mmRawTailMaxBytes = 4096
+let mmOutputMaxBytes = 65536
+let traceMaxBytes = 4 * 1024 * 1024
+
+/// Entry point called by Server.maxon's dispatch table.
+export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "mm-trace") otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "mm_trace_analyze: {sourceArgErrorReason(err)}")
+	end 'badSrc'
+
+	let repoRoot = repoRootPath()
+	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	if not File.exists(csharpBinary) 'noCsharp'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "mm_trace_analyze: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
+	end 'noCsharp'
+
+	let analyzerScript = childPath(parent: repoRoot, segment: "scripts/analyze_mm_trace.py")
+	if not File.exists(analyzerScript) 'noScript'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer script `{analyzerScript.path}` not found")
+	end 'noScript'
+
+	var buildArgv = StringArray.create()
+	buildArgv.push("build")
+	buildArgv.push(mainFile.projectDir.path)
+	buildArgv.push("--mm-trace")
+	let buildPhase = runBuild(csharpBinary: csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: mmBuildTimeoutMs)
+	if not buildPhase.succeeded() 'buildFailed'
+		let outcome = buildFailureOutcome(buildPhase)
+		cleanupResolvedSource(mainFile)
+		return outcome
+	end 'buildFailed'
+
+	let producedExe = expectedExePath(mainFile: mainFile.mainFile)
+	if not File.exists(producedExe) 'noExe'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: build reported success but expected binary `{producedExe.path}` does not exist")
+	end 'noExe'
+
+	let runArgv = parseRunArgv(argsDoc: argsDoc, argsId: argsId)
+	let stdinPayload = parseStdin(argsDoc: argsDoc, argsId: argsId)
+	let runTimeoutMs = parseTimeoutMs(argsDoc: argsDoc, argsId: argsId, defaultMs: mmTraceDefaultTimeoutMs)
+
+	let runTiming = Clock.nowMs()
+	var runConfig = Configuration.create(Executable.path(producedExe))
+	runConfig.arguments = runArgv
+	runConfig.standardInput = stdinPayload
+	runConfig.standardOutput = OutputDestination.collect(limitBytes: mmOutputMaxBytes)
+	runConfig.standardError = OutputDestination.collect(limitBytes: traceMaxBytes)
+	runConfig.timeoutMs = runTimeoutMs
+	let runResult = try runConfig.run() otherwise (err) 'runErr'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: run failed: {err.displayReason()}")
+	end 'runErr'
+	let runElapsed = Clock.elapsedMs(since: runTiming)
+
+	// `--mm-trace` writes to stderr. Pipe that into the analyzer's stdin.
+	let analyzeTiming = Clock.nowMs()
+	var analyzeArgv = StringArray.create()
+	analyzeArgv.push(analyzerScript.path)
+	analyzeArgv.push("--json")
+	var analyzeConfig = Configuration.create(Executable.name("python"))
+	analyzeConfig.arguments = analyzeArgv
+	analyzeConfig.standardInput = InputSource.bytes(data: runResult.stderr)
+	analyzeConfig.standardOutput = OutputDestination.collect(limitBytes: mmOutputMaxBytes)
+	analyzeConfig.standardError = OutputDestination.collect(limitBytes: 32 * 1024)
+	analyzeConfig.timeoutMs = analyzeTimeoutMs
+	let analyzeResult = try analyzeConfig.run() otherwise (err) 'analyzeErr'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer spawn failed: {err.displayReason()} (is python on PATH?)")
+	end 'analyzeErr'
+	let analyzeElapsed = Clock.elapsedMs(since: analyzeTiming)
+
+	if not analyzeResult.succeeded() 'analyzeFail'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer exited non-zero ({analyzeResult.exitCode()}). stderr: {analyzeResult.stderr.trim()}")
+	end 'analyzeFail'
+
+	let report = try Json.parse(analyzeResult.stdout) otherwise (err) 'parseErr'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer JSON parse failed: {err.name}")
+	end 'parseErr'
+
+	let outcome = buildFullOutcome(buildPhase: buildPhase, run: runResult, runDurationMs: runElapsed, analyze: analyzeResult, analyzeDurationMs: analyzeElapsed, report: report)
+	cleanupResolvedSource(mainFile)
+	return outcome
+end 'mmTraceAnalyzeHandler'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildFailureOutcome(build BuildPhase) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let buildId = mmBuildPhaseToJson(doc, build: build)
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("build")
+	children.push(buildId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildFailureOutcome'
+
+function buildFullOutcome(buildPhase BuildPhase, run CollectedOutput, runDurationMs DurationMs, analyze CollectedOutput, analyzeDurationMs DurationMs, report JsonDoc) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let buildId = mmBuildPhaseToJson(doc, build: buildPhase)
+	let runId = mmRunPhaseToJson(doc, run: run, durationMs: runDurationMs)
+	let analyzeId = mmAnalyzePhaseToJson(doc, analyze: analyze, durationMs: analyzeDurationMs, report: report)
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("build")
+	children.push(buildId)
+	keys.push("run")
+	children.push(runId)
+	keys.push("analyze")
+	children.push(analyzeId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildFullOutcome'
+
+function mmBuildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
+	let exitId = doc.add(JsonNode.numberNode(build.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(build.durationMs as float))
+	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
+	let tailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: mmRawTailMaxBytes)))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("rawTail")
+	children.push(tailId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'mmBuildPhaseToJson'
+
+function mmRunPhaseToJson(doc JsonDoc, run CollectedOutput, durationMs DurationMs) returns JsonNodeId
+	let exitId = doc.add(JsonNode.numberNode(run.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(run.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let stdoutId = doc.add(JsonNode.stringNode(lastBytes(run.stdout, max: mmOutputMaxBytes)))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("stdout")
+	children.push(stdoutId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'mmRunPhaseToJson'
+
+function mmAnalyzePhaseToJson(doc JsonDoc, analyze CollectedOutput, durationMs DurationMs, report JsonDoc) returns JsonNodeId
+	let exitId = doc.add(JsonNode.numberNode(analyze.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(analyze.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let reportId = copyJsonNode(src: report, srcId: report.root, dst: doc)
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("report")
+	children.push(reportId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'mmAnalyzePhaseToJson'

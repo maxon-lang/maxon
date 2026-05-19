@@ -1,0 +1,269 @@
+// JSON-RPC 2.0 framing over newline-delimited stdio.
+//
+// `readRequest()` blocks until one full JSON object arrives on stdin, parses
+// it, and returns an `RpcRequest`. EOF returns `RpcReadResult.eof`. Malformed
+// input returns `RpcReadResult.protocolError(msg)` so the dispatcher can
+// reply with a parse-error response on the same id (or `null` if unknowable).
+//
+// `writeResponseResult` / `writeResponseError` emit one JSON object per line
+// to stdout. The MCP spec doesn't use Content-Length framing on stdio.
+
+// JSON-RPC 2.0 reserves the range -32768 to -32000 for protocol errors.
+// `RpcErrorCode` is referenced in `Server.maxon`'s `ToolOutcome.error(code RpcErrorCode, …)` signature, so it must be exported.
+export typealias RpcErrorCode = int(i32.min to i32.max)
+
+// JSON-RPC 2.0 error codes (subset). The MCP server only needs the parse /
+// invalid-request / method-not-found / invalid-params / internal codes.
+// Exported because Server.maxon references it as `RpcStandardErrorCode.methodNotFound.rawValue`, which needs the enum name in scope.
+export enum RpcStandardErrorCode
+	parseError = -32700
+	invalidRequest = -32600
+	methodNotFound = -32601
+	invalidParams = -32602
+	internalError = -32603
+end 'RpcStandardErrorCode'
+
+// One inbound JSON-RPC request. `doc` owns the parsed message; `params` is
+// the JsonNodeId of the `params` field (or a JSON null in `doc` if absent —
+// the caller checks `paramsPresent`).
+//
+// Exported because Server.maxon's handler signatures take RpcRequest by name.
+export type RpcRequest
+	export var doc JsonDoc
+	export var idNodeId JsonNodeId
+	export var method String
+	export var paramsNodeId JsonNodeId
+	export var paramsPresent bool
+
+	export static function create(doc JsonDoc, idNodeId JsonNodeId, method String, paramsNodeId JsonNodeId, paramsPresent bool) returns RpcRequest
+		return Self{doc: doc, idNodeId: idNodeId, method: method, paramsNodeId: paramsNodeId, paramsPresent: paramsPresent}
+	end 'create'
+end 'RpcRequest'
+
+// Outcome of attempting to read one request from stdin. Exported because
+// Server.maxon matches on it after `readRpcRequest`.
+export union RpcReadResult
+	request(value RpcRequest)
+	eof
+	protocolError(message String)
+end 'RpcReadResult'
+
+/// Read one JSON-RPC request from stdin. Each request is one line of JSON.
+/// Notifications (no `id`) are still returned with `idNodeId` pointing at a
+/// JSON null in `doc`; the dispatcher decides whether to send a response.
+export function readRpcRequest(stdin Stdin) returns RpcReadResult
+	let line = try stdin.readLine() otherwise 'eof'
+		return RpcReadResult.eof
+	end 'eof'
+
+	// `doc` must be `var` because below we may append synthetic null nodes
+	// (for an absent `id` or absent `params`), which mutates the arena.
+	var doc = try Json.parse(line) otherwise (e) 'parseErr'
+		return RpcReadResult.protocolError("JSON parse failed: {e.name}")
+	end 'parseErr'
+
+	let root = doc.root
+	let rootNode = doc.get(root)
+	if not isObjectKind(rootNode.kind) 'notObj'
+		return RpcReadResult.protocolError("request must be a JSON object, got {rootNode.kind.name}")
+	end 'notObj'
+
+	// Required fields: jsonrpc == "2.0", method (string). `id` is optional
+	// for notifications. `params` is optional.
+	let jsonrpcVersion = try doc.getString(root, key: "jsonrpc") otherwise 'jv'
+		return RpcReadResult.protocolError("missing or non-string `jsonrpc` field")
+	end 'jv'
+	if not jsonrpcVersion.equals("2.0") 'badVersion'
+		return RpcReadResult.protocolError("unsupported jsonrpc version: {jsonrpcVersion}")
+	end 'badVersion'
+
+	let method = try doc.getString(root, key: "method") otherwise 'mk'
+		return RpcReadResult.protocolError("missing or non-string `method` field")
+	end 'mk'
+
+	// `id`: present (string/number/null) for calls, absent for notifications.
+	// We store it as a JsonNodeId pointing into `doc`. If absent we synthesize
+	// a JSON null node so callers always have a value to echo back.
+	var idNodeId = 0
+	let idResolved = resolveOptionalNode(doc, parent: root, key: "id")
+	if idResolved < 0 'missing'
+		idNodeId = doc.add(JsonNode.nullNode())
+	end 'missing' else 'present'
+		idNodeId = idResolved
+	end 'present'
+
+	let paramsResolved = resolveOptionalNode(doc, parent: root, key: "params")
+	var paramsNodeId = 0
+	var paramsPresent = false
+	if paramsResolved >= 0 'havePar'
+		paramsNodeId = paramsResolved
+		paramsPresent = true
+	end 'havePar' else 'noPar'
+		paramsNodeId = doc.add(JsonNode.nullNode())
+	end 'noPar'
+
+	return RpcReadResult.request(RpcRequest.create(doc, idNodeId: idNodeId, method: method, paramsNodeId: paramsNodeId, paramsPresent: paramsPresent))
+end 'readRpcRequest'
+
+function isObjectKind(kind JsonKind) returns bool
+	return match kind 'k'
+		jsonObject gives true
+		jsonNull gives false
+		jsonBool gives false
+		jsonNumber gives false
+		jsonString gives false
+		jsonArray gives false
+	end 'k'
+end 'isObjectKind'
+
+// Returns the child node id for `key`, or -1 if the field is absent. We use
+// -1 as a sentinel rather than throwing, because both "absent" and "present
+// but typed wrong" are legitimate outcomes the caller needs to distinguish
+// from each other at this layer.
+typealias OptionalNodeId = int(-1 to u64.max)
+function resolveOptionalNode(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNodeId
+	let parentNode = doc.get(parent)
+	let n = parentNode.keys.count()
+	for i in 0 upto n 'scan'
+		let k = try parentNode.keys.get(i) otherwise 'kErr'
+			panic("resolveOptionalNode: keys.get OOB — i bounds-checked")
+		end 'kErr'
+		if k.equals(key) 'hit'
+			return try parentNode.children.get(i) otherwise 'cErr'
+				panic("resolveOptionalNode: children.get OOB — parallel arrays out of sync")
+			end 'cErr'
+		end 'hit'
+	end 'scan'
+	return -1
+end 'resolveOptionalNode'
+
+/// Write `{"jsonrpc":"2.0","id":<id>,"result":<resultDoc.root>}` to stdout.
+/// The `id` node is taken from the request's `doc` so it round-trips with
+/// whatever shape the client used (number, string, or null).
+export function writeRpcResult(requestDoc JsonDoc, idNodeId JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId)
+	var envelope = JsonDoc.create()
+	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
+	let echoedId = copyNode(src: requestDoc, srcId: idNodeId, dst: envelope)
+	let copiedResult = copyNode(src: resultDoc, srcId: resultRoot, dst: envelope)
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	children.push(jsonrpcId)
+	keys.push("id")
+	children.push(echoedId)
+	keys.push("result")
+	children.push(copiedResult)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	print("{Json.stringify(envelope)}\n")
+end 'writeRpcResult'
+
+/// Write `{"jsonrpc":"2.0","id":<id>,"error":{"code":code,"message":msg}}`.
+export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcErrorCode, message String)
+	var envelope = JsonDoc.create()
+	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
+	let echoedId = copyNode(src: requestDoc, srcId: idNodeId, dst: envelope)
+	let codeId = envelope.add(JsonNode.numberNode(code as float))
+	let msgId = envelope.add(JsonNode.stringNode(message))
+
+	var errKeys = StringArray.create()
+	var errChildren = JsonNodeIdArray.create()
+	errKeys.push("code")
+	errChildren.push(codeId)
+	errKeys.push("message")
+	errChildren.push(msgId)
+	let errId = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	children.push(jsonrpcId)
+	keys.push("id")
+	children.push(echoedId)
+	keys.push("error")
+	children.push(errId)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	print("{Json.stringify(envelope)}\n")
+end 'writeRpcError'
+
+/// Special-case error writer for the case where parsing the request itself
+/// failed — `id` is null because we couldn't extract it.
+export function writeRpcParseError(message String)
+	var envelope = JsonDoc.create()
+	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
+	let nullIdId = envelope.add(JsonNode.nullNode())
+	let codeId = envelope.add(JsonNode.numberNode(RpcStandardErrorCode.parseError.rawValue as float))
+	let msgId = envelope.add(JsonNode.stringNode(message))
+
+	var errKeys = StringArray.create()
+	var errChildren = JsonNodeIdArray.create()
+	errKeys.push("code")
+	errChildren.push(codeId)
+	errKeys.push("message")
+	errChildren.push(msgId)
+	let errId = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("jsonrpc")
+	children.push(jsonrpcId)
+	keys.push("id")
+	children.push(nullIdId)
+	keys.push("error")
+	children.push(errId)
+	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
+
+	print("{Json.stringify(envelope)}\n")
+end 'writeRpcParseError'
+
+// Deep-copy a node (and all descendants) from one JsonDoc arena into another.
+// Returns the id of the new copy in `dst`. Used to splice request `id`s and
+// tool-call results into response envelopes without sharing arena slots.
+function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	match node.kind 'k'
+		jsonNull then return dst.add(JsonNode.nullNode())
+		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray then break
+		jsonObject then break
+	end 'k'
+
+	match node.kind 'kk'
+		jsonArray then return copyArray(src, node: node, dst: dst)
+		jsonObject then return copyObject(src, node: node, dst: dst)
+		default panic("copyNode: unreachable — scalar kinds handled above")
+	end 'kk'
+end 'copyNode'
+
+function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var newChildren = JsonNodeIdArray.create()
+	let n = node.children.count()
+	for i in 0 upto n 'each'
+		let childId = try node.children.get(i) otherwise 'cErr'
+			panic("copyArray: children.get OOB — i bounds-checked")
+		end 'cErr'
+		newChildren.push(copyNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.arrayNode(newChildren))
+end 'copyArray'
+
+function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var newKeys = StringArray.create()
+	var newChildren = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let k = try node.keys.get(i) otherwise 'kErr'
+			panic("copyObject: keys.get OOB — i bounds-checked")
+		end 'kErr'
+		let childId = try node.children.get(i) otherwise 'cErr'
+			panic("copyObject: children.get OOB — parallel arrays out of sync")
+		end 'cErr'
+		newKeys.push(k)
+		newChildren.push(copyNode(src, srcId: childId, dst: dst))
+	end 'each'
+	return dst.add(JsonNode.objectNode(newKeys, children: newChildren))
+end 'copyObject'

@@ -1,0 +1,178 @@
+// `run_program` MCP tool. Compiles a snippet or file with the C# bootstrap,
+// runs the resulting executable, and returns the structured result so an
+// MCP client can ask "does this Maxon code do what I think it does?" in a
+// single call instead of building + locating the binary + spawning.
+//
+// Inputs (JSON):
+//   source: { kind: "file", path } | { kind: "snippet", code }
+//   args?: [String]    — argv to pass to the compiled program
+//   stdin?: String     — bytes piped to the program's stdin
+//   timeoutMs?: Number — per-run timeout (default: 30s)
+//
+// Output (JSON):
+//   build:  { exitCode, success, durationMs, rawTail }
+//   run?:   { exitCode, success, durationMs, stdout, stderr }
+//     (omitted when the build step failed — there's nothing to run)
+
+let runProgramDefaultTimeoutMs = 30000
+let buildTimeoutMs = 60000
+let rawTailMaxBytes = 4096
+// Cap stdout/stderr we surface in the response. Larger outputs are
+// truncated; a separate `<stream>Truncated` flag flags the case so callers
+// can re-run with a smaller workload if they need the full text.
+let outputMaxBytes = 65536
+
+/// Entry point called by Server.maxon's dispatch table.
+export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let mainFile = try resolveProjectSource(argsDoc, argsId: argsId, snippetPrefix: "run-program") otherwise (err) 'badSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "run_program: {sourceArgErrorReason(err)}")
+	end 'badSrc'
+
+	let repoRoot = repoRootPath()
+	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	if not File.exists(csharpBinary) 'noCsharp'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "run_program: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
+	end 'noCsharp'
+
+	var buildArgv = StringArray.create()
+	buildArgv.push("build")
+	buildArgv.push(mainFile.projectDir.path)
+	let buildResult = runBuild(csharpBinary: csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
+	if not buildResult.succeeded() 'buildFailed'
+		let outcome = buildOutcomeBuildOnly(buildResult: buildResult)
+		cleanupResolvedSource(mainFile)
+		return outcome
+	end 'buildFailed'
+
+	let producedExe = expectedExePath(mainFile: mainFile.mainFile)
+	if not File.exists(producedExe) 'noExe'
+		cleanupResolvedSource(mainFile)
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "run_program: build reported success but expected binary `{producedExe.path}` does not exist")
+	end 'noExe'
+
+	let runArgv = parseRunArgv(argsDoc: argsDoc, argsId: argsId)
+	let stdinPayload = parseStdin(argsDoc: argsDoc, argsId: argsId)
+	let runTimeoutMs = parseTimeoutMs(argsDoc: argsDoc, argsId: argsId, defaultMs: runProgramDefaultTimeoutMs)
+
+	let runTiming = Clock.nowMs()
+	var runConfig = Configuration.create(Executable.path(producedExe))
+	runConfig.arguments = runArgv
+	runConfig.standardInput = stdinPayload
+	runConfig.standardOutput = OutputDestination.collect(limitBytes: outputMaxBytes)
+	runConfig.standardError = OutputDestination.collect(limitBytes: outputMaxBytes)
+	runConfig.timeoutMs = runTimeoutMs
+	let runResult = try runConfig.run() otherwise (err) 'runErr'
+		let outcome = buildOutcomeBuildOnlyWithRunError(buildResult: buildResult, runErrorReason: err.displayReason(), runDurationMs: Clock.elapsedMs(since: runTiming))
+		cleanupResolvedSource(mainFile)
+		return outcome
+	end 'runErr'
+	let runElapsed = Clock.elapsedMs(since: runTiming)
+
+	let outcome = buildOutcomeFull(buildResult: buildResult, runResult: runResult, runDurationMs: runElapsed)
+	cleanupResolvedSource(mainFile)
+	return outcome
+end 'runProgramHandler'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcomeBuildOnly(buildResult BuildPhase) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let buildId = buildPhaseToJson(doc, build: buildResult)
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("build")
+	children.push(buildId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcomeBuildOnly'
+
+function buildOutcomeBuildOnlyWithRunError(buildResult BuildPhase, runErrorReason String, runDurationMs DurationMs) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let buildId = buildPhaseToJson(doc, build: buildResult)
+	let runErrId = doc.add(JsonNode.stringNode(runErrorReason))
+	let runDurId = doc.add(JsonNode.numberNode(runDurationMs as float))
+	var runKeys = StringArray.create()
+	var runChildren = JsonNodeIdArray.create()
+	runKeys.push("durationMs")
+	runChildren.push(runDurId)
+	runKeys.push("error")
+	runChildren.push(runErrId)
+	let runId = doc.add(JsonNode.objectNode(runKeys, children: runChildren))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("build")
+	children.push(buildId)
+	keys.push("run")
+	children.push(runId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcomeBuildOnlyWithRunError'
+
+function buildOutcomeFull(buildResult BuildPhase, runResult CollectedOutput, runDurationMs DurationMs) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let buildId = buildPhaseToJson(doc, build: buildResult)
+	let runId = runPhaseToJson(doc, run: runResult, durationMs: runDurationMs)
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("build")
+	children.push(buildId)
+	keys.push("run")
+	children.push(runId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcomeFull'
+
+function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
+	let exitId = doc.add(JsonNode.numberNode(build.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(build.durationMs as float))
+	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
+	let tail = lastBytes(combined, max: rawTailMaxBytes)
+	let tailId = doc.add(JsonNode.stringNode(tail))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("rawTail")
+	children.push(tailId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'buildPhaseToJson'
+
+function runPhaseToJson(doc JsonDoc, run CollectedOutput, durationMs DurationMs) returns JsonNodeId
+	let exitId = doc.add(JsonNode.numberNode(run.exitCode() as float))
+	let successId = doc.add(JsonNode.boolNode(run.succeeded()))
+	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let stdoutBytes = run.stdout.toByteArray()
+	let stderrBytes = run.stderr.toByteArray()
+	let stdoutTruncated = stdoutBytes.count() > outputMaxBytes
+	let stderrTruncated = stderrBytes.count() > outputMaxBytes
+	let stdoutId = doc.add(JsonNode.stringNode(lastBytes(run.stdout, max: outputMaxBytes)))
+	let stderrId = doc.add(JsonNode.stringNode(lastBytes(run.stderr, max: outputMaxBytes)))
+	let stdoutTrId = doc.add(JsonNode.boolNode(stdoutTruncated))
+	let stderrTrId = doc.add(JsonNode.boolNode(stderrTruncated))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("exitCode")
+	children.push(exitId)
+	keys.push("success")
+	children.push(successId)
+	keys.push("durationMs")
+	children.push(durId)
+	keys.push("stdout")
+	children.push(stdoutId)
+	keys.push("stdoutTruncated")
+	children.push(stdoutTrId)
+	keys.push("stderr")
+	children.push(stderrId)
+	keys.push("stderrTruncated")
+	children.push(stderrTrId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'runPhaseToJson'

@@ -1,0 +1,88 @@
+// Result of a build subprocess. Captures both "ran cleanly" and "spawn
+// failed" cases in one struct so outcome-builders can stay uniform. Shared
+// by `run_program` and `mm_trace_analyze`.
+
+export type BuildPhase
+	export var output CollectedOutput
+	export var durationMs DurationMs
+	export var spawnError String = ""
+	export var spawnFailed bool = false
+
+	export static function spawned(output CollectedOutput, durationMs DurationMs) returns BuildPhase
+		return BuildPhase{output: output, durationMs: durationMs}
+	end 'spawned'
+
+	export static function failedToSpawn(reason String, durationMs DurationMs) returns BuildPhase
+		return BuildPhase{output: emptyCollectedOutput(), durationMs: durationMs, spawnError: reason, spawnFailed: true}
+	end 'failedToSpawn'
+
+	export function succeeded() returns bool
+		if spawnFailed 'no'
+			return false
+		end 'no'
+		return output.succeeded()
+	end 'succeeded'
+
+	export function exitCode() returns ExitInt
+		if spawnFailed 'spawnFailed'
+			return -1
+		end 'spawnFailed'
+		return output.exitCode()
+	end 'exitCode'
+
+	export function stdout() returns String
+		return output.stdout
+	end 'stdout'
+
+	export function stderr() returns String
+		if spawnFailed 'spawnFailed'
+			return spawnError
+		end 'spawnFailed'
+		return output.stderr
+	end 'stderr'
+end 'BuildPhase'
+
+// Used as a placeholder `output` when the build subprocess never spawned.
+// The exit code is -1 so consumers reading it without checking
+// `spawnFailed` still see a "didn't succeed" sentinel.
+export function emptyCollectedOutput() returns CollectedOutput
+	return CollectedOutput.create(TerminationStatus.exited(-1), stdout: "", stderr: "", pid: 0, durationMs: 0)
+end 'emptyCollectedOutput'
+
+/// Run the build subprocess with the given argv and wrap the result in a
+/// `BuildPhase`. Shared by `run_program` and `mm_trace_analyze` so spawn
+/// error handling is uniform.
+export function runBuild(csharpBinary FilePath, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns BuildPhase
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs) otherwise (err) 'spawn'
+		return BuildPhase.failedToSpawn("build spawn failed: {err.displayReason()}", durationMs: Clock.elapsedMs(since: timing))
+	end 'spawn'
+	return BuildPhase.spawned(result, durationMs: Clock.elapsedMs(since: timing))
+end 'runBuild'
+
+// =============================================================================
+// Expected exe path (snippets and projects both use this shape)
+// =============================================================================
+
+/// Locate the produced executable for a built Maxon source. The C# compiler
+/// emits either `<base>.exe` (single-file builds, like our snippets) or
+/// `<project>/.maxon/<basename>.exe` (project builds with a build.maxon).
+/// Returns the first existing path; if neither exists, returns the direct
+/// `<base>.exe` so callers can surface a useful "expected binary missing"
+/// error.
+export function expectedExePath(mainFile FilePath) returns FilePath
+	let base = stripExtension(mainFile)
+	let direct = changeExtension(base: base, ext: "exe")
+	if File.exists(direct) 'direct'
+		return direct
+	end 'direct'
+	let parent = try parentDirOrThrow(mainFile) otherwise 'noParent'
+		return direct
+	end 'noParent'
+	let basename = lastSegment(base)
+	let inMaxonDir = childPath(parent: parent, segment: ".maxon/{basename}.exe")
+	if File.exists(inMaxonDir) 'inMaxon'
+		return inMaxonDir
+	end 'inMaxon'
+	return direct
+end 'expectedExePath'

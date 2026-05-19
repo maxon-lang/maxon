@@ -521,6 +521,15 @@ public partial class ARM64CodeEmitter {
         _e.EmitMovRegReg(destReg, ARM64Register.X2);
     }
 
+    public void GetCurrentProcessId(VReg dest) {
+      // POSIX getpid() returns a pid_t (32-bit). Zero-extends naturally
+      // into X0 for the caller's i64 result.
+      _e.EmitCallImport("getpid");
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X0)
+        _e.EmitMovRegReg(destReg, ARM64Register.X0);
+    }
+
     public void WakeWorker(VReg p) {
       // dispatch_semaphore_signal(p->wakeSemaphore); POffWakeSemaphore = 0x38
       _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, R(p), 0x38, 8);

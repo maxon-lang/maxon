@@ -233,69 +233,131 @@ end 'signatureMatches'
 // structural equality would reject the otherwise-correct conformance.
 // Treat `named("X")` and `typeParameter(id)` as equal when `id`'s declared
 // param name is `X`. All other arms fall back to plain structural equality.
+//
+// For `genericInstance` arms, the same looseness has to apply per-arg:
+// `Iterator with(Source, Element)` substitutes `Element → __Tuple2 with
+// (Source, Element)` and the resulting return arms reference `Source` /
+// `Element` as `named` in the expected side and as `typeParameter` in the
+// implementer's body. Walk arg lists element-wise with the same predicate.
 function maxonTypesMatchForConformance(project Project, expected MaxonType, actual MaxonType) returns bool
 	if maxonTypesStructurallyEqual(expected, b: actual) 'eq'
 		return true
 	end 'eq'
-	// Stage K.X.wasm (K.3-final.fix): recurse through genericInstance arms
-	// so a tuple/array like `__Tuple2<Source, Element>` matches across two
-	// scopes that both expose `Source`/`Element` as typeParameters with the
-	// SAME printed names but DIFFERENT typeParameterIds (interface
-	// declaration vs the conformer's `usesParams` re-declaration). Without
-	// the recurse, the two gids hash distinct because their typeParameter
-	// args carry distinct ids; with the recurse, the per-arg
-	// `maxonTypesMatchForConformance` allows the
-	// `typeParameter(id_iface)` vs `typeParameter(id_conformer)` shape to
-	// match by name.
-	if maxonTypeIsGenericInstance(expected) and maxonTypeIsGenericInstance(actual) 'bothGid'
-		let (expBase, expArgs) = match expected 'expExtract'
-			genericInstance(gid) gives project.genericInstances.get(gid)
-			default panic("maxonTypesMatchForConformance: expected guard mismatched arm")
-		end 'expExtract'
-		let (actBase, actArgs) = match actual 'actExtract'
-			genericInstance(gid) gives project.genericInstances.get(gid)
-			default panic("maxonTypesMatchForConformance: actual guard mismatched arm")
-		end 'actExtract'
-		if expBase == actBase and expArgs.count() == actArgs.count() 'shapeOk'
-			for i in 0 upto expArgs.count() 'eachArg'
-				let ea = try expArgs.get(i) otherwise panic("maxonTypesMatchForConformance: expArgs.get OOB at {i}")
-				let aa = try actArgs.get(i) otherwise panic("maxonTypesMatchForConformance: actArgs.get OOB at {i}")
-				if not maxonTypesMatchForConformance(project, expected: ea, actual: aa) 'argMismatch'
-					return false
-				end 'argMismatch'
-			end 'eachArg'
-			return true
-		end 'shapeOk'
-		// Falls through to the named/typeParameter relaxation below.
-	end 'bothGid'
-	// Cross-scope typeParameter equivalence: a signature parsed inside an
-	// interface body lands `named("Element")` for the unbound parameter,
-	// while the implementing type's method lands `typeParameter(id)` where
-	// the id's declared name is `Element`. Treat them as equal so the
-	// `current() returns Element` requirement matches `current() returns Self.Element`.
-	let expParamName = typeParamNameOrEmpty(project, t: expected)
-	if expParamName.isEmpty() 'noExpName'
-		return false
-	end 'noExpName'
-	let actParamName = typeParamNameOrEmpty(project, t: actual)
-	return not actParamName.isEmpty() and actParamName == expParamName
-end 'maxonTypesMatchForConformance'
-
-// Return the bound name for `named(id)` / `typeParameter(id)` arms — the only
-// two shapes that participate in cross-scope type-parameter equivalence. Every
-// other arm returns "" so the caller's `isEmpty` short-circuit fires.
-function typeParamNameOrEmpty(project Project, t MaxonType) returns String
-	return match t 'pick'
-		typeParameter(id) gives project.typeParameters.getName(id)
+	// Generic-instance arms compare structurally with the per-arg looseness
+	// applied recursively. Without this, a `current() returns __Tuple2 with
+	// (Source, Element)` impl on a `Iterator with(Source, Element)` conformer
+	// surfaces as a wrong-signature E3016 because the expected side's args
+	// are `named` and the actual side's are `typeParameter`.
+	let giMatch = tryMatchGenericInstanceArms(project, expected: expected, actual: actual)
+	if giMatch.handled 'giResult'
+		return giMatch.result
+	end 'giResult'
+	let expName = match expected 'expCase'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
+		function gives ""
+		unresolved gives ""
+		typeParameter gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'expCase'
+	if expName.isEmpty() 'noExpName'
+		return false
+	end 'noExpName'
+	let actParamName = match actual 'actCase'
+		typeParameter(id) gives project.typeParameters.getName(id)
+		boolean to string gives ""
+		named gives ""
 		function gives ""
 		unresolved gives ""
 		genericInstance gives ""
 		interface gives ""
 		constInt gives ""
-	end 'pick'
-end 'typeParamNameOrEmpty'
+	end 'actCase'
+	return not actParamName.isEmpty() and actParamName == expName
+end 'maxonTypesMatchForConformance'
+
+// Three-state result so the caller can distinguish "both arms are
+// genericInstance and the arg-wise compare ran" from "neither arm is a
+// genericInstance, fall through to the named/typeParameter looseness".
+type GenericInstanceMatchResult
+	export var handled bool
+	export var result bool
+
+	export static function pass() returns GenericInstanceMatchResult
+		return Self{handled: false, result: false}
+	end 'pass'
+
+	export static function decided(result bool) returns GenericInstanceMatchResult
+		return Self{handled: true, result: result}
+	end 'decided'
+end 'GenericInstanceMatchResult'
+
+// When both `expected` and `actual` are `genericInstance` arms, compare them
+// structurally: same base name + same arg arity + arg-wise conformance match.
+// Returns a `handled: false` sentinel when either arm isn't a generic
+// instance so the caller can fall through to the existing named/
+// typeParameter looseness path.
+function tryMatchGenericInstanceArms(project Project, expected MaxonType, actual MaxonType) returns GenericInstanceMatchResult
+	let expGidOpt = extractGenericInstanceGid(expected)
+	let actGidOpt = extractGenericInstanceGid(actual)
+	if not expGidOpt.present or not actGidOpt.present 'notGi'
+		return GenericInstanceMatchResult.pass()
+	end 'notGi'
+	return compareGenericInstanceContents(project, expGid: expGidOpt.gid, actGid: actGidOpt.gid)
+end 'tryMatchGenericInstanceArms'
+
+// Optional<GenericInstanceId> shape. Maxon's `match` arms can't bind a
+// pattern variable in some arms and pass through in others when the result
+// type needs to differ, so a tiny carrier struct lets callers tell "this
+// arm was a genericInstance and the gid is X" from "this arm wasn't a
+// genericInstance" without painting all the non-gi arms with a sentinel.
+type OptionalGenericInstanceId
+	export var present bool
+	export var gid GenericInstanceId
+
+	export static function none() returns OptionalGenericInstanceId
+		return Self{present: false, gid: 0}
+	end 'none'
+
+	export static function some(gid GenericInstanceId) returns OptionalGenericInstanceId
+		return Self{present: true, gid: gid}
+	end 'some'
+end 'OptionalGenericInstanceId'
+
+function extractGenericInstanceGid(t MaxonType) returns OptionalGenericInstanceId
+	return match t 'arm'
+		genericInstance(id) gives OptionalGenericInstanceId.some(id)
+		boolean to unresolved gives OptionalGenericInstanceId.none()
+		typeParameter gives OptionalGenericInstanceId.none()
+		interface gives OptionalGenericInstanceId.none()
+		constInt gives OptionalGenericInstanceId.none()
+	end 'arm'
+end 'extractGenericInstanceGid'
+
+// Compare two generic-instance gids structurally: base ids must match, and
+// each arg slot must satisfy the conformance-side type predicate (so a
+// `named("Element")` on the expected side accepts a `typeParameter` whose
+// name is `Element` on the actual side, mirroring the top-level rule).
+function compareGenericInstanceContents(project Project, expGid GenericInstanceId, actGid GenericInstanceId) returns GenericInstanceMatchResult
+	let (expBase, expArgs) = project.genericInstances.get(expGid)
+	let (actBase, actArgs) = project.genericInstances.get(actGid)
+	if expBase != actBase 'baseMismatch'
+		return GenericInstanceMatchResult.decided(false)
+	end 'baseMismatch'
+	if expArgs.count() != actArgs.count() 'arityMismatch'
+		return GenericInstanceMatchResult.decided(false)
+	end 'arityMismatch'
+	for i in 0 upto expArgs.count() 'eachArg'
+		let ea = try expArgs.get(i) otherwise panic("compareGenericInstanceContents: expArgs.get OOB at {i}")
+		let aa = try actArgs.get(i) otherwise panic("compareGenericInstanceContents: actArgs.get OOB at {i}")
+		if not maxonTypesMatchForConformance(project, expected: ea, actual: aa) 'mismatch'
+			return GenericInstanceMatchResult.decided(false)
+		end 'mismatch'
+	end 'eachArg'
+	return GenericInstanceMatchResult.decided(true)
+end 'compareGenericInstanceContents'
 
 function maxonReturnTypesMatchForConformance(project Project, expected MaxonReturnType, actual MaxonReturnType) returns bool
 	return match expected 'cmp'

@@ -211,13 +211,21 @@ let whitelist = ["basics",
 	"cache-parity",
 ]
 
-// Signed elapsed time in milliseconds (deltas between Process.currentTimeMs() reads).
+// Signed elapsed time in milliseconds (deltas between Clock.nowMs() reads).
 typealias Millis = int(i64.min to i64.max)
 
-// Signed process exit code: typically 0..255 / u32.max, but Process APIs surface
-// -1 on internal failure so the field has to accommodate negative sentinels.
+// Signed process exit code: typically 0..255 / u32.max, but Subprocess.run
+// surfaces NTSTATUS-class codes for abnormal termination, so the field has
+// to accommodate the full i64 range.
 typealias ProcessExitCode = int(i64.min to i64.max)
+
 typealias TestCount = int(0 to u64.max)
+
+// Promise carrying an awaited Subprocess.run result. The worker phases spawn
+// these in parallel by pushing them into a SubprocessPromiseArray, then drain
+// each one with `try await` to recover its CollectedOutput (stdout/stderr/exit).
+typealias SubprocessPromise = Promise with CollectedOutput
+typealias SubprocessPromiseArray = Array with SubprocessPromise
 
 // Per-test-process wall-clock budget. Test fragments hitting this limit are
 // terminated by the runtime's processWait kill-on-timeout path so a runaway
@@ -238,16 +246,18 @@ function markPhase(label String)
 	if not phaseTimingActive 'inactive'
 		return
 	end 'inactive'
-	let now = Process.currentTimeMs()
+	let now = Clock.nowMs()
 	let delta = now - lastPhaseTimestamp
 	lastPhaseTimestamp = now
 	printError("[PHASE +{delta}ms] {label}\n")
 end 'markPhase'
 
 // Best-effort delete of any leftover capture files from a prior crashed run.
-// Runtime processCloseCapture normally deletes them; if the runner or a worker
-// crashed mid-test, files remain behind. We sweep the fragment directory tree
-// and remove any whose name suggests it's a capture leftover:
+// The earlier Process.captureStart path wrote files like `.capture-bw-3.out`
+// under the fragment dir and deleted them on cleanup; the current
+// Subprocess.run path captures stdout/stderr in-process instead, so any
+// surviving files are pre-migration leftovers. We sweep the fragment
+// directory tree and remove any whose name suggests it's a capture leftover:
 //   - top level: ".capture-*.out|.err"  (worker stdout/stderr)
 //   - per-spec subdirs: "*.capture.out|.err" (per-test compiled-binary captures)
 // Errors (missing dir, permission, ...) are silently ignored — this is purely
@@ -271,23 +281,12 @@ function cleanupLeftoverCaptureFiles(fragmentDir FilePath)
 	end 'each'
 end 'cleanupLeftoverCaptureFiles'
 
-// Build the pair of capture file paths for a worker/test redirect, both rooted
-// under fragmentDir/.spec-cache so a `.gitignore` entry on `.spec-cache`
-// covers them automatically. `stem` is a short descriptor like "bw-3" or
-// "retry-arrays-foo" — file extensions .out/.err are appended.
-function captureFilePaths(fragmentDir FilePath, stem String) returns (FilePath, FilePath)
-	let cacheDir = fragmentDir.join(".spec-cache")
-	let outPath = cacheDir.join(".capture-{stem}.out")
-	let errPath = cacheDir.join(".capture-{stem}.err")
-	return (outPath, errPath)
-end 'captureFilePaths'
-
 function startPhaseTiming()
 	if not passTimingsActive() 'inactive'
 		return
 	end 'inactive'
 	phaseTimingActive = true
-	lastPhaseTimestamp = Process.currentTimeMs()
+	lastPhaseTimestamp = Clock.nowMs()
 	printError("[PHASE +0ms] start\n")
 end 'startPhaseTiming'
 
@@ -335,15 +334,26 @@ end 'findWasmtimePath'
 // Build the command to run a compiled binary. The runner's upstream
 // `isSupportedTarget` gate guarantees we only get here for the host target or
 // wasm32-wasi — no other cross-execution paths are supported.
-function buildRunCommand(outputPath FilePath, target Target, testArgs String) returns String
+// Exe + argv pair used by every spec-test invocation. Subprocess.run accepts
+// argv as an array directly, so there's no shell parsing on the runtime side
+// and nothing else here needs the legacy shell-string form.
+type RunCommand
+	export var exe Executable
+	export var argv StringArray
+
+	export static function create(exe Executable, argv StringArray) returns RunCommand
+		return Self{exe: exe, argv: argv}
+	end 'create'
+end 'RunCommand'
+
+function buildRunCommand(outputPath FilePath, target Target, testArgs String) returns RunCommand
 	if target.os == Os.wasi 'isWasm'
 		return buildWasmRunCommand(outputPath, testArgs: testArgs)
 	end 'isWasm'
 
-	if not testArgs.isEmpty() 'hasArgs'
-		return "{outputPath} {testArgs}"
-	end 'hasArgs'
-	return outputPath.toString()
+	var argv = StringArray.create()
+	appendSplitArgs(argv, testArgs: testArgs)
+	return RunCommand.create(exe: Executable.path(outputPath), argv: argv)
 end 'buildRunCommand'
 
 // Build the command to run a WASM binary via vendored wasmtime. wasmtime's
@@ -351,16 +361,51 @@ end 'buildRunCommand'
 // follows as wasi argv — there is no shell-style `--` separator (any literal
 // `--` in argv is forwarded verbatim and lands as argv[1] inside the module).
 // Spec tests that declare `Args: ...` therefore have to pass the args raw.
-function buildWasmRunCommand(outputPath FilePath, testArgs String) returns String
+function buildWasmRunCommand(outputPath FilePath, testArgs String) returns RunCommand
 	let wasmtimePath = findWasmtimePath()
 	if wasmtimePath.isEmpty() 'noWasmtime'
 		panic("wasmtime not found in vendor/wasmtime/")
 	end 'noWasmtime'
-	if not testArgs.isEmpty() 'hasArgs'
-		return "{wasmtimePath} run {outputPath} {testArgs}"
-	end 'hasArgs'
-	return "{wasmtimePath} run {outputPath}"
+	let wasmtimeExe = try FilePath.from(wasmtimePath) otherwise panic("buildWasmRunCommand: findWasmtimePath returned an invalid path '{wasmtimePath}'")
+	var argv = StringArray.create()
+	argv.push("run")
+	argv.push(outputPath.toString())
+	appendSplitArgs(argv, testArgs: testArgs)
+	return RunCommand.create(exe: Executable.path(wasmtimeExe), argv: argv)
 end 'buildWasmRunCommand'
+
+// Split a space-separated `Args:` string into individual argv entries. The
+// spec format doesn't support args with embedded spaces (no test in the
+// corpus uses them), so a plain whitespace split matches what the old
+// shell-string path did. One special case: the literal token `""` is the
+// shell idiom for "pass an empty string as this argv element" — see the
+// command-line-args/empty-string-arg spec test — so we map it to an empty
+// argv push rather than letting it pass through as a literal 2-char string
+// the Subprocess stub would re-shell-quote.
+function appendSplitArgs(argv StringArray, testArgs String)
+	if testArgs.isEmpty() 'empty'
+		return
+	end 'empty'
+	for part in testArgs.split(" ") 'each'
+		if part.isEmpty() 'blank'
+			continue
+		end 'blank'
+		if part == "\"\"" 'quotedEmpty'
+			argv.push("")
+			continue
+		end 'quotedEmpty'
+		argv.push(part)
+	end 'each'
+end 'appendSplitArgs'
+
+// Construct a RunCommand for a worker, given a binary path as a String and
+// a fully-built argv. Used by buildFallbackWorkerCommand /
+// buildSinglesWorkerCommand / buildBatchWorkerCommand to share the
+// String→FilePath conversion in one place.
+function workerRunCommand(exePath String, argv StringArray) returns RunCommand
+	let exeFile = try FilePath.from(exePath) otherwise panic("workerRunCommand: invalid worker exe path '{exePath}'")
+	return RunCommand.create(exe: Executable.path(exeFile), argv: argv)
+end 'workerRunCommand'
 
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
 function captureLoweringLog(source String, testName String, specName String, tempDir FilePath, target Target) returns String
@@ -419,7 +464,7 @@ end 'updateAllRequiredLowering'
 // see consistent behavior: stdlib functions are pre-compiled to machine code
 // and linked in, rather than the first test compiling from source.
 function warmStdlibCache(target Target)
-	let exePath = Process.executablePath()
+	let exePath = try Process.executablePath() otherwise panic("warmStdlibCache: cannot determine executable path")
 	let exeParent = try exePath.parent() otherwise panic("executable has no parent directory")
 	let projectDir = try exeParent.parent() otherwise panic("executable parent has no parent directory")
 	logInfo(LogCategory.testing, message: () gives "Compiling stdlib cache using project dir: {projectDir}")
@@ -562,7 +607,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	setLogLevel(LogLevel.ERROR)
 	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
 
-	let startTime = Process.currentTimeMs()
+	let startTime = Clock.nowMs()
 	totalCompileMs = 0
 
 	let targetKey = targetToString(target)
@@ -572,7 +617,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 	// Ensure fragment directory exists
 	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 
 	// Reap any leftover capture files from a prior crashed run.
@@ -628,7 +673,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
 	end 'showFrags'
 
-	let elapsedMs = Process.currentTimeMs() - startTime
+	let elapsedMs = Clock.nowMs() - startTime
 	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
 
 	if totalFailed == 0 'allPass'
@@ -730,12 +775,12 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let virtualPath = fragmentDir.join(specName).join("{specName}.maxon")
 
 	startCapturingErrors()
-	let compileStart = Process.currentTimeMs()
+	let compileStart = Clock.nowMs()
 	let batchedSource = buildResult.source
 	let covMapPath = batchExePath.changeExtension(".covmap")
 	emitWorkerCompiling("{specName} (batch of {tests.count()})")
 	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
-		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
+		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		// The shared compile didn't identify any single test — re-run every
 		// batchable test via the per-fragment path so callers see real
@@ -744,7 +789,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
 		return outcome
 	end 'batchCompileFailed'
-	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
+	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
 	cancelCapturingErrors()
 	logDebug(LogCategory.testing, message: () gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
 
@@ -752,9 +797,9 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	// in sequence and emits BEGIN/END markers around each so we can slice
 	// the binary's stdout into per-test stdout and per-test exit code.
 	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
-	let captureOut = batchExePath.changeExtension(".capture.out")
-	let captureErr = batchExePath.changeExtension(".capture.err")
-	let runResult = Process.captureOutput(runCommand, stdoutPath: captureOut, stderrPath: captureErr, timeoutMs: testProcessTimeoutMs)
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: Directory.currentPath(), timeoutMs: testProcessTimeoutMs) otherwise (err) 'batchRun'
+		panic("Batch run failed for {batchExePath.toString()}: {err.displayReason()}")
+	end 'batchRun'
 
 	// First pass: check each batchable test's slice. Tests with a present and
 	// passing slice are committed as PASS immediately; tests with a missing
@@ -1140,10 +1185,10 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// each fragment as a distinct compilation unit so cross-file references
 	// resolve like a real on-disk project.
 	startCapturingErrors()
-	let compileStart = Process.currentTimeMs()
+	let compileStart = Clock.nowMs()
 	emitWorkerCompiling("{specName}/{testName}")
 	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
-		totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
+		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
@@ -1165,7 +1210,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		cleanup(outputExe)
 		return TestResult.create(testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileFailed'
-	totalCompileMs = totalCompileMs + (Process.currentTimeMs() - compileStart) as Millis
+	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
 	cancelCapturingErrors()
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
@@ -1184,12 +1229,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	// Run the compiled executable.
 	let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
-	let captureOut = outputPath.changeExtension(".capture.out")
-	let captureErr = outputPath.changeExtension(".capture.err")
-	let runResult = Process.captureOutput(runCommand, stdoutPath: captureOut, stderrPath: captureErr, timeoutMs: testProcessTimeoutMs)
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: Directory.currentPath(), timeoutMs: testProcessTimeoutMs) otherwise (err) 'runFail'
+		cleanup(outputExe)
+		return TestResult.create(testName, passed: false, errorMessage: "Run failed: {err.displayReason()}", filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
+	end 'runFail'
 	let runStdout = runResult.stdout
 	let runStderr = runResult.stderr
-	let runEc = runResult.exitCode as ProcessExitCode
+	let runEc = runResult.exitCode() as ProcessExitCode
 
 	var passed = true
 	var errorMsg = ""
@@ -2213,7 +2259,7 @@ export function runSpecBatchWorker(workerSpecs String, filter String, target Tar
 	let specCacheDir = fragmentDir.join(".spec-cache")
 
 	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
@@ -2451,7 +2497,7 @@ export function runSpecSinglesWorker(workerSpecs String, filter String, target T
 	let specCacheDir = fragmentDir.join(".spec-cache")
 
 	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
@@ -2528,7 +2574,7 @@ export function runSpecFallbackWorker(groupsArg String, filter String, target Ta
 	let specCacheDir = fragmentDir.join(".spec-cache")
 
 	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 	if not Directory.exists(specCacheDir) 'noSpecCacheDir'
 		_ = Directory.create(specCacheDir)
@@ -2617,24 +2663,27 @@ export function runSpecFallbackWorker(groupsArg String, filter String, target Ta
 end 'runSpecFallbackWorker'
 
 // Build the command line for a fallback worker.
-function buildFallbackWorkerCommand(exePath String, groupsArg String, targetStr String, filter String, verbose bool) returns String
-	var cmd = "{exePath} spec-test --worker-fallback={groupsArg} --target={targetStr} --workers=1"
+function buildFallbackWorkerCommand(exePath String, groupsArg String, targetStr String, filter String, verbose bool) returns RunCommand
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("--worker-fallback={groupsArg}")
+	argv.push("--target={targetStr}")
+	argv.push("--workers=1")
 	if not filter.isEmpty() 'hasFilter'
-		cmd = "{cmd} --filter={filter}"
+		argv.push("--filter={filter}")
 	end 'hasFilter'
 	if verbose 'isVerbose'
-		cmd = "{cmd} --verbose"
+		argv.push("--verbose")
 	end 'isVerbose'
-	return cmd
+	return workerRunCommand(exePath, argv: argv)
 end 'buildFallbackWorkerCommand'
 
-// Spawn fallback workers in parallel via captureStart, then drain via
-// captureStdout/captureStderr/captureWait. Each worker handles a round-robin
-// chunk of units encoded as a `;`-joined groupsArg. Phase 5 runs after Phase 4
-// has drained and closed every batch-worker handle, but the drain_both
-// runtime fix (50ms initial WaitForSingleObject + ReadFile-fallback on
-// peek-FALSE) makes the race-free even when other captures are still alive.
-function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, fragmentDir FilePath, numWorkers TestCount) returns (TestCount, TestCount)
+// Spawn fallback workers in parallel via `async Subprocess.run`, then drain
+// each one with `try await`. Each worker handles a round-robin chunk of units
+// encoded as a `;`-joined groupsArg. The await yields the parent green thread
+// to the scheduler so the other workers' subprocess waits proceed concurrently
+// through the IOCP-backed subprocessWaitCollect path.
+function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount) returns (TestCount, TestCount)
 	if fallbackUnits.count() == 0 'noWork'
 		return (0 as TestCount, 0 as TestCount)
 	end 'noWork'
@@ -2673,10 +2722,13 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 		fallbackWorkerCount = 1 as TestCount
 	end 'tooFew'
 
-	// Phase A: spawn workers in parallel via captureStart. Each worker receives
-	// a round-robin slice of the (spec, test) pairs, regrouped into the
-	// `spec1:t1|t2;spec2:t3` format the worker dispatcher expects.
-	var handles = BatchWorkerHandleArray.create()
+	// Phase A: spawn workers in parallel via `async Subprocess.run`. Each worker
+	// receives a round-robin slice of the (spec, test) pairs, regrouped into
+	// the `spec1:t1|t2;spec2:t3` format the worker dispatcher expects. The
+	// chunk-spec list is tracked in a parallel StringArray so Phase B can name
+	// each promise when reporting failures.
+	var promises = SubprocessPromiseArray.create()
+	var chunkSpecLists = StringArray.create()
 	for i in 0 upto fallbackWorkerCount 'spawnChunks'
 		var groupsArg = ""
 		var chunkSpecs = ""
@@ -2701,32 +2753,34 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 		end 'collectChunk'
 		if not groupsArg.isEmpty() 'hasChunk'
 			let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: filter, verbose: verbose)
-			let (captureOut, captureErr) = captureFilePaths(fragmentDir, stem: "fb-{i}")
-			let handle = Process.captureStart(cmd, stdoutPath: captureOut, stderrPath: captureErr)
-			handles.push(BatchWorkerHandle.create(chunkSpecs, handle: handle))
+			promises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
+			chunkSpecLists.push(chunkSpecs)
 		end 'hasChunk'
 	end 'spawnChunks'
 
-	// Phase B: drain each worker. captureStdout reads until EOF; other workers
-	// continue running concurrently in the OS background, so total wall time
-	// is gated by the slowest worker rather than the sum.
+	// Phase B: drain each worker by awaiting its promise. The await yields the
+	// parent green thread to the scheduler whenever the subprocess wait would
+	// block, so all spawned children make wall-clock progress in parallel.
 	var workerStdouts = TextLineArray.create()
 	var workerSpecLists = StringArray.create()
-	for h in handles 'drainHandles'
-		let stdoutStr = Process.captureStdout(h.handle)
-		let stderrStr = Process.captureStderr(h.handle)
-		_ = Process.captureWait(h.handle, timeoutMs: 0)
+	let promiseCount = promises.count()
+	for i in 0 upto promiseCount 'drainHandles'
+		let specNames = try chunkSpecLists.get(i) otherwise panic("runFallbackPhase: chunkSpecLists.get({i}) OOB (count={promiseCount})")
+		let p = try promises.get(i) otherwise panic("runFallbackPhase: promises.get({i}) OOB (count={promiseCount})")
+		let result = try await p otherwise panic("fallback worker [{specNames}] subprocess spawn/wait failed (see SubprocessError on stderr)")
+		let stdoutStr = result.stdout
+		let stderrStr = result.stderr
 		// Abort if the worker panicked — see batch/singles drain sites for
 		// rationale.
 		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
-			abortOnWorkerCompilerPanic("fallback [{h.specNames}]", stderr: stderrStr)
+			abortOnWorkerCompilerPanic("fallback [{specNames}]", stderr: stderrStr)
 		end 'panicked'
 		let cleanedStderr = stripCompilingBreadcrumbs(stderrStr)
 		if not cleanedStderr.isEmpty() 'hasStderr'
 			printError(cleanedStderr)
 		end 'hasStderr'
 		workerStdouts.push(stdoutStr)
-		workerSpecLists.push(h.specNames)
+		workerSpecLists.push(specNames)
 	end 'drainHandles'
 
 	var totalPassed = 0 as TestCount
@@ -2814,7 +2868,7 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 				continue
 			end 'noFallback'
 			markPhase("fallback retrying spec [{pn}] with {crashedTests.count()} tests")
-			let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: crashedTests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: "fallback", fragmentDir: fragmentDir)
+			let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: crashedTests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: "fallback")
 			totalPassed = totalPassed + rp
 			totalFailed = totalFailed + rf
 		end 'handleMissing'
@@ -2828,8 +2882,8 @@ end 'runFallbackPhase'
 // regular failures). `phaseLabel` distinguishes "fallback" vs the singles
 // phase label in log output. Returns (added passed, added failed) so the
 // caller can keep its own running totals in sync.
-function retryAndAccountCrashedSpec(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray, phaseLabel String, fragmentDir FilePath) returns (TestCount, TestCount)
-	let (rp, rf, rfMissing) = retryFallbackTestsIndividually(specName, tests: tests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, fragmentDir: fragmentDir)
+function retryAndAccountCrashedSpec(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray, phaseLabel String) returns (TestCount, TestCount)
+	let (rp, rf, rfMissing) = retryFallbackTestsIndividually(specName, tests: tests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads)
 	let specTotal = rp + rf
 	if rf > 0 'someFailed'
 		logError(LogCategory.testing, message: () gives "[FAIL] {specName} {phaseLabel} ({rp}/{specTotal})")
@@ -2845,26 +2899,32 @@ end 'retryAndAccountCrashedSpec'
 // one test only kills its own subprocess, leaving the others' results intact.
 // Returns (passed, failed, stillCrashed) — stillCrashed counts subprocesses
 // that produced no result line (worker died before reporting).
-function retryFallbackTestsIndividually(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray, fragmentDir FilePath) returns (TestCount, TestCount, TestCount)
+function retryFallbackTestsIndividually(specName String, tests SpecTestArray, exePath String, targetStr String, verbose bool, failOwners StringArray, failPayloads TextLineArray) returns (TestCount, TestCount, TestCount)
 	var passed = 0 as TestCount
 	var failed = 0 as TestCount
 	var crashed = 0 as TestCount
 	for t in tests 'eachTest'
 		let groupsArg = "{specName}:{t.name}"
 		let cmd = buildFallbackWorkerCommand(exePath, groupsArg: groupsArg, targetStr: targetStr, filter: "", verbose: verbose)
-		let (captureOut, captureErr) = captureFilePaths(fragmentDir, stem: "retry-{specName}-{t.name}")
-		let pr = Process.captureOutput(cmd, stdoutPath: captureOut, stderrPath: captureErr, timeoutMs: 0)
+		// Per-test retry: synchronous run is fine — we already serialized down
+		// to one subprocess per test, so there's no parallelism left to gain.
+		// A genuine spawn failure (executable not found, OS pipe exhaustion,
+		// etc.) is a system-level problem the runner can't recover from —
+		// panic so the user sees it immediately.
+		let runResult = try Subprocess.run(cmd.exe, arguments: cmd.argv) otherwise panic("retry [{specName}/{t.name}]: Subprocess.run spawn/wait failed (see SubprocessError on stderr)")
+		let stdoutStr = runResult.stdout
+		let stderrStr = runResult.stderr
 		// A panic during the per-test retry means the compiler is broken for
 		// this test — looping over the rest will just waste time re-panicking.
-		if workerStderrIsCompilerPanic(pr.stderr) 'panicked'
-			abortOnWorkerCompilerPanic("retry [{specName}/{t.name}]", stderr: pr.stderr)
+		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
+			abortOnWorkerCompilerPanic("retry [{specName}/{t.name}]", stderr: stderrStr)
 		end 'panicked'
-		let cleanedStderr = stripCompilingBreadcrumbs(pr.stderr)
+		let cleanedStderr = stripCompilingBreadcrumbs(stderrStr)
 		if not cleanedStderr.isEmpty() 'hasStderr'
 			printError(cleanedStderr)
 		end 'hasStderr'
 		var sawResult = false
-		let lines = pr.stdout.split("\n")
+		let lines = stdoutStr.split("\n")
 		for line in lines 'parseLines'
 			let trimmedLine = trimWhitespace(line)
 			if trimmedLine.startsWith(workerSingleFailMarker) 'isFail'
@@ -2959,29 +3019,21 @@ function parseSinglesFailLine(line String, specName String) returns String
 	return decodeFailPayload(line.slice(idx, endIndex: line.endIndex()))
 end 'parseSinglesFailLine'
 
-// A running singles-worker subprocess.
-type SinglesWorkerHandle
-	export var specNames String
-	export var handle ProcessHandle
-
-	export static function create(specNames String, handle ProcessHandle) returns SinglesWorkerHandle
-		return Self{specNames: specNames, handle: handle}
-	end 'create'
-end 'SinglesWorkerHandle'
-
-export typealias SinglesWorkerHandleArray = Array with SinglesWorkerHandle
-
 // Build the command line for a singles worker.
 // --workers=1 prevents the child from spawning its own sub-workers.
-function buildSinglesWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns String
-	var cmd = "{exePath} spec-test --worker-singles={workerSpecs} --target={targetStr} --workers=1"
+function buildSinglesWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns RunCommand
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("--worker-singles={workerSpecs}")
+	argv.push("--target={targetStr}")
+	argv.push("--workers=1")
 	if not filter.isEmpty() 'hasFilter'
-		cmd = "{cmd} --filter={filter}"
+		argv.push("--filter={filter}")
 	end 'hasFilter'
 	if verbose 'isVerbose'
-		cmd = "{cmd} --verbose"
+		argv.push("--verbose")
 	end 'isVerbose'
-	return cmd
+	return workerRunCommand(exePath, argv: argv)
 end 'buildSinglesWorkerCommand'
 
 // Per-worker outcome bundled with the spec list for aggregation.
@@ -3004,14 +3056,12 @@ export typealias SinglesWorkerOutcomeArray = Array with SinglesWorkerOutcome
 // tests counted as failed via the `units` table; we never retry in-process,
 // because a deterministic panic would then take down the parent runner.
 //
-// Spawn singles workers in parallel via captureStart, then drain via
-// captureStdout/captureStderr/captureWait. Each worker handles a round-robin
-// chunk of specs. Spawning all workers up front lets the OS run them
-// concurrently across cores; the drain loop then reads each in turn. The
-// runtime fix to maxon_process_drain_both (50ms initial WaitForSingleObject
-// + ReadFile-fallback on broken-pipe peek) makes this safe even when batch
-// workers from Phase 2 are still alive in the parent.
-function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount, phaseLabel String, fragmentDir FilePath) returns (TestCount, TestCount)
+// Spawn singles workers in parallel via `async Subprocess.run`, then drain
+// each one with `try await`. Each worker handles a round-robin chunk of specs.
+// All promises are pushed before any await runs, so the OS launches every
+// child concurrently; the drain loop awaits them in order and the scheduler
+// yields between blocked promises so wall time is gated by the slowest child.
+function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount, phaseLabel String) returns (TestCount, TestCount)
 	let count = specNames.count()
 	if count == 0 'noWork'
 		return (0 as TestCount, 0 as TestCount)
@@ -3025,8 +3075,11 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 		effectiveWorkers = 1 as TestCount
 	end 'tooFew'
 
-	// Phase A: spawn every worker via captureStart so they all run in parallel.
-	var handles = BatchWorkerHandleArray.create()
+	// Phase A: spawn every worker via `async Subprocess.run` so they all run
+	// in parallel. A parallel StringArray tracks each promise's spec-chunk so
+	// the drain loop can name the worker for failure / panic reporting.
+	var promises = SubprocessPromiseArray.create()
+	var chunkSpecLists = StringArray.create()
 	for i in 0 upto effectiveWorkers 'spawnChunks'
 		var specStr = ""
 		var j = i
@@ -3041,27 +3094,29 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 		end 'collectChunk'
 		if not specStr.isEmpty() 'hasChunk'
 			let cmd = buildSinglesWorkerCommand(exePath, workerSpecs: specStr, targetStr: targetStr, filter: filter, verbose: verbose)
-			let (captureOut, captureErr) = captureFilePaths(fragmentDir, stem: "sg-{i}")
-			let handle = Process.captureStart(cmd, stdoutPath: captureOut, stderrPath: captureErr)
-			handles.push(BatchWorkerHandle.create(specStr, handle: handle))
+			promises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
+			chunkSpecLists.push(specStr)
 		end 'hasChunk'
 	end 'spawnChunks'
 
-	// Phase B: drain each worker. captureStdout blocks until that worker exits;
-	// the others continue running concurrently in the OS background, so total
-	// wall time is gated by the slowest worker rather than the sum.
+	// Phase B: drain each worker by awaiting its promise. The scheduler yields
+	// the parent green thread whenever the subprocess wait would block, so
+	// the other children keep making progress through subprocessWaitCollect.
 	var outcomes = SinglesWorkerOutcomeArray.create()
-	for h in handles 'collectHandles'
-		let stdoutStr = Process.captureStdout(h.handle)
-		let stderrStr = Process.captureStderr(h.handle)
-		_ = Process.captureWait(h.handle, timeoutMs: 0)
+	let promiseCount = promises.count()
+	for i in 0 upto promiseCount 'collectHandles'
+		let specNamesChunk = try chunkSpecLists.get(i) otherwise panic("runSinglesPhase: chunkSpecLists.get({i}) OOB (count={promiseCount})")
+		let p = try promises.get(i) otherwise panic("runSinglesPhase: promises.get({i}) OOB (count={promiseCount})")
+		let result = try await p otherwise panic("singles worker [{specNamesChunk}] subprocess spawn/wait failed (see SubprocessError on stderr)")
+		let stdoutStr = result.stdout
+		let stderrStr = result.stderr
 		// Abort early on a compiler panic. Per-test retry of a deterministic
 		// panic just compounds the wait — fail fast so the user sees the
 		// panic now instead of after every other worker has also drained.
 		if workerStderrIsCompilerPanic(stderrStr) 'panicked'
-			abortOnWorkerCompilerPanic("singles [{h.specNames}]", stderr: stderrStr)
+			abortOnWorkerCompilerPanic("singles [{specNamesChunk}]", stderr: stderrStr)
 		end 'panicked'
-		outcomes.push(SinglesWorkerOutcome.create(h.specNames, stdout: stdoutStr, stderr: stderrStr))
+		outcomes.push(SinglesWorkerOutcome.create(specNamesChunk, stdout: stdoutStr, stderr: stderrStr))
 	end 'collectHandles'
 
 	var totalPassed = 0 as TestCount
@@ -3147,7 +3202,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 			end 'noSingles'
 			totalFailed = totalFailed + unit.missingLoweringCount
 			if nonBatchableCount > 0 'hasNonBatchable'
-				let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: unit.nonBatchable, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: phaseLabel, fragmentDir: fragmentDir)
+				let (rp, rf) = retryAndAccountCrashedSpec(pn, tests: unit.nonBatchable, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads, phaseLabel: phaseLabel)
 				totalPassed = totalPassed + rp
 				totalFailed = totalFailed + rf
 			end 'hasNonBatchable' else 'onlyMissing'
@@ -3178,31 +3233,22 @@ function logSpecFailuresFor(owners StringArray, payloads TextLineArray, specName
 	end 'each'
 end 'logSpecFailuresFor'
 
-// A running batch worker subprocess. `specNames` is the comma-joined list of
-// spec names assigned to this worker; used to detect missing result lines.
-type BatchWorkerHandle
-	export var specNames String
-	export var handle ProcessHandle
-
-	export static function create(specNames String, handle ProcessHandle) returns BatchWorkerHandle
-		return Self{specNames: specNames, handle: handle}
-	end 'create'
-end 'BatchWorkerHandle'
-
-export typealias BatchWorkerHandleArray = Array with BatchWorkerHandle
-
 // Assemble the command to run this executable as a batch worker.
 // `workerSpecs` is a comma-joined list of spec names.
 // --workers=1 prevents the child from spawning its own sub-workers.
-function buildBatchWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns String
-	var cmd = "{exePath} spec-test --worker-spec={workerSpecs} --target={targetStr} --workers=1"
+function buildBatchWorkerCommand(exePath String, workerSpecs String, targetStr String, filter String, verbose bool) returns RunCommand
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	argv.push("--worker-spec={workerSpecs}")
+	argv.push("--target={targetStr}")
+	argv.push("--workers=1")
 	if not filter.isEmpty() 'hasFilter'
-		cmd = "{cmd} --filter={filter}"
+		argv.push("--filter={filter}")
 	end 'hasFilter'
 	if verbose 'isVerbose'
-		cmd = "{cmd} --verbose"
+		argv.push("--verbose")
 	end 'isVerbose'
-	return cmd
+	return workerRunCommand(exePath, argv: argv)
 end 'buildBatchWorkerCommand'
 
 // Parsed outcome from one spec's WORKER_BATCH_RESULT stdout line.
@@ -3471,7 +3517,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	setLogLevel(LogLevel.ERROR)
 	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
 
-	let startTime = Process.currentTimeMs()
+	let startTime = Clock.nowMs()
 	totalCompileMs = 0
 	startPhaseTiming()
 
@@ -3481,13 +3527,13 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	let tempDir = root.join("temp")
 
 	if not Directory.exists(fragmentDir) 'noFragDir'
-		_ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 
-	// Reap any leftover capture files from a prior crashed run. In the happy
-	// path, processCloseCapture deletes them as part of cleanup; if the runner
-	// or a worker crashed mid-test, files like `.capture-bw-3.out` remain
-	// behind. Best-effort: ignore failures.
+	// Reap any leftover capture files from a prior crashed run that used the
+	// old Process.captureStart code path. The current Subprocess.run path
+	// captures in memory, so the sweep is purely hygienic for older runs.
+	// Best-effort: ignore failures.
 	cleanupLeftoverCaptureFiles(fragmentDir)
 
 	// Warm the stdlib cache for the in-process single-test path.
@@ -3550,9 +3596,10 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	// Phase 2: Distribute specs with batchable tests across `workerCount` workers
 	// using round-robin. All workers start before the parent waits for any —
 	// this is what enables OS-level parallelism.
-	let exePath = Process.executablePath().toString()
+	let exePath = (try Process.executablePath() otherwise panic("runAllSpecTestsParallel: cannot determine executable path")).toString()
 	let targetStr = targetToString(target)
-	var workers = BatchWorkerHandleArray.create()
+	var batchPromises = SubprocessPromiseArray.create()
+	var batchChunkSpecLists = StringArray.create()
 
 	// Collect the names of specs that have batchable tests, in whitelist order.
 	var batchableSpecNames = StringArray.create()
@@ -3569,7 +3616,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	end 'fewerSpecsThanWorkers'
 
 	// Round-robin: worker i gets specs at positions i, i+numWorkers, i+2*numWorkers, ...
-	// Build a comma-joined spec list for each worker, then spawn them all at once.
+	// Build a comma-joined spec list for each worker, then spawn them all at once
+	// via `async Subprocess.run`. A parallel StringArray tracks each promise's
+	// spec-chunk so Phase 4 can name the worker for failure / panic reporting.
 	for i in 0 upto numWorkers 'spawnWorkers'
 		var specStr = ""
 		var j = i
@@ -3584,12 +3633,11 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		end 'collectChunk'
 		if not specStr.isEmpty() 'hasChunk'
 			let cmd = buildBatchWorkerCommand(exePath, workerSpecs: specStr, targetStr: targetStr, filter: filter, verbose: verbose)
-			let (captureOut, captureErr) = captureFilePaths(fragmentDir, stem: "bw-{i}")
-			let handle = Process.captureStart(cmd, stdoutPath: captureOut, stderrPath: captureErr)
-			workers.push(BatchWorkerHandle.create(specStr, handle: handle))
+			batchPromises.push(async Subprocess.run(cmd.exe, arguments: cmd.argv))
+			batchChunkSpecLists.push(specStr)
 		end 'hasChunk'
 	end 'spawnWorkers'
-	markPhase("Phase 2 spawned {workers.count()} batch workers ({batchableCount} specs)")
+	markPhase("Phase 2 spawned {batchPromises.count()} batch workers ({batchableCount} specs)")
 
 	// Phase 3: Dispatch single (non-batchable) tests to singles workers so a
 	// compile-time panic in one of them is contained as a failed test rather
@@ -3603,29 +3651,33 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	end 'collectSingles'
 
 	markPhase("Phase 3 about to call runSinglesPhase ({singlesSpecNames.count()} singles specs)")
-	let (singlesPassed, singlesFailed) = runSinglesPhase(singlesSpecNames, units: units, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, numWorkers: numWorkers, phaseLabel: "non-batchable", fragmentDir: fragmentDir)
+	let (singlesPassed, singlesFailed) = runSinglesPhase(singlesSpecNames, units: units, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, numWorkers: numWorkers, phaseLabel: "non-batchable")
 	totalPassed = totalPassed + singlesPassed
 	totalFailed = totalFailed + singlesFailed
 	markPhase("Phase 3 runSinglesPhase done")
 
-	// Phase 4: Collect batch worker results.
-	// captureStdout blocks until the worker exits; all other workers continue
-	// running in the OS background while we wait for each in turn.
+	// Phase 4: Collect batch worker results. The await on each promise yields
+	// the parent green thread to the scheduler whenever the subprocess wait
+	// would block, so workers later in the array keep making progress while
+	// we drain the ones earlier in spawn order.
 	// Each worker emits one WORKER_BATCH_RESULT line per spec it was assigned.
 	var fallbackUnits = SpecWorkUnitArray.create()
+	let batchPromiseCount = batchPromises.count()
 
-	for worker in workers 'collectWorkers'
-		let stdout = Process.captureStdout(worker.handle)
-		let stderr = Process.captureStderr(worker.handle)
-		_ = Process.captureWait(worker.handle, timeoutMs: 0)
-		markPhase("batch drained worker [{worker.specNames}] stdoutLen={stdout.count()} stderrLen={stderr.count()}")
+	for i in 0 upto batchPromiseCount 'collectWorkers'
+		let workerSpecs = try batchChunkSpecLists.get(i) otherwise panic("Phase 4: batchChunkSpecLists.get({i}) OOB (count={batchPromiseCount})")
+		let p = try batchPromises.get(i) otherwise panic("Phase 4: batchPromises.get({i}) OOB (count={batchPromiseCount})")
+		let result = try await p otherwise panic("batch worker [{workerSpecs}] subprocess spawn/wait failed (see SubprocessError on stderr)")
+		let stdout = result.stdout
+		let stderr = result.stderr
+		markPhase("batch drained worker [{workerSpecs}] stdoutLen={stdout.count()} stderrLen={stderr.count()}")
 
 		// A compiler panic in any batch worker means re-running its tests in
 		// new subprocesses would just re-panic; abort the whole run now so the
 		// user sees the panic immediately rather than waiting for fallback
 		// retries to grind through one process per test.
 		if workerStderrIsCompilerPanic(stderr) 'panicked'
-			abortOnWorkerCompilerPanic("batch [{worker.specNames}]", stderr: stderr)
+			abortOnWorkerCompilerPanic("batch [{workerSpecs}]", stderr: stderr)
 		end 'panicked'
 
 		// Forward the worker's log output to our stderr (minus compile-breadcrumb
@@ -3636,7 +3688,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		end 'hasWorkerStderr'
 
 		// Track which specs this worker was assigned so we can detect missing results.
-		var pendingSpecs = worker.specNames.split(",")
+		var pendingSpecs = workerSpecs.split(",")
 
 		let lines = stdout.split("\n")
 		for line in lines 'parseResultLines'
@@ -3644,8 +3696,8 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			if not trimmedLine.startsWith(workerBatchResultMarker) 'notResult'
 				continue
 			end 'notResult'
-			let result = parseBatchWorkerResult(trimmedLine)
-			if not result.valid 'invalidResult'
+			let parsed = parseBatchWorkerResult(trimmedLine)
+			if not parsed.valid 'invalidResult'
 				logError(LogCategory.testing, message: () gives "[BATCH ERROR] malformed result line from worker: {trimmedLine}")
 				continue
 			end 'invalidResult'
@@ -3653,21 +3705,21 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			// Remove this spec from the pending list.
 			var remaining = StringArray.create()
 			for pn in pendingSpecs 'filterPending'
-				if pn != result.specName 'keep'
+				if pn != parsed.specName 'keep'
 					remaining.push(pn)
 				end 'keep'
 			end 'filterPending'
 			pendingSpecs = remaining
 
-			totalCompileMs = totalCompileMs + result.compileMs
-			totalPassed = totalPassed + result.passed
+			totalCompileMs = totalCompileMs + parsed.compileMs
+			totalPassed = totalPassed + parsed.passed
 
-			if result.skippedNames.count() > 0 'hasSkipped'
-				let unit = findUnitByName(units, specName: result.specName)
+			if parsed.skippedNames.count() > 0 'hasSkipped'
+				let unit = findUnitByName(units, specName: parsed.specName)
 				var fallbackTests = SpecTestArray.create()
-				appendSkippedToFallback(fallbackTests, batchable: unit.batchable, skippedNames: result.skippedNames)
+				appendSkippedToFallback(fallbackTests, batchable: unit.batchable, skippedNames: parsed.skippedNames)
 				if fallbackTests.count() > 0 'hasFallback'
-					fallbackUnits.push(makeFallbackOnlyUnit(result.specName, tests: fallbackTests))
+					fallbackUnits.push(makeFallbackOnlyUnit(parsed.specName, tests: fallbackTests))
 				end 'hasFallback'
 			end 'hasSkipped'
 		end 'parseResultLines'
@@ -3698,7 +3750,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	for unit in fallbackUnits 'countFallbackFrags'
 		totalFragmentsWritten = totalFragmentsWritten + unit.nonBatchable.count()
 	end 'countFallbackFrags'
-	let (fallbackPassed, fallbackFailed) = runFallbackPhase(fallbackUnits, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, fragmentDir: fragmentDir, numWorkers: numWorkers)
+	let (fallbackPassed, fallbackFailed) = runFallbackPhase(fallbackUnits, exePath: exePath, targetStr: targetStr, filter: filter, verbose: verbose, numWorkers: numWorkers)
 	totalPassed = totalPassed + fallbackPassed
 	totalFailed = totalFailed + fallbackFailed
 	markPhase("Phase 5 runFallbackPhase done")
@@ -3707,7 +3759,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
 	end 'showFrags'
 
-	let elapsedMs = Process.currentTimeMs() - startTime
+	let elapsedMs = Clock.nowMs() - startTime
 	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
 
 	if totalFailed == 0 'allPass'

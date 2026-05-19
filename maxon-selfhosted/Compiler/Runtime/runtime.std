@@ -36,6 +36,46 @@ func mrt_write_stderr 2 void
     std ret v2
 end
 
+// mrt_read_stdin(ptr len): reads up to len bytes from stdin into [ptr].
+// Returns the number of bytes read in v2 (0 on EOF).
+func mrt_read_stdin 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std osRead v0 v1
+    std ret v2
+end
+
+// mrt_read_stdin_managed(maxBytes): allocates a __ManagedMemory of capacity
+// maxBytes (byte-sized elements), reads up to maxBytes bytes from stdin into
+// its buffer, sets the MM's length to the count actually read, and returns
+// the MM pointer. The lowering for `__Builtins.readStdin` calls this helper.
+//
+// Slot usage:
+//   slot 0 = mm pointer
+//   slot 1 = bytes read
+func mrt_read_stdin_managed 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std call __managed_mem_create v0 v1
+    std storeSlot 0 v2
+
+    // Load mm buffer = mm[0].
+    v3 = std loadSlot 0
+    v4 = std loadIndirect v3 0
+    v5 = std osRead v4 v0
+    std storeSlot 1 v5
+
+    // Store mm.length = bytes read at mm[8].
+    v6 = std loadSlot 0
+    v7 = std loadSlot 1
+    std storeIndirect v6 8 v7
+
+    v8 = std loadSlot 0
+    std ret v8
+end
+
 // mrt_i64_to_string(value buffer_ptr): converts integer to decimal string in buffer.
 // Returns number of bytes written.
 func mrt_i64_to_string 2 i64
@@ -1482,12 +1522,12 @@ end
 // substitutes stub bodies (see `filterRuntimeForOs`).
 //
 // IAT slot mapping (must stay in lockstep with PeWriter):
-//   11 = kernel32!GetCommandLineW  () -> LPWSTR
-//   12 = kernel32!LocalFree        (HLOCAL) -> HLOCAL
-//   13 = kernel32!WideCharToMultiByte (codepage, flags, wstr, wlen, buf, bufLen,
+//   12 = kernel32!GetCommandLineW  () -> LPWSTR
+//   13 = kernel32!LocalFree        (HLOCAL) -> HLOCAL
+//   14 = kernel32!WideCharToMultiByte (codepage, flags, wstr, wlen, buf, bufLen,
 //                                       defChar, usedDefChar) -> int
-//   14 = kernel32!GetModuleFileNameW (hModule, lpFilename, nSize) -> DWORD
-//   15 = shell32!CommandLineToArgvW (LPCWSTR, &argc) -> LPWSTR*
+//   15 = kernel32!GetModuleFileNameW (hModule, lpFilename, nSize) -> DWORD
+//   16 = shell32!CommandLineToArgvW (LPCWSTR, &argc) -> LPWSTR*
 //
 // Slot usage (function-local stack slots, each 8 bytes):
 //   slot 0 = argc (CommandLineToArgvW out-param; widened by i32-into-i64 store)
@@ -1500,18 +1540,18 @@ end
 func mrt_command_line_count 0 i64
   block entry:
     // GetCommandLineW() -> RAX
-    v0 = std iatCall 11
+    v0 = std iatCall 12
     // CommandLineToArgvW(rax, &argc) -> wargv
     // CommandLineToArgvW writes 4-byte argc through the second arg. Zero the
     // slot via a constI64 store + stackAddr so the upper 32 bits read clean.
     v1 = std constI64 0
     std storeSlot 0 v1
     v2 = std stackAddr 0
-    v3 = std iatCall 15 v0 v2
+    v3 = std iatCall 16 v0 v2
     std storeSlot 1 v3
     // LocalFree(wargv) — we only wanted the count.
     v4 = std loadSlot 1
-    v5 = std iatCall 12 v4
+    v5 = std iatCall 13 v4
     // Return argc.
     v6 = std loadSlot 0
     std ret v6
@@ -1524,12 +1564,12 @@ func mrt_command_line_arg 1 i64
     std storeSlot 6 v0
 
     // GetCommandLineW() -> LPWSTR
-    v1 = std iatCall 11
+    v1 = std iatCall 12
     // CommandLineToArgvW(cmdLine, &argc) -> wargv
     v2 = std constI64 0
     std storeSlot 0 v2
     v3 = std stackAddr 0
-    v4 = std iatCall 15 v1 v3
+    v4 = std iatCall 16 v1 v3
     std storeSlot 1 v4
 
     // Bounds check: if index < 0 OR index >= argc, jump to oob path.
@@ -1565,7 +1605,7 @@ func mrt_command_line_arg 1 i64
     v22 = std constI64 0
     v23 = std constI64 0
     v24 = std constI64 0
-    v25 = std iatCall 13 v17 v18 v19 v20 v21 v22 v23 v24
+    v25 = std iatCall 14 v17 v18 v19 v20 v21 v22 v23 v24
     std storeSlot 3 v25
 
     // Allocate a __ManagedMemory with byte-buffer of capacity = bytesWithNul.
@@ -1589,7 +1629,7 @@ func mrt_command_line_arg 1 i64
     v36 = std loadSlot 3
     v37 = std constI64 0
     v38 = std constI64 0
-    v39 = std iatCall 13 v31 v32 v33 v34 v35 v36 v37 v38
+    v39 = std iatCall 14 v31 v32 v33 v34 v35 v36 v37 v38
 
     // Store length = bytesWithNul - 1 (drop trailing NUL) at mm[8].
     v40 = std loadSlot 3
@@ -1600,7 +1640,7 @@ func mrt_command_line_arg 1 i64
 
     // LocalFree(wargv).
     v44 = std loadSlot 1
-    v45 = std iatCall 12 v44
+    v45 = std iatCall 13 v44
 
     // Return mm pointer.
     v46 = std loadSlot 4
@@ -1617,7 +1657,7 @@ func mrt_command_line_arg 1 i64
     // Still need to LocalFree(wargv) on this path so we don't leak the
     // CommandLineToArgvW allocation.
     v50 = std loadSlot 1
-    v51 = std iatCall 12 v50
+    v51 = std iatCall 13 v50
 
     std ret v49
 end
@@ -1650,8 +1690,8 @@ end
 //
 // `mrt_executable_path()` returns a `__ManagedMemory` pointer whose buffer
 // holds the UTF-8-encoded absolute path of the running module. The body
-// uses GetModuleFileNameW (kernel32 IAT slot 14) to fetch the wide-char
-// path, then WideCharToMultiByte (slot 13) to re-encode as UTF-8. The
+// uses GetModuleFileNameW (kernel32 IAT slot 15) to fetch the wide-char
+// path, then WideCharToMultiByte (slot 14) to re-encode as UTF-8. The
 // wide buffer lives in stack slots 10..267 (256 qwords = 2048 bytes,
 // room for ~1023 wchars + NUL — well past PATH_MAX on every supported
 // system, including extended-prefix Windows paths up to 4 KiB if the
@@ -1672,7 +1712,7 @@ func mrt_executable_path 0 i64
     v0 = std constI64 0
     v1 = std stackAddr 267
     v2 = std constI64 1024
-    v3 = std iatCall 14 v0 v1 v2
+    v3 = std iatCall 15 v0 v1 v2
     std storeSlot 0 v3
 
     // WideCharToMultiByte size query: CP_UTF8=65001, flags=0, wstr,
@@ -1687,7 +1727,7 @@ func mrt_executable_path 0 i64
     v9 = std constI64 0
     v10 = std constI64 0
     v11 = std constI64 0
-    v12 = std iatCall 13 v4 v5 v6 v7 v8 v9 v10 v11
+    v12 = std iatCall 14 v4 v5 v6 v7 v8 v9 v10 v11
     std storeSlot 1 v12
 
     // Allocate a __ManagedMemory with a byte buffer sized for the full
@@ -1712,7 +1752,7 @@ func mrt_executable_path 0 i64
     v23 = std loadSlot 1
     v24 = std constI64 0
     v25 = std constI64 0
-    v26 = std iatCall 13 v18 v19 v20 v21 v22 v23 v24 v25
+    v26 = std iatCall 14 v18 v19 v20 v21 v22 v23 v24 v25
 
     // Store length = byte_size_with_nul - 1 (drop trailing NUL) at mm[8].
     v27 = std loadSlot 1
@@ -5131,5 +5171,216 @@ func __layout_word_store 2 void
     v1 = std param 1 i64
     std storeIndirect v0 0 v1
     v2 = std constI64 0
+    std ret v2
+end
+
+// =============================================================================
+// Phase 3.4 — Subprocess + Clock runtime stubs.
+//
+// Each function below declares the ABI signature the self-hosted X64 backend's
+// `emitDirectCall` looks up via `lookupFuncParamTypes`. Bodies are intentionally
+// stubs that signal "operation unsupported" to the caller — the real Win32 /
+// POSIX subprocess work is the heavy mechanical step 3.4 in the parent plan.
+// Once a target's real implementation lands, replace the stub body in place.
+//
+// Return-shape conventions (matching the runtime contract in the parent plan):
+//   int family       → -1 on failure, a valid handle / value otherwise.
+//   managed family   → fresh empty __ManagedMemory; callers test via
+//                       `__Builtins.managedIsNull`, which sees a real-but-empty
+//                       MM as non-null. The Subprocess.maxon stub treats the
+//                       managed-not-null result as "resolver hit" — a bare-name
+//                       caller falls through to OS lookup, so the empty hit is
+//                       fine for the smoke test path even though it'd misfire
+//                       semantically for a name that should be reported as
+//                       missing. Real PATH lookup lands later.
+//   void family      → standard `ret 0` convention.
+
+// maxon_current_time_ms() — monotonic clock helper for stdlib/Clock.maxon.
+// Real bodies query QueryPerformanceCounter / clock_gettime; the stub returns
+// 0 so `Clock.elapsedMs(since: start)` reports 0 elapsed.
+func maxon_current_time_ms 0 i64
+  block entry:
+    v0 = std constI64 0
+    std ret v0
+end
+
+// maxon_subprocess_resolve_on_path(name_mm) — PATH lookup. Stub returns a
+// fresh empty MM so the Subprocess.maxon caller's `managedIsNull` check sees
+// "resolver returned something" and uses the bare name with the OS spawn
+// primitive. The subsequent spawn-stub will fail with -1, surfacing as
+// `SubprocessError.spawnFailed`.
+func maxon_subprocess_resolve_on_path 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std constI64 1
+    v3 = std call __managed_mem_create v1 v2
+    std ret v3
+end
+
+// maxon_subprocess_spawn(argv, argc, cwd, envBlock, envInherit,
+//                        stdinKind, stdinData,
+//                        stdoutKind, stdoutData, stdoutLimit,
+//                        stderrKind, stderrData, stderrLimit,
+//                        flags) — 14 args, returns handle or -1.
+// Stub returns -1; caller throws SubprocessError.spawnFailed.
+func maxon_subprocess_spawn 14 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std param 3 i64
+    v4 = std param 4 i64
+    v5 = std param 5 i64
+    v6 = std param 6 i64
+    v7 = std param 7 i64
+    v8 = std param 8 i64
+    v9 = std param 9 i64
+    v10 = std param 10 i64
+    v11 = std param 11 i64
+    v12 = std param 12 i64
+    v13 = std param 13 i64
+    v14 = std constI64 -1
+    std ret v14
+end
+
+// maxon_subprocess_detach — same 14-arg shape as spawn, returns pid (or -1).
+func maxon_subprocess_detach 14 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std param 2 i64
+    v3 = std param 3 i64
+    v4 = std param 4 i64
+    v5 = std param 5 i64
+    v6 = std param 6 i64
+    v7 = std param 7 i64
+    v8 = std param 8 i64
+    v9 = std param 9 i64
+    v10 = std param 10 i64
+    v11 = std param 11 i64
+    v12 = std param 12 i64
+    v13 = std param 13 i64
+    v14 = std constI64 -1
+    std ret v14
+end
+
+// maxon_subprocess_last_error_message() — returns MM with last error text.
+// Stub returns an empty MM; Subprocess.maxon renders it as an empty string,
+// which is fine for the unreachable path (spawn always fails so this is
+// what fills SubprocessError.spawnFailed's reason field).
+func maxon_subprocess_last_error_message 0 i64
+  block entry:
+    v0 = std constI64 1
+    v1 = std constI64 1
+    v2 = std call __managed_mem_create v0 v1
+    std ret v2
+end
+
+// maxon_subprocess_get_pid(handle) — returns the OS pid for a live handle.
+// Stub never reached (spawn fails first) but must link; returns -1.
+func maxon_subprocess_get_pid 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 -1
+    std ret v1
+end
+
+// maxon_subprocess_wait_collect(handle, timeoutMs) — blocks until the child
+// exits and returns a result pointer (or -1). Stub returns -1.
+func maxon_subprocess_wait_collect 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 -1
+    std ret v2
+end
+
+// maxon_subprocess_kill(handle, force) — returns 0 on success, -1 on failure.
+func maxon_subprocess_kill 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 -1
+    std ret v2
+end
+
+// maxon_subprocess_send_signal(handle, sig) — returns 0 on success, -1 on
+// failure. Windows ignores `sig` (no concept of POSIX signals beyond TerminateProcess).
+func maxon_subprocess_send_signal 2 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std param 1 i64
+    v2 = std constI64 -1
+    std ret v2
+end
+
+// maxon_subprocess_release_handle(handle) — drops the runtime's reference to
+// the spawn-side bookkeeping struct. Void.
+func maxon_subprocess_release_handle 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// Result-struct accessors. Each takes the opaque resultPtr returned by
+// wait_collect. Stubs return -1 / empty MM; never reached in the smoke path
+// because wait_collect already returned -1.
+func maxon_subprocess_result_status_kind 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 -1
+    std ret v1
+end
+
+func maxon_subprocess_result_status_code 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 -1
+    std ret v1
+end
+
+func maxon_subprocess_result_stdout 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std constI64 1
+    v3 = std call __managed_mem_create v1 v2
+    std ret v3
+end
+
+func maxon_subprocess_result_stderr 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 1
+    v2 = std constI64 1
+    v3 = std call __managed_mem_create v1 v2
+    std ret v3
+end
+
+func maxon_subprocess_result_duration_ms 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+func maxon_subprocess_result_release 1 void
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    std ret v1
+end
+
+// maxon_managed_is_null(mm) — 1 when `mm` is the runtime's null sentinel, 0
+// otherwise. Stub treats every non-zero pointer as non-null; the resolver
+// stub above always returns a real allocation, so this always returns 0,
+// which matches the "PATH found name" path in `Subprocess.resolveByName`.
+func maxon_managed_is_null 1 i64
+  block entry:
+    v0 = std param 0 i64
+    v1 = std constI64 0
+    v2 = std cmpI64Eq v0 v1
     std ret v2
 end

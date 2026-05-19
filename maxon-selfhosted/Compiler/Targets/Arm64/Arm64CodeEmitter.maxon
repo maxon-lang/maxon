@@ -755,6 +755,102 @@ function arm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray,
 	arm64EmitRet(code)
 end 'arm64EmitWriteStdoutWinApi'
 
+// mrt_read_stdin stub parameterized by OsDescriptor. Like arm64EmitWriteStdout
+// this exists as a hand-coded counterpart to the regular `std osRead`
+// lowering — callers that splice in mrt_read_stdin without going through MIR
+// pipe the OS-specific code in directly via this entrypoint. Caller passes
+// X0=ptr, X1=len; result (bytes read) returned in X0.
+function arm64EmitReadStdin(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns Arm64Offset
+	let offset = code.count()
+	match osDesc.read 'readStrategy'
+		syscall(readNum, fd) then arm64EmitReadStdinSyscall(code, readNumber: readNum, fd: fd)
+		winApi(getHandleSlot, handleConstant, readFileSlot) then arm64EmitReadStdinWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot)
+		libcall(readSlot, fd) then arm64EmitReadStdinLibcall(code, relocations: relocations, readSlot: readSlot, fd: fd)
+	end 'readStrategy'
+	return offset
+end 'arm64EmitReadStdin'
+
+// mrt_read_stdin via syscall: caller X0=ptr, X1=len; bytes-read in X0.
+function arm64EmitReadStdinSyscall(code ByteArray, readNumber MachineWord, fd MachineWord)
+	arm64EmitStpPreIndex(code, frameSize: 32)
+	arm64EmitMovFpSp(code)
+
+	// Remap args: caller X0=ptr, X1=len -> syscall X0=fd, X1=ptr, X2=len
+	arm64EmitMovReg(code, rd: 2, rn: 1)
+	arm64EmitMovReg(code, rd: 1, rn: 0)
+	arm64EmitMovz(code, rd: 0, imm16: fd)
+	arm64EmitMovz(code, rd: 8, imm16: readNumber)
+	arm64EmitSvc(code)
+
+	arm64EmitLdpPostIndex(code, frameSize: 32)
+	arm64EmitRet(code)
+end 'arm64EmitReadStdinSyscall'
+
+// mrt_read_stdin via libcall: read(fd, buf, len) through GOT slot.
+// Used for macOS (libSystem.B.dylib). Caller: X0=ptr, X1=len.
+function arm64EmitReadStdinLibcall(code ByteArray, relocations RelocationArray, readSlot MachineWord, fd MachineWord)
+	arm64EmitStpPreIndex(code, frameSize: 32)
+	arm64EmitMovFpSp(code)
+
+	// Remap args: caller X0=ptr, X1=len -> read(X0=fd, X1=ptr, X2=len)
+	arm64EmitMovReg(code, rd: 2, rn: 1)
+	arm64EmitMovReg(code, rd: 1, rn: 0)
+	arm64EmitMovz(code, rd: 0, imm16: fd)
+
+	// Call read through GOT slot
+	relocations.push(Relocation.create(code.count(), slotIndex: readSlot))
+	arm64EmitAdrp(code, rd: 16)
+	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+	arm64EmitBlr(code, rn: 16)
+
+	arm64EmitLdpPostIndex(code, frameSize: 32)
+	arm64EmitRet(code)
+end 'arm64EmitReadStdinLibcall'
+
+// mrt_read_stdin via Win32 API (GetStdHandle(STD_INPUT_HANDLE) + ReadFile through IAT).
+// Caller: X0=ptr, X1=len. Stack frame: slot 0=ptr, slot 1=len, slot 2=bytesRead,
+// slot 3=handle. Returns bytesRead in X0.
+function arm64EmitReadStdinWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, readFileSlot MachineWord)
+	arm64EmitStpPreIndex(code, frameSize: 80)
+	arm64EmitMovFpSp(code)
+
+	// Save args: [FP+16] = X0 (ptr), [FP+24] = X1 (len)
+	arm64EmitStrSlot(code, rt: 0, slotIndex: 0)
+	arm64EmitStrSlot(code, rt: 1, slotIndex: 1)
+
+	// Zero bytesRead at [FP+32]
+	arm64EmitMovz(code, rd: 2, imm16: 0)
+	arm64EmitStrSlot(code, rt: 2, slotIndex: 2)
+
+	// GetStdHandle(STD_INPUT_HANDLE): X0 = handleConstant
+	arm64EmitMovImm(code, rd: 0, value: handleConstant)
+	relocations.push(Relocation.create(code.count(), slotIndex: getHandleSlot))
+	arm64EmitAdrp(code, rd: 16)
+	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+	arm64EmitBlr(code, rn: 16)
+
+	// Save handle to [FP+40]
+	arm64EmitStrSlot(code, rt: 0, slotIndex: 3)
+
+	// ReadFile(handle, buffer, length, &bytesRead, NULL)
+	arm64EmitLdrSlot(code, rt: 0, slotIndex: 3)
+	arm64EmitLdrSlot(code, rt: 1, slotIndex: 0)
+	arm64EmitLdrSlot(code, rt: 2, slotIndex: 1)
+	arm64EmitAddImm(code, rd: 3, rn: 29, imm12: 32)
+	arm64EmitMovz(code, rd: 4, imm16: 0)
+
+	relocations.push(Relocation.create(code.count(), slotIndex: readFileSlot))
+	arm64EmitAdrp(code, rd: 16)
+	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+	arm64EmitBlr(code, rn: 16)
+
+	// Load bytesRead from [FP+32] into X0 — discards the BOOL return.
+	arm64EmitLdrSlot(code, rt: 0, slotIndex: 2)
+
+	arm64EmitLdpPostIndex(code, frameSize: 80)
+	arm64EmitRet(code)
+end 'arm64EmitReadStdinWinApi'
+
 // --- mrt_i64_to_string stub ---
 // Input: X0 = value to convert
 // Returns: X0 = pointer to string, X1 = length

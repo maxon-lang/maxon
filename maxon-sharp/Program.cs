@@ -441,8 +441,9 @@ class Program {
   }
 
   /// <summary>
-  /// Extracts top-level function names from build.maxon content.
-  /// Returns (name, comment) pairs where comment is the preceding // comment line, if any.
+  /// Prints the "Available commands (from build.maxon):" listing produced by
+  /// <see cref="ListBuildFunctions"/>. Underscores in function names are
+  /// rewritten to dashes for the user-facing display.
   /// </summary>
   static void PrintAvailableCommands(List<(string name, string? comment)> functions, TextWriter? writer = null) {
     writer ??= Console.Out;
@@ -468,17 +469,27 @@ class Program {
 
   /// <summary>
   /// Extracts top-level function names from build.maxon content.
-  /// Returns (name, comment) pairs where comment is the preceding // comment line, if any.
+  /// Returns (name, comment) pairs. `comment` is built from the contiguous
+  /// block of `///` doc-comment lines immediately preceding the function
+  /// declaration (joined with single spaces). Plain `//` comments are
+  /// treated as authoring notes and ignored — only `///` flows through to
+  /// the CLI help output.
   /// </summary>
   static List<(string name, string? comment)> ListBuildFunctions(string content, bool exportedOnly = true) {
     var results = new List<(string name, string? comment)>();
     var lines = content.Split('\n');
-    string? lastComment = null;
+    var docBuffer = new List<string>();
 
     foreach (var rawLine in lines) {
       var line = rawLine.Trim();
-      if (line.StartsWith("//")) {
-        lastComment = line[2..].Trim();
+      if (line.StartsWith("///")) {
+        docBuffer.Add(line[3..].Trim());
+      } else if (line.StartsWith("//")) {
+        // Plain `//` is for in-source notes, not user-facing help. It
+        // neither contributes to the doc buffer nor clears it — that way a
+        // mixed block (`/// summary` then a `// implementation note`) still
+        // shows the `///` line at the top.
+        continue;
       } else if (line.StartsWith("export function ") || (!exportedOnly && line.StartsWith("function "))) {
         var rest = line.StartsWith("export function ")
           ? line["export function ".Length..]
@@ -486,11 +497,12 @@ class Program {
         var parenIndex = rest.IndexOf('(');
         if (parenIndex > 0) {
           var name = rest[..parenIndex].Trim();
-          results.Add((name, lastComment));
+          var comment = docBuffer.Count == 0 ? null : string.Join(' ', docBuffer);
+          results.Add((name, comment));
         }
-        lastComment = null;
+        docBuffer.Clear();
       } else if (line.Length > 0) {
-        lastComment = null;
+        docBuffer.Clear();
       }
     }
 

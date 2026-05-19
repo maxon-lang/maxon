@@ -602,7 +602,7 @@ end 'classifyPhase'
 // Profiling support: per-pass wall-clock accumulator across every pipeline
 // run in the process. The spec runner / build CLI drains this via
 // dumpPassTimings() at the end of a run when timing is enabled. Instrumentation
-// is gated on `passTimingsEnabled` so the per-pass `Process.currentTimeMs()`
+// is gated on `passTimingsEnabled` so the per-pass `Clock.nowMs()`
 // reads aren't paid in production runs.
 export typealias PassMillis = int(0 to u64.max)
 typealias PassMillisMap = Map with(String, PassMillis)
@@ -629,7 +629,7 @@ end 'recordPassTime'
 // Capture a wall-clock start point only when timings are active. Returns 0
 // when inactive — a no-op so callers can write the same shape regardless.
 export function passTimerStart() returns PassMillis
-	return (Process.currentTimeMs() if passTimingsEnabled else 0) as PassMillis
+	return (Clock.nowMs() if passTimingsEnabled else 0) as PassMillis
 end 'passTimerStart'
 
 // Record `now - startMs` against `passName` when timings are active. Pair
@@ -639,7 +639,7 @@ export function recordPassSince(passName String, startMs PassMillis)
 	if not passTimingsEnabled 'inactive'
 		return
 	end 'inactive'
-	recordPassTime(passName, elapsedMs: ((Process.currentTimeMs() as PassMillis) - startMs) as PassMillis)
+	recordPassTime(passName, elapsedMs: ((Clock.nowMs() as PassMillis) - startMs) as PassMillis)
 end 'recordPassSince'
 
 // Print per-pass totals + invocation counts, descending by total ms. Selection

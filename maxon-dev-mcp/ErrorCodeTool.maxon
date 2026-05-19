@@ -1,0 +1,373 @@
+// `lookup_error_code` MCP tool. Given a 4-digit Maxon error code (e.g.
+// `3014`, `"3014"`, or `"E3014"`), returns the source-of-truth doc comment
+// from `maxon-selfhosted/Compiler/ErrorCode.maxon` plus the spec files that
+// exercise it.
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias CodeNumber = int(1000 to 9999)
+typealias LineCount = int(0 to u64.max)
+
+/// Entry point called by Server.maxon's dispatch table.
+export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let code = try resolveCode(argsDoc, argsId: argsId) otherwise (err) 'bad'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: {errorReason(err)}")
+	end 'bad'
+
+	let repoRoot = repoRootPath()
+	let entry = try lookupInErrorCodeFile(repoRoot: repoRoot, code: code) otherwise 'notInSrc'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: code E{code} not found in maxon-selfhosted/Compiler/ErrorCode.maxon")
+	end 'notInSrc'
+
+	let specFiles = collectSpecFilesReferencing(repoRoot: repoRoot, code: code)
+	return buildOutcome(code: code, entry: entry, specFiles: specFiles)
+end 'lookupErrorCodeHandler'
+
+// =============================================================================
+// Input parsing
+// =============================================================================
+
+enum LookupArgError implements Error
+	missing
+	wrongType
+	notFourDigits
+	outOfRange
+end 'LookupArgError'
+
+function errorReason(err LookupArgError) returns String
+	return match err 'r'
+		missing gives "missing required `code` argument (number or string like \"E3014\")"
+		wrongType gives "`code` must be a number or a string"
+		notFourDigits gives "`code` must be a 4-digit value (e.g. 3014 or E3014)"
+		outOfRange gives "`code` is outside the 1000..9999 range"
+	end 'r'
+end 'errorReason'
+
+function resolveCode(argsDoc JsonDoc, argsId JsonNodeId) returns CodeNumber throws LookupArgError
+	// Numeric form: `{"code": 3014}`.
+	let numeric = try argsDoc.getInt(argsId, key: "code") otherwise 'notNum'
+		// Fall through to the string form below.
+		return try resolveStringCode(argsDoc, argsId: argsId)
+	end 'notNum'
+	return try clampToCodeRange(numeric)
+end 'resolveCode'
+
+function resolveStringCode(argsDoc JsonDoc, argsId JsonNodeId) returns CodeNumber throws LookupArgError
+	let s = try argsDoc.getString(argsId, key: "code") otherwise 'notStr'
+		throw LookupArgError.missing
+	end 'notStr'
+	let bytes = s.toByteArray()
+	var start = 0
+	let n = bytes.count()
+	if n == 0 'empty'
+		throw LookupArgError.notFourDigits
+	end 'empty'
+	let first = try bytes.get(0) otherwise 'gErr'
+		panic("resolveStringCode: bytes.get(0) OOB — n > 0 just checked")
+	end 'gErr'
+	if first == 0x45 or first == 0x65 'leadingE'
+		start = 1
+	end 'leadingE'
+	let digitCount = n - start
+	if digitCount != 4 'wrongLen'
+		throw LookupArgError.notFourDigits
+	end 'wrongLen'
+	var value = 0
+	for i in start upto n 'each'
+		let b = try bytes.get(i) otherwise 'gErr2'
+			panic("resolveStringCode: bytes.get OOB — i bounded by n")
+		end 'gErr2'
+		if b < 0x30 or b > 0x39 'badDigit'
+			throw LookupArgError.notFourDigits
+		end 'badDigit'
+		value = value * 10 + (b - 0x30)
+	end 'each'
+	return try clampToCodeRange(value)
+end 'resolveStringCode'
+
+function clampToCodeRange(value JsonInt) returns CodeNumber throws LookupArgError
+	if value < 1000 or value > 9999 'oob'
+		throw LookupArgError.outOfRange
+	end 'oob'
+	return value as CodeNumber
+end 'clampToCodeRange'
+
+// =============================================================================
+// ErrorCode.maxon parsing
+// =============================================================================
+
+type ErrorEntry
+	export var name String
+	export var stage String
+	export var docComment String
+
+	export static function create(name String, stage String, docComment String) returns ErrorEntry
+		return Self{name: name, stage: stage, docComment: docComment}
+	end 'create'
+end 'ErrorEntry'
+
+function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns ErrorEntry throws NotFound
+	let path = childPath(parent: repoRoot, segment: "maxon-selfhosted/Compiler/ErrorCode.maxon")
+	let content = try File.readText(path) otherwise 'readErr'
+		panic("lookupInErrorCodeFile: cannot read {path.path}; the file should always be present in a Maxon checkout")
+	end 'readErr'
+	let lines = content.split("\n")
+	let total = lines.count()
+	let needleSuffix = "= {code}"
+	for i in 0 upto total 'scan'
+		let line = try lines.get(i) otherwise 'gErr'
+			panic("lookupInErrorCodeFile: lines.get OOB — i bounded by total")
+		end 'gErr'
+		if not line.contains(needleSuffix) 'noMatch'
+			continue
+		end 'noMatch'
+		let parsed = try parseVariantLine(line) otherwise 'badLine'
+			continue
+		end 'badLine'
+		// Walk backwards to harvest the contiguous `//` comment block
+		// immediately above the variant.
+		let docComment = collectDocComment(lines, before: i)
+		return ErrorEntry.create(parsed.name, stage: stageFor(code), docComment: docComment)
+	end 'scan'
+	throw NotFound.notFound
+end 'lookupInErrorCodeFile'
+
+type VariantParse
+	export var name String
+	export var code CodeNumber
+
+	export static function create(name String, code CodeNumber) returns VariantParse
+		return Self{name: name, code: code}
+	end 'create'
+end 'VariantParse'
+
+// Match `\tnameCamelCase = NNNN` (any whitespace prefix; the `=` may be
+// surrounded by spaces). Throws NotFound if the line doesn't match the
+// expected variant shape — e.g. comment lines, blank lines, the `union`
+// header, etc.
+function parseVariantLine(line String) returns VariantParse throws NotFound
+	let bytes = line.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	// Skip leading whitespace.
+	while i < n 'skipWs'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("parseVariantLine: bytes.get OOB during whitespace skip")
+		end 'gErr'
+		if b != 0x20 and b != 0x09 'notWs'
+			break
+		end 'notWs'
+		i = i + 1
+	end 'skipWs'
+	let nameStart = i
+	// Identifier: [A-Za-z][A-Za-z0-9]*
+	if i >= n 'noName'
+		throw NotFound.notFound
+	end 'noName'
+	let firstChar = try bytes.get(i) otherwise 'gErr2'
+		panic("parseVariantLine: bytes.get OOB at nameStart")
+	end 'gErr2'
+	if not isAsciiLetter(firstChar) 'notIdent'
+		throw NotFound.notFound
+	end 'notIdent'
+	i = i + 1
+	while i < n 'scanIdent'
+		let b = try bytes.get(i) otherwise 'gErr3'
+			panic("parseVariantLine: bytes.get OOB during identifier scan")
+		end 'gErr3'
+		if not isAsciiLetter(b) and not isAsciiDigit(b) 'stop'
+			break
+		end 'stop'
+		i = i + 1
+	end 'scanIdent'
+	let name = sliceBytes(bytes, from: nameStart, until: i)
+	// Skip whitespace.
+	while i < n 'skipWs2'
+		let b = try bytes.get(i) otherwise 'gErr4'
+			panic("parseVariantLine: bytes.get OOB during second whitespace skip")
+		end 'gErr4'
+		if b != 0x20 and b != 0x09 'notWs2'
+			break
+		end 'notWs2'
+		i = i + 1
+	end 'skipWs2'
+	if i >= n 'noEq'
+		throw NotFound.notFound
+	end 'noEq'
+	let eqByte = try bytes.get(i) otherwise 'gErr5'
+		panic("parseVariantLine: bytes.get OOB at expected '='")
+	end 'gErr5'
+	if eqByte != 0x3D 'notEq'
+		throw NotFound.notFound
+	end 'notEq'
+	i = i + 1
+	while i < n 'skipWs3'
+		let b = try bytes.get(i) otherwise 'gErr6'
+			panic("parseVariantLine: bytes.get OOB during third whitespace skip")
+		end 'gErr6'
+		if b != 0x20 and b != 0x09 'notWs3'
+			break
+		end 'notWs3'
+		i = i + 1
+	end 'skipWs3'
+	let digitStart = i
+	while i < n 'scanDigits'
+		let b = try bytes.get(i) otherwise 'gErr7'
+			panic("parseVariantLine: bytes.get OOB during digit scan")
+		end 'gErr7'
+		if not isAsciiDigit(b) 'stop2'
+			break
+		end 'stop2'
+		i = i + 1
+	end 'scanDigits'
+	let digitLen = i - digitStart
+	if digitLen != 4 'notFourDigits'
+		throw NotFound.notFound
+	end 'notFourDigits'
+	var value = 0
+	for j in digitStart upto i 'acc'
+		let b = try bytes.get(j) otherwise 'gErr8'
+			panic("parseVariantLine: bytes.get OOB during digit accumulation")
+		end 'gErr8'
+		value = value * 10 + (b - 0x30)
+	end 'acc'
+	if value < 1000 or value > 9999 'oob'
+		throw NotFound.notFound
+	end 'oob'
+	return VariantParse.create(name, code: value as CodeNumber)
+end 'parseVariantLine'
+
+function isAsciiLetter(b Byte) returns bool
+	return (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A) or b == 0x5F
+end 'isAsciiLetter'
+
+function isAsciiDigit(b Byte) returns bool
+	return b >= 0x30 and b <= 0x39
+end 'isAsciiDigit'
+
+// Walk backwards from `before` collecting contiguous `//` comment lines.
+// Stops at the first non-comment line. Returns the comments joined with `\n`
+// (or an empty string when no doc precedes the variant).
+function collectDocComment(lines StringArray, before LineCount) returns String
+	if before == 0 'top'
+		return ""
+	end 'top'
+	var startIndex = before
+	var i = before
+	while i > 0 'walk'
+		i = i - 1
+		let line = try lines.get(i) otherwise 'gErr'
+			panic("collectDocComment: lines.get OOB — i bounded by before")
+		end 'gErr'
+		if not isCommentLine(line) 'stop'
+			startIndex = i + 1
+			break
+		end 'stop'
+		startIndex = i
+		if i == 0 'wentToTop'
+			break
+		end 'wentToTop'
+	end 'walk'
+	if startIndex >= before 'noDoc'
+		return ""
+	end 'noDoc'
+	var result = ""
+	for j in startIndex upto before 'each'
+		let line = try lines.get(j) otherwise 'gErr2'
+			panic("collectDocComment: lines.get OOB during join")
+		end 'gErr2'
+		if not result.isEmpty() 'sep'
+			result.append("\n")
+		end 'sep'
+		result.append(line)
+	end 'each'
+	return result
+end 'collectDocComment'
+
+function isCommentLine(line String) returns bool
+	let trimmed = line.trim()
+	return trimmed.startsWith("//")
+end 'isCommentLine'
+
+function stageFor(code CodeNumber) returns String
+	let leading = code / 1000
+	return match leading 'pick'
+		1 gives "lexer"
+		2 gives "parser"
+		3 gives "semantic"
+		4 gives "ir"
+		5 gives "codegen"
+		6 gives "pewriter"
+		default gives "unknown"
+	end 'pick'
+end 'stageFor'
+
+// =============================================================================
+// Spec-file scan
+// =============================================================================
+
+function collectSpecFilesReferencing(repoRoot FilePath, code CodeNumber) returns StringArray
+	let specsDir = childPath(parent: repoRoot, segment: "specs")
+	var matches = StringArray.create()
+	let files = try Directory.list(specsDir) otherwise 'listErr'
+		return matches
+	end 'listErr'
+	let needle = "E{code}"
+	let n = files.count()
+	for i in 0 upto n 'each'
+		let entry = try files.get(i) otherwise 'gErr'
+			panic("collectSpecFilesReferencing: files.get OOB — i bounded by n")
+		end 'gErr'
+		if not entry.path.endsWith(".md") 'notMd'
+			continue
+		end 'notMd'
+		let content = try File.readText(entry) otherwise 'readErr'
+			continue
+		end 'readErr'
+		if content.contains(needle) 'hit'
+			matches.push(entry.path)
+		end 'hit'
+	end 'each'
+	return matches
+end 'collectSpecFilesReferencing'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(code CodeNumber, entry ErrorEntry, specFiles StringArray) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let codeId = doc.add(JsonNode.numberNode(code as float))
+	let tagId = doc.add(JsonNode.stringNode("E{code}"))
+	let nameId = doc.add(JsonNode.stringNode(entry.name))
+	let stageId = doc.add(JsonNode.stringNode(entry.stage))
+	let docId = doc.add(JsonNode.stringNode(entry.docComment))
+
+	var specIds = JsonNodeIdArray.create()
+	let sn = specFiles.count()
+	for i in 0 upto sn 'each'
+		let path = try specFiles.get(i) otherwise 'gErr'
+			panic("buildOutcome: specFiles.get OOB — i bounded by sn")
+		end 'gErr'
+		specIds.push(doc.add(JsonNode.stringNode(path)))
+	end 'each'
+	let specsArr = doc.add(JsonNode.arrayNode(specIds))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("code")
+	children.push(codeId)
+	keys.push("tag")
+	children.push(tagId)
+	keys.push("name")
+	children.push(nameId)
+	keys.push("stage")
+	children.push(stageId)
+	keys.push("docComment")
+	children.push(docId)
+	keys.push("specFiles")
+	children.push(specsArr)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'

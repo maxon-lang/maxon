@@ -334,8 +334,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // we slice the output to recover per-test stdout and exit code. Tests
     // the rewriter rejected (skipped at build time) are NOT in the binary
     // and run via the per-fragment path instead.
+    //
+    // Sum the per-test timeouts (or default for tests without an explicit
+    // value) so a batch containing a long-timeout test doesn't get killed
+    // by the per-test default. This is the same "additive on serial work"
+    // semantics callers would expect from running the tests one at a time.
+    var batchTimeoutMs = item.Tests.Sum(t => t.TimeoutMs ?? DefaultTestTimeoutMs);
     var batchSw = Stopwatch.StartNew();
-    var (_, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null);
+    var (_, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null, timeoutMs: batchTimeoutMs);
     batchSw.Stop();
 
     // Parse the markers out of stdout. If ANY batched test fails its slice
@@ -774,7 +780,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       // Run the executable if we have runtime expectations
       if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
-        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
+        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
 
         if (successExpectation.ExitCode.HasValue) {
           // On macOS/Linux, process exit codes are masked to 8 bits (0-255)
@@ -905,9 +911,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     }
   }
 
-  private const int TestTimeoutMs = 2000;
+  private const int DefaultTestTimeoutMs = 2000;
 
-  private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null) {
+  private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
+    var effectiveTimeoutMs = timeoutMs ?? DefaultTestTimeoutMs;
     // Code signing and executable permissions are now handled by MachOWriter at compile time
 
     var psi = new ProcessStartInfo {
@@ -933,7 +940,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var stdoutTask = process.StandardOutput.ReadToEndAsync();
     var stderrTask = process.StandardError.ReadToEndAsync();
 
-    bool exited = process.WaitForExit(TestTimeoutMs);
+    bool exited = process.WaitForExit(effectiveTimeoutMs);
     if (!exited) {
       // Process timed out - kill it and drain streams
       try { process.Kill(entireProcessTree: true); } catch { }
@@ -1576,7 +1583,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
-              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir, test.Args);
+              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs);
               var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
               var oldStderr = normalize(success.Stderr);
               var newStderr = normalize(actualStderr);

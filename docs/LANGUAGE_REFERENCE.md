@@ -3814,6 +3814,24 @@ p.cancel()
 
 Cancelling a green thread stops it at its next yield point. The green thread's stack is freed.
 
+### Typed promises in collections
+
+Promises can be stored in collections and struct fields by declaring an explicit `Promise with T` type. The compiler boxes the green-thread handle into a `Promise<T>` struct at the storage site and unboxes it at the matching `await`. This pattern lets you fan out N tasks and join them in a second loop:
+
+```maxon
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+var arr = IntPromiseArray.create()
+for i in 0 upto n 'spawn'
+	arr.push(async compute(i))
+end 'spawn'
+var total = 0
+for p in arr 'join'
+	total = total + await p
+end 'join'
+```
+
 ### Restrictions
 
 - `async` can only be used on direct function calls (not closures or indirect calls)
@@ -4404,21 +4422,31 @@ myproject/
 
 The `build.maxon` file contains exported functions that serve as runnable commands. Each exported function must return `ExitCode` and must not throw. Private helper functions (without `export`) are not listed or runnable.
 
+Each exported function may be preceded by `///` doc-comment lines; those lines are rendered next to the command name in the `maxon run` listing. Plain `//` comments are treated as in-source notes and are not surfaced to the CLI.
+
 ```maxon
-// Build the project
+/// Build the project.
 export function build() returns ExitCode
-	let result = Process.execute("maxon build .", timeoutMs: 60000)
-	if result != 0 'failed'
+	let exe = try FilePath.from("maxon") otherwise return 2
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push(".")
+	let result = try Subprocess.run(.path(exe), arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 60000) otherwise return 1
+	if not result.succeeded() 'failed'
 		return 1
 	end 'failed'
 	return 0
 end 'build'
 
-// Compile the self-hosted compiler and run its spec tests
+/// Compile the self-hosted compiler and run its spec tests.
 export function spec_test_selfhosted() returns ExitCode
 	print("Compiling...\n")
-	let result = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
-	if result != 0 'failed'
+	let exe = try FilePath.from("bin/maxon.exe") otherwise return 2
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push("maxon-selfhosted")
+	let result = try Subprocess.run(.path(exe), arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 120000) otherwise return 1
+	if not result.succeeded() 'failed'
 		return 1
 	end 'failed'
 	return 0
@@ -4942,7 +4970,7 @@ CPU faults — division (or modulo) by zero, null pointer dereference, and stack
 
 14. **Propagate errors with `try` in throwing functions**:
     ```maxon
-		function process() returns Result throws ProcessError
+		function process() returns Result throws WorkflowError
 				let data = try loadData()  // Propagates error to caller
 				return transform(data)
 		end 'process'

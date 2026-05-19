@@ -238,6 +238,18 @@ public interface IEmitterBackend {
   void GetCurrentTimeMs(VReg dest, int scratchSlot);
 
   /// <summary>
+  /// Get current process ID into dest register (zero-extended).
+  /// Windows: GetCurrentProcessId.
+  /// macOS / POSIX: getpid.
+  /// Stable for the process's lifetime; differs across concurrent
+  /// processes. Used by stdlib helpers that need to disambiguate
+  /// filesystem temp paths or other shared-resource names across
+  /// sibling subprocesses spawned by a parent. The Win32 / POSIX
+  /// callouts have no parameters and do not require scratch slots.
+  /// </summary>
+  void GetCurrentProcessId(VReg dest);
+
+  /// <summary>
   /// Wake an idle worker thread.
   /// Windows: SetEvent(p->wakeEvent) where POffWakeEvent = 0x38.
   /// macOS: dispatch_semaphore_signal(p->wakeSemaphore) where POffWakeSemaphore = 0x38.

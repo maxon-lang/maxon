@@ -1,0 +1,305 @@
+// `run_spec_test` MCP tool. Wraps `<compiler>.exe spec-test` with the
+// canonical filter / log / memory-trace flags and parses the test runner's
+// final summary line into structured `{passed, failed, total, durationMs,
+// memoryLeak}` output.
+//
+// Inputs (JSON):
+//   compiler?: "csharp" | "selfhosted"   (default "csharp")
+//   filter?: String                      → --filter=<pat>
+//   updateRequired?: bool                → --update-required
+//   log?: String                         → --log=<value>
+//   mmTrace?: bool                       → --mm-trace
+//
+// Output (JSON):
+//   compiler, passed, failed, total, durationMs, memoryLeak (exit code 101),
+//   exitCode, failures: [{name, output}], rawTail.
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias TestCount = int(0 to u64.max)
+
+// Spec runs can take a while when nothing is filtered: a full self-hosted
+// run is ~30s today, but cold-cache compiles can spike past that. 10 min
+// timeout gives plenty of head room without making a runaway run silent.
+let defaultSpecTestTimeoutMs = 600000
+
+// `rawTail` cap: enough to include the summary plus a handful of failure
+// lines without flooding the MCP response.
+let rawTailMaxBytes = 4096
+
+// Exit code 101 means the test runner detected a memory leak — surface it
+// as a typed `memoryLeak` boolean so callers don't have to know the magic
+// number.
+let memoryLeakExitCode = 101
+
+/// Entry point called by Server.maxon's dispatch table.
+export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
+	return specTestWith(compiler: compiler, argsDoc: argsDoc, argsId: argsId)
+end 'specTestHandler'
+
+/// Self-hosted variant exposed as its own MCP tool so clients can discover
+/// it without knowing about the `compiler` argument. Delegates to the same
+/// machinery as `specTestHandler` with `compiler` pinned to "selfhosted".
+export function selfHostedSpecTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	return specTestWith(compiler: "selfhosted", argsDoc: argsDoc, argsId: argsId)
+end 'selfHostedSpecTestHandler'
+
+function specTestWith(compiler String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let repoRoot = repoRootPath()
+	let binary = try compilerBinary(repoRoot: repoRoot, compiler: compiler) otherwise (err) 'noBin'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler}: required binary missing. Build it first via the `build` tool.")
+	end 'noBin'
+
+	let argv = buildSpecTestArgv(argsDoc: argsDoc, argsId: argsId)
+	let displayCommand = displayCommandFor(binary: binary, argv: argv)
+	let timing = Clock.nowMs()
+	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultSpecTestTimeoutMs) otherwise (err) 'spawn'
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test {compiler}: {err.displayReason()} (after {Clock.elapsedMs(since: timing)}ms)")
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(since: timing)
+
+	return buildOutcome(compiler: compiler, command: displayCommand, result: result, durationMs: elapsed)
+end 'specTestWith'
+
+// =============================================================================
+// Argument parsing
+// =============================================================================
+
+/// Normalize the `compiler` arg into a canonical token. Recognised values
+/// are `"csharp"` (default) and `"selfhosted"`; anything else falls back to
+/// `"csharp"` since that's the only compiler required for spec-tests today.
+/// Shared with `SpecOutcomeTool` so the two stay in lockstep.
+export function compilerFromArgs(argsDoc JsonDoc, argsId JsonNodeId) returns String
+	let raw = try argsDoc.getString(argsId, key: "compiler") otherwise "csharp"
+	if raw.equals("selfhosted") 'sh'
+		return raw
+	end 'sh'
+	return "csharp"
+end 'compilerFromArgs'
+
+/// Resolve the on-disk path for the requested compiler binary. Throws when
+/// the binary doesn't exist — callers translate that into an
+/// `invalidRequest` error pointing the user at the `build` tool.
+export function compilerBinary(repoRoot FilePath, compiler String) returns FilePath throws NotFound
+	let path = match compiler 'pick'
+		"csharp" gives childPath(parent: repoRoot, segment: "bin/maxon.exe")
+		"selfhosted" gives childPath(parent: repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+		default panic("compilerBinary: unknown compiler `{compiler}` — compilerFromArgs should have normalized")
+	end 'pick'
+	if not File.exists(path) 'missing'
+		throw NotFound.notFound
+	end 'missing'
+	return path
+end 'compilerBinary'
+
+// Construct the argv passed to `<compiler>.exe spec-test`. The argv0 (the
+// binary path itself) is handled separately by Subprocess.run, so this list
+// starts at the `spec-test` subcommand.
+function buildSpecTestArgv(argsDoc JsonDoc, argsId JsonNodeId) returns StringArray
+	var argv = StringArray.create()
+	argv.push("spec-test")
+	let filter = try argsDoc.getString(argsId, key: "filter") otherwise ""
+	if not filter.isEmpty() 'haveFilter'
+		argv.push("--filter={filter}")
+	end 'haveFilter'
+	let updateRequired = try argsDoc.getBool(argsId, key: "updateRequired") otherwise false
+	if updateRequired 'haveUR'
+		argv.push("--update-required")
+	end 'haveUR'
+	let log = try argsDoc.getString(argsId, key: "log") otherwise ""
+	if not log.isEmpty() 'haveLog'
+		argv.push("--log={log}")
+	end 'haveLog'
+	let mmTrace = try argsDoc.getBool(argsId, key: "mmTrace") otherwise false
+	if mmTrace 'haveMM'
+		argv.push("--mm-trace")
+	end 'haveMM'
+	return argv
+end 'buildSpecTestArgv'
+
+// Human-readable rendering of `binary argv...` for the JSON response. Args
+// here never contain shell metacharacters (they're flag names + values from
+// the MCP request), so a plain space-join is faithful.
+function displayCommandFor(binary FilePath, argv StringArray) returns String
+	var s = binary.path
+	let n = argv.count()
+	for i in 0 upto n 'each'
+		let a = try argv.get(i) otherwise panic("displayCommandFor: argv.get({i}) OOB (count={n})")
+		s.append(" ")
+		s.append(a)
+	end 'each'
+	return s
+end 'displayCommandFor'
+
+// =============================================================================
+// Result parsing
+// =============================================================================
+
+type SpecSummary
+	export var passed TestCount = 0
+	export var total TestCount = 0
+	export var durationMs TestCount = 0
+	export var parsed bool = false
+
+	export static function empty() returns SpecSummary
+		return Self{}
+	end 'empty'
+
+	export static function withCounts(passed TestCount, total TestCount, durationMs TestCount) returns SpecSummary
+		return Self{passed: passed, total: total, durationMs: durationMs, parsed: true}
+	end 'withCounts'
+end 'SpecSummary'
+
+// Parse the runner's final summary line. Two shapes are accepted:
+//   `[TST] Tests: 39 passed (total: 39) in 1126ms`    (C# bootstrap)
+//   `[TST] INFO: Tests: 19 passed (total: 19) in 1547ms`  (self-hosted)
+// Returns a zero-filled struct with `parsed: false` if neither is found.
+function parseSummary(combined String) returns SpecSummary
+	let bytes = combined.toByteArray()
+	let marker = "Tests: "
+	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noTests'
+		return SpecSummary.empty()
+	end 'noTests'
+	let lineStart = pos + marker.byteLength()
+	let lineEnd = findEndOfLine(bytes, from: lineStart)
+	let line = sliceBytes(bytes, from: lineStart, until: lineEnd)
+	return parseSummaryLine(line)
+end 'parseSummary'
+
+function findEndOfLine(bytes ByteArray, from BytePos) returns BytePos
+	let n = bytes.count()
+	var i = from
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("findEndOfLine: get OOB — i bounded by n")
+		end 'gErr'
+		if b == 10 or b == 13 'eol'
+			return i
+		end 'eol'
+		i = i + 1
+	end 'scan'
+	return n
+end 'findEndOfLine'
+
+// "39 passed (total: 39) in 1126ms"
+function parseSummaryLine(line String) returns SpecSummary
+	let passed = try parseLeadingInt(line) otherwise 'noPassed'
+		return SpecSummary.empty()
+	end 'noPassed'
+	let afterTotal = try sliceAfter(line, marker: "(total: ") otherwise 'noTotal'
+		return SpecSummary.empty()
+	end 'noTotal'
+	let total = try parseLeadingInt(afterTotal) otherwise 'badTotal'
+		return SpecSummary.empty()
+	end 'badTotal'
+	// Duration is optional — the bare-summary form may omit ` in NNNms` when
+	// the runner is in some report modes. Treat that as duration=0.
+	var durationMs = 0
+	let afterIn = try sliceAfter(afterTotal, marker: " in ") otherwise 'noIn'
+		return SpecSummary.withCounts(passed.value, total: total.value, durationMs: 0)
+	end 'noIn'
+	let duration = try parseLeadingInt(afterIn) otherwise 'badDur'
+		return SpecSummary.withCounts(passed.value, total: total.value, durationMs: 0)
+	end 'badDur'
+	durationMs = duration.value
+	return SpecSummary.withCounts(passed.value, total: total.value, durationMs: durationMs)
+end 'parseSummaryLine'
+
+type ParsedInt
+	export var value TestCount
+	export var rest String
+
+	export static function create(value TestCount, rest String) returns ParsedInt
+		return Self{value: value, rest: rest}
+	end 'create'
+end 'ParsedInt'
+
+function parseLeadingInt(s String) returns ParsedInt throws NotFound
+	let bytes = s.toByteArray()
+	let n = bytes.count()
+	var i = 0
+	var value = 0
+	var anyDigits = false
+	while i < n 'scan'
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("parseLeadingInt: get OOB — i bounded by n")
+		end 'gErr'
+		if b < 0x30 or b > 0x39 'notDigit'
+			break
+		end 'notDigit'
+		value = value * 10 + (b - 0x30)
+		anyDigits = true
+		i = i + 1
+	end 'scan'
+	if not anyDigits 'noDigits'
+		throw NotFound.notFound
+	end 'noDigits'
+	let rest = sliceBytes(bytes, from: i, until: n)
+	return ParsedInt.create(value, rest: rest)
+end 'parseLeadingInt'
+
+function sliceAfter(s String, marker String) returns String throws NotFound
+	let bytes = s.toByteArray()
+	let pos = try findByteSequence(bytes, needle: marker)
+	let start = pos + marker.byteLength()
+	return sliceBytes(bytes, from: start, until: bytes.count())
+end 'sliceAfter'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+function buildOutcome(compiler String, command String, result CollectedOutput, durationMs DurationMs) returns ToolOutcome
+	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let summary = parseSummary(combined)
+	let memoryLeak = result.exitCode() == memoryLeakExitCode
+
+	// Failed count = total - passed when we have a successful parse.
+	// Falls back to 0 when we couldn't find the summary line at all
+	// (e.g. a compile error before the tests ran) or when the math would
+	// underflow.
+	var failed = 0
+	if summary.parsed and summary.total >= summary.passed 'okMath'
+		failed = summary.total - summary.passed
+	end 'okMath'
+
+	var doc = JsonDoc.create()
+	let compilerId = doc.add(JsonNode.stringNode(compiler))
+	let commandId = doc.add(JsonNode.stringNode(command))
+	let passedId = doc.add(JsonNode.numberNode(summary.passed as float))
+	let failedId = doc.add(JsonNode.numberNode(failed as float))
+	let totalId = doc.add(JsonNode.numberNode(summary.total as float))
+	let durationId = doc.add(JsonNode.numberNode(durationMs as float))
+	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode() as float))
+	let memoryLeakId = doc.add(JsonNode.boolNode(memoryLeak))
+	let parsedId = doc.add(JsonNode.boolNode(summary.parsed))
+	let rawTail = lastBytes(combined, max: rawTailMaxBytes)
+	let rawTailId = doc.add(JsonNode.stringNode(rawTail))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("compiler")
+	children.push(compilerId)
+	keys.push("command")
+	children.push(commandId)
+	keys.push("passed")
+	children.push(passedId)
+	keys.push("failed")
+	children.push(failedId)
+	keys.push("total")
+	children.push(totalId)
+	keys.push("durationMs")
+	children.push(durationId)
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("memoryLeak")
+	children.push(memoryLeakId)
+	keys.push("summaryParsed")
+	children.push(parsedId)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'

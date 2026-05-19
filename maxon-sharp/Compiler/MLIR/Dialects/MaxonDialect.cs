@@ -178,6 +178,7 @@ public enum MaxonOpKind {
   ManagedToCString,
   ManagedWriteStdout,
   ManagedWriteStderr,
+  ManagedReadStdin,
   Panic,
   PanicDynamic,
   CallRuntime,
@@ -1413,6 +1414,17 @@ public sealed class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
+}
+
+// Read up to MaxBytes bytes from stdin into a freshly-allocated __ManagedMemory,
+// whose length reflects the count actually read (0 on EOF). Returns the MM.
+public sealed class MaxonManagedReadStdinOp(MaxonValue maxBytes) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.ManagedReadStdin;
+  public override string Mnemonic => "maxon.managed_read_stdin";
+  public MaxonValue MaxBytes { get; } = maxBytes;
+  public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [MaxBytes.ToString()];
 }
 
 // Write managed memory buffer to stderr, returns number of bytes written

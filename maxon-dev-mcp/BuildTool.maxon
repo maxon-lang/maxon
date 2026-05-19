@@ -1,0 +1,275 @@
+// `build` MCP tool. Invokes the canonical Maxon build commands so MCP
+// clients can drive `dotnet build` and `./bin/maxon.exe build maxon-selfhosted`
+// through one structured tool call — no more re-deriving the commands each
+// session.
+
+// Local byte alias — kept file-private so byte arithmetic in the error
+// parsers below doesn't have to qualify Util's exported aliases.
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+// Default per-target timeout: 5 minutes. dotnet build on a clean cache plus
+// the self-hosted bootstrap can take a couple of minutes each, so a 5-minute
+// ceiling per step is generous but not infinite.
+let defaultBuildTimeoutMs = 300000
+
+// Tail of captured output we surface in `rawTail`. Long enough to include
+// the error summary at the end of a failed dotnet build without flooding
+// the MCP response. ~4 KiB.
+let rawTailMaxBytes = 4096
+
+/// Entry point called by Server.maxon's dispatch table.
+export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
+	let target = try argsDoc.getString(argsId, key: "target") otherwise 'noTarget'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: missing required `target` (one of csharp | selfhosted | both)")
+	end 'noTarget'
+
+	let repoRoot = repoRootPath()
+	if target.equals("csharp") 'cs'
+		return runCsharpBuild(repoRoot: repoRoot)
+	end 'cs'
+	if target.equals("selfhosted") 'sh'
+		return runSelfhostedBuild(repoRoot: repoRoot)
+	end 'sh'
+	if target.equals("both") 'both'
+		let csOutcome = runCsharpBuild(repoRoot: repoRoot)
+		// Abort the chain on csharp failure; otherwise continue with the
+		// selfhosted build. We can't hold the second step as a function
+		// reference (Maxon's compiler currently has trouble with function-
+		// type values), so we just inline the conditional here.
+		match csOutcome 'cs'
+			success then return runSelfhostedBuild(repoRoot: repoRoot)
+			error then return csOutcome
+		end 'cs'
+	end 'both'
+
+	return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "build: unknown target `{target}` (expected csharp | selfhosted | both)")
+end 'buildToolHandler'
+
+// =============================================================================
+// csharp target
+// =============================================================================
+
+function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
+	let cwd = childPath(parent: repoRoot, segment: "maxon-sharp")
+	let timing = Clock.nowMs()
+	var argv = StringArray.create()
+	argv.push("build")
+	let result = try Subprocess.run(Executable.name("dotnet"), arguments: argv, workingDirectory: cwd, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
+		return subprocessErrorOutcome(target: "csharp", err: err, durationMs: Clock.elapsedMs(since: timing))
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(since: timing)
+
+	let binaryPath = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	return buildOutcome(target: "csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+end 'runCsharpBuild'
+
+// =============================================================================
+// selfhosted target
+// =============================================================================
+
+function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
+	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	if not File.exists(csharpBinary) 'noCsharp'
+		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build selfhosted: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
+	end 'noCsharp'
+
+	let timing = Clock.nowMs()
+	var argv = StringArray.create()
+	argv.push("build")
+	argv.push("maxon-selfhosted")
+	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
+		return subprocessErrorOutcome(target: "selfhosted", err: err, durationMs: Clock.elapsedMs(since: timing))
+	end 'spawn'
+	let elapsed = Clock.elapsedMs(since: timing)
+
+	let binaryPath = childPath(parent: repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+	return buildOutcome(target: "selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+end 'runSelfhostedBuild'
+
+// =============================================================================
+// Outcome construction
+// =============================================================================
+
+// Build the success/error JSON envelope for one build invocation. Shared
+// between csharp and selfhosted because the shape is identical.
+function buildOutcome(target String, result CollectedOutput, durationMs DurationMs, expectedBinary FilePath) returns ToolOutcome
+	var doc = JsonDoc.create()
+	let targetId = doc.add(JsonNode.stringNode(target))
+	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode() as float))
+	let durationId = doc.add(JsonNode.numberNode(durationMs as float))
+	let successId = doc.add(JsonNode.boolNode(result.succeeded()))
+
+	let combinedOutput = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let errors = parseBuildErrors(combinedOutput)
+	let errorsArr = buildErrorsArray(doc, errors: errors)
+	let rawTail = lastBytes(combinedOutput, max: rawTailMaxBytes)
+	let rawTailId = doc.add(JsonNode.stringNode(rawTail))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("target")
+	children.push(targetId)
+	keys.push("exitCode")
+	children.push(exitCodeId)
+	keys.push("durationMs")
+	children.push(durationId)
+	keys.push("success")
+	children.push(successId)
+	if result.succeeded() 'haveBinary'
+		let binaryId = doc.add(JsonNode.stringNode(expectedBinary.path))
+		keys.push("binaryPath")
+		children.push(binaryId)
+	end 'haveBinary'
+	keys.push("errors")
+	children.push(errorsArr)
+	keys.push("rawTail")
+	children.push(rawTailId)
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	return ToolOutcome.success(doc, root: doc.root)
+end 'buildOutcome'
+
+// Surface a Subprocess spawn / timeout / I/O failure as a JSON-RPC error. We
+// can't construct the success-shaped buildOutcome here because we never got an
+// exit code — there was no child to inspect.
+function subprocessErrorOutcome(target String, err SubprocessError, durationMs DurationMs) returns ToolOutcome
+	return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "build {target}: {err.displayReason()} (after {durationMs}ms)")
+end 'subprocessErrorOutcome'
+
+// =============================================================================
+// Error parsing
+// =============================================================================
+
+type BuildError
+	export var message String
+	export var code String = ""
+	export var file String = ""
+
+	export static function fromMessage(message String) returns BuildError
+		return Self{message: message}
+	end 'fromMessage'
+end 'BuildError'
+
+typealias BuildErrorArray = Array with BuildError
+
+// Walk the combined build output line by line. Two formats:
+//   - Maxon compiler emits `error E3014: <file>:<line>:<col>: <message>`
+//   - MSBuild emits `<file>(<line>,<col>): error CS1234: <message>`
+// We scan for both. Anything not matching is ignored — the rawTail field
+// already captures full context for ad-hoc inspection.
+function parseBuildErrors(combined String) returns BuildErrorArray
+	var errors = BuildErrorArray.create()
+	let lines = combined.split("\n")
+	let n = lines.count()
+	for i in 0 upto n 'each'
+		let line = try lines.get(i) otherwise 'gErr'
+			panic("parseBuildErrors: lines.get OOB — i bounds-checked")
+		end 'gErr'
+		// Skip blank lines and the spec-test progress chatter (`[TST] ...`).
+		if line.isEmpty() 'empty'
+			break
+		end 'empty'
+		extractMaxonError(line, errors: errors)
+	end 'each'
+	return errors
+end 'parseBuildErrors'
+
+// Match the Maxon compiler's `error EXXXX: file:line:col: message` shape.
+function extractMaxonError(line String, errors BuildErrorArray)
+	let marker = " error E"
+	let bytes = line.toByteArray()
+	let total = bytes.count()
+	let pos = try findByteSequence(bytes, needle: marker) otherwise 'noMaxon'
+		// MSBuild form starts with the file path before " error ".
+		extractMsbuildError(line, errors: errors)
+		return
+	end 'noMaxon'
+	// Everything after "error E" up to the first colon is the code.
+	let afterMarker = pos + marker.byteLength()
+	var codeEnd = afterMarker
+	while codeEnd < total 'scanCode'
+		let b = try bytes.get(codeEnd) otherwise 'gErr'
+			panic("extractMaxonError: bytes.get OOB — codeEnd bounded")
+		end 'gErr'
+		if b == 0x3A 'colon'
+			break
+		end 'colon'
+		codeEnd = codeEnd + 1
+	end 'scanCode'
+	// `pos` points to the leading space. ` error ` is 7 chars, so `pos + 7`
+	// lands on the `E` itself — codeStr already includes the leading `E`.
+	let codeStr = sliceString(line, from: pos + 7, until: codeEnd)
+	let message = sliceString(line, from: codeEnd + 1, until: total).trim()
+	var err = BuildError.fromMessage(message)
+	err.code = codeStr
+	errors.push(err)
+end 'extractMaxonError'
+
+// Match the MSBuild `file(line,col): error CSxxxx: message` shape.
+function extractMsbuildError(line String, errors BuildErrorArray)
+	let marker = ": error "
+	let bytes = line.toByteArray()
+	let total = bytes.count()
+	let pos = try findByteSequence(bytes, needle: marker) otherwise 'notFound'
+		return
+	end 'notFound'
+	var err = BuildError.fromMessage(sliceString(line, from: pos + marker.byteLength(), until: total))
+	// The file/line/col portion ends at the `(` just before " error ".
+	// If no `(` precedes it (rare — MSBuild's format always has one — but
+	// we keep the lookup total), the file field stays empty.
+	let parenPos = try findOpenParenBefore(bytes, endPos: pos) otherwise 'noParen'
+		errors.push(err)
+		return
+	end 'noParen'
+	err.file = sliceString(line, from: 0, until: parenPos)
+	errors.push(err)
+end 'extractMsbuildError'
+
+function findOpenParenBefore(bytes ByteArray, endPos BytePos) returns BytePos throws NotFound
+	if endPos == 0 'atZero'
+		throw NotFound.notFound
+	end 'atZero'
+	var i = endPos
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise 'gErr'
+			panic("findOpenParenBefore: bytes.get OOB — i bounded by endPos < count")
+		end 'gErr'
+		if b == 0x28 'lparen'
+			return i
+		end 'lparen'
+	end 'scan'
+	throw NotFound.notFound
+end 'findOpenParenBefore'
+
+// =============================================================================
+// JSON helpers
+// =============================================================================
+
+function buildErrorsArray(doc JsonDoc, errors BuildErrorArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	let n = errors.count()
+	for i in 0 upto n 'each'
+		let err = try errors.get(i) otherwise 'gErr'
+			panic("buildErrorsArray: errors.get OOB — i bounds-checked")
+		end 'gErr'
+		let messageId = doc.add(JsonNode.stringNode(err.message))
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+		if not err.code.isEmpty() 'haveCode'
+			let codeId = doc.add(JsonNode.stringNode(err.code))
+			keys.push("code")
+			children.push(codeId)
+		end 'haveCode'
+		if not err.file.isEmpty() 'haveFile'
+			let fileId = doc.add(JsonNode.stringNode(err.file))
+			keys.push("file")
+			children.push(fileId)
+		end 'haveFile'
+		keys.push("message")
+		children.push(messageId)
+		ids.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'each'
+	return doc.add(JsonNode.arrayNode(ids))
+end 'buildErrorsArray'

@@ -104,6 +104,14 @@ export type IrFunction
 	// or save is unneeded, it should decrement the counter so the prologue
 	// stays accurate without a re-scan.
 	export var stackSize StackSize
+	// Bytes the function needs reserved at the bottom of its frame for
+	// outgoing call args that overflow the per-domain register file (i.e.,
+	// args 8+ on the int side, 9+ on the FP side under the internal CC).
+	// X64 ISel records the max stack-arg block across all calls in the
+	// function; the prologue/epilogue pass folds that into `stackSize`. The
+	// caller writes overflow args to `[rsp+0..outgoingArgSize)` before each
+	// `call` and the callee reads them at `[rbp + 0x10 + slot*8]`.
+	export var outgoingArgSize StackSize
 	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
@@ -164,6 +172,7 @@ export type IrFunction
 			varSlotCount: 0,
 			spillSize: 0,
 			stackSize: 0,
+			outgoingArgSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
@@ -199,6 +208,7 @@ export type IrFunction
 			varSlotCount: 0,
 			spillSize: 0,
 			stackSize: 0,
+			outgoingArgSize: 0,
 			calleeSavedGprs: RegIntArray.create(),
 			calleeSavedFps: RegIntArray.create(),
 			hasImplicitLayoutParam: false,
@@ -236,6 +246,7 @@ export type IrFunction
 			varSlotCount: src.varSlotCount,
 			spillSize: src.spillSize,
 			stackSize: src.stackSize,
+			outgoingArgSize: src.outgoingArgSize,
 			calleeSavedGprs: src.calleeSavedGprs,
 			calleeSavedFps: src.calleeSavedFps,
 			hasImplicitLayoutParam: src.hasImplicitLayoutParam,

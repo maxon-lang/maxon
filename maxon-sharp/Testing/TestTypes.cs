@@ -36,6 +36,13 @@ public class TestCase {
   /// When true, compile with --async-trace enabled.
   /// </summary>
   public bool AsyncTrace { get; init; }
+  /// <summary>
+  /// Per-test runtime timeout in milliseconds. When null, the runner uses
+  /// its default (2000ms). Parsed from `&lt;!-- TimeoutMs: N --&gt;` directives
+  /// in the spec file. Use for tests that legitimately take longer than the
+  /// default (e.g. async tests with multiple subprocess spawns).
+  /// </summary>
+  public int? TimeoutMs { get; init; }
 }
 
 /// <summary>
@@ -123,6 +130,11 @@ public class Fragment {
   /// When true, compile with --async-trace enabled.
   /// </summary>
   public bool AsyncTrace { get; init; }
+  /// <summary>
+  /// Per-test runtime timeout in milliseconds. When null, the runner uses
+  /// its default. See <see cref="TestCase.TimeoutMs"/>.
+  /// </summary>
+  public int? TimeoutMs { get; init; }
 }
 
 /// <summary>

@@ -1,0 +1,193 @@
+// JSON Schema builders for tool inputSchemas. MCP clients use these to
+// discover required arguments and offer typed completion. The shape we
+// emit is JSON Schema draft-07 — what the official MCP TypeScript SDK
+// and Inspector expect.
+//
+// Each builder takes the destination JsonDoc and returns the JsonNodeId of
+// the newly-added node. Schemas are composed bottom-up: leaves first
+// (string/number/enum), then composites (object/oneOf).
+
+// =============================================================================
+// Leaf builders
+// =============================================================================
+
+/// `{ "type": "string" }` (with optional description).
+export function schemaString(doc JsonDoc, description String) returns JsonNodeId
+	return schemaPrimitive(doc, jsonType: "string", description: description)
+end 'schemaString'
+
+/// `{ "type": "string", "enum": [...] }`. The choices are emitted as a
+/// JSON array of string literals.
+export function schemaStringEnum(doc JsonDoc, choices StringArray, description String) returns JsonNodeId
+	let typeId = doc.add(JsonNode.stringNode("string"))
+	let descId = doc.add(JsonNode.stringNode(description))
+	var enumIds = JsonNodeIdArray.create()
+	let n = choices.count()
+	for i in 0 upto n 'each'
+		let c = try choices.get(i) otherwise panic("schemaStringEnum: choices.get OOB")
+		enumIds.push(doc.add(JsonNode.stringNode(c)))
+	end 'each'
+	let enumArrId = doc.add(JsonNode.arrayNode(enumIds))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(typeId)
+	keys.push("enum")
+	children.push(enumArrId)
+	keys.push("description")
+	children.push(descId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaStringEnum'
+
+/// `{ "type": "integer", "description": "..." }`. We use "integer" rather
+/// than "number" when the tool actually requires whole numbers — gives
+/// clients a tighter type hint.
+export function schemaInteger(doc JsonDoc, description String) returns JsonNodeId
+	return schemaPrimitive(doc, jsonType: "integer", description: description)
+end 'schemaInteger'
+
+/// `{ "type": "boolean", "description": "..." }`.
+export function schemaBoolean(doc JsonDoc, description String) returns JsonNodeId
+	return schemaPrimitive(doc, jsonType: "boolean", description: description)
+end 'schemaBoolean'
+
+/// `{ "type": "array", "items": <itemSchema>, "description": "..." }`.
+export function schemaArrayOf(doc JsonDoc, itemSchema JsonNodeId, description String) returns JsonNodeId
+	let typeId = doc.add(JsonNode.stringNode("array"))
+	let descId = doc.add(JsonNode.stringNode(description))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(typeId)
+	keys.push("items")
+	children.push(itemSchema)
+	keys.push("description")
+	children.push(descId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaArrayOf'
+
+/// `{ "oneOf": [<schemaA>, <schemaB>, ...], "description": "..." }`.
+/// Used for sum-type arguments (e.g. `code: integer | string`).
+export function schemaOneOf(doc JsonDoc, alternatives JsonNodeIdArray, description String) returns JsonNodeId
+	let altsArr = doc.add(JsonNode.arrayNode(alternatives))
+	let descId = doc.add(JsonNode.stringNode(description))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("oneOf")
+	children.push(altsArr)
+	keys.push("description")
+	children.push(descId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaOneOf'
+
+// =============================================================================
+// Object composer
+// =============================================================================
+
+// One field in an object schema: name, schema id, and whether it's
+// required. The schemaObject builder consumes these to populate the
+// `properties` and `required` arrays in one pass.
+export type SchemaField
+	export var name String
+	export var schemaId JsonNodeId
+	export var required bool
+
+	export static function create(name String, schemaId JsonNodeId, required bool) returns SchemaField
+		return Self{name: name, schemaId: schemaId, required: required}
+	end 'create'
+end 'SchemaField'
+
+export typealias SchemaFieldArray = Array with SchemaField
+
+/// `{ "type": "object", "properties": { ... }, "required": [...], "additionalProperties": false }`.
+/// `additionalProperties` is set to false so MCP clients flag typos at
+/// validation time rather than passing unknown keys through.
+export function schemaObject(doc JsonDoc, fields SchemaFieldArray, description String) returns JsonNodeId
+	let typeId = doc.add(JsonNode.stringNode("object"))
+	let descId = doc.add(JsonNode.stringNode(description))
+	let additionalId = doc.add(JsonNode.boolNode(false))
+
+	var propKeys = StringArray.create()
+	var propChildren = JsonNodeIdArray.create()
+	var requiredIds = JsonNodeIdArray.create()
+	let n = fields.count()
+	for i in 0 upto n 'each'
+		let field = try fields.get(i) otherwise panic("schemaObject: fields.get OOB")
+		propKeys.push(field.name)
+		propChildren.push(field.schemaId)
+		if field.required 'r'
+			requiredIds.push(doc.add(JsonNode.stringNode(field.name)))
+		end 'r'
+	end 'each'
+	let propsId = doc.add(JsonNode.objectNode(propKeys, children: propChildren))
+	let requiredArrId = doc.add(JsonNode.arrayNode(requiredIds))
+
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(typeId)
+	keys.push("description")
+	children.push(descId)
+	keys.push("properties")
+	children.push(propsId)
+	keys.push("required")
+	children.push(requiredArrId)
+	keys.push("additionalProperties")
+	children.push(additionalId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaObject'
+
+// =============================================================================
+// Convenience: tools that accept the {kind, path | code} source shape
+// =============================================================================
+
+/// Schema for the standard source argument shared by `run_program`,
+/// `fmt`, `dump_ir`, and `mm_trace_analyze`. The `kind` field is required
+/// and constrained to "file" or "snippet"; `path` or `code` is required
+/// depending on `kind`, but we encode the two-key xor as a description
+/// rather than a `oneOf` so the schema stays scannable.
+export function schemaSource(doc JsonDoc) returns JsonNodeId
+	var kindChoices = StringArray.create()
+	kindChoices.push("file")
+	kindChoices.push("snippet")
+	let kindSchema = schemaStringEnum(doc, choices: kindChoices, description: "\"file\" reads from `path`; \"snippet\" compiles inline `code`.")
+	let pathSchema = schemaString(doc, description: "Absolute path to a .maxon file or project directory. Required when kind=\"file\".")
+	let codeSchema = schemaString(doc, description: "Inline Maxon source. Required when kind=\"snippet\". Will be written to a temp directory and built.")
+
+	var fields = SchemaFieldArray.create()
+	fields.push(SchemaField.create("kind", schemaId: kindSchema, required: true))
+	fields.push(SchemaField.create("path", schemaId: pathSchema, required: false))
+	fields.push(SchemaField.create("code", schemaId: codeSchema, required: false))
+	return schemaObject(doc, fields: fields, description: "Source to operate on: either an existing file/project or an inline snippet.")
+end 'schemaSource'
+
+// =============================================================================
+// Internal helpers
+// =============================================================================
+
+function schemaPrimitive(doc JsonDoc, jsonType String, description String) returns JsonNodeId
+	let typeId = doc.add(JsonNode.stringNode(jsonType))
+	let descId = doc.add(JsonNode.stringNode(description))
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("type")
+	children.push(typeId)
+	keys.push("description")
+	children.push(descId)
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'schemaPrimitive'
+
+/// Convenience: a fresh `StringArray` from a single literal.
+export function singletonStringArray(s String) returns StringArray
+	var out = StringArray.create()
+	out.push(s)
+	return out
+end 'singletonStringArray'
+
+/// Convenience: a `StringArray` from two literals.
+export function pairStringArray(a String, b String) returns StringArray
+	var out = StringArray.create()
+	out.push(a)
+	out.push(b)
+	return out
+end 'pairStringArray'

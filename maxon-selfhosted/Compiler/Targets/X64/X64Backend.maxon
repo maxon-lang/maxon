@@ -3,6 +3,10 @@
 // Mutable tracker for the current function's callee-saved registers
 export type X64StackTracker
 	export var calleeSavedGprs RegIntArray = RegIntArray.create()
+	// Bytes reserved at the bottom of the frame for outgoing call args; the
+	// prologue/epilogue use this to offset the callee-saved-reg save slots so
+	// they don't collide with the outgoing-arg area.
+	export var outgoingArgSize StackSize = 0
 
 	export static function create() returns X64StackTracker
 		return Self{}
@@ -52,8 +56,11 @@ export type X64Backend implements TargetBackend
 			// Record function name -> code offset
 			recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: func.name, offset: code.count())
 
-			// Set callee-saved register list for this function
+			// Set callee-saved register list + outgoing-arg block size for
+			// this function — the prologue/epilogue need both to lay out the
+			// callee-save slots above the outgoing-arg area.
 			stackTracker.calleeSavedGprs = func.calleeSavedGprs
+			stackTracker.outgoingArgSize = func.outgoingArgSize
 
 			// Block offset table for this function (indexed by BlockId)
 			var blockOffsets = CodeOffsetArray.create()
@@ -172,6 +179,7 @@ export type X64Backend implements TargetBackend
 			var rdataRelocs = objFunc.rdataRelocs
 
 			stackTracker.calleeSavedGprs = func.calleeSavedGprs
+			stackTracker.outgoingArgSize = func.outgoingArgSize
 
 			var blockOffsets = CodeOffsetArray.create()
 			for _ in 0 upto func.nextBlockId 'alloc'
@@ -806,11 +814,17 @@ end 'emitShrRegClParam'
 
 // --- Byte emission helpers (identical to X86CodeEmitter) ---
 
-function emitPrologue(code ByteArray, stackSize StackSize, calleeSavedGprs RegIntArray)
+function emitPrologue(code ByteArray, stackSize StackSize, calleeSavedGprs RegIntArray, outgoingArgSize StackSize)
 	// push rbp; mov rbp, rsp
 	code.append(b"\x55\x48\x89\xe5")
 	// sub rsp, stackSize (only if non-zero)
-	// stackSize already includes space for callee-saved registers
+	// stackSize already includes space for callee-saved registers + outgoing
+	// stack args; layout from low addresses up is:
+	//   [rsp + 0 .. outgoingArgSize)              outgoing call args
+	//   [rsp + outgoingArgSize .. + savedRegs*8)  callee-saved registers
+	//   ...                                       spills (regalloc)
+	//   ...                                       local var slots
+	//   [rbp - 8] ↑                                first local
 	if stackSize > 0 and stackSize <= i8.max 'smallSub'
 		code.append(b"\x48\x83\xec")
 		code.push(stackSize and 0xFF)
@@ -818,29 +832,32 @@ function emitPrologue(code ByteArray, stackSize StackSize, calleeSavedGprs RegIn
 		code.append(b"\x48\x81\xec")
 		writeDword(code, value: stackSize)
 	end 'largeSub'
-	// Save callee-saved registers at the bottom of the frame using mov, not push.
-	// This preserves the frame pointer chain for stack unwinding.
-	// Stored at [rsp + 0], [rsp + 8], etc.
+	// Save callee-saved registers immediately above the outgoing-arg block.
+	// Storing them above the outgoing-arg area (rather than at [rsp+0]) keeps
+	// the outgoing-arg writes a single `mov [rsp+offset], reg` per arg with no
+	// frame-pointer-relative addressing.
 	var csi = 0
 	while csi < calleeSavedGprs.count() 'saveCalleeSaved'
 		let regOrd = try calleeSavedGprs.get(csi) otherwise 'skipSave'
 			csi = csi + 1
 			continue
 		end 'skipSave'
-		emitMovToRspOffset(code, regOrd: regOrd, offset: csi * 8)
+		emitMovToRspOffset(code, regOrd: regOrd, offset: outgoingArgSize + csi * 8)
 		csi = csi + 1
 	end 'saveCalleeSaved'
 end 'emitPrologue'
 
-function emitEpilogue(code ByteArray, calleeSavedGprs RegIntArray)
-	// Restore callee-saved registers from [rsp + i*8] before frame teardown.
+function emitEpilogue(code ByteArray, calleeSavedGprs RegIntArray, outgoingArgSize StackSize)
+	// Restore callee-saved registers from above the outgoing-arg block, mirror
+	// of emitPrologue. The teardown follows: `mov rsp, rbp; pop rbp` peels both
+	// the locals/spills/calleeSaved area and the outgoing-arg area in one shot.
 	var csi = 0
 	while csi < calleeSavedGprs.count() 'restoreCalleeSaved'
 		let regOrd = try calleeSavedGprs.get(csi) otherwise 'skipRestore'
 			csi = csi + 1
 			continue
 		end 'skipRestore'
-		emitMovFromRspOffset(code, regOrd: regOrd, offset: csi * 8)
+		emitMovFromRspOffset(code, regOrd: regOrd, offset: outgoingArgSize + csi * 8)
 		csi = csi + 1
 	end 'restoreCalleeSaved'
 	// mov rsp, rbp; pop rbp
@@ -1254,6 +1271,64 @@ function emitX64WriteStdoutWinApi(code ByteArray, relocations RelocationArray, g
 	// Epilogue: mov rsp, rbp; pop rbp; ret
 	code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitX64WriteStdoutWinApi'
+
+// Emit mrt_read_stdin stub parameterized by OsDescriptor. The Maxon-source
+// `mrt_read_stdin` body in runtime.std already routes through `std osRead` and
+// the regular MIR lowering pipeline; this hand-emitter mirrors the parallel
+// `emitX64WriteStdout` stubs above so a future caller (or build mode that
+// bypasses the runtime.std body) can splice in the OS-specific code directly.
+// Signature matches mrt_read_stdin(ptr len) returns bytes-read; callers pass
+// ptr in rcx and len in rdx, result in rax.
+function emitX64ReadStdin(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns CodeOffset
+	let offset = code.count()
+	match osDesc.read 'readStrategy'
+		syscall(readNum, fd) then emitX64ReadStdinSyscall(code, readNumber: readNum, fd: fd)
+		winApi(getHandleSlot, handleConstant, readFileSlot) then emitX64ReadStdinWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot)
+		libcall then panic("x64 does not support libcall read strategy")
+	end 'readStrategy'
+	return offset
+end 'emitX64ReadStdin'
+
+// mrt_read_stdin via syscall (Linux): args in rcx=ptr, rdx=len
+function emitX64ReadStdinSyscall(code ByteArray, readNumber MachineWord, fd MachineWord)
+	// Prologue (push rbp; mov rbp, rsp); mov rsi, rcx; mov edi, fd
+	code.append(b"\x55\x48\x89\xe5\x48\x89\xce\xbf")
+	writeDword(code, value: fd)
+	// mov eax, readNumber; syscall; epilogue (pop rbp; ret)
+	code.push(0xB8)
+	writeDword(code, value: readNumber)
+	code.append(b"\x0f\x05\x5d\xc3")
+end 'emitX64ReadStdinSyscall'
+
+// mrt_read_stdin via Win32 API (GetStdHandle(STD_INPUT_HANDLE) + ReadFile through IAT).
+// Stack frame matches the WriteFile stub: [rbp-0x08]=savedPtr, [rbp-0x10]=savedLen,
+// [rbp-0x18]=handle, [rbp-0x20]=bytesRead (out param). Returns bytesRead in rax.
+function emitX64ReadStdinWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, readFileSlot MachineWord)
+	// Prologue; save args; zero bytesRead; mov ecx, handleConstant (STD_INPUT_HANDLE)
+	code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x40\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\xc7\x45\xe0\x00\x00\x00\x00\x48\xc7\xc1")
+	writeDword(code, value: handleConstant)
+
+	// call [rip+disp32] GetStdHandle
+	code.append(b"\xff\x15")
+	relocations.push(Relocation.create(code.count(), slotIndex: getHandleSlot))
+	writeDword(code, value: 0)
+
+	// Save handle (rax → [rbp-0x18]); load ReadFile args; mov qword [rsp+0x20], 0 (lpOverlapped=NULL)
+	// rcx=hFile (handle), rdx=lpBuffer (saved ptr), r8=nNumberOfBytesToRead (saved len),
+	// r9=lpNumberOfBytesRead (lea r9, [rbp-0x20]), [rsp+0x20]=lpOverlapped=NULL
+	code.append(b"\x48\x89\x45\xe8\x48\x8b\x4d\xe8\x48\x8b\x55\xf8\x4c\x8b\x45\xf0\x4c\x8d\x4d\xe0\x48\xc7\x44\x24\x20\x00\x00\x00\x00")
+
+	// call [rip+disp32] ReadFile
+	code.append(b"\xff\x15")
+	relocations.push(Relocation.create(code.count(), slotIndex: readFileSlot))
+	writeDword(code, value: 0)
+
+	// Discard ReadFile's BOOL return; load bytesRead into rax. mov rax, [rbp-0x20]
+	code.append(b"\x48\x8b\x45\xe0")
+
+	// Epilogue: mov rsp, rbp; pop rbp; ret
+	code.append(b"\x48\x89\xec\x5d\xc3")
+end 'emitX64ReadStdinWinApi'
 
 // --- Stack argument passing helpers ---
 
@@ -1918,8 +1993,8 @@ end 'emitMovqGprToXmmOp'
 // Emit bytes for a single X64Op.
 function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray, tracker X64StackTracker)
 	match op 'emit'
-		prologue(stackSize) then emitPrologue(code, stackSize: stackSize, calleeSavedGprs: tracker.calleeSavedGprs)
-		epilogue then emitEpilogue(code, calleeSavedGprs: tracker.calleeSavedGprs)
+		prologue(stackSize) then emitPrologue(code, stackSize: stackSize, calleeSavedGprs: tracker.calleeSavedGprs, outgoingArgSize: tracker.outgoingArgSize)
+		epilogue then emitEpilogue(code, calleeSavedGprs: tracker.calleeSavedGprs, outgoingArgSize: tracker.outgoingArgSize)
 		ret then emitRet(code)
 		movRegImm(dest, value) then emitMovRegImmGeneric(code, dest: resolveGpr(dest), value: value)
 		movRegImm32(dest, value) then emitMovRegImm32(code, dest: resolveGpr(dest), value: value)

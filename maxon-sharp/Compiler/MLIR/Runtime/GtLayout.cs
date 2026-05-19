@@ -123,8 +123,17 @@ public static class GtLayout {
   public const int POffMainThread = 0x78;
   public const int PStructSize = POffMainThread + GtStructSize;   // 0x128 = 296 bytes
 
-  // ---- Per-P system stack size for __gt_morestack scratch ----
-  public const int PSystemStackSize = 0x2000;   // 8 KB
+  // ---- Per-P system stack size ----
+  // Used for two purposes:
+  //   1. __gt_morestack scratch frame during GT stack relocation.
+  //   2. Windows API calls invoked from a green thread via
+  //      EmitCallImportOnSystemStack / EmitSystemStackEnter, with TIB stack
+  //      bounds repointed at this region. Heavyweight kernel calls
+  //      (CreateProcessW, CreateFileW, ...) consume tens of kilobytes of
+  //      stack for RPC marshalling and security probes. 8 KB was observed
+  //      to fault inside CreateFileW from a green thread; 64 KB covers
+  //      worst-case CreateProcessW with margin.
+  public const int PSystemStackSize = 0x10000;   // 64 KB
 
   // ---- Per-P GT free-list cap (returned to mm_raw_alloc once exceeded) ----
   public const int MaxFreeListLen = 64;

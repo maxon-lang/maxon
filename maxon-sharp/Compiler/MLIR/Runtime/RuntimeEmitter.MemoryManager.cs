@@ -1238,6 +1238,20 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_current_process_id() -> i64 (OS process ID, zero-extended)
+  //
+  // Windows: GetCurrentProcessId. POSIX: getpid. The returned value is
+  // stable for the process's lifetime and differs across concurrent
+  // processes — stdlib uses it to disambiguate temp-file names when a
+  // parent spawns multiple subprocesses that share the same filesystem.
+  // =========================================================================
+  public void EmitCurrentProcessId() {
+    _b.FunctionStart("maxon_current_process_id", 0, 0x20);
+    _b.GetCurrentProcessId(VReg.Scratch0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // mm_raw_alloc_260() -> ptr
   //
   // Convenience wrapper: allocates exactly 260 bytes (for path buffers).

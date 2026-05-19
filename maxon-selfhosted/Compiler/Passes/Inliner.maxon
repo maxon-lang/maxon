@@ -1497,6 +1497,7 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		osWrite gives false
 		free gives false
 		osWriteErr gives false
+		osRead gives false
 		osOpenWrite gives false
 		osWriteFd gives false
 		osClose gives false
@@ -1711,6 +1712,7 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		osWrite gives nextId
 		free gives nextId
 		osWriteErr gives nextId
+		osRead(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osOpenWrite(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osWriteFd gives nextId
 		osClose gives nextId
@@ -1876,6 +1878,7 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osWrite(ptrId, lenId) gives StdSystemOp.osWrite(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
 		free(ptrId) gives StdSystemOp.free(lookupRemap(remap, key: ptrId))
 		osWriteErr(ptrId, lenId) gives StdSystemOp.osWriteErr(lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
+		osRead(resultId, ptrId, lenId) gives StdSystemOp.osRead(lookupRemap(remap, key: resultId), ptrId: lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
 		osOpenWrite(resultId, pathPtrId, pathLenId) gives StdSystemOp.osOpenWrite(lookupRemap(remap, key: resultId), pathPtrId: lookupRemap(remap, key: pathPtrId), pathLenId: lookupRemap(remap, key: pathLenId))
 		osWriteFd(fdId, ptrId, lenId) gives StdSystemOp.osWriteFd(lookupRemap(remap, key: fdId), ptrId: lookupRemap(remap, key: ptrId), lenId: lookupRemap(remap, key: lenId))
 		osClose(fdId) gives StdSystemOp.osClose(lookupRemap(remap, key: fdId))
