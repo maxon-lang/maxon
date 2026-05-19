@@ -84,22 +84,17 @@ export function readRpcRequest(stdin Stdin) returns RpcReadResult
 	// `id`: present (string/number/null) for calls, absent for notifications.
 	// We store it as a JsonNodeId pointing into `doc`. If absent we synthesize
 	// a JSON null node so callers always have a value to echo back.
-	var idNodeId = 0
-	let idResolved = resolveOptionalNode(doc, parent: root, key: "id")
-	if idResolved < 0 'missing'
-		idNodeId = doc.add(JsonNode.nullNode())
-	end 'missing' else 'present'
-		idNodeId = idResolved
-	end 'present'
+	let idNodeId = try resolveOptionalNode(doc, parent: root, key: "id") otherwise doc.add(JsonNode.nullNode())
 
-	let paramsResolved = resolveOptionalNode(doc, parent: root, key: "params")
 	var paramsNodeId = 0
 	var paramsPresent = false
-	if paramsResolved >= 0 'havePar'
-		paramsNodeId = paramsResolved
+	try 'par'
+		paramsNodeId = resolveOptionalNode(doc, parent: root, key: "params")
 		paramsPresent = true
-	end 'havePar' else 'noPar'
-		paramsNodeId = doc.add(JsonNode.nullNode())
+	end 'par' otherwise (e) 'noPar'
+		match e 'k'
+			notFound then paramsNodeId = doc.add(JsonNode.nullNode())
+		end 'k'
 	end 'noPar'
 
 	return RpcReadResult.request(RpcRequest.create(doc, idNodeId: idNodeId, method: method, paramsNodeId: paramsNodeId, paramsPresent: paramsPresent))
@@ -116,12 +111,10 @@ function isObjectKind(kind JsonKind) returns bool
 	end 'k'
 end 'isObjectKind'
 
-// Returns the child node id for `key`, or -1 if the field is absent. We use
-// -1 as a sentinel rather than throwing, because both "absent" and "present
-// but typed wrong" are legitimate outcomes the caller needs to distinguish
-// from each other at this layer.
-typealias OptionalNodeId = int(-1 to u64.max)
-function resolveOptionalNode(doc JsonDoc, parent JsonNodeId, key String) returns OptionalNodeId
+// Returns the child node id for `key`, or throws `NotFound` if the field is
+// absent. Callers distinguish "absent" from "present but typed wrong" by
+// catching `NotFound` here versus catching the typed-getter error separately.
+function resolveOptionalNode(doc JsonDoc, parent JsonNodeId, key String) returns JsonNodeId throws NotFound
 	let parentNode = doc.get(parent)
 	let n = parentNode.keys.count()
 	for i in 0 upto n 'scan'
@@ -134,7 +127,7 @@ function resolveOptionalNode(doc JsonDoc, parent JsonNodeId, key String) returns
 			end 'cErr'
 		end 'hit'
 	end 'scan'
-	return -1
+	throw NotFound.notFound
 end 'resolveOptionalNode'
 
 /// Write `{"jsonrpc":"2.0","id":<id>,"result":<resultDoc.root>}` to stdout.
@@ -162,8 +155,23 @@ end 'writeRpcResult'
 /// Write `{"jsonrpc":"2.0","id":<id>,"error":{"code":code,"message":msg}}`.
 export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcErrorCode, message String)
 	var envelope = JsonDoc.create()
-	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
 	let echoedId = copyNode(src: requestDoc, srcId: idNodeId, dst: envelope)
+	writeErrorEnvelope(envelope, idNode: echoedId, code: code, message: message)
+end 'writeRpcError'
+
+/// Special-case error writer for the case where parsing the request itself
+/// failed — `id` is null because we couldn't extract it.
+export function writeRpcParseError(message String)
+	var envelope = JsonDoc.create()
+	let nullIdId = envelope.add(JsonNode.nullNode())
+	writeErrorEnvelope(envelope, idNode: nullIdId, code: RpcStandardErrorCode.parseError.rawValue, message: message)
+end 'writeRpcParseError'
+
+// Shared envelope-assembly path for both error writers. Builds the JSON-RPC
+// envelope from a caller-supplied id node, stamps the response error object,
+// and writes one line to stdout.
+function writeErrorEnvelope(envelope JsonDoc, idNode JsonNodeId, code RpcErrorCode, message String)
+	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
 	let codeId = envelope.add(JsonNode.numberNode(code as float))
 	let msgId = envelope.add(JsonNode.stringNode(message))
 
@@ -180,43 +188,13 @@ export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcE
 	keys.push("jsonrpc")
 	children.push(jsonrpcId)
 	keys.push("id")
-	children.push(echoedId)
+	children.push(idNode)
 	keys.push("error")
 	children.push(errId)
 	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
 
 	print("{Json.stringify(envelope)}\n")
-end 'writeRpcError'
-
-/// Special-case error writer for the case where parsing the request itself
-/// failed — `id` is null because we couldn't extract it.
-export function writeRpcParseError(message String)
-	var envelope = JsonDoc.create()
-	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
-	let nullIdId = envelope.add(JsonNode.nullNode())
-	let codeId = envelope.add(JsonNode.numberNode(RpcStandardErrorCode.parseError.rawValue as float))
-	let msgId = envelope.add(JsonNode.stringNode(message))
-
-	var errKeys = StringArray.create()
-	var errChildren = JsonNodeIdArray.create()
-	errKeys.push("code")
-	errChildren.push(codeId)
-	errKeys.push("message")
-	errChildren.push(msgId)
-	let errId = envelope.add(JsonNode.objectNode(errKeys, children: errChildren))
-
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
-	keys.push("jsonrpc")
-	children.push(jsonrpcId)
-	keys.push("id")
-	children.push(nullIdId)
-	keys.push("error")
-	children.push(errId)
-	envelope.root = envelope.add(JsonNode.objectNode(keys, children: children))
-
-	print("{Json.stringify(envelope)}\n")
-end 'writeRpcParseError'
+end 'writeErrorEnvelope'
 
 // Deep-copy a node (and all descendants) from one JsonDoc arena into another.
 // Returns the id of the new copy in `dst`. Used to splice request `id`s and
@@ -228,15 +206,9 @@ function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
 		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
 		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
 		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
-		jsonArray then break
-		jsonObject then break
-	end 'k'
-
-	match node.kind 'kk'
 		jsonArray then return copyArray(src, node: node, dst: dst)
 		jsonObject then return copyObject(src, node: node, dst: dst)
-		default panic("copyNode: unreachable — scalar kinds handled above")
-	end 'kk'
+	end 'k'
 end 'copyNode'
 
 function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
