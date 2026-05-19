@@ -38,4 +38,219 @@ module {
     x64.ret
   }
 }
+
+// Stdlib StdModule (post-dce, post-inliner — pre-MIR-lowering, reachable from main only)
+module {
+  func @Math.exp(local0: f64) -> f64 {
+  entry:
+    %69 = func.param 0 : f64
+    %70 = arith.float_constant {value = 4607182418800017408 : f64}
+    %2 = arith.float_constant {value = 0 : f64}
+    %3 = arith.cmpf eq, %69, %2
+    cf.cond_br %3 [then: zero_0, else: zero_0.after]
+  zero_0:
+    func.return %70
+  zero_0.after:
+    %7 = arith.float_constant {value = 0 : f64}
+    %8 = arith.cmpf lt, %69, %7
+    cf.cond_br %8 [then: neg_0, else: neg_0.after(%69)]
+  neg_0:
+    %11 = arith.float_constant {value = 0 : f64}
+    %12 = arith.subf %11, %69
+    cf.br neg_0.after(%12)
+  neg_0.after:
+    %13 = arith.constant {value = 0 : i64}
+    cf.br reduce_0.header(%61, %13)
+  reduce_0.header:
+    %16 = arith.cmpf gt, %60, %70
+    cf.cond_br %16 [then: reduce_0, else: series_0.header(%70, %70, %70)]
+  reduce_0:
+    %18 = arith.float_constant {value = 4611686018427387904 : f64}
+    %19 = arith.divf %60, %18
+    %21 = arith.constant {value = 1 : i64}
+    %22 = arith.addi %62, %21
+    cf.br reduce_0.header(%19, %22)
+  series_0.header:
+    %27 = arith.float_constant {value = 4626322717216342016 : f64}
+    %28 = arith.cmpf lt, %65, %27
+    cf.cond_br %28 [then: series_0, else: series_0.exit]
+  series_0:
+    %31 = arith.mulf %63, %60
+    %35 = arith.divf %31, %65
+    %38 = arith.addf %64, %35
+    %40 = arith.constant {value = 1 : i64}
+    %41 = arith.sitofp %40
+    %42 = arith.addf %65, %41
+    cf.br series_0.header(%35, %38, %42)
+  series_0.exit:
+    %44 = arith.constant {value = 0 : i64}
+    cf.br square_0.header(%64, %44)
+  square_0.header:
+    %48 = arith.cmpi lt, %68, %62
+    cf.cond_br %48 [then: square_0, else: square_0.exit]
+  square_0:
+    %51 = arith.mulf %67, %67
+    cf.br square_0.step
+  square_0.step:
+    %53 = arith.constant {value = 1 : i64}
+    %54 = arith.addi %68, %53
+    cf.br square_0.header(%51, %54)
+  square_0.exit:
+    cf.cond_br %8 [then: invert_0, else: invert_0.after(%67)]
+  invert_0:
+    %58 = arith.divf %70, %67
+    cf.br invert_0.after(%58)
+  invert_0.after:
+    func.return %66
+  }
+  func @Math.log(local0: f64) -> f64 {
+  entry:
+    %85 = func.param 0 : f64
+    %2 = arith.float_constant {value = 0 : f64}
+    %3 = arith.cmpf le, %85, %2
+    cf.cond_br %3 [then: invalid_0, else: invalid_0.after]
+  invalid_0:
+    %4 = arith.float_constant {value = 0 : f64}
+    func.return %4
+  invalid_0.after:
+    %6 = arith.float_constant {value = 4607182418800017408 : f64}
+    %7 = arith.cmpf eq, %85, %6
+    cf.cond_br %7 [then: one_0, else: one_0.after]
+  one_0:
+    %8 = arith.float_constant {value = 0 : f64}
+    func.return %8
+  one_0.after:
+    %9 = arith.constant {value = 0 : i64}
+    cf.br normalize_down_0.header(%9, %85)
+  normalize_down_0.header:
+    %12 = arith.float_constant {value = 4607182418800017408 : f64}
+    %13 = arith.cmpf ge, %81, %12
+    cf.cond_br %13 [then: normalize_down_0, else: normalize_up_0.header(%79, %81)]
+  normalize_down_0:
+    %15 = arith.float_constant {value = 4611686018427387904 : f64}
+    %16 = arith.divf %81, %15
+    %18 = arith.constant {value = 1 : i64}
+    %19 = arith.addi %79, %18
+    cf.br normalize_down_0.header(%19, %16)
+  normalize_up_0.header:
+    %21 = arith.float_constant {value = 4602678819172646912 : f64}
+    %22 = arith.cmpf lt, %80, %21
+    cf.cond_br %22 [then: normalize_up_0, else: normalize_up_0.exit]
+  normalize_up_0:
+    %24 = arith.float_constant {value = 4611686018427387904 : f64}
+    %25 = arith.mulf %80, %24
+    %27 = arith.constant {value = 1 : i64}
+    %28 = arith.subi %78, %27
+    cf.br normalize_up_0.header(%28, %25)
+  normalize_up_0.exit:
+    %30 = arith.float_constant {value = 4607182418800017408 : f64}
+    %31 = arith.subf %80, %30
+    %33 = arith.float_constant {value = 4607182418800017408 : f64}
+    %34 = arith.addf %80, %33
+    %37 = arith.divf %31, %34
+    %40 = arith.mulf %37, %37
+    %45 = arith.constant {value = 1 : i64}
+    %46 = arith.constant {value = 20 : i64}
+    cf.br series_0.header(%37, %37, %45)
+  series_0.header:
+    %49 = arith.cmpi lt, %84, %46
+    cf.cond_br %49 [then: series_0, else: series_0.exit]
+  series_0:
+    %52 = arith.mulf %82, %40
+    %53 = arith.float_constant {value = 4611686018427387904 : f64}
+    %55 = arith.sitofp %84
+    %56 = arith.mulf %53, %55
+    %57 = arith.float_constant {value = 4607182418800017408 : f64}
+    %58 = arith.addf %56, %57
+    %62 = arith.divf %52, %58
+    %63 = arith.addf %83, %62
+    cf.br series_0.step
+  series_0.step:
+    %65 = arith.constant {value = 1 : i64}
+    %66 = arith.addi %84, %65
+    cf.br series_0.header(%52, %63, %66)
+  series_0.exit:
+    %67 = arith.float_constant {value = 4611686018427387904 : f64}
+    %69 = arith.mulf %67, %83
+    %70 = arith.float_constant {value = 4604418534313441772 : f64}
+    %74 = arith.sitofp %78
+    %75 = arith.mulf %74, %70
+    %76 = arith.addf %69, %75
+    func.return %76
+  }
+  func @Math.pow(local0: f64, local1: f64) -> f64 {
+  entry:
+    %79 = func.param 0 : f64
+    %80 = func.param 1 : f64
+    %81 = arith.float_constant {value = 4607182418800017408 : f64}
+    %3 = arith.float_constant {value = 0 : f64}
+    %4 = arith.cmpf eq, %80, %3
+    cf.cond_br %4 [then: exp_zero_0, else: exp_zero_0.after]
+  exp_zero_0:
+    func.return %81
+  exp_zero_0.after:
+    %8 = arith.cmpf eq, %79, %3
+    cf.cond_br %8 [then: base_zero_0, else: base_zero_0.after]
+  base_zero_0:
+    %11 = arith.cmpf gt, %80, %3
+    cf.cond_br %11 [then: exp_positive_0, else: exp_positive_0.after]
+  exp_positive_0:
+    func.return %3
+  exp_positive_0.after:
+    func.return %3
+  base_zero_0.after:
+    %16 = arith.cmpf eq, %79, %81
+    cf.cond_br %16 [then: base_one_0, else: base_one_0.after]
+  base_one_0:
+    func.return %81
+  base_one_0.after:
+    %20 = arith.cmpf lt, %79, %3
+    cf.cond_br %20 [then: negative_base_0, else: negative_base_0.after]
+  negative_base_0:
+    func.return %3
+  negative_base_0.after:
+    %23 = arith.floorf %80
+    %26 = arith.subf %80, %23
+    %28 = arith.cmpf eq, %26, %3
+    cf.cond_br %28 [then: is_int_0, else: is_int_0.after]
+  is_int_0:
+    %31 = arith.cmpf gt, %80, %3
+    cf.cond_br %31 [then: positive_int_0, else: positive_int_0.after]
+  positive_int_0:
+    %33 = arith.float_constant {value = 4626322717216342016 : f64}
+    %34 = arith.cmpf le, %80, %33
+    cf.cond_br %34 [then: mult_loop_0.header(%81, %3), else: positive_int_0.after]
+  mult_loop_0.header:
+    %39 = arith.cmpf lt, %76, %80
+    cf.cond_br %39 [then: mult_loop_0, else: mult_loop_0.exit]
+  mult_loop_0:
+    %42 = arith.mulf %75, %79
+    %45 = arith.addf %76, %81
+    cf.br mult_loop_0.header(%42, %45)
+  mult_loop_0.exit:
+    func.return %75
+  positive_int_0.after:
+    %49 = arith.cmpf lt, %80, %3
+    cf.cond_br %49 [then: negative_int_0, else: is_int_0.after]
+  negative_int_0:
+    %52 = arith.subf %3, %80
+    %54 = arith.float_constant {value = 4626322717216342016 : f64}
+    %55 = arith.cmpf le, %52, %54
+    cf.cond_br %55 [then: div_loop_0.header(%81, %3), else: is_int_0.after]
+  div_loop_0.header:
+    %60 = arith.cmpf lt, %78, %52
+    cf.cond_br %60 [then: div_loop_0, else: div_loop_0.exit]
+  div_loop_0:
+    %63 = arith.divf %77, %79
+    %66 = arith.addf %78, %81
+    cf.br div_loop_0.header(%63, %66)
+  div_loop_0.exit:
+    func.return %77
+  is_int_0.after:
+    %69 = func.call @Math.log(%79)
+    %72 = arith.mulf %80, %69
+    %74 = func.call @Math.exp(%72)
+    func.return %74
+  }
+}
 ---

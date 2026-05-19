@@ -146,7 +146,7 @@ export function augmentWithRuntime(module StdModule, project Project) returns St
 	// + transitively walk runtime helpers' call edges, and trim the
 	// runtime to that closure. This makes cache-off and cache-on paths
 	// emit the same set of runtime functions for the same user program.
-	let filteredRuntime = filterRuntimeByReachability(covFilteredRuntime, userModule: module, cpu: project.target.cpu)
+	let filteredRuntime = filterRuntimeByReachability(covFilteredRuntime, userModule: module, cpu: project.target.cpu, globalData: project.globalData)
 	if project.coverageEnabled 'reserveGlobals'
 		// Register the coverage globals once per compile, after instrumentation
 		// has finalized the site count but before backend emission reads the
@@ -217,7 +217,7 @@ typealias RuntimeFuncByName = Map with(String, IrFunction)
 // is also seeded because backends emit literal `call mrt_panic` for
 // range-check guards regardless of whether user IR has a matching call
 // edge yet.
-function filterRuntimeByReachability(runtime StdModule, userModule StdModule, cpu CpuArch) returns StdModule
+function filterRuntimeByReachability(runtime StdModule, userModule StdModule, cpu CpuArch, globalData GlobalDataTable) returns StdModule
 	var runtimeMap = RuntimeFuncByName.create()
 	for func in runtime.functions 'buildRuntimeMap'
 		runtimeMap.upsert(func.name, value: func)
@@ -243,11 +243,25 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, cp
 	// emits a `call mm_realloc` op at lowering time, which lives in the
 	// cached body's `callFixups`). The user pipeline can't see those calls
 	// — they're in cached machine code, not in `userModule.functions` —
-	// so we seed from every cached function's `callFixups` here. Walking
-	// the entire cache (not just functions the link step will pull in) is
-	// safe: anything not actually called drops back out via reachability.
+	// so we seed from cached `callFixups` here. To stay in lockstep with
+	// the linker (which only pulls in cached bodies transitively reachable
+	// from the user's calls), we first compute the needed-stdlib set from
+	// user-module callees, then walk only those cached bodies' fixups.
+	// Walking the entire cache would re-anchor runtime helpers via stdlib
+	// functions the user never reaches (e.g. a Math.pow-only program would
+	// otherwise pull in `mm_alloc` via every cached String / Map helper).
 	if isStdlibCacheValid() 'cacheValid'
-		seedFromCacheCallees(cpu, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		var userCalleeSeeds = collectUserCalleeSeeds(userModule)
+		// Layout/witness descriptor entries reach cached thunk bodies via
+		// `funcAbs64InRdata` relocs registered by BuildLayoutDescriptors /
+		// BuildWitnessTables — those thunks aren't named by any Std-level
+		// `call` op (they're invoked indirectly through the descriptor at
+		// runtime) so the cache-side reachability walk wouldn't pull them
+		// in otherwise. The wasm emitter's `computeNeededWasmStdlibFunctions`
+		// makes the same seed contribution at MIR time; mirroring it here
+		// keeps the two reachability sets in sync.
+		appendFuncAbs64Seeds(userCalleeSeeds, relocs: globalData.pendingRdataRelocs)
+		seedFromCacheCallees(cpu, userCalleeSeeds: userCalleeSeeds, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'cacheValid'
 
 	var i = 0
@@ -282,36 +296,121 @@ function seedRuntimeReachName(name String, runtimeMap RuntimeFuncByName, seen Ru
 	worklist.push(name)
 end 'seedRuntimeReachName'
 
-// Per-arch seed for runtime DCE: every callFixup on every cached function
+// Per-arch seed for runtime DCE: every callFixup on a NEEDED cached function
 // (either `ObjectFunction.callFixups` for native or
-// `WasmObjectFunction.callFixups` for wasm) names a callee. If the callee
-// is a runtime function (e.g. `mm_realloc` called from `__managed_mem_grow`'s
-// cached body), seed it into the runtime DCE worklist. The native and wasm
-// arms differ only in which cached-function array they walk — both fixup
-// types expose `targetName` and the seeding logic is identical.
-function seedFromCacheCallees(cpu CpuArch, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+// `WasmObjectFunction.callFixups` for wasm) names a callee. If the callee is a
+// runtime function (e.g. `mm_realloc` called from `__managed_mem_grow`'s
+// cached body), seed it into the runtime DCE worklist. "Needed" means
+// transitively reachable from `userCalleeSeeds` through the cache's call /
+// funcAddr / adr fixup graph — same computation the linker / wasm emitter
+// uses to decide which cached bodies to actually splice in. Restricting the
+// walk to needed bodies keeps the runtime DCE in lockstep with link-time
+// reachability so programs that never reach an allocator-touching stdlib
+// helper don't carry the slab/MM runtime along for the ride.
+function seedFromCacheCallees(cpu CpuArch, userCalleeSeeds StringArray, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
 	let cacheData = getStdlibCacheData()
 	match cpu 'arch'
-		x64 to arm64 then seedFromNativeCacheFixups(cacheData.functions, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		wasm32 then seedFromWasmCacheFixups(cacheData.wasmFunctions, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		x64 to arm64 then seedFromNativeCacheFixups(cacheData.functions, needed: computeNeededStdlibFunctions(userCalleeSeeds, stdlibCache: cacheData), runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+		wasm32 then seedFromWasmCacheFixups(cacheData.wasmFunctions, needed: computeNeededStdlibFunctionsWasm(userCalleeSeeds, stdlibCache: cacheData), runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 	end 'arch'
 end 'seedFromCacheCallees'
 
-function seedFromNativeCacheFixups(functions ObjectFunctionArray, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+// `ObjectFunction` and `WasmObjectFunction` are distinct types with the same
+// `name`/`callFixups` shape, so the per-arch fixup walkers are mechanically
+// identical but can't share a body without a common interface for the
+// fixup-bearing array element. Keeping them separate is the cost of avoiding
+// a one-use interface.
+function seedFromNativeCacheFixups(functions ObjectFunctionArray, needed StdlibFuncNameSet, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
 	for func in functions 'eachCacheFunc'
+		if not needed.contains(func.name) 'skipUnneeded'
+			continue
+		end 'skipUnneeded'
 		for fixup in func.callFixups 'eachFixup'
 			seedRuntimeReachName(fixup.targetName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		end 'eachFixup'
 	end 'eachCacheFunc'
 end 'seedFromNativeCacheFixups'
 
-function seedFromWasmCacheFixups(functions WasmObjectFunctionArray, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
+function seedFromWasmCacheFixups(functions WasmObjectFunctionArray, needed StdlibFuncNameSet, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
 	for func in functions 'eachCacheFunc'
+		if not needed.contains(func.name) 'skipUnneeded'
+			continue
+		end 'skipUnneeded'
 		for fixup in func.callFixups 'eachFixup'
 			seedRuntimeReachName(fixup.targetName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
 		end 'eachFixup'
 	end 'eachCacheFunc'
 end 'seedFromWasmCacheFixups'
+
+// Collect every callee name from the user `module`'s Std-level ops. Both
+// stdlib and non-stdlib names are returned — the caller filters via the
+// stdlib cache's name index. Used by `seedFromCacheCallees` to seed the
+// linker-parity reachability walk.
+function collectUserCalleeSeeds(module StdModule) returns StringArray
+	var seeds = StringArray.create()
+	for func in module.functions 'eachFunc'
+		appendStdCalleesInFunc(module, func: func, seeds: seeds)
+	end 'eachFunc'
+	return seeds
+end 'collectUserCalleeSeeds'
+
+// Walk every op (body + terminator) in `func` and push every direct-call,
+// funcRef, and funcAddr callee name into `seeds`. Shared by `collectUser-
+// CalleeSeeds` (which feeds the cache-side reachability walk) and `collect-
+// RuntimeReachFromFunc` (which then filters via `seedRuntimeReachName`).
+function appendStdCalleesInFunc(module StdModule, func IrFunction, seeds StringArray)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("appendStdCalleesInFunc: blockRef {blockRef} not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			appendCalleeFromStdOp(module, opIdx: opIdx, seeds: seeds)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			appendCalleeFromStdOp(module, opIdx: block.terminatorIndex(), seeds: seeds)
+		end 'hasTerm'
+	end 'eachBlock'
+end 'appendStdCalleesInFunc'
+
+function appendCalleeFromStdOp(module StdModule, opIdx OpIndex, seeds StringArray)
+	let op = try module.ops.get(opIdx) otherwise panic("appendCalleeFromStdOp: opIdx {opIdx} not in module.ops")
+	match op 'shape'
+		call(inner) then appendCalleeFromStdCallOp(inner, seeds: seeds)
+		system(inner) then appendCalleeFromStdSystemOp(inner, seeds: seeds)
+		arith then return
+		control then return
+		memory then return
+	end 'shape'
+end 'appendCalleeFromStdOp'
+
+function appendCalleeFromStdCallOp(op StdCallOp, seeds StringArray)
+	match op 'kind'
+		ret then return
+		call(_, callee, _) then seeds.push(callee)
+		tryCall(_, callee, _, _) then seeds.push(callee)
+		tailCall(callee, _) then seeds.push(callee)
+		funcRef(_, funcName) then seeds.push(funcName)
+		indirectCall then return
+		witnessCall then return
+		param then return
+		errorReturn then return
+	end 'kind'
+end 'appendCalleeFromStdCallOp'
+
+// Only `funcAddr` names a runtime function; every other system-op arm
+// operates on register values or named rdata/data blobs which the runtime
+// split doesn't care about (those are pruned separately by
+// `pruneDeadGlobalData`).
+function appendCalleeFromStdSystemOp(op StdSystemOp, seeds StringArray)
+	match op 'kind'
+		globalAddr then return
+		loadLayoutDescriptor then return
+		loadWitnessTable then return
+		syscall to iatCall then return
+		memcpy to loadIndirect then return
+		funcAddr(_, funcName) then seeds.push(funcName)
+		storeIndirect to unboxValue then return
+		descriptorField to dropTypeParam then return
+	end 'kind'
+end 'appendCalleeFromStdSystemOp'
 
 // Wasm backend emits per-runtime-function bodies that call OTHER runtime
 // functions by name at codegen time (after augmentWithRuntime). The IR
@@ -349,60 +448,16 @@ end 'seedRuntimeBackendEdgesWasm'
 // Walk every op in `func`'s body. For each call/tryCall/tailCall/funcRef/
 // funcAddr op whose callee names a runtime function, add the runtime
 // function to the reachability set. Non-runtime callees are ignored —
-// runtime DCE only decides which runtime functions ride along.
+// `seedRuntimeReachName` does the filter — but we collect them first via
+// the same op-walker the cache-side seed path uses, so the two reachability
+// sets are guaranteed to see the same edges.
 function collectRuntimeReachFromFunc(module StdModule, func IrFunction, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("collectRuntimeReachFromFunc: blockRef {blockRef} not in module.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			collectRuntimeReachFromOp(module, opIdx: opIdx, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		end 'eachOp'
-		if block.hasTerminatorOp() 'hasTerm'
-			collectRuntimeReachFromOp(module, opIdx: block.terminatorIndex(), runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		end 'hasTerm'
-	end 'eachBlock'
+	var callees = StringArray.create()
+	appendStdCalleesInFunc(module, func: func, seeds: callees)
+	for name in callees 'eachCallee'
+		seedRuntimeReachName(name, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
+	end 'eachCallee'
 end 'collectRuntimeReachFromFunc'
-
-function collectRuntimeReachFromOp(module StdModule, opIdx OpIndex, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	let op = try module.ops.get(opIdx) otherwise panic("collectRuntimeReachFromOp: opIdx {opIdx} not in module.ops")
-	match op 'shape'
-		call(inner) then collectRuntimeReachFromCallOp(inner, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		system(inner) then collectRuntimeReachFromSystemOp(inner, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		arith then return
-		control then return
-		memory then return
-	end 'shape'
-end 'collectRuntimeReachFromOp'
-
-function collectRuntimeReachFromCallOp(op StdCallOp, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	match op 'kind'
-		ret then return
-		call(_, callee, _) then seedRuntimeReachName(callee, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		tryCall(_, callee, _, _) then seedRuntimeReachName(callee, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		tailCall(callee, _) then seedRuntimeReachName(callee, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		funcRef(_, funcName) then seedRuntimeReachName(funcName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		indirectCall then return
-		witnessCall then return
-		param then return
-		errorReturn then return
-	end 'kind'
-end 'collectRuntimeReachFromCallOp'
-
-function collectRuntimeReachFromSystemOp(op StdSystemOp, runtimeMap RuntimeFuncByName, seen RuntimeReachSet, worklist StringArray)
-	// Only `funcAddr` names a runtime function; every other system-op
-	// arm operates on register values or named rdata/data blobs which
-	// the runtime split doesn't care about (those are pruned separately
-	// by `pruneDeadGlobalData`).
-	match op 'kind'
-		globalAddr then return
-		loadLayoutDescriptor then return
-		loadWitnessTable then return
-		syscall to iatCall then return
-		memcpy to loadIndirect then return
-		funcAddr(_, funcName) then seedRuntimeReachName(funcName, runtimeMap: runtimeMap, seen: seen, worklist: worklist)
-		storeIndirect to unboxValue then return
-		descriptorField to dropTypeParam then return
-	end 'kind'
-end 'collectRuntimeReachFromSystemOp'
 
 // Splits the runtime module along the per-compile boundary. The cache-side
 // caller wants the project-independent functions baked into the stdlib
