@@ -3382,6 +3382,16 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
 
+		// Maintain the `structInnerAliasNames` reverse index alongside
+		// every write into a struct's `innerAliases` map. Even on the
+		// duplicate-type-error path above, the user's body still
+		// registered these names — the original struct's body already
+		// declared them, so reporting them as known suppresses cascading
+		// E3009s for the same name.
+		for (aliasName, _) in innerAliases 'recordAliasNames'
+			project.structInnerAliasNames.insert(aliasName)
+		end 'recordAliasNames'
+
 		// Eager BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery.
 		// Walking conformances at type-registration time means each static
 		// cache is populated by the time stdlib parsing finishes — which is
@@ -4823,6 +4833,11 @@ export type Parser
 				if not target.innerAliases.contains(aliasName) 'novel'
 					target.innerAliases.upsert(aliasName, value: aliasExpr)
 				end 'novel'
+				// Record the reverse-index entry regardless of whether
+				// this extension introduced it or the struct already had
+				// it — Set.insert is idempotent and the "novel" check
+				// above only gates the per-struct map write.
+				project.structInnerAliasNames.insert(aliasName)
 			end 'eachAlias'
 			project.unresolvedStructTypes.upsert(targetTypeName, value: target)
 			return

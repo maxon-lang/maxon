@@ -674,17 +674,20 @@ export function dumpPassTimings()
 		end 'swap'
 	end 'outer'
 
-	var grandTotal = 0 as PassMillis
-	for sumName in rows 'sumLoop'
-		grandTotal = grandTotal + (try passTimings.get(sumName) otherwise panic("dumpPassTimings: missing timing for '{sumName}'"))
-	end 'sumLoop'
-
-	print("Pass timings (descending; total {grandTotal}ms):\n")
+	print("Pass timings (descending):\n")
+	var suppressed = 0
 	for name in rows 'printRow'
 		let ms = try passTimings.get(name) otherwise panic("dumpPassTimings: missing timing for '{name}'")
+		if ms == 0 'subMs'
+			suppressed = suppressed + 1
+			continue
+		end 'subMs'
 		let count = try passInvocations.get(name) otherwise panic("dumpPassTimings: missing invocations for '{name}'")
 		print("  {name}: {ms}ms across {count} invocations\n")
 	end 'printRow'
+	if suppressed > 0 'note'
+		print("  ({suppressed} sub-millisecond rows suppressed)\n")
+	end 'note'
 
 	passTimings = PassMillisMap.create()
 	passInvocations = PassMillisMap.create()

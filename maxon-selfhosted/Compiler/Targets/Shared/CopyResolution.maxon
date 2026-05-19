@@ -30,6 +30,11 @@ end 'CopyMove'
 // for use as a Map key.
 export typealias EdgeCopyMap = Map with(RegInt, CopyMoveArray)
 
+// blockId -> blockRef (index into module.blocks). Built once per function
+// so successor lookups during edge-copy construction are O(1) instead of
+// O(B).
+typealias BlockIdToRefMap = Map with(BlockId, BlockRef)
+
 // ============================================================
 // Public entry points
 // ============================================================
@@ -50,13 +55,19 @@ export function buildBlockArgCopies(module TargetModule, func IrFunction, colori
 	let numBlocks = cfg.numBlocks
 	var edgeCopies = EdgeCopyMap.create()
 
+	// Build blockId -> blockRef index once. A naive linear scan of
+	// func.blockRefs per successor lookup makes the outer pass O(B^2) on
+	// large inlined functions where regalloc cost dominates.
+	let blockIdToRef = buildBlockIdToRefMap(module, func: func)
+
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		let blockId = block.id
 
 		for edge in block.branchEdges 'eachEdge'
 			let succId = edge.targetBlockId
-			let succBlock = findBlockById(module, func: func, blockId: succId)
+			let succRef = try blockIdToRef.get(succId) otherwise panic("buildBlockArgCopies: branch edge targets blockId {succId} not in func.blockRefs")
+			let succBlock = try module.blocks.get(succRef) otherwise panic("invariant: blockRef from blockIdToRef not in module.blocks")
 			if succBlock.blockArgs.count() == 0 'noArgs'
 				continue
 			end 'noArgs'
@@ -105,13 +116,20 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 
 	logTrace(LogCategory.ir, message: () gives "copy-resolve: block {dstBlock.id} moves={moves.count()}")
 
-	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd
+	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd.
+	// pendingReaders[ord] tracks how many still-pending moves read from
+	// `ord`; a destination is "blocked" iff some other pending move still
+	// reads it. Maintaining this counter replaces an inner O(M) scan with
+	// an O(1) lookup, dropping Phase 1 from O(M^2) per iteration to O(M).
 	var needsMove = RegIntArray.create()
 	var moveFrom = RegIntArray.create()
+	var pendingReaders = RegIntArray.create()
 
 	for move in moves 'buildMap'
 		set(needsMove, index: move.dstOrd, value: 1, sentinel: 0)
 		set(moveFrom, index: move.dstOrd, value: move.srcOrd, sentinel: RM_NONE)
+		let prev = getOr(pendingReaders, index: move.srcOrd, fallback: 0)
+		set(pendingReaders, index: move.srcOrd, value: prev + 1, sentinel: 0)
 	end 'buildMap'
 
 	// Phase 1: Resolve non-conflicting moves iteratively
@@ -131,21 +149,21 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 				continue
 			end 'noSrc'
 
-			// Check if dstOrd is a source for any other pending move
-			var blocked = false
-			for other in moves 'checkBlocked'
-				if other.dstOrd != dstOrd and getOr(needsMove, index: other.dstOrd, fallback: 0) == 1 'pending'
-					let otherSrc = getOr(moveFrom, index: other.dstOrd, fallback: RM_NONE)
-					if otherSrc == dstOrd 'isBlocked'
-						blocked = true
-						break
-					end 'isBlocked'
-				end 'pending'
-			end 'checkBlocked'
+			// `dstOrd` is blocked iff some other still-pending move reads
+			// from it. buildBlockArgCopies filters identity copies, so
+			// this move itself cannot be a reader of `dstOrd` here.
+			let blocked = getOr(pendingReaders, index: dstOrd, fallback: 0) > 0
 
 			if not blocked 'safe'
 				emitClassMov(regTarget, module: module, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd, isFloat: move.isFloat)
 				try needsMove.set(dstOrd, value: 0) otherwise panic("invariant: needsMove.set OOB")
+				// This move is now committed — drop its contribution from
+				// the reader count so a downstream move whose destination
+				// equals `srcOrd` becomes unblocked.
+				let prevReaders = getOr(pendingReaders, index: srcOrd, fallback: 0)
+				if prevReaders > 0 'dec'
+					try pendingReaders.set(srcOrd, value: prevReaders - 1) otherwise panic("invariant: pendingReaders.set OOB")
+				end 'dec'
 				progress = true
 			end 'safe'
 		end 'tryMoves'
@@ -232,14 +250,14 @@ end 'scratchOrdForClass'
 // Helpers
 // ============================================================
 
-// Find a block by its ID in the function
-function findBlockById(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
-	for blockRef in func.blockRefs 'search'
+// Build a blockId -> blockRef map for one function. Used by
+// buildBlockArgCopies so successor lookups during edge-copy construction
+// are O(1) instead of an O(B) linear scan per call.
+function buildBlockIdToRefMap(module TargetModule, func IrFunction) returns BlockIdToRefMap
+	var map = BlockIdToRefMap.create()
+	for blockRef in func.blockRefs 'each'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
-		if block.id == blockId 'found'
-			return block
-		end 'found'
-	end 'search'
-
-	panic("findBlockById: block {blockId} not found in function")
-end 'findBlockById'
+		map.upsert(block.id, value: blockRef)
+	end 'each'
+	return map
+end 'buildBlockIdToRefMap'

@@ -573,15 +573,15 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 	end 'eachFunc'
 end 'allocateRegistersWithTarget'
 
-// Coarse per-function bucketing for regalloc timings: runtime stubs share a
-// `__regalloc-rt:<name>` prefix so the dump shows the worst offenders, while
-// user functions roll up into a single `__regalloc-user` bucket. Used only
-// when --profile-passes is active.
+// Coarse per-function bucketing for regalloc timings: runtime stubs roll
+// up into `__regalloc-rt`, everything else into `__regalloc-user`. Two
+// buckets keeps the dumpPassTimings output scannable instead of producing
+// one row per function. Used only when --profile-passes is active.
 function classifyRegallocFunc(name String) returns String
 	if name.startsWith("mrt_") or name.startsWith("__slab_") or name.startsWith("mm_") or name.startsWith("__mm_") 'isRuntime'
-		return "__regalloc-rt:{name}"
+		return "__regalloc-rt"
 	end 'isRuntime'
-	return "__regalloc-fn:{name}"
+	return "__regalloc-user"
 end 'classifyRegallocFunc'
 
 // Increment the use count for a value. Called during pre-scan for each read operand.

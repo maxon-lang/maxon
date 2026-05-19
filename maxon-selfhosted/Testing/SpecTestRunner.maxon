@@ -395,12 +395,10 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 		let tests = parseSpecFile(content, targetKey: targetKey)
 		var results = TestResultArray.create()
 		for test in tests 'eachTest'
-			if not filter.isEmpty() 'hasFilter'
-				let testPath = "{specName}/{test.name}"
-				if not testPath.contains(filter) 'noMatch'
-					continue
-				end 'noMatch'
-			end 'hasFilter'
+			let testPath = "{specName}/{test.name}"
+			if not filterMatches(filter, testPath: testPath) 'noMatch'
+				continue
+			end 'noMatch'
 			if test.expectation.hasCompilerStderr 'skipErrorTest'
 				continue
 			end 'skipErrorTest'
@@ -3319,6 +3317,28 @@ function isSelfHostedKnownBroken(specName String, testName String) returns bool
 	return false
 end 'isSelfHostedKnownBroken'
 
+// Match `testPath` against `filter`. Empty filter matches everything. A
+// comma-separated filter (`a,b,c`) matches if any of the terms is a
+// substring of `testPath` — lets `--filter=basics,arrays,map` run a quick
+// representative subset without chaining multiple invocations. Single-term
+// filters keep the historical substring semantics. Whitespace around terms
+// is trimmed.
+function filterMatches(filter String, testPath String) returns bool
+	if filter.isEmpty() 'noFilter'
+		return true
+	end 'noFilter'
+	for term in filter.split(",") 'eachTerm'
+		let trimmed = term.trim()
+		if trimmed.isEmpty() 'skipEmpty'
+			continue
+		end 'skipEmpty'
+		if testPath.contains(trimmed) 'match'
+			return true
+		end 'match'
+	end 'eachTerm'
+	return false
+end 'filterMatches'
+
 function partitionSpecTests(tests SpecTestArray, specName String, filter String, targetKey String) returns SpecWorkUnit
 	var batchable = SpecTestArray.create()
 	var nonBatchable = SpecTestArray.create()
@@ -3327,11 +3347,9 @@ function partitionSpecTests(tests SpecTestArray, specName String, filter String,
 
 	for test in tests 'partition'
 		let testPath = "{specName}/{test.name}"
-		if not filter.isEmpty() 'hasFilter'
-			if not testPath.contains(filter) 'noMatch'
-				continue
-			end 'noMatch'
-		end 'hasFilter'
+		if not filterMatches(filter, testPath: testPath) 'noMatch'
+			continue
+		end 'noMatch'
 		if isSelfHostedKnownBroken(specName, testName: test.name) 'knownBroken'
 			continue
 		end 'knownBroken'

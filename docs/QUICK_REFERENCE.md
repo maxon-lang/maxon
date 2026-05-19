@@ -924,7 +924,7 @@ maxon lsp-server             # Start LSP server for IDE integration
 ### Test Options (spec-test)
 | Option | Description |
 |--------|-------------|
-| `--filter=PATTERN` | Run tests matching pattern |
+| `--filter=PATTERN` | Run tests matching pattern (comma-separated for union, e.g. `arrays,map`) |
 | `--verbose` | Show pass/fail per test |
 | `--update-required` | Regenerate and update RequiredIR + MmTrace stderr |
 | `--workers=N` | Set number of parallel test workers |

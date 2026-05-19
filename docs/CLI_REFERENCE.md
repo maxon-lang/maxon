@@ -164,7 +164,7 @@ maxon spec-test [options]
 
 | Option | Description |
 |--------|-------------|
-| `--filter=PATTERN` | Run only tests matching the pattern |
+| `--filter=PATTERN` | Run only tests matching the pattern. Comma-separated terms run a union (any-of) — e.g. `--filter=basics,arrays,map`. Whitespace around each term is trimmed. |
 | `--workers=N` | Use N worker threads (default: `ProcessorCount - 2`) |
 | `--update-required` | Force regeneration and update `RequiredIR` + `MmTrace` stderr blocks |
 | `--verbose` | Show per-test PASS/FAIL timing logs |
@@ -177,6 +177,9 @@ maxon spec-test
 
 # Run tests matching a pattern
 maxon spec-test --filter=array
+
+# Run tests matching any of several patterns
+maxon spec-test --filter=basics,arrays,map
 
 # Run with verbose output
 maxon spec-test --verbose

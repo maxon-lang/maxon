@@ -409,7 +409,17 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 		rangeIdx = rangeIdx + 1
 	end 'populateBlocks'
 
-	// For each block, check pairwise overlap
+	// For each block, sweep intervals in start-position order. The active
+	// set holds positions (into the block's parallel br/bs/be arrays) for
+	// ranges whose interval has begun but not yet ended at the sweep
+	// point. On each new arrival we (a) retire active entries whose endPos
+	// has passed, then (b) emit interference vs every survivor (they
+	// overlap the new range by construction), then (c) add the new range
+	// to the active set. This is O(R log R + edges) per block versus a
+	// naive O(R^2) pairwise scan; both addInterference and
+	// isCopyBoundaryOverlap are symmetric in (a,b), so swapping argument
+	// order at the call site is safe.
+	var active = RegIntArray.create()
 	var blockId = 0
 	while blockId < numBlocks 'eachBlock'
 		let br = try blockRanges.get(blockId) otherwise 'noBr2'
@@ -426,47 +436,104 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 		end 'noBe2'
 
 		let count = br.count()
-		var i = 0
-		while i < count 'outer'
-			let ri1 = try br.get(i) otherwise 'skipI'
-				i = i + 1
-				continue
-			end 'skipI'
-			let s1 = try bs.get(i) otherwise panic("buildInterference: bs must be parallel to br but get({i}) failed (count={count}, bs.count={bs.count()})")
-			let e1 = try be.get(i) otherwise panic("buildInterference: be must be parallel to br but get({i}) failed (count={count}, be.count={be.count()})")
+		active.clear()
 
-			var j = i + 1
-			while j < count 'inner'
-				let ri2 = try br.get(j) otherwise 'skipJ'
-					j = j + 1
-					continue
-				end 'skipJ'
-				let s2 = try bs.get(j) otherwise panic("buildInterference: bs must be parallel to br but get({j}) failed (count={count}, bs.count={bs.count()})")
-				let e2 = try be.get(j) otherwise panic("buildInterference: be must be parallel to br but get({j}) failed (count={count}, be.count={be.count()})")
+		let order = sortBlockIndicesByStart(bs)
 
-				// Check overlap: s1 < e2 and s2 < e1
-				if s1 < e2 and s2 < e1 'overlaps'
-					// Skip interference for copy-connected ranges that overlap by
-					// exactly 1 position at the copy boundary. This happens when
-					// the source's interval is [_, P+1) and the dest starts at [P, _):
-					// they share only position P (the movRegReg instruction).
-					let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, ranges: ranges, ri1: ri1, ri2: ri2)
-					if not isCopyBoundary 'realOverlap'
-						addInterference(ig, a: ri1, b: ri2)
-					end 'realOverlap'
-				end 'overlaps'
+		var oi = 0
+		while oi < count 'sweep'
+			let idx = try order.get(oi) otherwise panic("buildInterference: order.get({oi}) OOB (count={count}, order.count={order.count()})")
+			let ri1 = try br.get(idx) otherwise panic("buildInterference: br.get({idx}) OOB (count={count})")
+			let s1 = try bs.get(idx) otherwise panic("buildInterference: bs.get({idx}) OOB (count={count})")
+			let e1 = try be.get(idx) otherwise panic("buildInterference: be.get({idx}) OOB (count={count})")
 
-				j = j + 1
-			end 'inner'
+			// Retire active entries whose interval ended at or before s1.
+			// Half-open semantics: a range ending at endPos shares no position
+			// with a range starting at endPos, matching the original
+			// (s1 < e2 and s2 < e1) overlap test.
+			var ai = 0
+			while ai < active.count() 'retire'
+				let activeIdx = try active.get(ai) otherwise panic("buildInterference: active.get({ai}) OOB")
+				let activeEnd = try be.get(activeIdx) otherwise panic("buildInterference: be.get({activeIdx}) OOB for active entry")
+				if activeEnd <= s1 'expired'
+					// Swap-pop: O(1) removal that doesn't preserve order.
+					let lastPos = active.count() - 1
+					if ai != lastPos 'notLast'
+						let tail = try active.get(lastPos) otherwise panic("buildInterference: active.get(lastPos) OOB")
+						try active.set(ai, value: tail) otherwise panic("buildInterference: active.set OOB during swap-pop")
+					end 'notLast'
+					try active.pop() otherwise panic("buildInterference: active.pop on non-empty active set must succeed")
+				end 'expired' else 'stillLive'
+					ai = ai + 1
+				end 'stillLive'
+			end 'retire'
 
-			i = i + 1
-		end 'outer'
+			// Every surviving active entry overlaps the new range — its
+			// startPos <= s1 and its endPos > s1, so [s1, min(activeEnd, e1))
+			// is non-empty.
+			var ei = 0
+			while ei < active.count() 'emit'
+				let activeIdx = try active.get(ei) otherwise panic("buildInterference: active.get({ei}) OOB during emit")
+				let ri2 = try br.get(activeIdx) otherwise panic("buildInterference: br.get({activeIdx}) OOB during emit")
+				let s2 = try bs.get(activeIdx) otherwise panic("buildInterference: bs.get({activeIdx}) OOB during emit")
+				let e2 = try be.get(activeIdx) otherwise panic("buildInterference: be.get({activeIdx}) OOB during emit")
+
+				// Skip interference for copy-connected ranges that overlap by
+				// exactly 1 position at the copy boundary. This happens when
+				// the source's interval is [_, P+1) and the dest starts at [P, _):
+				// they share only position P (the movRegReg instruction).
+				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, ranges: ranges, ri1: ri1, ri2: ri2)
+				if not isCopyBoundary 'realOverlap'
+					addInterference(ig, a: ri1, b: ri2)
+				end 'realOverlap'
+
+				ei = ei + 1
+			end 'emit'
+
+			active.push(idx)
+			oi = oi + 1
+		end 'sweep'
 
 		blockId = blockId + 1
 	end 'eachBlock'
 
 	return ig
 end 'buildInterferenceGraph'
+
+// Insertion-sort permutation: returns indices 0..bs.count() sorted by
+// bs[idx] ascending. Per-block live-range counts are bounded (typically
+// 10-100), so insertion sort is faster than a recursive quicksort once
+// constants are folded in, and trivially stable.
+function sortBlockIndicesByStart(bs RegIntArray) returns RegIntArray
+	let count = bs.count()
+	var order = RegIntArray.create()
+	var i = 0
+	while i < count 'init'
+		order.push(i)
+		i = i + 1
+	end 'init'
+
+	var si = 1
+	while si < count 'sort'
+		let keyIdx = try order.get(si) otherwise panic("sortBlockIndicesByStart: order.get({si}) OOB (count={count})")
+		let keyStart = try bs.get(keyIdx) otherwise panic("sortBlockIndicesByStart: bs.get({keyIdx}) OOB (count={count})")
+
+		var j = si - 1
+		while j >= 0 'insert'
+			let jIdx = try order.get(j) otherwise panic("sortBlockIndicesByStart: order.get({j}) OOB during insert")
+			let jStart = try bs.get(jIdx) otherwise panic("sortBlockIndicesByStart: bs.get({jIdx}) OOB during insert")
+			if jStart <= keyStart 'inPlace'
+				break
+			end 'inPlace'
+			try order.set(j + 1, value: jIdx) otherwise panic("sortBlockIndicesByStart: order.set OOB during insert")
+			j = j - 1
+		end 'insert'
+		try order.set(j + 1, value: keyIdx) otherwise panic("sortBlockIndicesByStart: order.set final OOB")
+		si = si + 1
+	end 'sort'
+
+	return order
+end 'sortBlockIndicesByStart'
 
 // Check if two overlapping intervals only share a single position at a copy boundary.
 function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool

@@ -23,6 +23,11 @@
 // Downstream passes (lowerMaxonToStd and beyond) depend on this pass having
 // run, so it sits first in the mid pipeline.
 
+// Cycle-guard set for interface-graph walks. Membership is the only
+// operation we need, and the walks can reach deep extends chains — a Set
+// keeps the per-step `contains` check at O(1) rather than O(visited).
+typealias StringSet = Set with String
+
 // --- Typealias resolution (fixed-point) ---
 
 // Try to translate a single UnresolvedTypeExpr into a (StdType, optional
@@ -623,7 +628,7 @@ typealias InterfaceUsesUpdateArray = Array with InterfaceUsesUpdate
 // would indicate a malformed `extends` graph (the parser doesn't validate
 // for those today, so we keep a `visited` set as a guard).
 function findInheritedBindings(project Project, iface IrInterface, siblings ConformanceArray) returns StringArray
-	var visited = StringArray.create()
+	var visited = StringSet.create()
 	var queue = StringArray.create()
 	for parentName in iface.extendsNames 'seedQueue'
 		queue.push(parentName)
@@ -632,17 +637,10 @@ function findInheritedBindings(project Project, iface IrInterface, siblings Conf
 	while queue.count() > 0 'walk'
 		let head = try queue.remove(at: 0) otherwise break
 
-		var seen = false
-		for v in visited 'checkVisit'
-			if v == head 'hit'
-				seen = true
-				break
-			end 'hit'
-		end 'checkVisit'
-		if seen 'skip'
+		if visited.contains(head) 'skip'
 			continue
 		end 'skip'
-		visited.push(head)
+		visited.insert(element: head)
 
 		// Look for a sibling conformance that names this ancestor.
 		for sib in siblings 'eachSib'
@@ -660,6 +658,12 @@ function findInheritedBindings(project Project, iface IrInterface, siblings Conf
 
 	return StringArray.create()
 end 'findInheritedBindings'
+
+// Type-parameter name → bound MaxonType, threaded through the substitute
+// family below. A map (rather than two parallel arrays) keeps the per-name
+// lookup O(1) so the inner loop of `substituteNamedId` doesn't turn the
+// conformance walk into O(M·I·K·P²).
+typealias TypeBindingMap = Map with(String, MaxonType)
 
 // Build the substituted method set a conforming type is expected to
 // provide. Each `Conformance` in `conformances` names an interface and
@@ -723,16 +727,13 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		// interface's `equals(other Self)` (resolved to `equals(other Equatable)`)
 		// against an implementer's `equals(other String)` and reject the
 		// otherwise-correct conformance.
-		var bindingNames = StringArray.create()
-		var bindingTypes = MaxonTypeArray.create()
+		var bindings = TypeBindingMap.create()
 		for i in 0 upto iface.usesParams.count() 'buildBindings'
 			let paramName = try iface.usesParams.get(i) otherwise panic("computeExpectedMethodsForConformances: usesParams.get OOB at {i}")
 			let argType = try resolvedWithArgs.get(i) otherwise panic("computeExpectedMethodsForConformances: resolvedWithArgs.get OOB at {i}")
-			bindingNames.push(paramName)
-			bindingTypes.push(argType)
+			bindings.upsert(paramName, value: argType)
 		end 'buildBindings'
-		bindingNames.push(conf.interfaceName)
-		bindingTypes.push(internMaxonType(project, name: declName))
+		bindings.upsert(conf.interfaceName, value: internMaxonType(project, name: declName))
 
 		// Walk this interface and every transitively-extended parent so the
 		// implementing type is responsible for satisfying the inherited methods
@@ -742,8 +743,8 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		// binding so any `Self` references inside the parent's signatures
 		// (parsed as `MaxonType.named(<parentName>)`) substitute back to the
 		// implementing type, mirroring the C# bootstrap's `CollectInterfaceMethods`.
-		var visited = StringArray.create()
-		collectInterfaceMethodsInto(project, iface: iface, declName: declName, directInterfaceName: conf.interfaceName, bindingNames: bindingNames, bindingTypes: bindingTypes, expected: expected, visited: visited)
+		var visited = StringSet.create()
+		collectInterfaceMethodsInto(project, iface: iface, declName: declName, directInterfaceName: conf.interfaceName, bindings: bindings, expected: expected, visited: visited)
 	end 'eachConf'
 
 	return expected
@@ -753,20 +754,18 @@ end 'computeExpectedMethodsForConformances'
 // signature (substituted against the binding map) into `expected`. The
 // `visited` set guards against cycles and against an ancestor being reached
 // twice via two different extends paths. For each ancestor visited, we
-// temporarily push `(ancestorName → declName)` onto the shared binding
-// arrays so any `Self` references parsed inside that ancestor's body
-// resolve to the implementing type, then pop after recursion so siblings
-// see the original binding state.
-function collectInterfaceMethodsInto(project Project, iface IrInterface, declName String, directInterfaceName String, bindingNames StringArray, bindingTypes MaxonTypeArray, expected InterfaceMethodSigArray, visited StringArray)
-	for v in visited 'checkVisit'
-		if v == iface.name 'hit'
-			return
-		end 'hit'
-	end 'checkVisit'
-	visited.push(iface.name)
+// temporarily augment `bindings` with `(ancestorName → declName)` so any
+// `Self` references parsed inside that ancestor's body resolve to the
+// implementing type, then restore the previous mapping after recursion so
+// siblings see the original binding state.
+function collectInterfaceMethodsInto(project Project, iface IrInterface, declName String, directInterfaceName String, bindings TypeBindingMap, expected InterfaceMethodSigArray, visited StringSet)
+	if visited.contains(iface.name) 'hit'
+		return
+	end 'hit'
+	visited.insert(element: iface.name)
 
 	for sig in iface.methods 'eachMethod'
-		var substituted = substituteMethodSig(project, sig: sig, bindingNames: bindingNames, bindingTypes: bindingTypes)
+		var substituted = substituteMethodSig(project, sig: sig, bindings: bindings)
 		substituted.sourceInterfaceName = iface.name
 		substituted.directInterfaceName = directInterfaceName
 		expected.push(substituted)
@@ -778,13 +777,20 @@ function collectInterfaceMethodsInto(project Project, iface IrInterface, declNam
 		// `Self` references substitute correctly. The parent inherits the
 		// child's `usesParams` bindings unchanged — interface inheritance in
 		// Maxon doesn't introduce new type parameters at the boundary.
-		// Push/pop the augmentation so sibling parents at this level see the
-		// original binding state on entry.
-		bindingNames.push(parentName)
-		bindingTypes.push(internMaxonType(project, name: declName))
-		collectInterfaceMethodsInto(project, iface: parent, declName: declName, directInterfaceName: directInterfaceName, bindingNames: bindingNames, bindingTypes: bindingTypes, expected: expected, visited: visited)
-		try bindingNames.pop() otherwise panic("collectInterfaceMethodsInto: bindingNames.pop after parent {parentName}")
-		try bindingTypes.pop() otherwise panic("collectInterfaceMethodsInto: bindingTypes.pop after parent {parentName}")
+		// First-binding-wins: a pre-existing entry for `parentName` (e.g. a
+		// usesParam already mapped to a concrete type) is preserved so the
+		// inner recursion sees the same lookup the original linear scan did.
+		// When no prior entry exists, insert the parent→declName binding for
+		// the duration of the recursion and remove it afterward so sibling
+		// parents at this level start from the same binding state.
+		let hadPrev = bindings.contains(parentName)
+		if not hadPrev 'inject'
+			bindings.upsert(parentName, value: internMaxonType(project, name: declName))
+		end 'inject'
+		collectInterfaceMethodsInto(project, iface: parent, declName: declName, directInterfaceName: directInterfaceName, bindings: bindings, expected: expected, visited: visited)
+		if not hadPrev 'drop'
+			_ = bindings.remove(parentName)
+		end 'drop'
 	end 'eachParent'
 end 'collectInterfaceMethodsInto'
 
@@ -793,18 +799,18 @@ end 'collectInterfaceMethodsInto'
 // type name gets the same string-substitution treatment so a method
 // declared as `throws Element` (rare, but valid in principle) ends up
 // throwing the bound concrete type.
-function substituteMethodSig(project Project, sig InterfaceMethodSig, bindingNames StringArray, bindingTypes MaxonTypeArray) returns InterfaceMethodSig
+function substituteMethodSig(project Project, sig InterfaceMethodSig, bindings TypeBindingMap) returns InterfaceMethodSig
 	var newParamTypes = MaxonTypeArray.create()
 	for pt in sig.paramTypes 'eachParam'
-		newParamTypes.push(substituteMaxonType(project, t: pt, bindingNames: bindingNames, bindingTypes: bindingTypes))
+		newParamTypes.push(substituteMaxonType(project, t: pt, bindings: bindings))
 	end 'eachParam'
 
 	let newReturnType = match sig.returnType 'rt'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(substituteMaxonType(project, t: inner, bindingNames: bindingNames, bindingTypes: bindingTypes))
+		value(inner) gives MaxonReturnType.value(substituteMaxonType(project, t: inner, bindings: bindings))
 	end 'rt'
 
-	let newThrows = substituteThrowsName(sig.throwsTypeName, bindingNames: bindingNames, bindingTypes: bindingTypes, project: project)
+	let newThrows = substituteThrowsName(sig.throwsTypeName, bindings: bindings, project: project)
 
 	return InterfaceMethodSig.create(sig.name, paramNames: sig.paramNames, paramTypes: newParamTypes, returnType: newReturnType, throwsTypeName: newThrows, isStatic: sig.isStatic, line: sig.line, column: sig.column)
 end 'substituteMethodSig'
@@ -813,9 +819,9 @@ end 'substituteMethodSig'
 // bound concrete type. Other arms (primitives, unresolved, unmapped named
 // references) pass through unchanged. A primitive can never be a type-
 // parameter binding target since binding names are always identifiers.
-function substituteMaxonType(project Project, t MaxonType, bindingNames StringArray, bindingTypes MaxonTypeArray) returns MaxonType
+function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingMap) returns MaxonType
 	match t 'kind'
-		named(id) then return substituteNamedId(project, id: id, bindingNames: bindingNames, bindingTypes: bindingTypes)
+		named(id) then return substituteNamedId(project, id: id, bindings: bindings)
 		boolean then return MaxonType.boolean
 		integer then return MaxonType.integer
 		float then return MaxonType.float
@@ -840,15 +846,9 @@ function substituteMaxonType(project Project, t MaxonType, bindingNames StringAr
 	end 'kind'
 end 'substituteMaxonType'
 
-function substituteNamedId(project Project, id TypeNameId, bindingNames StringArray, bindingTypes MaxonTypeArray) returns MaxonType
+function substituteNamedId(project Project, id TypeNameId, bindings TypeBindingMap) returns MaxonType
 	let name = project.typeNames.get(id)
-	for i in 0 upto bindingNames.count() 'lookup'
-		let bn = try bindingNames.get(i) otherwise panic("substituteNamedId: bindingNames.get OOB at {i}")
-		if bn == name 'hit'
-			return try bindingTypes.get(i) otherwise panic("substituteNamedId: bindingTypes.get OOB at {i}")
-		end 'hit'
-	end 'lookup'
-	return MaxonType.named(id)
+	return try bindings.get(name) otherwise MaxonType.named(id)
 end 'substituteNamedId'
 
 // When the name carried by a `ThrowsClause.throwing(name)` matches a
@@ -857,7 +857,7 @@ end 'substituteNamedId'
 // (`ThrowsClause.none`) pass through unchanged. If the substituted type has
 // no name, fall back to the original clause to avoid synthesising a
 // `throwing("")` sentinel.
-function substituteThrowsName(throwsTypeName ThrowsClause, bindingNames StringArray, bindingTypes MaxonTypeArray, project Project) returns ThrowsClause
+function substituteThrowsName(throwsTypeName ThrowsClause, bindings TypeBindingMap, project Project) returns ThrowsClause
 	let name = match throwsTypeName 'unwrap'
 		none gives ""
 		throwing(n) gives n
@@ -865,20 +865,16 @@ function substituteThrowsName(throwsTypeName ThrowsClause, bindingNames StringAr
 	if name.isEmpty() 'noThrow'
 		return ThrowsClause.none
 	end 'noThrow'
-	for i in 0 upto bindingNames.count() 'lookup'
-		let bn = try bindingNames.get(i) otherwise panic("substituteThrowsName: bindingNames.get OOB at {i}")
-		if bn == name 'hit'
-			let bt = try bindingTypes.get(i) otherwise panic("substituteThrowsName: bindingTypes.get OOB at {i}")
-			let substituted = bt.nameOrEmpty(project)
-			if substituted.isEmpty() 'unnamed'
-				// Anonymous binding type — fall back to the unsubstituted clause
-				// rather than introducing a `throwing("")` sentinel.
-				return throwsTypeName
-			end 'unnamed'
-			return ThrowsClause.throwing(substituted)
-		end 'hit'
-	end 'lookup'
-	return ThrowsClause.throwing(name)
+	let bt = try bindings.get(name) otherwise 'noBind'
+		return ThrowsClause.throwing(name)
+	end 'noBind'
+	let substituted = bt.nameOrEmpty(project)
+	if substituted.isEmpty() 'unnamed'
+		// Anonymous binding type — fall back to the unsubstituted clause
+		// rather than introducing a `throwing("")` sentinel.
+		return throwsTypeName
+	end 'unnamed'
+	return ThrowsClause.throwing(substituted)
 end 'substituteThrowsName'
 
 // --- Struct type resolution ---
@@ -1167,7 +1163,7 @@ function recordConformance(project Project, typeName String, conf Conformance)
 	let usesCount = lookupInterfaceUsesParams(project, name: conf.interfaceName).count()
 	let withArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: usesCount)
 	_ = project.conformances.intern(typeName, interfaceName: conf.interfaceName, withArgs: withArgs)
-	var visited = StringArray.create()
+	var visited = StringSet.create()
 	recordParentConformancesHelper(project, typeName: typeName, interfaceName: conf.interfaceName, withArgs: withArgs, visited: visited)
 end 'recordConformance'
 
@@ -1178,13 +1174,11 @@ end 'recordConformance'
 // also valid bindings for each parent. A duplicate visit is gated by the
 // conformance registry's idempotent `intern` and a local `visited` set
 // guards against cycles in malformed interface graphs.
-function recordParentConformancesHelper(project Project, typeName String, interfaceName String, withArgs MaxonTypeArray, visited StringArray)
-	for v in visited 'cycleGuard'
-		if v == interfaceName 'seen'
-			return
-		end 'seen'
-	end 'cycleGuard'
-	visited.push(interfaceName)
+function recordParentConformancesHelper(project Project, typeName String, interfaceName String, withArgs MaxonTypeArray, visited StringSet)
+	if visited.contains(interfaceName) 'seen'
+		return
+	end 'seen'
+	visited.insert(element: interfaceName)
 
 	var parents = StringArray.create()
 	if let resolved = try project.interfaces.get(interfaceName) 'fromResolved'
@@ -2882,17 +2876,15 @@ end 'interfaceReceiverIsIteratorShape'
 // classify receivers without depending on `unresolvedInterfaces` (which
 // has been drained by the time `methodCallResultType` runs).
 function interfaceDeclaresMethodInResolved(project Project, interfaceName String, methodName String) returns bool
-	var visited = StringArray.create()
+	var visited = StringSet.create()
 	return interfaceDeclaresMethodInResolvedHelper(project, interfaceName: interfaceName, methodName: methodName, visited: visited)
 end 'interfaceDeclaresMethodInResolved'
 
-function interfaceDeclaresMethodInResolvedHelper(project Project, interfaceName String, methodName String, visited StringArray) returns bool
-	for v in visited 'cycleGuard'
-		if v == interfaceName 'seen'
-			return false
-		end 'seen'
-	end 'cycleGuard'
-	visited.push(interfaceName)
+function interfaceDeclaresMethodInResolvedHelper(project Project, interfaceName String, methodName String, visited StringSet) returns bool
+	if visited.contains(interfaceName) 'seen'
+		return false
+	end 'seen'
+	visited.insert(element: interfaceName)
 	let iface = try project.interfaces.get(interfaceName) otherwise return false
 	for i in 0 upto iface.methods.count() 'scan'
 		let m = try iface.methods.get(i) otherwise panic("interfaceDeclaresMethodInResolvedHelper: methods.get OOB at {i}")

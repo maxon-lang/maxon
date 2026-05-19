@@ -274,6 +274,22 @@ export type Project
 	// `structTypes` before any pass that consumes struct layouts runs.
 	export var unresolvedStructTypes UnresolvedStructTypeMap
 
+	// Reverse index of every name that appears as a struct inner-typealias
+	// (e.g. `ElementMemory` declared inside `type Array uses Element`). Lets
+	// `anyStructHasInnerAlias` answer in O(1) instead of scanning every entry
+	// in `structTypes`. Populated by the parser alongside every write into a
+	// struct's `innerAliases` map (`parseTypeBody` after a `type ... end` is
+	// built, `mergeExtensionInnerAliases` when an `extension Struct` merges
+	// aliases into an existing entry); membership is purely additive so no
+	// invalidation is needed. The probe runs 10k+ times per compile from
+	// cast/compare validation and unresolved-type lookup, so an
+	// O(struct-count) per-call walk dominates TypeResolution's runtime.
+	// Interface-only inner aliases are intentionally excluded — the consumer
+	// (`resolveNamedToStdType` and the unknown-type validity gate) only
+	// treats struct inner aliases as the i64-typed "we know about this name"
+	// bucket.
+	export var structInnerAliasNames InnerAliasNameSet
+
 	// Phase 11.0 step 4: parser-recorded `extension TargetType ... end`
 	// blocks. Method bodies inside each extension are registered as
 	// qualified `TargetType.methodName` callees at parse time; this
@@ -580,6 +596,7 @@ export type Project
 			immutableArrayLitNames: StringArray.create(),
 			structTypes: StructTypeMap.create(),
 			unresolvedStructTypes: UnresolvedStructTypeMap.create(),
+			structInnerAliasNames: InnerAliasNameSet.create(),
 			unresolvedExtensions: UnresolvedExtensionArray.create(),
 			enumTypes: EnumTypeMap.create(),
 			unresolvedEnums: UnresolvedEnumTypeMap.create(),
@@ -2326,19 +2343,17 @@ export function resolveNamedIdToStdType(project Project, id TypeNameId) returns 
 	return resolveNamedToStdType(project, name: project.typeNames.get(id))
 end 'resolveNamedIdToStdType'
 
-// Phase 11.0 step 8b: scan struct bodies for an inner-alias entry matching
-// `aliasName`. Used by `resolveNamedToStdType` to recognize names that
-// originated from per-struct inner typealiases (e.g. `ElementMemory`
-// declared inside `type Array uses Element`) so they can lower to the
-// shared i64 ABI representation rather than triggering the
-// "unknown named type" panic.
+// Phase 11.0 step 8b: report whether any struct registered `aliasName` as
+// an inner typealias (e.g. `ElementMemory` declared inside
+// `type Array uses Element`). Used by `resolveNamedToStdType` to recognize
+// names that originated from per-struct inner typealiases so they can lower
+// to the shared i64 ABI representation rather than triggering the "unknown
+// named type" panic, and by `namedNameIsKnown` to keep cast/compare
+// validation from emitting E3009 against the same names. Backed by
+// `Project.structInnerAliasNames`, which the parser maintains alongside
+// every write to a struct's `innerAliases` map, so the lookup is O(1).
 export function anyStructHasInnerAlias(project Project, aliasName String) returns bool
-	for (_, st) in project.structTypes 'eachStruct'
-		if st.innerAliases.contains(aliasName) 'hit'
-			return true
-		end 'hit'
-	end 'eachStruct'
-	return false
+	return project.structInnerAliasNames.contains(aliasName)
 end 'anyStructHasInnerAlias'
 
 // Struct field descriptor: name, type, byte offset, and `var`/`let`
@@ -2438,6 +2453,10 @@ end 'StructType'
 
 export typealias StructTypeMap = Map with(String, StructType)
 export typealias StructTypeArray = Array with StructType
+
+// Reverse-index value type for `Project.structInnerAliasNames` — see the
+// field comment on `Project` for the population contract.
+export typealias InnerAliasNameSet = Set with String
 
 // Phase 11.0 step 2: resolved-form of inner typealiases. Mirrors
 // `GenericTypealiasMap`'s shape; lives on `StructType` so per-type
