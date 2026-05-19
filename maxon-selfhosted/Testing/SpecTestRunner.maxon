@@ -208,6 +208,7 @@ let whitelist = ["basics",
 	"tuples",
 	"panic-stack-trace",
 	"command-line-args",
+	"cache-parity",
 ]
 
 // Signed elapsed time in milliseconds (deltas between Process.currentTimeMs() reads).
@@ -941,8 +942,176 @@ function compileFragmentInMemory(fragment Fragment, virtualSourcePath FilePath, 
 	return try compileMultiFileSourceWithIr(virtualFiles, target: target, outputPath: outputExe, coverage: false, covMapPath: covMapPath, includeStdlibIr: fragment.includeStdlibIr)
 end 'compileFragmentInMemory'
 
+// Cache-parity test driver. Compiles `fragment` twice — once with the stdlib
+// cache forced off via `setStdlibCacheBypassed(true)`, once with it on — and
+// fails if the captured RequiredLowering trace or the compiled PE's `.rdata`
+// section differs between legs. Only compared fields are IR + rdata; runtime
+// stdout / stderr / exit code are intentionally not checked because a
+// cache-masked bug can corrupt slot data or rdata layout without changing
+// the program's runtime output (the whole point of running this gate is to
+// catch IR-level drift the regular suite would silently let through).
+//
+// After both legs we call `warmStdlibCache(target)` so the rest of the suite
+// resumes from a warm in-process cache (otherwise every subsequent test would
+// pay the cold-start parse cost).
+function runTestParityCheck(fragment Fragment, projectRoot FilePath, target Target, specName String, specCacheDir FilePath) returns TestResult
+	let testName = fragment.testName
+	let tempDir = projectRoot.join("temp")
+	let virtualSourcePath = try FilePath.from(fragment.filePath) otherwise tempDir.join("{fragment.testName}.test")
+	let ext = executableExtension(target)
+	let cacheSpecDir = specCacheDir.join(specName)
+	if not Directory.exists(cacheSpecDir) 'noCacheDir'
+		_ = Directory.create(cacheSpecDir)
+	end 'noCacheDir'
+	let outputExeA = cacheSpecDir.join("{fragment.testName}-cacheoff{ext}")
+	let outputExeB = cacheSpecDir.join("{fragment.testName}-cacheon{ext}")
+
+	// Leg B (cache on) runs first to exercise the in-process warm path that
+	// every other spec test uses; leg A (cache off) then wipes the loader
+	// state and re-parses stdlib from source. Running A first would leave a
+	// partially-restored in-process state that leg B couldn't trust.
+	let legB = runParityLeg(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExeB, bypassed: false)
+	let legA = runParityLeg(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExeA, bypassed: true)
+
+	// Restore suite-wide warm state for subsequent (non-parity) tests so the
+	// rest of the run keeps its normal wall clock. The reset is essential —
+	// leg B left in-process state from a bypassed-then-restored parse cycle
+	// that the cache's gid translator can't always reconcile against a fresh
+	// warmup project (StdlibCache.translateWriterGenericInstanceId panics
+	// without this reset).
+	resetStdlibLoaderState()
+	warmStdlibCache(target)
+
+	var errorMsg = ""
+	var passed = true
+
+	// Compile-status divergence is itself a parity failure: a cache-masked bug
+	// can manifest as "compiles with cache on, fails to compile with cache
+	// off" (or vice versa). Catch this before the IR/rdata diff.
+	if legA.compiled != legB.compiled 'compileStatusDiff'
+		passed = false
+		errorMsg = "cache-parity: compile status diverged. leg A (cache off) compiled={legA.compiled}; leg B (cache on) compiled={legB.compiled}\nleg A error: {legA.errorMessage}\nleg B error: {legB.errorMessage}"
+	end 'compileStatusDiff' else 'sameCompileStatus'
+		if not legA.compiled 'bothFailed'
+			// Both legs failed: compare error messages. Different errors → still
+			// a parity bug.
+			if legA.errorMessage != legB.errorMessage 'errorMessageDiff'
+				passed = false
+				errorMsg = "cache-parity: both legs failed but with different errors.\n--- leg A (cache off) ---\n{legA.errorMessage}\n--- leg B (cache on) ---\n{legB.errorMessage}"
+			end 'errorMessageDiff'
+		end 'bothFailed' else 'bothOk'
+			// Note: lowering-trace comparison is intentionally NOT done on
+			// tryold. Leg A (cache off) lowers the full stdlib through the
+			// user pipeline; leg B (cache on) loads stdlib metadata from
+			// the cache and lowers nothing stdlib-related in the user
+			// pipeline. Their lowering traces diverge by design — that's
+			// the cache's *purpose*. The right parity invariant on tryold
+			// is "same observable output": rdata bytes and (when we add
+			// it) text-section function bytes match between legs.
+			//
+			// Rdata + text comparison is PE-only — non-Windows targets
+			// emit code/data into other sections, so we skip the byte
+			// compare on those.
+			if target.os == Os.windows 'isWindows'
+				if legA.rdataBytes != legB.rdataBytes 'rdataMismatch'
+					passed = false
+					errorMsg = "cache-parity: .rdata diverged between leg A (cache off) and leg B (cache on)\nleg A ({legA.rdataBytes.count()} bytes): {formatHexBytes(legA.rdataBytes)}\nleg B ({legB.rdataBytes.count()} bytes): {formatHexBytes(legB.rdataBytes)}"
+				end 'rdataMismatch'
+				if legA.textBytes != legB.textBytes 'textMismatch'
+					passed = false
+					let textMsg = "cache-parity: .text diverged between leg A (cache off) and leg B (cache on); leg A {legA.textBytes.count()} bytes / leg B {legB.textBytes.count()} bytes"
+					if errorMsg.isEmpty() 'firstText'
+						errorMsg = textMsg
+					end 'firstText' else 'appendText'
+						errorMsg = "{errorMsg}\n{textMsg}"
+					end 'appendText'
+				end 'textMismatch'
+			end 'isWindows'
+		end 'bothOk'
+	end 'sameCompileStatus'
+
+	cleanup(outputExeA)
+	cleanup(outputExeB)
+	return TestResult.create(testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: legB.loweringLog, compileIr: "")
+end 'runTestParityCheck'
+
+// Per-leg result for a cache-parity test. `compiled = false` means the compile
+// itself failed (which should never happen for either leg when the fix being
+// tested is well-formed — both compile or neither does). On success,
+// `loweringLog` is the captured IR trace and `rdataBytes` is the .rdata
+// section bytes (empty on non-Windows targets).
+type ParityLegResult
+	export var compiled bool
+	export var errorMessage String
+	export var loweringLog String
+	export var rdataBytes ByteArray
+	export var textBytes ByteArray
+
+	static function create(compiled bool, errorMessage String, loweringLog String, rdataBytes ByteArray, textBytes ByteArray) returns ParityLegResult
+		return Self{compiled: compiled, errorMessage: errorMessage, loweringLog: loweringLog, rdataBytes: rdataBytes, textBytes: textBytes}
+	end 'create'
+end 'ParityLegResult'
+
+// Run one leg of a cache-parity test. Resets stdlib loader state, flips the
+// bypass to the requested value, compiles, and captures both the IR trace and
+// (on Windows targets) the compiled .rdata section bytes.
+function runParityLeg(fragment Fragment, virtualSourcePath FilePath, target Target, outputExe FilePath, bypassed bool) returns ParityLegResult
+	// Reset only on the bypassed leg: that's the one that must re-parse stdlib
+	// from source. The non-bypassed leg deliberately leaves the suite-wide
+	// warm in-process state in place so it exercises the normal
+	// `stdlibLoaded` cached path that every other spec test uses — which is
+	// also the path most likely to mask bugs.
+	if bypassed 'needsFreshParse'
+		resetStdlibLoaderState()
+	end 'needsFreshParse'
+	setStdlibCacheBypassed(bypassed)
+	setCategoryLogLevel(LogCategory.ir, level: LogLevel.TRACE)
+	startCapturingTrace()
+	startCapturingErrors()
+
+	// We use `compileOk.outputPath` further down (it's the same path we asked
+	// the compiler to produce, but binding through the compile result keeps
+	// the analyzer satisfied that the call's return value is consumed).
+	let compileOk = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
+		let capturedErrors = stopCapturingErrors()
+		cancelCapturingTrace()
+		setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
+		setStdlibCacheBypassed(false)
+		return ParityLegResult.create(false, errorMessage: capturedErrors, loweringLog: "", rdataBytes: ByteArray.create(), textBytes: ByteArray.create())
+	end 'compileFailed'
+	let compiledExe = compileOk.outputPath
+
+	cancelCapturingErrors()
+	let loweringLog = stopCapturingTrace()
+	setCategoryLogLevel(LogCategory.ir, level: LogLevel.ERROR)
+	setStdlibCacheBypassed(false)
+
+	var rdataBytes = ByteArray.create()
+	var textBytes = ByteArray.create()
+	if target.os == Os.windows 'readSections'
+		let exeBytes = try File.readBinary(compiledExe) otherwise ByteArray.create()
+		let sections = try parsePeSections(exeBytes) otherwise PeSectionInfoArray.create()
+		if let text = try findSection(sections, name: ".text") 'haveText'
+			textBytes = readPeSectionBytes(exeBytes, info: text)
+		end 'haveText'
+		if let rdata = try findSection(sections, name: ".rdata") 'haveRdata'
+			rdataBytes = readPeSectionBytes(exeBytes, info: rdata)
+		end 'haveRdata'
+	end 'readSections'
+
+	return ParityLegResult.create(true, errorMessage: "", loweringLog: loweringLog, rdataBytes: rdataBytes, textBytes: textBytes)
+end 'runParityLeg'
+
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String, specCacheDir FilePath) returns TestResult
+	// Cache-parity spec files dispatch to a dedicated double-compile harness
+	// that fails the test if the IR or .rdata diverges between cache-off and
+	// cache-on legs. Runtime stdout / stderr / exit code are intentionally
+	// not checked in this mode — see runTestParityCheck for rationale.
+	if fragment.cacheParity 'isParity'
+		return runTestParityCheck(fragment, projectRoot: projectRoot, target: target, specName: specName, specCacheDir: specCacheDir)
+	end 'isParity'
+
 	let tempDir = projectRoot.join("temp")
 	// virtualPath ends up embedded in compiler error messages, so point it at
 	// the on-disk fragment we just wrote — readers can open the path verbatim.

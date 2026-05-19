@@ -51,6 +51,14 @@ export function isBatchable(specName String, test SpecTest) returns bool
 		return false
 	end 'hasIncludeStdlibIr'
 
+	// Cache-parity tests must compile twice with explicitly-toggled cache
+	// state in between, which the shared-process batched binary can't model
+	// (the batch already loads stdlib once and reuses it). Force the
+	// per-fragment path so runTestParityCheck owns the full compile cycle.
+	if test.cacheParity or test.expectation.cacheParity 'hasCacheParity'
+		return false
+	end 'hasCacheParity'
+
 	// Tests that assert runtime stderr (panics, stack traces, runtime errors)
 	// are sensitive to: the source file's virtual name, the test's `main`
 	// symbol name, and the dispatcher frame appearing in the stack trace.

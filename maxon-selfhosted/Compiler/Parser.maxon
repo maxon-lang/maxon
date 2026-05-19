@@ -1853,7 +1853,11 @@ export type Parser
 		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise ignore
 		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise ignore
 		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise ignore
-		project.livenessRoots.push(helperName)
+		// Stage K.4: no livenessRoot push. Every `Self{}` literal that
+		// omits a defaulted field emits a `MaxonOp.call(__field_init_<name>)`
+		// op in `parseStructLiteral`, so the regular DFE call-edge walk
+		// reaches the helper when the struct is actually constructed. If no
+		// user code constructs the struct, the helper is correctly dead.
 		module.functions.push(helperFunc)
 	end 'parseFieldDefaultInitHelper'
 
@@ -2863,9 +2867,12 @@ export type Parser
 		let existingFromOtherFile = hasExisting and not (existingFilePath.toString() == filePath.toString())
 		let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise filePath
 
-		// Classify the relationship with each existing entry.
+		// Stage K.X.A: Classify the relationship with each existing entry.
+		// A duplicate only fires when both this and the existing decl are
+		// simultaneously observable from each other's file (same file, or
+		// both non-file-private). Cross-file invisibility silences the
+		// check entirely — no separate "shadows" path.
 		var collides = false
-		var shadows = false
 		if project.typealiases.contains(nameToken.value) 'haveResolved'
 			var infos = TypealiasVisibilityInfoArray.create()
 			if let storedInfos = try project.typealiasVisibilities.get(nameToken.value) 'haveInfos'
@@ -2879,34 +2886,30 @@ export type Parser
 			for info in infos 'classifyEach'
 				let resolvedIsFilePrivate = info.visibility == Visibility.file
 				let resolvedFromOtherFile = not (info.sourceFilePath.toString() == filePath.toString())
-				let bothFilePrivate = isFilePrivate and resolvedIsFilePrivate
-				let okBecauseFilePrivatePair = bothFilePrivate and resolvedFromOtherFile
-				if not okBecauseFilePrivatePair 'conflict'
-					if (isFilePrivate or resolvedIsFilePrivate) and resolvedFromOtherFile and not bothFilePrivate 'shadow'
-						shadows = true
-					end 'shadow' else 'dup'
-						collides = true
-					end 'dup'
-				end 'conflict'
+				if not resolvedFromOtherFile 'sameFile'
+					collides = true
+					continue
+				end 'sameFile'
+				let existingInvisibleHere = resolvedIsFilePrivate
+				let thisInvisibleThere = isFilePrivate
+				if existingInvisibleHere or thisInvisibleThere 'oneIsInvisible'
+					continue
+				end 'oneIsInvisible'
+				collides = true
 			end 'classifyEach'
 		end 'haveResolved'
-		if not collides and not shadows and hasExisting 'checkUnresolved'
-			let bothFilePrivate = isFilePrivate and existingIsFilePrivate
-			let okBecauseFilePrivatePair = bothFilePrivate and existingFromOtherFile
-			if not okBecauseFilePrivatePair 'conflict'
-				if (isFilePrivate or existingIsFilePrivate) and existingFromOtherFile and not bothFilePrivate 'shadow'
-					shadows = true
-				end 'shadow' else 'dup'
+		if not collides and hasExisting 'checkUnresolved'
+			if not existingFromOtherFile 'sameFile'
+				collides = true
+			end 'sameFile' else 'differentFiles'
+				let existingInvisibleHere = existingIsFilePrivate
+				let thisInvisibleThere = isFilePrivate
+				if not existingInvisibleHere and not thisInvisibleThere 'bothObservable'
 					collides = true
-				end 'dup'
-			end 'conflict'
+				end 'bothObservable'
+			end 'differentFiles'
 		end 'checkUnresolved'
 
-		if shadows 'shadowing'
-			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "typealias '{nameToken.value}' shadows an existing typealias from another file (file-private and exported declarations of the same name are not allowed)", line: nameToken.line, column: nameToken.column, filePath: filePath)
-			skipToNextLine()
-			return
-		end 'shadowing'
 		if collides 'duplicate'
 			reportCompileError(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			skipToNextLine()
@@ -4280,8 +4283,11 @@ export type Parser
 		// out), so the throw never needs to carry a union pointer.
 		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
 
+		// Stage K.4: no livenessRoot push. `EnumName.fromRawValue(...)`
+		// user calls are rewritten to `call __enum_<EnumName>_fromRawValue`
+		// ops via `enumFromRawValueSymbolName` (MaxonDialect.maxon), so
+		// the DFE call-edge walk reaches the helper when needed.
 		module.functions.push(func)
-		project.livenessRoots.push(funcName)
 
 		currentFunc = savedFunc
 		currentBlock = savedBlock
@@ -4383,8 +4389,11 @@ export type Parser
 		// bare-case enums; the throw carries no union pointer.
 		module.setTerminator(throwBlock, op: MaxonOp.throw(enumName, variantName: firstCase.name, payloadValueName: ByteArray.create(), range: SourceRange.none()))
 
+		// Stage K.4: no livenessRoot push. `EnumName.fromName(...)` user
+		// calls are rewritten to `call __enum_<EnumName>_fromName` ops via
+		// `enumFromNameSymbolName` (MaxonDialect.maxon), so the DFE
+		// call-edge walk reaches the helper when needed.
 		module.functions.push(func)
-		project.livenessRoots.push(funcName)
 
 		currentFunc = savedFunc
 		currentBlock = savedBlock
@@ -12193,6 +12202,16 @@ export function maxonTypeStructName(project Project, t MaxonType) returns String
 	if project.structTypes.contains(nameStr) 'isStruct'
 		return nameStr
 	end 'isStruct'
+	// Stage K.X.A: parse-time callers (parser's tryMethodCall qualifier)
+	// run before resolveAllStructTypes has drained
+	// `unresolvedStructTypes`, so a concrete user/stdlib struct still
+	// lives in the unresolved registry. Recognise it as a struct here so
+	// methodCall qualification doesn't fall back to a bare-name lookup
+	// that misses funcThrowsTypes / funcReturnTypes (the latter is keyed
+	// by qualified `T.method`).
+	if project.unresolvedStructTypes.contains(nameStr) 'isUnresolvedStruct'
+		return nameStr
+	end 'isUnresolvedStruct'
 	// Enums share the method-dispatch path with structs: a method call on
 	// an enum-typed receiver qualifies the callee with the enum's name.
 	// Lookup against `enumTypes` (post-resolution) and `unresolvedEnums`

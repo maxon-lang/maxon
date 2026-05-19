@@ -101,6 +101,15 @@ function emitDescriptorForInstance(project Project, maxonModule MaxonModule, glo
 	if anyMaxonTypeIsConditional(gidArgs) 'conditional'
 		return
 	end 'conditional'
+	// Stage K.X.wasm: `anyMaxonTypeIsConditional` only catches the literal
+	// top-level `typeParameter` arm; it does NOT recurse into
+	// `genericInstance` args. A wrapping gid like `WithIterIterator with
+	// (MapIterator with (Key, Value), ...)` would slip through and emit a
+	// `__layout_*` descriptor for what is still a parametric shape. The
+	// deeper recursive check catches this.
+	if anyNamedArgIsParametric(project, args: gidArgs) 'parametricNamed'
+		return
+	end 'parametricNamed'
 
 	let mangled = mangleInstance(project, gid: gid)
 	let descriptorLabel = "__layout_{mangled}"
@@ -123,8 +132,13 @@ function emitDescriptorForInstance(project Project, maxonModule MaxonModule, glo
 
 	synthesizeCopyThunk(project, maxonModule: maxonModule, gid: gid, name: copyName)
 	synthesizeDestroyThunk(project, maxonModule: maxonModule, gid: gid, name: destroyName)
-	project.livenessRoots.push(copyName)
-	project.livenessRoots.push(destroyName)
+	// Stage K.4: witness-conditional roots keyed by the descriptor label.
+	// Std-DFE promotes copy/destroy to definite roots iff a live function
+	// emits `loadLayoutDescriptor(descriptorLabel)`. If no user code
+	// reaches the descriptor, both the rdata blob and the thunks are
+	// correctly dropped.
+	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: copyName)
+	pushWitnessConditionalRoot(project, rdataLabel: descriptorLabel, funcName: destroyName)
 
 	project.layoutDescriptors.intern(gid, label: descriptorLabel)
 end 'emitDescriptorForInstance'
@@ -248,6 +262,76 @@ export function maxonTypeIsConditional(t MaxonType) returns bool
 	end 'check'
 end 'maxonTypeIsConditional'
 
+// Stage K.X.wasm: deeper conditional-arg check that `maxonTypeIsConditional`
+// can't catch. Treats every type-parameter-bearing reference as parametric:
+//   - a bare `named(Element)` where `Element` is a typeParameter on the
+//     enclosing scope, or a bare reference to a generic type
+//   - a `genericInstance(...)` whose nested args are themselves parametric
+//     under the same rules (e.g. `MapIterator with(Key, Value)` where Key
+//     and Value are MapIterator's own typeParameters)
+//
+// `anyMaxonTypeIsConditional` only catches the literal-typeParameter arm
+// at the top level; it does NOT recurse into genericInstance args. Both
+// `BuildWitnessTables.gidIsConditional` and
+// `BuildLayoutDescriptors.emitDescriptorForInstance` need the deeper check
+// so a wrapping gid like `WithIterIterator with(MapIterator with(Key, Value), ...)`
+// is correctly recognised as parametric.
+export function anyNamedArgIsParametric(project Project, args MaxonTypeArray) returns bool
+	for a in args 'each'
+		if namedArgIsParametric(project, t: a) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'anyNamedArgIsParametric'
+
+function namedArgIsParametric(project Project, t MaxonType) returns bool
+	return match t 'pick'
+		named(id) gives isNamedIdParametric(project, id: id)
+		genericInstance(gid) gives anyNamedArgIsParametric(project, args: genericInstanceArgs(project, gid: gid))
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		function gives false
+		unresolved gives true
+		typeParameter gives true
+		interface gives false
+		constInt gives false
+	end 'pick'
+end 'namedArgIsParametric'
+
+function isNamedIdParametric(project Project, id TypeNameId) returns bool
+	let name = project.typeNames.get(id)
+	if project.structTypes.contains(name) 'isStruct'
+		// Generic struct referenced bare (e.g. `named(MapIterator)`
+		// instead of `genericInstance(MapIterator with(Key,Value))`)
+		// is still parametric — its concrete shape depends on the
+		// caller-supplied type-arg list, so per-instance emission
+		// must skip it. Non-generic struct (no `uses` clause) is a
+		// real ground type and not parametric.
+		return project.typeParameters.getParamNames(name).count() > 0
+	end 'isStruct'
+	if project.enumTypes.contains(name) or project.unresolvedEnums.contains(name) 'isEnum'
+		// Mirror the struct check: a generic enum referenced bare is
+		// parametric. Most enums in the stdlib are non-generic, but
+		// the rule is symmetric.
+		return project.typeParameters.getParamNames(name).count() > 0
+	end 'isEnum'
+	if project.typealiases.contains(name) 'isRangedAlias'
+		return false
+	end 'isRangedAlias'
+	if project.genericTypealiases.contains(name) 'isGenericAlias'
+		return false
+	end 'isGenericAlias'
+	return true
+end 'isNamedIdParametric'
+
+function genericInstanceArgs(project Project, gid GenericInstanceId) returns MaxonTypeArray
+	let (_, args) = project.genericInstances.get(gid)
+	return args
+end 'genericInstanceArgs'
+
 // Build a deterministic, valid-C-identifier mangling for a generic
 // instance. `genericInstanceIdToString` already produces a
 // human-readable spelling but the result includes spaces, parentheses,
@@ -335,6 +419,23 @@ export function pushFuncAbs64Reloc(globalData GlobalDataTable, rdataLabel String
 	let kind = RdataRelocKind.funcAbs64InRdata(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel)
 	globalData.pendingRdataRelocs.push(RdataRelocation.create(0, rdataLabel: rdataLabel, kind: kind))
 end 'pushFuncAbs64Reloc'
+
+// Stage K.4: register `funcName` as a witness-conditional root keyed by
+// `rdataLabel` (a witness-table label or layout-descriptor label).
+// Std-DFE promotes the function to a definite root the moment it sees a
+// `loadWitnessTable` or `loadLayoutDescriptor` op naming the same label
+// in a live function. Used by both this pass (copy/destroy thunks per
+// descriptor) and BuildWitnessTables (method impls per witness table).
+export function pushWitnessConditionalRoot(project Project, rdataLabel String, funcName String)
+	if var bucket = try project.witnessConditionalRoots.get(rdataLabel) 'haveBucket'
+		bucket.push(funcName)
+		project.witnessConditionalRoots.upsert(rdataLabel, value: bucket)
+	end 'haveBucket' else 'freshBucket'
+		var bucket = StringArray.create()
+		bucket.push(funcName)
+		project.witnessConditionalRoots.upsert(rdataLabel, value: bucket)
+	end 'freshBucket'
+end 'pushWitnessConditionalRoot'
 
 // Per-thunk synthetic value name. Each thunk has its own block and its
 // own value-name namespace at the Maxon level, but salting with the

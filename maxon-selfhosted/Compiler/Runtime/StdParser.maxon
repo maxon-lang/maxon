@@ -283,6 +283,14 @@ export type StdParser
 		skipNewlines()
 
 		var func = IrFunction.createFromStd(funcName, returnType: returnStdType, paramCount: paramCount, paramTypes: StdTypeArray.create(), returnLine: 0)
+		// Note: main's K.X.E sets `func.namespace = "stdlib"` here. On
+		// tryold the additional namespace tag interacts with the K.X.1
+		// DFE stdlib-seeding loop to keep ~30 extra runtime helpers alive
+		// at the Maxon phase, costing >10% on wasm wall clock. Without the
+		// rest of K.X.E (three-tier rdata layout) the tag has no
+		// correctness benefit on tryold, so we leave runtime.std functions
+		// untagged. If a future parity test surfaces a missing-runtime-call
+		// bug, revisit by adding the tag alongside the rdata changes.
 
 		try collectBlockLabels()
 

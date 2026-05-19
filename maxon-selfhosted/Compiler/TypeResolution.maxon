@@ -5851,19 +5851,28 @@ function preResolveSlotFromGlobalStore(project Project, module MaxonModule, func
 			return
 		end 'gotMap'
 	end 'isMapLit'
-	// The value's producer is the `T.init(mm)` call op the parser
-	// emitted just before the globalStore. Walk every op in the module
-	// looking for a `call` whose result name matches `value`.
-	for opIdx in 0 upto module.ops.count() 'findProducer'
-		let op = try module.ops.get(opIdx) otherwise panic("preResolveSlotFromGlobalStore: ops.get OOB")
-		if op.name != "call" 'notCall'
-			continue
-		end 'notCall'
-		match op 'extractCall'
-			call(result, callee, _, _, _, _, _, _) then maybePatchFromCall(project, name: name, result: result, callee: callee, value: value)
-			default panic("preResolveSlotFromGlobalStore: call match failed")
-		end 'extractCall'
-	end 'findProducer'
+	// Stage K.X.A: The value's producer is a call/tryCall the parser
+	// emitted into the same `__module_init_<n>` function. Synthesized
+	// names like `$t1` reset per-function, so a flat module-wide walk
+	// would match any unrelated stdlib call with the same result name and
+	// patch the slot to its return type. Restrict the search to this
+	// func's blocks so the producer-lookup is unambiguous. Also accept
+	// `tryCall` producers, since the parser may emit either shape for
+	// throwing initializers.
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("preResolveSlotFromGlobalStore: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("preResolveSlotFromGlobalStore: ops.get OOB")
+			if op.name != "call" and op.name != "tryCall" 'notCallShape'
+				continue
+			end 'notCallShape'
+			match op 'extractCall'
+				call(result, callee, _, _, _, _, _, _) then maybePatchFromCall(project, name: name, result: result, callee: callee, value: value)
+				tryCall(result, callee, _, _, _, _, _, _, _) then maybePatchFromCall(project, name: name, result: result, callee: callee, value: value)
+				default panic("preResolveSlotFromGlobalStore: name check accepted op shape but match did not extract")
+			end 'extractCall'
+		end 'eachOp'
+	end 'eachBlock'
 end 'preResolveSlotFromGlobalStore'
 
 function maybePatchFromCall(project Project, name String, result ByteArray, callee ByteArray, value ByteArray)
@@ -6734,6 +6743,13 @@ end 'checkNamedTypeVisibility'
 // lowering, where it would surface as a less-actionable cast-category
 // failure deep inside `coerceArgToParam`.
 function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray)
+	// Note: the Stage K.X.C pre-clone path from main (`preCloneInterfaceExtensionImpls`)
+	// is omitted on tryold because it depends on Stage K.3 Phase B
+	// infrastructure (`IrInterface.extensionMethods`) that hasn't been
+	// introduced on this branch. The `func.maxonParamTypes.count()` half
+	// of K.X.C is applied directly in `extendSlotsForInterfaceWitnesses` /
+	// `buildInterfaceWitnessSlotMap` (see LowerMaxonToStd.maxon).
+	//
 	// Walk by index rather than iterator because the body may append new
 	// monomorphized clones onto `module.functions` (J.4b user-extension
 	// monomorphization); iterating by index lets the loop pick them up on

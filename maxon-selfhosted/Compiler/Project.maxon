@@ -440,12 +440,27 @@ export type Project
 	// dispatching through a witness.
 	export var witnessTables WitnessTableRegistry
 
-	// Phase 11.2 / 11.3: function names that are referenced only as static
-	// rdata payload (layout-descriptor copy/destroy thunks, witness-table
-	// methods). DeadFunctionElimination seeds its worklist from
-	// `["main"] + livenessRoots` so these statically-emitted references
-	// keep their callees alive even though no `call` op names them.
+	// Definite roots — function names the DFE must keep alive even when no
+	// statically-named `call` op reaches them. After Stage K.4, this is
+	// restricted to runtime-called entry points like `__module_init_<namespace>`
+	// that the runtime invokes before `main` and that no Std-level op names.
+	// Witness-table method impls and layout-descriptor copy/destroy thunks
+	// moved to `witnessConditionalRoots` (their liveness is now contingent
+	// on the owning rdata blob's label being demanded by a `loadWitnessTable`
+	// / `loadLayoutDescriptor` op).
 	export var livenessRoots StringArray
+
+	// Stage K.4: witness-conditional roots — keyed by the rdata label of a
+	// witness table (`__witness_<type>_<iface>` / `__witness_<gid>_<iface>`)
+	// or a layout descriptor (`__layout_<gid>`); value is the list of
+	// function names whose liveness is contingent on that label being
+	// demanded by a `loadWitnessTable` / `loadLayoutDescriptor` op in a
+	// live function. Std-DFE promotes entries here onto its worklist the
+	// moment it sees a demand op for the corresponding label, so
+	// witness-impl bodies and layout copy/destroy thunks stay alive
+	// exactly when the rdata blob they back is actually loaded by user
+	// code.
+	export var witnessConditionalRoots WitnessConditionalRootsMap
 
 	// Phase 11.4: per-function shape of synthetic trailing params that the
 	// Maxon→Std lowering injects when the body is a generic — a layout slot
@@ -591,6 +606,7 @@ export type Project
 			layoutDescriptors: LayoutDescriptorRegistry.create(),
 			witnessTables: WitnessTableRegistry.create(),
 			livenessRoots: StringArray.create(),
+			witnessConditionalRoots: WitnessConditionalRootsMap.create(),
 			genericFunctionImplicitArity: GenericFunctionImplicitArityMap.create(),
 			staticRdataValues: StaticRdataValueMap.create(),
 			constantArrayRdata: ConstantArrayRdataMap.create(),
@@ -796,6 +812,12 @@ export typealias PendingConstraintCheckArray = Array with PendingConstraintCheck
 // the canonicalize pass to fold `descriptorField` reads into constants
 // when the descriptor's content is known at compile time.
 export typealias StaticRdataValueMap = Map with(String, ByteArray)
+
+// Stage K.4 witness-conditional roots: rdata label → list of function
+// names whose liveness is contingent on that label being demanded by a
+// code-level `loadWitnessTable` / `loadLayoutDescriptor` op in a function
+// the DFE has already kept alive. Std-DFE walks this map at promotion time.
+export typealias WitnessConditionalRootsMap = Map with(String, StringArray)
 
 // Phase: constant-array-to-rdata fast path. Populated by the
 // `runConstantArrayLiteralRdata` pass for `__ManagedMemory.create` call

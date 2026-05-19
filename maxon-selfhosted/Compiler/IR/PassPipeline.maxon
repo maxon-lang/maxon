@@ -341,13 +341,32 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 	if stdlibFuncNames.count() > 0 'haveStdlib'
 		module.merge(stdlibSnapshot)
 	end 'haveStdlib'
+	// Stage K.X.1: also gather in-module stdlib functions (the bypass /
+	// fresh-parse path puts stdlib bodies directly in the user pipeline's
+	// module instead of routing them through the snapshot). On a cache-hit
+	// run this loop adds nothing; on a cache-bypass run it captures every
+	// stdlib body so the inliner skips them as callers.
+	var seenSkipNames = StringSet.create()
+	for n in stdlibFuncNames 'seedSeen'
+		seenSkipNames.insert(element: n)
+	end 'seedSeen'
+	for f in module.functions 'collectInModule'
+		if f.namespace == "stdlib" and not seenSkipNames.contains(f.name) 'fresh'
+			seenSkipNames.insert(element: f.name)
+			stdlibFuncNames.push(f.name)
+		end 'fresh'
+	end 'collectInModule'
 	// Inliner needs stdlib bodies as *callees* but not as *callers* — they
 	// were already inlined when the stdlib was compiled. On a tiny user input
 	// the caller-walk over hundreds of stdlib functions dominates the user
 	// pipeline; skipping them recovers most of that cost.
 	var inlined = inlineModule(module, project: project, skipCallerNames: stdlibFuncNames)
-	if stdlibFuncNames.count() > 0 'dropMerged'
-		inlined.dropFunctionsByName(names: stdlibFuncNames)
+	if stdlibSnapshot.functions.count() > 0 'dropMerged'
+		var snapshotNames = StringArray.create()
+		for f in stdlibSnapshot.functions 'collectSnap'
+			snapshotNames.push(f.name)
+		end 'collectSnap'
+		inlined.dropFunctionsByName(names: snapshotNames)
 	end 'dropMerged'
 	return inlined
 end 'runInlinerWithStdlibSnapshot'

@@ -129,15 +129,22 @@ export function stabilizeLabels(text String) returns String
 	// a rename map entry. Identifier-runs include dots and dashes so that
 	// `<funcQual>.<label>` forms (e.g. `main.__range_panic_3`) get matched
 	// as a single token. Tokens that aren't in the map pass through
-	// unchanged.
+	// unchanged. Stage K.X.B: track the enclosing function so per-function
+	// counters (e.g. `try_4`) resolve against their own scope rather than
+	// colliding with another function's identically-numbered counter.
 	var out = ""
 	let lineCount = lines.count()
+	var rewriteFunc = ""
 	for idx in 0 upto lineCount 'eachLine'
 		if idx > 0 'sep'
 			out.append("\n")
 		end 'sep'
 		let line = try lines.get(idx) otherwise panic("stabilizeLabels: idx in range but lines.get failed")
-		appendRewrittenLine(out, line: line, renames: renames)
+		let funcName = extractTopLevelFuncName(line)
+		if not funcName.isEmpty() 'inFunc'
+			rewriteFunc = funcName
+		end 'inFunc'
+		appendRewrittenLine(out, line: line, renames: renames, currentFunc: rewriteFunc)
 	end 'eachLine'
 	return out
 end 'stabilizeLabels'
@@ -265,16 +272,24 @@ end 'extractBlockHeader'
 // decide whether it's a label-introducing context. This handles every
 // non-block-header context in one pass.
 function scanLineForContextualLabels(line String, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
-	// We accumulate a moving window: the last 32 characters before the
+	// We accumulate a moving window: the last ~40 characters before the
 	// current position. When we hit the start of an identifier-run we
 	// classify the run by inspecting the window's suffix.
+	//
+	// Stage K.X.B: the window must be wide enough to retain the leading
+	// `x64.lea` / `x64.mov` marker even when the in-progress token is a
+	// 3+ digit counter-suffixed name (e.g. `__panic_msg_136` = 15 chars,
+	// plus the `    x64.lea rcx, [rip+` lead = 22 chars, total 37). 40
+	// leaves headroom for longer register names without affecting the
+	// per-line cost meaningfully — most lines short-circuit via the
+	// underscore fast path.
 	//
 	// We also track whether we're inside `[...]` brackets so that
 	// identifiers like `[__panic_msg_0]` get classified as data labels.
 	var bracketDepth = 0
 	var token = ""
 	var precedingWindow = ""
-	let windowMax = 32
+	let windowMax = 40
 	for c in line 'eachChar'
 		if isIdentChar(c) 'identChar'
 			token.append(c.toString())
@@ -304,7 +319,7 @@ function scanLineForContextualLabels(line String, currentFunc String, renames La
 end 'scanLineForContextualLabels'
 
 // Classify `token` based on the text immediately before it. The window
-// holds the most recent ~32 characters consumed before this token began.
+// holds the most recent ~40 characters consumed before this token began.
 function classifyAndRegister(token String, precedingWindow String, bracketDepth BracketDepth, currentFunc String, renames LabelRenameMap, nextNum NextIndexMap)
 	// Data label context: identifier inside `[...]` brackets after a
 	// `lea_symdata`/`lea_rdata` op (MIR dialect) or an `x64.lea` instruction
@@ -450,7 +465,7 @@ end 'endsWithMemRefVar'
 // generic ops, immediate-only x64 instructions) match the fast path, and
 // the slow walk's per-char Character/String allocations were the dominant
 // cost of `__finalIrString` on inlining-heavy fragments.
-function appendRewrittenLine(out String, line String, renames LabelRenameMap)
+function appendRewrittenLine(out String, line String, renames LabelRenameMap, currentFunc String)
 	if not lineHasUnderscore(line) 'fastPath'
 		out.append(line)
 		return
@@ -461,14 +476,14 @@ function appendRewrittenLine(out String, line String, renames LabelRenameMap)
 			token.append(c.toString())
 		end 'ident' else 'delim'
 			if not token.isEmpty() 'flush'
-				out.append(rewriteToken(token, renames: renames))
+				out.append(rewriteToken(token, renames: renames, currentFunc: currentFunc))
 				token = ""
 			end 'flush'
 			out.append(c.toString())
 		end 'delim'
 	end 'eachChar'
 	if not token.isEmpty() 'flushTail'
-		out.append(rewriteToken(token, renames: renames))
+		out.append(rewriteToken(token, renames: renames, currentFunc: currentFunc))
 	end 'flushTail'
 end 'appendRewrittenLine'
 
@@ -477,29 +492,92 @@ end 'appendRewrittenLine'
 // suffixes (e.g. `k_15.cmp0` → `<rename of k_15>.cmp0`). Try the whole
 // token first, then progressively shorter prefixes split at each `.` from
 // right to left, preferring the longest matching prefix.
-function rewriteToken(token String, renames LabelRenameMap) returns String
-	let direct = try renames.get(token) otherwise ""
-	if not direct.isEmpty() 'gotIt'
-		return direct
+//
+// Stage K.X.B: `currentFunc` is the enclosing function for the line — empty
+// at module scope. Counter-suffixed labels are scoped per-function (each
+// function has its own `try_N` / `block_N` counters), so we look up
+// scope-qualified keys first and only fall back to the bare key for
+// module-scope tokens like `__panic_msg_47` (registered under MODULE_SCOPE).
+// Without the scope qualifier two functions' identical `try_4` labels
+// collide and the second function's references rewrite to the first
+// function's stable number.
+function rewriteToken(token String, renames LabelRenameMap, currentFunc String) returns String
+	let scoped = lookupRename(renames, token: token, currentFunc: currentFunc)
+	if not scoped.isEmpty() 'gotIt'
+		return scoped
 	end 'gotIt'
 	let startIdx = token.startIndex()
 	let endIdx = token.endIndex()
 	var idx = endIdx.clone()
+	// Walk back through every `.` from right to left. For each split point,
+	// try the prefix as either a function-qualified `<funcScope>.<label>`
+	// form (where the prefix IS `<funcScope>.<label>` so we strip one more
+	// `.<sub>` tail) or as a `<label>` in `currentFunc`'s scope. The first
+	// hit wins; tail accumulates the `.<rest>` portion.
 	while idx != startIdx 'walkBack'
 		idx = try token.indexBefore(idx) otherwise break
 		if token.charAt(idx) != '.' 'notDot'
 			continue
 		end 'notDot'
 		let prefix = token.slice(startIdx, endIndex: idx)
-		let prefixRename = try renames.get(prefix) otherwise ""
+		// First try: the prefix may be a function-qualified label like
+		// `main.try_4` — split it at the first `.`, treat the part before
+		// as the function scope, and look up the suffix in that scope.
+		let qualifiedRename = lookupQualified(renames, qualified: prefix)
+		if not qualifiedRename.isEmpty() 'foundQualified'
+			let tail = token.slice(idx, endIndex: endIdx)
+			return "{qualifiedRename}{tail}"
+		end 'foundQualified'
+		// Otherwise treat the prefix as a label within the current
+		// function's scope.
+		let prefixRename = lookupRename(renames, token: prefix, currentFunc: currentFunc)
 		if not prefixRename.isEmpty() 'foundPrefix'
-			// Append the `.<rest>` tail to the renamed prefix.
 			let tail = token.slice(idx, endIndex: endIdx)
 			return "{prefixRename}{tail}"
 		end 'foundPrefix'
 	end 'walkBack'
 	return token
 end 'rewriteToken'
+
+// Look up `token` using the scope-qualified key first (so per-function
+// counters resolve against their own scope), falling back to the bare key
+// for tokens registered at module scope (e.g. `__panic_msg_47`).
+function lookupRename(renames LabelRenameMap, token String, currentFunc String) returns String
+	if not currentFunc.isEmpty() 'haveFunc'
+		let scopedKey = "{currentFunc}|{token}"
+		let scopedRename = try renames.get(scopedKey) otherwise ""
+		if not scopedRename.isEmpty() 'foundScoped'
+			return scopedRename
+		end 'foundScoped'
+	end 'haveFunc'
+	let moduleKey = "{MODULE_SCOPE}|{token}"
+	return try renames.get(moduleKey) otherwise ""
+end 'lookupRename'
+
+// Look up a function-qualified label like `Iterator.advanceBy.try_4` by
+// splitting at the LAST `.` into scope and label, then looking up the
+// label in that scope. Returns the rewritten qualified form
+// (`<scope>.<rewrittenLabel>`) on hit, "" otherwise.
+function lookupQualified(renames LabelRenameMap, qualified String) returns String
+	let startIdx = qualified.startIndex()
+	let endIdx = qualified.endIndex()
+	var idx = endIdx.clone()
+	while idx != startIdx 'walkBack'
+		idx = try qualified.indexBefore(idx) otherwise break
+		if qualified.charAt(idx) != '.' 'notDot'
+			continue
+		end 'notDot'
+		let scope = qualified.slice(startIdx, endIndex: idx)
+		let labelStart = try qualified.indexAfter(idx) otherwise continue
+		let label = qualified.slice(labelStart, endIndex: endIdx)
+		let scopedKey = "{scope}|{label}"
+		let rename = try renames.get(scopedKey) otherwise ""
+		if not rename.isEmpty() 'found'
+			return "{scope}.{rename}"
+		end 'found'
+	end 'walkBack'
+	return ""
+end 'lookupQualified'
 
 // Chars allowed inside an identifier-run for the purposes of stabilizeLabels.
 // Function names can also start with a digit when synthesized by the batched
@@ -599,14 +677,14 @@ function assignRename(scope String, original String, baseName String, renames La
 	let stable = try nextNum.get(nextKey) otherwise 0
 	nextNum.upsert(nextKey, value: stable + 1)
 	let rewritten = "{baseName}_{stable}"
-	// Insert two map entries: one keyed by the scope-qualified original (for
-	// disambiguating per-scope lookups in the future) and one keyed by just
-	// the original token (for the bare lookup used by appendRewrittenLine).
-	// In practice the original names produced by counter-based labels are
-	// unique across the whole printed text — module-wide and function-wide
-	// counters mint distinct numbers — so the bare-key version doesn't
-	// collide between scopes for *different* renumberings.
-	try renames.insert(original.clone(), value: rewritten) otherwise ignore
+	// Stage K.X.B: only insert under the scope-qualified key. Pass 2
+	// always looks up labels by `(currentFunc, token)` or
+	// `(MODULE_SCOPE, token)`, so a bare-key entry would only re-introduce
+	// the cross-scope collision the scoped key is here to prevent: two
+	// functions' `try_4`s would both register the bare key, the second
+	// insert would fail silently due to `ignore`, and any lookup via the
+	// bare key in the second function would return the first function's
+	// stable number.
 	try renames.insert(key.clone(), value: rewritten) otherwise ignore
 end 'assignRename'
 

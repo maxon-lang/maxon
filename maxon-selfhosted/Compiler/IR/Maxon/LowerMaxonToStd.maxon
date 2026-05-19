@@ -217,12 +217,23 @@ end 'recordSlotType'
 //
 // LOCAL slots (slotId >= paramCount): append a fresh trailing slot.
 // Bumps `func.scope.nextSlot` and pushes a `MaxonType.integer` filler.
+//
+// Stage K.X.C: `paramCount` here means the PARSER's user-visible param
+// count (`maxonParamTypes.count()`), not the Std-level ABI count that
+// `transferFuncs` augmented with implicit layout/witness slots. A local
+// interface slot whose id happens to land below the augmented count would
+// otherwise reuse a parser-emitted local slot as its "witness companion" —
+// e.g. `for item in self` allocates slot_3 (iter) + slot_4 (item) on top
+// of slot_0/1/2 params; once `paramCount += 1` for the layout shifts the
+// boundary to 4, slot_3 looks like a param and its companion lookup
+// returns slot_4 (the `item` binding), corrupting both the witness and
+// the loop variable at the first `current()` store.
 function extendSlotsForInterfaceWitnesses(func IrFunction)
 	let originalSlotCount = func.slotMaxonTypes.count()
 	if originalSlotCount == 0 'noSlots'
 		return
 	end 'noSlots'
-	let paramCount = func.paramCount as VarSlot
+	let paramCount = func.maxonParamTypes.count() as VarSlot
 	for slotId in 0 upto originalSlotCount 'eachSlot'
 		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
 		if not interfaceTypeIsFat(slotType) 'notInterface'
@@ -244,13 +255,16 @@ end 'extendSlotsForInterfaceWitnesses'
 // immediate-next slot (parser pre-allocated `__witness_<name>`); for
 // LOCAL slots the companion is appended at the end by
 // `extendSlotsForInterfaceWitnesses`, walked here in iteration order.
+// `paramCount` is the parser-level count; see the matching comment on
+// `extendSlotsForInterfaceWitnesses` for why post-`transferFuncs`
+// `paramCount` would mis-classify a local slot as a param.
 function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessSlotMap
 	var map = InterfaceWitnessSlotMap.create()
 	let totalSlots = func.slotMaxonTypes.count()
 	if totalSlots == 0 'noSlots'
 		return map
 	end 'noSlots'
-	let paramCount = func.paramCount as VarSlot
+	let paramCount = func.maxonParamTypes.count() as VarSlot
 	// Count only LOCAL interface slots — those are the ones that grew
 	// trailing companions. Param interface slots use their pre-allocated
 	// `slotId+1` and don't shift the original-slot boundary.
@@ -5677,12 +5691,25 @@ type MaxonToStdLowering
 		// resolver pass inserts both keys together — so a miss here means a
 		// pass-ordering or visit-set bug.
 		let resolvedParamTypes = try self.project.callParamTypes.get(opIdx) otherwise panic("slotArgsForCall: opIdx={opIdx} missing from project.callParamTypes despite having a resolvedCallees entry — resolveAllCalls invariant violated")
-		// General path: reuse scratch buffers. resize() zero-fills new slots
-		// — slot=0, filled=false — matching the old per-call init loop.
+		// Stage K.X.1: General path: reuse scratch buffers. Array.resize()
+		// only sets the length field; the underlying backing memory still
+		// carries whatever the previous (longer-arity) call left there.
+		// Explicitly write slot=0 / filled=false for every user slot so the
+		// default-fill loop below sees a clean state. Without this, slot 1
+		// of a 1-arg call can inherit `filled=true` from a prior 2-arg call
+		// and the default-fill loop skips it, leaving the resulting
+		// ValueIdArray pointing at a never-allocated SSA id. Cache-masked:
+		// with the stdlib cache active the user pipeline lowered far fewer
+		// functions and the scratch buffer never grew past the user call's
+		// own arity, so the bug stayed dormant.
 		self.slotIdsScratch.clear()
 		self.slotFilledScratch.clear()
 		self.slotIdsScratch.resize(userParamCount)
 		self.slotFilledScratch.resize(userParamCount)
+		for initIdx in 0 upto userParamCount 'initScratch'
+			try self.slotIdsScratch.set(initIdx, value: 0) otherwise panic("invariant: slotIdsScratch.set OOB right after resize")
+			try self.slotFilledScratch.set(initIdx, value: false) otherwise panic("invariant: slotFilledScratch.set OOB right after resize")
+		end 'initScratch'
 		for i in 0 upto args.count() 'placeArgs'
 			let arg = try args.get(i) otherwise panic("invariant: i < args.count() but get failed")
 			let label = try argLabels.get(i) otherwise ""
@@ -7181,11 +7208,20 @@ type MaxonToStdLowering
 		// so fieldStore/fieldLoad substitute `_TN` typeParameter fields
 		// through to their concrete arg types — without it, float elements
 		// would store/load through the GP-register width path instead of
-		// movsd/SSE, corrupting the bits round-trip.
+		// movsd/SSE, corrupting the bits round-trip. Stage K.X.A: gate the
+		// hint on the struct name actually being `__TupleN` — synthesized
+		// result names (`$t3`, `$t10`, …) reset per function, so a flat
+		// module-keyed map collides between user tuples and stdlib struct
+		// allocations of the same shape (e.g. `RangeIterator.create`
+		// happens to mint `$t3`). Without this guard the stdlib alloc
+		// gets typed as the user's specialised tuple gi and downstream
+		// fieldStores for its real fields trip the field-lookup walk.
 		var receiverValueType = MaxonType.named(self.project.typeNames.intern(structNameStr))
-		if let tupleGid = try self.project.tupleAllocGids.get(result) 'tupleHint'
-			receiverValueType = MaxonType.genericInstance(tupleGid)
-		end 'tupleHint'
+		if rawNameStr.startsWith("__Tuple") 'maybeTuple'
+			if let tupleGid = try self.project.tupleAllocGids.get(result) 'tupleHint'
+				receiverValueType = MaxonType.genericInstance(tupleGid)
+			end 'tupleHint'
+		end 'maybeTuple'
 		self.setValueType(resultId, t: receiverValueType)
 		// Phase 11.0 step 8.8 (mirrors C# bootstrap `EmitEmptyBuiltinManagedLiteral`):
 		// auto-initialize fields whose declared type resolves to the

@@ -148,6 +148,47 @@ export function setCachedBuiltinDictionaryLiteralTypeName(name String)
 	cachedBuiltinDictionaryLiteralTypeName = name.toByteArray()
 end 'setCachedBuiltinDictionaryLiteralTypeName'
 
+// Cache-parity test harness: when true, `getStdlibModule` skips both the
+// in-process warm path and the on-disk cache read, forcing a fresh parse +
+// lowering from source on every call. The companion write-cache call at the
+// end of `getStdlibModule` is also short-circuited so a bypassed run doesn't
+// inadvertently warm the disk cache for a subsequent non-bypassed leg.
+var stdlibCacheBypassed = false
+
+export function setStdlibCacheBypassed(bypassed bool)
+	stdlibCacheBypassed = bypassed
+end 'setStdlibCacheBypassed'
+
+// Wipe every module-level stdlib-cache var back to its initial state. The
+// cache-parity test harness calls this between the two legs of a parity test
+// so leg B starts from the same blank in-process state as leg A, regardless
+// of what leg A left behind. Each assignment mirrors the original top-level
+// initializer above.
+//
+// `stdlibCacheProjectDirs` is intentionally NOT reset: it's not loader cache
+// state, it's a sticky hint that pins the on-disk cache file location to the
+// first project's directory observed in the process. Clearing it would make
+// post-reset compiles look for the cache under the per-test exe's path
+// instead of the suite-warmup project's, producing spurious cache misses on
+// the cache-on leg of every parity test.
+export function resetStdlibLoaderState()
+	cachedStdlibModule = MaxonModule.create()
+	stdlibParsedModuleArr = StdlibParseSnapshotArray.create()
+	stdlibLoaded = false
+	stdlibTypealiases = TypealiasMap.create()
+	stdlibTypealiasVisibilities = TypealiasVisibilityMap.create()
+	stdlibTypealiasRanges = TypealiasRangeMap.create()
+	stdlibTypealiasCastCategories = TypealiasCastCategoryMap.create()
+	cachedStdlibStdModule = StdModule.create()
+	cachedStdlibCacheData = StdlibCacheData.create()
+	stdlibCacheValid = false
+	stdlibCacheTargetSet = false
+	stdlibCacheCpuOrd = 0
+	stdlibCacheOsOrd = 0
+	cachedBuiltinArrayLiteralTypeName = ByteArray.create()
+	cachedBuiltinDictionaryLiteralTypeName = ByteArray.create()
+end 'resetStdlibLoaderState'
+
 // The self-hosted compiler isn't yet feature-complete enough to compile every
 // file under `stdlib/` — many use language features (generics, interface
 // dispatch, error handling) that are still unimplemented. We start from a
@@ -331,7 +372,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// qualified-static call shape. File-path gating in `lowerInternalsIntrinsic`
 	// rejects callers outside the designated internals file.
 	registerInternalsIntrinsicSignatures(project)
-	if stdlibLoaded 'cached'
+	if stdlibLoaded and not stdlibCacheBypassed 'cached'
 		let bootstrapStart = passTimerStart()
 		// Parse the synthesized bootstrap first so unresolvedInterfaces
 		// (Error, Iterator, etc.) is populated for this project before
@@ -401,7 +442,10 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let cacheDir = projectDir.join(".maxon").join("cache")
 	let cachePath = cacheDir.join("stdlib-{targetToString(project.target)}.mxc")
 	let contentChecksum = currentStdlibChecksum(project.target)
-	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
+	// Cache-parity test harness: skip the read entirely when bypassed so the
+	// expensive decode + restore work doesn't even fire. Falls through to the
+	// parse-from-source path below.
+	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum) if not stdlibCacheBypassed else StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
 	if cacheResult.valid 'cacheHit'
 		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
@@ -472,9 +516,14 @@ export function getStdlibModule(project Project) returns MaxonModule
 	// Build and write stdlib cache for next time.
 	// After writing, switch to cached mode so subsequent calls in the same
 	// process (e.g. spec tests) consistently use the pre-compiled path.
-	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
+	// Cache-parity test harness: when bypassed, skip both the write and the
+	// `stdlibLoaded` marker so a subsequent leg-A compile in the same process
+	// re-parses from source rather than picking up half-cached state.
+	if not stdlibCacheBypassed 'writeCache'
+		buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
+		stdlibLoaded = true
+	end 'writeCache'
 
-	stdlibLoaded = true
 	if stdlibCacheValid 'switchToCached'
 		// Cache was built successfully — the user binary picks up stdlib via
 		// the pre-compiled cache (linked at codegen) plus the metadata we

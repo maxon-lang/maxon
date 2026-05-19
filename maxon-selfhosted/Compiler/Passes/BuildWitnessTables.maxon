@@ -97,14 +97,14 @@ function emitWitnessForConformance(project Project, globalData GlobalDataTable, 
 		let bareImplName = "{typeName}.{m.name}"
 		let implName = resolveImplNameForMethod(project, bareName: bareImplName, m: m)
 		methodImplNames.push(implName)
-		// Push each impl name onto `livenessRoots` unconditionally so DFE
-		// keeps the function alive even on user-builds where the witness
-		// table was restored from cache (`project.witnessTables` already
-		// has the entry, but DFE still needs the root push every pipeline
-		// run). The cache stores `witnessTables` / `staticRdataValues`
-		// but NOT `globalData.pendingRdataRelocs`, so we also re-push the
-		// funcAbs64 relocs below — patching at PE write time needs them.
-		project.livenessRoots.push(implName)
+		// Stage K.4: register the impl as witness-conditional under this
+		// table's label. Std-DFE promotes it to a definite root iff a
+		// live function emits `loadWitnessTable(label)` for this
+		// conformance. If no user code reaches the witness table, both
+		// the table's rdata blob and its impl bodies are correctly
+		// dropped. Runs in both emit-new and cache-restore paths because
+		// it's outside the `alreadyEmitted` branch.
+		pushWitnessConditionalRoot(project, rdataLabel: label, funcName: implName)
 	end 'eachMethod'
 
 	let alreadyEmitted = project.witnessTables.contains(typeName, interfaceName: interfaceName)
@@ -264,14 +264,16 @@ function emitPerInstanceWitnessForConformance(project Project, globalData Global
 		end 'eachMethod'
 	end 'buildFresh'
 
-	// DFE roots — every pipeline run re-pushes its own root list. The
-	// cache restore re-hydrates `project.witnessTables` but not the
-	// per-run livenessRoots set, so a cached entry still needs its
-	// thunks rooted here or DFE strips them and the funcAbs64 reloc
-	// resolves to address 0 (segfault on dispatch).
+	// Stage K.4: register every thunk (and the placeholders that share
+	// the slot for unsatisfied where-clause pairs) as witness-conditional
+	// roots keyed by THIS per-instance table's label. Std-DFE promotes
+	// them iff a live function emits a `loadWitnessTable(label)` for this
+	// conformance — keeping the thunk bodies in lockstep with the table's
+	// reachability. Runs every pipeline run so cache-hit and cache-miss
+	// paths populate identical conditional-root bindings.
 	for i in 0 upto methodImplNames.count() 'rootEach'
 		let thunkName = try methodImplNames.get(i) otherwise panic("emitPerInstanceWitnessForConformance: methodImplNames.get OOB at {i}")
-		project.livenessRoots.push(thunkName)
+		pushWitnessConditionalRoot(project, rdataLabel: label, funcName: thunkName)
 	end 'rootEach'
 
 	let isFatBoxed = maxonTypeWidthBytes(project, t: MaxonType.genericInstance(gid)) > 8
@@ -328,7 +330,17 @@ end 'mangleInstanceForWitness'
 // caller's call site rather than statically here.
 function gidIsConditional(project Project, gid GenericInstanceId) returns bool
 	let (_, args) = project.genericInstances.get(gid)
-	return anyMaxonTypeIsConditional(args)
+	// Stage K.X.wasm: cheap top-level check first; if it doesn't fire,
+	// fall back to the deeper recursive `anyNamedArgIsParametric` so a
+	// wrapping gid like `WithIterIterator with(MapIterator with(Key,
+	// Value), ...)` is recognised as parametric. Without the deeper
+	// check, a per-instance witness emitted against such a gid would
+	// mangle to `__witness_Element_*` / `__witness_ArrayIter_*` — labels
+	// no path ever registers, panicking the wasm linker.
+	if anyMaxonTypeIsConditional(args) 'cheap'
+		return true
+	end 'cheap'
+	return anyNamedArgIsParametric(project, args: args)
 end 'gidIsConditional'
 
 // Resolve a bare type name to a representative MaxonType for sizing. Falls

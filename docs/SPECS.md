@@ -327,6 +327,12 @@ Optional per-test directives go between the test marker and the maxon block:
 | `<!-- AsyncTrace -->` | Enable async-runtime trace output |
 | `<!-- IncludeStdlibIr -->` | Include reachable stdlib functions in the captured CompiledIR snapshot |
 
+File-level directives appear once at the top of the file (above `## Tests`) and apply to every test in the file:
+
+| Directive | Effect |
+|-----------|--------|
+| `<!-- CacheParity -->` | Run every test in this file twice — once with the stdlib cache forced off, once with it on — and fail if the captured RequiredLowering trace or the compiled PE's `.rdata` section diverges. Used to surface cache-masked compiler bugs. |
+
 ```markdown
 <!-- test: basic-example -->
 ```maxon
@@ -431,6 +437,7 @@ A fragment has four parts separated by `---` lines:
 | `Args: ...` | Command-line arguments to pass to the test executable |
 | `MmTrace: true` / `AsyncTrace: true` | Enable runtime trace output |
 | `IncludeStdlibIr: true` | Include reachable stdlib functions in the captured CompiledIR snapshot |
+| `CacheParity: true` | Drive this fragment through the cache-parity double-compile harness (set automatically by the file-level `<!-- CacheParity -->` directive) |
 | `` Stdout: ``` `` / `` Stderr: ``` `` | Expected runtime stdout/stderr (fenced multiline block) |
 | `` RequiredIR: ``` `` | Expected compiler IR to verify, pinned (fenced multiline block) |
 | `` RequiredRdata: ``` `` / `` RequiredData: ``` `` | Expected .rdata / .data section contents |

@@ -236,31 +236,65 @@ function maxonTypesMatchForConformance(project Project, expected MaxonType, actu
 	if maxonTypesStructurallyEqual(expected, b: actual) 'eq'
 		return true
 	end 'eq'
-	let expName = match expected 'expCase'
+	// Stage K.X.wasm (K.3-final.fix): recurse through genericInstance arms
+	// so a tuple/array like `__Tuple2<Source, Element>` matches across two
+	// scopes that both expose `Source`/`Element` as typeParameters with the
+	// SAME printed names but DIFFERENT typeParameterIds (interface
+	// declaration vs the conformer's `usesParams` re-declaration). Without
+	// the recurse, the two gids hash distinct because their typeParameter
+	// args carry distinct ids; with the recurse, the per-arg
+	// `maxonTypesMatchForConformance` allows the
+	// `typeParameter(id_iface)` vs `typeParameter(id_conformer)` shape to
+	// match by name.
+	if maxonTypeIsGenericInstance(expected) and maxonTypeIsGenericInstance(actual) 'bothGid'
+		let (expBase, expArgs) = match expected 'expExtract'
+			genericInstance(gid) gives project.genericInstances.get(gid)
+			default panic("maxonTypesMatchForConformance: expected guard mismatched arm")
+		end 'expExtract'
+		let (actBase, actArgs) = match actual 'actExtract'
+			genericInstance(gid) gives project.genericInstances.get(gid)
+			default panic("maxonTypesMatchForConformance: actual guard mismatched arm")
+		end 'actExtract'
+		if expBase == actBase and expArgs.count() == actArgs.count() 'shapeOk'
+			for i in 0 upto expArgs.count() 'eachArg'
+				let ea = try expArgs.get(i) otherwise panic("maxonTypesMatchForConformance: expArgs.get OOB at {i}")
+				let aa = try actArgs.get(i) otherwise panic("maxonTypesMatchForConformance: actArgs.get OOB at {i}")
+				if not maxonTypesMatchForConformance(project, expected: ea, actual: aa) 'argMismatch'
+					return false
+				end 'argMismatch'
+			end 'eachArg'
+			return true
+		end 'shapeOk'
+		// Falls through to the named/typeParameter relaxation below.
+	end 'bothGid'
+	// Cross-scope typeParameter equivalence: a signature parsed inside an
+	// interface body lands `named("Element")` for the unbound parameter,
+	// while the implementing type's method lands `typeParameter(id)` where
+	// the id's declared name is `Element`. Treat them as equal so the
+	// `current() returns Element` requirement matches `current() returns Self.Element`.
+	let expParamName = typeParamNameOrEmpty(project, t: expected)
+	if expParamName.isEmpty() 'noExpName'
+		return false
+	end 'noExpName'
+	let actParamName = typeParamNameOrEmpty(project, t: actual)
+	return not actParamName.isEmpty() and actParamName == expParamName
+end 'maxonTypesMatchForConformance'
+
+// Return the bound name for `named(id)` / `typeParameter(id)` arms — the only
+// two shapes that participate in cross-scope type-parameter equivalence. Every
+// other arm returns "" so the caller's `isEmpty` short-circuit fires.
+function typeParamNameOrEmpty(project Project, t MaxonType) returns String
+	return match t 'pick'
+		typeParameter(id) gives project.typeParameters.getName(id)
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
 		function gives ""
 		unresolved gives ""
-		typeParameter gives ""
 		genericInstance gives ""
 		interface gives ""
 		constInt gives ""
-	end 'expCase'
-	if expName.isEmpty() 'noExpName'
-		return false
-	end 'noExpName'
-	let actParamName = match actual 'actCase'
-		typeParameter(id) gives project.typeParameters.getName(id)
-		boolean to string gives ""
-		named gives ""
-		function gives ""
-		unresolved gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
-	end 'actCase'
-	return not actParamName.isEmpty() and actParamName == expName
-end 'maxonTypesMatchForConformance'
+	end 'pick'
+end 'typeParamNameOrEmpty'
 
 function maxonReturnTypesMatchForConformance(project Project, expected MaxonReturnType, actual MaxonReturnType) returns bool
 	return match expected 'cmp'

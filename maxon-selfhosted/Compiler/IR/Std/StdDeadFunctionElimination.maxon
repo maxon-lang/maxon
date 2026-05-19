@@ -11,12 +11,23 @@
 //     functions alive because we can't see through the function pointer at
 //     this phase). At Std level call resolution is already complete; the
 //     callee names are direct strings, no CallContext qualification.
-//   - Seeds the worklist from `["main"] + project.livenessRoots` exactly
-//     like the Maxon-level pass: layout-descriptor copy/destroy thunks and
-//     witness-table method impls live behind static rdata pointers (not
-//     `call` ops) and would otherwise look unreachable.
+//   - Stage K.4: witness-table method impls and layout-descriptor copy/destroy
+//     thunks are NOT statically rooted. They live in
+//     `project.witnessConditionalRoots` keyed by the rdata label of the
+//     table / descriptor they back. When the worklist walk pops a function
+//     and finds a `loadWitnessTable(label)` or `loadLayoutDescriptor(label)`
+//     op in its body, the conditional roots for that label are promoted
+//     onto the worklist. This shares the same `liveLabels` set with
+//     `pruneDeadGlobalData` below: a label is in `liveLabels` iff some live
+//     function demands it via a system op, and impls / blobs /
+//     `pendingRdataRelocs` entries keyed under that label are kept iff the
+//     label is live.
+//   - `livenessRoots` is reserved for definite roots that the runtime calls
+//     before `main` (e.g. `__module_init_<namespace>`) and that no Std-level
+//     op names.
 
 typealias StdDfeStringSet = Set with String
+typealias StdFuncByName = Map with(String, IrFunction)
 
 export function eliminateDeadStdFunctions(module StdModule, project Project) returns StdModule
 	var seen = StdDfeStringSet from ["main"]
@@ -33,11 +44,19 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 		funcMap.upsert(func.name, value: func)
 	end 'buildMap'
 
+	// Stage K.4: shared with `pruneDeadGlobalData` below — every rdata
+	// label that any live function demands via `loadWitnessTable` /
+	// `loadLayoutDescriptor` / `globalAddr`. Function-DFE writes into it
+	// during the walk to drive witness-conditional-root promotion;
+	// globalData prune reads from it to decide which blobs and relocs
+	// survive.
+	var liveLabels = StdDfeStringSet.create()
+
 	var i = 0
 	while i < worklist.count() 'walk'
 		let name = try worklist.get(i) otherwise panic("eliminateDeadStdFunctions: worklist.get OOB at {i}")
 		if let func = try funcMap.get(name) 'found'
-			collectStdCallees(module, func: func, worklist: worklist, seen: seen)
+			walkLiveFunction(module, project: project, func: func, worklist: worklist, seen: seen, liveLabels: liveLabels)
 		end 'found'
 		i = i + 1
 	end 'walk'
@@ -51,36 +70,194 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 		end 'drop'
 	end 'filter'
 	module.functions = newFunctions
+
+	// Stage K.X.D + K.4: prune unreferenced globalData entries and
+	// pendingRdataRelocs whose target labels are dead. Sharing
+	// `liveLabels` with the walker means we use the same reachability
+	// fixed point that drove function-level liveness.
+	pruneDeadGlobalData(project.globalData, liveLabels: liveLabels)
 	return module
 end 'eliminateDeadStdFunctions'
 
-typealias StdFuncByName = Map with(String, IrFunction)
+// Prune unreferenced globalData entries.
+//
+// Reachability set:
+//   - every label demanded by a live function via `globalAddr`,
+//     `loadLayoutDescriptor`, or `loadWitnessTable` (collected during the
+//     function-DFE walk into the shared `liveLabels` set).
+//   - everything reserved up-front: __panic_stacktrace, __panic_in,
+//     __panic_newline, __panic_unknown, the __xmmmask_* float-bit masks,
+//     and any DataSection / CovData entry whose offset the linker resolves
+//     statically (handled by `shouldKeepGlobal`).
+//
+// `globalData.pendingRdataRelocs` is filtered the same way: a reloc whose
+// `rdataLabel` isn't live points at a witness/layout blob that's about to
+// be pruned, so the reloc would dangle at link time. Both the writers
+// hard-panic on missing functions, so the filter must run atomically with
+// the function/blob prune.
+function pruneDeadGlobalData(globalData GlobalDataTable, liveLabels StdDfeStringSet)
+	// `liveLabels` is already populated by `walkLiveFunction` for every
+	// label any kept function demanded via `globalAddr` /
+	// `loadLayoutDescriptor` / `loadWitnessTable`.
 
-function collectStdCallees(module StdModule, func IrFunction, worklist StringArray, seen StdDfeStringSet)
+	// Explicitly-named globals registered through addNamedGlobalData stay
+	// live — they're addressed by the runtime (panic-stack helpers) or
+	// the loader (.data / .covdata) and have no code-side globalAddr op
+	// until the user actually references them.
+	for entry in globalData.dataSectionEntries 'eachData'
+		liveLabels.insert(element: entry.name)
+	end 'eachData'
+	for entry in globalData.covDataEntries 'eachCov'
+		liveLabels.insert(element: entry.name)
+	end 'eachCov'
+
+	// Filter pendingRdataRelocs: every funcAbs64InRdata reloc names a
+	// witness/layout method slot whose impl was already conditionally
+	// rooted under the same `rdataLabel`. If the label isn't live, the
+	// impl isn't live either (function-DFE didn't promote it), so
+	// dropping the reloc keeps the patcher's symbol table consistent.
+	var newRelocs = RdataRelocationArray.create()
+	for reloc in globalData.pendingRdataRelocs 'eachReloc'
+		if liveLabels.contains(reloc.rdataLabel) 'keepReloc'
+			newRelocs.push(reloc)
+		end 'keepReloc' else 'dropReloc'
+			logTrace(LogCategory.ir, message: () gives "pruneDeadGlobalData: dropping reloc for dead rdata label '{reloc.rdataLabel}'")
+		end 'dropReloc'
+	end 'eachReloc'
+	globalData.pendingRdataRelocs = newRelocs
+
+	let total = globalData.names.count()
+	var newNames = StringArray.create()
+	var newValues = ByteArrayArray.create()
+	var newNameIndex = GlobalNameIndexMap.create()
+	var newValueDedup = GlobalDedupMap.create()
+	for i in 0 upto total 'partition'
+		let name = try globalData.names.get(i) otherwise panic("pruneDeadGlobalData: i < total but names.get({i}) failed")
+		let value = try globalData.values.get(i) otherwise panic("pruneDeadGlobalData: i < total but values.get({i}) failed")
+		if not shouldKeepGlobal(name, liveLabels: liveLabels) 'drop'
+			logTrace(LogCategory.ir, message: () gives "pruneDeadGlobalData: dropping '{name}'")
+			continue
+		end 'drop'
+		let newIdx = newNames.count() as MachineWord
+		newNames.push(name)
+		newValues.push(value)
+		newNameIndex.upsert(name, value: newIdx)
+		// Keep the byte-payload dedup index in sync. Earlier entries with
+		// identical bytes still point at the canonical name; recording every
+		// surviving entry preserves that invariant.
+		newValueDedup.upsert(value, value: name)
+	end 'partition'
+	globalData.names = newNames
+	globalData.values = newValues
+	globalData.nameIndex = newNameIndex
+	globalData.valueDedup = newValueDedup
+end 'pruneDeadGlobalData'
+
+// True when a globalData entry must survive pruning regardless of liveness:
+//   - reserved runtime helpers (`__panic_*`, `__symtable`, `__xmmmask_*`) are
+//     addressed via funcAddr / direct linker symbol, not globalAddr;
+//   - data-section / cov-data entries are kept via the dataSectionEntries /
+//     covDataEntries scan above (their names also enter `names`/`values`);
+//   - `__data_*` globals back user `var`/`static` slots and the backend reads
+//     their offsets through `lookupRdataOffset` without an SSA `globalAddr`.
+// Everything else (user strings, panic messages, interned literals, float
+// constants, layout descriptors, witness tables) gets dropped unless it
+// appears in `liveLabels`.
+function shouldKeepGlobal(name String, liveLabels StdDfeStringSet) returns bool
+	if liveLabels.contains(name) 'isLive'
+		return true
+	end 'isLive'
+	if name.startsWith("__panic_stacktrace") or name.startsWith("__panic_in") or name.startsWith("__panic_newline") or name.startsWith("__panic_unknown") 'isPanicHelper'
+		return true
+	end 'isPanicHelper'
+	if name.startsWith("__xmmmask_") 'isXmmMask'
+		return true
+	end 'isXmmMask'
+	if name == "__symtable" 'isSymtable'
+		return true
+	end 'isSymtable'
+	if name.startsWith("__data_") 'isDataGlobal'
+		return true
+	end 'isDataGlobal'
+	return false
+end 'shouldKeepGlobal'
+
+// Stage K.4: single-pass walk over every op in `func`'s body. Two
+// reachability edges run at each op:
+//   1. Static call edges (`call` / `tryCall` / `tailCall` / `funcRef`)
+//      push named callees onto the worklist.
+//   2. Witness-table / layout-descriptor demand ops
+//      (`loadWitnessTable` / `loadLayoutDescriptor`) record the label in
+//      `liveLabels` and promote every `witnessConditionalRoots[label]`
+//      entry onto the worklist. `globalAddr` pins the named blob via
+//      `liveLabels` only (no conditional roots — that map only keys off
+//      witness/layout labels).
+// Together these form the reachability fixed point: a function is live
+// iff (a) it was seeded, (b) a live function calls it directly, or (c) a
+// live function loads a witness/layout label under which the function
+// was registered.
+function walkLiveFunction(module StdModule, project Project, func IrFunction, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("collectStdCallees: blockRef {blockRef} not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("walkLiveFunction: blockRef {blockRef} not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			markCalleesFromStdOp(module, opIdx: opIdx, worklist: worklist, seen: seen)
+			visitStdOp(module, project: project, opIdx: opIdx, worklist: worklist, seen: seen, liveLabels: liveLabels)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			markCalleesFromStdOp(module, opIdx: block.terminatorIndex(), worklist: worklist, seen: seen)
+			visitStdOp(module, project: project, opIdx: block.terminatorIndex(), worklist: worklist, seen: seen, liveLabels: liveLabels)
 		end 'hasTerm'
 	end 'eachBlock'
-end 'collectStdCallees'
+end 'walkLiveFunction'
 
-function markCalleesFromStdOp(module StdModule, opIdx OpIndex, worklist StringArray, seen StdDfeStringSet)
-	let op = try module.ops.get(opIdx) otherwise panic("markCalleesFromStdOp: opIdx {opIdx} not in module.ops")
+function visitStdOp(module StdModule, project Project, opIdx OpIndex, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	let op = try module.ops.get(opIdx) otherwise panic("visitStdOp: opIdx {opIdx} not in module.ops")
 	match op 'shape'
 		call(inner) then markFromStdCallOp(inner, worklist: worklist, seen: seen)
+		system(inner) then promoteLabelsFromSystemOp(project, op: inner, worklist: worklist, seen: seen, liveLabels: liveLabels)
 		arith then return
 		control then return
 		memory then return
-		// Std-level system ops never name a function via plain text — funcAddr
-		// is the only candidate, and that names a runtime helper which is
-		// already in livenessRoots when relevant.
-		system then return
 	end 'shape'
-end 'markCalleesFromStdOp'
+end 'visitStdOp'
+
+function promoteLabelsFromSystemOp(project Project, op StdSystemOp, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	match op 'kind'
+		// `globalAddr` pins a generic globalData entry (string / float
+		// constants). It doesn't carry witness-conditional roots — those
+		// only key off witness/layout labels — but recording the name
+		// into `liveLabels` lets `pruneDeadGlobalData` keep the blob
+		// alive via `shouldKeepGlobal`.
+		globalAddr(_, name) then liveLabels.insert(element: name)
+		// `loadLayoutDescriptor` / `loadWitnessTable` pin both the blob
+		// AND its conditional-root impls. First-touch on a label
+		// promotes every `witnessConditionalRoots[label]` entry onto
+		// the worklist.
+		loadLayoutDescriptor(_, label) then promoteConditionalRoots(project, label: label, worklist: worklist, seen: seen, liveLabels: liveLabels)
+		loadWitnessTable(_, label) then promoteConditionalRoots(project, label: label, worklist: worklist, seen: seen, liveLabels: liveLabels)
+		// `funcAddr` resolves through the link-time symbol table, not
+		// globalData, and any function it names is already rooted by
+		// the `funcRef` op that produced its value. Other variants
+		// either patch register state or run a syscall — none can pin
+		// a witness/layout label.
+		syscall to iatCall then return
+		memcpy to loadIndirect then return
+		funcAddr then return
+		storeIndirect to unboxValue then return
+		descriptorField to dropTypeParam then return
+	end 'kind'
+end 'promoteLabelsFromSystemOp'
+
+function promoteConditionalRoots(project Project, label String, worklist StringArray, seen StdDfeStringSet, liveLabels StdDfeStringSet)
+	if liveLabels.contains(label) 'already'
+		return
+	end 'already'
+	liveLabels.insert(element: label)
+	if let bucket = try project.witnessConditionalRoots.get(label) 'haveBucket'
+		for i in 0 upto bucket.count() 'eachImpl'
+			let implName = try bucket.get(i) otherwise panic("promoteConditionalRoots: bucket.get OOB at {i}")
+			markStdCallee(implName, worklist: worklist, seen: seen)
+		end 'eachImpl'
+	end 'haveBucket'
+end 'promoteConditionalRoots'
 
 function markFromStdCallOp(op StdCallOp, worklist StringArray, seen StdDfeStringSet)
 	match op 'kind'

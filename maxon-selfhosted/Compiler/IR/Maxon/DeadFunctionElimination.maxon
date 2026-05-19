@@ -36,6 +36,47 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 			worklist.push(root)
 		end 'fresh'
 	end 'seedRoots'
+	// Stage K.4: Maxon-DFE walks `call` ops only; it can't see witness-
+	// table / layout-descriptor demand because those ops are synthesized
+	// at Std lowering time. Std-DFE has the precise machinery to drop
+	// unreached witness/layout impls — at the Maxon level we
+	// conservatively seed every name registered in
+	// `witnessConditionalRoots` so the thunks / impls survive into the
+	// Std module where Std-DFE can re-prune them based on actual
+	// `loadWitnessTable` / `loadLayoutDescriptor` demand.
+	for (_, bucket) in project.witnessConditionalRoots 'seedCondRoots'
+		for funcName in bucket 'eachCondImpl'
+			if not seen.contains(funcName) 'freshCond'
+				seen.insert(element: funcName)
+				worklist.push(funcName)
+			end 'freshCond'
+		end 'eachCondImpl'
+	end 'seedCondRoots'
+
+	// Stage K.X.1: keep every stdlib function alive at the Maxon phase.
+	// Several reachability paths can't be statically traced from Maxon ops:
+	//   - LowerMaxonToStd synthesizes direct `call stdlib.__managed_mem_*`
+	//     / `stdlib.__mm_*` / `stdlib.__destruct___ManagedMemory` ops that
+	//     have no Maxon-level `call` predecessor.
+	//   - Interface conformances reach stdlib accessors (Array.create from
+	//     BuiltinArrayLiteral, Map/Set witnesses) via funcAbs64InRdata
+	//     pointers populated after DFE runs.
+	//   - Generic-method monomorphization is driven by witness tables that
+	//     reference stdlib accessors by name; the Maxon walk can't resolve
+	//     those pointers.
+	// Keeping every stdlib name on the worklist is the conservative
+	// preservation strategy; the Std-level DFE pass (eliminateDeadStd
+	// Functions) runs after lowering and prunes truly unreachable bodies
+	// based on the emitted call ops. On tryold the stdlib cache still
+	// serves stdlib bodies at link time, but the cache itself is built by
+	// running this same DFE pass — so stripping here would write a broken
+	// cache.
+	for func in module.functions 'seedStdlib'
+		if func.namespace == "stdlib" and not seen.contains(func.name) 'fresh'
+			seen.insert(element: func.name)
+			worklist.push(func.name)
+		end 'fresh'
+	end 'seedStdlib'
 
 	var i = 0
 	while i < worklist.count() 'worklist'

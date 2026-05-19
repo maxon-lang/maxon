@@ -24,6 +24,10 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
 		sb = "{sb}IncludeStdlibIr: true\n"
 	end 'hasIncludeStdlibIr'
 
+	if test.cacheParity 'hasCacheParity'
+		sb = "{sb}CacheParity: true\n"
+	end 'hasCacheParity'
+
 	if test.expectation.hasCompilerStderr 'hasCompilerErr'
 		sb = "{sb}MaxoncStderr: ```\n{test.expectation.compilerStderr}\n```\n"
 	end 'hasCompilerErr' else 'isSuccess'
@@ -176,6 +180,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	var fragMmTrace = false
 	var fragAsyncTrace = false
 	var fragIncludeStdlibIr = false
+	var fragCacheParity = false
 
 	var k = firstSep + 1
 	while k < secondSep 'parseExpect'
@@ -206,7 +211,9 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 			fragAsyncTrace = trimmedLine.contains("true")
 		end 'isAsync' else if trimmedLine.startsWith("IncludeStdlibIr:") 'isIncludeStdlibIr'
 			fragIncludeStdlibIr = trimmedLine.contains("true")
-		end 'isIncludeStdlibIr' else if trimmedLine.startsWith("MaxoncStderr: ```") 'isCompErr'
+		end 'isIncludeStdlibIr' else if trimmedLine.startsWith("CacheParity:") 'isCacheParity'
+			fragCacheParity = trimmedLine.contains("true")
+		end 'isCacheParity' else if trimmedLine.startsWith("MaxoncStderr: ```") 'isCompErr'
 			k = k + 1
 			let errBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
 			expectation.compilerStderr = errBlock.value
@@ -268,6 +275,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	expectation.mmTrace = fragMmTrace
 	expectation.asyncTrace = fragAsyncTrace
 	expectation.includeStdlibIr = fragIncludeStdlibIr
+	expectation.cacheParity = fragCacheParity
 
 	// Parse compiled IR (between second and third ---). When non-empty,
 	// section 3 must start with a "// CompiledIR" header — this is the
@@ -338,7 +346,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	let sourceFiles = splitMultiFileSource(source)
 	let hasMulti = sourceFiles.count() > 0
 
-	return Fragment.create(filePath: fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr)
+	return Fragment.create(filePath: fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedIR: generatedIR, hasGeneratedIR: hasGeneratedIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace, includeStdlibIr: fragIncludeStdlibIr, cacheParity: fragCacheParity)
 end 'parseFragment'
 
 // Helper: read a multi-line value from fragment lines until a closing ``` is found.
