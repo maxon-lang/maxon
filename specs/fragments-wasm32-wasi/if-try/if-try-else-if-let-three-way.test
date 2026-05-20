@@ -1,0 +1,52 @@
+// Test: if-try-else-if-let-three-way
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	throw MyError.failed
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b' else 'fallback'
+		result = 7
+	end 'fallback'
+	return result
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    mir.br fallback_0()
+  fallback_0:
+    %11 = mir.mov_imm 7 : i64
+    mir.br b_0.merge(%11)
+  b_0.merge:
+    mir.br a_0.merge(%13)
+  a_0.merge:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %14
+  }
+}
+---

@@ -210,6 +210,13 @@ export type Parser
 	// `function(...) returns T` types are valid only when this is set.
 	// Cleared on every descent into nested type positions.
 	var atTopOfTypeAliasRhs bool
+	// True while parsing the condition expression of an `if` statement. A
+	// `try EXPR` inside the condition produces an `ExprResult.tryCondition`
+	// (no automatic error propagation / `otherwise`) so the surrounding
+	// `if` emits a condBr branching on the success flag instead. Cleared
+	// before parsing the body so try-expressions inside the then-block
+	// behave normally.
+	var inIfCondition bool
 	// Inner typealiases currently in scope (set while parsing inside a type
 	// or extension body). Lets `parserChaseFnAlias` resolve a function-type
 	// alias declared earlier in the same body before its merge into the
@@ -278,7 +285,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -4423,6 +4430,34 @@ export type Parser
 		return false
 	end 'enumIsAssociatedValueUnion'
 
+	// Declare an error-value binding for an `(e)` clause on a fallback /
+	// else-after-if-try handler block. Discriminates between bare-enum throws
+	// (the runtime stores `ordinal + 1`, so emit `flag - 1` to recover the
+	// ordinal) and associated-value union throws (the flag SSA name IS the
+	// union pointer; bind `e` directly to it). Pushes a fresh scope so the
+	// binding is local to the handler body — the caller must `scope.popScope()`
+	// at handler-end.
+	function declareErrorBindingInBlock(targetBlock IrBlock, errorFlagName ByteArray, bindingName String, calleeThrowsTypeName ThrowsClause, range SourceRange) throws ParserError
+		var bindingType = MaxonType.integer
+		var throwsIsUnion = false
+		if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
+			bindingType = internMaxonType(project, name: throwsName)
+			throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
+		end 'haveThrowsName'
+		scope.pushScope()
+		let bindingSlot = scope.declare(bindingName, varType: bindingType, mutable: false)
+		var bindingValueName = ByteArray.create()
+		if throwsIsUnion 'isUnion'
+			bindingValueName = errorFlagName
+		end 'isUnion' else 'isBare'
+			let oneName = emitLiteral(targetBlock, value: 1, valueType: MaxonType.integer)
+			let enumOrdinalName = freshSynthName()
+			module.appendOp(targetBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: range))
+			bindingValueName = enumOrdinalName
+		end 'isBare'
+		module.appendOp(targetBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: range))
+	end 'declareErrorBindingInBlock'
+
 	// Phase 9 Stage 5: true when at least one case on `enumName` carries a
 	// `= StructType{...}` / `= StructType.create(...)` backing literal. Used
 	// to suppress `.fromRawValue(...)` rewrite (the struct rawValue can't
@@ -5570,23 +5605,67 @@ export type Parser
 
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
+	// Single entry point for `if` statements. Forms:
+	//   if EXPR 'label' ... end 'label'
+	//   if let X = EXPR 'label' ... end 'label'
+	//   if var X = EXPR 'label' ... end 'label'
+	// `EXPR` is any expression. A `try CALL` in the condition slot is
+	// special-cased by parseTryExpression (via the `inIfCondition` flag)
+	// to return a `tryCondition` ExprResult — the if-parser then branches
+	// on success/failure instead of treating the value as a bool.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParserError
 		let ifToken = try consume()
 
-		// `if let X = try CALL`, `if var X = try CALL`, and `if try CALL`:
-		// dispatch to the binding/error form. Parses the try, branches on
-		// the error flag, and threads the success-side binding into the
-		// then-block scope.
-		if at(TokenKind.let) or at(TokenKind.var) or at(TokenKind.try) 'isIfTry'
-			return try parseIfTryStatement(func, block: block, ifToken: ifToken)
-		end 'isIfTry'
+		// Optional binding form: `if let X = EXPR` / `if var X = EXPR`. The
+		// binding only makes sense when EXPR is fallible (i.e. a `try` form);
+		// for a plain bool condition, `if let x = bool` would be useless. We
+		// allow it syntactically and report a binding-without-try error after
+		// parsing if EXPR didn't turn out to be a try-condition.
+		var bindingName = ""
+		var bindingMutable = false
+		var hasBinding = false
+		if at(TokenKind.let) or at(TokenKind.var) 'isBinding'
+			bindingMutable = at(TokenKind.var)
+			_ = try consume()
+			let nameTok = try consumeExpecting("identifier")
+			if not tokenIsIdentifierLike(nameTok) 'badName'
+				reportTokenMismatch(nameTok, expectedDisplay: "identifier")
+				synchronize()
+				return block
+			end 'badName'
+			checkReservedDeclName(nameTok)
+			bindingName = nameTok.value
+			hasBinding = true
+			try expect(TokenKind.equals)
+		end 'isBinding'
 
-		// Seed currentBlock so a bool short-circuit in the condition appends to
-		// the right place; recover the post-condition block afterwards because
-		// short-circuit may have advanced control flow to a merge block.
+		// Parse the condition expression. Enable `inIfCondition` so a `try`
+		// inside it short-circuits the propagation/otherwise path and instead
+		// returns a `tryCondition` carrying the success-flag + call result.
+		// Saved/restored so a nested `if` inside the body doesn't leak the
+		// flag back out into the outer condition slot.
+		let savedInIfCondition = inIfCondition
+		inIfCondition = true
 		currentBlock = block
 		let condResult = try parseExpression(block)
+		inIfCondition = savedInIfCondition
 		let condBlock = currentBlock
+
+		// Discriminate the two condition shapes:
+		//   - tryCondition: success-flag is `successCond`; success value is `name`
+		//   - direct/stringConst: `name` is the value to branch on; no binding allowed
+		let isTryCondition = exprIsTryCondition(condResult)
+		let bindingValueType = exprType(condResult)
+		var condName = exprName(condResult)
+		if isTryCondition 'tcExtract'
+			condName = exprTryConditionSuccessCond(condResult)
+		end 'tcExtract'
+
+		if hasBinding and not isTryCondition 'badBinding'
+			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'if let/var' requires a `try` expression on the right of `=`", line: ifToken.line, column: ifToken.column, filePath: filePath)
+			synchronize()
+			return condBlock
+		end 'badBinding'
 
 		// `if` requires a block label (matches C# bootstrap). Without one,
 		// downstream `end 'label'` matching can't be enforced.
@@ -5602,6 +5681,13 @@ export type Parser
 		let thenBlockId = thenBlock.id
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
+
+		// For the binding form, declare the bound name in the then-block
+		// scope and seed it with the call's success value.
+		if hasBinding 'declareBinding'
+			let bindingSlot = scope.declare(bindingName, varType: bindingValueType, mutable: bindingMutable)
+			module.appendOp(thenBlock, op: MaxonOp.varDecl(bindingSlot, value: exprName(condResult), slotType: bindingValueType, range: SourceRange.ofToken(ifToken)))
+		end 'declareBinding'
 
 		let thenExit = try parseScopedStatementsRequireBody(func, block: thenBlock, blockLabel: userLabel)
 
@@ -5622,8 +5708,31 @@ export type Parser
 				// reference under the IR's block-array growth semantics.
 				let elseBlockId = elseBlock.id
 				let elseIfExit = try parseIfStatement(func, block: elseBlock)
-				return finalizeIfElseById(func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+				return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'isElseIf' else 'plainElse'
+				// Optional error binding: `else (e) 'label'` exposes the typed
+				// error value to the else block's body. Only legal in the
+				// try-condition branch, since bool conditions have no error
+				// value to bind.
+				var elseBindingName = ""
+				var hasElseBinding = false
+				if at(TokenKind.leftParen) 'hasErrorBinding'
+					if not isTryCondition 'noErrToBind'
+						reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'else (binding)' is only valid after `if let/var = try ...` or `if try ...`", line: cursor.current().line, column: cursor.current().column, filePath: filePath)
+						synchronize()
+						return condBlock
+					end 'noErrToBind'
+					try eat(TokenKind.leftParen)
+					let bindingToken = try consume()
+					if not tokenIsIdentifierLike(bindingToken) 'badBindingName'
+						reportTokenMismatch(bindingToken, expectedDisplay: "identifier")
+						synchronize()
+						return condBlock
+					end 'badBindingName'
+					try eat(TokenKind.rightParen)
+					elseBindingName = bindingToken.value
+					hasElseBinding = true
+				end 'hasErrorBinding'
 				if at(TokenKind.charLiteral) 'hasElseLabel'
 					let elseLabelToken = try consume()
 					elseUserLabel = elseLabelToken.value
@@ -5637,202 +5746,27 @@ export type Parser
 				// Capture id before parseScopedStatements — subsequent block adds
 				// may invalidate the `elseBlock` struct reference.
 				let elseBlockId = elseBlock.id
+				// Bind the error value when `(e)` was present. The
+				// hasElseBinding guard above requires isTryCondition, so the
+				// flag/throws helpers below return non-empty values.
+				if hasElseBinding 'declareErrorBinding'
+					try declareErrorBindingInBlock(elseBlock, errorFlagName: exprTryConditionErrorFlag(condResult), bindingName: elseBindingName, calleeThrowsTypeName: exprTryConditionThrows(condResult), range: SourceRange.ofToken(elseToken))
+				end 'declareErrorBinding'
 				let elseExit = try parseScopedStatementsRequireBody(func, block: elseBlock, blockLabel: elseUserLabel)
+				if hasElseBinding 'popBindingScope'
+					scope.popScope()
+				end 'popBindingScope'
 				try skipEndAndLabel()
-				return finalizeIfElseById(func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+				return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'plainElse'
 		end 'hasElse'
 
 		// No else clause. We're already past the then-block's end/label.
 		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: cursor.current().line)
 		branchIfNeeded(thenExit, target: afterBlock.id)
-		module.setTerminator(condBlock, op: MaxonOp.condBr(exprName(condResult), thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
-		return afterBlock
-	end 'parseIfStatement'
-
-	// Parse `if let X = try CALL 'lab' ... end 'lab'` and friends. Three forms:
-	//   `if let X = try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
-	//   `if var X = try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
-	//   `if try CALL 'lab' ... end 'lab' [else 'el' ... end 'el']`
-	// On try-success, the bound name (let/var form) is the call result and the
-	// then-block runs. On try-error, the else block runs (or the if is skipped
-	// when no else is present). The error flag is the condition.
-	// entry: cursor AT `let`, `var`, or `try` (caller has already eaten `if`).
-	function parseIfTryStatement(func IrFunction, block IrBlock, ifToken Token) returns IrBlock throws ParserError
-		var bindingName = ""
-		var bindingMutable = false
-		if at(TokenKind.let) or at(TokenKind.var) 'isBinding'
-			bindingMutable = at(TokenKind.var)
-			_ = try consume()
-			let nameTok = try consumeExpecting("identifier")
-			if not tokenIsIdentifierLike(nameTok) 'badName'
-				reportTokenMismatch(nameTok, expectedDisplay: "identifier")
-				synchronize()
-				return block
-			end 'badName'
-			checkReservedDeclName(nameTok)
-			bindingName = nameTok.value
-			try expect(TokenKind.equals)
-		end 'isBinding'
-
-		// Now parse the `try CALL` part. We re-use parseTryExpression's
-		// internal mechanics by inlining the rewrite-call path: parse the
-		// inner call, rewrite to tryCall/tryMethodCall, and produce the
-		// error-flag name + result name.
-		let tryToken = try consumeExpecting("try")
-		if tryToken.kind != TokenKind.try 'noTry'
-			reportTokenMismatch(tryToken, expectedDisplay: "'try'")
-			synchronize()
-			return block
-		end 'noTry'
-
-		currentBlock = block
-		let opCountBefore = module.ops.count()
-		let inner = try parseUnary(block)
-		let innerName = exprName(inner)
-		var callReturnType = exprType(inner)
-		var condBlock = currentBlock
-		let opCountAfter = module.ops.count()
-
-		let errorFlagName = freshSynthName()
-		var rewrote = false
-		var calleeThrowsTypeName = ThrowsClause.none
-		if opCountAfter > opCountBefore 'haveLast'
-			let lastIdx = opCountAfter - 1
-			let lastOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: ops.get OOB")
-			rewrote = tryRewriteCallToTryCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
-			if not rewrote 'tryMethod'
-				rewrote = tryRewriteMethodCallToTryMethodCall(opIdx: lastIdx, op: lastOp, errorFlagName: errorFlagName, tryRange: SourceRange.ofToken(tryToken))
-			end 'tryMethod'
-			if rewrote 'resolveThrows'
-				// Cache the callee's throws clause so an `else (e) 'label'`
-				// binding (added below) can pick the right type for the error
-				// slot, parallel to parseTryFallbackDispatch's binding path.
-				let rewrittenOp = try module.ops.get(lastIdx) otherwise panic("parseIfTryStatement: re-read OOB after rewrite")
-				let qualifiedCallee = qualifiedCalleeFromTryCall(rewrittenOp, opIdx: lastIdx)
-				calleeThrowsTypeName = try project.funcThrowsTypes.get(qualifiedCallee) otherwise ThrowsClause.none
-			end 'resolveThrows'
-		end 'haveLast'
-		if not rewrote 'noRewrite'
-			reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "'if let/var/try' requires a throwing call expression after 'try'", line: tryToken.line, column: tryToken.column, filePath: filePath)
-			synchronize()
-			return block
-		end 'noRewrite'
-
-		// cmp flag != 0 → error path; flag == 0 → success path.
-		let zeroName = emitLiteral(condBlock, value: 0, valueType: MaxonType.integer)
-		let condName = freshSynthName()
-		module.appendOp(condBlock, op: MaxonOp.cmp(condName, left: errorFlagName, right: zeroName, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
-
-		// `if` requires a block label.
-		if not at(TokenKind.charLiteral) 'noLabel'
-			reportTokenMismatch(cursor.current(), expectedDisplay: "characterliteral")
-			synchronize()
-			return condBlock
-		end 'noLabel'
-		let userLabel = try parseOptionalBlockLabel("if")
-
-		let ifFilePath = filePath.toString()
-		var thenBlock = module.addBlockAt(func, label: userLabel, filePath: ifFilePath, firstLine: ifToken.line)
-		let thenBlockId = thenBlock.id
-		let baseLabel = "{userLabel}_{thenBlockId}"
-		thenBlock.label = baseLabel
-
-		// In the then-block, declare the binding (if any) and seed it with
-		// the call result so user body code can reference it. Mutability
-		// follows the let/var form.
-		if not bindingName.isEmpty() 'declareBinding'
-			let bindingSlot = scope.declare(bindingName, varType: callReturnType, mutable: bindingMutable)
-			module.appendOp(thenBlock, op: MaxonOp.varDecl(bindingSlot, value: innerName, slotType: callReturnType, range: SourceRange.ofToken(tryToken)))
-		end 'declareBinding'
-
-		let thenExit = try parseScopedStatementsRequireBody(func, block: thenBlock, blockLabel: userLabel)
-
-		try skipEndAndLabel()
-		_ = skipOptionalNewlines()
-
-		if at(TokenKind.else) 'hasElse'
-			let elseToken = try consume()
-
-			// `else if [let/var/try/expr] ...`: recurse into parseIfStatement
-			// so the nested if's binding / try / condition reuses the same
-			// dispatch as a top-level `if`. The else-block hosts the nested
-			// if's IR; its exit becomes this if-try's else exit.
-			if at(TokenKind.if) 'isElseIf'
-				var elseIfBlock = module.addBlockAt(func, label: "{baseLabel}.elseif", filePath: ifFilePath, firstLine: elseToken.line)
-				let elseIfBlockId = elseIfBlock.id
-				let elseIfExit = try parseIfStatement(func, block: elseIfBlock)
-				return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseIfBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
-			end 'isElseIf'
-
-			// Optional error binding: `else (e) 'label'` exposes the typed
-			// error value to the else block's body, mirroring the
-			// `otherwise (e) 'label'` form in parseTryFallbackDispatch.
-			var elseBindingName = ""
-			var hasElseBinding = false
-			if at(TokenKind.leftParen) 'hasErrorBinding'
-				try eat(TokenKind.leftParen)
-				let bindingToken = try consume()
-				if not tokenIsIdentifierLike(bindingToken) 'badBindingName'
-					reportTokenMismatch(bindingToken, expectedDisplay: "identifier")
-					synchronize()
-					return condBlock
-				end 'badBindingName'
-				try eat(TokenKind.rightParen)
-				elseBindingName = bindingToken.value
-				hasElseBinding = true
-			end 'hasErrorBinding'
-			var elseLabel = "{baseLabel}.else"
-			var elseUserLabel = "else"
-			if at(TokenKind.charLiteral) 'hasElseLabel'
-				let elseLabelToken = try consume()
-				elseUserLabel = elseLabelToken.value
-				elseLabel = "{elseLabelToken.value}_{func.nextBlockId}"
-				try expectNewlineAfterLabel()
-			end 'hasElseLabel' else 'noElseLabel'
-				try skipNewlines()
-			end 'noElseLabel'
-
-			var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
-			let elseBlockId = elseBlock.id
-			// Bind the error value in the else block when `(e)` was present.
-			// Choose the slot type the same way parseTryFallbackDispatch does:
-			// bare-enum throws → `flag - 1` recovers the ordinal (integer slot);
-			// associated-value union → the flag value IS the union pointer.
-			if hasElseBinding 'declareErrorBinding'
-				var bindingType = MaxonType.integer
-				var throwsIsUnion = false
-				if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
-					bindingType = internMaxonType(project, name: throwsName)
-					throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
-				end 'haveThrowsName'
-				scope.pushScope()
-				let bindingSlot = scope.declare(elseBindingName, varType: bindingType, mutable: false)
-				var bindingValueName = ByteArray.create()
-				if throwsIsUnion 'isUnion'
-					bindingValueName = errorFlagName
-				end 'isUnion' else 'isBare'
-					let oneName = emitLiteral(elseBlock, value: 1, valueType: MaxonType.integer)
-					let enumOrdinalName = freshSynthName()
-					module.appendOp(elseBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(elseToken)))
-					bindingValueName = enumOrdinalName
-				end 'isBare'
-				module.appendOp(elseBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: SourceRange.ofToken(elseToken)))
-			end 'declareErrorBinding'
-			let elseExit = try parseScopedStatementsRequireBody(func, block: elseBlock, blockLabel: elseUserLabel)
-			if hasElseBinding 'popBindingScope'
-				scope.popScope()
-			end 'popBindingScope'
-			try skipEndAndLabel()
-			return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
-		end 'hasElse'
-
-		// No else clause.
-		let afterBlock = module.addBlockAt(func, label: "{baseLabel}.after", filePath: ifFilePath, firstLine: cursor.current().line)
-		branchIfNeeded(thenExit, target: afterBlock.id)
 		module.setTerminator(condBlock, op: MaxonOp.condBr(condName, thenTarget: thenBlockId, elseTarget: afterBlock.id, range: SourceRange.none()))
 		return afterBlock
-	end 'parseIfTryStatement'
+	end 'parseIfStatement'
 
 	// --- While statement ---
 
@@ -8773,6 +8707,18 @@ export type Parser
 			end 'noMethodRewrite'
 		end 'noRewrite'
 
+		// When the surrounding context is an `if` condition, surface the
+		// rewritten try-call so the if-parser can branch on it directly. No
+		// `otherwise` / propagation control flow is emitted; the if-parser
+		// owns the success/error split. The `==0` success-condition cmp is
+		// emitted here so the caller can plug it straight into a condBr.
+		if inIfCondition 'asIfCond'
+			let successName = freshSynthName()
+			let zeroForSuccess = emitLiteral(innerExitBlock, value: 0, valueType: MaxonType.integer)
+			module.appendOp(innerExitBlock, op: MaxonOp.cmp(successName, left: errorFlagName, right: zeroForSuccess, predicate: CmpPredicate.eq, leftType: MaxonType.integer, rightType: MaxonType.integer, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
+			return ExprResult.tryCondition(innerName, valueType: callReturnType, successCond: successName, errorFlagName: errorFlagName, calleeThrowsTypeName: calleeThrowsTypeName)
+		end 'asIfCond'
+
 		// cmp flag != 0 — error when nonzero, success otherwise.
 		let zeroName = emitLiteral(innerExitBlock, value: 0, valueType: MaxonType.integer)
 		let condName = freshSynthName()
@@ -8951,49 +8897,15 @@ export type Parser
 
 		// Binding form: `otherwise (e) 'label' ... end 'label'`
 		// Binds the typed error value to a name for inspection (e.g., match).
-		// For bare-case enums the flag is `ordinal + 1`; subtract 1 to recover
-		// the enum ordinal. For associated-value unions (Phase 9 Stage 5c) the
-		// flag slot IS the union pointer — bind `e` directly to the flag SSA
-		// name so `match e` sees the heap-boxed union with the right tag at
-		// offset 0 and the existing union-match lowering applies unchanged.
+		// `declareErrorBindingInBlock` pushes a fresh scope so sibling
+		// `otherwise (e)` blocks with different error types don't share the
+		// slot — the `error.otherwise-block-reused-binding` regression.
 		if dispatchToken.kind == TokenKind.leftParen 'isBinding'
 			try eat(TokenKind.leftParen)
 			let bindingToken = try consume()  // identifier: the binding name
 			try eat(TokenKind.rightParen)
 			_ = try consume()  // charLiteral: the block label
-			// Resolve the throws-clause type up front so we can decide
-			// between the bare-enum (flag-1) and union-pointer paths.
-			// `throwsClauseName` throws when the callee is non-throwing,
-			// in which case the binding defaults to int (the bare-enum /
-			// flag path).
-			var bindingType = MaxonType.integer
-			var throwsIsUnion = false
-			if let throwsName = try throwsClauseName(calleeThrowsTypeName) 'haveThrowsName'
-				bindingType = internMaxonType(project, name: throwsName)
-				throwsIsUnion = enumIsAssociatedValueUnion(throwsName)
-			end 'haveThrowsName'
-			// Declare the binding in a fresh scope so sibling `otherwise (e)`
-			// blocks with different error types don't share the slot — the
-			// `error.otherwise-block-reused-binding` regression. The scope
-			// pops at handler-end before InjectDrops sees the slot.
-			scope.pushScope()
-			let bindingSlot = scope.declare(bindingToken.value, varType: bindingType, mutable: false)
-			var bindingValueName = ByteArray.create()
-			if throwsIsUnion 'isUnion'
-				// Union throws: the runtime-bound `errorFlagName` IS the
-				// union pointer (option-1 ABI). Bind `e` directly to it so
-				// `match e` lowers against the union scrutinee and managed-
-				// payload decrefs flow through the standard scope-exit drops.
-				bindingValueName = errorFlagName
-			end 'isUnion' else 'isBare'
-				// Bare enum: recover the ordinal via `flag - 1`. The binding
-				// is an integer in the enum's domain.
-				let oneName = emitLiteral(fallbackBlock, value: 1, valueType: MaxonType.integer)
-				let enumOrdinalName = freshSynthName()
-				module.appendOp(fallbackBlock, op: MaxonOp.binop(enumOrdinalName, left: errorFlagName, right: oneName, opKind: BinOpKind.sub, operandType: MaxonType.integer, range: SourceRange.ofToken(tryToken)))
-				bindingValueName = enumOrdinalName
-			end 'isBare'
-			module.appendOp(fallbackBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: SourceRange.ofToken(tryToken)))
+			try declareErrorBindingInBlock(fallbackBlock, errorFlagName: errorFlagName, bindingName: bindingToken.value, calleeThrowsTypeName: calleeThrowsTypeName, range: SourceRange.ofToken(tryToken))
 			var handlerExitBlock = try parseStatements(currentFunc, block: fallbackBlock, lastWasReturn: false)
 			scope.popScope()
 			try skipEndAndLabel()
@@ -13212,6 +13124,14 @@ export union ExprResult
 	// folding) reference the literal by its stable project-wide id rather
 	// than re-allocating its bytes.
 	stringConst(name ByteArray, stringId StringId)
+	// `try EXPR` rewritten in-place: the underlying call/methodCall op has
+	// already been rewritten to its `tryCall` shape, the error flag binding
+	// is `errorFlagName`, and `successCond` is the `errorFlagName == 0` cmp
+	// result. `name`/`valueType` carry the call's success result for binding
+	// sites (`if let x = try foo()`). Only produced when `parseTryExpression`
+	// runs in if-condition context (no `otherwise`, no propagation); the
+	// caller (`parseIf`) emits the `condBr` using `successCond`.
+	tryCondition(name ByteArray, valueType MaxonType, successCond ByteArray, errorFlagName ByteArray, calleeThrowsTypeName ThrowsClause)
 end 'ExprResult'
 
 // --- ExprResult helpers ---
@@ -13220,6 +13140,7 @@ function exprName(expr ExprResult) returns ByteArray
 	return match expr 'getName'
 		direct(name, _) gives name
 		stringConst(name, _) gives name
+		tryCondition(name, _, _, _, _) gives name
 	end 'getName'
 end 'exprName'
 
@@ -13227,6 +13148,7 @@ function exprType(expr ExprResult) returns MaxonType
 	return match expr 'getType'
 		direct(_, valueType) gives valueType
 		stringConst gives MaxonType.string
+		tryCondition(_, valueType, _, _, _) gives valueType
 	end 'getType'
 end 'exprType'
 
@@ -13234,13 +13156,47 @@ function exprIsStringConst(expr ExprResult) returns bool
 	return match expr 'check'
 		stringConst gives true
 		direct gives false
+		tryCondition gives false
 	end 'check'
 end 'exprIsStringConst'
+
+function exprIsTryCondition(expr ExprResult) returns bool
+	return match expr 'check'
+		tryCondition gives true
+		direct gives false
+		stringConst gives false
+	end 'check'
+end 'exprIsTryCondition'
+
+function exprTryConditionSuccessCond(expr ExprResult) returns ByteArray
+	return match expr 'getSucc'
+		tryCondition(_, _, successCond, _, _) gives successCond
+		direct gives ByteArray.create()
+		stringConst gives ByteArray.create()
+	end 'getSucc'
+end 'exprTryConditionSuccessCond'
+
+function exprTryConditionErrorFlag(expr ExprResult) returns ByteArray
+	return match expr 'getFlag'
+		tryCondition(_, _, _, errorFlagName, _) gives errorFlagName
+		direct gives ByteArray.create()
+		stringConst gives ByteArray.create()
+	end 'getFlag'
+end 'exprTryConditionErrorFlag'
+
+function exprTryConditionThrows(expr ExprResult) returns ThrowsClause
+	return match expr 'getThrows'
+		tryCondition(_, _, _, _, calleeThrowsTypeName) gives calleeThrowsTypeName
+		direct gives ThrowsClause.none
+		stringConst gives ThrowsClause.none
+	end 'getThrows'
+end 'exprTryConditionThrows'
 
 function exprStringConstId(expr ExprResult) returns StringId
 	return match expr 'getId'
 		stringConst(_, stringId) gives stringId
 		direct gives 0
+		tryCondition gives 0
 	end 'getId'
 end 'exprStringConstId'
 
