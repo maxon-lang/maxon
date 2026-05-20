@@ -3172,12 +3172,21 @@ while true 'outer'
 end 'outer'
 ```
 
+Labeling a `break` with the innermost enclosing loop's own label is
+redundant — unlabeled `break` already targets that loop — and is rejected
+as E2048. The label is meaningful only when an outer loop must be exited,
+or when a `match` arm sits between the `break` and its target loop.
+
 ### Continue Statement
 ```maxon
 continue           // Continue innermost loop
 continue 'label'   // Continue loop with specified label
 ```
 Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
+
+Like `break`, `continue 'label'` is rejected as E2048 when `label` names
+the innermost enclosing loop. Use bare `continue` for the innermost loop,
+or a label only when an outer loop is the actual target.
 
 ---
 

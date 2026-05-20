@@ -860,6 +860,18 @@ function detectCondBrPattern(module TargetModule, block IrBlock, regTarget RegAl
 	return CondBrInfo.none()
 end 'detectCondBrPattern'
 
+// True iff the (fromId, toId) edge has at least one pending parallel-copy
+// move. Used to detect when restoring an eliminated fall-through jmp is
+// necessary so then-edge copies don't land before the condJump.
+function edgeHasCopies(edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt) returns bool
+	if toId < 0 'invalid'
+		return false
+	end 'invalid'
+	let edgeKey = fromId * numBlocks + toId
+	let moves = try edgeCopies.get(edgeKey) otherwise return false
+	return moves.count() > 0
+end 'edgeHasCopies'
+
 // Emit sequentialized copies for a single CFG edge, if any are needed.
 function emitEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, fromId BlockId, toId RegInt, numBlocks RegInt, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	if toId < 0 'invalid'
@@ -984,8 +996,24 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			//   block.opRefs: [..., condJump(cond, elseTarget)]
 			//   block.terminator: cf/mir condBr or x64 jmp(thenTarget)
 			let elseTarget = condBrInfo.elseTarget
-			let condBrIdx = condBrInfo.condBrIdx
+			var condBrIdx = condBrInfo.condBrIdx
+			var inTerminator = condBrInfo.inTerminator
 			let thenTarget = pickThenTarget(block, elseTarget: elseTarget)
+
+			// If eliminateFallthroughJumps stripped the trailing jmp and the
+			// then-edge has pending copies, restore the canonical layout
+			// (condJump in opRefs, jmp $thenTarget as terminator) before
+			// appending copies. Without this, then-edge copies would land
+			// between the cmp and the condJump in the printed sequence, so
+			// they'd execute unconditionally instead of only on the
+			// not-taken / fallthrough path — corrupting the back-edge state.
+			if inTerminator and edgeHasCopies(edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks) 'restoreLayout'
+				let condPacked = block.terminatorIndex()
+				block.opRefs.append(condPacked)
+				condBrIdx = block.opRefs.count() - 1
+				block.terminator = Terminator.opIndex(regTarget.createJmpOp(module, blockId: thenTarget))
+				inTerminator = false
+			end 'restoreLayout'
 
 			// Then-edge copies: execute on fallthrough (condJump not taken).
 			// Appended to block.opRefs after the condJump, before the jmp terminator.
@@ -994,7 +1022,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			// Else-edge copies: execute when condJump IS taken.
 			// Since condJump branches directly to elseTarget, we need a trampoline
 			// block to insert the copies between the condJump and the else-target.
-			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, inTerminator: condBrInfo.inTerminator, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
+			nextBlockId = emitElseEdgeCopies(module, edgeCopies: edgeCopies, block: block, condBrIdx: condBrIdx, inTerminator: inTerminator, elseTarget: elseTarget, numBlocks: numBlocks, trampolineRefs: trampolineRefs, nextBlockId: nextBlockId, state: state, regTarget: regTarget)
 		end 'condBrCase' else 'plainJmp'
 			// Single successor (unconditional jump or fall-through). All copies
 			// go into this block before whatever terminator (or none) it has.

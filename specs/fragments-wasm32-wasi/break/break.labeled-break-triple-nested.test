@@ -1,0 +1,48 @@
+// Test: break.labeled-break-triple-nested
+function main() returns ExitCode
+	var result = 0
+	while true 'outer'
+		while true 'middle'
+			while true 'inner'
+				result = result + 1
+				if result == 5 'check'
+					break 'outer'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return result
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br outer_0.header(%0)
+  outer_0.header:
+    mir.br middle_0.header(%14)
+  outer_0.exit:
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %11, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
+  middle_0.header:
+    mir.br inner_0.header(%13)
+  inner_0.header:
+    mir.br inner_0()
+  inner_0:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.add.i64 %12, %6
+    %9 = mir.mov_imm 5 : i64
+    %10 = mir.cmp eq, %7, %9
+    mir.cond_br %10 [then: outer_0.exit(%7), else: inner_0.header(%7)]
+  __range_panic_0:
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
+  __range_ok_0:
+    mir.ret %11
+  }
+}
+---

@@ -1,0 +1,60 @@
+// Test: break.labeled-continue-outer
+function main() returns ExitCode
+	var x = 0
+	var count = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			count = count + 1
+			if y == 2 'check'
+				continue 'outer'
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return count
+end 'main'
+---
+ExitCode: 6
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br outer_0.header(%0, %1)
+  outer_0.header:
+    %3 = mir.mov_imm 3 : i64
+    %4 = mir.cmp lt, %22, %3
+    mir.cond_br %4 [then: outer_0(), else: outer_0.exit()]
+  outer_0:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.add.i64 %22, %6
+    %8 = mir.mov_imm 0 : i64
+    mir.br inner_0.header(%23, %8)
+  outer_0.exit:
+    %26 = mir.mov_imm 125 : i64
+    %27 = mir.cmp ugt, %23, %26
+    mir.cond_br %27 [then: __range_panic_0(), else: __range_ok_0()]
+  inner_0.header:
+    %11 = mir.mov_imm 5 : i64
+    %12 = mir.cmp lt, %25, %11
+    mir.cond_br %12 [then: inner_0(), else: outer_0.header(%7, %24)]
+  inner_0:
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.add.i64 %25, %14
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.add.i64 %24, %17
+    %20 = mir.mov_imm 2 : i64
+    %21 = mir.cmp eq, %15, %20
+    mir.cond_br %21 [then: outer_0.header(%7, %18), else: inner_0.header(%18, %15)]
+  __range_panic_0:
+    %28 = mir.global_addr @__panic_msg_0
+    %29 = mir.call @mrt_panic(%28)
+  __range_ok_0:
+    mir.ret %23
+  }
+}
+---

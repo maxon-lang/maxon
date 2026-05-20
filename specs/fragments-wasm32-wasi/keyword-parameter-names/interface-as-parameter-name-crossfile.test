@@ -1,0 +1,25 @@
+// Test: interface-as-parameter-name-crossfile
+// --- file: shared.maxon
+export typealias StdType = int(i64.min to i64.max)
+
+// --- file: helper.maxon
+export function passthrough(interface StdType) returns StdType
+	return interface
+end 'passthrough'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return passthrough(5)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    mir.ret %0
+  }
+}
+---

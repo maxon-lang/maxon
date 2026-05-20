@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **108 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1295 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2723/2723 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **118 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1355 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2753/2753 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -1392,6 +1392,289 @@ AND substituted=float — int paths are byte-identical to the prior baseline.
 **Net Stage J + J.4f**: +19 fragments over the 1276 pre-J baseline, +61 over
 Stage I's 1234. Final state: **1295/1295 x64-windows, 1295/1295 wasm32-wasi,
 2723/2723 C# bootstrap.** Zero remaining stage-tracked residuals.
+
+## Stage K landing (2026-05-15..17) — cache-parity harness + witness-conditional DFE + runtime DCE
+
+Three undocumented stages landed between J.4f and the current 1311/1311
+baseline. None of them unlock new specs by themselves, but they surface
+real correctness bugs that were previously masked by the stdlib cache.
+
+**K.1 — Cache-parity harness** (commit `7549a7247`). New
+`<!-- CacheParity -->` file-level directive + per-fragment
+`CacheParity: true` flag double-compile each test once with the stdlib
+cache forced off and once with it on, failing on `.rdata` or `.text`
+divergence between legs.
+- `StdlibLoader.setStdlibCacheBypassed` + `resetStdlibLoaderState` gate
+  the in-process warm path and on-disk cache read.
+- `runTestParityCheck` double-compiles, compares PE `.rdata` + `.text`,
+  restores warm in-process state for subsequent tests.
+- New `cache-parity` spec exercising the harness.
+
+**K.2 — Witness-conditional DFE** (commit `7549a7247`). Replaces
+unconditional `livenessRoots.push(...)` for witness-table impls and
+layout-descriptor copy/destroy thunks with conditional roots.
+- `Project.witnessConditionalRoots` keys rdata labels → impl names.
+- `BuildLayoutDescriptors` / `BuildWitnessTables` register copy/destroy
+  thunks and witness method impls as conditional roots.
+- Std-DFE promotes them onto the worklist when a live function emits
+  `loadWitnessTable` / `loadLayoutDescriptor` for the same label; also
+  prunes dead `globalData` entries + dangling rdata relocs in the same
+  fixed point.
+- Maxon-DFE conservatively keeps every stdlib function alive (cache is
+  built from this pipeline; pruning here would write a broken cache).
+- Cut `.text` by ~77% on the representative compile.
+
+**K.3 — Runtime reachability DCE** (commits `7549a7247`, `0edb27569`).
+`BackendDispatch.filterRuntimeByReachability` walks user-module call
+edges + cache `callFixups` + wasm-specific backend edges to trim
+`runtime.std` from ~62 helpers to the user binary's actual closure.
+- Splits the cache-bypass merge order (user-side runtime → user code →
+  stdlib → cache-side runtime) to match cache-on's emission order so
+  `.text` is byte-identical across cache states.
+- Follow-up `0edb27569` restricts cache-side `callFixups` seeding to
+  stdlib bodies the user transitively reaches (via
+  `computeNeededStdlibFunctions[Wasm]`), and seeds layout/witness
+  thunks from `funcAbs64InRdata` relocs so descriptor-referenced impls
+  don't fall out. A `Math.pow`-only program no longer drags in
+  `mm_alloc` via every cached String/Map helper. Shrunk
+  `IncludeStdlibIr` fixtures by ~4.4k lines.
+
+**Compiler fixes surfaced by the parity harness** (commit `7549a7247`):
+- `LowerMaxonToStd`: slot scratch buffers explicit zero-fill after
+  `resize()` (resize sets length, not memory).
+  `extendSlotsForInterfaceWitnesses` / `buildInterfaceWitnessSlotMap`
+  use parser-level `maxonParamTypes.count()` instead of the augmented
+  paramCount so local interface slots aren't mis-classified as params.
+  Tuple-hint lookup gated on `__Tuple`-prefixed result names to avoid
+  colliding with synthesized `$tN` names from stdlib allocs.
+- `IrPrinter.stabilizeLabels`: per-function counter scope so `try_4` in
+  two different functions resolves to distinct names; preceding-context
+  window widened 32→40 chars.
+- `Parser`: typealias collision check simplified (cross-file
+  invisibility silences "shadows" path); `maxonTypeStructName` also
+  looks up unresolved struct types so parse-time method-call
+  qualification sees user/stdlib structs before `resolveAllStructTypes`
+  runs.
+- `SemanticCheck.maxonTypesMatchForConformance` recurses into
+  `genericInstance` args so type-parameter equivalence works across
+  interface decl vs conformer scopes (wasm regression).
+- `TypeResolution.preResolveSlotFromGlobalStore` scopes the producer
+  search to the func's own blocks (synthesized `$tN` names reset per
+  function) and accepts `tryCall` shapes.
+
+**K.4 — Lock + remote-free queue work surfaced by Stage K parity**
+(commits `206fad39c`, `92eaabb9f`): the parity harness exercised the
+allocator under more concurrent pressure than the previous workload,
+which surfaced SIGSEGVs in the slab span free-list. Fixed by adding a
+per-span lock; then replaced the global slab pool lock with a
+Mimalloc-style cross-P remote-free queue. ASLR-resilient fault
+diagnostic suffix added alongside.
+
+**Net Stage K**: 1295 → 1299 (+4). No new specs unlocked directly;
+the parity harness flagged correctness gaps that would otherwise have
+shipped as latent bugs.
+
+## Stage K.X landing (2026-05-18) — enum narrow storage + E3014 + Phase 9 closure
+
+**K.X.1 — `enum-narrow-storage`** (commit `be2faaeea`). Storage width
+narrowing for enum-backed fields, matching the C# bootstrap.
+- `StoreWidth` (byte/halfword/word/qword) added to load/store ops,
+  threaded through Std/Mir/X64/Arm64 dialects with sign-extension on
+  narrow loads.
+- New `layoutAllStructs` pass in `TypeResolution` computes field
+  offsets and `byteSize` after typealiases resolve so narrow
+  enum-backed fields pack correctly. `StructField.offsetResolved`
+  guards against unstamped fields.
+- New `ConstantArrayLiteralRdata` pass emits compile-time array
+  literals (`[Color.red, ...]`) into `.rdata`, skipping runtime
+  `__managed_mem_create` + per-element `set`.
+- Parser: negative enum raw values; IEEE 754 round-to-nearest-even in
+  `parseFloatBits`.
+- `SpecTestRunner`: PE `.rdata` section parser + `RequiredRdata` block
+  validation (u8[], u16[], i16[], i32[], ...) matching `TestRunner.cs`.
+- Stdlib: `__managed_mem_get/set/remove` dispatch on `element_size`
+  for 1/2/4/8-byte access; new `__Internals.{load,store}{Halfword,Word}`.
+- Stdlib cache bumped to v34.
+
+**K.X.2 — `E3014` unexported-field-access + cursor narrow-load**
+(commit `874c72c51`). Phase-9 finishing work.
+- `StructField.isExported` (parser+layout+cache v35);
+  `validateFieldVisibility` emits E3014 for non-init field reads/writes
+  outside the type's own methods. Reclaimed 3014 from
+  `semanticTypeResolutionCycle` (moved to 3091) to match the C#
+  bootstrap's numbering.
+- `__managed_mem_cursor_current`: stdlib helper that dispatches on the
+  cursor's runtime `element_size` and uses the matching narrow load.
+  Replaces the inline qword-load + arithmetic-select sequence that
+  leaked 7 bytes past narrow elements.
+- `lowerRangeMatchArm`: load the union tag at offset 0 before comparing
+  against case-ordinal bounds (the bare scrutinee was the heap
+  pointer).
+- `isStdlibBootstrapVirtualPath`: identifies compiler-synthesized field
+  accesses (struct-literal init thunks, witness shims) so they bypass
+  the export check.
+- Re-enabled `enum-match-exhaustive` (17), `match-exhaustive-default-panic`
+  (7), `export-var-fields` (7) specs.
+
+**Net Stage K.X**: 1299 → 1305 (+6 net, with the re-enabled specs
+absorbing the K.4 +4 plus +2 more from `enum-narrow-storage`).
+
+## Stage L landing (2026-05-19) — enum function backing + first-class function polish
+
+**L.1 — `enum-function-backing`** (commit `1047721ff`). Enums can now
+use function references as backing values; each case carries a
+compile-time function pointer accessible via `.rawValue`, dispatched
+through a select chain.
+- All cases share the same function signature; the signature becomes
+  the backing type for the enum.
+- New `enum-function-backing` spec (6 fragments: basic dispatch,
+  cross-file, forward-reference, multi-case dispatch, through-variable,
+  two-args). All green.
+- `MaxonDialect`: function-backing arm on `EnumType` + `EnumCase`;
+  `LowerMaxonToStd` emits a per-enum `__enum_<Name>_rawValue` dispatch
+  helper.
+
+**L.2 — Function-valued map entries** (commit `1047721ff`). Map values
+can be function references; new `map/function-valued.dispatch.test`
+exercises lookup → indirect call. Required straightening the
+fat-pointer ABI for function-typed map values through
+`MapIterator.advance`.
+
+**L.3 — First-class function polish**. New fragments under
+`first-class-functions`: `let-from-call-returning-fn`,
+`typealias-single-param`, `typealias-multi-param`, `typealias-with-closure`.
+- Closure-capture tests rewritten to use the new function-typed
+  parameter shape uniformly.
+- Stdlib-map-on-{array,set,map-with-function} interface-extension tests
+  cleaned up against the new shape.
+
+**Net Stage L**: 1305 → 1311 (+6).
+
+## Stage M landing (2026-05-19) — Tier-1 sweep (low-friction whitelist adds)
+
+Speculative whitelist add of 12 unwhitelisted-but-bootstrap-green specs to
+identify cheap-vs-deep wins. Two passed cleanly on the first try, ten
+surfaced real work:
+
+**Whitelisted (+14 fragments)**:
+- `arithmetic-operators` (10/10) — `+`, `-`, `*`, `/`, `mod` on `int` /
+  `float` / `byte` already fully covered by existing op-table coverage;
+  spec was simply never added.
+- `keyword-parameter-names` (4/4) — interaction between reserved-keyword
+  param names (`type`, `with`, etc.) and call-site labeling; already
+  fixed by [`feedback_type_param_keyword_collision.md`].
+
+**Deferred with a written audit note** in `Testing/SpecTestRunner.maxon`
+above the whitelist tail (each entry includes the bootstrap-vs-self-hosted
+pass-count gap and a one-line root cause):
+- `block-scoping` (9/12), `break` (10/13), `empty-block` (3/8),
+  `self-assignment` (2/7) — **missing semantic diagnostics**
+  (E2013 immutable-for-binding, E2032 break-to-own-label, E2055
+  empty-block, E3067 self-assignment).
+- `tuple-assign` (0/10) — **parser doesn't accept `(x, y) = expr`**
+  LHS shape.
+- `while-loops` (?/5) — **runtime miscompile**: `while-loops.basic`
+  infinite-loops on self-hosted-built binary (bootstrap is fine).
+- `short-circuit-evaluation` (4/11), `same-name-methods` (2/5),
+  `sizeof` (0/11) — uncategorized; need investigation.
+- `short-type` (1/2) — `u16-rdata` writes 168 bytes vs expected 6 (panic
+  message rdata bleeds into the captured slice; needs a
+  `RequiredRdata` slice/offset feature).
+
+**Net Stage M**: 1311 → 1325 (+14). Each deferred spec is its own
+narrowly-scoped follow-up.
+
+## Stage N landing (2026-05-19) — regalloc fallthrough fix + missing diagnostics
+
+Follow-up to Stage M: drove each deferred Tier-1 spec to green, fixed a
+real x64 register-allocator correctness bug surfaced by `while-loops`,
+and added four missing semantic diagnostics. Net: **+30 fragments**.
+
+**N.1 — Register allocator fallthrough copy fix** (real correctness bug).
+[`destroySSA`](Compiler/Targets/Shared/RegisterAllocator.maxon) appended
+then-edge block-arg copies to `block.opRefs` even when
+`eliminateFallthroughJumps` had promoted the condJump into the
+terminator slot — putting the copies BEFORE the condJump in the emitted
+order. The copies then executed unconditionally, corrupting back-edge
+state on every loop iteration with both a body computation and a
+distinct exit-value shape. Surfaced as `while-loops.basic` infinite-
+looping (loop counter `r8` got clobbered with the accumulator `r9` on
+each iteration). Fix: in the `inTerminator + then-edge has copies`
+case, restore the canonical layout — pop the condJump back into
+`opRefs`, append copies, synthesize a trailing `jmp $thenTarget` as
+the new terminator. Affects every loop with a non-identity SSA-block-
+arg shape on the fallthrough edge. Unlocks `while-loops` (5),
+`break/multiple-conditions` (already on whitelist), and prevents any
+future loop spec from hitting this latent miscompile.
+
+**N.2 — E3082 empty-block diagnostic**. Labeled control-flow blocks
+(`if`/`else`/`while`/`for-in`/`for-range`) with no body statements
+now emit E3082 matching the C# bootstrap. New
+`parseScopedStatementsRequireBody` helper + `bodyStmtParsed` parser
+flag track whether `parseStatements` consumed a real statement during
+the call; an unchanged flag on return means empty. Inlined version
+for `parseForStatement` and `parseForInIterable` (which don't go
+through `parseScopedStatements`). Diagnostic-only — the empty block
+still parses cleanly so downstream passes see a valid IR. Unlocks
+`empty-block` (5/5).
+
+**N.3 — E3067 self-assignment diagnostic**. Three shapes:
+- `x = x` (bare var): lookahead in `parseVarAssignment` — if the RHS
+  is exactly one identifier matching the LHS followed by a statement
+  terminator, emit E3067.
+- `p.x = p.x` / `a.b.c = a.b.c` (field chain): new
+  `checkSelfAssignmentForFieldChain` helper walks the LHS token slice
+  and the same-length RHS token slice; if every (kind, value) pair
+  matches and a terminator follows, emit E3067.
+- `_ = LITERAL` (discard with non-call RHS): the discard form exists
+  to silence "discarded result" warnings on calls; a bare literal RHS
+  is degenerate. Lookahead in `parseDiscardAssignment` catches it.
+Unlocks `self-assignment` (5/5).
+
+**N.4 — E2013 immutable-local on regular `let`-bound vars**. Pre-
+existing self-hosted gap: `let x = 5; x = 6` silently compiled
+(bootstrap errored E2013). `parseVarAssignment` checked mutability
+only on union-payload bindings; regular locals fell through. Added
+the check to the `localWrite` branch using the same `bindingInfo.mutable`
+flag. Also changed for-in loop var declaration to `mutable: false`
+matching the C# bootstrap (each iteration binds a fresh `let`).
+
+**N.5 — E2048 redundant-loop-label diagnostic**. `break 'lab'` /
+`continue 'lab'` where `lab` names the innermost enclosing loop (with
+no intervening match for `break`) — the label is redundant since
+unlabeled `break`/`continue` already targets that loop. Added to
+`resolveBreakTarget` / `resolveContinueTarget`. Surfaced a latent bug
+in `stdlib/Internals.maxon`: three redundant labels
+(`continue 'arenaLoop'`, `break 'bitLoop'`, `break 'scan'`) survived
+because the C# bootstrap **deliberately excludes `Internals.maxon`**
+from stdlib loading ([`maxon-sharp/Compiler/0-Compiler.cs:792`](../maxon-sharp/Compiler/0-Compiler.cs#L792)
+— the C# version doesn't expose `__mm_*` intrinsics) so it never
+parsed them. Self-hosted DOES parse Internals.maxon. Fix: removed the
+redundant labels (kept the `end 'name'` markers; just dropped the
+labels on the `break`/`continue` statements themselves). Unlocks
+`break` (3 remaining fragments after the N.1 regalloc fix).
+
+**Whitelist additions in Stage N**: `while-loops` (5/5),
+`empty-block` (5/5), `self-assignment` (5/5), `break` (10+ fragments
+across primary + fallback).
+
+**Still deferred from Tier-1**:
+- `block-scoping` (11/12) — `local-shadows-prior-field-access` needs
+  panic-string interpolation (shared blocker with `panic-interpolation`,
+  `match-expr-arm-divergent`, `optimizer-refcount`).
+- `short-circuit-evaluation` (4/11) — uncategorized; needs investigation.
+- `same-name-methods` (2/5) — uncategorized; needs investigation.
+- `tuple-assign` (0/10) — parser doesn't accept `(x, y) = expr` LHS.
+- `sizeof` (0/11) — needs investigation; likely missing `__sizeof` builtin.
+- `short-type` (1/2) — `u16-rdata` writes 168 bytes vs expected 6 (panic
+  message rdata bleeds in; needs `RequiredRdata` slice/offset feature).
+
+**Net Stage N**: 1325 → 1355 (+30, distributed: while-loops +5,
+empty-block +5, self-assignment +5, break +13, parse-tracking infra +2).
+
+**Current spec count, end of Stage N**: 118 specs whitelisted,
+**1355/1355 on x64-windows, 1355/1355 on wasm32-wasi, 2753/2753 on
+C# bootstrap.**
 
 ## Verification
 

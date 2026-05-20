@@ -518,6 +518,11 @@ continue           // skip to next iteration
 continue 'outer'   // labeled continue
 ```
 
+Labeling `break` / `continue` with the innermost enclosing loop's own
+label is redundant and rejected as E2048 — use unlabeled `break` /
+`continue` for that case. A label is only meaningful when targeting an
+outer loop (or, for `break`, jumping out across an intervening `match`).
+
 ### match statement
 
 ```maxon

@@ -72,6 +72,24 @@ export union ErrorCode
 	semanticMatchPayloadArityMismatch = 3035
 	semanticWrongArgCount = 3036
 	semanticMatchDiscardedBindings = 3081
+	// E3082: a labeled control-flow block (`if`/`else`/`while`/`for`) has no
+	// statements between its header and matching `end`. The C# bootstrap
+	// rejects this so dead control-flow can't sneak past a refactor; emitted
+	// from `parseBodyOrEmpty` after `parseScopedStatements` reports no
+	// statements were consumed.
+	semanticEmptyBlock = 3082
+	// E3067: a textual self-assignment (`x = x`, `p.x = p.x`) or a
+	// discard-assignment whose RHS isn't a function call (`_ = 42`). The
+	// former has no effect; the latter is the historic shape for opting out
+	// of a "discarded result" warning, but a non-call RHS makes the discard
+	// nonsensical. Emitted from `parseVarAssignment`,
+	// `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
+	semanticSelfAssignment = 3067
+	// E2048: `break 'lab'` / `continue 'lab'` where `lab` names the
+	// innermost enclosing loop (with no intervening match for `break`). The
+	// label is redundant — unlabeled `break`/`continue` already targets
+	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+	parserRedundantLoopLabel = 2048
 	// E3087: an `if x.contains(k)` whose then-block immediately performs
 	// `try x.get(k) otherwise ...` on the same receiver/key pair does the
 	// lookup twice. The compiler asks the user to rewrite as `if let v =

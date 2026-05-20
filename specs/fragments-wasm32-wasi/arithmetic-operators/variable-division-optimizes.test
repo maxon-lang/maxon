@@ -1,0 +1,27 @@
+// Test: variable-division-optimizes
+function main() returns ExitCode
+	let a = 7
+	let b = 2
+	return a / b              // int/int = truncating int, returns 3
+end 'main'
+---
+ExitCode: 3
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 7 : i64
+    %1 = mir.mov_imm 2 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

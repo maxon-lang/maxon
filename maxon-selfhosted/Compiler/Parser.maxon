@@ -135,6 +135,12 @@ export type Parser
 	// mirroring the C# bootstrap compiler's throw-to-top-level recovery. Suppresses
 	// cascading E3013 (missing-return) and out-of-place `end` consumption.
 	var abortBody bool
+	// Out-mode signal from `parseStatements`: set true once a real statement
+	// is consumed in the current invocation. `parseScopedStatementsRequireBody`
+	// flips it false before the call and reads it after to emit E3082 when no
+	// body was parsed. Nested calls save/restore the flag so an outer empty
+	// check isn't poisoned by an inner non-empty body.
+	var bodyStmtParsed bool
 	// Per-function unused-parameter and unused-local tracking. paramLocations
 	// records each parameter's declaration site; localVarLocations records
 	// each `let`/`var` declaration's site; referencedVars records every name
@@ -263,7 +269,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -1140,6 +1146,13 @@ export type Parser
 				reportUnexpectedToken()
 			end 'unexpectedToken'
 
+			// Signal that a body statement was processed. Used by
+			// parseScopedStatementsRequireBody to detect the empty-block
+			// case (E3082). Set even on unexpectedToken paths so a junk
+			// body doesn't double-report as both unexpected-token AND
+			// empty-block.
+			bodyStmtParsed = true
+
 			// abortBody (from reportUnexpectedToken) means synchronizeToTopLevel
 			// already parked cursor at next top-level opener; break so the
 			// outer parseFunction can re-dispatch it.
@@ -1297,8 +1310,46 @@ export type Parser
 	// field case (`x.f = …`, chainLen == 1) emits varLoad + fieldStore
 	// with no intermediate loads. TypeResolution / lowering perform the
 	// per-field validation (existence, mutability) on each emitted op.
+	// E3067 helper: peek at the field-chain LHS and the same-arity RHS
+	// candidate after the `=`. Match succeeds only when every (kind, value)
+	// pair lines up AND the post-RHS slot is a statement terminator
+	// (newline / `end` / eof). Compiler-synthesized peeking only — no
+	// tokens are consumed.
+	function checkSelfAssignmentForFieldChain(nameToken Token, chainLen FieldChainDepth)
+		let lhsLen = 1 + 2 * chainLen
+		let rhsStart = lhsLen + 1
+		var rendered = nameToken.value
+		var i = 1
+		while i < lhsLen 'eachLhsTok'
+			let lhsTok = try cursor.peek(i as ChainPeekOffset) otherwise return
+			let rhsTok = try cursor.peek((rhsStart + i) as ChainPeekOffset) otherwise return
+			if lhsTok.kind != rhsTok.kind or lhsTok.value != rhsTok.value 'mismatch'
+				return
+			end 'mismatch'
+			rendered = "{rendered}{lhsTok.value}"
+			i = i + 1
+		end 'eachLhsTok'
+		// LHS pos 0 vs RHS pos rhsStart
+		let leadingRhs = try cursor.peek(rhsStart as ChainPeekOffset) otherwise return
+		if leadingRhs.kind != TokenKind.identifier or leadingRhs.value != nameToken.value 'noMatch'
+			return
+		end 'noMatch'
+		let trailing = try cursor.peek((rhsStart + lhsLen) as ChainPeekOffset) otherwise Token.eof()
+		if not tokenIsStatementTerminator(trailing) 'notTerminator'
+			return
+		end 'notTerminator'
+		reportCompileError(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{rendered} = {rendered}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+	end 'checkSelfAssignmentForFieldChain'
+
 	function parseLocalFieldAssignment(block IrBlock, chainLen FieldChainDepth) throws ParserError
-		let nameToken = try consume()
+		let nameToken = cursor.current()
+		// E3067: detect textual `RECV.f1...fN = RECV.f1...fN`. LHS spans
+		// 2*chainLen + 1 tokens (recv + N*(dot+field)); `=` at index
+		// 2*chainLen + 1; RHS spans the same 2*chainLen + 1 tokens; terminator
+		// follows. Compare the LHS slice tokenwise to the RHS slice; if every
+		// (kind, value) pair matches, fire the diagnostic before consuming.
+		checkSelfAssignmentForFieldChain(nameToken, chainLen: chainLen)
+		_ = try consume()
 		let slot = lookupVariable(nameToken.value, token: nameToken)
 		let nameRange = SourceRange.ofToken(nameToken)
 		var receiverName = freshSynthName()
@@ -5321,7 +5372,7 @@ export type Parser
 			return
 		end 'noNext'
 		let returnToken = try consume()
-		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
+		if tokenIsStatementTerminator(nextTok) 'bareReturn'
 			emitImplicitReturn(block)
 			return
 		end 'bareReturn'
@@ -5460,7 +5511,7 @@ export type Parser
 		let baseLabel = "{userLabel}_{thenBlockId}"
 		thenBlock.label = baseLabel
 
-		let thenExit = try parseScopedStatements(func, block: thenBlock)
+		let thenExit = try parseScopedStatementsRequireBody(func, block: thenBlock, blockLabel: userLabel)
 
 		try skipEndAndLabel()
 		// EOF here is fine — `if ... end` with nothing after just ends the construct.
@@ -5470,6 +5521,7 @@ export type Parser
 			let elseToken = try consume()
 
 			var elseLabel = "{baseLabel}.else"
+			var elseUserLabel = "else"
 
 			if at(TokenKind.if) 'isElseIf'
 				var elseBlock = module.addBlockAt(func, label: elseLabel, filePath: ifFilePath, firstLine: elseToken.line)
@@ -5482,6 +5534,7 @@ export type Parser
 			end 'isElseIf' else 'plainElse'
 				if at(TokenKind.charLiteral) 'hasElseLabel'
 					let elseLabelToken = try consume()
+					elseUserLabel = elseLabelToken.value
 					elseLabel = "{elseLabelToken.value}_{func.nextBlockId}"
 					try expectNewlineAfterLabel()
 				end 'hasElseLabel' else 'noElseLabel'
@@ -5492,7 +5545,7 @@ export type Parser
 				// Capture id before parseScopedStatements — subsequent block adds
 				// may invalidate the `elseBlock` struct reference.
 				let elseBlockId = elseBlock.id
-				let elseExit = try parseScopedStatements(func, block: elseBlock)
+				let elseExit = try parseScopedStatementsRequireBody(func, block: elseBlock, blockLabel: elseUserLabel)
 				try skipEndAndLabel()
 				return finalizeIfElseById(func, condBlock: condBlock, condName: exprName(condResult), thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
 			end 'plainElse'
@@ -5601,7 +5654,7 @@ export type Parser
 			module.appendOp(thenBlock, op: MaxonOp.varDecl(bindingSlot, value: innerName, slotType: callReturnType, range: SourceRange.ofToken(tryToken)))
 		end 'declareBinding'
 
-		let thenExit = try parseScopedStatements(func, block: thenBlock)
+		let thenExit = try parseScopedStatementsRequireBody(func, block: thenBlock, blockLabel: userLabel)
 
 		try skipEndAndLabel()
 		_ = skipOptionalNewlines()
@@ -5626,8 +5679,10 @@ export type Parser
 				hasElseBinding = true
 			end 'hasErrorBinding'
 			var elseLabel = "{baseLabel}.else"
+			var elseUserLabel = "else"
 			if at(TokenKind.charLiteral) 'hasElseLabel'
 				let elseLabelToken = try consume()
+				elseUserLabel = elseLabelToken.value
 				elseLabel = "{elseLabelToken.value}_{func.nextBlockId}"
 				try expectNewlineAfterLabel()
 			end 'hasElseLabel' else 'noElseLabel'
@@ -5660,7 +5715,7 @@ export type Parser
 				end 'isBare'
 				module.appendOp(elseBlock, op: MaxonOp.varDecl(bindingSlot, value: bindingValueName, slotType: bindingType, range: SourceRange.ofToken(elseToken)))
 			end 'declareErrorBinding'
-			let elseExit = try parseScopedStatements(func, block: elseBlock)
+			let elseExit = try parseScopedStatementsRequireBody(func, block: elseBlock, blockLabel: elseUserLabel)
 			if hasElseBinding 'popBindingScope'
 				scope.popScope()
 			end 'popBindingScope'
@@ -5731,7 +5786,7 @@ export type Parser
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: condBlockId, exitBlockId: exitBlockId, continueBlockId: condBlockId))
 
 		// Parse body in bodyBlock
-		let bodyExit = try parseScopedStatements(func, block: bodyBlock)
+		let bodyExit = try parseScopedStatementsRequireBody(func, block: bodyBlock, blockLabel: userLabel)
 
 		// Pop the loop context we pushed above. The stack can't be empty here —
 		// we own both the matching push and the intermediate parse call.
@@ -7331,7 +7386,7 @@ export type Parser
 
 		// BODY: parse user statements; natural fall-through goes to the step block.
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: stepBlockId))
-		var bodyExit = try parseStatements(func, block: bodyBlock, lastWasReturn: false)
+		var bodyExit = try parseStatementsRequireBody(func, block: bodyBlock, blockLabel: userLabel)
 		try loopStack.pop() otherwise panic("loopStack.pop: stack unexpectedly empty after for-range body parse")
 
 		if not bodyExit.isTerminated() 'needsStep'
@@ -7490,7 +7545,10 @@ export type Parser
 		if effectiveIterName == "_" 'discardIter'
 			loopVarSlot = scope.declare("__forin_var_{forToken.line}_{forToken.column}", varType: MaxonType.unresolved, mutable: false)
 		end 'discardIter' else 'namedIter'
-			loopVarSlot = defineVariableWithType(effectiveIterName, varType: MaxonType.unresolved)
+			// E2013 expects the loop variable to be immutable — `for x in arr`
+			// binds a fresh `let` per iteration in the C# bootstrap. Destructured
+			// fields below follow the same rule.
+			loopVarSlot = scope.declare(effectiveIterName, varType: MaxonType.unresolved, mutable: false)
 		end 'namedIter'
 		module.appendOp(bodyBlock, op: MaxonOp.varDecl(loopVarSlot, value: currentResultName, slotType: MaxonType.unresolved, range: stmtRange))
 		if isDestructure 'emitFieldBindings'
@@ -7503,7 +7561,7 @@ export type Parser
 				if destName == "_" 'discardField'
 					destSlot = scope.declare("__forin_destfield_{forToken.line}_{forToken.column}_{i}", varType: MaxonType.unresolved, mutable: false)
 				end 'discardField' else 'namedField'
-					destSlot = defineVariableWithType(destName, varType: MaxonType.unresolved)
+					destSlot = scope.declare(destName, varType: MaxonType.unresolved, mutable: false)
 				end 'namedField'
 				module.appendOp(bodyBlock, op: MaxonOp.varDecl(destSlot, value: fieldLoadName, slotType: MaxonType.unresolved, range: stmtRange))
 			end 'eachDestructure'
@@ -7513,7 +7571,7 @@ export type Parser
 		// resolve to this loop's labels. `continue` -> header (where advance
 		// runs), `break` -> exit. Natural fall-through goes to header.
 		loopStack.push(LoopContext.create(userLabel, headerBlockId: headerBlockId, exitBlockId: exitBlockId, continueBlockId: headerBlockId))
-		let bodyExit = try parseStatements(func, block: bodyBlock, lastWasReturn: false)
+		let bodyExit = try parseStatementsRequireBody(func, block: bodyBlock, blockLabel: userLabel)
 		try loopStack.pop() otherwise panic("loopStack.pop: stack unexpectedly empty after for-in iterable body parse")
 
 		if not bodyExit.isTerminated() 'needsHeader'
@@ -7570,6 +7628,12 @@ export type Parser
 		for i in 0 upto loopStack.count() 'loopSearch'
 			let lctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveBreakTarget: loopStack index OOB")
 			if lctx.sourceLabel == labelToken.value 'foundLoop'
+				// E2048: redundant if this IS the innermost loop AND no match
+				// sits between us and it. Otherwise the label is meaningful —
+				// it disambiguates an outer loop from a closer match arm.
+				if i == 0 and matchStack.count() == 0 'isRedundant'
+					reportCompileError(project, code: ErrorCode.parserRedundantLoopLabel, message: "'break' with label '{labelToken.value}' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop", line: labelToken.line, column: labelToken.column, filePath: filePath)
+				end 'isRedundant'
 				return lctx.exitBlockId
 			end 'foundLoop'
 		end 'loopSearch'
@@ -7615,6 +7679,12 @@ export type Parser
 		for i in 0 upto loopStack.count() 'search'
 			let ctx = try loopStack.get(loopStack.count() - 1 - i) otherwise panic("resolveContinueTarget: loop index out of bounds")
 			if ctx.sourceLabel == labelToken.value 'found'
+				// E2048: continue can only re-enter a loop, never a match, so
+				// "innermost loop" is the only test we need (no match
+				// short-circuit like in resolveBreakTarget).
+				if i == 0 'isRedundant'
+					reportCompileError(project, code: ErrorCode.parserRedundantLoopLabel, message: "'continue' with label '{labelToken.value}' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop", line: labelToken.line, column: labelToken.column, filePath: filePath)
+				end 'isRedundant'
 				return ctx.continueBlockId
 			end 'found'
 		end 'search'
@@ -7628,6 +7698,20 @@ export type Parser
 	// Parse: _ = expression (discard function result)
 	// Uses parserNextSlot as a unique suffix since it increments with each variable
 	function parseDiscardAssignment(block IrBlock) throws ParserError
+		let underscoreToken = cursor.current()
+		// E3067: `_ = LITERAL` is degenerate — the discard form exists to
+		// silence a "discarded result" warning on a call, so a bare literal
+		// RHS is always a bug. Detected by peeking: int/float/bool/string
+		// literal directly after `=` followed by a statement terminator.
+		// Function calls (identifier + leftParen) and complex expressions
+		// fall through to the normal parse path.
+		let rhsTok = try cursor.peek(2) otherwise Token.eof()
+		let afterRhs = try cursor.peek(3) otherwise Token.eof()
+		if rhsTok.kind == TokenKind.intLiteral or rhsTok.kind == TokenKind.floatLiteral or rhsTok.kind == TokenKind.true or rhsTok.kind == TokenKind.false or rhsTok.kind == TokenKind.stringLiteral or rhsTok.kind == TokenKind.charLiteral 'isLiteralRhs'
+			if tokenIsStatementTerminator(afterRhs) 'isTerminator'
+				reportCompileError(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: underscoreToken.line, column: underscoreToken.column, filePath: filePath)
+			end 'isTerminator'
+		end 'isLiteralRhs'
 		// Dispatched on identifier `_` followed by `=`; both positions proven.
 		try eat(TokenKind.identifier)
 		try eat(TokenKind.equals)
@@ -7646,6 +7730,18 @@ export type Parser
 	// Parse: identifier = expression (variable reassignment)
 	function parseVarAssignment(block IrBlock) throws ParserError
 		let nameToken = cursor.current()
+		// E3067: detect bare `x = x` before consuming the RHS. Lookahead
+		// pattern: [ident("="), ident(name), statement-terminator]. Catches
+		// the trivial self-assignment without an IR walk; field-chain
+		// `p.x = p.x` is detected in `parseLocalFieldAssignment` via the
+		// same lexical pattern there.
+		let postEquals = try cursor.peek(2) otherwise Token.eof()
+		let postRhs = try cursor.peek(3) otherwise Token.eof()
+		if postEquals.kind == TokenKind.identifier and postEquals.value == nameToken.value 'maybeSelfAssign'
+			if tokenIsStatementTerminator(postRhs) 'isTerminator'
+				reportCompileError(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{nameToken.value} = {nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			end 'isTerminator'
+		end 'maybeSelfAssign'
 		// Dispatched on `identifier` followed by `=`; advance through both.
 		try eat(TokenKind.identifier)
 		try eat(TokenKind.equals)
@@ -7696,6 +7792,15 @@ export type Parser
 			// the user wrote `field = value`, not a separate self-load op.
 			emitSelfFieldStore(emitBlock, fieldName: nameToken.value, valueName: exprName(materializedResult), range: stmtRange)
 		end 'selfFieldWrite' else 'localWrite'
+			// E2013: a `let`-bound local (or for-in loop variable, which the
+			// C# bootstrap also binds immutable) can't be reassigned. The
+			// payload-binding branch above checks the same mutable flag —
+			// this catches the regular local case that previously fell
+			// through silently.
+			if not bindingInfo.mutable 'immutableLocal'
+				reportCompileError(project, code: ErrorCode.parserImmutableVariable, message: "cannot assign to immutable variable: '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+				return
+			end 'immutableLocal'
 			module.appendOp(emitBlock, op: MaxonOp.varStore(slot, value: exprName(materializedResult), range: stmtRange))
 		end 'localWrite'
 	end 'parseVarAssignment'
@@ -12401,6 +12506,42 @@ export type Parser
 		scope.popScope()
 		return exitBlock
 	end 'parseScopedStatements'
+
+	// Run `parseStatements` with the `bodyStmtParsed` tracking flag and
+	// emit E3082 (`empty block: '{label}'`) when no real statement was
+	// consumed. The flag is saved/restored across the call so nested calls
+	// can't poison an outer empty check. Matches the C# bootstrap's
+	// `ParseBodyUntilEndOrThrowEmpty` (modulo abort: the diagnostic alone
+	// is enough since downstream passes tolerate empty blocks — codegen
+	// produces a bare br to the merge block and DCE removes everything
+	// reachable from the failed parse). Shared by
+	// `parseScopedStatementsRequireBody` (if/while/try-then-else) and the
+	// for-range / for-in body parsers (which manage their own scope +
+	// loopStack lifetimes).
+	function parseStatementsRequireBody(func IrFunction, block IrBlock, blockLabel String) returns IrBlock throws ParserError
+		let priorFlag = bodyStmtParsed
+		bodyStmtParsed = false
+		let exitBlock = try parseStatements(func, block: block, lastWasReturn: false)
+		let sawAny = bodyStmtParsed
+		bodyStmtParsed = priorFlag
+		if not sawAny 'isEmpty'
+			let endTok = cursor.current()
+			reportCompileError(project, code: ErrorCode.semanticEmptyBlock, message: "empty block: '{blockLabel}'", line: endTok.line, column: endTok.column, filePath: filePath)
+		end 'isEmpty'
+		return exitBlock
+	end 'parseStatementsRequireBody'
+
+	// Variant of `parseScopedStatements` that emits E3082 when the body is
+	// empty (no statements between header and `end`). `blockLabel` is the
+	// source-level label that follows `end 'label'`. Wraps
+	// `parseStatementsRequireBody` in a `scope.pushScope`/`popScope` pair so
+	// any locals declared in the body fall out at `end`.
+	function parseScopedStatementsRequireBody(func IrFunction, block IrBlock, blockLabel String) returns IrBlock throws ParserError
+		scope.pushScope()
+		let exitBlock = try parseStatementsRequireBody(func, block: block, blockLabel: blockLabel)
+		scope.popScope()
+		return exitBlock
+	end 'parseScopedStatementsRequireBody'
 end 'Parser'
 
 // Result for the parser-time varLoad lookup in `chaseVarLoadProducerType`.
@@ -12746,6 +12887,14 @@ function tokenIsIdentifierLike(token Token) returns bool
 	let isUnderscore = first == '_'
 	return isLower or isUpper or isUnderscore
 end 'tokenIsIdentifierLike'
+
+// True iff `token` ends a statement at the parser's lookahead level:
+// a newline, the `end` keyword closing the enclosing block, or EOF. The
+// E3067 self-assignment / discard-literal probes and the bare-`return`
+// probe share this check.
+function tokenIsStatementTerminator(token Token) returns bool
+	return token.kind == TokenKind.newline or token.kind == TokenKind.end or token.kind == TokenKind.eof
+end 'tokenIsStatementTerminator'
 
 // Qualify a function name with namespace: "ns.name".
 // Returns the raw name if namespace is empty. Exported because the Maxon→Std

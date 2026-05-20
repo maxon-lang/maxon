@@ -314,6 +314,11 @@ break 'loop'      // labeled break
 continue 'loop'   // labeled continue
 ```
 
+`break 'lab'` / `continue 'lab'` is an error (E2048) when `lab` names the
+innermost enclosing loop — use bare `break`/`continue` for that case.
+Labels are only meaningful when targeting an *outer* loop (or, for `break`,
+escaping across an intervening `match`).
+
 ### For (iterator)
 ```maxon
 for item in array 'loop' ... end 'loop'

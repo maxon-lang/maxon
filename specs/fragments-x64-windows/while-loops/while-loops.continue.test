@@ -16,47 +16,30 @@ ExitCode: 12
 ---
 // CompiledIR
 module {
-  func @while-loops.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.jmp while-loops.main.loop_0.header
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.xchg r8, r9
   loop_0.header:
-    x64.mov rax, 5
-    x64.mov rcx, [rbp-16]
-    x64.cmp rcx, rax
-    x64.jge while-loops.main.loop_0.exit
+    x64.cmp r9, 5
+    x64.jge loop_0.exit
   loop_0:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-16]
-    x64.add rcx, rax
-    x64.mov [rbp-16], rcx
-    x64.mov rdx, 3
-    x64.cmp rcx, rdx
-    x64.jne while-loops.main.skip_0.after
-  skip_0:
-    x64.jmp while-loops.main.loop_0.header
-  skip_0.after:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.add rax, rcx
-    x64.mov [rbp-8], rax
-    x64.jmp while-loops.main.loop_0.header
+    x64.add r9, 1
+    x64.cmp r9, 3
+    x64.jne skip_0.after
+    x64.jmp loop_0.header
   loop_0.exit:
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg while-loops.main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl while-loops.main.__range_panic_0
-    x64.jmp while-loops.main.__range_ok_0
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  skip_0.after:
+    x64.add r8, r9
+    x64.jmp loop_0.header
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

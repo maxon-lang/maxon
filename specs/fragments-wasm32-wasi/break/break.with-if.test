@@ -1,0 +1,40 @@
+// Test: break.with-if
+function main() returns ExitCode
+	var x = 0
+	while true 'loop'
+		x = x + 1
+		if x == 10 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0)
+  loop_0.header:
+    mir.br loop_0()
+  loop_0:
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.add.i64 %9, %3
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.cmp eq, %4, %6
+    mir.cond_br %7 [then: loop_0.exit(%4), else: loop_0.header(%4)]
+  loop_0.exit:
+    %11 = mir.mov_imm 125 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

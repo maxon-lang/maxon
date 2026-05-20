@@ -210,6 +210,29 @@ let whitelist = ["basics",
 	"panic-stack-trace",
 	"command-line-args",
 	"cache-parity",
+	"arithmetic-operators",
+	"keyword-parameter-names",
+	"while-loops",
+	"empty-block",
+	"self-assignment",
+	"break",
+	// Tier-1 candidates that aren't on the whitelist but are worth a focused
+	// pass each — bootstrap-green specs whose self-hosted gaps surfaced in
+	// the 2026-05-19 Tier-1 sweep + the post-Stage-N missing-diagnostic
+	// work. Each entry lists the gating feature work:
+	// "block-scoping" (11/12) — all diagnostics now fire; one fragment
+	//   (`local-shadows-prior-field-access`) needs panic-string interpolation
+	//   (shared blocker with `panic-interpolation`, `match-expr-arm-divergent`,
+	//   `optimizer-refcount`).
+	// "short-circuit-evaluation" (4/11) — needs investigation.
+	// "same-name-methods" (2/5) — needs investigation.
+	// "tuple-assign" (0/10) — parser doesn't accept `(x, y) = expr` LHS shape.
+	// "sizeof" (0/11) — needs investigation; likely missing __sizeof builtin.
+	// "short-type" (1/2) — `u16-rdata` writes 168 bytes vs expected 6
+	//   (panic-message rdata bleeds in; needs RequiredRdata slice support).
+	// "panic-interpolation" — separate spec; blocks block-scoping +
+	//   match-expr-arm-divergent + optimizer-refcount; needs a runtime
+	//   helper that formats interpolated values into a panic message buffer.
 ]
 
 // Signed elapsed time in milliseconds (deltas between Clock.nowMs() reads).

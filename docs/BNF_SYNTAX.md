@@ -594,9 +594,10 @@ in match arms with E2049. Every single-statement `try` form (bare propagation,
 ### 5.8 Break and Continue
 
 ```
-break_stmt    = 'break' [ LABEL ]
+break_stmt    = 'break' [ LABEL ]   (* LABEL must NOT name the innermost
+                                       enclosing loop; that's E2048 *)
 
-continue_stmt = 'continue' [ LABEL ]
+continue_stmt = 'continue' [ LABEL ] (* same E2048 rule as `break` *)
 ```
 
 ### 5.9 Throw

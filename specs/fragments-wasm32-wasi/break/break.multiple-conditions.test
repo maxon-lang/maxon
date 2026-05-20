@@ -1,0 +1,47 @@
+// Test: break.multiple-conditions
+function main() returns ExitCode
+	var x = 5
+	var count = 0
+	while x < 100 'loop'
+		x = x + 1
+		count = count + 1
+		if count == 3 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %3 = mir.mov_imm 100 : i64
+    %4 = mir.cmp lt, %15, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit(%15)]
+  loop_0:
+    %6 = mir.mov_imm 1 : i64
+    %7 = mir.add.i64 %15, %6
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %17, %9
+    %12 = mir.mov_imm 3 : i64
+    %13 = mir.cmp eq, %10, %12
+    mir.cond_br %13 [then: loop_0.exit(%7), else: loop_0.header(%7, %10)]
+  loop_0.exit:
+    %18 = mir.mov_imm 125 : i64
+    %19 = mir.cmp ugt, %16, %18
+    mir.cond_br %19 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %20 = mir.global_addr @__panic_msg_0
+    %21 = mir.call @mrt_panic(%20)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---
