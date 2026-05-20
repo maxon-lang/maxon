@@ -254,6 +254,36 @@ public partial class X86CodeEmitter {
       _e.EmitByte((byte)offset);
     }
 
+    public void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired) {
+      // x86 CMPXCHG forces the "expected" operand to be in RAX (= VReg.Scratch0),
+      // so we move expected -> RAX first. After the instruction, RAX holds either
+      // the just-written value (on success) or the actually-observed memory value
+      // (on failure). Either way Scratch0 is clobbered; this is documented in the
+      // IEmitterBackend contract.
+      var destBaseReg = R(destBase);
+      var expectedReg = R(expected);
+      var desiredReg = R(desired);
+      if (destBaseReg == X86Register.Rax || destBaseReg == X86Register.Rbx)
+        throw new ArgumentException("AtomicCAS: destBase must not be Scratch0/RAX or Scratch3/RBX");
+      if (expectedReg == X86Register.Rbx || desiredReg == X86Register.Rax || desiredReg == X86Register.Rbx)
+        throw new ArgumentException("AtomicCAS: expected/desired must not collide with Scratch0/Scratch3");
+
+      // MOV RAX, expected
+      if (expectedReg != X86Register.Rax)
+        _e.EmitMovRegReg(X86Register.Rax, expectedReg);
+
+      // LOCK CMPXCHG [destBase + offset], desired
+      // ZF=1 on success (memory unchanged, RAX==[mem]) — semantically RAX still equals expected.
+      // ZF=0 on failure (RAX = [mem]).
+      _e.EmitLockCmpxchgMemReg(destBaseReg, offset, desiredReg);
+
+      // SETZ BL — write low byte of Scratch3 with the ZF flag (1 on success).
+      _e.EmitSetcc("z", X86Register.Rbx);
+
+      // MOVZX RBX, BL — zero-extend to 64 bits so the result reads back cleanly as 0/1.
+      _e.EmitMovzxReg8To64(X86Register.Rbx);
+    }
+
     public void FullBarrier() => _e.EmitMfence();
 
     // ---- Labels & data ----

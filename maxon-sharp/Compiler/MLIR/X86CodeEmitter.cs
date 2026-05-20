@@ -1936,6 +1936,20 @@ public partial class X86CodeEmitter() {
     EmitModRmWithBase(baseReg, dest, displacement);
   }
 
+  /// Emit LOCK CMPXCHG [baseReg+disp], src.
+  /// Atomically compares RAX with [baseReg+disp]:
+  ///   if equal: stores src into [baseReg+disp], sets ZF=1
+  ///   if not equal: loads [baseReg+disp] into RAX, sets ZF=0
+  /// Opcode: F0 (LOCK prefix) + REX.W + 0F B1 /r
+  private void EmitLockCmpxchgMemReg(X86Register baseReg, int displacement, X86Register src) {
+    RequireGpr(baseReg, nameof(EmitLockCmpxchgMemReg));
+    RequireGpr(src, nameof(EmitLockCmpxchgMemReg));
+    EmitByte(0xF0); // LOCK prefix
+    Rex.W().Reg(src).Rm(baseReg).Emit(this);
+    EmitBytes(0x0F, 0xB1);
+    EmitModRmWithBase(baseReg, src, displacement);
+  }
+
   private void EmitMovzxRegByteIndirect(X86Register dest, X86Register baseReg, int displacement) {
     RequireGpr(dest, nameof(EmitMovzxRegByteIndirect));
     RequireGpr(baseReg, nameof(EmitMovzxRegByteIndirect));

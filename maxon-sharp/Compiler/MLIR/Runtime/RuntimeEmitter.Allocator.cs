@@ -62,7 +62,7 @@ public partial class RuntimeEmitter {
   private const int SlabMaxSmallSize = 32768;
   private const int ArenaSize = 64 * 1024 * 1024; // 64MB
 
-  // mspan struct layout (64 bytes)
+  // mspan struct layout (72 bytes used; 80-byte slot for 16-byte alignment)
   private const int MspanOffBaseAddr = 0x00;
   private const int MspanOffSlotSize = 0x08;
   private const int MspanOffFreeList = 0x10;
@@ -71,7 +71,17 @@ public partial class RuntimeEmitter {
   private const int MspanOffClassIndex = 0x28;
   private const int MspanOffTotalSlots = 0x30;
   private const int MspanOffArenaBase = 0x38;
-  private const int MspanStructSize = 0x40; // 64 bytes
+  // Mimalloc-style owning-P identifier. The P that currently owns this span has
+  // exclusive write access to span->free_list (via __slab_alloc fast path and the
+  // same-thread __slab_free local path). 0xFFFFFFFF means "in mcentral / unowned"
+  // — see __slab_mcentral_return_span.
+  private const int MspanOffOwningP = 0x40;
+  // Bump-allocator slot for an mspan header rounded up to 16-byte alignment so
+  // successive headers stay 16-byte aligned within the metadata chunk. The
+  // mspan field block currently runs from 0x00..0x48; the trailing 8 bytes are
+  // padding inside the slot.
+  private const int MspanMetaSlotSize = 0x50; // 80 bytes
+  private const uint MspanOwningPSentinel = 0xFFFFFFFFu; // span in mcentral, no owner
 
   // Arena map: two-level radix tree for pointer -> span lookup
   private const int ArenaMapL1Size = 256;
@@ -365,16 +375,16 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(noFreeSlot);
 
-    // Check bump allocator: if bump_ptr + 64 <= bump_end
+    // Check bump allocator: if bump_ptr + MspanMetaSlotSize <= bump_end
     _b.LoadGlobal(VReg.Scratch0, MetaBumpPtrLabel);
     _b.MovRegReg(VReg.Scratch1, VReg.Scratch0);
-    _b.AddRegImm(VReg.Scratch1, MspanStructSize); // bump_ptr + 64
+    _b.AddRegImm(VReg.Scratch1, MspanMetaSlotSize);
     _b.LoadGlobal(VReg.Scratch2, MetaBumpEndLabel);
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
     var needNewChunk = UniqueLabel("meta_alloc_new_chunk");
     _b.JumpIf(Condition.Above, needNewChunk);
 
-    // Bump: result = bump_ptr; bump_ptr += 64
+    // Bump: result = bump_ptr; bump_ptr += MspanMetaSlotSize
     _b.StoreGlobal(MetaBumpPtrLabel, VReg.Scratch1);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -386,9 +396,9 @@ public partial class RuntimeEmitter {
     // Scratch0 = new chunk base
     _b.StoreLocal(0, VReg.Scratch0); // save chunk base
 
-    // bump_ptr = chunk + 64 (first slot is the return value)
+    // bump_ptr = chunk + MspanMetaSlotSize (first slot is the return value)
     _b.MovRegReg(VReg.Scratch1, VReg.Scratch0);
-    _b.AddRegImm(VReg.Scratch1, MspanStructSize);
+    _b.AddRegImm(VReg.Scratch1, MspanMetaSlotSize);
     _b.StoreGlobal(MetaBumpPtrLabel, VReg.Scratch1);
 
     // bump_end = chunk + ChunkSize
@@ -1617,6 +1627,16 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch1, 6); // arena_base
     _b.StoreIndirect(VReg.Scratch0, MspanOffArenaBase, VReg.Scratch1);
 
+    // Initial owning_p = current P's id. Defensive: __slab_mcentral_get_span
+    // (the sole caller) re-stamps owning_p before returning, so any escape via
+    // partial-list / mcache will see the caller's id. Stamping here as well
+    // guarantees the field is never left at a poisoned post-malloc value if a
+    // future code path exposes a freshly-allocated span without going through
+    // mcentral_get_span.
+    _b.LoadCurrentP(VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch1, POffId);
+    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch1);
+
     // --- Build intrusive free list ---
     // free_list = page_base
     _b.LoadLocal(VReg.Scratch0, 1); // mspan_ptr
@@ -1733,6 +1753,18 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, MspanOffNextSpan, VReg.Scratch1);
 
     _b.DefineLabel(gotSpan);
+    // Stamp owning_p = current P's id. This is the single point where mcentral
+    // hands a span off to a P, so it covers both the fresh-alloc path and the
+    // partial-list re-cache path (which may be a different P from the one that
+    // originally returned the span to mcentral). The store happens under the
+    // mcentral lock to serialise against __slab_mcentral_return_span's sentinel
+    // write — no remote-free can observe a stale owning_p once the span is
+    // visible outside mcentral.
+    _b.LoadCurrentP(VReg.Scratch3);
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch3, POffId);
+    _b.LoadLocal(VReg.Scratch0, 2); // span
+    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+
     _b.LockRelease(MspanPoolLockLabel);
 
     // Return span
@@ -1752,8 +1784,19 @@ public partial class RuntimeEmitter {
 
     _b.LockAcquire(MspanPoolLockLabel);
 
-    // Get class_index from span; compute class_offset = class_index * 8
+    // Clear owning_p to the "in mcentral / unowned" sentinel under the mcentral
+    // lock. Cross-P free invariant: __slab_mcentral_return_span is only called
+    // from the local free path's "free_count == total_slots" branch, which
+    // means the owning P has just accounted for every slot in this span — so
+    // no slot from this span can still be in flight in any other P's
+    // remote-free queue. Stamping the sentinel here, combined with the
+    // defensive panic in __slab_free's remote path, makes any future invariant
+    // violation crash loudly rather than corrupt freed memory.
     _b.LoadLocal(VReg.Scratch0, 0); // span_ptr
+    _b.MovRegImm(VReg.Scratch3, (long)(uint)MspanOwningPSentinel);
+    _b.StoreIndirect(VReg.Scratch0, MspanOffOwningP, VReg.Scratch3);
+
+    // Get class_index from span; compute class_offset = class_index * 8
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffClassIndex);
     _b.ShlRegImm(VReg.Scratch1, 3); // class_offset = class_index * 8
     _b.StoreLocal(1, VReg.Scratch1);
@@ -2093,30 +2136,23 @@ public partial class RuntimeEmitter {
     var retryLabel = UniqueLabel("slab_alloc_retry");
     _b.DefineLabel(retryLabel);
 
-    // Span free-list manipulation must be serialised against concurrent
-    // __slab_free calls on the same span. The mcache slot is per-P, so only
-    // ONE P pulls from a given span via __slab_alloc — but ANY P can call
-    // __slab_free on an object that happens to live in that span (via
-    // __slab_span_lookup), since the lookup goes through the global arena
-    // map, not through any P's mcache. Without the lock, __slab_alloc's
-    // "read free_count, read free_list, dereference free_list" sequence races
-    // with __slab_free's "read free_list, link slot, write free_list,
-    // increment free_count": a sufficiently unlucky interleaving lets
-    // __slab_alloc observe free_count > 0 but free_list = NULL, then nil-deref.
-    // Symptom: intermittent SIGSEGV inside __slab_alloc under multi-worker
-    // load, with the fault address = 0.
-    _b.LockAcquire(MspanPoolLockLabel);
-
+    // --- Lock-free fast path ---
+    // span->free_list is mutated only by the owning P (Mimalloc single-writer
+    // invariant; see __slab_free's localPath comment). Cross-P frees bypass
+    // free_list entirely — they push onto P->remote_free_head instead and the
+    // owner drains lazily on the slow path below. This means the prior global
+    // MspanPoolLock that serialised alloc against cross-P free is no longer
+    // needed on the fast path.
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
-    var needRefillUnlock = UniqueLabel("slab_need_refill_unlock");
-    _b.JumpIfZero(VReg.Scratch1, needRefillUnlock);
+    var slowPath = UniqueLabel("slab_alloc_slow_path");
+    _b.JumpIfZero(VReg.Scratch1, slowPath);
 
     // Check if span has free slots
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
-    _b.JumpIfZero(VReg.Scratch2, needRefillUnlock);
+    _b.JumpIfZero(VReg.Scratch2, slowPath);
 
-    // --- Fast path: pop from free list ---
+    // Fast path: pop from free list.
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
 
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffFreeList);
@@ -2131,8 +2167,6 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.SubRegImm(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
-
-    _b.LockRelease(MspanPoolLockLabel);
 
     // Clear the free-list next pointer at slot[0]
     _b.LoadLocal(VReg.Scratch0, 5);
@@ -2156,17 +2190,31 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
-    // --- Refill path (entered with the lock held, must release before
-    // calling __slab_mcentral_get_span which acquires the same lock — the
-    // lock is a recursive CRITICAL_SECTION on Windows so re-entry would be
-    // safe, but releasing first keeps contention down and matches the lock's
-    // single-acquisition convention elsewhere in the allocator). ---
-    _b.DefineLabel(needRefillUnlock);
-    _b.LockRelease(MspanPoolLockLabel);
+    // --- Slow path: drain remote frees, then either re-serve from cache or
+    // ask mcentral for a span. Drain runs before mcentral_get_span so that a
+    // burst of cross-P frees aimed at this P's spans can be reclaimed without
+    // grabbing a fresh span from the central pool. ---
+    _b.DefineLabel(slowPath);
 
+    _b.LoadCurrentP(VReg.Arg0);
+    _b.Call("__slab_drain_remote_frees");
+
+    // Re-probe the cached span — drain may have refilled it (or evicted it via
+    // __slab_mcentral_return_span if it reached full).
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
+    var stillEmpty = UniqueLabel("slab_alloc_still_empty");
+    _b.JumpIfZero(VReg.Scratch1, stillEmpty);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
+    _b.JumpIfZero(VReg.Scratch2, stillEmpty);
+    // Cached span has slots again — jump back to the fast path.
+    _b.Jump(retryLabel);
+
+    _b.DefineLabel(stillEmpty);
+    // No slots in cache. Clear the mcache slot (idempotent — may already be NULL).
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // *mcache_slot = NULL
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
 
     _b.LoadLocal(VReg.Arg0, 1); // class_index
     _b.Call("__slab_mcentral_get_span");
@@ -2176,6 +2224,123 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // *mcache_slot = new_span
 
     _b.Jump(retryLabel);
+  }
+
+  /// <summary>
+  /// Emit code that pushes <paramref name="slotReg"/> onto
+  /// <paramref name="spanReg"/>->free_list, increments free_count, and if the
+  /// span has now become fully free (free_count == total_slots) calls
+  /// __slab_mcentral_return_span(span).
+  ///
+  /// <paramref name="t0"/> and <paramref name="t1"/> must be distinct from
+  /// spanReg, slotReg, and each other. Caller is responsible for saving the
+  /// slot_base and the span pointer in stack slots if they need them after the
+  /// helper returns (the mcentral call clobbers all scratch regs).
+  ///
+  /// Used by both the same-thread free path in __slab_free and the per-node
+  /// loop body in __slab_drain_remote_frees — the single-writer invariant on
+  /// span->free_list holds in both, so no locking is required.
+  /// </summary>
+  private void EmitPushSlotOntoSpanFreeList(VReg spanReg, VReg slotReg,
+                                            VReg t0, VReg t1) {
+    // old_head = span->free_list; slot[0] = old_head; span->free_list = slot.
+    _b.LoadIndirect(t0, spanReg, MspanOffFreeList);
+    _b.StoreIndirect(slotReg, 0, t0);
+    _b.StoreIndirect(spanReg, MspanOffFreeList, slotReg);
+
+    // span->free_count++. Result kept in t1 so the fully-free compare below
+    // doesn't reload it.
+    _b.LoadIndirect(t1, spanReg, MspanOffFreeCount);
+    _b.AddRegImm(t1, 1);
+    _b.StoreIndirect(spanReg, MspanOffFreeCount, t1);
+
+    _b.LoadIndirect(t0, spanReg, MspanOffTotalSlots);
+    _b.CmpRegReg(t1, t0);
+    var notFullyFree = UniqueLabel("push_slot_not_full");
+    _b.JumpIf(Condition.NotEqual, notFullyFree);
+    _b.MovRegReg(VReg.Arg0, spanReg);
+    _b.Call("__slab_mcentral_return_span");
+    _b.DefineLabel(notFullyFree);
+  }
+
+  // =========================================================================
+  // EmitSlabDrainRemoteFrees: __slab_drain_remote_frees(P*)
+  //
+  // Mimalloc-style drain of the per-P MPSC remote-free queue. Called only by
+  // the owning P (on the __slab_alloc slow path). One atomic CAS detaches the
+  // entire chain (head -> NULL), then we walk it and push each slot onto its
+  // owning span's free_list. Because we ARE the owner, the per-span pushes
+  // are lockless (single-writer invariant).
+  //
+  // Spans that reach free_count == total_slots during the walk get returned
+  // to mcentral immediately — the mcentral return path takes MspanPoolLock
+  // internally, which is fine: it's an off-fast-path event.
+  //
+  // No trace emission here: cross-P queue traffic is inherently non-
+  // deterministic (depends on which worker P serviced an alloc), and surfacing
+  // it in --mm-trace would break the byte-exact stderr comparisons spec tests
+  // rely on. The MPSC mechanics are still observable via wall-clock perf and
+  // through __slab_mcentral_return_span counters; deterministic-trace users
+  // get refcount-shape events only.
+  // =========================================================================
+  // Stack slots: 0=P_ptr (arg), 1=current_node, 2=next_node
+  public void EmitSlabDrainRemoteFrees() {
+    _b.FunctionStart("__slab_drain_remote_frees", 1, 0x30);
+
+    var drainDone = UniqueLabel("drain_done");
+
+    // Detach the entire queue with a single CAS: head -> NULL, head retained
+    // in slot 1 (parked before the CAS because x86's AtomicCAS clobbers RAX).
+    //   retry:
+    //     old = P->remote_free_head           // also parked to slot 1
+    //     if old == NULL: nothing to drain
+    //     if CAS(head, old, NULL): start walking
+    //     else: retry
+    var detachRetry = UniqueLabel("drain_detach_retry");
+    _b.DefineLabel(detachRetry);
+    _b.LoadLocal(VReg.Scratch2, 0); // P*
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch2, POffRemoteFreeHead); // expected (in RAX on x86)
+    _b.JumpIfZero(VReg.Scratch0, drainDone);
+    _b.StoreLocal(1, VReg.Scratch0); // park chain head BEFORE CAS clobbers Scratch0/RAX
+    _b.ZeroReg(VReg.Scratch1); // desired = NULL
+    _b.AtomicCAS(VReg.Scratch2, POffRemoteFreeHead, VReg.Scratch0, VReg.Scratch1);
+    _b.CmpRegImm(VReg.Scratch3, 0);
+    _b.JumpIf(Condition.Equal, detachRetry);
+
+    // Walk the detached chain. current_node lives in Scratch1, refreshed from
+    // slot 1 each iteration (`next` is parked across the span_lookup call).
+    _b.LoadLocal(VReg.Scratch1, 1); // current_node = chain head
+
+    var walkLoop = UniqueLabel("drain_walk");
+    _b.DefineLabel(walkLoop);
+    _b.JumpIfZero(VReg.Scratch1, drainDone);
+
+    // next = current_node[0]
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, 0);
+    _b.StoreLocal(2, VReg.Scratch0); // park next on stack across __slab_span_lookup
+    _b.StoreLocal(1, VReg.Scratch1); // re-park current so we can pass it to lookup via Arg0
+
+    // span = __slab_span_lookup(current_node)
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.Call("__slab_span_lookup");
+    // Scratch0 = span_ptr. Per the cross-P invariant, this lookup must succeed
+    // for any slot that was ever pushed onto a remote queue — the slot lives
+    // in a span the arena map knows about and the span hasn't been freed
+    // (otherwise it couldn't have been allocated in the first place).
+    _b.MovRegReg(VReg.Scratch3, VReg.Scratch0); // span (preserve across reloads)
+    _b.LoadLocal(VReg.Scratch1, 1); // reload current_node
+
+    // Push current_node onto span->free_list and conditionally hand the span
+    // back to mcentral if it has become fully free.
+    EmitPushSlotOntoSpanFreeList(spanReg: VReg.Scratch3, slotReg: VReg.Scratch1,
+                                 t0: VReg.Scratch0, t1: VReg.Scratch2);
+
+    // Advance: current_node = next; loop.
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.Jump(walkLoop);
+
+    _b.DefineLabel(drainDone);
+    _b.FunctionEnd();
   }
 
   // =========================================================================
@@ -2290,35 +2455,95 @@ public partial class RuntimeEmitter {
       _b.Call("__slab_memzero");
     }
 
-    // Push slot_base onto span's free list. Must be serialised against
-    // concurrent __slab_alloc on the same span — see the corresponding
-    // comment in __slab_alloc for the race details.
-    _b.LockAcquire(MspanPoolLockLabel);
+    // Mimalloc-style local-vs-remote routing.
+    //
+    // Read the span's current owning_p and the calling thread's P id. If they
+    // match, this is a same-thread free: push directly onto span->free_list
+    // (single-writer invariant — see __slab_alloc's fast path comment). If
+    // they don't match, this is a cross-thread free: push the slot onto the
+    // OWNER P's remote-free MPSC queue and return. The owner will drain it on
+    // its next __slab_alloc slow path.
+    //
+    // Special case: raw OS threads (the Windows IOCP completion loop, the
+    // sync worker, the fault handler) call mm_raw_free without ever having
+    // had a Maxon P assigned via TLS — they are external producers from the
+    // allocator's perspective. LoadCurrentP returns NULL on those threads, so
+    // we force them down the remote path: they are by construction not the
+    // owning P of any span, so a CAS-push onto the owner's queue is correct.
+    _b.LoadLocal(VReg.Scratch0, 1); // span_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffOwningP);
+    _b.StoreLocal(4, VReg.Scratch1); // owning_p (saved for the remote-path target lookup)
+    _b.LoadCurrentP(VReg.Scratch2);
+    var localPath = UniqueLabel("slab_free_local");
+    var remotePath = UniqueLabel("slab_free_remote");
+    // Raw OS threads (no Maxon P): skip the id compare and go straight to remote.
+    _b.JumpIfZero(VReg.Scratch2, remotePath);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, POffId);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.JumpIf(Condition.Equal, localPath);
 
+    // Defensive: detect the sentinel owning_p (= span has been returned to
+    // mcentral). Per the cross-P free invariant in __slab_mcentral_return_span,
+    // this is unreachable in correct code — the owning P drains all in-flight
+    // remote frees for a span before returning it to mcentral. CLAUDE.md "no
+    // silent fallthrough": a logic bug that lets a remote free through after
+    // sentinel-stamping would otherwise silently corrupt an unrelated P's
+    // queue; panic loudly instead.
+    _b.MovRegImm(VReg.Scratch3, (long)(uint)MspanOwningPSentinel);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch3);
+    var notSentinel = UniqueLabel("slab_free_owner_ok");
+    _b.JumpIf(Condition.NotEqual, notSentinel);
+    _b.LeaSymdata(VReg.Arg0, "__slab_panic_sentinel_owning_p");
+    _b.Call("mrt_panic");
+    _b.DefineLabel(notSentinel);
+    _b.Jump(remotePath);
+
+    // --- Local free path: no locking, no atomics ---
+    // Single-writer invariant on span->free_list (see __slab_alloc): the
+    // owning P is the ONLY mutator across all of (alloc-fast pop, drain push,
+    // local-free push, initial setup). Cross-P frees never touch this list.
+    // mcentral_return_span (invoked by the helper when free_count reaches
+    // total_slots) takes the pool lock internally — still locked-as-before;
+    // only the per-span push above is lockless.
+    _b.DefineLabel(localPath);
     _b.LoadLocal(VReg.Scratch1, 1); // span_ptr
     _b.LoadLocal(VReg.Scratch0, 0); // slot_base
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeList);
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch2); // [slot_base] = old_head
-    _b.StoreIndirect(VReg.Scratch1, MspanOffFreeList, VReg.Scratch0);
-
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
-    _b.AddRegImm(VReg.Scratch2, 1);
-    _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
-
-    // If span fully free, return to mcentral. Release the lock first so
-    // __slab_mcentral_return_span can take it without recursion.
-    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffTotalSlots);
-    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch0);
-    var notFullyFree = UniqueLabel("slab_free_not_fully_free");
-    _b.JumpIf(Condition.NotEqual, notFullyFree);
-
-    _b.LockRelease(MspanPoolLockLabel);
-    _b.LoadLocal(VReg.Arg0, 1);
-    _b.Call("__slab_mcentral_return_span");
+    EmitPushSlotOntoSpanFreeList(spanReg: VReg.Scratch1, slotReg: VReg.Scratch0,
+                                 t0: VReg.Scratch2, t1: VReg.Scratch3);
     _b.FunctionEnd();
 
-    _b.DefineLabel(notFullyFree);
-    _b.LockRelease(MspanPoolLockLabel);
+    // --- Remote free path: CAS-push onto target P's remote_free_head ---
+    // Treiber-stack push, with the new node's "next" pointer reused as the
+    // free-list link slot[0]. The CAS retry loop reloads `old` each iteration
+    // because x86's AtomicCAS clobbers Scratch0 (= RAX) — keeping the loop
+    // identical across backends rather than micro-optimising for ARM64.
+    //
+    // No trace emission: see EmitSlabDrainRemoteFrees for the rationale
+    // (cross-P routing is non-deterministic and would break spec tests).
+    _b.DefineLabel(remotePath);
+
+    // target_P = __sched_procs[owning_p]
+    _b.LoadGlobal(VReg.Scratch2, "__sched_procs");
+    _b.LoadLocal(VReg.Scratch1, 4); // owning_p
+    _b.ShlRegImm(VReg.Scratch1, 3); // *8 (pointer slot)
+    _b.AddRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, 0); // target_P*
+    _b.StoreLocal(4, VReg.Scratch2); // park target_P across the CAS retry loop
+
+    var remoteRetry = UniqueLabel("slab_free_remote_retry");
+    _b.DefineLabel(remoteRetry);
+
+    // old = target_P->remote_free_head
+    _b.LoadLocal(VReg.Scratch2, 4); // target_P
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch2, POffRemoteFreeHead); // expected = old (in Scratch0/RAX so CAS can clobber it)
+    // slot[0] = old
+    _b.LoadLocal(VReg.Scratch1, 0); // slot_base = desired
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
+    // CAS(target_P->remote_free_head, expected=Scratch0, desired=Scratch1). Result in Scratch3.
+    _b.AtomicCAS(VReg.Scratch2, POffRemoteFreeHead, VReg.Scratch0, VReg.Scratch1);
+    _b.CmpRegImm(VReg.Scratch3, 0);
+    _b.JumpIf(Condition.Equal, remoteRetry);
+
     _b.FunctionEnd();
 
     // --- Not a slab span: try OS-direct ---
@@ -2375,6 +2600,7 @@ public partial class RuntimeEmitter {
     EmitMspanAlloc();
     EmitMcentralGetSpan();
     EmitMcentralReturnSpan();
+    EmitSlabDrainRemoteFrees();
     EmitSlabAlloc(mmTrace, mmDebug);
     EmitSlabFree(mmTrace, mmDebug);
   }

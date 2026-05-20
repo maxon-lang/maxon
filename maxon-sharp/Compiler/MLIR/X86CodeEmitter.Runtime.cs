@@ -7490,7 +7490,7 @@ public partial class X86CodeEmitter {
     DefineSymdata("__subp_err_signal_unsupported", "signal not supported on this platform\0"u8.ToArray());
     DefineSymdata("__subp_nul_devname", "NUL\0\0"u8.ToArray()); // ANSI "NUL", padded
     // UTF-16 "NUL\0" for CreateFileW
-    DefineSymdata("__subp_nul_devname_w", new byte[] { (byte)'N', 0, (byte)'U', 0, (byte)'L', 0, 0, 0 });
+    DefineSymdata("__subp_nul_devname_w", [(byte)'N', 0, (byte)'U', 0, (byte)'L', 0, 0, 0]);
 
     EmitMaxonManagedIsNull();
     EmitMaxonSubprocessLastErrorMessage();

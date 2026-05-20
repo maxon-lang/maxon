@@ -318,6 +318,65 @@ public partial class ARM64CodeEmitter {
       _e.EmitMovRegReg(vr, ARM64Register.X16);
     }
 
+    public void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired) {
+      // ARM64 LDAXR/STLXR require the address in a register (no offset operand).
+      // Effective address is precomputed once into X16 and kept across retries.
+      // X17 is reused as both the loaded value and the STLXR status code — once
+      // we've finished the CMP we no longer need the loaded value, so the same
+      // register doubles as the status output.
+      //
+      // CLREX on the fail path explicitly clears the local-monitor reservation
+      // taken by LDAXR — without it a subsequent unrelated LDAXR/STLXR pair on
+      // this core could observe a stale reservation. Per CLAUDE.md, "no silent
+      // fallthrough": the failure branch must do real work, not just B.NE-skip.
+      var baseReg = R(destBase);
+      var expectedReg = R(expected);
+      var desiredReg = R(desired);
+      var resultReg = R(VReg.Scratch3);
+
+      if (expectedReg == ARM64Register.X16 || expectedReg == ARM64Register.X17 ||
+          desiredReg  == ARM64Register.X16 || desiredReg  == ARM64Register.X17)
+        throw new ArgumentException("AtomicCAS: expected/desired must not collide with X16/X17 scratch pair");
+
+      // X16 = destBase + offset
+      if (offset != 0) {
+        _e.EmitAddSubImm(ARM64Register.X16, baseReg, offset, isAdd: true);
+      } else if (baseReg != ARM64Register.X16) {
+        _e.EmitMovRegReg(ARM64Register.X16, baseReg);
+      }
+
+      var retry = $"__cas_retry_{_e._uniqueLabelCounter}";
+      var fail = $"__cas_fail_{_e._uniqueLabelCounter}";
+      var done = $"__cas_done_{_e._uniqueLabelCounter++}";
+
+      _e.DefineLabel(retry);
+      // LDAXR X17, [X16]
+      _e.EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17));
+      // CMP X17, expected  (SUBS XZR, X17, expected)
+      _e.EmitWord(0xEB00001F | (Reg(expectedReg) << 16) | (Reg(ARM64Register.X17) << 5));
+      // B.NE fail
+      _e._condBranchFixups.Add((_e._code.Count, fail));
+      _e.EmitWord(0x54000001); // B.NE (cond=0001)
+
+      // STLXR W17, desired, [X16] — status code goes back into X17.
+      _e.EmitWord(0xC800FC00 | (Reg(ARM64Register.X16) << 5) | (17u << 16) | Reg(desiredReg));
+      // CBNZ W17, retry (STLXR failed: lost exclusive monitor)
+      _e._condBranchFixups.Add((_e._code.Count, retry));
+      _e.EmitWord(0x35000000 | 17u);
+
+      // Success path: result = 1
+      _e.EmitMovRegImm(resultReg, 1);
+      _e.EmitBranch(done);
+
+      // Failure path: clear monitor, result = 0
+      _e.DefineLabel(fail);
+      // CLREX (clear local-monitor reservation): 0xD5033F5F
+      _e.EmitWord(0xD5033F5F);
+      _e.EmitMovRegImm(resultReg, 0);
+
+      _e.DefineLabel(done);
+    }
+
     public void FullBarrier() => _e.EmitDmbIsh();
 
     // ---- Labels & data ----

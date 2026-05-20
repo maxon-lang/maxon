@@ -34,7 +34,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0xC8  fault_redirect_rsp       SP to resume at
 ///   0xD0  fault_redirect_fp        FP to resume at
 ///
-/// ProcContext struct (296 bytes = 0x128):
+/// ProcContext struct (344 bytes = 0x158):
 ///   0x00  local_queue_head         per-P run queue (no lock needed)
 ///   0x08  local_queue_tail
 ///   0x10  local_queue_len
@@ -50,7 +50,9 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x60  free_list_head           GT free list head (capped at MaxFreeListLen)
 ///   0x68  free_list_len            GT free list count
 ///   0x70  system_stack_sp          saved OS thread RSP (for system calls / morestack)
-///   0x78  main_thread              inline 176-byte GT struct (replaces global __gt_main_thread)
+///   0x78  remote_free_head         atomic head of the Mimalloc-style MPSC remote-free queue
+///                                  (cross-thread slab frees push here; owner drains on alloc slow path)
+///   0x80  main_thread              inline GT struct (replaces global __gt_main_thread)
 /// </summary>
 public static class GtLayout {
 
@@ -120,8 +122,12 @@ public static class GtLayout {
   public const int POffFreeListHead = 0x60;
   public const int POffFreeListLen = 0x68;
   public const int POffSystemStackSP = 0x70;
-  public const int POffMainThread = 0x78;
-  public const int PStructSize = POffMainThread + GtStructSize;   // 0x128 = 296 bytes
+  // Atomic head of the per-P Mimalloc-style MPSC remote-free queue. Cross-thread
+  // slab frees push freed slots here via AtomicCAS; the owning P drains the list
+  // on its next __slab_alloc slow path. Zero-initialised at P alloc time (memzero).
+  public const int POffRemoteFreeHead = 0x78;
+  public const int POffMainThread = 0x80;
+  public const int PStructSize = POffMainThread + GtStructSize;   // 0x80 + 0xD8 = 0x158 = 344 bytes
 
   // ---- Per-P system stack size ----
   // Used for two purposes:

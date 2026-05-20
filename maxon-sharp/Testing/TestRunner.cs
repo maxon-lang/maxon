@@ -43,7 +43,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// cleanly: the field is reachable until the process ends.
   /// </summary>
   private static readonly Lazy<WindowsJobObject> _runnerJobLazy = new(() => new WindowsJobObject());
-  private static WindowsJobObject _runnerJob => _runnerJobLazy.Value;
+  private static WindowsJobObject RunnerJob => _runnerJobLazy.Value;
 
   /// <summary>
   /// Run all tests and return summary.
@@ -956,7 +956,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // runner doesn't leave zombie test binaries holding file locks on
     // their cached .exe.
     using var process = Process.Start(psi)!;
-    if (!_runnerJob.AssignProcess(process.Handle)) {
+    if (!RunnerJob.AssignProcess(process.Handle)) {
       Logger.Debug(LogCategory.Testing, $"AssignProcessToJobObject failed for {exePath} (errno {Marshal.GetLastWin32Error()})");
     }
 
@@ -1190,7 +1190,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var lines = stderr.Replace("\r\n", "\n").Split('\n');
     for (int i = 0; i < lines.Length; i++) {
       var idx = lines[i].IndexOf(" at rip=0x", StringComparison.Ordinal);
-      if (idx >= 0) lines[i] = lines[i].Substring(0, idx);
+      if (idx >= 0) lines[i] = lines[i][..idx];
     }
     return string.Join('\n', lines);
   }

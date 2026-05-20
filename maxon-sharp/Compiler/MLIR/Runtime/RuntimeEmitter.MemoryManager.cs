@@ -134,6 +134,8 @@ public partial class RuntimeEmitter {
       "__ManagedFile.statField/statFree: buffer must not be null\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_panic_dir_filename_null_block",
       "__ManagedDirectory.filename: _block is null (called on closed iterator)\n\0"u8.ToArray());
+    _b.DefineSymdata("__slab_panic_sentinel_owning_p",
+      "__slab_free: cross-P free hit owning_p sentinel; span already returned to mcentral (Mimalloc invariant violation)\n\0"u8.ToArray());
 
     if (mmDebug) {
       _b.DefineSymdata("__mm_panic_canary",

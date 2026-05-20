@@ -199,6 +199,22 @@ public interface IEmitterBackend {
   void AtomicXadd(VReg baseAddr, int offset, VReg val);
 
   /// <summary>
+  /// Atomic compare-and-swap on a 64-bit memory location:
+  ///   if [destBase+offset] == expected: [destBase+offset] = desired; success=1
+  ///   else:                              expected = [destBase+offset]; success=0
+  /// Success/failure is written into VReg.Scratch3 (not flags), so callers can do
+  /// arbitrary IR ops (e.g. LoadIndirect) before branching on the result.
+  /// x86 clobbers VReg.Scratch0 (= RAX) via LOCK CMPXCHG's implicit operand — the
+  /// expected value is moved into RAX and the post-instruction RAX holds the
+  /// observed memory value (equal to <paramref name="expected"/> on success, or
+  /// the actual current value on failure).
+  /// Callers must NOT pass VReg.Scratch0 or VReg.Scratch3 as <paramref name="expected"/>
+  /// or <paramref name="desired"/>, and must not have anything live in Scratch0
+  /// across the call.
+  /// </summary>
+  void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired);
+
+  /// <summary>
   /// Full memory barrier (MFENCE on x86, DMB ISH on ARM64). Orders all prior memory
   /// accesses before all subsequent memory accesses on this core. Used for Dekker-style
   /// protocols where a store must be globally visible before a later unrelated load.
