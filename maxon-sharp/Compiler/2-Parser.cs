@@ -187,7 +187,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   /// Shared info for both try-call and try-await operations, used by the otherwise-clause helpers.
-  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, IrType? CalleeReturnType = null);
+  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, IrType? CalleeReturnType = null, IrFunctionType? ResultFnType = null);
   private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false, bool IsModuleVisible = false);
   private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
@@ -2952,6 +2952,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
   }
 
+  /// Structural equality on IrFunctionType: same parameter arity, identical param
+  /// types by name, identical (or both null) return type by name. Used by the
+  /// post-prescan resolution pass to ensure all cases of a function-backed enum
+  /// share a single signature.
+  internal static bool FunctionSignaturesEqual(IrFunctionType a, IrFunctionType b) {
+    if (a.ParameterTypes.Count != b.ParameterTypes.Count) return false;
+    for (int i = 0; i < a.ParameterTypes.Count; i++) {
+      if (a.ParameterTypes[i].Name != b.ParameterTypes[i].Name) return false;
+    }
+    if ((a.ReturnType == null) != (b.ReturnType == null)) return false;
+    if (a.ReturnType != null && a.ReturnType.Name != b.ReturnType!.Name) return false;
+    return true;
+  }
+
   private void PreScanEnum(IrModule<MaxonOp> module, bool isExported = false, bool isModuleVisible = false, bool isUnion = false) {
     Advance(); // consume 'enum' or 'union'
     var nameToken = Expect(TokenType.Identifier);
@@ -3147,6 +3161,29 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           foreach (var uref in unresolvedConstRefs)
             structRawValue.UnresolvedConstRefs.Add(uref);
           cases.Add(new IrEnumCase(caseName, ordinal, structRawValue, assocValues));
+        } else if (Check(TokenType.Identifier)) {
+          // Function-backed enum: `case = functionName`. Defer signature
+          // resolution until all top-level decls across all files have been
+          // pre-scanned (ResolveFunctionBackedEnumRefs in 0-Compiler runs that
+          // pass). The function may be declared later in this file, in another
+          // file, or via export-qualified name. At this point we only consume
+          // the identifier and record its short name as the case's raw value.
+          var fnTok = Advance();
+          var fnIdent = fnTok.Value;
+          if (backingType == null) {
+            // Placeholder backing — signature filled in post-prescan. Use an
+            // empty IrFunctionType for now so the registry shape is stable.
+            backingType = new IrFunctionBackingType(new IrFunctionType([], null));
+          } else if (backingType is not IrFunctionBackingType) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              $"raw value type mismatch: all cases must have the same backing kind",
+              caseToken.Line, caseToken.Column);
+          }
+          ValidateUniqueRawValue(fnIdent, cases, caseToken.Line, caseToken.Column);
+          cases.Add(new IrEnumCase(caseName, ordinal, fnIdent, assocValues) {
+            SourceLine = fnTok.Line,
+            SourceColumn = fnTok.Column
+          });
         } else {
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"expected integer, float, string, or character literal for enum raw value",
@@ -3197,6 +3234,26 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (!isUnion) {
       if (!finalInterfaces.Contains("Hashable")) finalInterfaces.Add("Hashable");
       if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
+    }
+
+    // If we're re-prescanning an enum whose function-backing was already
+    // resolved (by ResolveFunctionBackedEnumRefs after the first pre-scan),
+    // preserve the resolved IrFunctionBackingType signature and each case's
+    // already-qualified RawValue. Without this, the second pre-scan rebuilds
+    // the enum with placeholder backing + short-name case raws, undoing the
+    // resolution before main parse / codegen sees it.
+    if (backingType is IrFunctionBackingType fnBacking
+        && fnBacking.Signature.ParameterTypes.Count == 0
+        && fnBacking.Signature.ReturnType == null
+        && _typeRegistry.TryGetValue(enumName, out var priorEntry)
+        && priorEntry is IrEnumType priorEnum
+        && priorEnum.BackingType is IrFunctionBackingType priorResolved
+        && (priorResolved.Signature.ParameterTypes.Count > 0 || priorResolved.Signature.ReturnType != null)) {
+      backingType = priorResolved;
+      foreach (var c in cases) {
+        var prior = priorEnum.GetCase(c.Name);
+        if (prior?.RawValue is string priorFn) c.RawValue = priorFn;
+      }
     }
 
     var mergedEnumTypeParams = MergeTypeParams(associatedTypeNames, conformanceTypeParams);
@@ -3980,9 +4037,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     _parsingTypeAliasRhs = true;
     try {
 
-      // Tuple type alias: typealias Entry = (Key, Value)
+      // Parenthesized RHS: either a tuple type, e.g. `(Key, Value)`, or a
+      // function type, e.g. `(Score) returns Score` / `(Score, Score) returns bool`.
+      // ParseTypeRef disambiguates: 0/1 params or any params followed by `returns`
+      // yield IrFunctionType; 2+ params without `returns` yield a tuple struct.
       if (Check(TokenType.LeftParen)) {
-        var tupleType = (IrStructType)ParseTypeRef();
+        var parsed = ParseTypeRef();
+        if (parsed is IrFunctionType) {
+          // Function-type alias — store the function type directly under the
+          // alias name. No alias source: IrFunctionType has no nominal source
+          // type to inherit methods from.
+          _typeRegistry[aliasName] = parsed;
+          return;
+        }
+        var tupleType = (IrStructType)parsed;
         // Build typeParams from any type parameter fields (e.g., Key, Value)
         var typeParams = new Dictionary<string, IrType>();
         foreach (var field in tupleType.Fields) {
@@ -5399,6 +5467,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     else if (enumType.BackingType is IrStringBackingType) backingTypeName = "String";
     else if (enumType.BackingType is IrCharBackingType) backingTypeName = "Character";
     else if (enumType.BackingType is IrStructBackingType) backingTypeName = "int";
+    // Function-backed enums hash/equal on the case ordinal (i64), matching the
+    // runtime representation; two cases are equal iff they're the same case.
+    else if (enumType.BackingType is IrFunctionBackingType) backingTypeName = "int";
     else if (enumType.BackingType == IrType.F64) backingTypeName = "float";
     else if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) backingTypeName = "int";
     else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
@@ -5522,6 +5593,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (enumType.BackingType is IrStringBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType is IrCharBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType is IrStructBackingType) return MaxonValueKind.Integer;
+    // Function-backed enums also store an ordinal at runtime; .rawValue is the
+    // select chain that maps the ordinal to a function pointer.
+    if (enumType.BackingType is IrFunctionBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
@@ -5549,22 +5623,33 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
+  /// Builds a MaxonEnumLiteralOp for one enum case, picking the literal kind
+  /// (f64 / i64 / ordinal) from the enum's backing type. Centralizes the
+  /// per-backing dispatch so call sites don't each repeat the BackingType
+  /// chain — particularly important for backings whose runtime representation
+  /// is the case ordinal (null / string / char / struct / function).
+  /// </summary>
+  private static MaxonEnumLiteralOp BuildEnumLiteralOp(string enumTypeName, IrEnumCase enumCase, IrType? backingType) {
+    if (backingType == IrType.F64) {
+      return new MaxonEnumLiteralOp(enumTypeName, enumCase.Name, (double)enumCase.RawValue!);
+    }
+    if (backingType == IrType.I64) {
+      return new MaxonEnumLiteralOp(enumTypeName, enumCase.Name, (long)enumCase.RawValue!);
+    }
+    if (backingType is null or IrStringBackingType or IrCharBackingType or IrStructBackingType or IrFunctionBackingType) {
+      return new MaxonEnumLiteralOp(enumTypeName, enumCase.Name, (long)enumCase.Ordinal);
+    }
+    throw new InvalidOperationException($"Unsupported enum backing type: {backingType}");
+  }
+
+  /// <summary>
   /// Emits an array literal containing all enum cases in declaration order.
   /// Reuses the existing array literal infrastructure (EmitManagedMemoryFromElements).
   /// </summary>
   private ExprResult EmitEnumAllCases(IrEnumType enumType, Token token) {
     var elements = new List<MaxonValue>();
     foreach (var enumCase in enumType.Cases) {
-      MaxonEnumLiteralOp enumLitOp;
-      if (enumType.BackingType == IrType.F64) {
-        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (double)enumCase.RawValue!);
-      } else if (enumType.BackingType == IrType.I64) {
-        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType is null or IrStringBackingType or IrCharBackingType or IrStructBackingType) {
-        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.Ordinal);
-      } else {
-        throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
-      }
+      var enumLitOp = BuildEnumLiteralOp(enumType.Name, enumCase, enumType.BackingType);
       _currentBlock!.AddOp(enumLitOp);
       elements.Add(enumLitOp.Result);
     }
@@ -6066,7 +6151,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       } else if (paramType is IrFunctionType fnType) {
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
-        _variables.Declare(paramNames[i], MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, fnTypeName: fnType);
+        _variables.Declare(paramNames[i], MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, fnType: fnType);
       } else if (paramType is IrRangedPrimitiveType rangedParam) {
         var kind = rangedParam.BaseType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -7812,13 +7897,14 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           ArgMutabilities = callOp.ArgMutabilities,
           ArgVarNames = callOp.ArgVarNames,
           CallLine = callOp.CallLine,
-          CallColumn = callOp.CallColumn
+          CallColumn = callOp.CallColumn,
+          ResultFnType = callOp.ResultFnType
         };
         _currentBlock!.AddOp(tryCallOp);
       }
       _lastExprCallOp = tryCallOp;
 
-      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType);
+      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType, tryCallOp.ResultFnType);
 
       // Void-returning functions can't be used as values in assignments
       if (!isStatementContext && tryCallOp.Result == null) {
@@ -7958,7 +8044,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // a union return like MaxonOp) or struct slot is decref'd via the generic
       // path and its owned fields are never released — the subsequent destructor
       // chain derefs partially-uninitialized memory.
-      _variables.Declare(resultVar, resultKind, true, tryInfo.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: tryInfo.ResultStructTypeName);
+      // For function-typed results, propagate the IrFunctionType so a later
+      // `let f = try call(...) otherwise ...` can recover the signature when
+      // reading the temp via MaxonVarRefOp.
+      _variables.Declare(resultVar, resultKind, true, tryInfo.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: tryInfo.ResultStructTypeName, fnType: tryInfo.ResultFnType);
     }
     return (errorFlagVar, resultVar);
   }
@@ -8448,7 +8537,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnTypeName: fnType);
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnType: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -8627,6 +8716,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       MaxonClosureCreateOp closureOp => closureOp.FunctionType,
       MaxonFunctionParamOp fnParamOp => fnParamOp.FunctionType,
       MaxonFunctionVarRefOp fnVarRefOp => fnVarRefOp.FunctionType,
+      // `let f = call_returning_fn(...)`: the call op carries the resolved
+      // signature (set at emission time by EmitCallOpForCallee, mirrored from
+      // MaxonCallOp onto MaxonTryCallOp).
+      MaxonCallOp callOp when callOp.ResultFnType != null => callOp.ResultFnType,
+      // `let f = try call_returning_fn(...) otherwise ...`: the try lowering
+      // ends the continue block with a MaxonVarRefOp loading __try_result_X,
+      // whose VarInfo carries the fn type set by StoreTryValuesForCrossBlockAccess.
+      MaxonVarRefOp varRefOp when _variables.TryGetValue(varRefOp.VarName, out var vi) && vi.FnType != null
+        => vi.FnType,
+      // `let f = someEnum.rawValue` on a function-backed enum: the rawValue op
+      // carries the shared signature recorded at parse time.
+      MaxonEnumFunctionRawValueOp efrv => efrv.Signature,
       _ => throw new InvalidOperationException($"Cannot determine function type from {lastOp?.GetType().Name}")
     };
   }
@@ -8685,7 +8786,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
       }
       _variables[name] = fnType != null
-        ? new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, FnTypeName: fnType)
+        ? new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, FnType: fnType)
         : new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, varInfo.StructTypeName, PayloadBinding: varInfo.PayloadBinding);
     }
   }
@@ -14211,16 +14312,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
           staticRawValueAccess:
             // Simple/raw-value enum: use MaxonEnumLiteralOp
-            MaxonEnumLiteralOp enumLitOp;
-            if (enumType.BackingType == IrType.F64) {
-              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
-            } else if (enumType.BackingType == IrType.I64) {
-              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
-            } else if (enumType.BackingType is null or IrStringBackingType or IrCharBackingType or IrStructBackingType) {
-              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
-            } else {
-              throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
-            }
+            var enumLitOp = BuildEnumLiteralOp(token.Value, enumCase, enumType.BackingType);
             _currentBlock!.AddOp(enumLitOp);
             return ParseFieldAccessChain(new ExprResult.Direct(enumLitOp.Result), token);
           }
@@ -14312,7 +14404,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
         // Check for indirect call through function-typed variable
         if (ResolveVariable(token.Value) is ResolvedVar.Local(var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
-          var fnType = fnVarInfo.FnTypeName!;
+          var fnType = fnVarInfo.FnType!;
           Advance(); // consume '('
           var indirectArgs = ParseIndirectCallArgs(token, fnType);
 
@@ -14538,6 +14630,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         // .rawValue access
         if (fieldName == "rawValue") {
           var enumVal = ResolveExprValue(result);
+          if (enumType.BackingType is IrFunctionBackingType fbt) {
+            var fnRawOp = new MaxonEnumFunctionRawValueOp(enumVal, userTypeName, fbt.Signature);
+            _currentBlock!.AddOp(fnRawOp);
+            result = new ExprResult.Direct(fnRawOp.Result);
+            continue;
+          }
           if (enumType.BackingType is IrStructBackingType sbt) {
             var structRawOp = new MaxonEnumStructRawValueOp(enumVal, userTypeName, sbt.StructTypeName);
             _currentBlock!.AddOp(structRawOp);
@@ -14956,16 +15054,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (constValue is EnumConstantValue ec) {
       var enumType = (IrEnumType)_typeRegistry[ec.EnumTypeName];
       var enumCase = enumType.GetCase(ec.CaseName)!;
-      MaxonEnumLiteralOp enumLitOp;
-      if (enumType.BackingType == IrType.F64) {
-        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (double)enumCase.RawValue!);
-      } else if (enumType.BackingType == IrType.I64) {
-        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType == null || enumType.BackingType is IrStringBackingType or IrCharBackingType or IrStructBackingType) {
-        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.Ordinal);
-      } else {
-        throw new InvalidOperationException($"Unsupported enum backing type for constant: {enumType.BackingType}");
-      }
+      var enumLitOp = BuildEnumLiteralOp(ec.EnumTypeName, enumCase, enumType.BackingType);
       _currentBlock!.AddOp(enumLitOp);
       return new ExprResult.Direct(enumLitOp.Result);
     }
@@ -16929,7 +17018,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         MaxonValueKind.Short => IrType.I16,
         MaxonValueKind.Struct => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var st) ? st : null,
         MaxonValueKind.Enum => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var et) ? et : null,
-        MaxonValueKind.Function => varInfo.FnTypeName,
+        MaxonValueKind.Function => varInfo.FnType,
         _ => null
       };
     }
@@ -18221,26 +18310,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args) {
     var functionName = functionNameToken.Value;
     var callee = ResolveFunctionName(functionName, functionNameToken);
-
-    ValidateThrowingCallContext(callee, functionNameToken, functionName);
-
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
-    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
-      ArgMutabilities = _lastArgMutabilities,
-      ArgVarNames = _lastArgVarNames,
-      CallLine = functionNameToken.Line,
-      CallColumn = functionNameToken.Column
-    };
-    _lastArgMutabilities = null;
-    _lastArgVarNames = null;
-    _currentBlock!.AddOp(callOp);
-    _lastRangedTypeName = ResolveCallReturnRangedType(callee.ReturnType, args);
-    // Struct call returns need a temp variable so refcounting tracks the intermediate
-    if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
-      EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
-    }
-    RouteBareThrowingCallToTryBlock(callOp, callee);
-    return callOp;
+    return EmitCallOpForCallee(functionNameToken, args, callee, validateName: functionName);
   }
 
   /// <summary>
@@ -18248,16 +18318,21 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Skips function lookup since the callee was already selected by ParseCallArgs/ParseInstanceMethodCallArgs.
   /// </summary>
   private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args, IrFunction<MaxonOp> callee) {
-    var functionName = functionNameToken.Value;
+    return EmitCallOpForCallee(functionNameToken, args, callee, validateName: UnmangleName(functionNameToken.Value));
+  }
 
-    ValidateThrowingCallContext(callee, functionNameToken, UnmangleName(functionName));
+  private MaxonCallOp EmitCallOpForCallee(Token functionNameToken, List<MaxonValue> args, IrFunction<MaxonOp> callee, string validateName) {
+    ValidateThrowingCallContext(callee, functionNameToken, validateName);
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, callee);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
       CallLine = functionNameToken.Line,
-      CallColumn = functionNameToken.Column
+      CallColumn = functionNameToken.Column,
+      ResultFnType = resultKind == MaxonValueKind.Function
+        ? ResolveCallResultFnType(callee.ReturnType, args)
+        : null
     };
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
@@ -18538,22 +18613,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
-  /// For generic methods returning a TypeParameter placeholder, checks if the caller's
-  /// struct type has a concrete Element type that should override the result kind.
+  /// Resolves the self arg's struct type — either from MaxonStruct.TypeName, or by
+  /// scanning the variable registry for a matching value (needed for module-level
+  /// arrays in multi-file builds where args[0] is a plain MaxonValue). Returns null
+  /// if the arg is not a struct-typed value or the type is not registered.
   /// </summary>
-  private (MaxonValueKind Kind, string? StructTypeName) OverrideResultKindForElementType(MaxonValueKind resultKind, string? resultStructTypeName, List<MaxonValue> args) {
-    if (resultKind != MaxonValueKind.TypeParameter || args.Count == 0)
-      return (resultKind, resultStructTypeName);
-
-    // Resolve the self arg's struct type name — either directly from MaxonStruct,
-    // or by looking up the variable in the registry (needed for module-level arrays
-    // in multi-file builds where args[0] is a plain MaxonValue, not MaxonStruct)
+  private IrStructType? ResolveSelfStructType(MaxonValue selfArg) {
     string? selfTypeName = null;
-    if (args[0] is MaxonStruct selfStruct) {
+    if (selfArg is MaxonStruct selfStruct) {
       selfTypeName = selfStruct.TypeName;
     } else {
       foreach (var varInfo in _variables.Values) {
-        if (varInfo.Value == args[0] && varInfo.StructTypeName != null) {
+        if (varInfo.Value == selfArg && varInfo.StructTypeName != null) {
           selfTypeName = varInfo.StructTypeName;
           break;
         }
@@ -18563,25 +18634,63 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (selfTypeName != null
         && _typeRegistry.TryGetValue(selfTypeName, out var selfType)
         && selfType is IrStructType selfStructType) {
-      // Check common type parameter names: "Element" (Array/Iterable), "Value" (Map), "Key" (Map)
-      IrType? resolvedType = null;
-      if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
-        resolvedType = elementType;
-      else if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
-        resolvedType = valueType;
-
-      if (resolvedType != null) {
-        if (resolvedType is IrTypeParameterType) return (resultKind, resultStructTypeName);
-        var kind = resolvedType.ToValueKind();
-        var typeName = resolvedType switch {
-          IrStructType s => s.Name,
-          IrEnumType e => e.Name,
-          _ => (string?)null
-        };
-        return (kind, typeName);
-      }
+      return selfStructType;
     }
-    return (resultKind, resultStructTypeName);
+    return null;
+  }
+
+  /// <summary>
+  /// Finds the concrete instantiation of a generic value-position type parameter on
+  /// the self struct. Returns the resolved Element (Array/Iterable) or Value (Map)
+  /// type, or null if neither is present.
+  /// </summary>
+  private static IrType? ResolveValuePositionTypeParam(IrStructType selfStructType) {
+    if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
+      return elementType;
+    if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
+      return valueType;
+    return null;
+  }
+
+  /// <summary>
+  /// Returns the IrFunctionType for a call whose result kind is Function. Two cases:
+  ///   1. The callee directly declares a function return type (possibly via an alias
+  ///      such as `function pickDouble() returns UnaryOp` where UnaryOp resolves to
+  ///      an IrFunctionType). The callee's ReturnType is the answer.
+  ///   2. The callee is a generic method returning a type parameter (e.g. Map.get
+  ///      returns Value) that resolves to a function type after instantiation.
+  /// Returns null when no function type can be recovered — the caller is responsible
+  /// for surfacing the appropriate error (or for not asking in the first place).
+  /// </summary>
+  private IrFunctionType? ResolveCallResultFnType(IrType? calleeReturnType, List<MaxonValue> args) {
+    if (calleeReturnType is IrFunctionType direct) return direct;
+    if (calleeReturnType is not IrTypeParameterType || args.Count == 0) return null;
+    var selfStructType = ResolveSelfStructType(args[0]);
+    return selfStructType != null && ResolveValuePositionTypeParam(selfStructType) is IrFunctionType fn ? fn : null;
+  }
+
+  /// <summary>
+  /// For generic methods returning a TypeParameter placeholder, checks if the caller's
+  /// struct type has a concrete Element type that should override the result kind.
+  /// </summary>
+  private (MaxonValueKind Kind, string? StructTypeName) OverrideResultKindForElementType(MaxonValueKind resultKind, string? resultStructTypeName, List<MaxonValue> args) {
+    if (resultKind != MaxonValueKind.TypeParameter || args.Count == 0)
+      return (resultKind, resultStructTypeName);
+
+    var selfStructType = ResolveSelfStructType(args[0]);
+    if (selfStructType == null) return (resultKind, resultStructTypeName);
+
+    var resolvedType = ResolveValuePositionTypeParam(selfStructType);
+    if (resolvedType == null || resolvedType is IrTypeParameterType)
+      return (resultKind, resultStructTypeName);
+
+    var kind = resolvedType.ToValueKind();
+    var typeName = resolvedType switch {
+      IrStructType s => s.Name,
+      IrEnumType e => e.Name,
+      _ => null
+    };
+    return (kind, typeName);
   }
 
   private string UniqueLabel(string label) => $"{label}_{_blockCounter++}";

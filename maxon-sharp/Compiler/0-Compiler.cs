@@ -394,6 +394,17 @@ public class Compiler {
     }
     if (sw != null) StageTimer.Record(timings!, "rescanAliases", sw.ElapsedMilliseconds);
 
+    // Function-backed enums need a final resolution AFTER the typealias rescan,
+    // because the rescan re-runs PreScanEnum for every file and re-creates each
+    // IrEnumType with the placeholder IrFunctionBackingType (signature filled in
+    // later). Resolving here uses the now-complete function registry and the
+    // post-rescan IrEnumType instances that subsequent passes will read.
+    try {
+      ResolveFunctionBackedEnumRefs(module);
+    } catch (CompileError ex) {
+      errors.Add(ex);
+    }
+
     if (errors.Count > 0) {
       errors.Add(HaltedError(errors, "typealias re-scan errors prevent full parse"));
       return errors;
@@ -476,6 +487,73 @@ public class Compiler {
           structType.TypeParams[key] = currentType;
       }
     }
+  }
+
+  /// <summary>
+  /// Resolves deferred function references in function-backed enum raw values.
+  /// PreScanEnum records each case's RawValue as the raw identifier the user
+  /// wrote (e.g. "doubleFn") with a placeholder IrFunctionBackingType. After
+  /// every file's top-level functions have been pre-scanned, this pass looks
+  /// each identifier up against the module's function registry, validates that
+  /// all cases share a single signature, and rewrites each case's RawValue to
+  /// the fully qualified function name so the lowering pass can emit the
+  /// correct StdFuncRefOp for the select chain.
+  /// </summary>
+  private static void ResolveFunctionBackedEnumRefs(IrModule<MaxonOp> module) {
+    foreach (var (_, type) in module.TypeDefs) {
+      if (type is not IrEnumType enumType) continue;
+      if (enumType.BackingType is not IrFunctionBackingType placeholder) continue;
+      // Empty signature is the placeholder marker; a non-empty one means the
+      // backing has already been resolved (idempotent across repeated calls).
+      if (placeholder.Signature.ParameterTypes.Count > 0 || placeholder.Signature.ReturnType != null)
+        continue;
+
+      IrFunctionType? sharedSignature = null;
+      string? firstCaseName = null;
+      foreach (var enumCase in enumType.Cases) {
+        if (enumCase.RawValue is not string ident) continue;
+        var line = enumCase.SourceLine ?? 0;
+        var col = enumCase.SourceColumn ?? 0;
+
+        var fn = ResolveFunctionByIdent(module, ident)
+          ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"function '{ident}' (referenced by enum case '{enumType.Name}.{enumCase.Name}') is not declared",
+            line, col);
+        var sig = new IrFunctionType([.. fn.ParamTypes], fn.ReturnType);
+        if (sharedSignature == null) {
+          sharedSignature = sig;
+          firstCaseName = enumCase.Name;
+        } else if (!Parser.FunctionSignaturesEqual(sharedSignature, sig)) {
+          throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+            $"raw value type mismatch: function '{ident}' has signature '{sig.Name}', "
+              + $"but case '{enumType.Name}.{firstCaseName}' established signature '{sharedSignature.Name}'",
+            line, col);
+        }
+        // Rewrite the case's RawValue to the fully qualified function name so
+        // the codegen pass emits the correct StdFuncRefOp label.
+        enumCase.RawValue = fn.Name;
+      }
+
+      if (sharedSignature != null) {
+        enumType.BackingType = new IrFunctionBackingType(sharedSignature);
+      }
+    }
+  }
+
+  /// Mirrors the bare-name function-reference resolution at expression sites:
+  /// exact, then short-name suffix match. Used by the function-backed enum
+  /// resolver so the identifier the user wrote (typically unqualified) maps to
+  /// whichever function was pre-scanned for it across the module.
+  private static IrFunction<MaxonOp>? ResolveFunctionByIdent(IrModule<MaxonOp> module, string ident) {
+    var fn = module.FindFunctionByExactName(ident);
+    if (fn != null) return fn;
+    if (ident.IndexOf('.') < 0) {
+      var suffixDot = "." + ident;
+      var matches = module.FindFunctionsByShortName(ident)
+        .Where(f => f.Name.EndsWith(suffixDot)).ToList();
+      if (matches.Count == 1) return matches[0];
+    }
+    return null;
   }
 
   /// <summary>

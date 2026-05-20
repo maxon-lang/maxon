@@ -25,6 +25,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 8. [Variables](#variables)
 9. [Functions](#functions)
    - [Parameter Passing](#parameter-passing)
+   - [Function Types and Function-Typed Values](#function-types-and-function-typed-values)
    - [Closures](#closures)
    - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
 10. [Expressions](#expressions)
@@ -1787,7 +1788,7 @@ end 'Priority'
 
 ### Backing Types
 
-Enums support integer, float, String, Character, and struct backing types.
+Enums support integer, float, String, Character, struct, and function backing types.
 
 ```maxon
 enum Threshold
@@ -1825,6 +1826,30 @@ let lat = Instruction.div.rawValue.latency  // 40
 ```
 
 At runtime, struct-backed enums are stored as ordinals. The struct is reconstructed on `.rawValue` access. `fromRawValue()` is not available for struct-backed enums.
+
+Function backing attaches a top-level function reference to each case. All cases must share the same function signature, which becomes the enum's backing type. The function may be declared later in the same file or in a different file; the binding is resolved after every file's top-level declarations have been pre-scanned.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+		return x * 2
+end 'doubleFn'
+
+function tripleFn(x Integer) returns Integer
+		return x * 3
+end 'tripleFn'
+
+enum Op
+		doubleOp = doubleFn
+		tripleOp = tripleFn
+end 'Op'
+
+let f = Op.doubleOp.rawValue
+let r = f(21)   // 42
+```
+
+At runtime, function-backed enums are stored as ordinals; `.rawValue` lowers to a select chain that recovers the function pointer for the live case. `fromRawValue()` is not available for function-backed enums.
 
 Auto-increment (bare case names with no explicit value) is only valid for integer-backed enums. Mixing bare names with non-integer explicit values is a compile error.
 
@@ -2281,6 +2306,39 @@ function main() returns ExitCode
 		return x
 end 'main'
 ```
+
+### Function Types and Function-Typed Values
+
+Functions in Maxon are first-class values: they can be stored in variables, passed as arguments, and returned from other functions. A *function type* describes a callable signature:
+
+```maxon
+(Score) returns Score             // takes one Score, returns Score
+(Score, Score) returns bool       // takes two Scores, returns bool
+()                                // takes nothing, returns void
+```
+
+The `returns` clause is omitted for a void-returning function type. To use a function type repeatedly, name it with `typealias`. A function-type alias resolves to the same `IrFunctionType` as the inline form and is interchangeable at every use site — function parameter, return type, struct field, or generic argument:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+typealias HandlerMap = Map with(String, UnaryOp)
+
+function apply(f UnaryOp, x Integer) returns Integer
+		return f(x)
+end 'apply'
+
+function pickDouble() returns UnaryOp
+		return double                  // function reference, no parens
+end 'pickDouble'
+
+function main() returns ExitCode
+		let f = pickDouble()           // f has type UnaryOp
+		return f(21)                   // 42
+end 'main'
+```
+
+A bare function name (no parens) evaluates to a function reference. Closures (see below) and function references are both valid where a function-typed value is expected.
 
 ### Closures
 

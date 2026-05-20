@@ -70,6 +70,14 @@ function enumNameHelperSymbol(enumName String) returns String
 	return "__enum_{enumName}_name"
 end 'enumNameHelperSymbol'
 
+// Linker symbol for the synthesized function-backed-enum `.rawValue` helper.
+// One per fn-backed enum: takes the ordinal i64 and returns a function
+// pointer (i64). Body is the cmp/condBr chain over case ordinals; each leaf
+// returns `funcRef(thunk_for_case_function)`.
+function enumFnRawHelperSymbol(enumName String) returns String
+	return "__enum_{enumName}_fnRaw"
+end 'enumFnRawHelperSymbol'
+
 // Phase 9 Stage 4: linker symbol for a synthesized union destructor. Matches
 // the convention used by the runtime's `__destruct___ManagedMemory` so wasm
 // `funcAddr` fixups and the X64/Arm64 backends find a uniform name shape
@@ -1367,6 +1375,10 @@ type MaxonToStdLowering
 	// `synthesizeWitnessThunks`. Plain string set; duplicates are deduped by
 	// insertion so the synthesis pass walks each enum exactly once.
 	var pendingEnumNameHelpers EnumNameHelperSet
+	// Function-backed enums: set of enum names whose `__fnRaw` helper has
+	// been requested by at least one `.rawValue` lowering. Mirrors the
+	// pendingEnumNameHelpers pattern; emitted at the tail of `lower()`.
+	var pendingEnumFnRawHelpers EnumNameHelperSet
 	// Phase 10 (closures): set of synthesized thunk names already scheduled
 	// by `scheduleFnRefThunk`. The thunk for a free function `foo` is
 	// `__fnref_foo` and wraps the target with the indirect-call ABI's
@@ -1404,6 +1416,7 @@ type MaxonToStdLowering
 			interfaceWitnessValueIds: InterfaceWitnessValueIdMap.create(),
 			stringLiteralProvenance: StringLiteralProvenanceMap.create(),
 			pendingEnumNameHelpers: EnumNameHelperSet.create(),
+			pendingEnumFnRawHelpers: EnumNameHelperSet.create(),
 			pendingFnRefThunks: EnumNameHelperSet.create(),
 			pendingFnRefThunkTargets: StringArray.create()
 		}
@@ -1790,6 +1803,11 @@ type MaxonToStdLowering
 		// Same lazy-synthesis pattern as `synthesizeWitnessThunks`, just for
 		// enum reflection instead of generic dispatch.
 		self.synthesizeEnumNameHelpers()
+
+		// Function-backed enums: emit one `__enum_<EnumName>_fnRaw` helper
+		// per enum that participated in a `.rawValue` field-load earlier in
+		// this pass. Same lazy-synthesis pattern as the `.name` helpers.
+		self.synthesizeEnumFnRawHelpers()
 
 		// Phase 9 Stage 4: emit one `__destruct_<UnionName>(self i64) returns i64`
 		// per union type with at least one managed payload field. Synthesized
@@ -2876,7 +2894,18 @@ type MaxonToStdLowering
 				let envLoadId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
 				self.fnEnvVarNames.upsert(resultId, value: envLoadId)
-			end 'hasEnv'
+			end 'hasEnv' else 'noEnvSlot'
+				// Function-typed local that wasn't bound to a paired env slot:
+				// the value flowed in from a top-level function reference
+				// (functionRef) or a non-closure call return, both of which
+				// carry an implicit env=0. Materialize a `const 0` op here
+				// so the env binding points at a real SSA definition — using
+				// a bare ValueId `0` as a sentinel collides with the actual
+				// SSA value 0 in any function whose ValueIds start at 0,
+				// breaking regalloc when that v0 isn't defined locally.
+				let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
+				self.fnEnvVarNames.upsert(resultId, value: envZeroId)
+			end 'noEnvSlot'
 		end 'pairEnv'
 	end 'lowerVarLoad'
 
@@ -3634,7 +3663,7 @@ type MaxonToStdLowering
 		end 'fatCall' else 'plainCall'
 			self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: qualifiedCallee, argIds: finalArgIds)))
 		end 'plainCall'
-		self.recordCallResultType(resultId, callee: qualifiedCallee, receiverContext: receiverContext)
+		self.recordCallResultType(resultId, callee: qualifiedCallee, dstBlock: dstBlock, receiverContext: receiverContext)
 		// Hybrid-generics ABI bridge (read side). When the callee's declared
 		// return type is `typeParameter(...)` but the call-site substitution
 		// binds it to a float-class concrete type, the runtime ABI hands the
@@ -5979,7 +6008,13 @@ type MaxonToStdLowering
 			result.push(v)
 			let paramType = try signature.paramTypes.get(i + paramStartIndex) otherwise MaxonType.integer
 			if isFunctionMaxonType(paramType) 'expandEnv'
-				let envId = try self.fnEnvVarNames.get(v) otherwise 0
+				// Fallback path: when the parser-side capture analysis didn't
+				// tag this value with an env binding, treat it as a free-function
+				// reference (env=0). Materialize a real `const 0` op rather
+				// than passing the literal ValueId `0` — a bare 0 alias-collides
+				// with the local v0 in any function whose first SSA value
+				// isn't defined locally, breaking regalloc downstream.
+				let envId = try self.fnEnvVarNames.get(v) otherwise self.emitConstI64(0, dstBlock: dstBlock)
 				result.push(envId)
 			end 'expandEnv'
 			// C1.d: an interface-typed param's ABI is (value, witness). The
@@ -6197,7 +6232,7 @@ type MaxonToStdLowering
 	// to the receiver's `genericInstance(EnclosingType, [...])` when the
 	// caller threaded a concrete receiverContext — the bare `funcReturnTypes`
 	// entry doesn't carry the type-arg binding the call site implies.
-	function recordCallResultType(resultId ValueId, callee String, receiverContext MaxonType = MaxonType.unresolved)
+	function recordCallResultType(resultId ValueId, callee String, dstBlock IrBlock, receiverContext MaxonType = MaxonType.unresolved)
 		let returnType = try self.project.funcReturnTypes.get(callee) otherwise MaxonReturnType.void
 		let raw = match returnType 'unwrap'
 			void gives MaxonType.integer
@@ -6210,7 +6245,25 @@ type MaxonToStdLowering
 		// (e.g. `MapIterator.current()` returns `Entry`) or a bare-generic
 		// name (e.g. `Map.createIterator()` returns `MapIterator`) — both
 		// only resolve once the receiver's substitution is in scope.
-		self.setValueType(resultId, t: substituteReturnTypeViaReceiver(self.project, raw: raw, receiverContext: receiverContext))
+		let substituted = substituteReturnTypeViaReceiver(self.project, raw: raw, receiverContext: receiverContext)
+		// Chase one hop through a function-type alias so a methodCall
+		// returning `named(UnaryOp)` (where UnaryOp = (Integer) returns
+		// Integer) sees its underlying function shape. Type-parameter
+		// substitution from the receiver's type args lands an arg-typed
+		// named value here — without the chase, the function-typed return
+		// stays nominal and the indirect-call env recording below misses.
+		let chased = chaseTypealiasToFunctionType(self.project, t: substituted)
+		self.setValueType(resultId, t: chased)
+		// Function-typed call results enter the indirect-call ABI with
+		// env=0 — the returned value is a code pointer to a top-level
+		// function reference (no captured environment). Materialize a real
+		// `const 0` op so the env binding has a defining SSA op; a literal
+		// `0 as ValueId` would alias whatever ValueId 0 is in this function
+		// and panic regalloc when that v0 has no def.
+		if isFunctionMaxonType(chased) 'isFnReturn'
+			let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
+			self.fnEnvVarNames.upsert(resultId, value: envZeroId)
+		end 'isFnReturn'
 	end 'recordCallResultType'
 
 	// fieldLoad: read receiver's struct type from the value-type map, find
@@ -6232,6 +6285,17 @@ type MaxonToStdLowering
 		if not enumName.isEmpty() 'maybeEnum'
 			if let enumType = try self.project.enumTypes.get(enumName) 'isEnum'
 				if fieldNameStr == "rawValue" 'isRaw'
+					if enumType.isFunctionBacked 'isFnBacked'
+						// Function-backed enums map their ordinal to a function
+						// pointer via a synthesized helper. The result is a
+						// function-typed value; the call into the helper is a
+						// regular `call`, but the SSA result must carry the
+						// enum's shared FunctionTypeId and an env entry of 0
+						// (free functions) so a subsequent indirect call site
+						// can find the right thunk and dispatch correctly.
+						self.lowerFunctionBackedEnumRawValue(result, receiverId: receiverId, enumType: enumType, dstBlock: dstBlock)
+						return
+					end 'isFnBacked'
 					self.aliasName(result, toId: receiverId)
 					return
 				end 'isRaw'
@@ -6661,6 +6725,82 @@ type MaxonToStdLowering
 		self.aliasName(result, toId: runningSumId)
 		self.setValueType(resultId, t: MaxonType.integer)
 	end 'lowerEnumOrdinalLookup'
+
+	// Function-backed enum `.rawValue`: call the synthesized helper
+	// `__enum_<EnumName>_fnRaw(ordinal) returns i64`. The returned i64 IS
+	// the function pointer for the matching case. We register the result as
+	// `MaxonType.function(functionBackingTypeId)` and stamp env=0 in
+	// `fnEnvVarNames` so a later indirect-call site treats it the same as
+	// any other free-function reference.
+	function lowerFunctionBackedEnumRawValue(result ByteArray, receiverId ValueId, enumType EnumType, dstBlock IrBlock)
+		let resultId = self.defineName(result)
+		let helperName = enumFnRawHelperSymbol(enumType.name)
+		self.pendingEnumFnRawHelpers.insert(element: enumType.name)
+		var argIds = ValueIdArray.create()
+		argIds.push(receiverId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+		self.setValueType(resultId, t: MaxonType.function(enumType.functionBackingTypeId))
+		// Env = 0 (free function ABI): the helper returns a thunk scheduled
+		// via `scheduleFnRefThunk`, and those thunks discard env. Materialize
+		// a real `const 0` op for the env binding — a literal `0 as ValueId`
+		// is a dangling sentinel in any function whose ValueId 0 has no
+		// defining op (caller paramCount > 0, no synth-anchored slot 0).
+		let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
+		self.fnEnvVarNames.upsert(resultId, value: envZeroId)
+	end 'lowerFunctionBackedEnumRawValue'
+
+	// One helper per fn-backed enum, mirroring synthesizeEnumNameHelpers but
+	// emitting `funcRef(thunk_for_case_function)` per case instead of a
+	// String literal. The dispatch shape is the same cmp/condBr chain.
+	function synthesizeEnumFnRawHelpers()
+		for enumName in self.pendingEnumFnRawHelpers 'eachEnum'
+			let enumType = try self.project.enumTypes.get(enumName) otherwise panic("synthesizeEnumFnRawHelpers: enumTypes lookup failed for registered enum '{enumName}'")
+			self.synthesizeOneEnumFnRawHelper(enumType)
+		end 'eachEnum'
+	end 'synthesizeEnumFnRawHelpers'
+
+	function synthesizeOneEnumFnRawHelper(enumType EnumType)
+		let helperName = enumFnRawHelperSymbol(enumType.name)
+		let returnType = StdReturnType.value(inner: StdType.i64)
+		var paramTypes = StdTypeArray.create()
+		paramTypes.push(StdType.i64)
+		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
+		let snapshot = self.beginSynthesizedFunc(1)
+
+		var entryBlock = self.stdModule.addBlock(func, label: "entry")
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.setValueType(0 as ValueId, t: MaxonType.integer)
+
+		let caseCount = enumType.cases.count()
+		var currentEntry = entryBlock
+		for i in 0 upto caseCount 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("synthesizeOneEnumFnRawHelper: cases.get OOB at {i}")
+			var caseBlock = self.stdModule.addBlock(func, label: "fnraw_case_{i}")
+			let isLast = i == caseCount - 1
+			if isLast 'noMoreCmps'
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.br(caseBlock.id, argIds: ValueIdArray.create())))
+			end 'noMoreCmps' else 'emitCmp'
+				let caseLitId = allocValueId(self.funcIdRef)
+				self.stdModule.appendOp(currentEntry, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: caseLitId, value: c.rawValue))))
+				let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: 0 as ValueId, rightId: caseLitId, dstBlock: currentEntry)
+				let nextEntry = self.stdModule.addBlock(func, label: "fnraw_check_{i + 1}")
+				self.stdModule.setTerminator(currentEntry, op: StdOp.control(StdControlOp.condBr(cmpId, thenTarget: caseBlock.id, thenArgIds: ValueIdArray.create(), elseTarget: nextEntry.id, elseArgIds: ValueIdArray.create())))
+				currentEntry = nextEntry
+			end 'emitCmp'
+			// Per-case block: emit funcRef to the case's function (via the
+			// env-aware thunk, same as a user-written bare function reference)
+			// and return its i64 address. Use defineName + resolveName so the
+			// regalloc tracks the result via the same nameToId table that user
+			// functionRef ops use (a raw allocValueId works for the simple
+			// inline case but trips SSA-coloring for the non-inlined helper).
+			let refName = "__fnraw_ref_{i}".toByteArray()
+			self.lowerFunctionRef(refName, funcName: c.rawFunctionName, dstBlock: caseBlock)
+			let refId = self.resolveName(refName)
+			self.stdModule.setTerminator(caseBlock, op: StdOp.call(StdCallOp.ret(refId)))
+		end 'eachCase'
+
+		self.endSynthesizedFunc(func, snapshot: snapshot)
+	end 'synthesizeOneEnumFnRawHelper'
 
 	function lowerFieldStore(receiver ByteArray, fieldName ByteArray, value ByteArray, isInit bool, range SourceRange, dstBlock IrBlock)
 		let receiverId = self.resolveName(receiver)
@@ -7208,7 +7348,11 @@ type MaxonToStdLowering
 			refTarget = self.scheduleFnRefThunk(targetFunc: funcName)
 		end 'isFreeFunc'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(resultId, funcName: refTarget)))
-		self.fnEnvVarNames.upsert(resultId, value: 0)
+		// Free-function refs carry env=0. Materialize a real `const 0` op
+		// so the env binding has a defining SSA op — bare ValueId `0` is a
+		// dangling sentinel in any function whose v0 has no local definition.
+		let envZeroId = self.emitConstI64(0, dstBlock: dstBlock)
+		self.fnEnvVarNames.upsert(resultId, value: envZeroId)
 	end 'lowerFunctionRef'
 
 	// Reserve (and lazily synthesize) an env-aware thunk for a free
@@ -7329,11 +7473,12 @@ type MaxonToStdLowering
 		var argIds = self.resolveArgNames(args)
 		// Every function-pointer value reaching an indirect call must have
 		// been bound in `fnEnvVarNames` by an upstream `functionRef` (env
-		// = 0), `closureCreate` (env = freshly-allocated block), or
-		// function-typed-param load (env = paired `__env_<name>` slot).
-		// A miss here is a compiler invariant violation, not a user
-		// error — panic loudly rather than emit a structurally-valid but
-		// semantically-wrong call with a null env.
+		// = const-0 op), `closureCreate` (env = freshly-allocated block),
+		// or function-typed-param load (env = paired `__env_<name>` slot).
+		// All three producer paths register a real defining-op ValueId —
+		// no sentinels — so the env arg is always a well-formed SSA value
+		// the downstream regalloc/codegen can color and emit. A miss here
+		// is a compiler invariant violation, not a user error.
 		let envId = try self.fnEnvVarNames.get(calleeId) otherwise panic("lowerIndirectCall: no env recorded for function-pointer value (upstream functionRef/closureCreate/param binding missed)")
 		argIds.push(envId)
 		let resultId = self.defineName(result)

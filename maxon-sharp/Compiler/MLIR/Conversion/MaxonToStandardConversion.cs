@@ -692,6 +692,40 @@ public static partial class MaxonToStandardConversion {
               valueMap[strRawOp.Result] = strRawHp;
               break;
             }
+            case MaxonEnumFunctionRawValueOp fnRawOp: {
+              var enumType = (IrEnumType)module.TypeDefs[fnRawOp.EnumTypeName];
+              var stdValue = valueMap[fnRawOp.EnumValue];
+
+              // Extract the case ordinal from the enum value. Function-backed
+              // enums don't carry payload, so the std value is the ordinal i64.
+              var ordinalValue = (StdI64)stdValue;
+
+              // Build a select chain: starting from a null i64, for each case
+              // compare-eq the enum ordinal against its declared ordinal and
+              // pick that case's func-ref (reinterpreted as i64). The final
+              // value is the function pointer for whichever ordinal matched.
+              // No-match falls through to 0; the parser ensures only declared
+              // enum values reach this op, so the path is unreachable in practice.
+              var nullConst = new StdConstI64Op(0);
+              newBlock.AddOp(nullConst);
+              StdI64 currentFn = nullConst.Result;
+              foreach (var enumCase in enumType.Cases) {
+                if (enumCase.RawValue is not string funcName) continue;
+                var ordConst = new StdConstI64Op(enumCase.Ordinal);
+                newBlock.AddOp(ordConst);
+                var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
+                newBlock.AddOp(cmpOp);
+                var refOp = new StdFuncRefOp(funcName);
+                newBlock.AddOp(refOp);
+                var ptrAsI64 = new StdPtrToI64Op(refOp.Result);
+                newBlock.AddOp(ptrAsI64);
+                var selectOp = new StdSelectI64Op(cmpOp.Result, ptrAsI64.Result, currentFn);
+                newBlock.AddOp(selectOp);
+                currentFn = selectOp.Result;
+              }
+              valueMap[fnRawOp.Result] = currentFn;
+              break;
+            }
             case MaxonEnumStructRawValueOp structRawOp: {
               var enumType = (IrEnumType)module.TypeDefs[structRawOp.EnumTypeName];
               var structType = (IrStructType)module.TypeDefs[structRawOp.StructTypeName];

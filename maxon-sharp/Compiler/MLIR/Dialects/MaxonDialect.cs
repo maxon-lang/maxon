@@ -148,6 +148,7 @@ public enum MaxonOpKind {
   EnumRawValue,
   EnumStringRawValue,
   EnumStructRawValue,
+  EnumFunctionRawValue,
   EnumName,
   EnumOrdinal,
   GlobalStore,
@@ -418,11 +419,18 @@ public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp
   public MaxonValueKind ValueKind { get; } = kind;
   public MaxonValue Result { get; } = kind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
-    new Dictionary<string, IrAttribute> {
-      ["var"] = new StringAttr(VarName),
-      ["type"] = new TypeAttr(ValueKind.ToIrType())
-    };
+  public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes {
+    get {
+      var attrs = new Dictionary<string, IrAttribute> { ["var"] = new StringAttr(VarName) };
+      // Function kinds don't have a single IrType — the signature is carried
+      // separately (on the var's declaration / call op). Print just the kind.
+      if (ValueKind == MaxonValueKind.Function)
+        attrs["kind"] = new StringAttr("fn");
+      else
+        attrs["type"] = new TypeAttr(ValueKind.ToIrType());
+      return attrs;
+    }
+  }
 }
 
 // Struct var ref: loads a struct from a variable in a different block
@@ -489,6 +497,11 @@ public class MaxonCallOp : MaxonOp {
   public MaxonValueKind? ResultKind { get; }
   // The struct type name for calls returning a struct
   public string? ResultStructTypeName { get; set; }
+  // The resolved function type when ResultKind == Function. Required by the
+  // parser to recover the signature at `let f = call(...)` sites where the
+  // callee's declared return is a function-type alias or a generic Value that
+  // resolves to a function type after instantiation.
+  public IrFunctionType? ResultFnType { get; set; }
   // Whether each argument at the call site came from a mutable variable
   public List<bool>? ArgMutabilities { get; set; }
   // The variable name each argument came from (null for literals/expressions)
@@ -1033,6 +1046,20 @@ public sealed class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumT
   public string EnumTypeName { get; } = enumTypeName;
   public string StructTypeName { get; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
+// Function-backed enum .rawValue: lowers to a select chain mapping the case
+// ordinal to one of N function pointers. The signature is carried so callers
+// can dispatch the resulting MaxonFunctionPtr via the usual indirect-call path.
+public sealed class MaxonEnumFunctionRawValueOp(MaxonValue enumValue, string enumTypeName, IrFunctionType signature) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumFunctionRawValue;
+  public override string Mnemonic => $"maxon.enum_function_rawvalue @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public IrFunctionType Signature { get; } = signature;
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }

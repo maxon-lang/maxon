@@ -1,0 +1,88 @@
+// Test: function-backing.two-args
+
+typealias Integer = int(i64.min to i64.max)
+
+function addFn(a Integer, b Integer) returns Integer
+	return a + b
+end 'addFn'
+
+function subFn(a Integer, b Integer) returns Integer
+	return a - b
+end 'subFn'
+
+enum BinOp
+	add = addFn
+	sub = subFn
+end 'BinOp'
+
+function main() returns ExitCode
+	let addF = BinOp.add.rawValue
+	let subF = BinOp.sub.rawValue
+	return addF(30, 15) - subF(5, 2)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @addFn(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %6 = mir.param local1 : i64
+    %4 = mir.add.i64 %5, %6
+    mir.ret %4
+  }
+  func @subFn(local0: i64, local1: i64) -> i64 {
+  entry:
+    %5 = mir.param local0 : i64
+    %6 = mir.param local1 : i64
+    %4 = mir.sub.i64 %5, %6
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br inlined___enum_BinOp_fnRaw_0()
+  inlined___enum_BinOp_fnRaw_0:
+    %17 = mir.mov_imm 0 : i64
+    %18 = mir.cmp eq, %0, %17
+    mir.cond_br %18 [then: inlined___enum_BinOp_fnRaw_1(), else: inlined___enum_BinOp_fnRaw_2()]
+  inlined___enum_BinOp_fnRaw_1:
+    %19 = mir.func_addr @__fnref_addFn
+    mir.br inline_cont_main_0(%19)
+  inlined___enum_BinOp_fnRaw_2:
+    %20 = mir.func_addr @__fnref_subFn
+    mir.br inline_cont_main_0(%20)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 1 : i64
+    mir.br inlined___enum_BinOp_fnRaw_0()
+  inlined___enum_BinOp_fnRaw_0:
+    %22 = mir.mov_imm 0 : i64
+    %23 = mir.cmp eq, %3, %22
+    mir.cond_br %23 [then: inlined___enum_BinOp_fnRaw_1(), else: inlined___enum_BinOp_fnRaw_2()]
+  inlined___enum_BinOp_fnRaw_1:
+    %24 = mir.func_addr @__fnref_addFn
+    mir.br inline_cont_main_1(%24)
+  inlined___enum_BinOp_fnRaw_2:
+    %25 = mir.func_addr @__fnref_subFn
+    mir.br inline_cont_main_1(%25)
+  inline_cont_main_1:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 30 : i64
+    %9 = mir.mov_imm 15 : i64
+    %10 = mir.indirect_call %21(%8, %9, %7)
+    %13 = mir.mov_imm 5 : i64
+    %14 = mir.mov_imm 2 : i64
+    %15 = mir.indirect_call %26(%13, %14, %0)
+    %16 = mir.sub.i64 %10, %15
+    %27 = mir.mov_imm 125 : i64
+    %28 = mir.cmp ugt, %16, %27
+    mir.cond_br %28 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %29 = mir.global_addr @__panic_msg_0
+    %30 = mir.call @mrt_panic(%29)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

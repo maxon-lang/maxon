@@ -222,6 +222,32 @@ Closure parameters are checked for unused (E3012). Use `_` to discard: `(_ int) 
 
 Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
+### Function Types
+
+Function values can be referenced by name (no parens), stored in variables, passed
+as arguments, and returned. Function types use `(params) returns Result`; the
+`returns` clause is omitted for void. A `typealias` can name a function type:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+		return f(x)
+end 'apply'
+
+function pickDouble() returns UnaryOp
+		return double                       // function reference
+end 'pickDouble'
+
+let f = pickDouble()
+let n = f(21)                             // 42
+```
+
+Function-typed values can also live in collections — e.g.
+`typealias HandlerMap = Map with(String, UnaryOp)` lets the caller dispatch by
+key.
+
 ## Visibility
 
 All declarations are file-scoped by default. Maxon has three visibility tiers:
@@ -488,7 +514,7 @@ end 'Array'
 
 ## Enums
 
-Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support direct `==` and `!=` comparison, `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`. Enums do NOT support associated values -- use `union` for that.
+Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct, function). Enums auto-implement `Equatable` and `Hashable`, and support direct `==` and `!=` comparison, `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`. Enums do NOT support associated values -- use `union` for that.
 
 ### Simple / Raw-Value Enums
 
@@ -571,6 +597,29 @@ let mem = Instruction.load.rawValue.isMemory  // true
 ```
 
 All cases must use the same struct type. Field values must be compile-time constants (integers, floats, booleans), enum member references (e.g., `Priority.high`), top-level constants, or nested struct literals.
+
+### Function-Backed Enums
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+let f = Op.doubleOp.rawValue   // function reference, callable as f(21)
+```
+
+All cases must share the same function signature, which becomes the enum's backing type. Functions may be declared later in the same file or in another file. Runtime storage is the case ordinal; `.rawValue` lowers to a select chain over the ordinal that recovers the function pointer. `fromRawValue()` is not available for function-backed enums.
 
 ## Unions
 

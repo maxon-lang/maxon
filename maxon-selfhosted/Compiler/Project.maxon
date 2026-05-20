@@ -1800,6 +1800,12 @@ export union UnresolvedTypeExpr
 	// gid). Distinct N produce distinct gids so Vec1 and Vec4 don't share
 	// monomorphization.
 	sizedGenericAlias(baseName String, size IntConstant, args StringArray)
+	// Function-type alias: `typealias UnaryOp = (Integer) returns Integer`.
+	// The parser fully resolves the function signature through `parseTypeRef`
+	// and stores the resulting `MaxonType.function(id)` directly. Resolution
+	// promotes the carried type into `project.genericTypealiases` so name
+	// chasing via `chaseTypealiasNameToType` finds it.
+	functionAlias(target MaxonType)
 	// Sentinel for a syntactically valid but semantically rejected typealias
 	// (range validation failure). Carried through resolution so the unused-
 	// typealias check (E3062) suppresses its cascade — the E3005 raised at
@@ -2518,9 +2524,16 @@ export type EnumCase
 	// `.fromName` lookups. The enclosing `EnumType.isStringBacked` /
 	// `isCharBacked` flag tells consumers how to interpret the bytes.
 	export var rawStringValue String
+	// Function-backed enums: the function name from the right-hand side of
+	// `case = funcName`. Captured verbatim from the source token at parse time
+	// and rewritten to a fully-qualified callable name by the post-prescan
+	// resolver. Empty string when the case has no function backing; the
+	// enclosing `EnumType.isFunctionBacked` flag tells consumers how to
+	// interpret this field.
+	export var rawFunctionName String
 
-	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0, rawStringValue String = "") returns EnumCase
-		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId, rawStringValue: rawStringValue}
+	export static function create(name String, ordinal CaseOrdinal, rawValue IntConstant, line LineNumber, column ColumnNumber, payloadFields EnumPayloadFieldArray = EnumPayloadFieldArray.create(), backingStructName String = "", backingStructExprId UnresolvedConstExprId = 0, rawStringValue String = "", rawFunctionName String = "") returns EnumCase
+		return Self{name: name, ordinal: ordinal, rawValue: rawValue, line: line, column: column, payloadFields: payloadFields, backingStructName: backingStructName, backingStructExprId: backingStructExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName}
 	end 'create'
 end 'EnumCase'
 
@@ -2551,7 +2564,7 @@ end 'enumCasesAnyPayload'
 // where `enum Color { red = 1; green = 2 }` prints "1" / "2" but
 // `enum Direction { north; south; east; west }` prints "north" etc.
 export function enumHasExplicitBacking(enumDef EnumType) returns bool
-	if enumDef.isFloatBacked or enumDef.isStringBacked or enumDef.isCharBacked 'asNonInt'
+	if enumDef.isFloatBacked or enumDef.isStringBacked or enumDef.isCharBacked or enumDef.isFunctionBacked 'asNonInt'
 		return true
 	end 'asNonInt'
 	for c in enumDef.cases 'scan'
@@ -2575,6 +2588,17 @@ export type EnumType
 	// `rawValue` as an int / float bit pattern.
 	export var isStringBacked bool
 	export var isCharBacked bool
+	// Function-backed enums: true when raw values were declared as function
+	// names (`case = doubleFn`). Mutually exclusive with the other backing
+	// flags. Runtime storage is still the per-case ordinal; the function
+	// pointer is recovered by the `.rawValue` lowering, which emits a chain
+	// of `cmp ordinal == i; if-eq then funcRef(case_i.rawFunctionName)`.
+	export var isFunctionBacked bool
+	// FunctionTypeId shared by every case of a function-backed enum. Set by
+	// the post-prescan resolver once all top-level functions are known.
+	// Sentinel `0` when the enum is not function-backed or resolution hasn't
+	// run yet — readers check `isFunctionBacked` first.
+	export var functionBackingTypeId FunctionTypeId
 	export var caseByName CaseIndexMap
 	// Visibility tier and declaring file path. Cross-file references
 	// (named-type operands, dot-prefixed case reads when no top-level
@@ -2600,7 +2624,7 @@ export type EnumType
 	// `enumCasesAnyPayload(cases) implies isUnion` is enforced in `create`.
 	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false) returns EnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, sourceFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, expectedMethods InterfaceMethodSigArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false, isFunctionBacked bool = false, functionBackingTypeId FunctionTypeId = 0) returns EnumType
 		var caseByName = CaseIndexMap.create()
 		for i in 0 upto cases.count() 'buildIndex'
 			let c = try cases.get(i) otherwise panic("EnumType.create: cases.get OOB at {i}")
@@ -2618,11 +2642,15 @@ export type EnumType
 		if isStringBacked and isCharBacked 'badMix2'
 			panic("EnumType.create: enum '{name}' has both string and char backings")
 		end 'badMix2'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, isUnion: isUnion}
+		if isFunctionBacked and (isFloatBacked or isStringBacked or isCharBacked) 'badMix3'
+			panic("EnumType.create: enum '{name}' has function backing mixed with another backing kind")
+		end 'badMix3'
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, isFunctionBacked: isFunctionBacked, functionBackingTypeId: functionBackingTypeId, caseByName: caseByName, visibility: visibility, sourceFilePath: sourceFilePath, nameLine: nameLine, nameColumn: nameColumn, expectedMethods: expectedMethods, isUnion: isUnion}
 	end 'create'
 end 'EnumType'
 
 export typealias EnumTypeMap = Map with(String, EnumType)
+export typealias EnumTypeArray = Array with EnumType
 
 export type UnresolvedEnumType
 	export var name String
@@ -2634,6 +2662,12 @@ export type UnresolvedEnumType
 	// `isFloatBacked`; the parser enforces the invariant.
 	export var isStringBacked bool
 	export var isCharBacked bool
+	// Phase 9 function-backed enums: mirror of `EnumType.isFunctionBacked`.
+	// Carried through pre-register → TypeResolution so the same flag is set
+	// on the promoted EnumType. The resolved `functionBackingTypeId` is
+	// computed only at the promotion step (function signatures need to be
+	// fully registered first) — UnresolvedEnumType does not carry it.
+	export var isFunctionBacked bool
 	// Visibility tier from the enum declaration's modifier. Used to
 	// stamp the per-case `TopLevelConstant`s and the implicit typealias
 	// the parser registers for the enum's name. The pre-register entry
@@ -2652,11 +2686,11 @@ export type UnresolvedEnumType
 	// answer at both stages.
 	export var isUnion bool
 
-	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false) returns UnresolvedEnumType
+	export static function create(name String, cases EnumCaseArray, isFloatBacked bool, visibility Visibility, line LineNumber, column ColumnNumber, filePath FilePath, implementedInterfaces ConformanceArray, isUnion bool = false, isStringBacked bool = false, isCharBacked bool = false, isFunctionBacked bool = false) returns UnresolvedEnumType
 		if enumCasesAnyPayload(cases) and not isUnion 'invariant'
 			panic("UnresolvedEnumType.create: enum '{name}' has payload cases but isUnion is false")
 		end 'invariant'
-		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, isUnion: isUnion}
+		return Self{name: name, cases: cases, isFloatBacked: isFloatBacked, isStringBacked: isStringBacked, isCharBacked: isCharBacked, isFunctionBacked: isFunctionBacked, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: implementedInterfaces, isUnion: isUnion}
 	end 'create'
 end 'UnresolvedEnumType'
 

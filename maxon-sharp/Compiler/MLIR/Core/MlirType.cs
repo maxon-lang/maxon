@@ -243,13 +243,24 @@ public class IrEnumCase(string name, int ordinal, object? rawValue = null,
     List<(string Name, IrType Type)>? associatedValues = null) {
   public string Name { get; } = name;
   public int Ordinal { get; } = ordinal;
-  public object? RawValue { get; } = rawValue;
+  // Settable so the post-prescan function-backed-enum resolution pass can
+  // rewrite the placeholder short-name into the fully qualified function name
+  // once it's been looked up against the module's function registry.
+  public object? RawValue { get; set; } = rawValue;
   public List<(string Name, IrType Type)>? AssociatedValues { get; } = associatedValues;
+  // Source position for diagnostics produced by deferred resolution passes
+  // (e.g. function-backed enum lookups). Null on synthesized cases.
+  public int? SourceLine { get; set; }
+  public int? SourceColumn { get; set; }
 }
 
 public class IrEnumType(string name, List<IrEnumCase> cases, IrType? backingType = null, IEnumerable<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, IrType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : IrType(name) {
   public List<IrEnumCase> Cases { get; } = cases;
-  public IrType? BackingType { get; } = backingType;
+  // BackingType is settable so the post-prescan resolution pass for
+  // function-backed enums can replace a pre-resolution placeholder
+  // IrFunctionBackingType with the concrete signature once every file's
+  // top-level functions have been pre-scanned.
+  public IrType? BackingType { get; set; } = backingType;
   public HashSet<string> ConformingInterfaces { get; } = conformingInterfaces is null ? [] : [.. conformingInterfaces];
   public List<string> AssociatedTypeNames { get; } = associatedTypeNames ?? [];
   public Dictionary<string, IrType> TypeParams { get; } = typeParams ?? [];
@@ -298,6 +309,14 @@ public record StructRawValue(string StructTypeName, List<(string FieldName, long
 /// are stored as ordinals (i64). Each case has an associated struct value accessible via .rawValue.
 public class IrStructBackingType(string structTypeName) : IrType("struct_enum", 8) {
   public string StructTypeName { get; } = structTypeName;
+}
+
+/// Marker type for function-backed enum backing types. At runtime, function-backed
+/// enums are stored as ordinals (i64). Each case's raw value is a function whose
+/// pointer is recovered via .rawValue (a select chain over the ordinal). All cases
+/// in a fn-backed enum share the same IrFunctionType signature.
+public class IrFunctionBackingType(IrFunctionType signature) : IrType("function_enum", 8) {
+  public IrFunctionType Signature { get; } = signature;
 }
 
 public class IrTypeParameterType(string parameterName) : IrType(parameterName) {

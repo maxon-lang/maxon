@@ -1091,7 +1091,7 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     } else if (fieldType == IrType.I32 || fieldType == IrType.U32) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovDwordIndirectRegOp(baseReg, fieldOffset, srcReg));
-    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
+    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrFunctionType || fieldType is IrEnumType || fieldType is IrStructType) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
     } else {
@@ -1126,8 +1126,10 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     } else if (fieldType == IrType.I32) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovsxdRegDwordIndirectOp(destGpr, baseReg, fieldOffset));
-    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrEnumType || fieldType is IrStructType) {
-      // 64-bit width — no extension needed regardless of signedness.
+    } else if (fieldType == IrType.I64 || fieldType == IrType.U64 || fieldType == IrType.Fn || fieldType is IrFunctionType || fieldType is IrEnumType || fieldType is IrStructType) {
+      // 64-bit width — no extension needed regardless of signedness. IrFunctionType
+      // is the concrete signature form of a function value; storage is the same
+      // 8-byte code pointer as the IrType.Fn sentinel.
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
     } else {

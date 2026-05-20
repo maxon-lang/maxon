@@ -44,6 +44,9 @@ public static partial class MaxonToStandardConversion {
     if (enumType.BackingType == IrType.F64) return IrType.F64;
     if (enumType.BackingType is IrStringBackingType or IrCharBackingType) return IrType.I64;
     if (enumType.BackingType is IrStructBackingType) return IrType.I64;
+    // Function-backed enums store an ordinal at runtime (the function-pointer
+    // table is reconstructed by MaxonEnumFunctionRawValueOp's select chain).
+    if (enumType.BackingType is IrFunctionBackingType) return IrType.I64;
     if (enumType.BackingType == IrType.I64 || enumType.BackingType == null) return IrType.I64;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }

@@ -1,0 +1,71 @@
+// Test: function-backing.cross-file
+// --- file: ops.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+export function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+// --- file: dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = Op.tripleOp.rawValue
+	return f(14)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @ops.doubleFn(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @ops.tripleFn(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    mir.br inlined___enum_Op_fnRaw_0()
+  inlined___enum_Op_fnRaw_0:
+    %7 = mir.mov_imm 0 : i64
+    %8 = mir.cmp eq, %0, %7
+    mir.cond_br %8 [then: inlined___enum_Op_fnRaw_1(), else: inlined___enum_Op_fnRaw_2()]
+  inlined___enum_Op_fnRaw_1:
+    %9 = mir.func_addr @__fnref_ops.doubleFn
+    mir.br inline_cont_main_0(%9)
+  inlined___enum_Op_fnRaw_2:
+    %10 = mir.func_addr @__fnref_ops.tripleFn
+    mir.br inline_cont_main_0(%10)
+  inline_cont_main_0:
+    %4 = mir.mov_imm 0 : i64
+    %5 = mir.mov_imm 14 : i64
+    %6 = mir.indirect_call %11(%5, %4)
+    %12 = mir.mov_imm 125 : i64
+    %13 = mir.cmp ugt, %6, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %6
+  }
+}
+---

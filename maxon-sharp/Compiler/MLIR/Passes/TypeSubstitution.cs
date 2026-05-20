@@ -604,6 +604,7 @@ internal class TypeSubstitution {
       IrEnumType ut when ut.HasAssociatedValues => MaxonValueKind.Enum,
       IrEnumType => MaxonValueKind.Integer,
       IrRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
+      IrFunctionType => MaxonValueKind.Function,
       IrTypeParameterType => MaxonValueKind.TypeParameter,
       _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported type '{concreteType}' for param '{paramKey}'")
     };

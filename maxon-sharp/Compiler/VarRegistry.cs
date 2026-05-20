@@ -25,7 +25,7 @@ public record VarInfo(
     IrBlock<MaxonOp> DefinedInBlock,
     OwnershipFlags Flags = OwnershipFlags.None,
     string? StructTypeName = null,
-    IrFunctionType? FnTypeName = null,
+    IrFunctionType? FnType = null,
     bool IsCaptured = false,
     bool IsSelfField = false,
     EnumPayloadBinding? PayloadBinding = null
@@ -51,9 +51,9 @@ public class VarRegistry {
     /// </summary>
     public VarInfo Declare(string name, MaxonValueKind kind, bool mutable, MaxonValue value,
         IrBlock<MaxonOp> block, OwnershipFlags flags = OwnershipFlags.None,
-        string? structTypeName = null, IrFunctionType? fnTypeName = null,
+        string? structTypeName = null, IrFunctionType? fnType = null,
         bool isSelfField = false, EnumPayloadBinding? payloadBinding = null) {
-        var info = new VarInfo(name, kind, mutable, value, block, flags, structTypeName, fnTypeName,
+        var info = new VarInfo(name, kind, mutable, value, block, flags, structTypeName, fnType,
             IsSelfField: isSelfField, PayloadBinding: payloadBinding);
         _vars[name] = info;
         return info;

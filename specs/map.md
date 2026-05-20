@@ -553,6 +553,35 @@ end 'main'
 2
 ```
 
+<!-- test: function-valued.dispatch -->
+A `Map<String, FunctionType>` lets the caller dispatch by string key.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+typealias HandlerMap = Map with String, UnaryOp
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function triple(x Integer) returns Integer
+	return x * 3
+end 'triple'
+
+function main() returns ExitCode
+	var m = HandlerMap.create()
+	m.upsert(key: "d", value: double)
+	m.upsert(key: "t", value: triple)
+	let f = try m.get("d") otherwise panic("missing 'd'")
+	let g = try m.get("t") otherwise panic("missing 't'")
+	return f(7) + g(7)
+end 'main'
+```
+```exitcode
+35
+```
+
 <!-- test: for-in.nested -->
 Nested for-in loops on the same map must not corrupt each other's iteration state.
 

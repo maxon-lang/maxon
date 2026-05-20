@@ -185,6 +185,42 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 	end 'check'
 end 'isFunctionMaxonType'
 
+// Chase a single hop through a function-type alias. When `t` is
+// `MaxonType.named("UnaryOp")` and `UnaryOp` resolves (or is on its way
+// to resolving) to a `MaxonType.function(id)` alias, return that
+// function type. Otherwise return `t` unchanged so callers that don't
+// care about aliasing can pipe values through unconditionally.
+//
+// Used at parse time — the resolved `genericTypealiases` entry isn't
+// populated until `drainResolvableTypealiases` runs, so we also probe
+// `unresolvedTypealiases` for the parser's own pending entries (the
+// alias's RHS was carried as `UnresolvedTypeExpr.functionAlias(target)`
+// with the fully-resolved MaxonType already inside it).
+export function chaseTypealiasToFunctionType(project Project, t MaxonType) returns MaxonType
+	let aliasName = t.namedAliasNameOrEmpty(project)
+	if aliasName.isEmpty() 'noAlias'
+		return t
+	end 'noAlias'
+	if let resolved = try project.genericTypealiases.get(aliasName) 'fromResolved'
+		if isFunctionMaxonType(resolved) 'isFn'
+			return resolved
+		end 'isFn'
+	end 'fromResolved'
+	if let entry = try project.unresolvedTypealiases.get(aliasName) 'fromUnresolved'
+		match entry.expr 'extract'
+			functionAlias(target) then return target
+			boolPrim then return t
+			rangedInt then return t
+			rangedFloat then return t
+			aliasName then return t
+			genericAlias then return t
+			sizedGenericAlias then return t
+			invalid then return t
+		end 'extract'
+	end 'fromUnresolved'
+	return t
+end 'chaseTypealiasToFunctionType'
+
 // Phase 11.3: True iff `t` is a `MaxonType.interface(_)`. Interface-typed
 // values are 16-byte fat pointers (`{value, witness}`); the construction
 // side of the lowering uses this discriminator to decide whether to emit
@@ -2115,6 +2151,7 @@ function parseTimeTypealiasCategory(project Project, expr UnresolvedTypeExpr) re
 		aliasName(name) gives try parseTimeTypealiasCategoryByName(project, name: name) otherwise throw TypealiasCategoryError.notPrimitive
 		genericAlias throws TypealiasCategoryError.notPrimitive
 		sizedGenericAlias throws TypealiasCategoryError.notPrimitive
+		functionAlias throws TypealiasCategoryError.notPrimitive
 		invalid throws TypealiasCategoryError.notPrimitive
 	end 'kind'
 end 'parseTimeTypealiasCategory'

@@ -75,6 +75,9 @@ function tryResolveTypeExpr(project Project, expr UnresolvedTypeExpr) returns Re
 		// Phase 13 (sized typealiases): mirror genericAlias — sized variants
 		// also live in `project.genericTypealiases`.
 		sizedGenericAlias gives ResolveResult.notYet()
+		// Function-type aliases live in `project.genericTypealiases` alongside
+		// generic aliases. The drain pass takes them out-of-band.
+		functionAlias gives ResolveResult.notYet()
 		// Validation-rejected typealias — surface i64 storage so downstream
 		// passes don't crash on a placeholder. The originating E3005 is the
 		// user-visible diagnostic.
@@ -108,6 +111,7 @@ function declaredCastCategoryFor(expr UnresolvedTypeExpr) returns DeclaredCastCa
 		aliasName gives DeclaredCastCategory.none()
 		genericAlias gives DeclaredCastCategory.none()
 		sizedGenericAlias gives DeclaredCastCategory.none()
+		functionAlias gives DeclaredCastCategory.none()
 		invalid gives DeclaredCastCategory.none()
 	end 'pick'
 end 'declaredCastCategoryFor'
@@ -124,9 +128,26 @@ export function isGenericAliasExpr(expr UnresolvedTypeExpr) returns bool
 		rangedFloat gives false
 		rangedInt gives false
 		aliasName gives false
+		functionAlias gives false
 		invalid gives false
 	end 'check'
 end 'isGenericAliasExpr'
+
+// True iff `expr` is a `functionAlias(...)` arm. Mirrors `isGenericAliasExpr`
+// so the drain pass can route function-type aliases into `genericTypealiases`
+// via their own fast path (the carried MaxonType is already fully resolved).
+export function isFunctionAliasExpr(expr UnresolvedTypeExpr) returns bool
+	return match expr 'check'
+		functionAlias gives true
+		genericAlias gives false
+		sizedGenericAlias gives false
+		boolPrim gives false
+		rangedFloat gives false
+		rangedInt gives false
+		aliasName gives false
+		invalid gives false
+	end 'check'
+end 'isFunctionAliasExpr'
 
 // Resolve a single argument name in a generic-alias RHS into a MaxonType.
 // Lookup precedence: in-scope type-parameter (when `declaringTypeName` is
@@ -158,6 +179,7 @@ export function resolveGenericAliasExpr(project Project, expr UnresolvedTypeExpr
 		rangedFloat then panic("resolveGenericAliasExpr: caller passed rangedFloat — must be genericAlias / sizedGenericAlias")
 		rangedInt then panic("resolveGenericAliasExpr: caller passed rangedInt — must be genericAlias / sizedGenericAlias")
 		aliasName then panic("resolveGenericAliasExpr: caller passed aliasName — must be genericAlias / sizedGenericAlias")
+		functionAlias then panic("resolveGenericAliasExpr: caller passed functionAlias — function-type aliases drain via their own path")
 		invalid then panic("resolveGenericAliasExpr: caller passed invalid — must be genericAlias / sizedGenericAlias")
 	end 'extract'
 end 'resolveGenericAliasExpr'
@@ -222,6 +244,7 @@ function validateGenericInstanceArgs(project Project, expr UnresolvedTypeExpr, d
 		rangedFloat then return
 		rangedInt then return
 		aliasName then return
+		functionAlias then return
 		invalid then return
 	end 'extract'
 end 'validateGenericInstanceArgs'
@@ -270,6 +293,7 @@ function validateGenericInstanceConstraints(project Project, expr UnresolvedType
 		rangedFloat then return
 		rangedInt then return
 		aliasName then return
+		functionAlias then return
 		invalid then return
 	end 'extract'
 end 'validateGenericInstanceConstraints'
@@ -290,6 +314,7 @@ function validateGenericInstanceArity(project Project, expr UnresolvedTypeExpr, 
 		rangedFloat then return
 		rangedInt then return
 		aliasName then return
+		functionAlias then return
 		invalid then return
 	end 'extract'
 end 'validateGenericInstanceArity'
@@ -416,6 +441,25 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 			continue
 		end 'genericFork'
 
+		// Function-type aliases land in `genericTypealiases` too — the parser
+		// fully resolved the signature via `parseTypeRef`, so the carried
+		// MaxonType.function(id) is already canonical. No constraint check
+		// is needed (no generic args).
+		if isFunctionAliasExpr(entry.expr) 'functionFork'
+			match entry.expr 'extract'
+				functionAlias(target) then try project.genericTypealiases.insert(name, value: target) otherwise ignore
+				boolPrim then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for boolPrim arm")
+				rangedInt then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for rangedInt arm")
+				rangedFloat then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for rangedFloat arm")
+				aliasName then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for aliasName arm")
+				genericAlias then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for genericAlias arm")
+				sizedGenericAlias then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for sizedGenericAlias arm")
+				invalid then panic("drainResolvableTypealiases: isFunctionAliasExpr returned true for invalid arm")
+			end 'extract'
+			resolvedNames.push(name)
+			continue
+		end 'functionFork'
+
 		let result = tryResolveTypeExpr(project, expr: entry.expr)
 		if not result.success 'wait'
 			continue
@@ -492,6 +536,7 @@ function reportUnresolvedTypealias(project Project, entry UnresolvedTypealias)
 		rangedFloat then panic("TypeResolution: rangedFloat left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		genericAlias then panic("TypeResolution: genericAlias left unresolved for '{entry.name}' — drainResolvableTypealiases unconditionally resolves these into project.genericTypealiases")
 		sizedGenericAlias then panic("TypeResolution: sizedGenericAlias left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
+		functionAlias then panic("TypeResolution: functionAlias left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 		invalid then panic("TypeResolution: invalid left unresolved for '{entry.name}' — drainResolvableTypealiases should have handled it")
 	end 'classify'
 end 'reportUnresolvedTypealias'
@@ -950,7 +995,7 @@ function resolveAllEnumTypes(project Project)
 
 	for (name, entry) in project.unresolvedEnums 'sweep'
 		let expected = computeExpectedMethodsForConformances(project, declName: entry.name, conformances: entry.implementedInterfaces, declFilePath: entry.filePath)
-		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion, isStringBacked: entry.isStringBacked, isCharBacked: entry.isCharBacked)
+		let et = EnumType.create(entry.name, cases: entry.cases, isFloatBacked: entry.isFloatBacked, visibility: entry.visibility, sourceFilePath: entry.filePath, nameLine: entry.line, nameColumn: entry.column, expectedMethods: expected, isUnion: entry.isUnion, isStringBacked: entry.isStringBacked, isCharBacked: entry.isCharBacked, isFunctionBacked: entry.isFunctionBacked)
 		try project.enumTypes.insert(name, value: et) otherwise ignore
 		resolvedNames.push(name)
 	end 'sweep'
@@ -959,6 +1004,94 @@ function resolveAllEnumTypes(project Project)
 		_ = project.unresolvedEnums.remove(resolvedName)
 	end 'drop'
 end 'resolveAllEnumTypes'
+
+// Resolves the deferred function references on every function-backed enum.
+// Runs after `resolveAllEnumTypes` (which has populated `project.enumTypes`)
+// and after every file's top-level function signatures have been registered
+// into `project.funcReturnTypes` / `project.funcSignatures`. For each
+// function-backed enum, look every case's bare function identifier up via
+// `qualifyCalleeForContext`, then ensure all cases share the same signature
+// (signature = same parameter MaxonTypes + same return MaxonReturnType). On
+// success: rewrite each case's `rawFunctionName` to the fully qualified
+// callable name (so the `.rawValue` lowering can emit a matching `funcRef`),
+// and stamp the enum's `functionBackingTypeId` with the shared
+// `FunctionTypeId`. On failure: report a diagnostic and leave the enum
+// in its placeholder state.
+export function resolveFunctionBackedEnumRefs(project Project)
+	// Collect the work first, then mutate the map after — Maxon for-in
+	// tuple bindings are immutable, so we can't update enumDef in place
+	// during the iteration. The map.upsert at the end writes the resolved
+	// EnumType back keyed by its name.
+	var pendingNames = StringArray.create()
+	var pendingTypes = EnumTypeArray.create()
+	for (enumName, enumDef) in project.enumTypes 'sweep'
+		if not enumDef.isFunctionBacked 'notFn'
+			continue
+		end 'notFn'
+		if enumDef.functionBackingTypeId != 0 'alreadyResolved'
+			continue
+		end 'alreadyResolved'
+		var sharedFnTypeId = 0 as FunctionTypeId
+		var sharedFromCase = ""
+		var hadError = false
+		// Build a fresh case list with rewritten rawFunctionName. We replace
+		// the array rather than mutating elements because EnumCase fields
+		// flowing out of `for c in cases` are immutable.
+		var newCases = EnumCaseArray.create()
+		for i in 0 upto enumDef.cases.count() 'cases'
+			let c = try enumDef.cases.get(i) otherwise panic("resolveFunctionBackedEnumRefs: cases.get OOB at {i}")
+			if c.rawFunctionName.isEmpty() 'noFn'
+				newCases.push(c)
+				continue
+			end 'noFn'
+			let ns = deriveNamespace(enumDef.sourceFilePath)
+			let qualified = qualifyCalleeForContext(project, bare: c.rawFunctionName, callContext: CallContext.free, currentNamespace: ns, readerFilePath: enumDef.sourceFilePath)
+			if not project.funcSignatures.contains(qualified) or not project.funcReturnTypes.contains(qualified) 'noFunc'
+				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "function '{c.rawFunctionName}' (referenced by enum case '{enumName}.{c.name}') is not declared", line: c.line, column: c.column, filePath: enumDef.sourceFilePath)
+				hadError = true
+				newCases.push(c)
+				continue
+			end 'noFunc'
+			let sig = try project.funcSignatures.get(qualified) otherwise panic("resolveFunctionBackedEnumRefs: funcSignatures.contains(true) but get() failed for '{qualified}'")
+			let returnType = try project.funcReturnTypes.get(qualified) otherwise panic("resolveFunctionBackedEnumRefs: funcReturnTypes.contains(true) but get() failed for '{qualified}'")
+			let caseFnTypeId = internFunctionType(project, paramTypes: sig.paramTypes, returnType: returnType)
+			if sharedFnTypeId == 0 'first'
+				sharedFnTypeId = caseFnTypeId
+				sharedFromCase = c.name
+			end 'first' else if caseFnTypeId != sharedFnTypeId 'mismatch'
+				let gotSig = functionTypeToString(project, id: caseFnTypeId)
+				let expectedSig = functionTypeToString(project, id: sharedFnTypeId)
+				reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: function '{c.rawFunctionName}' has signature '{gotSig}', but case '{enumName}.{sharedFromCase}' established signature '{expectedSig}'", line: c.line, column: c.column, filePath: enumDef.sourceFilePath)
+				hadError = true
+			end 'mismatch'
+			let updated = EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.rawValue, line: c.line, column: c.column, payloadFields: c.payloadFields, backingStructName: c.backingStructName, backingStructExprId: c.backingStructExprId, rawStringValue: c.rawStringValue, rawFunctionName: qualified)
+			newCases.push(updated)
+		end 'cases'
+		if hadError 'skipCommit'
+			continue
+		end 'skipCommit'
+		let finalFnTypeId = sharedFnTypeId
+		let rebuilt = EnumType.create(enumDef.name, cases: newCases, isFloatBacked: enumDef.isFloatBacked, visibility: enumDef.visibility, sourceFilePath: enumDef.sourceFilePath, nameLine: enumDef.nameLine, nameColumn: enumDef.nameColumn, expectedMethods: enumDef.expectedMethods, isUnion: enumDef.isUnion, isStringBacked: enumDef.isStringBacked, isCharBacked: enumDef.isCharBacked, isFunctionBacked: true, functionBackingTypeId: finalFnTypeId)
+		pendingNames.push(enumName)
+		pendingTypes.push(rebuilt)
+		// Seed every case's function as a liveness root. The `.rawValue`
+		// lowering reaches these functions only through a StdCallOp.funcRef
+		// emitted in a synthesized helper — DFE's MaxonOp walker doesn't
+		// see those references, so without an explicit root each fn-backed
+		// case's function would get stripped before codegen.
+		for i in 0 upto newCases.count() 'roots'
+			let c = try newCases.get(i) otherwise panic("resolveFunctionBackedEnumRefs: newCases.get OOB at {i}")
+			if not c.rawFunctionName.isEmpty() 'haveFn'
+				project.livenessRoots.push(c.rawFunctionName)
+			end 'haveFn'
+		end 'roots'
+	end 'sweep'
+	for i in 0 upto pendingNames.count() 'apply'
+		let key = try pendingNames.get(i) otherwise panic("resolveFunctionBackedEnumRefs: pendingNames.get OOB at {i}")
+		let value = try pendingTypes.get(i) otherwise panic("resolveFunctionBackedEnumRefs: pendingTypes.get OOB at {i}")
+		project.enumTypes.upsert(key, value: value)
+	end 'apply'
+end 'resolveFunctionBackedEnumRefs'
 
 // Round `value` up to the next multiple of `multiple`. `multiple` is always
 // a positive power-of-2 here (1, 2, 4, 8 — the storeWidthBytes results), so
@@ -3206,9 +3339,19 @@ function fieldLoadResultType(project Project, receiverType MaxonType, fieldName 
 		if fieldNameStr == "name" 'isName'
 			return MaxonType.named(project.typeNames.intern("String"))
 		end 'isName'
-		if fieldNameStr == "rawValue" or fieldNameStr == "ordinal" 'isInt'
+		if fieldNameStr == "rawValue" 'isRaw'
+			// Function-backed enums return a function pointer of the enum's
+			// shared signature; all other backings (int/float/string/char/struct/ordinal)
+			// surface as int at the producer-type level.
+			let enumDef = try project.enumTypes.get(structName) otherwise return MaxonType.integer
+			if enumDef.isFunctionBacked and enumDef.functionBackingTypeId != 0 'asFn'
+				return MaxonType.function(enumDef.functionBackingTypeId)
+			end 'asFn'
 			return MaxonType.integer
-		end 'isInt'
+		end 'isRaw'
+		if fieldNameStr == "ordinal" 'isOrdinal'
+			return MaxonType.integer
+		end 'isOrdinal'
 	end 'maybeEnumAccessor'
 	let structType = try project.structTypes.get(structName) otherwise return MaxonType.unresolved
 	let fieldIdx = try structType.fieldByName.get(String.from(fieldName)) otherwise return MaxonType.unresolved
@@ -6144,6 +6287,12 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	drainPendingConstraintChecks(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
+	// Phase 9 function-backed enums: every case's bare function identifier
+	// (recorded as `EnumCase.rawFunctionName` at parse time) is resolved
+	// here against the now-populated funcSignatures/funcReturnTypes maps.
+	// Each case gets its name rewritten to a fully qualified callable name
+	// and the enum stamps its shared FunctionTypeId on `functionBackingTypeId`.
+	resolveFunctionBackedEnumRefs(project)
 	// Compute struct field offsets and total byteSize now that every named
 	// type the parser saw has been promoted into `project.structTypes` /
 	// `project.enumTypes` / `project.typealiases`. Must run before any

@@ -228,6 +228,14 @@ public static class CallGraphDialects {
       case MaxonClosureCreateOp cc:
         sink.Add(cc.FunctionName);
         break;
+      // Function-backed enum .rawValue: pins every case's backing function
+      // reachable. The select chain emitted at lowering uses StdFuncRefOp for
+      // each case, so the linker needs all those function symbols present.
+      case MaxonEnumFunctionRawValueOp efrv when module.TypeDefs.TryGetValue(efrv.EnumTypeName, out var def) && def is IrEnumType et:
+        foreach (var c in et.Cases) {
+          if (c.RawValue is string fn) sink.Add(fn);
+        }
+        break;
       case MaxonGlobalLoadOp gl when gl.LazyInitFuncName is string lazy:
         sink.Add(lazy);
         break;

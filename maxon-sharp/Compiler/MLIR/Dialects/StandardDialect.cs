@@ -1294,6 +1294,8 @@ public static class StdValueFactory {
     if (type is IrEnumType) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrStructType) return new StdI64(IrContext.Current.NextStdId());
     if (type is IrRangedPrimitiveType rpt) return CreateStdValueForType(rpt.OptimalType);
+    // Function values are represented as 64-bit code-pointers in storage.
+    if (type is IrFunctionType) return new StdI64(IrContext.Current.NextStdId());
     throw new InvalidOperationException($"Cannot create StdValue for type: {type}");
   }
 }

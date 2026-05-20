@@ -1,0 +1,80 @@
+// Test: function-backing.through-variable
+
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+function apply(op Op, x Integer) returns Integer
+	let f = op.rawValue
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(Op.tripleOp, x: 14)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @doubleFn(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 2 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @tripleFn(local0: i64) -> i64 {
+  entry:
+    %4 = mir.param local0 : i64
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.mul.i64 %4, %2
+    mir.ret %3
+  }
+  func @apply(local0: u8, local1: i64) -> i64 {
+  entry:
+    %9 = mir.param local0 : u8
+    %10 = mir.param local1 : i64
+    mir.br inlined___enum_Op_fnRaw_0()
+  inlined___enum_Op_fnRaw_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp eq, %9, %11
+    mir.cond_br %12 [then: inlined___enum_Op_fnRaw_1(), else: inlined___enum_Op_fnRaw_2()]
+  inlined___enum_Op_fnRaw_1:
+    %13 = mir.func_addr @__fnref_doubleFn
+    mir.br inline_cont_apply_0(%13)
+  inlined___enum_Op_fnRaw_2:
+    %14 = mir.func_addr @__fnref_tripleFn
+    mir.br inline_cont_apply_0(%14)
+  inline_cont_apply_0:
+    %6 = mir.mov_imm 0 : i64
+    %8 = mir.indirect_call %15(%10, %6)
+    mir.ret %8
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 14 : i64
+    %2 = mir.call @apply(%0, %1)
+    %3 = mir.mov_imm 125 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_0
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

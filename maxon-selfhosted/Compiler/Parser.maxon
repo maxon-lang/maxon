@@ -546,7 +546,16 @@ export type Parser
 			return MaxonType.genericInstance(giid)
 		end 'isGenericInstance'
 
-		return internMaxonType(project, name: typeToken.value)
+		// If the bare name resolves to a function-type alias, substitute the
+		// underlying `MaxonType.function(id)` directly. This keeps function-
+		// typed parameters and return types observable as such everywhere the
+		// parser branches on `isFunctionMaxonType` (env-slot allocation,
+		// indirect-call dispatch). Falls back to the standard named-type
+		// intern when the alias is not a function-type alias or doesn't
+		// exist; the resolver later promotes the named reference.
+		let interned = internMaxonType(project, name: typeToken.value)
+		let chased = chaseTypealiasToFunctionType(project, t: interned)
+		return chased
 	end 'parseTypeRef'
 
 	// Phase 11.0: True iff `name` is one of the in-scope type-parameter bare
@@ -2933,6 +2942,45 @@ export type Parser
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
+	// Peek across the parenthesized RHS of a typealias to decide between
+	// function-type and tuple-type parsing. Cursor must be AT the opening
+	// `(`. Walks paren-balanced tokens until the matching `)` and inspects
+	// the token after. Returns true iff the shape is a function type:
+	//   - `(...) returns T` — explicit return clause
+	//   - `()` — empty parens are always a function type (void→void)
+	//   - `(T)` — single element with no follow-up commas at depth 0
+	// Returns false otherwise (2+ comma-separated elements without
+	// `returns` is a tuple). Tolerates EOF mid-scan by falling back to
+	// tuple — the downstream tuple parser then reports a clean diagnostic.
+	function typealiasRhsLooksLikeFunctionType() returns bool
+		var depth = 1 as ParsedInt
+		var offset = 1 as ParsedInt
+		var commaCountAtDepthZero = 0 as ParsedInt
+		while depth > 0 'scan'
+			let tok = try cursor.peek(offset) otherwise return false
+			if tok.kind == TokenKind.leftParen 'openParen'
+				depth = depth + 1
+			end 'openParen' else if tok.kind == TokenKind.rightParen 'closeParen'
+				depth = depth - 1
+			end 'closeParen' else if tok.kind == TokenKind.comma 'isComma'
+				if depth == 1 'topLevel'
+					commaCountAtDepthZero = commaCountAtDepthZero + 1
+				end 'topLevel'
+			end 'isComma'
+			offset = offset + 1
+		end 'scan'
+		// At this point `offset` points one token past the closing `)`.
+		let afterParen = try cursor.peek(offset) otherwise Token.eof()
+		if afterParen.kind == TokenKind.returns 'hasReturns'
+			return true
+		end 'hasReturns'
+		// 0 or 1 element (no commas at top level) is also a function type
+		// — but we need to distinguish `()` (0 elements) from `(T)` (1).
+		// `commaCountAtDepthZero == 0` covers both; tuple parses require
+		// at least one comma between elements.
+		return commaCountAtDepthZero == 0
+	end 'typealiasRhsLooksLikeFunctionType'
+
 	// Phase 11.0 step 2: shared RHS parser used by both top-level and
 	// inner-body typealias declarations. Returns the captured expression
 	// on success. Throws `ParserError.unhandledToken` after emitting a
@@ -2958,41 +3006,49 @@ export type Parser
 			sawValidBase = true
 		end 'isBool'
 
-		// Tuple-type RHS: `typealias Entry = (Key, Value)` desugars to a
-		// generic instance of a synthetic `__TupleN` base struct. The
-		// arity decides the base (`__Tuple2` for 2 elements, `__Tuple3`
-		// for 3); each element must be a bare identifier (a type-param
-		// in the enclosing scope, or a type name resolvable later). The
-		// generic-alias resolver path then folds this into a real
-		// `MaxonType.genericInstance`. Mirrors the C# bootstrap's tuple
-		// typealias handling.
-		if not sawValidBase and baseToken.kind == TokenKind.leftParen 'isTuple'
-			try eat(TokenKind.leftParen)
-			var elemNames = StringArray.create()
-			while not at(TokenKind.rightParen) 'tupleLoop'
-				let elemTok = cursor.current()
-				if not isTypeNameToken(elemTok) 'badElem'
-					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple element must be a type name, got '{tokenValueToString(elemTok.value)}'", line: elemTok.line, column: elemTok.column, filePath: filePath)
-					skipToNextLine()
+		// Paren-prefixed RHS: either a function-type alias
+		// (`typealias UnaryOp = (Integer) returns Integer`) or a tuple-type
+		// alias (`typealias Entry = (Key, Value)`). The disambiguation rule
+		// mirrors `parseTypeRef`: 0/1 elements OR any-arity followed by
+		// `returns` is a function type; 2+ elements without `returns` is a
+		// tuple. We delegate the function-type branch to `parseTypeRef`
+		// (which already handles the full grammar including nested types)
+		// and keep the tuple branch on its bare-identifier path so type-
+		// parameter names from the enclosing decl resolve through the
+		// genericAlias scope-aware lookup.
+		if not sawValidBase and baseToken.kind == TokenKind.leftParen 'isParen'
+			if typealiasRhsLooksLikeFunctionType() 'isFnAlias'
+				let fnType = try parseTypeRef()
+				expr = UnresolvedTypeExpr.functionAlias(fnType)
+				sawValidBase = true
+			end 'isFnAlias' else 'isTuple'
+				try eat(TokenKind.leftParen)
+				var elemNames = StringArray.create()
+				while not at(TokenKind.rightParen) 'tupleLoop'
+					let elemTok = cursor.current()
+					if not isTypeNameToken(elemTok) 'badElem'
+						reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple element must be a type name, got '{tokenValueToString(elemTok.value)}'", line: elemTok.line, column: elemTok.column, filePath: filePath)
+						skipToNextLine()
+						throw ParserError.unhandledToken
+					end 'badElem'
+					_ = try consume()
+					usedTypeAliases.insert(element: elemTok.value)
+					elemNames.push(elemTok.value)
+					if at(TokenKind.rightParen) 'doneTuple'
+						break
+					end 'doneTuple'
+					try expect(TokenKind.comma)
+				end 'tupleLoop'
+				try expect(TokenKind.rightParen)
+				if elemNames.count() < 2 'badArity'
+					reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple must have at least 2 elements", line: baseToken.line, column: baseToken.column, filePath: filePath)
 					throw ParserError.unhandledToken
-				end 'badElem'
-				_ = try consume()
-				usedTypeAliases.insert(element: elemTok.value)
-				elemNames.push(elemTok.value)
-				if at(TokenKind.rightParen) 'doneTuple'
-					break
-				end 'doneTuple'
-				try expect(TokenKind.comma)
-			end 'tupleLoop'
-			try expect(TokenKind.rightParen)
-			if elemNames.count() < 2 'badArity'
-				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}' tuple must have at least 2 elements", line: baseToken.line, column: baseToken.column, filePath: filePath)
-				throw ParserError.unhandledToken
-			end 'badArity'
-			let baseName = "__Tuple{elemNames.count()}"
-			expr = UnresolvedTypeExpr.genericAlias(baseName, args: elemNames)
-			sawValidBase = true
-		end 'isTuple'
+				end 'badArity'
+				let baseName = "__Tuple{elemNames.count()}"
+				expr = UnresolvedTypeExpr.genericAlias(baseName, args: elemNames)
+				sawValidBase = true
+			end 'isTuple'
+		end 'isParen'
 
 		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
 			let isFloat = baseToken.kind == TokenKind.float
@@ -3481,6 +3537,11 @@ export type Parser
 		var isFloatBacked = false
 		var isStringBacked = false
 		var isCharBacked = false
+		// Phase 9 function-backing: set by the first `case = funcName` case;
+		// subsequent cases must also be function-backed (E3032 on mix). The
+		// resolver pass binds every case to a single FunctionTypeId after
+		// pre-scan completes.
+		var isFunctionBacked = false
 		// Phase 9 Stage 5 (struct-backing): when a case carries
 		// `= StructType{...}`, the struct type fixes the backing for every
 		// case in the enum. Empty means no struct backing has been seen yet;
@@ -3555,6 +3616,11 @@ export type Parser
 			// emit the user-visible rendering; `.rawValue` / `.fromName`
 			// look it up the same way.
 			var rawStringValue = ""
+			// Source-token spelling for `caseName = funcName` cases; empty
+			// otherwise. The post-prescan resolver looks the name up against
+			// `project` and rewrites it to a fully qualified callee name that
+			// the lowering pass passes to `funcRef`.
+			var rawFunctionName = ""
 
 			if accept(TokenKind.equals) 'hasRawValue'
 				let valueToken = cursor.current()
@@ -3599,34 +3665,81 @@ export type Parser
 					end 'structVsFloatMix'
 					hasExplicitBacking = true
 					isFloatBacked = true
-				end 'isFloat' else if magToken.kind == TokenKind.identifier and rawSign > 0 'isStructBacking'
-					// Phase 9 Stage 5: `caseName = StructType{...}` /
-					// `caseName = StructType.create(...)` — capture the per-case
-					// struct backing literal. The struct type is fixed by the
-					// first such case; subsequent cases must use the same type.
-					// The cases keep their auto-assigned ordinal as the rawValue
-					// (the runtime representation is the ordinal i64).
-					let structTypeNameForCase = magToken.value
-					if not enumStructBackingTypeName.isEmpty() and structTypeNameForCase != enumStructBackingTypeName 'wrongStructType'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'wrongStructType'
-					if hasExplicitBacking 'numericVsStruct'
-						var priorBacking = "int"
-						if isFloatBacked 'asFloat'
-							priorBacking = "float"
-						end 'asFloat'
-						reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
-					end 'numericVsStruct'
-					let exprId = try parseConstStructLiteralRoot()
-					caseBackingTypeName = structTypeNameForCase
-					caseBackingExprId = exprId
-					if enumStructBackingTypeName.isEmpty() 'firstStruct'
-						enumStructBackingTypeName = structTypeNameForCase
-					end 'firstStruct'
-					rawValue = nextOrdinal
-					rawIsFloat = false
-					nextOrdinal = nextOrdinal + 1
-				end 'isStructBacking' else if magToken.kind == TokenKind.stringLiteral and rawSign > 0 'isStringLit'
+				end 'isFloat' else if magToken.kind == TokenKind.identifier and rawSign > 0 'isIdentBacking'
+					// Disambiguate `caseName = Identifier`. Three shapes share
+					// the identifier prefix:
+					//   `Identifier{...}` / `Identifier.create(...)` — struct backing
+					//   `Identifier`                                — function backing
+					// Look one token ahead: a `{` or a `.` means struct backing,
+					// anything else (newline / comma / end / EOF) is a function
+					// reference whose signature gets resolved later by
+					// resolveFunctionBackedEnumRefs once all top-level
+					// functions are registered.
+					let nextTok = try cursor.peek(1) otherwise Token.eof()
+					let isStructForm = nextTok.kind == TokenKind.leftBrace or nextTok.kind == TokenKind.dot
+					if isStructForm 'isStructBacking'
+						// Phase 9 Stage 5: `caseName = StructType{...}` /
+						// `caseName = StructType.create(...)` — capture the per-case
+						// struct backing literal. The struct type is fixed by the
+						// first such case; subsequent cases must use the same type.
+						// The cases keep their auto-assigned ordinal as the rawValue
+						// (the runtime representation is the ordinal i64).
+						let structTypeNameForCase = magToken.value
+						if not enumStructBackingTypeName.isEmpty() and structTypeNameForCase != enumStructBackingTypeName 'wrongStructType'
+							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						end 'wrongStructType'
+						if hasExplicitBacking 'numericVsStruct'
+							var priorBacking = "int"
+							if isFloatBacked 'asFloat'
+								priorBacking = "float"
+							end 'asFloat'
+							if isFunctionBacked 'asFn'
+								priorBacking = "function"
+							end 'asFn'
+							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got {structTypeNameForCase}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						end 'numericVsStruct'
+						let exprId = try parseConstStructLiteralRoot()
+						caseBackingTypeName = structTypeNameForCase
+						caseBackingExprId = exprId
+						if enumStructBackingTypeName.isEmpty() 'firstStruct'
+							enumStructBackingTypeName = structTypeNameForCase
+						end 'firstStruct'
+						rawValue = nextOrdinal
+						rawIsFloat = false
+						nextOrdinal = nextOrdinal + 1
+					end 'isStructBacking' else 'isFunctionBacking'
+						// Phase 9 function backing: `caseName = funcName`. Record
+						// the bare function name for resolveFunctionBackedEnumRefs
+						// (post-prescan) to look up + validate signature uniformity
+						// across cases. Runtime representation stays the ordinal;
+						// the `.rawValue` lowering rebuilds the per-case function
+						// pointer via a compare-eq + funcRef chain over the ordinal.
+						if hasExplicitBacking and not isFunctionBacked 'fnMismatch'
+							var priorBacking = "int"
+							if isFloatBacked 'asFloat'
+								priorBacking = "float"
+							end 'asFloat'
+							if isStringBacked 'asString'
+								priorBacking = "string"
+							end 'asString'
+							if isCharBacked 'asChar'
+								priorBacking = "char"
+							end 'asChar'
+							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {priorBacking}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						end 'fnMismatch'
+						if not enumStructBackingTypeName.isEmpty() 'structVsFnMix'
+							reportCompileError(project, code: ErrorCode.semanticEnumRawValueTypeMismatch, message: "raw value type mismatch: 'expected {enumStructBackingTypeName}, got function'", line: caseToken.line, column: caseToken.column, filePath: filePath)
+						end 'structVsFnMix'
+						let funcIdent = magToken.value
+						try eat(TokenKind.identifier)
+						hasExplicitBacking = true
+						isFunctionBacked = true
+						rawValue = nextOrdinal
+						rawIsFloat = false
+						rawFunctionName = funcIdent
+						nextOrdinal = nextOrdinal + 1
+					end 'isFunctionBacking'
+				end 'isIdentBacking' else if magToken.kind == TokenKind.stringLiteral and rawSign > 0 'isStringLit'
 					// Phase 9 (string-backed enums): `caseName = "literal"`.
 					// Runtime representation stays as the auto-incrementing
 					// ordinal so `match` / equality / hashing all compile to
@@ -3716,10 +3829,23 @@ export type Parser
 			// pattern for floats and the literal text for string/char; the
 			// spec only requires the literal to appear in the message.
 			let dupOnString = isStringBacked or isCharBacked
+			let dupOnFunction = isFunctionBacked
 			for existing in cases 'checkDup'
-				let isDupHit = (dupOnString and not rawStringValue.isEmpty() and existing.rawStringValue == rawStringValue) or (not dupOnString and existing.rawValue == rawValue)
+				var isDupHit = false
+				if dupOnString 'asString'
+					isDupHit = not rawStringValue.isEmpty() and existing.rawStringValue == rawStringValue
+				end 'asString' else if dupOnFunction 'asFn'
+					isDupHit = not rawFunctionName.isEmpty() and existing.rawFunctionName == rawFunctionName
+				end 'asFn' else 'asNumeric'
+					isDupHit = existing.rawValue == rawValue
+				end 'asNumeric'
 				if isDupHit 'isDup'
-					let dupShown = rawStringValue if dupOnString else "{rawValue}"
+					var dupShown = "{rawValue}"
+					if dupOnString 'shStr'
+						dupShown = rawStringValue
+					end 'shStr' else if dupOnFunction 'shFn'
+						dupShown = rawFunctionName
+					end 'shFn'
 					reportCompileError(project, code: ErrorCode.semanticEnumDuplicateRawValue, message: "duplicate raw value: '{dupShown}'", line: caseToken.line, column: caseToken.column, filePath: filePath)
 					break
 				end 'isDup'
@@ -3736,7 +3862,7 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue))
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: rawValue, line: caseToken.line, column: caseToken.column, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId, rawStringValue: rawStringValue, rawFunctionName: rawFunctionName))
 
 			// Register the case as a top-level constant so the existing
 			// `unresolvedRead → literal` rewrite resolves `EnumName.case`.
@@ -3775,7 +3901,7 @@ export type Parser
 		// Patch the pre-registered placeholder with the full case list. The
 		// duplicate-name diagnostic was already issued above when we tried to
 		// insert the placeholder, so this upsert is unconditional.
-		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: isStringBacked, isCharBacked: isCharBacked)
+		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: isStringBacked, isCharBacked: isCharBacked, isFunctionBacked: isFunctionBacked)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
 
 		// Phase 9 Stage 5: synthesize the per-enum `.fromRawValue` /
@@ -9268,10 +9394,15 @@ export type Parser
 				// control flow (e.g. a nested `try EXPR otherwise FB`), so the
 				// methodCall must live where its args' defining ops dominate.
 				module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(memberToken, last: rparenToken)))
-				// Method-call result type is filled in by TypeResolution from
-				// the resolved callee signature — the parser doesn't peek
-				// into `project.funcReturnTypes`.
-				result = ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
+				// Method-call result type is normally filled in by
+				// TypeResolution from the resolved callee signature, but
+				// generic methods returning a value-position type parameter
+				// (e.g. `Map.get` returning `Value`) need parse-time eager
+				// fill when the receiver's value binding is a function-type
+				// alias. Without that, a follow-on `f(7)` on the bound name
+				// gets mis-routed as a regular call and trips fillBinop on
+				// unresolved operands.
+				result = ExprResult.direct(methodResultName, valueType: parseTimeMethodReturnTypeForFn(receiverType: exprType(result)))
 				continue
 			end 'isMethodCall'
 
@@ -9290,8 +9421,10 @@ export type Parser
 			module.appendOp(block, op: MaxonOp.fieldLoad(fieldLoadName, receiver: receiverName, fieldName: memberNameBytes, range: SourceRange.ofToken(memberToken)))
 			// Field-load result type is filled in by TypeResolution from
 			// the receiver's resolved struct-field layout — the parser
-			// doesn't peek into `project.structTypes`.
-			result = ExprResult.direct(fieldLoadName, valueType: MaxonType.unresolved)
+			// doesn't peek into `project.structTypes`. Exception:
+			// `.rawValue` on a function-backed enum needs the signature now
+			// so the binding's later call site picks the indirectCall path.
+			result = ExprResult.direct(fieldLoadName, valueType: parseTimeFieldLoadResultTypeForFn(memberToken: memberToken, receiverType: exprType(result)))
 		end 'postfixLoop'
 
 		return result
@@ -9383,9 +9516,11 @@ export type Parser
 					let methodResultName = freshSynthName()
 					// Emit into `currentBlock` — see emitCallAndResult for rationale.
 					module.appendOp(currentBlock, op: MaxonOp.methodCall(methodResultName, receiver: receiverLoadName, methodName: memberNameBytes, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: SourceRange.between(token, last: rparenToken)))
-					// methodCall result type is filled in by TypeResolution
-					// from `funcReturnTypes` once registries are populated.
-					return ExprResult.direct(methodResultName, valueType: MaxonType.unresolved)
+					// Eager parse-time fill ONLY for the function-valued return
+					// case — see parseTimeMethodReturnTypeForFn for rationale.
+					// Other method-call result types remain `unresolved` for
+					// TypeResolution to fill from the resolved signature.
+					return ExprResult.direct(methodResultName, valueType: parseTimeMethodReturnTypeForFn(receiverType: receiverVarType))
 				end 'isMethodOnLocal'
 				// Qualified static call: Type.method(...) — lowering resolves verbatim.
 				// Defer the named-arg-required check (E3005) to TypeResolution
@@ -9651,8 +9786,16 @@ export type Parser
 				let resultName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.unresolvedRead(resultName, name: qualifiedName, range: SourceRange.between(token, last: memberToken)))
 				// Producer type is filled in by TypeResolution when it
-				// rewrites the unresolvedRead — see `enumLiteralType`.
-				return ExprResult.direct(resultName, valueType: MaxonType.unresolved)
+				// rewrites the unresolvedRead — see `enumLiteralType`. Exception:
+				// when the head is a known enum, surface its type at parse time
+				// so a follow-on `.rawValue` on a function-backed enum can
+				// observe the function signature now (needed for the indirect-
+				// call dispatch check at the binding's call site).
+				var enumValueType = MaxonType.unresolved
+				if prefixIsEnum 'tagAsEnum'
+					enumValueType = MaxonType.named(project.typeNames.intern(token.value))
+				end 'tagAsEnum'
+				return ExprResult.direct(resultName, valueType: enumValueType)
 			end 'isFieldRead'
 		end 'maybeQualifiedRead'
 
@@ -10039,10 +10182,212 @@ export type Parser
 	function emitCallAndResult(calleeName String, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, callContext CallContext, range SourceRange = SourceRange.none()) returns ExprResult
 		let callName = freshSynthName()
 		module.appendOp(currentBlock, op: MaxonOp.call(callName, callee: project.calleeNames.intern(calleeName), callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range))
-		// Call result type is filled in by TypeResolution from
-		// `funcReturnTypes` once registries are fully populated.
-		return ExprResult.direct(callName, valueType: MaxonType.unresolved)
+		// Most call result types are filled in by TypeResolution from
+		// `funcReturnTypes` once registries are fully populated. The single
+		// parse-time exception is a call returning a function type — that
+		// has to be observable now so a `let f = pickDouble()` binding
+		// records `f` as function-typed and the next `f(21)` site dispatches
+		// through the indirect-call path. Lowering pairs the function-
+		// typed call result with env=0 in `recordCallResultType`, so the
+		// downstream `lowerIndirectCall` invariant holds.
+		return ExprResult.direct(callName, valueType: parseTimeReturnTypeForCallee(calleeName))
 	end 'emitCallAndResult'
+
+	// Best-effort method-call companion: when a method call's receiver is a
+	// generic instance (e.g. `Map with(String, UnaryOp)`) and the Value /
+	// Element type parameter binds to a function-type alias, return that
+	// function type. This is a narrowly-scoped hack — most method calls
+	// resolve types in TypeResolution, but `let f = m.get("d")` needs the
+	// function-type observable now so the parser's indirect-call check at
+	// `f(7)` finds it. Returns `MaxonType.unresolved` otherwise.
+	function parseTimeMethodReturnTypeForFn(receiverType MaxonType) returns MaxonType
+		// `receiverType` is the parsed type of the receiver expression. For
+		// `var m HandlerMap = ...`, parseTypeRef stored the resolved
+		// `genericInstance(Map, [String, UnaryOp])` (or, via the function-
+		// alias chase introduced for this branch, `genericInstance(Map,
+		// [String, function(id)])`). We don't know which method was called
+		// here — just probe the Value-position type arg and return it if
+		// it's a function type. This may over-eagerly fill returns for
+		// methods like `count()` that don't return Value, but TypeResolution
+		// later rewrites those via the resolved signature, so an over-eager
+		// `function(id)` fill is harmless (it'd be overridden if wrong).
+		let lastArg = extractGenericInstanceLastArg(receiverType)
+		if isUnresolvedMaxonType(lastArg) 'noLast'
+			return MaxonType.unresolved
+		end 'noLast'
+		let chased = chaseTypealiasToFunctionType(project, t: lastArg)
+		if isFunctionMaxonType(chased) 'isFn'
+			return chased
+		end 'isFn'
+		return MaxonType.unresolved
+	end 'parseTimeMethodReturnTypeForFn'
+
+	// Parse-time field-load type companion: when the field is `rawValue` and
+	// the receiver is a `MaxonType.named(EnumName)` for a function-backed
+	// enum, surface the enum's shared signature so a follow-on call site
+	// dispatches via indirectCall. The signature may not be fully resolved
+	// yet (functionBackingTypeId could be 0 if the enum is still pending
+	// resolveFunctionBackedEnumRefs), in which case we return unresolved
+	// and the call site falls back to the regular call path — accepted as a
+	// soft restriction: cross-file forward-ref shapes still compile because
+	// the parser already saw the `isFunctionBacked` flag on the
+	// UnresolvedEnumType, even if the FunctionTypeId hasn't been interned.
+	function parseTimeFieldLoadResultTypeForFn(memberToken Token, receiverType MaxonType) returns MaxonType
+		if memberToken.value != "rawValue" 'notRaw'
+			return MaxonType.unresolved
+		end 'notRaw'
+		// Receiver must be `MaxonType.named(EnumName)` — the `isFieldRead`
+		// branch tags enum-name reads with this shape.
+		let nameId = match receiverType 'extract'
+			named(id) gives id
+			boolean gives 0 as TypeNameId
+			integer gives 0 as TypeNameId
+			float gives 0 as TypeNameId
+			string gives 0 as TypeNameId
+			genericInstance gives 0 as TypeNameId
+			function gives 0 as TypeNameId
+			unresolved gives 0 as TypeNameId
+			typeParameter gives 0 as TypeNameId
+			interface gives 0 as TypeNameId
+			constInt gives 0 as TypeNameId
+		end 'extract'
+		if nameId == 0 'noEnumName'
+			return MaxonType.unresolved
+		end 'noEnumName'
+		let enumName = project.typeNames.get(nameId)
+		if enumName.isEmpty() 'badName'
+			return MaxonType.unresolved
+		end 'badName'
+		// Already-resolved enum: read the stamped fnTypeId.
+		if let enumDef = try project.enumTypes.get(enumName) 'resolved'
+			if enumDef.isFunctionBacked and enumDef.functionBackingTypeId != 0 'fnBacked'
+				return MaxonType.function(enumDef.functionBackingTypeId)
+			end 'fnBacked'
+		end 'resolved'
+		// Pre-TypeResolution: look at the UnresolvedEnumType. If it's
+		// function-backed, opportunistically intern the FunctionTypeId now
+		// by looking the first case's function name up against funcSignatures.
+		// If the function isn't registered yet (forward reference within the
+		// same file, or unparsed cross-file), fall back to unresolved.
+		if let unresolved = try project.unresolvedEnums.get(enumName) 'haveUnresolved'
+			if unresolved.isFunctionBacked and unresolved.cases.count() > 0 'isFnBacked'
+				let firstCase = try unresolved.cases.get(0) otherwise return MaxonType.unresolved
+				if not firstCase.rawFunctionName.isEmpty() 'haveName'
+					let ns = deriveNamespace(unresolved.filePath)
+					let qualified = qualifyCalleeForContext(project, bare: firstCase.rawFunctionName, callContext: CallContext.free, currentNamespace: ns, readerFilePath: unresolved.filePath)
+					if project.funcSignatures.contains(qualified) and project.funcReturnTypes.contains(qualified) 'sigKnown'
+						let sig = try project.funcSignatures.get(qualified) otherwise return MaxonType.unresolved
+						let returnType = try project.funcReturnTypes.get(qualified) otherwise return MaxonType.unresolved
+						let fnTypeId = internFunctionType(project, paramTypes: sig.paramTypes, returnType: returnType)
+						return MaxonType.function(fnTypeId)
+					end 'sigKnown'
+				end 'haveName'
+			end 'isFnBacked'
+		end 'haveUnresolved'
+		return MaxonType.unresolved
+	end 'parseTimeFieldLoadResultTypeForFn'
+
+	// Last (Value/Element-position) type argument of a `genericInstance(gid)`
+	// receiver. Returns `MaxonType.unresolved` for any non-generic-instance
+	// receiver or empty arg list — callers treat that as "no opinion".
+	function extractGenericInstanceLastArg(t MaxonType) returns MaxonType
+		return match t 'extract'
+			genericInstance(gid) gives genericInstanceLastArgOrUnresolved(gid)
+			boolean gives MaxonType.unresolved
+			integer gives MaxonType.unresolved
+			float gives MaxonType.unresolved
+			string gives MaxonType.unresolved
+			named gives MaxonType.unresolved
+			function gives MaxonType.unresolved
+			unresolved gives MaxonType.unresolved
+			typeParameter gives MaxonType.unresolved
+			interface gives MaxonType.unresolved
+			constInt gives MaxonType.unresolved
+		end 'extract'
+	end 'extractGenericInstanceLastArg'
+
+	function genericInstanceLastArgOrUnresolved(gid GenericInstanceId) returns MaxonType
+		let (_, args) = project.genericInstances.get(gid)
+		if args.count() == 0 'noArgs'
+			return MaxonType.unresolved
+		end 'noArgs'
+		return try args.get(args.count() - 1) otherwise MaxonType.unresolved
+	end 'genericInstanceLastArgOrUnresolved'
+
+	// Best-effort: when a bare callee resolves at parse time to a function whose
+	// return type is a `MaxonType.function(_)`, return that function type so
+	// the caller's binding sees the indirect-call shape. Otherwise return
+	// `MaxonType.unresolved` and let TypeResolution finish the job. Chases
+	// through one hop of function-type alias so a `returns UnaryOp` clause is
+	// recognized even when `UnaryOp` is still in the unresolved-typealias map.
+	//
+	// Also handles the static-factory case `TypeAlias.create()`: when the
+	// dotted head is a generic typealias whose binding has a function in a
+	// value position (e.g. `HandlerMap = Map with(String, UnaryOp)`), the
+	// `Self`-returning factory should propagate `genericInstance(Map,
+	// [String, function(id)])` to its binding. Surfacing that as a return
+	// type here lets the receiver's slot type carry the generic instance so
+	// downstream `m.get("d")` site can see the function-typed Value.
+	function parseTimeReturnTypeForCallee(calleeName String) returns MaxonType
+		// `funcReturnTypes` is keyed by qualified name; try the namespace-
+		// prefixed form first, then the bare name as a fallback for stdlib /
+		// non-namespaced callees.
+		let qualified = qualifyName(namespace, name: calleeName)
+		if let rt = try project.funcReturnTypes.get(qualified) 'fromQualified'
+			let chased = chaseTypealiasToFunctionType(project, t: maxonReturnTypeValueOrUnresolved(rt))
+			if isFunctionMaxonType(chased) 'isFn'
+				return chased
+			end 'isFn'
+		end 'fromQualified'
+		if let rt = try project.funcReturnTypes.get(calleeName) 'fromBare'
+			let chased = chaseTypealiasToFunctionType(project, t: maxonReturnTypeValueOrUnresolved(rt))
+			if isFunctionMaxonType(chased) 'isFn'
+				return chased
+			end 'isFn'
+		end 'fromBare'
+		// Static-factory promotion for function-valued generics only:
+		// `HandlerMap.create()` where `HandlerMap = Map with(String, UnaryOp)`
+		// — without this, the binding's slot type stays `unresolved` and
+		// follow-on method calls (`m.get("d")`) can't surface the function-
+		// typed Value for the parser's indirect-call check.
+		// The condition is intentionally narrow: only fire when the dotted
+		// head resolves to a generic instance whose last (Value/Element)
+		// type arg is a function type. Non-function generics keep their
+		// `unresolved` return so we don't second-guess TypeResolution's
+		// fuller `inferGenericReturnFromArgs` for return-type-polymorphic
+		// factories (`Set.from`, `Array.with`, etc.).
+		let calleeBytes = calleeName.toByteArray()
+		let dotIdx = lastIndexOfDotByte(calleeBytes)
+		if dotIdx < calleeBytes.count() 'isDotted'
+			let head = byteSliceToString(calleeBytes, startIndex: 0, endIndex: dotIdx)
+			// drainResolvableTypealiases hasn't run yet at parse time, so
+			// probe both registries. genericTypealiases is checked first in
+			// case stdlib cache restore landed bootstrap aliases there;
+			// unresolvedTypealiases holds anything declared in the current
+			// pass that hasn't been drained.
+			if let aliased = try project.genericTypealiases.get(head) 'haveResolvedAlias'
+				let lastArg = extractGenericInstanceLastArg(aliased)
+				if isFunctionMaxonType(lastArg) 'hasFnValue'
+					return aliased
+				end 'hasFnValue'
+			end 'haveResolvedAlias'
+			if let entry = try project.unresolvedTypealiases.get(head) 'haveUnresolvedAlias'
+				if isGenericAliasExpr(entry.expr) 'isGenericRhs'
+					let resolved = resolveGenericAliasExpr(project, expr: entry.expr, declaringTypeName: "")
+					let lastArg = extractGenericInstanceLastArg(resolved)
+					// Chase the last arg through function-type aliases —
+					// `genericAlias(Map, ["String", "UnaryOp"])` resolves
+					// args by name into `MaxonType.named(...)`, and the
+					// per-arg typealias is not yet drained at parse time.
+					let chasedLast = chaseTypealiasToFunctionType(project, t: lastArg)
+					if isFunctionMaxonType(chasedLast) 'hasFnValueU'
+						return resolved
+					end 'hasFnValueU'
+				end 'isGenericRhs'
+			end 'haveUnresolvedAlias'
+		end 'isDotted'
+		return MaxonType.unresolved
+	end 'parseTimeReturnTypeForCallee'
 
 	// entry: cursor AT type-name identifier (if not typeNameConsumed) OR AT `{`.
 	// exit:  cursor on the token AFTER `}`.
@@ -12501,6 +12846,7 @@ export function isInvalidTypealiasExpr(expr UnresolvedTypeExpr) returns bool
 		aliasName gives false
 		genericAlias gives false
 		sizedGenericAlias gives false
+		functionAlias gives false
 	end 'check'
 end 'isInvalidTypealiasExpr'
 

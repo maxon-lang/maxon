@@ -1,0 +1,70 @@
+// Test: function-backing.forward-reference
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+function tripleFn(x Integer) returns Integer
+	return x * 3
+end 'tripleFn'
+
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(21)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @doubleFn(rcx: i64) -> i64 {
+  entry:
+    x64.mov r9d, 2
+    x64.mov r8, rcx
+    x64.imul r8, r9
+    x64.ret
+  }
+  func @tripleFn(rcx: i64) -> i64 {
+  entry:
+    x64.mov r9d, 3
+    x64.mov r8, rcx
+    x64.imul r8, r9
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor r8d, r8d
+  inlined___enum_Op_fnRaw_0:
+    x64.test r8, r8
+    x64.jne inlined___enum_Op_fnRaw_2
+  inlined___enum_Op_fnRaw_1:
+    x64.lea r8, [rip+__fnref_doubleFn]
+    x64.mov r12, r8
+    x64.jmp inline_cont_main_0
+  inlined___enum_Op_fnRaw_2:
+    x64.lea r8, [rip+__fnref_tripleFn]
+    x64.mov r12, r8
+  inline_cont_main_0:
+    x64.xor edx, edx
+    x64.mov ecx, 21
+    x64.call r12
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_0]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

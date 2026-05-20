@@ -932,7 +932,7 @@ public static class StandardToARM64Conversion {
     if (t == IrType.I1 || t == IrType.I8 || t == IrType.U8) return 1;
     if (t == IrType.I16 || t == IrType.U16) return 2;
     if (t == IrType.I32 || t == IrType.U32) return 4;
-    if (t == IrType.I64 || t == IrType.U64 || t == IrType.Fn || t is IrEnumType || t is IrStructType) return 8;
+    if (t == IrType.I64 || t == IrType.U64 || t == IrType.Fn || t is IrFunctionType || t is IrEnumType || t is IrStructType) return 8;
     throw new InvalidOperationException($"ARM64 {context}: unhandled field type: {t}");
   }
 

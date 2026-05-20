@@ -270,6 +270,7 @@ raw_value     = [ '-' ] INTEGER
               | STRING
               | CHARACTER
               | struct_raw_literal                                   (* struct-backed: TypeName{field: value, ...} *)
+              | IDENTIFIER                                            (* function-backed: top-level function name *)
 
 struct_raw_literal
               = IDENTIFIER '{' raw_field_init { ',' raw_field_init } '}'
@@ -334,6 +335,7 @@ typealias_decl
 typealias_rhs = ranged_type
               | generic_type
               | tuple_type
+              | function_type
 
 ranged_type   = primitive_type '(' range_bound ('to' | 'upto') range_bound ')'
 

@@ -35,6 +35,29 @@ typealias Score = int(i64.min to i64.max)
 var operation (x Score, y Score) returns Score
 ```
 
+## Function Type Aliases
+
+Function types can be named with `typealias` so they can be referred to anywhere a
+type is expected (function parameters, return types, struct fields, generic
+arguments like `Map with(String, T)`):
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+typealias BinaryOp = (Integer, Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function pickDouble() returns UnaryOp
+	return double
+end 'pickDouble'
+```
+
+A function-type alias resolves to the same `IrFunctionType` as the inline form;
+`UnaryOp` and `(Integer) returns Integer` are interchangeable at use sites.
+
 ## Function References
 
 To get a reference to a function, use the function name without parentheses:
@@ -227,4 +250,89 @@ end 'main'
 ```
 ```exitcode
 50
+```
+
+<!-- test: first-class-function.typealias-single-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(double, x: 21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.typealias-multi-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias BinaryOp = (Integer, Integer) returns Integer
+
+function add(x Integer, y Integer) returns Integer
+	return x + y
+end 'add'
+
+function compute(f BinaryOp, a Integer, b Integer) returns Integer
+	return f(a, b)
+end 'compute'
+
+function main() returns ExitCode
+	return compute(add, a: 15, b: 27)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.typealias-with-closure -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply((n Integer) gives n + 5, x: 37)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.let-from-call-returning-fn -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = (Integer) returns Integer
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function pickDouble() returns UnaryOp
+	return double
+end 'pickDouble'
+
+function main() returns ExitCode
+	let f = pickDouble()
+	return f(21)
+end 'main'
+```
+```exitcode
+42
 ```
