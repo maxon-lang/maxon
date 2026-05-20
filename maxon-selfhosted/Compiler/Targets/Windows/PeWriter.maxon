@@ -400,7 +400,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 end 'patchRelocationsArm64'
 
 export function writePe(outputPath FilePath, codeResult CodeResult, target Target)
-	logInfo(LogCategory.binary, message: () gives "Writing PE file: {outputPath}")
+	logInfo(LogCategory.binary, message: function() gives "Writing PE file: {outputPath}")
 	var pe = ByteArray.create()
 	pe.reserve(4096)
 
@@ -484,12 +484,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	let imageSize = covdataRva + covdataSizeVirtual
 
-	logDebug(LogCategory.binary, message: () gives "Code section: {codeSize} bytes")
-	logDebug(LogCategory.binary, message: () gives "Rdata section: {rdataSize} bytes")
-	logDebug(LogCategory.binary, message: () gives "Symdata section: {symdataSize} bytes")
-	logDebug(LogCategory.binary, message: () gives "Import section: {idataSize} bytes")
-	logDebug(LogCategory.binary, message: () gives "Data section: {DATA_SECTION_VIRTUAL_SIZE} bytes (virtual)")
-	logDebug(LogCategory.binary, message: () gives "Covdata section: {covdataSize} bytes")
+	logDebug(LogCategory.binary, message: function() gives "Code section: {codeSize} bytes")
+	logDebug(LogCategory.binary, message: function() gives "Rdata section: {rdataSize} bytes")
+	logDebug(LogCategory.binary, message: function() gives "Symdata section: {symdataSize} bytes")
+	logDebug(LogCategory.binary, message: function() gives "Import section: {idataSize} bytes")
+	logDebug(LogCategory.binary, message: function() gives "Data section: {DATA_SECTION_VIRTUAL_SIZE} bytes (virtual)")
+	logDebug(LogCategory.binary, message: function() gives "Covdata section: {covdataSize} bytes")
 
 	// Patch IAT references in code (different encoding per CPU architecture)
 	match target.cpu 'patchCpu'
@@ -648,11 +648,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, codeSize: codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, idataSize: idataSize, dataRawSize: dataRawSize, hasCovdata: hasCovdata, covdataSize: covdataSize)
 		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
 		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)
-		logDebug(LogCategory.binary, message: () gives "COFF symbol table: {totalSymbolCount} entries at file offset {symbolTableFileOffset}")
+		logDebug(LogCategory.binary, message: function() gives "COFF symbol table: {totalSymbolCount} entries at file offset {symbolTableFileOffset}")
 	end 'writeCoff'
 
 	// Write to file
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'
-		logError(LogCategory.binary, message: () gives "Failed to write PE file: {outputPath}")
+		logError(LogCategory.binary, message: function() gives "Failed to write PE file: {outputPath}")
 	end 'writeErr'
 end 'writePe'

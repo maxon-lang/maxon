@@ -456,7 +456,7 @@ function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opInd
 	let record = BorrowRecord.create(slotId, borrowValueId: resultId, borrowBlock: blockId, borrowOpIndex: opIndex, isMutable: false)
 	var slotState = try state.slotBorrows.get(slotId) otherwise panic("invariant: slotBorrows grown via ensureSlotBorrowCapacity but get({slotId}) failed")
 	slotState.borrows.push(record)
-	logTrace(LogCategory.ir, message: () gives "borrow-check: %{resultId} borrows slot_{slotId} at op {opIndex}")
+	logTrace(LogCategory.ir, message: function() gives "borrow-check: %{resultId} borrows slot_{slotId} at op {opIndex}")
 end 'registerBorrow'
 
 // A memref.storeSlot is a mutation of the slot. Check for violations:
@@ -470,11 +470,11 @@ function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, 
 		if not borrow.isMutable 'immutableBorrow'
 			// Mutating a slot while an immutable borrow is active
 			reportSemanticError(project, code: ErrorCode.borrowMutateWhileBorrowed, message: "cannot assign to slot_{slotId} in '{funcName}': value %{borrow.borrowValueId} still borrows it (borrowed at op {borrow.borrowOpIndex}, store at op {opIndex})")
-			logTrace(LogCategory.ir, message: () gives "borrow-check: VIOLATION mutate slot_{slotId} while %{borrow.borrowValueId} borrows it")
+			logTrace(LogCategory.ir, message: function() gives "borrow-check: VIOLATION mutate slot_{slotId} while %{borrow.borrowValueId} borrows it")
 		end 'immutableBorrow' else 'mutableBorrow'
 			// Multiple simultaneous mutable borrows
 			reportSemanticError(project, code: ErrorCode.borrowMultipleMutable, message: "cannot mutably borrow slot_{slotId} in '{funcName}': already mutably borrowed by %{borrow.borrowValueId} (at op {borrow.borrowOpIndex})")
-			logTrace(LogCategory.ir, message: () gives "borrow-check: VIOLATION double mutable borrow slot_{slotId}")
+			logTrace(LogCategory.ir, message: function() gives "borrow-check: VIOLATION double mutable borrow slot_{slotId}")
 		end 'mutableBorrow'
 	end 'checkBorrows'
 end 'checkStoreViolations'

@@ -30,7 +30,7 @@ export type X64Backend implements TargetBackend
 	end 'lowerMirToTarget'
 
 	function emitTargetCode(stdlibCache StdlibCacheData) returns CodeResult
-		logInfo(LogCategory.codegen, message: () gives "X64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
+		logInfo(LogCategory.codegen, message: function() gives "X64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
 		var code = ByteArray.create()
 		code.reserve(1024)
 		var relocations = RelocationArray.create()
@@ -243,7 +243,7 @@ export type X64Backend implements TargetBackend
 			end 'skip'
 
 			let funcStart = code.count()
-			logDebug(LogCategory.compiler, message: () gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}")
+			logDebug(LogCategory.compiler, message: function() gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}")
 
 			labelNames.push(func.name)
 			labelOffsets.push(funcStart)
@@ -264,7 +264,7 @@ export type X64Backend implements TargetBackend
 		end 'linkFuncs'
 
 		mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
-		logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+		logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
 	end 'linkX64StdlibFunctions'
 end 'X64Backend'
 
@@ -288,7 +288,7 @@ export typealias BlockJumpFixupArray = Array with BlockJumpFixup
 typealias CodeLabelOffsetMap = Map with(String, CodeOffset)
 
 function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, name String, offset CodeOffset)
-	logTrace(LogCategory.codegen, message: () gives "Label '{name}' at code offset {offset}")
+	logTrace(LogCategory.codegen, message: function() gives "Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 	labelOffsetMap.upsert(name, value: offset)
@@ -296,14 +296,14 @@ end 'recordLabel'
 
 function lookupLabel(labelOffsetMap CodeLabelOffsetMap, name String) returns CodeOffset
 	let offset = try labelOffsetMap.get(name) otherwise 'missing'
-		logError(LogCategory.codegen, message: () gives "Unresolved label '{name}' -- call will jump to offset 0")
+		logError(LogCategory.codegen, message: function() gives "Unresolved label '{name}' -- call will jump to offset 0")
 		return 0
 	end 'missing'
 	return offset
 end 'lookupLabel'
 
 function resolveCallFixups(code ByteArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray)
-	logTrace(LogCategory.codegen, message: () gives "Resolving {callFixups.count()} call fixups")
+	logTrace(LogCategory.codegen, message: function() gives "Resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
 		let targetOffset = lookupLabel(labelOffsetMap, name: fixup.targetName)
 		let callEnd = fixup.codeOffset + 4
@@ -1409,7 +1409,7 @@ end 'emitLoadRegRbpOffset'
 
 // Emit call rel32 placeholder -- resolved after all functions are emitted.
 function emitCallFixup(code ByteArray, callFixups CallFixupArray, target String)
-	logTrace(LogCategory.codegen, message: () gives "Call fixup to '{target}' at offset {code.count()}")
+	logTrace(LogCategory.codegen, message: function() gives "Call fixup to '{target}' at offset {code.count()}")
 	code.push(0xE8)
 	let fixupOffset = code.count()
 	callFixups.push(CallFixup.create(fixupOffset, targetName: target))

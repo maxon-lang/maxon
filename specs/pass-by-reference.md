@@ -341,13 +341,14 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f () returns Integer) returns Integer
+typealias FnTypeAlias1 = function() returns Integer
+function apply(f FnTypeAlias1) returns Integer
 	return f()
 end 'apply'
 
 function main() returns ExitCode
 	let x = 42
-	let result = apply(f: () gives x)
+	let result = apply(f: function() gives x)
 	return result
 end 'main'
 ```
@@ -360,13 +361,14 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f () returns Integer) returns Integer
+typealias FnTypeAlias1 = function() returns Integer
+function apply(f FnTypeAlias1) returns Integer
 	return f()
 end 'apply'
 
 function main() returns ExitCode
 	var x = 10
-	let f = () gives x
+	let f = function() gives x
 	x = 99
 	let result = apply(f: f)
 	return result

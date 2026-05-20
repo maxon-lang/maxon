@@ -2309,19 +2309,21 @@ end 'main'
 
 ### Function Types and Function-Typed Values
 
-Functions in Maxon are first-class values: they can be stored in variables, passed as arguments, and returned from other functions. A *function type* describes a callable signature:
+Functions in Maxon are first-class values: they can be stored in variables, passed as arguments, and returned from other functions. A *function type* is written with the `function` keyword and must be named via `typealias` — the literal `function(...) returns T` form is legal only as the right-hand side of a `typealias` declaration. Anywhere else (parameters, return types, struct fields, variable annotations, generic arguments), reference the alias by name.
 
 ```maxon
-(Score) returns Score             // takes one Score, returns Score
-(Score, Score) returns bool       // takes two Scores, returns bool
-()                                // takes nothing, returns void
+typealias Score = int(i64.min to i64.max)
+
+typealias UnaryOp = function(Score) returns Score    // takes one Score, returns Score
+typealias Compare = function(Score, Score) returns bool  // two Scores, returns bool
+typealias Callback = function()                       // takes nothing, returns void
 ```
 
-The `returns` clause is omitted for a void-returning function type. To use a function type repeatedly, name it with `typealias`. A function-type alias resolves to the same `IrFunctionType` as the inline form and is interchangeable at every use site — function parameter, return type, struct field, or generic argument:
+The `returns` clause is omitted for a void-returning function type. Once defined, the alias can be used at every use site — function parameter, return type, struct field, or generic argument:
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 typealias HandlerMap = Map with(String, UnaryOp)
 
 function apply(f UnaryOp, x Integer) returns Integer

@@ -129,6 +129,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private bool _inForInIterable;
   private MaxonCallOp? _lastExprCallOp;
   private bool _parsingTypeAliasRhs;
+  // True only while parsing the topmost typeref of a typealias RHS. Inline
+  // `function(...) returns T` types are only valid when this flag is set.
+  private bool _atTopOfTypeAliasRhs;
   private bool _parsingExtension;
   private bool _skipWhereValidation;
   private readonly Dictionary<string, IrType> _typeRegistry = seedModule != null
@@ -2336,7 +2339,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         _pos++;
       } else if (t.Type == TokenType.Function || t.Type == TokenType.Type
                  || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) {
-        depth++;
+        // `function(` (no identifier between) is a function-type/literal, not a block opener.
+        bool isFunctionLiteral = t.Type == TokenType.Function
+          && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.LeftParen;
+        if (!isFunctionLiteral) depth++;
         _pos++;
       } else if (t.Type == TokenType.TypeAlias && _pos + 1 < _tokens.Count
                  && _tokens[_pos + 1].Type == TokenType.Identifier) {
@@ -3721,14 +3727,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (depth == 1) {
         if (tokenType == TokenType.TypeAlias) {
           typealiasPositions.Add(scanPos);
-        } else if (tokenType == TokenType.Function) {
+        } else if (tokenType == TokenType.Function
+                   && (scanPos + 1 >= _tokens.Count || _tokens[scanPos + 1].Type != TokenType.LeftParen)) {
+          // Function declarations only — skip `function(` which is a type/literal.
           functionPositions.Add(scanPos);
         }
       }
       if (tokenType == TokenType.Function || tokenType == TokenType.If
           || tokenType == TokenType.While || tokenType == TokenType.For
           || tokenType == TokenType.Match) {
-        depth++;
+        // `function(` (no name between `function` and `(`) is a function-type
+        // or lambda literal, not a block-opening declaration — don't bump depth.
+        bool isFunctionLiteral = tokenType == TokenType.Function
+          && scanPos + 1 < _tokens.Count && _tokens[scanPos + 1].Type == TokenType.LeftParen;
+        if (!isFunctionLiteral) depth++;
       } else if (tokenType == TokenType.Else) {
         depth++;
       } else if (tokenType == TokenType.Otherwise && scanPos + 1 < _tokens.Count
@@ -4035,21 +4047,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     Expect(TokenType.Equals);
     _parsingTypeAliasRhs = true;
+    _atTopOfTypeAliasRhs = true;
     try {
 
-      // Parenthesized RHS: either a tuple type, e.g. `(Key, Value)`, or a
-      // function type, e.g. `(Score) returns Score` / `(Score, Score) returns bool`.
-      // ParseTypeRef disambiguates: 0/1 params or any params followed by `returns`
-      // yield IrFunctionType; 2+ params without `returns` yield a tuple struct.
+      // Function-type alias: `typealias UnaryOp = function(Integer) returns Integer`.
+      if (Check(TokenType.Function) && PeekNext().Type == TokenType.LeftParen) {
+        _typeRegistry[aliasName] = ParseTypeRef();
+        return;
+      }
+
+      _atTopOfTypeAliasRhs = false; // not a function-type alias — descend normally
+
+      // Parenthesized RHS: tuple type, e.g. `(Key, Value)`.
       if (Check(TokenType.LeftParen)) {
         var parsed = ParseTypeRef();
-        if (parsed is IrFunctionType) {
-          // Function-type alias — store the function type directly under the
-          // alias name. No alias source: IrFunctionType has no nominal source
-          // type to inherit methods from.
-          _typeRegistry[aliasName] = parsed;
-          return;
-        }
         var tupleType = (IrStructType)parsed;
         // Build typeParams from any type parameter fields (e.g., Key, Value)
         var typeParams = new Dictionary<string, IrType>();
@@ -4257,7 +4268,11 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         constParams.Count > 0 ? constParams : null,
         isExtensionAlias: _inExtensionConformanceLoop);
 
-    } finally { _parsingTypeAliasRhs = false; _resolvingTypeAliases.Remove(aliasName); }
+    } finally {
+      _parsingTypeAliasRhs = false;
+      _atTopOfTypeAliasRhs = false;
+      _resolvingTypeAliases.Remove(aliasName);
+    }
   }
 
   /// Checks whether a type is fully concrete (no IrTypeParameterType anywhere).
@@ -6588,14 +6603,44 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private IrType ParseTypeRef() {
-    // Parenthesized types: function type or tuple type
+    // Function type: `function(ParamType, ...) returns ReturnType`. Only allowed
+    // as the topmost type of a typealias RHS — anywhere else (parameter types,
+    // return types, generic arguments) must reference a typealias by name.
+    if (Check(TokenType.Function) && PeekNext().Type == TokenType.LeftParen) {
+      var fnToken = Current();
+      if (!_atTopOfTypeAliasRhs) {
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          "Inline function types are not allowed here; define a `typealias` and reference it by name",
+          fnToken.Line, fnToken.Column);
+      }
+      _atTopOfTypeAliasRhs = false; // nested types may not introduce function types
+      Advance(); // consume 'function'
+      Advance(); // consume '('
+      var fnParamTypes = new List<IrType>();
+      while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+        if (CheckIdentifierLike() && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
+          Advance(); // consume name
+        }
+        fnParamTypes.Add(ParseTypeRef());
+        if (Check(TokenType.Comma)) Advance();
+      }
+      Expect(TokenType.RightParen);
+      if (Check(TokenType.Returns)) {
+        Advance();
+        var returnType = ParseTypeRef();
+        return new IrFunctionType(fnParamTypes, returnType);
+      }
+      return new IrFunctionType(fnParamTypes, null);
+    }
+
+    // Parenthesized type: tuple only. Function types require the `function(...)`
+    // prefix and are only legal as the topmost type of a typealias RHS.
     if (Check(TokenType.LeftParen)) {
+      var parenToken = Current();
       Advance(); // consume '('
       var paramTypes = new List<IrType>();
       while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-        // Check if this is a named parameter (name Type) or just a type
         if (CheckIdentifierLike() && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
-          // This looks like "name Type" - skip the name
           Advance(); // consume name
         }
         paramTypes.Add(ParseTypeRef());
@@ -6603,15 +6648,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
       Expect(TokenType.RightParen);
       if (Check(TokenType.Returns)) {
-        // Function type: (ParamType, ...) returns ReturnType
-        Advance();
-        var returnType = ParseTypeRef();
-        return new IrFunctionType(paramTypes, returnType);
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          "Function types must use the `function(...) returns T` syntax; bare `(...) returns T` is no longer accepted",
+          parenToken.Line, parenToken.Column);
       }
-      // 0 or 1 params without 'returns' → function type (void return)
-      if (paramTypes.Count < 2)
-        return new IrFunctionType(paramTypes, null);
-      // 2+ params without 'returns' → tuple type
+      if (paramTypes.Count < 2) {
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          paramTypes.Count == 0
+            ? "Empty parenthesised type is not allowed"
+            : "Single-element parenthesised type is not allowed; use the type directly",
+          parenToken.Line, parenToken.Column);
+      }
       return GetOrCreateTupleType(paramTypes);
     }
 
@@ -13966,14 +14013,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return result;
     }
 
+    // Closure literal: function(params) gives expr
+    if (IsClosure()) {
+      return ParseClosure();
+    }
+
     if (Check(TokenType.LeftParen)) {
-      // Need to distinguish between:
-      // 1. Closure: (param type, ...) gives expr
-      // 2. Tuple literal: (expr, expr, ...)
-      // 3. Parenthesized expression: (expr)
-      if (IsClosure()) {
-        return ParseClosure();
-      }
+      // Distinguish between:
+      // 1. Tuple literal: (expr, expr, ...)
+      // 2. Parenthesized expression: (expr)
       var parenToken = Advance(); // consume '('
       var first = ParseExpression();
       if (Check(TokenType.Comma)) {
@@ -18857,14 +18905,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   /// <summary>
   /// Checks if the current position is the start of a closure expression.
-  /// Closures look like: (param type, ...) gives expr
-  /// vs parenthesized expression: (expr)
+  /// Closure syntax: function(param type, ...) gives expr
   /// </summary>
   private bool IsClosure() {
-    // Look ahead without consuming tokens
-    int lookahead = 0;
+    // Closures must start with the `function` keyword followed by '('.
+    if (_pos >= _tokens.Count || _tokens[_pos].Type != TokenType.Function)
+      return false;
+    int lookahead = 1;
 
-    // Must start with '('
+    // Must be followed by '('
     if (_pos + lookahead >= _tokens.Count || _tokens[_pos + lookahead].Type != TokenType.LeftParen)
       return false;
     lookahead++;
@@ -18916,6 +18965,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// is set to enable struct literal parsing in the body.
   /// </summary>
   private ExprResult.Direct ParseClosure(IrFunctionType? inferredFnType = null) {
+    Expect(TokenType.Function); // consume 'function'
     Expect(TokenType.LeftParen);
 
     // Parse closure parameters

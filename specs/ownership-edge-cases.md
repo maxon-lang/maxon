@@ -1941,13 +1941,14 @@ Closure environment block is allocated as a struct and freed when the closure va
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let offset = 5
-	let result = apply(f: (n Integer) gives n + offset, x: 10)
+	let result = apply(f: function(n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -1974,6 +1975,7 @@ mm_raw_free #R1
 Closure captures a struct variable by address; the closure env is freed at scope exit but the original struct lives on.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias FnTypeAlias1 = function(Integer) returns Integer
 
 type Config
 	export var level Integer
@@ -1983,13 +1985,13 @@ type Config
 	end 'create'
 end 'Config'
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let cfg = Config.create(level: 3)
-	let result = apply(f: (_ Integer) gives cfg.level, x: 0)
+	let result = apply(f: function(_ Integer) gives cfg.level, x: 0)
 	return result
 end 'main'
 ```
@@ -3984,13 +3986,14 @@ A closure that captures a string variable must properly manage the string's refc
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns String, x Integer) returns String
+typealias FnTypeAlias1 = function(Integer) returns String
+function apply(f FnTypeAlias1, x Integer) returns String
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let prefix = "hello"
-	let result = apply(f: (_ Integer) gives prefix, x: 0)
+	let result = apply(f: function(_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'

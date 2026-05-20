@@ -218,6 +218,25 @@ export function chaseTypealiasToFunctionType(project Project, t MaxonType) retur
 			invalid then return t
 		end 'extract'
 	end 'fromUnresolved'
+	// Interface and struct inner aliases — function-type aliases declared
+	// inside `extension SomeInterface ... end` (e.g. `ElementTransform`
+	// declared inside `extension Iterable`) land on the interface's
+	// `innerAliases`. Probe both registries so a `named(alias)` that
+	// resolves through an inner alias still chases to its function type.
+	for (_, iface) in project.interfaces 'eachIface'
+		if let resolved = try iface.innerAliases.get(aliasName) 'innerHit'
+			if isFunctionMaxonType(resolved) 'innerIsFn'
+				return resolved
+			end 'innerIsFn'
+		end 'innerHit'
+	end 'eachIface'
+	for (_, structEntry) in project.structTypes 'eachStruct'
+		if let resolved = try structEntry.innerAliases.get(aliasName) 'structInnerHit'
+			if isFunctionMaxonType(resolved) 'structInnerIsFn'
+				return resolved
+			end 'structInnerIsFn'
+		end 'structInnerHit'
+	end 'eachStruct'
 	return t
 end 'chaseTypealiasToFunctionType'
 

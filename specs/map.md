@@ -558,7 +558,7 @@ A `Map<String, FunctionType>` lets the caller dispatch by string key.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 typealias HandlerMap = Map with String, UnaryOp
 
 function double(x Integer) returns Integer

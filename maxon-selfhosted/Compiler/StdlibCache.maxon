@@ -548,8 +548,8 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	buf.reserve(4096)
 	try encodeStdlibCacheBody(project, buf: buf, data: data, target: target, contentChecksum: contentChecksum) otherwise(e) 'corrupt'
 		match e 'kind'
-			absent then logError(LogCategory.compiler, message: () gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
-			invalidEncoding then logError(LogCategory.compiler, message: () gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
+			absent then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
+			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
 		end 'kind'
 		return
 	end 'corrupt'
@@ -561,7 +561,7 @@ export function writeStdlibCache(project Project, path FilePath, data StdlibCach
 	end 'hasParent'
 
 	try File.writeBinary(path, content: buf) otherwise 'writeErr'
-		logError(LogCategory.compiler, message: () gives "Failed to write stdlib cache to {path}")
+		logError(LogCategory.compiler, message: function() gives "Failed to write stdlib cache to {path}")
 	end 'writeErr'
 end 'writeStdlibCache'
 
@@ -896,8 +896,8 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 
 	let result = try decodeStdlibCache(project, buf: buf, target: target, expectedChecksum: expectedChecksum) otherwise(e) 'corrupt'
 		match e 'kind'
-			absent then logInfo(LogCategory.compiler, message: () gives "Stdlib cache at {path} reports unexpected `absent` from optional-string codec; treating as corrupt and rebuilding")
-			invalidEncoding then logInfo(LogCategory.compiler, message: () gives "Stdlib cache at {path} is corrupt (CacheCorruption.invalidEncoding); rebuilding from source")
+			absent then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} reports unexpected `absent` from optional-string codec; treating as corrupt and rebuilding")
+			invalidEncoding then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} is corrupt (CacheCorruption.invalidEncoding); rebuilding from source")
 		end 'kind'
 		return invalid
 	end 'corrupt'
@@ -949,7 +949,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 
 	let version = readDword(buf, offset: 4)
 	if version != CACHE_FORMAT_VERSION 'badVersion'
-		logInfo(LogCategory.compiler, message: () gives "Stdlib cache version mismatch (found {version}, expected {CACHE_FORMAT_VERSION}); regenerating")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache version mismatch (found {version}, expected {CACHE_FORMAT_VERSION}); regenerating")
 		return invalid
 	end 'badVersion'
 

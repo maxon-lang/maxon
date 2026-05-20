@@ -71,7 +71,8 @@ Extensions from interfaces are also applied transitively. If interface `B` exten
 extension Iterable
 	typealias ElementArray = Array with Element
 
-	function map(transform (Element) returns Element) returns ElementArray
+typealias FnTypeAlias1 = function(Element) returns Element
+	function map(transform FnTypeAlias1) returns ElementArray
 		var result = ElementArray.create()
 		for item in self 'loop'
 			result.push(transform(item))
@@ -303,7 +304,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let nums = [1, 2, 3, 4, 5]
-	let doubled = nums.map((x Integer) gives x * 2)
+	let doubled = nums.map(function(x Integer) gives x * 2)
 
 	var sum = 0
 	for n in doubled 'loop'
@@ -325,7 +326,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let s = Set from [10, 20, 30]
-	let mapped = s.map((x Integer) gives x + 1)
+	let mapped = s.map(function(x Integer) gives x + 1)
 
 	var sum = 0
 	for n in mapped 'loop'
@@ -362,7 +363,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
-	let mapped = m.map((p) gives p)
+	let mapped = m.map(function(p) gives p)
 
 	var sum = 0
 	for pair in mapped 'loop'

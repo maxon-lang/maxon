@@ -125,7 +125,7 @@ typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let numbers = [1, 2, 3]
-	let squared = numbers.map((x Score) gives x * x)
+	let squared = numbers.map(function(x Score) gives x * x)
 	let val0 = try squared.get(0) otherwise 0
 	let val1 = try squared.get(1) otherwise 0
 	let val2 = try squared.get(2) otherwise 0
@@ -269,7 +269,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let arr = [2, 3, 4]
-	let result = arr.map((x Integer) gives x * 3)
+	let result = arr.map(function(x Integer) gives x * 3)
 	let val0 = try result.get(0) otherwise 0
 	let val1 = try result.get(1) otherwise 0
 	let val2 = try result.get(2) otherwise 0
@@ -294,7 +294,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4]
-	let squared = arr.map((n Integer) gives n * n)
+	let squared = arr.map(function(n Integer) gives n * n)
 	let val0 = try squared.get(0) otherwise 0
 	let val1 = try squared.get(1) otherwise 0
 	let val2 = try squared.get(2) otherwise 0
@@ -380,7 +380,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let arr = [42]
-	let result = arr.map((x Integer) gives x + 8)
+	let result = arr.map(function(x Integer) gives x + 8)
 	let val = try result.get(0) otherwise 0
 	print("{val}\n")
 	return 0

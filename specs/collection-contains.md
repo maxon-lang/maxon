@@ -43,7 +43,7 @@ Checks if any element satisfies a predicate closure. Works on all iterable types
 
 ```text
 var numbers = [1, 2, 3, 4, 5]
-numbers.contains(predicate: (n int) gives n > 3)   // true
+numbers.contains(predicate: function(n int) gives n > 3)   // true
 
 var dict = ["a": 1, "b": 2]
 dict.contains(predicate: (e (String, int)) gives e.0 == "a")   // true
@@ -314,7 +314,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(predicate: (n Integer) gives n > 3) 'check'
+	if arr.contains(predicate: function(n Integer) gives n > 3) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -331,7 +331,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(predicate: (n Integer) gives n > 10) 'check'
+	if arr.contains(predicate: function(n Integer) gives n > 10) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -348,7 +348,7 @@ typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
 	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: (e MapEntry) gives e.0 == "b") 'check'
+	if dict.contains(predicate: function(e MapEntry) gives e.0 == "b") 'check'
 		return 1
 	end 'check'
 	return 0
@@ -365,7 +365,7 @@ typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
 	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: (e MapEntry) gives e.1 == 2) 'check'
+	if dict.contains(predicate: function(e MapEntry) gives e.1 == 2) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -382,7 +382,7 @@ typealias MapEntry = (String, Integer)
 
 function main() returns ExitCode
 	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: (e MapEntry) gives e.1 > 10) 'check'
+	if dict.contains(predicate: function(e MapEntry) gives e.1 > 10) 'check'
 		return 1
 	end 'check'
 	return 0

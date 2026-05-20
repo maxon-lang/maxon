@@ -555,7 +555,7 @@ end 'arm64PatchCondBranch'
 export typealias Arm64LabelOffsetMap = Map with(String, Arm64Offset)
 
 export function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, labelOffsetMap Arm64LabelOffsetMap, name String, offset Arm64Offset)
-	logTrace(LogCategory.codegen, message: () gives "ARM64 Label '{name}' at code offset {offset}")
+	logTrace(LogCategory.codegen, message: function() gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 	labelOffsetMap.upsert(name, value: offset)
@@ -563,7 +563,7 @@ end 'arm64RecordLabel'
 
 export function arm64LookupLabel(labelOffsetMap Arm64LabelOffsetMap, name String) returns Arm64Offset
 	let offset = try labelOffsetMap.get(name) otherwise 'missing'
-		logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{name}'")
+		logError(LogCategory.codegen, message: function() gives "ARM64 unresolved label '{name}'")
 		return 0
 	end 'missing'
 	return offset
@@ -628,7 +628,7 @@ end 'arm64ResolveAdrFixups'
 
 // Resolve call fixups using function name -> offset labels.
 export function arm64ResolveCallFixups(code ByteArray, labelOffsetMap Arm64LabelOffsetMap, callFixups Arm64CallFixupArray)
-	logTrace(LogCategory.codegen, message: () gives "ARM64 resolving {callFixups.count()} call fixups")
+	logTrace(LogCategory.codegen, message: function() gives "ARM64 resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelOffsetMap, name: fixup.targetName)
 		arm64PatchBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
@@ -1205,7 +1205,7 @@ export function linkArm64StdlibFunctions(code ByteArray, labelNames StringArray,
 	end 'linkFuncs'
 
 	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
-	logInfo(LogCategory.compiler, message: () gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
 end 'linkArm64StdlibFunctions'
 
 // Emit a single target op by index.

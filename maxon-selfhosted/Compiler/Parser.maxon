@@ -206,6 +206,15 @@ export type Parser
 	// parenthesized sub-expression (e.g. `for x in (1 upto 4).createIterator() 'l'`)
 	// still gets a first-class Range/OpenRange value.
 	var inForInHeader bool
+	// True only while parsing the topmost typeref of a typealias RHS. Inline
+	// `function(...) returns T` types are valid only when this is set.
+	// Cleared on every descent into nested type positions.
+	var atTopOfTypeAliasRhs bool
+	// Inner typealiases currently in scope (set while parsing inside a type
+	// or extension body). Lets `parserChaseFnAlias` resolve a function-type
+	// alias declared earlier in the same body before its merge into the
+	// target's `innerAliases`. Empty between bodies.
+	var currentInnerAliases InnerAliasMap
 	// Stage E (closures): the outer function's scope at the moment we
 	// entered a closure body. Used to discriminate capture references
 	// (declared in the enclosing scope) from genuine undefined names.
@@ -269,11 +278,11 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
-		logDebug(LogCategory.parser, message: () gives "parser: module={filePath}")
+		logDebug(LogCategory.parser, message: function() gives "parser: module={filePath}")
 
 		// Stream-style dispatch: each helper exits past its last-consumed token.
 		// Use skipOptionalNewlines (vs skipNewlines) since trailing newlines at
@@ -402,12 +411,36 @@ export type Parser
 
 	// --- Function parsing ---
 
+	// Chase a parse-time function-type alias to its underlying `MaxonType.function`.
+	// Probes the parser's currentInnerAliases first (typealiases declared
+	// earlier in the same type/extension body), then falls back to the
+	// project-wide chase which queries `unresolvedTypealiases` and
+	// `genericTypealiases`. Returns `t` unchanged when not a function-type alias.
+	function parserChaseFnAlias(t MaxonType) returns MaxonType
+		let aliasName = t.namedAliasNameOrEmpty(project)
+		if not aliasName.isEmpty() and currentInnerAliases.contains(aliasName) 'innerMatch'
+			if let entry = try currentInnerAliases.get(aliasName) 'haveEntry'
+				match entry 'extract'
+					functionAlias(target) then return target
+					boolPrim then return t
+					rangedInt then return t
+					rangedFloat then return t
+					aliasName then return t
+					genericAlias then return t
+					sizedGenericAlias then return t
+					invalid then return t
+				end 'extract'
+			end 'haveEntry'
+		end 'innerMatch'
+		return chaseTypealiasToFunctionType(project, t: t)
+	end 'parserChaseFnAlias'
+
 	// Parse a single type reference. Recognizes either:
 	//   - a single type-name token (identifier or primitive keyword), OR
-	//   - a function type `(T1, T2) returns R` (parameter parens, optional
-	//     `returns` clause; missing `returns` ⇒ void return).
+	//   - a function type `function(T1, T2) returns R` (only when this typeref
+	//     is the topmost of a typealias RHS).
 	// Used by parameter-type and interface-method parameter-type sites so
-	// `function apply(f (Integer) returns Integer, x Integer) ...` parses.
+	// `function apply(f UnaryOp, x Integer) ...` parses through the alias.
 	// On a missing/malformed type token the helper reports E2003 and
 	// synchronizes the cursor — callers that already have their own
 	// recovery path (parseFunctionParameters' `synchronize() + return`)
@@ -418,11 +451,55 @@ export type Parser
 	// lexer (see actionTable's skipOther), so the inner `parseTypeRef` calls
 	// see a flat run of types between the parens.
 	function parseTypeRef() returns MaxonType throws ParserError
-		// Paren-prefixed type: either a function type `(T1, T2) returns R`
-		// or a tuple type `(T1, T2, ...)` (2+ elements, no `returns`).
-		// Empty `()` and single-element `(T)` followed by `returns` are
-		// always function types; `()` alone is a void→void function type.
+		// Function type: `function(T1, T2) returns R`. Only legal as the topmost
+		// type of a typealias RHS — anywhere else (parameter types, return types,
+		// generic arguments) must reference a typealias by name.
+		let fnPeek = try cursor.peek(1) otherwise Token.eof()
+		if at(TokenKind.function) and fnPeek.kind == TokenKind.leftParen 'isFunctionType'
+			let fnToken = cursor.current()
+			if not atTopOfTypeAliasRhs 'badFnPos'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Inline function types are not allowed here; define a `typealias` and reference it by name", line: fnToken.line, column: fnToken.column, filePath: filePath)
+				synchronize()
+				return MaxonType.unresolved
+			end 'badFnPos'
+			atTopOfTypeAliasRhs = false
+			try eat(TokenKind.function)
+			try eat(TokenKind.leftParen)
+			var fnParamTypes = MaxonTypeArray.create()
+			while not at(TokenKind.rightParen) 'fnParamTypes'
+				// Optional parameter name preceding the type; skip if present.
+				let paramPeek = try cursor.peek(1) otherwise Token.eof()
+				let isBareType = isTypeNameToken(cursor.current()) and (paramPeek.kind == TokenKind.comma or paramPeek.kind == TokenKind.rightParen)
+				if not isBareType 'maybeName'
+					let maybeNameTok = cursor.current()
+					if maybeNameTok.kind == TokenKind.identifier 'hasName'
+						try eat(TokenKind.identifier)
+					end 'hasName'
+				end 'maybeName'
+				let inner = try parseTypeRef()
+				fnParamTypes.push(inner)
+				if at(TokenKind.rightParen) 'doneFnParams'
+					break
+				end 'doneFnParams'
+				try expect(TokenKind.comma)
+			end 'fnParamTypes'
+			try eat(TokenKind.rightParen)
+			if at(TokenKind.returns) 'fnHasReturn'
+				try eat(TokenKind.returns)
+				let retInner = try parseTypeRef()
+				let fnReturn = MaxonReturnType.value(retInner)
+				let id = internFunctionType(project, paramTypes: fnParamTypes, returnType: fnReturn)
+				return MaxonType.function(id)
+			end 'fnHasReturn'
+			let fnReturn = MaxonReturnType.void
+			let id = internFunctionType(project, paramTypes: fnParamTypes, returnType: fnReturn)
+			return MaxonType.function(id)
+		end 'isFunctionType'
+
+		// Paren-prefixed type: tuple type `(T1, T2, ...)` (2+ elements). Function
+		// types now require the explicit `function(...)` prefix above.
 		if at(TokenKind.leftParen) 'isParen'
+			let parenTok = cursor.current()
 			try eat(TokenKind.leftParen)
 			var innerTypes = MaxonTypeArray.create()
 			while not at(TokenKind.rightParen) 'paramTypes'
@@ -434,26 +511,20 @@ export type Parser
 				try expect(TokenKind.comma)
 			end 'paramTypes'
 			try eat(TokenKind.rightParen)
-			// `returns` always means function type. Otherwise: 2+ inner
-			// types means tuple; 0 or 1 stays a function type (void-arg
-			// returning void / single-arg returning void). This matches
-			// the C# bootstrap's disambiguation rule.
-			if at(TokenKind.returns) 'hasReturn'
-				try eat(TokenKind.returns)
-				let retInner = try parseTypeRef()
-				let fnReturn = MaxonReturnType.value(retInner)
-				let id = internFunctionType(project, paramTypes: innerTypes, returnType: fnReturn)
-				return MaxonType.function(id)
-			end 'hasReturn'
-			if innerTypes.count() >= 2 'isTuple'
-				let baseName = "__Tuple{innerTypes.count()}"
-				let baseId = project.typeNames.intern(baseName)
-				let giid = project.genericInstances.intern(baseId, args: innerTypes)
-				return MaxonType.genericInstance(giid)
-			end 'isTuple'
-			let fnReturn = MaxonReturnType.void
-			let id = internFunctionType(project, paramTypes: innerTypes, returnType: fnReturn)
-			return MaxonType.function(id)
+			if at(TokenKind.returns) 'badLegacyFn'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Function types must use the `function(...) returns T` syntax; bare `(...) returns T` is no longer accepted", line: parenTok.line, column: parenTok.column, filePath: filePath)
+				synchronize()
+				return MaxonType.unresolved
+			end 'badLegacyFn'
+			if innerTypes.count() < 2 'badParenType'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Parenthesised type must have 2 or more elements; use the type directly for a single value", line: parenTok.line, column: parenTok.column, filePath: filePath)
+				synchronize()
+				return MaxonType.unresolved
+			end 'badParenType'
+			let baseName = "__Tuple{innerTypes.count()}"
+			let baseId = project.typeNames.intern(baseName)
+			let giid = project.genericInstances.intern(baseId, args: innerTypes)
+			return MaxonType.genericInstance(giid)
 		end 'isParen'
 
 		// Phase 11.0 step 3b: bare `Self` in any type position resolves to the
@@ -626,7 +697,7 @@ export type Parser
 			paramNames.push(paramNameToken.value)
 			paramDefaults.push(try parseOptionalParamDefault())
 			paramCount = paramCount + 1
-			// Stage E (closures): a function-typed parameter `f (T) returns R`
+			// Stage E (closures): a function-typed parameter `f UnaryOp`
 			// expands at the ABI level to a (fn-pointer, env-pointer) pair.
 			// Allocate the hidden env slot in the parser's scope here — that
 			// way the slot-id counter and any follow-on `defineVariableWithType`
@@ -637,7 +708,15 @@ export type Parser
 			// entry is appended later by parseFunction's caller-side
 			// expansion step so the user-facing FuncSignature stays at the
 			// declared param count.
-			if isFunctionMaxonType(paramMaxonType) 'expandEnv'
+			//
+			// The param type may be `MaxonType.named(alias)` referencing a
+			// function-type alias declared earlier in this same file — chase
+			// through pending typealiases so the env slot is still reserved
+			// even when the user writes `f UnaryOp` instead of an inline
+			// `function(T) returns R`. Cross-file aliases remain invisible at
+			// parse time and fall back to the later monomorphization passes.
+			let chasedParam = parserChaseFnAlias(paramMaxonType)
+			if isFunctionMaxonType(chasedParam) 'expandEnv'
 				let envName = "__env_{paramNameToken.value}"
 				_ = scope.declare(envName, varType: MaxonType.integer, mutable: true)
 			end 'expandEnv'
@@ -844,14 +923,14 @@ export type Parser
 		var qualifiedName = ""
 		if isMethod 'methodName'
 			qualifiedName = "{typeName}.{nameToken.value}"
-			logTrace(LogCategory.parser, message: () gives "parser: method '{qualifiedName}'")
+			logTrace(LogCategory.parser, message: function() gives "parser: method '{qualifiedName}'")
 		end 'methodName' else 'freeName'
 			if nameToken.value == "main" 'isMain'
 				qualifiedName = nameToken.value
 			end 'isMain' else 'qualifyNonMain'
 				qualifiedName = qualifyName(namespace, name: nameToken.value)
 			end 'qualifyNonMain'
-			logTrace(LogCategory.parser, message: () gives "parser: function '{nameToken.value}'")
+			logTrace(LogCategory.parser, message: function() gives "parser: function '{nameToken.value}'")
 		end 'freeName'
 
 		try expect(TokenKind.leftParen)
@@ -899,7 +978,11 @@ export type Parser
 		for i in 0 upto paramTypes.count() 'expandAbi'
 			let pt = try paramTypes.get(i) otherwise panic("parseFunction: paramTypes.get OOB at {i} during ABI expansion")
 			abiParamTypes.push(pt)
-			if isFunctionMaxonType(pt) 'addEnv'
+			// Chase through pending typealiases so a `named(alias)` resolving to
+			// a function type still gets its env-pointer slot. Same rationale as
+			// the scope-level allocation in parseFunctionParametersInner.
+			let chasedAbi = parserChaseFnAlias(pt)
+			if isFunctionMaxonType(chasedAbi) 'addEnv'
 				abiParamTypes.push(MaxonType.integer)
 			end 'addEnv'
 			// C1.d: an interface-typed param is a fat pointer (value,
@@ -1659,7 +1742,7 @@ export type Parser
 			skipToNextLine()
 			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
 			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise ignore
-			logTrace(LogCategory.parser, message: () gives "parser: deferred struct-literal decl '{qualifiedName}' (no init emitted)")
+			logTrace(LogCategory.parser, message: function() gives "parser: deferred struct-literal decl '{qualifiedName}' (no init emitted)")
 			return
 		end 'isStructLit'
 
@@ -1692,7 +1775,7 @@ export type Parser
 		// Step past the string literal. Tolerate EOF because `<name> = ""`
 		// at end-of-file is a complete declaration.
 		try cursor.advance() otherwise 'eofAfterString'
-			logTrace(LogCategory.parser, message: () gives "parser: top-level string const at EOF")
+			logTrace(LogCategory.parser, message: function() gives "parser: top-level string const at EOF")
 		end 'eofAfterString'
 		// Interpolations have no compile-time meaning at top level — the
 		// operand names they'd reference don't exist yet. Reject
@@ -1705,7 +1788,7 @@ export type Parser
 		let strId = project.strings.intern(valueToken.value)
 		let exprId = appendConstExpr(UnresolvedConstExpr.stringLit(strId))
 		registerUnresolvedTopLevelDecl(nameToken, qualifiedName: qualifiedName, rootExprId: exprId, mutable: mutable, visibility: visibility)
-		logTrace(LogCategory.parser, message: () gives "parser: const string '{qualifiedName}'")
+		logTrace(LogCategory.parser, message: function() gives "parser: const string '{qualifiedName}'")
 	end 'parseTopLevelStringDecl'
 
 	// Lazily allocate this file's synthetic `__module_init_<n>` function on
@@ -1836,7 +1919,7 @@ export type Parser
 			project.immutableArrayLitNames.push(qualifiedName)
 		end 'isLet'
 
-		logTrace(LogCategory.parser, message: () gives "parser: top-level {kindLabel} '{qualifiedName}' → {moduleInitName}")
+		logTrace(LogCategory.parser, message: function() gives "parser: top-level {kindLabel} '{qualifiedName}' → {moduleInitName}")
 	end 'finalizeTopLevelInitDecl'
 
 	// Close out this file's synthetic `__module_init_<n>` function once the
@@ -2065,7 +2148,7 @@ export type Parser
 		try project.unresolvedTopLevelDecls.insert(qualifiedName, value: entry) otherwise 'dupPending'
 			reportDuplicateConstant(nameToken)
 		end 'dupPending'
-		logTrace(LogCategory.parser, message: () gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable} visibility={visibility.name}")
+		logTrace(LogCategory.parser, message: function() gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable} visibility={visibility.name}")
 	end 'registerUnresolvedTopLevelDecl'
 
 	// Parse `static let NAME = <const-int-expr>` inside a type. The value is
@@ -3057,22 +3140,27 @@ export type Parser
 			sawValidBase = true
 		end 'isBool'
 
-		// Paren-prefixed RHS: either a function-type alias
-		// (`typealias UnaryOp = (Integer) returns Integer`) or a tuple-type
-		// alias (`typealias Entry = (Key, Value)`). The disambiguation rule
-		// mirrors `parseTypeRef`: 0/1 elements OR any-arity followed by
-		// `returns` is a function type; 2+ elements without `returns` is a
-		// tuple. We delegate the function-type branch to `parseTypeRef`
-		// (which already handles the full grammar including nested types)
-		// and keep the tuple branch on its bare-identifier path so type-
-		// parameter names from the enclosing decl resolve through the
-		// genericAlias scope-aware lookup.
+		// Function-type alias: `typealias UnaryOp = function(Integer) returns Integer`.
+		// Delegated to `parseTypeRef`, which handles the full grammar including
+		// nested types. Only this entry point may use the `function(...)` literal
+		// — `atTopOfTypeAliasRhs` permits the inline type and is cleared on descent.
+		let fnAliasPeek = try cursor.peek(1) otherwise Token.eof()
+		if not sawValidBase and baseToken.kind == TokenKind.function and fnAliasPeek.kind == TokenKind.leftParen 'isFnAlias'
+			atTopOfTypeAliasRhs = true
+			let fnType = try parseTypeRef()
+			atTopOfTypeAliasRhs = false
+			expr = UnresolvedTypeExpr.functionAlias(fnType)
+			sawValidBase = true
+		end 'isFnAlias'
+
+		// Paren-prefixed RHS: tuple-type alias (`typealias Entry = (Key, Value)`,
+		// 2+ elements). Function types require the `function(...)` prefix above.
 		if not sawValidBase and baseToken.kind == TokenKind.leftParen 'isParen'
-			if typealiasRhsLooksLikeFunctionType() 'isFnAlias'
-				let fnType = try parseTypeRef()
-				expr = UnresolvedTypeExpr.functionAlias(fnType)
-				sawValidBase = true
-			end 'isFnAlias' else 'isTuple'
+			if typealiasRhsLooksLikeFunctionType() 'isLegacyFnAlias'
+				reportCompileError(project, code: ErrorCode.parserExpectedType, message: "Function types must use the `function(...) returns T` syntax; bare `(...) returns T` is no longer accepted", line: baseToken.line, column: baseToken.column, filePath: filePath)
+				skipToNextLine()
+				throw ParserError.unhandledToken
+			end 'isLegacyFnAlias' else 'isTuple'
 				try eat(TokenKind.leftParen)
 				var elemNames = StringArray.create()
 				while not at(TokenKind.rightParen) 'tupleLoop'
@@ -3311,7 +3399,7 @@ export type Parser
 		// body so a sibling type at file scope starts fresh.
 		currentTypeVisibility = visibility
 
-		logTrace(LogCategory.parser, message: () gives "parser: type '{currentTypeName}'")
+		logTrace(LogCategory.parser, message: function() gives "parser: type '{currentTypeName}'")
 
 		// Phase 11.0: capture `uses T1, T2` (mirrors `parseInterfaceDecl`).
 		// Commas are stripped at the lexer; the loop stops at the next
@@ -3375,6 +3463,7 @@ export type Parser
 		// that appear inside this body. Step 5+ consumes the table during
 		// substitution; this step only stores them.
 		var innerAliases = InnerAliasMap.create()
+		currentInnerAliases = innerAliases
 
 		while true 'body'
 			let bodyPrevPos = cursor.index()
@@ -3528,6 +3617,7 @@ export type Parser
 		// .count() so an empty StringArray is the correct sentinel.
 		currentTypeParams = StringArray.create()
 		currentTypeConformances = ConformanceArray.create()
+		currentInnerAliases = InnerAliasMap.create()
 		try skipEndAndLabel()
 	end 'parseTypeDecl'
 
@@ -3558,7 +3648,7 @@ export type Parser
 		// auto-injected typealias, and any methods declared in the body
 		// inherit the same tier without the user repeating the modifier.
 		currentEnumVisibility = visibility
-		logTrace(LogCategory.parser, message: () gives "parser: enum '{currentTypeName}'")
+		logTrace(LogCategory.parser, message: function() gives "parser: enum '{currentTypeName}'")
 
 		// Phase 1b: capture `implements I1, I2, ...` as metadata. The clause
 		// follows the enum name (and precedes any newlines / cases), mirroring
@@ -4008,7 +4098,7 @@ export type Parser
 
 		currentTypeName = unionNameToken.value
 		currentEnumVisibility = visibility
-		logTrace(LogCategory.parser, message: () gives "parser: union '{currentTypeName}'")
+		logTrace(LogCategory.parser, message: function() gives "parser: union '{currentTypeName}'")
 
 		let conformances = try parseImplementsClause()
 
@@ -4631,7 +4721,7 @@ export type Parser
 		let nameToken = try consume()
 		checkReservedDeclName(nameToken)
 
-		logTrace(LogCategory.parser, message: () gives "parser: interface '{nameToken.value}'")
+		logTrace(LogCategory.parser, message: function() gives "parser: interface '{nameToken.value}'")
 
 		// Commas are skipped at the lexer (see actionTable's skipOther) so the
 		// extends/uses lists land as plain runs of identifiers. The loop stops
@@ -4927,6 +5017,7 @@ export type Parser
 		// land on a per-call local map; step 5+ folds the entries into the
 		// target struct's `innerAliases` during resolution.
 		var extInnerAliases = InnerAliasMap.create()
+		currentInnerAliases = extInnerAliases
 
 		// J.4b: collect the qualified names of methods parsed inside this
 		// extension body. parseFunction registers each method's identifier
@@ -5015,6 +5106,7 @@ export type Parser
 			mergeExtensionInnerAliases(targetTypeName, extInnerAliases: extInnerAliases)
 		end 'mergeInner'
 
+		currentInnerAliases = InnerAliasMap.create()
 		try skipEndAndLabel()
 	end 'parseExtension'
 
@@ -9046,12 +9138,12 @@ export type Parser
 	// expressions whose intermediate types are still unresolved).
 	function qualifyMethodCalleeFromReceiver(receiver ByteArray, methodName String, scanFrom OpIndex) returns String
 		let receiverType = scanProducerTypeForName(receiver, scanFrom: scanFrom)
-		logTrace(LogCategory.parser, message: () gives "qualifyMethodCalleeFromReceiver: receiver='{String.from(receiver)}' methodName='{methodName}' scanFrom={scanFrom} receiverType.kind='{receiverType.name}'")
+		logTrace(LogCategory.parser, message: function() gives "qualifyMethodCalleeFromReceiver: receiver='{String.from(receiver)}' methodName='{methodName}' scanFrom={scanFrom} receiverType.kind='{receiverType.name}'")
 		if isUnresolvedMaxonType(receiverType) 'unresolved'
 			return methodName
 		end 'unresolved'
 		let structName = try maxonTypeStructName(project, t: receiverType) otherwise return methodName
-		logTrace(LogCategory.parser, message: () gives "qualifyMethodCalleeFromReceiver: structName='{structName}' -> '{structName}.{methodName}'")
+		logTrace(LogCategory.parser, message: function() gives "qualifyMethodCalleeFromReceiver: structName='{structName}' -> '{structName}.{methodName}'")
 		return "{structName}.{methodName}"
 	end 'qualifyMethodCalleeFromReceiver'
 
@@ -9912,10 +10004,21 @@ export type Parser
 			// (sibling-method probe inside a type body, then free resolution
 			// via currentNamespace + stdlib fallback). Lowering also detects
 			// __self instance-method calls and prepends the receiver.
+			//
+			// Chase through pending typealiases so a `named(alias)` resolving
+			// to a function type still triggers the indirect-call path. The
+			// alias may have been declared earlier in this file even though
+			// project.genericTypealiases hasn't been drained yet.
 			let bareCallee = token.value
-			if scope.contains(bareCallee) and isFunctionMaxonType(scope.getType(bareCallee)) 'isIndirect'
+			var calleeIsFn = false
+			var calleeChased = MaxonType.unresolved
+			if scope.contains(bareCallee) 'checkScope'
+				calleeChased = parserChaseFnAlias(scope.getType(bareCallee))
+				calleeIsFn = isFunctionMaxonType(calleeChased)
+			end 'checkScope'
+			if calleeIsFn 'isIndirect'
 				let calleeSlot = lookupVariable(bareCallee, token: token)
-				let calleeType = scope.getType(bareCallee)
+				let calleeType = calleeChased
 				let calleeLoadName = freshSynthName()
 				module.appendOp(block, op: MaxonOp.varLoad(calleeLoadName, slotId: calleeSlot, slotType: calleeType, range: SourceRange.ofToken(token)))
 				// Function-typed locals carry no source-level param names —
@@ -10608,6 +10711,14 @@ export type Parser
 		if isPrimitiveTypeStaticCallStart(cur) 'isPrimStaticCall'
 			return try parsePrimitiveTypeStaticCall(block)
 		end 'isPrimStaticCall'
+		// `function(` opens a closure literal in expression position.
+		if cur.kind == TokenKind.function 'isFnLit'
+			let fnPeek = try cursor.peek(1) otherwise Token.eof()
+			if fnPeek.kind == TokenKind.leftParen 'fnIsLambda'
+				return try parseClosure(block)
+			end 'fnIsLambda'
+		end 'isFnLit'
+
 		match cur.kind 'primary'
 			intLiteral then return try parseIntLiteral(block)
 			floatLiteral then return try parseFloatLiteral(block)
@@ -11597,7 +11708,7 @@ export type Parser
 
 	function parseParenExpr(block IrBlock) returns ExprResult throws ParserError
 		// Stage B (closures): a leading `(` may open either a parenthesized
-		// expression OR a closure literal (`() gives ...`, `(x T) gives ...`).
+		// expression OR a closure literal (`function() gives ...`, `function(x T) gives ...`).
 		// Distinguish via lookahead before committing to expression parsing —
 		// otherwise the first token inside `()` reaches `parsePrimary` and
 		// emits E2004 ("Expected expression but got ')'").
@@ -11695,55 +11806,12 @@ export type Parser
 	// back to the parenthesized-expression path which will surface the
 	// truncated input via its own diagnostic.
 	function isClosure() returns bool
-		if not at(TokenKind.leftParen) 'noLP'
+		// Closures must start with the `function` keyword followed by `(`.
+		if not at(TokenKind.function) 'noFn'
 			return false
-		end 'noLP'
-		// `()` ⇒ closure iff `gives` follows.
+		end 'noFn'
 		let p1 = try cursor.peek(1) otherwise return false
-		if p1.kind == TokenKind.rightParen 'emptyParams'
-			let p2 = try cursor.peek(2) otherwise return false
-			return p2.kind == TokenKind.gives
-		end 'emptyParams'
-		// `(name TYPE...` — name is identifier (or `_`, lexed as identifier
-		// with value "_"). TYPE must be a parseTypeRef opener: an identifier
-		// or a `(`.
-		if p1.kind != TokenKind.identifier 'notIdent'
-			return false
-		end 'notIdent'
-		let p2 = try cursor.peek(2) otherwise return false
-		if p2.kind == TokenKind.identifier or p2.kind == TokenKind.leftParen 'isTypeStart'
-			return true
-		end 'isTypeStart'
-		// `(name)` followed by `gives` — untyped single-param closure.
-		if p2.kind == TokenKind.rightParen 'noTypeOneParam'
-			let p3 = try cursor.peek(3) otherwise return false
-			return p3.kind == TokenKind.gives
-		end 'noTypeOneParam'
-		// `(name,` — possibly an untyped multi-param closure OR a tuple
-		// expression. Scan past balanced parens to the matching `)` and
-		// check whether `gives` follows; this is the only way to
-		// distinguish `(a, b) gives a` from the tuple `(a, b)`.
-		if p2.kind == TokenKind.comma 'maybeMultiUntyped'
-			var depth = 1
-			var offset = 2
-			while depth > 0 'scanBalanced'
-				let tok = try cursor.peek(offset) otherwise return false
-				if tok.kind == TokenKind.leftParen 'lp'
-					depth = depth + 1
-				end 'lp' else if tok.kind == TokenKind.rightParen 'rp'
-					depth = depth - 1
-				end 'rp'
-				offset = offset + 1
-				// Safety bound — closure headers should not exceed this in
-				// practice; bail rather than scanning the entire stream.
-				if offset > 128 'tooFar'
-					return false
-				end 'tooFar'
-			end 'scanBalanced'
-			let after = try cursor.peek(offset) otherwise return false
-			return after.kind == TokenKind.gives
-		end 'maybeMultiUntyped'
-		return false
+		return p1.kind == TokenKind.leftParen
 	end 'isClosure'
 
 	// Stage B (closures): parse a closure-literal expression and emit a
@@ -11757,12 +11825,13 @@ export type Parser
 	// Capture analysis is Stage E. For now the lifted body parses against
 	// the OUTER scope — references to outer locals will lookup directly,
 	// which is incorrect at runtime but acceptable for Stages B+C: the
-	// only currently-passing target is the `() gives self` shape inside a
+	// only currently-passing target is the `function() gives self` shape inside a
 	// free function (test 3), where `parseSelfInstanceExpr` reports E2001
 	// before the body finishes parsing.
 	function parseClosure(block IrBlock) returns ExprResult throws ParserError
-		let leftParenToken = try consume()
-		let closureRange = SourceRange.ofToken(leftParenToken)
+		let functionToken = try consume() // 'function' keyword
+		let leftParenToken = try consume() // '('
+		let closureRange = SourceRange.ofToken(functionToken)
 
 		// Parse closure parameters. The `_` underscore name is allowed (it
 		// is the conventional ignore-the-arg shape used by tests 1 and 2);
@@ -11781,7 +11850,7 @@ export type Parser
 				checkReservedDeclName(nameToken)
 			end 'notDiscard'
 
-			// Untyped closure params (`(p) gives ...` / `(a, b) gives ...`)
+			// Untyped closure params (`function(p) gives ...` / `function(a, b) gives ...`)
 			// stamp slots `MaxonType.unresolved`; the concrete type is
 			// inferred at TypeResolution from the call-arg slot the closure
 			// flows into (see propagateClosureArgTypesFromCall). A type-ref

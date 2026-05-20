@@ -51,6 +51,8 @@ typealias StringArray = Array with String
 typealias Matrix = Array with IntArray
 typealias PointArray = Array with Point
 
+typealias FnTypeAlias1 = function(Integer) returns Integer
+
 type Point
 	export var x Integer
 	export var y Integer
@@ -91,7 +93,7 @@ function describe(s Shape) returns Integer
 	end 'describe'
 end 'describe'
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
@@ -181,7 +183,7 @@ function main() returns ExitCode
 
 	// --- section 9: closure capturing a managed value ---
 	let prefix = "pfx_"
-	let builder = (n Integer) gives "{prefix}{n}".count()
+	let builder = function(n Integer) gives "{prefix}{n}".count()
 	total = total + apply(f: builder, x: 7)
 	total = total + apply(f: builder, x: 8)
 

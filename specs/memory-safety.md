@@ -245,11 +245,12 @@ end 'main'
 <!-- test: eq-requires-equatable -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias FnTypeAlias1 = function() returns Integer
 
 type Callback
-	export var fn () returns Integer
+	export var fn FnTypeAlias1
 
-	static function create(fn () returns Integer) returns Self
+	static function create(fn FnTypeAlias1) returns Self
 		return Self{fn: fn}
 	end 'create'
 end 'Callback'
@@ -264,7 +265,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:15:7: '==' requires type 'Callback' to implement 'Equatable'
+error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:16:7: '==' requires type 'Callback' to implement 'Equatable'
 ```
 
 <!-- test: auto-equatable -->

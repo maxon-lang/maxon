@@ -6,10 +6,10 @@
 
 // Set or update a source file input. Bumps revision only if content changed.
 export function fileChanged(project Project, path FilePath, content String)
-	logTrace(LogCategory.compiler, message: () gives "fileChanged: {path}")
+	logTrace(LogCategory.compiler, message: function() gives "fileChanged: {path}")
 	if let existing = try project.db.sourceFiles.get(path) 'exists'
 		if existing.content == content 'unchanged'
-			logTrace(LogCategory.compiler, message: () gives "  unchanged, skipping")
+			logTrace(LogCategory.compiler, message: function() gives "  unchanged, skipping")
 			return
 		end 'unchanged'
 	end 'exists' else 'newFile'
@@ -17,7 +17,7 @@ export function fileChanged(project Project, path FilePath, content String)
 	end 'newFile'
 
 	project.db.currentRevision = project.db.currentRevision + 1
-	logTrace(LogCategory.compiler, message: () gives "  changed at revision {project.db.currentRevision}")
+	logTrace(LogCategory.compiler, message: function() gives "  changed at revision {project.db.currentRevision}")
 	let entry = SourceFileEntry.create(content, changedAtRevision: project.db.currentRevision)
 	project.db.sourceFiles.upsert(path, value: entry)
 end 'fileChanged'

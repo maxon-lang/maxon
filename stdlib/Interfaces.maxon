@@ -116,8 +116,10 @@ end 'Iterable'
 // Extension methods for Iterable - available on all conforming types
 export extension Iterable
 	typealias ElementArray = Array with Element
+	typealias ElementTransform = function(Element) returns Element
+	typealias ElementPredicate = function(Element) returns bool
 
-	function map(transform(Element) returns Element) returns ElementArray
+	function map(transform ElementTransform) returns ElementArray
 		var result = ElementArray{}
 		for item in self 'loop'
 			result.push(transform(item))
@@ -125,7 +127,7 @@ export extension Iterable
 		return result
 	end 'map'
 
-	function filter(keep(Element) returns bool) returns ElementArray
+	function filter(keep ElementPredicate) returns ElementArray
 		var result = ElementArray{}
 		for item in self 'loop'
 			if keep(item) 'match'
@@ -135,7 +137,7 @@ export extension Iterable
 		return result
 	end 'filter'
 
-	function contains(predicate(Element) returns bool) returns bool
+	function contains(predicate ElementPredicate) returns bool
 		for item in self 'loop'
 			if predicate(item) 'match'
 				return true

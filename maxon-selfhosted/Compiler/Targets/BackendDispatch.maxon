@@ -279,7 +279,7 @@ function filterRuntimeByReachability(runtime StdModule, userModule StdModule, cp
 		if seen.contains(func.name) 'keep'
 			trimmed.functions.push(func)
 		end 'keep' else 'drop'
-			logTrace(LogCategory.ir, message: () gives "augmentWithRuntime: dropping unreachable runtime function '{func.name}'")
+			logTrace(LogCategory.ir, message: function() gives "augmentWithRuntime: dropping unreachable runtime function '{func.name}'")
 		end 'drop'
 	end 'filter'
 	return trimmed
@@ -776,25 +776,25 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 end 'emitBackend'
 
 function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
-	logDebug(LogCategory.ir, message: () gives "=== Running pass: lower-mir-to-target ===")
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: lower-mir-to-target ===")
 	let lmtStart = passTimerStart()
 	pipeline.targetModule = backend.lowerMirToTarget()
 	recordPassSince("__lowerMirToTarget", startMs: lmtStart)
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "lower-mir-to-target"))
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "lower-mir-to-target"))
 
 	// Register allocation (target-independent)
-	logDebug(LogCategory.ir, message: () gives "=== Running pass: allocate-registers ===")
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: allocate-registers ===")
 	let regStart = passTimerStart()
 	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
 	recordPassSince("__allocateRegisters", startMs: regStart)
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
 
 	// Prologue/epilogue insertion (uses backend for target-specific ops)
-	logDebug(LogCategory.ir, message: () gives "=== Running pass: insert-prologue-epilogue ===")
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: insert-prologue-epilogue ===")
 	let peStart = passTimerStart()
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
 	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
-	logTrace(LogCategory.ir, message: () gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
 
 	// Emit machine code from the fully-lowered target module
 	let emitStart = passTimerStart()
@@ -905,7 +905,7 @@ end 'getMirBinOpLatency'
 export function insertPrologueEpilogueWith(module TargetModule, backend TargetBackend)
 	let opQuery = backend.createOpQuery()
 	for func in module.functions 'eachFunc'
-		logTrace(LogCategory.ir, message: () gives "prologue-epilogue: func={func.name}")
+		logTrace(LogCategory.ir, message: function() gives "prologue-epilogue: func={func.name}")
 		insertPrologueEpilogueShared(module, func: func, backend: backend, opQuery: opQuery)
 	end 'eachFunc'
 end 'insertPrologueEpilogueWith'

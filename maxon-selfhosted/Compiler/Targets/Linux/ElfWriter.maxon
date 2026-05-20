@@ -155,8 +155,8 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	let rdataVAddr = ELF_LOAD_ADDR + rdataFileOffset
 	let symdataVAddr = ELF_LOAD_ADDR + symdataFileOffset
 
-	logInfo(LogCategory.binary, message: () gives "Writing ELF file: {outputPath}")
-	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, rdata size: {rdataSize} bytes, symdata size: {symdataSize} bytes, data section: {dataMemSize} bytes (virtual), covdata size: {covdataSize} bytes, entry point: {entryPoint}")
+	logInfo(LogCategory.binary, message: function() gives "Writing ELF file: {outputPath}")
+	logInfo(LogCategory.binary, message: function() gives "Code size: {codeSize} bytes, rdata size: {rdataSize} bytes, symdata size: {symdataSize} bytes, data section: {dataMemSize} bytes (virtual), covdata size: {covdataSize} bytes, entry point: {entryPoint}")
 
 	// Patch rdata, symdata, data, and covdata section relocations in code before writing
 	match target.cpu 'patchRdata'
@@ -402,11 +402,11 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		patchWord(elf, offset: eShnumOffset, value: shnum)
 		patchWord(elf, offset: eShstrndxOffset, value: shstrtabShndx)
 
-		logDebug(LogCategory.binary, message: () gives "ELF debug symbols: {codeResult.debugSymbols.count()} entries, section header table at file offset {shoffFileOffset}")
+		logDebug(LogCategory.binary, message: function() gives "ELF debug symbols: {codeResult.debugSymbols.count()} entries, section header table at file offset {shoffFileOffset}")
 	end 'writeSymTables'
 
 	// Write to file
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
-		logError(LogCategory.binary, message: () gives "Failed to write ELF file: {outputPath}")
+		logError(LogCategory.binary, message: function() gives "Failed to write ELF file: {outputPath}")
 	end 'writeErr'
 end 'writeElf'

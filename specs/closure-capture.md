@@ -12,7 +12,7 @@ Closures can capture variables from their enclosing scope. When a closure refere
 
 ```text
 var offset = 10
-var f = (x int) gives x + offset
+var f = function(x int) gives x + offset
 ```
 
 Because captures are by reference, the closure always sees the current value of the captured variable, even if it changes after the closure is created.
@@ -21,13 +21,13 @@ This is especially useful with higher-order functions like `map`:
 
 ```text
 var multiplier = 3
-var results = numbers.map((x) gives x * multiplier)
+var results = numbers.map(function(x) gives x * multiplier)
 ```
 
 Use `_` as a parameter name to ignore the parameter:
 
 ```text
-var values = items.map((_) gives defaultValue)
+var values = items.map(function(_) gives defaultValue)
 ```
 
 ## Tests
@@ -37,13 +37,14 @@ var values = items.map((_) gives defaultValue)
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let offset = 7
-	let result = apply(f: (n Integer) gives n + offset, x: 10)
+	let result = apply(f: function(n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -56,13 +57,14 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let value = 42
-	let result = apply(f: (_ Integer) gives value, x: 99)
+	let result = apply(f: function(_ Integer) gives value, x: 99)
 	return result
 end 'main'
 ```
@@ -75,7 +77,8 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
@@ -89,7 +92,7 @@ end 'Level'
 
 function main() returns ExitCode
 	let level = Level.create(rawValue: 5)
-	let result = apply(f: (_ Integer) gives level.rawValue, x: 0)
+	let result = apply(f: function(_ Integer) gives level.rawValue, x: 0)
 	return result
 end 'main'
 ```
@@ -113,7 +116,7 @@ end 'Level'
 function main() returns ExitCode
 	let level = Level.create(rawValue: 5)
 	let arr = [1, 2, 3]
-	let result = arr.map((_ Integer) gives level.rawValue)
+	let result = arr.map(function(_ Integer) gives level.rawValue)
 	return result.count()
 end 'main'
 ```
@@ -126,14 +129,15 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let a = 10
 	let b = 20
-	let result = apply(f: (x Integer) gives x + a + b, x: 5)
+	let result = apply(f: function(x Integer) gives x + a + b, x: 5)
 	return result
 end 'main'
 ```
@@ -146,12 +150,13 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-	let result = apply(f: (n Integer) gives n * 3, x: 10)
+	let result = apply(f: function(n Integer) gives n * 3, x: 10)
 	return result
 end 'main'
 ```
@@ -164,13 +169,14 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns String, x Integer) returns String
+typealias FnTypeAlias1 = function(Integer) returns String
+function apply(f FnTypeAlias1, x Integer) returns String
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let prefix = "hello"
-	let result = apply(f: (_ Integer) gives prefix, x: 0)
+	let result = apply(f: function(_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'

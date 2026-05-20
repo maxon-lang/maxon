@@ -15,7 +15,7 @@ export function compile(path FilePath, target Target, coverage bool = false, irD
 		let codeResult = project.db.codeCache.value
 		let ir = finalIrString(project, codeResult: codeResult, skipStdlib: true)
 		try File.writeText(irOutputPath, content: ir) otherwise 'writeErr'
-			logInfo(LogCategory.compiler, message: () gives "emit-ir: failed to write {irOutputPath}")
+			logInfo(LogCategory.compiler, message: function() gives "emit-ir: failed to write {irOutputPath}")
 		end 'writeErr'
 	end 'hasEmit'
 
@@ -167,7 +167,7 @@ function writeCovMapTo(project Project, covMapPath FilePath)
 		return
 	end 'skip'
 	try writeCovMap(project.covSites, path: covMapPath) otherwise 'noWrite'
-		logInfo(LogCategory.compiler, message: () gives "Failed to write covmap to {covMapPath}")
+		logInfo(LogCategory.compiler, message: function() gives "Failed to write covmap to {covMapPath}")
 	end 'noWrite'
 end 'writeCovMapTo'
 
@@ -225,7 +225,7 @@ end 'compileMultiFileSourceWithIr'
 // Shared tail for the in-memory compile entry points: run the code query,
 // write the executable, emit the covmap, and capture IR.
 function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
-	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
+	logInfo(LogCategory.compiler, message: function() gives "Starting in-memory compilation")
 	let codeStart = passTimerStart()
 	let codeResult = try queryCodeResult(project)
 	recordPassSince("__queryCodeResult", startMs: codeStart)
@@ -233,7 +233,7 @@ function finishInMemoryCompile(project Project, outputPath FilePath, covMapPath 
 	let writeStart = passTimerStart()
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 	recordPassSince("__writeExecutable", startMs: writeStart)
-	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	writeCovMapTo(project, covMapPath: covMapPath)
 
@@ -254,7 +254,7 @@ end 'CompileWithIrResult'
 
 // Compiles a project and returns the output executable path.
 export function compileProject(project Project) returns FilePath throws CompileError
-	logInfo(LogCategory.compiler, message: () gives "Starting incremental compilation")
+	logInfo(LogCategory.compiler, message: function() gives "Starting incremental compilation")
 
 	try loadSourceFiles(project, path: project.rootPath)
 
@@ -265,7 +265,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
 
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target, stdlibCache: getStdlibCacheData())
 
-	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	writeCovMapTo(project, covMapPath: outputPath.changeExtension(".covmap"))
 
@@ -307,7 +307,7 @@ end 'BuildNameError'
 
 function loadSourceFiles(project Project, path FilePath) throws CompileError
 	if File.exists(path) 'isFile'
-		logTrace(LogCategory.compiler, message: () gives "Loading single file: {path}")
+		logTrace(LogCategory.compiler, message: function() gives "Loading single file: {path}")
 
 		if isIgnoredPath(path) 'ignored'
 			return
@@ -318,7 +318,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 		let content = stripTestFragments(path, content: rawContent)
 		fileChanged(project, path: path, content: content)
 	end 'isFile' else if Directory.exists(path) 'isDir'
-		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
+		logTrace(LogCategory.compiler, message: function() gives "Loading directory: {path}")
 
 		if isIgnoredPath(path) 'ignored'
 			return
@@ -332,7 +332,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 				continue
 			end 'isBuildFile'
 			if name.endsWith(".maxon") 'isMaxon'
-				logTrace(LogCategory.compiler, message: () gives "Loading file: {entry}")
+				logTrace(LogCategory.compiler, message: function() gives "Loading file: {entry}")
 
 				let content = try File.readText(entry) otherwise continue
 

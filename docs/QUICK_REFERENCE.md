@@ -212,25 +212,27 @@ greet("Smith", title: "Dr.")
 ## Closures
 
 ```maxon
-let addX = (n int) gives n + x   // single expression body
-let double = (n int) gives n * 2
+let addX = function(n int) gives n + x   // single expression body
+let double = function(n int) gives n * 2
 ```
 
 Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
 
-Closure parameters are checked for unused (E3012). Use `_` to discard: `(_ int) gives 42`
+Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ int) gives 42`
 
 Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
 ### Function Types
 
 Function values can be referenced by name (no parens), stored in variables, passed
-as arguments, and returned. Function types use `(params) returns Result`; the
-`returns` clause is omitted for void. A `typealias` can name a function type:
+as arguments, and returned. Function types are written with the `function`
+keyword and must be named via `typealias`; the `returns` clause is omitted for
+void. The literal `function(...) returns T` form is legal only as the right-hand
+side of a `typealias` — anywhere else, reference the alias by name.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 
 function apply(f UnaryOp, x Integer) returns Integer
 		return f(x)

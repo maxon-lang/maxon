@@ -124,7 +124,7 @@ function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray,
 		// arms are equivalent because the predicate is dead — keep the
 		// then-arm args.
 		module.setTerminator(block, op: StdOp.control(StdControlOp.br(thenTarget, argIds: thenArgIds)))
-		logTrace(LogCategory.ir, message: () gives "canonicalize: folded condBr (both arms -> block_{thenTarget})")
+		logTrace(LogCategory.ir, message: function() gives "canonicalize: folded condBr (both arms -> block_{thenTarget})")
 		return
 	end 'sameTarget'
 	let condVal = constMapGet(constMap, valueId: condId)
@@ -136,7 +136,7 @@ function applyCondBrFold(module StdModule, block IrBlock, constMap ValueIdArray,
 	let takenArgIds = thenArgIds if condVal != 0 else elseArgIds
 
 	module.setTerminator(block, op: StdOp.control(StdControlOp.br(takenTarget, argIds: takenArgIds)))
-	logTrace(LogCategory.ir, message: () gives "canonicalize: folded condBr %{condId}={condVal} -> br block_{takenTarget}")
+	logTrace(LogCategory.ir, message: function() gives "canonicalize: folded condBr %{condId}={condVal} -> br block_{takenTarget}")
 end 'applyCondBrFold'
 
 // Try to fold a std op. If it is a foldable std.arith.binary with both
@@ -195,7 +195,7 @@ function tryFoldDescriptorField(module StdModule, project Project, opIdx OpIndex
 		return
 	end 'cannotFold'
 	constMapSet(constMap, valueId: resultId, value: foldedVal)
-	logTrace(LogCategory.ir, message: () gives "canonicalize: folded descriptorField %{resultId} = @{label}.{descriptorFieldName(field)} -> const {foldedVal}")
+	logTrace(LogCategory.ir, message: function() gives "canonicalize: folded descriptorField %{resultId} = @{label}.{descriptorFieldName(field)} -> const {foldedVal}")
 	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: foldedVal))))
 end 'tryFoldDescriptorField'
 
@@ -280,7 +280,7 @@ function tryFoldBinaryOp(module StdModule, b StdArithBinaryOp, constMap ValueIdA
 	// Successfully folded: emit a new std.arith.const with the binary op's resultId
 	// Register the folded value so downstream ops can also fold
 	constMapSet(constMap, valueId: b.resultId, value: foldResult)
-	logTrace(LogCategory.ir, message: () gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
+	logTrace(LogCategory.ir, message: function() gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
 	module.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: b.resultId, value: foldResult))))
 end 'tryFoldBinaryOp'
 

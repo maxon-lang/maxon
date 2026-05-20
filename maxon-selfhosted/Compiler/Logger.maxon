@@ -22,6 +22,7 @@ end 'LogCategory'
 var globalLogLevel = 2
 
 typealias CaptureMessageArray = Array with String
+typealias LazyMessage = function() returns String
 
 function joinLines(lines CaptureMessageArray) returns String
 	var result = ""
@@ -108,19 +109,19 @@ function effectiveLogLevel(category LogCategory) returns StoredLevel
 	return globalLogLevel
 end 'effectiveLogLevel'
 
-export function logError(category LogCategory, message() returns String)
+export function logError(category LogCategory, message LazyMessage)
 	log(category, level: LogLevel.ERROR, message: message)
 end 'logError'
 
-export function logInfo(category LogCategory, message() returns String)
+export function logInfo(category LogCategory, message LazyMessage)
 	log(category, level: LogLevel.INFO, message: message)
 end 'logInfo'
 
-export function logDebug(category LogCategory, message() returns String)
+export function logDebug(category LogCategory, message LazyMessage)
 	log(category, level: LogLevel.DEBUG, message: message)
 end 'logDebug'
 
-export function logTrace(category LogCategory, message() returns String)
+export function logTrace(category LogCategory, message LazyMessage)
 	log(category, level: LogLevel.TRACE, message: message)
 end 'logTrace'
 
@@ -157,7 +158,7 @@ export function parseLogOption(option String) returns bool
 	return true
 end 'parseLogOption'
 
-function log(category LogCategory, level LogLevel, message() returns String)
+function log(category LogCategory, level LogLevel, message LazyMessage)
 	let effectiveLevel = effectiveLogLevel(category)
 	if level.rawValue <= effectiveLevel 'check'
 		let msg = message()

@@ -12,39 +12,43 @@ Functions in Maxon are first-class citizens. They can be stored in variables, pa
 
 ## Function Types
 
-Function types describe the signature of a function:
+Function types are introduced with the `function` keyword and must be named via
+`typealias` — the literal `function(...) returns T` form is only legal as the
+right-hand side of a `typealias` declaration. Anywhere else (parameters, return
+types, struct fields, variable annotations, generic arguments), reference the
+alias by name.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
-// A function that takes an int and returns an int
-var transform (Score) returns Score
+// A function that takes a Score and returns a Score
+typealias Transform = function(Score) returns Score
 
-// A function that takes two ints and returns a bool
-var compare (Score, Score) returns bool
+// A function that takes two Scores and returns a bool
+typealias Compare = function(Score, Score) returns bool
 
 // A function with no parameters that returns void
-var callback ()
+typealias Callback = function()
 ```
 
-Named parameters can be used for documentation:
+Parameter names inside a function-type signature are optional and act as
+documentation:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
-var operation (x Score, y Score) returns Score
+typealias Operation = function(x Score, y Score) returns Score
 ```
 
-## Function Type Aliases
+## Using Function-Type Aliases
 
-Function types can be named with `typealias` so they can be referred to anywhere a
-type is expected (function parameters, return types, struct fields, generic
-arguments like `Map with(String, T)`):
+Once defined, a function-type alias can be used anywhere a type is expected
+(function parameters, return types, struct fields, generic arguments):
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
-typealias BinaryOp = (Integer, Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
+typealias BinaryOp = function(Integer, Integer) returns Integer
 
 function apply(f UnaryOp, x Integer) returns Integer
 	return f(x)
@@ -54,9 +58,6 @@ function pickDouble() returns UnaryOp
 	return double
 end 'pickDouble'
 ```
-
-A function-type alias resolves to the same `IrFunctionType` as the inline form;
-`UnaryOp` and `(Integer) returns Integer` are interchangeable at use sites.
 
 ## Function References
 
@@ -80,12 +81,13 @@ end 'main'
 
 ## Passing Functions as Arguments
 
-Functions can be passed to other functions:
+Functions can be passed to other functions via a function-type alias:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
+typealias ScoreOp = function(Score) returns Score
 
-function apply(f (Score) returns Score, x Score) returns Score
+function apply(f ScoreOp, x Score) returns Score
 	return f(x)
 end 'apply'
 
@@ -103,13 +105,13 @@ end 'main'
 
 ## Closures
 
-Closures are inline anonymous functions:
+Closures are inline anonymous functions written with the `function` keyword:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let f = (x Score) gives x * 2
+	let f = function(x Score) gives x * 2
 	return f(21)  // returns 42
 end 'main'
 ```
@@ -121,13 +123,14 @@ Closures can be passed directly to higher-order functions:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
+typealias ScoreOp = function(Score) returns Score
 
-function apply(f (Score) returns Score, x Score) returns Score
+function apply(f ScoreOp, x Score) returns Score
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-	return apply((n Score) gives n + 5, x: 10)  // returns 15
+	return apply(function(n Score) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
 ```exitcode
@@ -158,8 +161,9 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+function apply(f UnaryOp, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
@@ -181,7 +185,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	let f = (x Integer) gives x * 5
+	let f = function(x Integer) gives x * 5
 	return f(8)
 end 'main'
 ```
@@ -193,13 +197,14 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+function apply(f UnaryOp, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-	return apply((n Integer) gives n + 7, x: 10)
+	return apply(function(n Integer) gives n + 7, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -210,8 +215,9 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias BinaryOp = function(Integer, Integer) returns Integer
 
-function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
+function calculate(f BinaryOp, a Integer, b Integer) returns Integer
 	return f(a, b)
 end 'calculate'
 
@@ -256,7 +262,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 
 function double(x Integer) returns Integer
 	return x * 2
@@ -278,7 +284,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias BinaryOp = (Integer, Integer) returns Integer
+typealias BinaryOp = function(Integer, Integer) returns Integer
 
 function add(x Integer, y Integer) returns Integer
 	return x + y
@@ -300,14 +306,14 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 
 function apply(f UnaryOp, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-	return apply((n Integer) gives n + 5, x: 37)
+	return apply(function(n Integer) gives n + 5, x: 37)
 end 'main'
 ```
 ```exitcode
@@ -318,7 +324,7 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = (Integer) returns Integer
+typealias UnaryOp = function(Integer) returns Integer
 
 function double(x Integer) returns Integer
 	return x * 2

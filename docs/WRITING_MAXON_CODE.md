@@ -34,6 +34,8 @@ func(a, b, c)                  func(a, b: b, c: c)
 param int                      param SomeTypealias
 returns int                    returns SomeTypealias
 cond ? a : b                   a if cond else b
+(x) gives x + 1                function(x) gives x + 1
+param (T) returns U            typealias F = function(T) returns U; param F
 ```
 
 ---
@@ -802,13 +804,32 @@ b as int       // byte to int OK
 
 ### Closures
 
+Closure literals start with the `function` keyword:
+
 ```maxon
-let double = (n Integer) gives n * 2
-items.sort((a, b) gives a.priority - b.priority)
-let always42 = (_ Integer) gives 42
+let double = function(n Integer) gives n * 2
+items.sort(function(a, b) gives a.priority - b.priority)
+let always42 = function(_ Integer) gives 42
 ```
 
 Closures capture by reference.
+
+### Function Types
+
+Function types are written `function(ParamType, ...) returns ReturnType` (the
+`returns` clause is omitted for a void-returning function type). The literal
+`function(...)` form is legal only as the right-hand side of a `typealias` —
+everywhere else (parameter types, return types, struct fields, generic
+arguments) you reference the alias by name:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+```
 
 ### Tuples
 

@@ -101,7 +101,7 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		integer gives MaxonType.integer
 		float gives MaxonType.float
 		string gives MaxonType.string
-		named gives t
+		named gives substituteNamedAlias(project, t: t, subst: subst)
 		function(id) gives substituteFunctionType(project, id: id, subst: subst)
 		unresolved gives MaxonType.unresolved
 		typeParameter(id) gives subst.lookup(id)
@@ -112,6 +112,20 @@ export function substituteType(project Project, t MaxonType, subst TypeSubstitut
 		constInt gives t
 	end 'sub'
 end 'substituteType'
+
+// When a `named(alias)` resolves to a function-type alias whose signature
+// references in-scope type parameters (e.g. `function(Element) returns Element`),
+// substitute through to produce a concrete function type. Other alias forms
+// (tuple, generic, ranged primitive) are left unchanged — their substitution
+// happens during later resolution stages.
+function substituteNamedAlias(project Project, t MaxonType, subst TypeSubstitution) returns MaxonType
+	let chased = chaseTypealiasToFunctionType(project, t: t)
+	if not isFunctionMaxonType(chased) 'notFnAlias'
+		return t
+	end 'notFnAlias'
+	let fnId = functionMaxonTypeId(chased)
+	return substituteFunctionType(project, id: fnId, subst: subst)
+end 'substituteNamedAlias'
 
 // Recursive case for `substituteType`: walks a function-type's param-type
 // list + return type, substitutes each, and re-interns through

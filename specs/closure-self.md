@@ -15,7 +15,7 @@ type Counter
     export var value Integer
 
     function getReader() returns (() returns Integer)
-        return () gives self.value
+        return function() gives self.value
     end 'getReader'
 end 'Counter'
 ```
@@ -31,7 +31,8 @@ A closure inside an instance method captures `self` and reads a field through it
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
@@ -43,7 +44,7 @@ type Holder
 	end 'create'
 
 	export function readViaClosure() returns Integer
-		return apply(f: (_ Integer) gives self.value, x: 0)
+		return apply(f: function(_ Integer) gives self.value, x: 0)
 	end 'readViaClosure'
 end 'Holder'
 
@@ -63,7 +64,8 @@ A closure may invoke an instance method on the captured `self`. This proves the 
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
@@ -79,7 +81,7 @@ type Doubler
 	end 'doubled'
 
 	export function run() returns Integer
-		return apply(f: (_ Integer) gives self.doubled(), x: 0)
+		return apply(f: function(_ Integer) gives self.doubled(), x: 0)
 	end 'run'
 end 'Doubler'
 
@@ -97,10 +99,10 @@ end 'main'
 The fix only enables `self` capture when the enclosing function actually has `self`. A closure inside a free function must still be rejected with E2001.
 ```maxon
 function main() returns ExitCode
-	let f = () gives self
+	let f = function() gives self
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/closure-self/error-self-in-free-function-closure.test:3:19: 'self' can only be used inside instance methods
+error E2001: specs/fragments/closure-self/error-self-in-free-function-closure.test:3:27: 'self' can only be used inside instance methods
 ```

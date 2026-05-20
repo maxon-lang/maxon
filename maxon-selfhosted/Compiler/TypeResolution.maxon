@@ -149,6 +149,23 @@ export function isFunctionAliasExpr(expr UnresolvedTypeExpr) returns bool
 	end 'check'
 end 'isFunctionAliasExpr'
 
+// Resolve a non-generic inner-alias expression. Function-type aliases unwrap
+// to their stored MaxonType.function so later passes can chase the alias to
+// its callable signature; all other shapes are recorded as named placeholders
+// keyed by `aliasName` (step 5 sharpens the lookup through StdType chaining).
+function resolveNonGenericInnerAlias(project Project, expr UnresolvedTypeExpr, aliasName String) returns MaxonType
+	return match expr 'extract'
+		functionAlias(target) gives target
+		boolPrim gives internMaxonType(project, name: aliasName)
+		rangedInt gives internMaxonType(project, name: aliasName)
+		rangedFloat gives internMaxonType(project, name: aliasName)
+		aliasName gives internMaxonType(project, name: aliasName)
+		genericAlias gives internMaxonType(project, name: aliasName)
+		sizedGenericAlias gives internMaxonType(project, name: aliasName)
+		invalid gives internMaxonType(project, name: aliasName)
+	end 'extract'
+end 'resolveNonGenericInnerAlias'
+
 // Resolve a single argument name in a generic-alias RHS into a MaxonType.
 // Lookup precedence: in-scope type-parameter (when `declaringTypeName` is
 // non-empty and the name is registered against it), `bool` primitive, then
@@ -587,7 +604,8 @@ function resolveAllInterfaces(project Project)
 				let resolvedType = resolveGenericAliasExpr(project, expr: aliasExpr, declaringTypeName: entry.name)
 				try resolvedInnerAliases.insert(aliasName, value: resolvedType) otherwise ignore
 			end 'isGeneric' else 'nonGeneric'
-				try resolvedInnerAliases.insert(aliasName, value: internMaxonType(project, name: aliasName)) otherwise ignore
+				let resolvedType = resolveNonGenericInnerAlias(project, expr: aliasExpr, aliasName: aliasName)
+				try resolvedInnerAliases.insert(aliasName, value: resolvedType) otherwise ignore
 			end 'nonGeneric'
 		end 'eachInner'
 
@@ -953,10 +971,8 @@ function resolveAllStructTypes(project Project)
 				let resolvedType = resolveGenericAliasExpr(project, expr: aliasExpr, declaringTypeName: entry.name)
 				try resolvedInnerAliases.insert(aliasName, value: resolvedType) otherwise ignore
 			end 'isGeneric' else 'nonGeneric'
-				// Non-generic inner aliases are recorded as named placeholders;
-				// step 5 will resolve them through the StdType typealias chain
-				// when implementing substitution.
-				try resolvedInnerAliases.insert(aliasName, value: internMaxonType(project, name: aliasName)) otherwise ignore
+				let resolvedType = resolveNonGenericInnerAlias(project, expr: aliasExpr, aliasName: aliasName)
+				try resolvedInnerAliases.insert(aliasName, value: resolvedType) otherwise ignore
 			end 'nonGeneric'
 		end 'eachInner'
 
@@ -3525,13 +3541,39 @@ end 'lookupInnerAliasOrPassThrough'
 // the cheap-path for non-generic call sites pays only one map lookup.
 export function resolveCalleeParamTypeInContext(project Project, paramType MaxonType, calleeQualifiedName String, receiverType MaxonType) returns MaxonType
 	if let enclosingType = try enclosingTypeNameForCallee(project, callee: calleeQualifiedName) 'haveEnclosing'
-		let structType = try project.structTypes.get(enclosingType) otherwise return paramType
-		let aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: structType.innerAliases)
+		// Inner-aliases may live on a struct OR an interface (when the method
+		// is declared inside `extension SomeInterface`). Try the struct registry
+		// first; fall back to the interface registry so `Iterable.map`'s
+		// `transform ElementTransform` parameter resolves through the alias
+		// declared in the Iterable extension body.
+		var aliasResolved = paramType
+		var didApplyAlias = false
+		var enclosingIsInterface = false
+		if let structType = try project.structTypes.get(enclosingType) 'isStruct'
+			aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: structType.innerAliases)
+			didApplyAlias = true
+		end 'isStruct'
+		if not didApplyAlias 'tryIface'
+			if let iface = try project.interfaces.get(enclosingType) 'isIface'
+				aliasResolved = applyInnerAliasIfNamed(project, t: paramType, innerAliases: iface.innerAliases)
+				enclosingIsInterface = true
+			end 'isIface'
+		end 'tryIface'
+		// For interface-method calls, the alias may carry the interface's own
+		// `uses` type parameters (e.g. `function(Element) returns Element`).
+		// `resolveInterfaceTypeParamsViaConformance` walks the type, rewriting
+		// any interface-declared typeParameter into the conformance's withArg
+		// (e.g. `Iterable.Element` → `Map`'s `(Key, Value)` tuple) before the
+		// receiver-substitution pass binds the receiver's own typeParameters.
+		var conformanceResolved = aliasResolved
+		if enclosingIsInterface 'ifaceConformance'
+			conformanceResolved = resolveInterfaceTypeParamsViaConformance(project, t: aliasResolved, receiverType: receiverType)
+		end 'ifaceConformance'
 		let subst = buildSubstitutionForInstance(project, t: receiverType)
 		if subst.isEmpty() 'noSubst'
-			return aliasResolved
+			return conformanceResolved
 		end 'noSubst'
-		return substituteType(project, t: aliasResolved, subst: subst)
+		return substituteType(project, t: conformanceResolved, subst: subst)
 	end 'haveEnclosing'
 	return paramType
 end 'resolveCalleeParamTypeInContext'
@@ -6450,7 +6492,7 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// (so arity errors are reported before any panic tripwire could fire).
 	resolveAllCalls(project, module: module, producerTypesPerFunc: producerTypesPerFunc)
 
-	// J.4f.2: closure literals with untyped parameters (`m.map((p) gives p)`)
+	// J.4f.2: closure literals with untyped parameters (`m.map(function(p) gives p)`)
 	// stamp `MaxonType.unresolved` on the lifted function's param slot at
 	// parse time — the parser cannot peek the callee's signature to learn
 	// what `p` should be. Now that `resolveAllCalls` has filled
@@ -7525,7 +7567,12 @@ function maybePropagateForCallOp(project Project, module MaxonModule, op MaxonOp
 	for i in 0 upto argCount 'eachArg'
 		let argName = try args.get(i) otherwise panic("maybePropagateForCallOp: args.get({i}) failed")
 		let argType = try argTypes.get(i) otherwise panic("maybePropagateForCallOp: argTypes.get({i}) failed")
-		let expected = try substituted.get(i + offset) otherwise panic("maybePropagateForCallOp: substituted.get({i + offset}) failed")
+		let expectedRaw = try substituted.get(i + offset) otherwise panic("maybePropagateForCallOp: substituted.get({i + offset}) failed")
+		// Chase through a named function-type alias so a parameter declared as
+		// `transform ElementTransform` still propagates the underlying
+		// `function(Element) returns Element` shape to a closure literal at
+		// the call site.
+		let expected = chaseTypealiasToFunctionType(project, t: expectedRaw)
 		if not isFunctionMaxonType(expected) 'expectedNotFn'
 			continue
 		end 'expectedNotFn'

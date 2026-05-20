@@ -562,11 +562,11 @@ function allocateRegistersWithTarget(module TargetModule, regTarget RegAllocTarg
 	let needsRegalloc = collectFuncsNeedingRegalloc(module, regTarget: regTarget)
 
 	if needsRegalloc.count() == 0 'allPhysical'
-		logDebug(LogCategory.ir, message: () gives "allocateRegisters: all registers physical, pass-through")
+		logDebug(LogCategory.ir, message: function() gives "allocateRegisters: all registers physical, pass-through")
 		return
 	end 'allPhysical'
 
-	logDebug(LogCategory.ir, message: () gives "allocateRegisters: virtual registers detected, running standalone regalloc")
+	logDebug(LogCategory.ir, message: function() gives "allocateRegisters: virtual registers detected, running standalone regalloc")
 	for funcIdx in needsRegalloc 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("allocateRegistersWithTarget: functions.get OOB at {funcIdx}")
 		let funcStart = passTimerStart()
@@ -727,14 +727,14 @@ type FunctionRegAllocator
 				break
 			end 'allColored'
 
-			logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
+			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
 			var spillDec = SpillDecision.create()
 			for ur in uncoloredSpills 'addSpills'
 				if ur.spillWeight == SPILL_WEIGHT_INFINITE 'cannotRespill'
 					panic("regalloc: reload vreg %{ur.valueId} cannot be respilled in {state.funcName} — register pressure unresolvable, need live-range splitting or IR-level pressure reduction (class={ur.regClass.name}, iteration={iteration})")
 				end 'cannotRespill'
-				logTrace(LogCategory.ir, message: () gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
+				logTrace(LogCategory.ir, message: function() gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
 				spillDec.spilledRanges.push(ur)
 			end 'addSpills'
 			allocateSpillSlots(spillDec)
@@ -751,7 +751,7 @@ type FunctionRegAllocator
 			iteration = iteration + 1
 		end 'spillColorLoop'
 
-		logTrace(LogCategory.ir, message: () gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
+		logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} colored={coloring.assignment.count()} iterations={iteration}")
 	end 'runSpillColorLoop'
 
 	export function run()

@@ -480,7 +480,7 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 			updateSpecLowering(specPath, targetKey: targetKey, results: results)
 		end 'hasResults'
 	end 'eachSpec'
-	logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering blocks in spec files")
+	logInfo(LogCategory.testing, message: function() gives "Updated RequiredLowering blocks in spec files")
 end 'updateAllRequiredLowering'
 
 // Run all whitelisted spec tests for a specific target.
@@ -491,7 +491,7 @@ function warmStdlibCache(target Target)
 	let exePath = try Process.executablePath() otherwise panic("warmStdlibCache: cannot determine executable path")
 	let exeParent = try exePath.parent() otherwise panic("executable has no parent directory")
 	let projectDir = try exeParent.parent() otherwise panic("executable parent has no parent directory")
-	logInfo(LogCategory.testing, message: () gives "Compiling stdlib cache using project dir: {projectDir}")
+	logInfo(LogCategory.testing, message: function() gives "Compiling stdlib cache using project dir: {projectDir}")
 	var warmupProject = createProject(projectDir, target: target)
 	_ = getStdlibModule(warmupProject)
 	// Trigger the process-wide runtime-module load + mem2reg-promotion now,
@@ -533,13 +533,13 @@ end 'SpecRunOutcome'
 function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePath, specCacheDir FilePath, root FilePath, target Target, filter String, targetKey String, verbose bool) returns SpecRunOutcome
 	let specPath = specDir.join("{specName}.md")
 	let content = try File.readText(specPath) otherwise 'readErr'
-		logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+		logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 		return SpecRunOutcome.notRun()
 	end 'readErr'
 
 	let fm = parseFrontmatter(content)
 	if fm.status == "draft" 'isDraft'
-		logDebug(LogCategory.testing, message: () gives "Skipping draft spec: {specName}")
+		logDebug(LogCategory.testing, message: function() gives "Skipping draft spec: {specName}")
 		return SpecRunOutcome.notRun()
 	end 'isDraft'
 
@@ -567,7 +567,7 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 		specPassed = specPassed + batchOutcome.passed
 		if verbose 'showBatch'
 			for verboseLine in batchOutcome.verboseLines 'eachVerbose'
-				logInfo(LogCategory.testing, message: () gives verboseLine)
+				logInfo(LogCategory.testing, message: function() gives verboseLine)
 			end 'eachVerbose'
 		end 'showBatch'
 		appendSkippedToFallback(unit.nonBatchable, batchable: unit.batchable, skippedNames: batchOutcome.skippedTestNames)
@@ -581,7 +581,7 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 		fragmentsWritten = fragmentsWritten + 1
 
 		let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
-			logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
+			logError(LogCategory.testing, message: function() gives "[FAIL] {testPath} - could not parse fragment")
 			specFailed = specFailed + 1
 			specFailures.push(fragPath.toString())
 			specFailures.push("  Failed to parse fragment file")
@@ -605,16 +605,16 @@ function runOneSpecSerial(specName String, specDir FilePath, fragmentDir FilePat
 
 		if verbose 'showTest'
 			if result.passed 'showPass'
-				logInfo(LogCategory.testing, message: () gives "[PASS] {testPath}")
+				logInfo(LogCategory.testing, message: function() gives "[PASS] {testPath}")
 			end 'showPass' else 'showFail'
-				logInfo(LogCategory.testing, message: () gives "[FAIL] {testPath}")
+				logInfo(LogCategory.testing, message: function() gives "[FAIL] {testPath}")
 			end 'showFail'
 		end 'showTest'
 	end 'eachSingle'
 
 	if specFailed > 0 'hasSpecFail'
 		let specTotal = specPassed + specFailed
-		logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({specPassed}/{specTotal})")
+		logError(LogCategory.testing, message: function() gives "[FAIL] {specName} ({specPassed}/{specTotal})")
 		logSpecFailureMessages(specFailures)
 	end 'hasSpecFail'
 
@@ -623,7 +623,7 @@ end 'runOneSpecSerial'
 
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'
 
@@ -689,21 +689,21 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	end 'eachSpec'
 
 	if totalTests == 0 'noTests'
-		logInfo(LogCategory.testing, message: () gives "No tests found")
+		logInfo(LogCategory.testing, message: function() gives "No tests found")
 		return 0
 	end 'noTests'
 
 	if totalFragmentsWritten > 0 'showFrags'
-		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
+		logInfo(LogCategory.testing, message: function() gives "Wrote {totalFragmentsWritten} fragment(s)")
 	end 'showFrags'
 
 	let elapsedMs = Clock.nowMs() - startTime
-	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
+	logInfo(LogCategory.testing, message: function() gives "Total compile time: {totalCompileMs}ms")
 
 	if totalFailed == 0 'allPass'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: function() gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
 	end 'allPass' else 'someFail'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: function() gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
 	end 'someFail'
 
 	if totalFailed > 0 'hasFail'
@@ -773,7 +773,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		outcome.skippedTestNames.push(skipName.clone())
 	end 'collectSkipped'
 	for reason in buildResult.skippedReasons 'logSkipped'
-		logDebug(LogCategory.testing, message: () gives "[BATCH SKIP] {reason}")
+		logDebug(LogCategory.testing, message: function() gives "[BATCH SKIP] {reason}")
 	end 'logSkipped'
 
 	if not buildResult.hasSource 'allRejected'
@@ -809,13 +809,13 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		// The shared compile didn't identify any single test — re-run every
 		// batchable test via the per-fragment path so callers see real
 		// individual pass/fail instead of a generic batch-flavored error.
-		logDebug(LogCategory.testing, message: () gives "[BATCH FALLBACK] {specName}: batch compile failed: {capturedErrors}")
+		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: batch compile failed: {capturedErrors}")
 		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
 		return outcome
 	end 'batchCompileFailed'
 	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
 	cancelCapturingErrors()
-	logDebug(LogCategory.testing, message: () gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
+	logDebug(LogCategory.testing, message: function() gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
 
 	// Run the batched binary ONCE. The dispatcher runs every included test
 	// in sequence and emits BEGIN/END markers around each so we can slice
@@ -867,7 +867,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	end 'firstPass'
 
 	if failedNames.count() > 0 'someFailed'
-		logDebug(LogCategory.testing, message: () gives "[BATCH FALLBACK] {specName}: re-running {failedNames.count()} failing batchable test(s) individually")
+		logDebug(LogCategory.testing, message: function() gives "[BATCH FALLBACK] {specName}: re-running {failedNames.count()} failing batchable test(s) individually")
 	end 'someFailed'
 
 	// Commit passes regardless of whether any tests failed — the failed ones
@@ -1348,7 +1348,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	end 'checkRdata'
 
 	if passed 'didPass'
-		logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
+		logDebug(LogCategory.testing, message: function() gives "[PASS] {testName}")
 	end 'didPass'
 
 	// Keep the exe only for passing success tests (cached for future runs)
@@ -2092,18 +2092,18 @@ function updateSpecLowering(specPath FilePath, targetKey String, results TestRes
 			specContent = updatedContent
 			modified = true
 			totalUpdated = totalUpdated + 1
-			logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering:{targetKey} for {result.testName}")
+			logInfo(LogCategory.testing, message: function() gives "Updated RequiredLowering:{targetKey} for {result.testName}")
 		end 'changed'
 	end 'eachResult'
 
 	if modified 'writeBack'
 		try File.writeText(specPath, content: specContent) otherwise 'writeErr'
-			logError(LogCategory.testing, message: () gives "Failed to write spec: {specPath}")
+			logError(LogCategory.testing, message: function() gives "Failed to write spec: {specPath}")
 		end 'writeErr'
 	end 'writeBack'
 
 	if totalUpdated > 0 'showCount'
-		logInfo(LogCategory.testing, message: () gives "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
+		logInfo(LogCategory.testing, message: function() gives "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
 	end 'showCount'
 end 'updateSpecLowering'
 
@@ -2253,9 +2253,9 @@ let workerBatchResultMarker = "WORKER_BATCH_RESULT:"
 function logSpecFailureMessages(failures TextLineArray)
 	for failMsg in failures 'eachFailure'
 		if not failMsg.startsWith("  ") 'isPath'
-			logError(LogCategory.testing, message: () gives "")
+			logError(LogCategory.testing, message: function() gives "")
 		end 'isPath'
-		logError(LogCategory.testing, message: () gives failMsg)
+		logError(LogCategory.testing, message: function() gives failMsg)
 	end 'eachFailure'
 end 'logSpecFailureMessages'
 
@@ -2290,7 +2290,7 @@ end 'emitWorkerResult'
 // not contaminate the result lines the parent needs to parse.
 export function runSpecBatchWorker(workerSpecs String, filter String, target Target, verbose bool) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'
 
@@ -2327,7 +2327,7 @@ export function runSpecBatchWorker(workerSpecs String, filter String, target Tar
 
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 			emitWorkerResult(specName, passed: 0, compileMs: 0, skippedNames: StringArray.create())
 			continue
 		end 'readErr'
@@ -2353,7 +2353,7 @@ export function runSpecBatchWorker(workerSpecs String, filter String, target Tar
 
 		if verbose 'showBatch'
 			for verboseLine in outcome.verboseLines 'eachVerbose'
-				logInfo(LogCategory.testing, message: () gives verboseLine)
+				logInfo(LogCategory.testing, message: function() gives verboseLine)
 			end 'eachVerbose'
 		end 'showBatch'
 
@@ -2532,7 +2532,7 @@ end 'decodeFailPayload'
 // same machinery the in-process Phase 3/5 paths use.
 export function runSpecSinglesWorker(workerSpecs String, filter String, target Target, verbose bool) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'
 
@@ -2565,7 +2565,7 @@ export function runSpecSinglesWorker(workerSpecs String, filter String, target T
 
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
 			continue
 		end 'readErr'
@@ -2606,10 +2606,10 @@ export function runSpecFallbackWorker(groupsArg String, filter String, target Ta
 	// already filtered when it built the test-name list. We log it for
 	// debugging when verbose so the unused-variable check is satisfied.
 	if verbose and not filter.isEmpty() 'showFilter'
-		logInfo(LogCategory.testing, message: () gives "[FALLBACK WORKER] filter (informational, ignored): {filter}")
+		logInfo(LogCategory.testing, message: function() gives "[FALLBACK WORKER] filter (informational, ignored): {filter}")
 	end 'showFilter'
 	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'
 
@@ -2636,12 +2636,12 @@ export function runSpecFallbackWorker(groupsArg String, filter String, target Ta
 			continue
 		end 'emptyGroup'
 		let colonIdx = try trimmedGroup.findFirst(":") otherwise 'badGroup'
-			logError(LogCategory.testing, message: () gives "[FALLBACK WORKER] malformed group (no colon): {trimmedGroup}")
+			logError(LogCategory.testing, message: function() gives "[FALLBACK WORKER] malformed group (no colon): {trimmedGroup}")
 			continue
 		end 'badGroup'
 		let specName = trimmedGroup.slice(trimmedGroup.startIndex(), endIndex: colonIdx)
 		let afterColon = try trimmedGroup.indexAfter(colonIdx) otherwise 'badGroupAfter'
-			logError(LogCategory.testing, message: () gives "[FALLBACK WORKER] malformed group (truncated): {trimmedGroup}")
+			logError(LogCategory.testing, message: function() gives "[FALLBACK WORKER] malformed group (truncated): {trimmedGroup}")
 			continue
 		end 'badGroupAfter'
 		let namesPart = trimmedGroup.slice(afterColon, endIndex: trimmedGroup.endIndex())
@@ -2658,7 +2658,7 @@ export function runSpecFallbackWorker(groupsArg String, filter String, target Ta
 
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 			emitWorkerSinglesResult(specName, passed: 0, failed: 0, compileMs: 0)
 			continue
 		end 'readErr'
@@ -2864,7 +2864,7 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 					end 'isPnMatch'
 				end 'matchSpec'
 				if not matched 'unmatched'
-					logError(LogCategory.testing, message: () gives "[FALLBACK ERROR] orphan fail line: {trimmedLine}")
+					logError(LogCategory.testing, message: function() gives "[FALLBACK ERROR] orphan fail line: {trimmedLine}")
 				end 'unmatched'
 				continue
 			end 'isFail'
@@ -2873,7 +2873,7 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 			end 'notResult'
 			let result = parseSinglesResultLine(trimmedLine)
 			if not result.valid 'invalidResult'
-				logError(LogCategory.testing, message: () gives "[FALLBACK ERROR] malformed result line: {trimmedLine}")
+				logError(LogCategory.testing, message: function() gives "[FALLBACK ERROR] malformed result line: {trimmedLine}")
 				continue
 			end 'invalidResult'
 
@@ -2891,7 +2891,7 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 
 			if result.failed > 0 'hasFail'
 				let specTotal = result.passed + result.failed
-				logError(LogCategory.testing, message: () gives "[FAIL] {result.specName} fallback ({result.passed}/{specTotal})")
+				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} fallback ({result.passed}/{specTotal})")
 				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: result.specName)
 			end 'hasFail'
 		end 'parseLines'
@@ -2935,11 +2935,11 @@ function retryAndAccountCrashedSpec(specName String, tests SpecTestArray, exePat
 	let (rp, rf, rfMissing) = retryFallbackTestsIndividually(specName, tests: tests, exePath: exePath, targetStr: targetStr, verbose: verbose, failOwners: failOwners, failPayloads: failPayloads)
 	let specTotal = rp + rf
 	if rf > 0 'someFailed'
-		logError(LogCategory.testing, message: () gives "[FAIL] {specName} {phaseLabel} ({rp}/{specTotal})")
+		logError(LogCategory.testing, message: function() gives "[FAIL] {specName} {phaseLabel} ({rp}/{specTotal})")
 		logSpecFailuresFor(failOwners, payloads: failPayloads, specName: specName)
 	end 'someFailed'
 	if rfMissing > 0 'someMissing'
-		logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({rfMissing} {phaseLabel} test(s) crashed individually too)")
+		logError(LogCategory.testing, message: function() gives "[FAIL] {specName} ({rfMissing} {phaseLabel} test(s) crashed individually too)")
 	end 'someMissing'
 	return (rp, rf)
 end 'retryAndAccountCrashedSpec'
@@ -3200,7 +3200,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 					end 'isPnMatch'
 				end 'matchSpec'
 				if not matched 'unmatched'
-					logError(LogCategory.testing, message: () gives "[SINGLES ERROR] orphan fail line: {trimmedLine}")
+					logError(LogCategory.testing, message: function() gives "[SINGLES ERROR] orphan fail line: {trimmedLine}")
 				end 'unmatched'
 				continue
 			end 'isFail'
@@ -3209,7 +3209,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 			end 'notResult'
 			let result = parseSinglesResultLine(trimmedLine)
 			if not result.valid 'invalidResult'
-				logError(LogCategory.testing, message: () gives "[SINGLES ERROR] malformed result line: {trimmedLine}")
+				logError(LogCategory.testing, message: function() gives "[SINGLES ERROR] malformed result line: {trimmedLine}")
 				continue
 			end 'invalidResult'
 
@@ -3227,7 +3227,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 
 			if result.failed > 0 'hasFail'
 				let specTotal = result.passed + result.failed
-				logError(LogCategory.testing, message: () gives "[FAIL] {result.specName} ({result.passed}/{specTotal})")
+				logError(LogCategory.testing, message: function() gives "[FAIL] {result.specName} ({result.passed}/{specTotal})")
 				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: result.specName)
 			end 'hasFail'
 		end 'parseLines'
@@ -3255,7 +3255,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 				totalPassed = totalPassed + rp
 				totalFailed = totalFailed + rf
 			end 'hasNonBatchable' else 'onlyMissing'
-				logError(LogCategory.testing, message: () gives "[FAIL] {pn} ({crashedCount} {phaseLabel} test(s)): worker crashed (panic, timeout, or non-zero exit)")
+				logError(LogCategory.testing, message: function() gives "[FAIL] {pn} ({crashedCount} {phaseLabel} test(s)): worker crashed (panic, timeout, or non-zero exit)")
 				logSpecFailuresFor(failOwners, payloads: failPayloads, specName: pn)
 			end 'onlyMissing'
 		end 'handleMissing'
@@ -3276,9 +3276,9 @@ function logSpecFailuresFor(owners StringArray, payloads TextLineArray, specName
 		end 'skipOther'
 		let payload = try payloads.get(i) otherwise continue
 		if not payload.startsWith("  ") 'isPath'
-			logError(LogCategory.testing, message: () gives "")
+			logError(LogCategory.testing, message: function() gives "")
 		end 'isPath'
-		logError(LogCategory.testing, message: () gives payload)
+		logError(LogCategory.testing, message: function() gives payload)
 	end 'each'
 end 'logSpecFailuresFor'
 
@@ -3516,7 +3516,7 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 		writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
 
 		let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
-			logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
+			logError(LogCategory.testing, message: function() gives "[FAIL] {testPath} - could not parse fragment")
 			specFailed = specFailed + 1
 			specFailures.push(fragPath.toString())
 			specFailures.push("  Failed to parse fragment file")
@@ -3541,9 +3541,9 @@ function runSingleTests(unit SpecWorkUnit, root FilePath, fragmentDir FilePath, 
 
 		if verbose 'showTest'
 			if result.passed 'showPass'
-				logInfo(LogCategory.testing, message: () gives "[PASS] {testPath}")
+				logInfo(LogCategory.testing, message: function() gives "[PASS] {testPath}")
 			end 'showPass' else 'showFail'
-				logInfo(LogCategory.testing, message: () gives "[FAIL] {testPath}")
+				logInfo(LogCategory.testing, message: function() gives "[FAIL] {testPath}")
 			end 'showFail'
 		end 'showTest'
 	end 'eachSingle'
@@ -3559,7 +3559,7 @@ end 'runSingleTests'
 // across multiple spec batches.
 export function runAllSpecTestsParallel(filter String, target Target, workerCount WorkerCount, updateRequired bool = false, verbose bool = false) returns ExitCode
 	let root = try findSpecsRoot() otherwise 'noRoot'
-		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		logError(LogCategory.testing, message: function() gives "Could not find project root (no specs/ directory found)")
 		return 1
 	end 'noRoot'
 
@@ -3621,7 +3621,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	for specName in whitelist 'parseSpecs'
 		let specPath = specDir.join("{specName}.md")
 		let content = try File.readText(specPath) otherwise 'readErr'
-			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			logError(LogCategory.testing, message: function() gives "Could not read spec: {specPath}")
 			continue
 		end 'readErr'
 
@@ -3638,7 +3638,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	markPhase("Phase 1 parseSpecs done ({units.count()} units, {totalTests} tests)")
 
 	if totalTests == 0 'noTests'
-		logInfo(LogCategory.testing, message: () gives "No tests found")
+		logInfo(LogCategory.testing, message: function() gives "No tests found")
 		return 0
 	end 'noTests'
 
@@ -3747,7 +3747,7 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 			end 'notResult'
 			let parsed = parseBatchWorkerResult(trimmedLine)
 			if not parsed.valid 'invalidResult'
-				logError(LogCategory.testing, message: () gives "[BATCH ERROR] malformed result line from worker: {trimmedLine}")
+				logError(LogCategory.testing, message: function() gives "[BATCH ERROR] malformed result line from worker: {trimmedLine}")
 				continue
 			end 'invalidResult'
 
@@ -3805,16 +3805,16 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	markPhase("Phase 5 runFallbackPhase done")
 
 	if totalFragmentsWritten > 0 'showFrags'
-		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
+		logInfo(LogCategory.testing, message: function() gives "Wrote {totalFragmentsWritten} fragment(s)")
 	end 'showFrags'
 
 	let elapsedMs = Clock.nowMs() - startTime
-	logInfo(LogCategory.testing, message: () gives "Total compile time: {totalCompileMs}ms")
+	logInfo(LogCategory.testing, message: function() gives "Total compile time: {totalCompileMs}ms")
 
 	if totalFailed == 0 'allPass'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: function() gives "Tests: {totalPassed} passed (total: {totalTests}) in {elapsedMs}ms")
 	end 'allPass' else 'someFail'
-		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
+		logInfo(LogCategory.testing, message: function() gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests}) in {elapsedMs}ms")
 	end 'someFail'
 
 	if totalFailed > 0 'hasFail'

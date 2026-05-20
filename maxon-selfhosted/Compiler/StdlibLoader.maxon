@@ -329,7 +329,7 @@ end 'currentStdlibChecksum'
 // trusted: any lex/parse failure is a compiler bug rather than a user input
 // problem, so we panic with a precise message instead of skipping silently.
 function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, content String)
-	logDebug(LogCategory.compiler, message: () gives "  Parsing {filePath}")
+	logDebug(LogCategory.compiler, message: function() gives "  Parsing {filePath}")
 	let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {filePath}")
 	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, namespace: "stdlib") otherwise panic("StdlibLoader: empty or malformed stdlib file {filePath}")
 	let parsed = try parser.parseModule() otherwise panic("StdlibLoader: parse failed for stdlib file {filePath}")
@@ -419,12 +419,12 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	let stdlibPath = findStdlibPath()
 	if stdlibPath.isEmpty() 'noStdlib'
-		logInfo(LogCategory.compiler, message: () gives "No stdlib/ found, skipping stdlib")
+		logInfo(LogCategory.compiler, message: function() gives "No stdlib/ found, skipping stdlib")
 		stdlibLoaded = true
 		return cachedStdlibModule
 	end 'noStdlib'
 
-	logInfo(LogCategory.compiler, message: () gives "Loading stdlib from {stdlibPath}")
+	logInfo(LogCategory.compiler, message: function() gives "Loading stdlib from {stdlibPath}")
 
 	// Try loading pre-compiled stdlib cache from project's .maxon/cache/ directory.
 	// For single-file builds, use the parent directory. The user-supplied path
@@ -449,7 +449,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum) if not stdlibCacheBypassed else StdlibCacheResult.create(StdlibCacheData.create(), valid: false)
 
 	if cacheResult.valid 'cacheHit'
-		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit: loaded {cacheResult.data.functions.count()} pre-compiled functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
 
 		// Parse the synthesized bootstrap first so unresolvedInterfaces is
@@ -476,7 +476,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 		return cachedStdlibModule
 	end 'cacheHit'
 
-	logInfo(LogCategory.compiler, message: () gives "Stdlib cache miss: compiling from source")
+	logInfo(LogCategory.compiler, message: function() gives "Stdlib cache miss: compiling from source")
 
 	// Cache miss — parse from source. Whitelist drives which stdlib files the
 	// self-hosted compiler can handle today; see stdlibWhitelist above.
@@ -487,7 +487,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
-				logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
+				logDebug(LogCategory.compiler, message: function() gives "  Failed to read {fp}")
 				continue
 			end 'readErr'
 			parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
@@ -593,7 +593,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// from loadRuntimeModule) get spliced in next so they ride through
 	// lowerStdToMir + backend phases the same way stdlib bodies do.
 	try pipeline.run() otherwise 'midErr'
-		logInfo(LogCategory.compiler, message: () gives "Stdlib cache build failed during mid pipeline")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache build failed during mid pipeline")
 		return
 	end 'midErr'
 
@@ -646,7 +646,7 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	end 'nativePasses'
 
 	try pipeline.run() otherwise 'pipelineErr'
-		logInfo(LogCategory.compiler, message: () gives "Stdlib cache build failed during pipeline")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache build failed during pipeline")
 		return
 	end 'pipelineErr'
 
@@ -684,8 +684,8 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 	// every runtime function from the cache so the empty stubs the wasm
 	// emitter produces for runtime signatures don't shadow real bodies.
 	if isWasm 'emitWasm'
-		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter((func) gives not isRuntimeFunctionName(func.name))
-		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
+		cacheData.wasmFunctions = emitWasmPerFunction(pipeline.mirModule, globalData: pipeline.globalData).filter(function(func) gives not isRuntimeFunctionName(func.name))
+		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.wasmFunctions.count()} WASM functions to {cachePath}")
 	end 'emitWasm' else 'emitNative'
 		// Create backend, run target lowering + regalloc + prologue/epilogue + emit
 		let emittedFunctions = match project.target.cpu 'emitPerFunc'
@@ -693,8 +693,8 @@ function buildAndWriteStdlibCache(project Project, allModule MaxonModule, cacheP
 			arm64 gives buildStdlibNativeWith(pipeline, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: cacheData.functions))
 			default panic("unreachable: WASM handled above")
 		end 'emitPerFunc'
-		cacheData.functions = emittedFunctions.filter((func) gives not isPerCompileRuntimeName(func.name))
-		logInfo(LogCategory.compiler, message: () gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
+		cacheData.functions = emittedFunctions.filter(function(func) gives not isPerCompileRuntimeName(func.name))
+		logInfo(LogCategory.compiler, message: function() gives "Wrote stdlib cache: {cacheData.functions.count()} functions to {cachePath}")
 	end 'emitNative'
 
 	// Write to disk and activate cache for subsequent compilations in this process
@@ -761,7 +761,7 @@ function loadCacheForTarget(project Project)
 	let cacheResult = readStdlibCache(project, path: cachePath, target: project.target, expectedChecksum: contentChecksum)
 
 	if cacheResult.valid 'cacheHit'
-		logInfo(LogCategory.compiler, message: () gives "Stdlib cache hit for {targetToString(project.target)}: loaded {cacheResult.data.functions.count()} native + {cacheResult.data.wasmFunctions.count()} WASM functions")
+		logInfo(LogCategory.compiler, message: function() gives "Stdlib cache hit for {targetToString(project.target)}: loaded {cacheResult.data.functions.count()} native + {cacheResult.data.wasmFunctions.count()} WASM functions")
 		activateStdlibCache(cacheResult.data, target: project.target)
 		return
 	end 'cacheHit'
@@ -782,7 +782,7 @@ function loadCacheForTarget(project Project)
 		end 'exists'
 	end 'iter'
 
-	logInfo(LogCategory.compiler, message: () gives "Stdlib cache miss for {targetToString(project.target)}: building")
+	logInfo(LogCategory.compiler, message: function() gives "Stdlib cache miss for {targetToString(project.target)}: building")
 	buildAndWriteStdlibCache(project, allModule: allModule, cachePath: cachePath, contentChecksum: contentChecksum)
 end 'loadCacheForTarget'
 

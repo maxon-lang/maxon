@@ -186,13 +186,13 @@ export type PassPipeline
 	export function run() throws CompileError
 		for pass in passes 'eachPass'
 			let name = passKindToString(pass)
-			logDebug(LogCategory.ir, message: () gives "=== Running pass: {name} ===")
+			logDebug(LogCategory.ir, message: function() gives "=== Running pass: {name} ===")
 
 			let passStart = passTimerStart()
 			self.dispatch(pass)
 			recordPassSince(name, startMs: passStart)
 
-			logTrace(LogCategory.ir, message: () gives self.summarizeForPass(pass, name: name))
+			logTrace(LogCategory.ir, message: function() gives self.summarizeForPass(pass, name: name))
 
 			// --dump-stages: write a post-pass IR snapshot before checking errors.
 			// Dumping even the failing pass helps diagnose pipeline bugs; no-op
@@ -548,11 +548,11 @@ export function writeStageDumpFile(project Project, label String, phase Pipeline
 	let counter = project.irDump.passCounter
 	let base = project.irDump.stagesBasePath
 	let path = try FilePath.from("{base}.{counter:02}-{label}.{phaseName}.ir") otherwise 'badPath'
-		logInfo(LogCategory.compiler, message: () gives "dump-stages: invalid path for {label}")
+		logInfo(LogCategory.compiler, message: function() gives "dump-stages: invalid path for {label}")
 		return
 	end 'badPath'
 	try File.writeText(path, content: content) otherwise 'writeErr'
-		logInfo(LogCategory.compiler, message: () gives "dump-stages: failed to write {path}")
+		logInfo(LogCategory.compiler, message: function() gives "dump-stages: failed to write {path}")
 		return
 	end 'writeErr'
 	project.irDump.passCounter = counter + 1

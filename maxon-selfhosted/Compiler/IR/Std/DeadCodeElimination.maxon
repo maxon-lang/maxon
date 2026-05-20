@@ -57,7 +57,7 @@ export function eliminateDeadCode(module StdModule) returns StdModule
 			block.opRefs = OpIndexList.create()
 			for packed in oldOps 'filterOps'
 				if isDeadPackedOp(module, opIdx: packed, useCount: useCount) 'dead'
-					logTrace(LogCategory.ir, message: () gives "dce: removing dead op with resultId {getPackedOpResultId(module, opIdx: packed)}")
+					logTrace(LogCategory.ir, message: function() gives "dce: removing dead op with resultId {getPackedOpResultId(module, opIdx: packed)}")
 					continue
 				end 'dead'
 				block.opRefs.append(packed)
@@ -163,7 +163,7 @@ function dropBypassableEntry(module StdModule, func IrFunction)
 	end 'each'
 	func.blockRefs = newRefs
 
-	logTrace(LogCategory.ir, message: () gives "dce: merged bypassable entry into block_{targetBlockId}")
+	logTrace(LogCategory.ir, message: function() gives "dce: merged bypassable entry into block_{targetBlockId}")
 end 'dropBypassableEntry'
 
 // True when `predecessorBlockId` is the only block whose terminator
@@ -311,7 +311,7 @@ function rewriteBr(target BlockId, fromBlockId BlockId, toBlockId BlockId, fwdAr
 	if target != fromBlockId 'noMatch'
 		return RewrittenTerminator.none
 	end 'noMatch'
-	logTrace(LogCategory.ir, message: () gives "dce: skip-through br block_{fromBlockId} -> block_{toBlockId}")
+	logTrace(LogCategory.ir, message: function() gives "dce: skip-through br block_{fromBlockId} -> block_{toBlockId}")
 	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(toBlockId, argIds: fwdArgIds)))
 end 'rewriteBr'
 
@@ -337,10 +337,10 @@ function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArr
 		if not valueIdArraysEqual(newThenArgs, b: newElseArgs) 'argMismatch'
 			return RewrittenTerminator.none
 		end 'argMismatch'
-		logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr collapsed both arms -> br block_{newThen}")
+		logTrace(LogCategory.ir, message: function() gives "dce: skip-through condBr collapsed both arms -> br block_{newThen}")
 		return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(newThen, argIds: newThenArgs)))
 	end 'collapsed'
-	logTrace(LogCategory.ir, message: () gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
+	logTrace(LogCategory.ir, message: function() gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
 	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
 end 'rewriteCondBr'
 
@@ -398,7 +398,7 @@ function pruneUnreachableBlocks(func IrFunction, module StdModule)
 		if isReachable 'live'
 			liveRefs.append(blockRef)
 		end 'live' else 'pruned'
-			logTrace(LogCategory.ir, message: () gives "dce: pruned unreachable block '{block.label}'")
+			logTrace(LogCategory.ir, message: function() gives "dce: pruned unreachable block '{block.label}'")
 		end 'pruned'
 	end 'filter'
 	func.blockRefs = liveRefs

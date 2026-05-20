@@ -1062,13 +1062,14 @@ The closure environment block is freed at block exit like any other struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let offset = 5
-	let result = apply(f: (n Integer) gives n + offset, x: 10)
+	let result = apply(f: function(n Integer) gives n + offset, x: 10)
 	print("{result}\n")
 	return 0
 end 'main'
@@ -1088,18 +1089,19 @@ typealias Integer = int(i64.min to i64.max)
 type Config
 	export var level Integer
 
+typealias FnTypeAlias1 = function(Integer) returns Integer
 	static function create(level Integer) returns Self
 		return Self{level: level}
 	end 'create'
 end 'Config'
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
 	return f(x)
 end 'apply'
 
 function main() returns ExitCode
 	let cfg = Config.create(level: 3)
-	let result = apply(f: (_ Integer) gives cfg.level, x: 0)
+	let result = apply(f: function(_ Integer) gives cfg.level, x: 0)
 	print("{result}\n")
 	return 0
 end 'main'

@@ -400,10 +400,12 @@ type_ref      = 'bool'
               | function_type
               | tuple_type
 
-function_type = '(' [ type_ref { ',' type_ref } ] ')' [ 'returns' type_ref ]
-              (* `returns` is optional. Without it, the function type
-                 returns void; with 2+ params and no `returns`, the form
-                 is a tuple_type instead. *)
+function_type = 'function' '(' [ type_ref { ',' type_ref } ] ')' [ 'returns' type_ref ]
+              (* `returns` is optional; without it, the function type
+                 returns void. The literal `function(...)` form is legal
+                 only as the topmost type of a `typealias` RHS — at every
+                 other use site (parameter types, return types, struct
+                 fields, generic arguments) reference the alias by name. *)
 ```
 
 ---
@@ -774,7 +776,7 @@ sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time si
 
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 
-closure       = '(' [ closure_params ] ')' 'gives' expression
+closure       = 'function' '(' [ closure_params ] ')' 'gives' expression
 closure_params
               = closure_param { ',' closure_param }
 closure_param = IDENTIFIER [ type_ref ]                          (* '_' discards the parameter *)

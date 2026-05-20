@@ -77,7 +77,7 @@ function promoteFunction(func IrFunction, module StdModule)
 		countIdx = countIdx + 1
 	end 'countSlots'
 	let numSlotsLog = slotInfo.maxSlot + 1
-	logDebug(LogCategory.ir, message: () gives "mem2reg: func={func.name} slots={numSlotsLog} promotable={promotableCount} skipped={skippedCount}")
+	logDebug(LogCategory.ir, message: function() gives "mem2reg: func={func.name} slots={numSlotsLog} promotable={promotableCount} skipped={skippedCount}")
 
 	// Stage E (closures): even with no promotable slots, we must still
 	// run the rebuild pass when an address-taken param exists — the pass
@@ -285,7 +285,7 @@ function markSlotAddressTaken(slotId VarSlot, blockId BlockId, info SlotInfo)
 		info.maxSlot = slotId
 	end 'updateMax'
 	info.hasAnySlot = true
-	logTrace(LogCategory.ir, message: () gives "mem2reg: slot_{slotId} address-taken in block_{blockId} — refusing promotion")
+	logTrace(LogCategory.ir, message: function() gives "mem2reg: slot_{slotId} address-taken in block_{blockId} — refusing promotion")
 end 'markSlotAddressTaken'
 
 function analyzeSlotMemRefOp(memOp StdMemoryOp, blockId BlockId, info SlotInfo)
@@ -742,7 +742,7 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount, func IrFun
 		let hasLoad = getSlotBool(slotInfo.slotHasLoad, slotId: slotIdx)
 		let addressTaken = getSlotBool(slotInfo.slotAddressTaken, slotId: slotIdx)
 		if addressTaken 'pinSlot'
-			logTrace(LogCategory.ir, message: () gives "mem2reg: skipping slot_{slotIdx} (address-taken)")
+			logTrace(LogCategory.ir, message: function() gives "mem2reg: skipping slot_{slotIdx} (address-taken)")
 			slotIdx = slotIdx + 1
 			continue
 		end 'pinSlot'
@@ -754,7 +754,7 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount, func IrFun
 		// companion sits at index `originalSlotCount + k` and is
 		// detected by sniffing the value half above it.
 		if slotIsInterfaceFatPointer(func, slotId: slotIdx) 'fatPair'
-			logTrace(LogCategory.ir, message: () gives "mem2reg: skipping slot_{slotIdx} (interface fat-pointer pair)")
+			logTrace(LogCategory.ir, message: function() gives "mem2reg: skipping slot_{slotIdx} (interface fat-pointer pair)")
 			slotIdx = slotIdx + 1
 			continue
 		end 'fatPair'
@@ -769,13 +769,13 @@ function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount, func IrFun
 			// slots, so unconditional promotion here is safe.
 			try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
 			anyPromoted = true
-			logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
+			logTrace(LogCategory.ir, message: function() gives "mem2reg: promoting slot_{slotIdx} (param, loads={hasLoad})")
 		end 'isParam' else 'isLocal'
 			// Local slots: promotable if they have any stores or loads
 			if hasStore or hasLoad 'localUsed'
 				try promotable.set(slotIdx, value: true) otherwise panic("invariant: promotable.set OOB")
 				anyPromoted = true
-				logTrace(LogCategory.ir, message: () gives "mem2reg: promoting slot_{slotIdx} (local, stores={hasStore} loads={hasLoad})")
+				logTrace(LogCategory.ir, message: function() gives "mem2reg: promoting slot_{slotIdx} (local, stores={hasStore} loads={hasLoad})")
 			end 'localUsed'
 		end 'isLocal'
 		slotIdx = slotIdx + 1
@@ -1024,7 +1024,7 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 						emptySlot then panic("invariant: phiMap/hasPlacedPhi/blockSlots slot empty after init")
 					end 'kind'
 				end 'badPlace'
-				logTrace(LogCategory.ir, message: () gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
+				logTrace(LogCategory.ir, message: function() gives "mem2reg: phi %{freshId} at block {dfBlock} for slot_{slotIdx}")
 
 				// The phi itself is a definition, so add to worklist
 				// Sentinel: inWorklist is grown lazily; absent entries default to false.
