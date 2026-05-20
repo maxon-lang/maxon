@@ -1,0 +1,51 @@
+// Test: if-try-else-if-let-three-way
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	throw MyError.failed
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b' else 'fallback'
+		result = 7
+	end 'fallback'
+	return result
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+  fallback_0:
+    x64.mov r8d, 7
+  b_0.merge:
+  a_0.merge:
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rcx, [rip+__panic_msg_0]
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

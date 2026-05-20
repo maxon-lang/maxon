@@ -10623,37 +10623,52 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
 
-      // Check for error binding: else (e) 'label'
-      Token? errorBindingToken = null;
-      if (Check(TokenType.LeftParen)) {
-        Advance(); // consume '('
-        errorBindingToken = Expect(TokenType.Identifier);
-        CheckReservedDeclName(errorBindingToken);
-        Expect(TokenType.RightParen);
-      }
-
-      var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
-      elseLabel = UniqueLabel(elseSourceLabel);
-      ExpectNewline();
-
-      elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
-      _currentBlock = elseBlock;
-      var ifTryElseOuterScope = _variables.SnapshotKeys();
-      PushScope();
-
-      // If error binding requested, emit a typed error binding in the else block
-      if (errorBindingToken != null) {
-        CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
-        EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
-      } else {
+      if (Check(TokenType.If)) {
+        // else-if chain: recurse into ParseIf which itself dispatches to
+        // ParseIfTry for `else if try` / `else if let` / `else if var`.
+        elseLabel = $"{thenLabel}.elseif";
+        elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+        _currentBlock = elseBlock;
+        var elseIfOuterScope = _variables.SnapshotKeys();
+        PushScope();
         EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
-      }
+        ParseIf();
+        ifTryElseInnerScope = _variables.KeysSince(elseIfOuterScope);
+        PopScope();
+        elseEndBlock = _currentBlock;
+      } else {
+        // Check for error binding: else (e) 'label'
+        Token? errorBindingToken = null;
+        if (Check(TokenType.LeftParen)) {
+          Advance(); // consume '('
+          errorBindingToken = Expect(TokenType.Identifier);
+          CheckReservedDeclName(errorBindingToken);
+          Expect(TokenType.RightParen);
+        }
 
-      ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
-      ifTryElseInnerScope = _variables.KeysSince(ifTryElseOuterScope);
-      PopScope();
-      elseEndBlock = _currentBlock;
-      ExpectEndLabel(elseSourceLabel);
+        var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+        elseLabel = UniqueLabel(elseSourceLabel);
+        ExpectNewline();
+
+        elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+        _currentBlock = elseBlock;
+        var ifTryElseOuterScope = _variables.SnapshotKeys();
+        PushScope();
+
+        // If error binding requested, emit a typed error binding in the else block
+        if (errorBindingToken != null) {
+          CheckNoSelfFieldShadow(errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column);
+          EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
+        } else {
+          EmitImplicitErrorCleanupIfNeeded(errorFlagVar, callee?.ThrowsType);
+        }
+
+        ParseBodyUntilEndOrThrowEmpty(elseSourceLabel);
+        ifTryElseInnerScope = _variables.KeysSince(ifTryElseOuterScope);
+        PopScope();
+        elseEndBlock = _currentBlock;
+        ExpectEndLabel(elseSourceLabel);
+      }
     } else if (callee?.ThrowsType is IrEnumType ifErrType && ifErrType.HasAssociatedValues) {
       // No else clause but the callee throws an associated-value enum: inject
       // a synthetic else block that decrefs the thrown heap object, then

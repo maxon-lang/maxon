@@ -5753,6 +5753,18 @@ export type Parser
 
 		if at(TokenKind.else) 'hasElse'
 			let elseToken = try consume()
+
+			// `else if [let/var/try/expr] ...`: recurse into parseIfStatement
+			// so the nested if's binding / try / condition reuses the same
+			// dispatch as a top-level `if`. The else-block hosts the nested
+			// if's IR; its exit becomes this if-try's else exit.
+			if at(TokenKind.if) 'isElseIf'
+				var elseIfBlock = module.addBlockAt(func, label: "{baseLabel}.elseif", filePath: ifFilePath, firstLine: elseToken.line)
+				let elseIfBlockId = elseIfBlock.id
+				let elseIfExit = try parseIfStatement(func, block: elseIfBlock)
+				return finalizeIfElseById(func, condBlock: condBlock, condName: condName, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseIfBlockId, elseExit: elseIfExit, baseLabel: baseLabel, mergeLine: cursor.current().line)
+			end 'isElseIf'
+
 			// Optional error binding: `else (e) 'label'` exposes the typed
 			// error value to the else block's body, mirroring the
 			// `otherwise (e) 'label'` form in parseTryFallbackDispatch.

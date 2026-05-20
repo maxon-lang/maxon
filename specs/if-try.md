@@ -684,3 +684,104 @@ end 'main'
 ```exitcode
 30
 ```
+
+<!-- test: if-try-else-if-let -->
+Chained `if let = try ... end 'a' else if let = try ... end 'b'`. The else
+branch must accept a new `if`/`if let` as its body without requiring a label.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	return 42
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: if-try-else-if-let-three-way -->
+Three-way `if let / else if let / else` chain.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryA() returns Integer throws MyError
+	throw MyError.failed
+end 'tryA'
+
+function tryB() returns Integer throws MyError
+	throw MyError.failed
+end 'tryB'
+
+function main() returns ExitCode
+	var result = 0
+	if let a = try tryA() 'a'
+		result = a
+	end 'a' else if let b = try tryB() 'b'
+		result = b
+	end 'b' else 'fallback'
+		result = 7
+	end 'fallback'
+	return result
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: if-try-else-if-plain-after-binding -->
+`else if <plain-expr>` after an `if let = try`.
+
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	if let v = try mayFail() 'check'
+		result = v
+	end 'check' else if x == 2 'two'
+		result = 22
+	end 'two' else 'fallback'
+		result = 99
+	end 'fallback'
+	return result
+end 'main'
+```
+```exitcode
+22
+```
