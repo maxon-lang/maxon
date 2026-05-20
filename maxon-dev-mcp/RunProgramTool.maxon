@@ -93,7 +93,7 @@ function buildOutcomeBuildOnlyWithRunError(buildResult BuildPhase, runErrorReaso
 	var doc = JsonDoc.create()
 	let buildId = buildPhaseToJson(doc, build: buildResult)
 	let runErrId = doc.add(JsonNode.stringNode(runErrorReason))
-	let runDurId = doc.add(JsonNode.numberNode(runDurationMs as float))
+	let runDurId = doc.add(JsonNode.numberNode(runDurationMs as JsonFloat))
 	var runKeys = StringArray.create()
 	var runChildren = JsonNodeIdArray.create()
 	runKeys.push("durationMs")
@@ -127,9 +127,9 @@ function buildOutcomeFull(buildResult BuildPhase, runResult CollectedOutput, run
 end 'buildOutcomeFull'
 
 function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
-	let exitId = doc.add(JsonNode.numberNode(build.exitCode() as float))
+	let exitId = doc.add(JsonNode.numberNode(build.exitCode() as JsonFloat))
 	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
-	let durId = doc.add(JsonNode.numberNode(build.durationMs as float))
+	let durId = doc.add(JsonNode.numberNode(build.durationMs as JsonFloat))
 	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
 	let tail = lastBytes(combined, max: rawTailMaxBytes)
 	let tailId = doc.add(JsonNode.stringNode(tail))
@@ -147,9 +147,9 @@ function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
 end 'buildPhaseToJson'
 
 function runPhaseToJson(doc JsonDoc, run CollectedOutput, durationMs DurationMs) returns JsonNodeId
-	let exitId = doc.add(JsonNode.numberNode(run.exitCode() as float))
+	let exitId = doc.add(JsonNode.numberNode(run.exitCode() as JsonFloat))
 	let successId = doc.add(JsonNode.boolNode(run.succeeded()))
-	let durId = doc.add(JsonNode.numberNode(durationMs as float))
+	let durId = doc.add(JsonNode.numberNode(durationMs as JsonFloat))
 	let stdoutBytes = run.stdout.toByteArray()
 	let stderrBytes = run.stderr.toByteArray()
 	let stdoutTruncated = stdoutBytes.count() > outputMaxBytes

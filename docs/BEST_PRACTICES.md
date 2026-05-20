@@ -68,8 +68,8 @@ Maxon only allows widening casts. For narrowing conversions, use explicit functi
 var rounded = round(3.7)    ' 4
 var truncated = trunc(3.7)  ' 3
 
-' The compiler rejects ambiguous casts
-var x = 3.7 as int          ' ERROR: narrowing cast not allowed
+' The compiler also rejects bare primitive cast targets — cast through a
+' named ranged typealias instead (e.g. `var x = 3.7 as Tally`).
 ```
 
 ---

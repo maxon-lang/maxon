@@ -132,7 +132,6 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // True only while parsing the topmost typeref of a typealias RHS. Inline
   // `function(...) returns T` types are only valid when this flag is set.
   private bool _atTopOfTypeAliasRhs;
-  private bool _parsingExtension;
   private bool _skipWhereValidation;
   private readonly Dictionary<string, IrType> _typeRegistry = seedModule != null
     ? new(seedModule!.TypeDefs.Where(kv =>
@@ -3690,14 +3689,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       Action<IrModule<MaxonOp>, List<int>, string> processFunction,
       Action<IrModule<MaxonOp>, string, List<string>, Token>? validateConformance = null) {
     Advance(); // consume 'extension'
-    _parsingExtension = true;
     Token interfaceNameToken;
     if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)) {
       interfaceNameToken = Advance();
     } else {
       interfaceNameToken = Expect(TokenType.Identifier);
     }
-    _parsingExtension = false;
     var interfaceName = interfaceNameToken.Value;
 
     // Parse optional conformance clause for extension blocks (primitives and generic struct types)
@@ -3757,9 +3754,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Primitive type extensions: process methods directly for the named type
     if (interfaceName is "int" or "float" or "bool" or "byte") {
       _currentTypeName = interfaceName;
-      _parsingExtension = true;
       processFunction(module, functionPositions, interfaceName);
-      _parsingExtension = false;
       _currentTypeName = null;
       if (extensionConformances.Count > 0) {
         validateConformance?.Invoke(module, interfaceName, extensionConformances, interfaceNameToken);
@@ -6662,47 +6657,82 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return GetOrCreateTupleType(paramTypes);
     }
 
+    // `Self` resolves to the enclosing type. Inside a primitive extension
+    // (`extension int`/`float`/`byte`), `Self` is the natural way to refer to
+    // the primitive — the bare-primitive token would otherwise be rejected
+    // by the strict-typealias rule below.
+    if (Check(TokenType.SelfType)) {
+      var selfTok = Advance();
+      if (_currentTypeName == null) throw new CompileError(ErrorCode.ParserExpectedType, "'Self' can only be used inside a type declaration", selfTok.Line, selfTok.Column);
+      if (TryResolveBarePrimitive(_currentTypeName, out var selfPrim)) return selfPrim;
+      if (_typeRegistry.TryGetValue(_currentTypeName, out var selfType))
+        return MarkTypeAliasUsed(_currentTypeName, selfType);
+      throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {_currentTypeName}", selfTok.Line, selfTok.Column);
+    }
+
     var typeNamePos = _pos;
     var typeName = ExpectTypeName();
-    return typeName switch {
-      "int" => _parsingTypeAliasRhs || _parsingExtension
-        ? IrType.I64
-        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
-
-      "float" => _parsingTypeAliasRhs || _parsingExtension
-        ? IrType.F64
-        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
-      "byte" => _parsingTypeAliasRhs || _parsingExtension
-        ? IrType.I8
-        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to u8.max)",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
-      "bool" => IrType.I1,
-      _ => _resolvingTypeAliases.Contains(typeName)
-        ? throw new CompileError(ErrorCode.ParserCircularDependency,
-            $"Circular typealias dependency: {typeName}",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
-        : seedModule?.AmbiguousTypeNames.Contains(typeName) == true
-        ? throw new CompileError(ErrorCode.SemanticAmbiguousTypeReference,
-            $"Ambiguous type '{typeName}': multiple definitions exist across files",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
-        : IsNonExportedCrossFileType(typeName)
-        ? throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
-            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
-        : _typeRegistry.TryGetValue(typeName, out var structType)
-        ? MarkTypeAliasUsed(typeName, structType)
-        : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
-    };
+    // Bare `int`/`float`/`byte` are only legal as the RHS of a typealias —
+    // every use site must travel through a named ranged typealias so the
+    // range-narrowing intent is explicit. Inside `extension int`/`float`/
+    // `byte`, methods reference the primitive via the `Self` keyword
+    // (handled above before ExpectTypeName runs). `bool` is unranged and
+    // stays accepted bare.
+    if (TryResolveBarePrimitive(typeName, out var primIrType)) {
+      if (typeName == "bool" || _parsingTypeAliasRhs) return primIrType;
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        BarePrimitiveTypeMessage(typeName),
+        _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
+    }
+    if (_resolvingTypeAliases.Contains(typeName))
+      throw new CompileError(ErrorCode.ParserCircularDependency,
+        $"Circular typealias dependency: {typeName}",
+        _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
+    if (seedModule?.AmbiguousTypeNames.Contains(typeName) == true)
+      throw new CompileError(ErrorCode.SemanticAmbiguousTypeReference,
+        $"Ambiguous type '{typeName}': multiple definitions exist across files",
+        _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
+    if (IsNonExportedCrossFileType(typeName))
+      throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
+        _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
+    if (_typeRegistry.TryGetValue(typeName, out var structType))
+      return MarkTypeAliasUsed(typeName, structType);
+    throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column);
   }
 
   private IrType MarkTypeAliasUsed(string name, IrType type) {
     _usedTypeAliases.Add(name);
     return type;
   }
+
+  // Centralizes the "name → primitive IrType" lookup shared between ParseType,
+  // the `Self` keyword branch, and ParseTypeKeyword. Returns false for any
+  // non-primitive name so the caller can fall through to user-defined types.
+  private static bool TryResolveBarePrimitive(string typeName, out IrType primIrType) {
+    switch (typeName) {
+      case "int": primIrType = IrType.I64; return true;
+      case "float": primIrType = IrType.F64; return true;
+      case "byte": primIrType = IrType.I8; return true;
+      case "bool": primIrType = IrType.I1; return true;
+      default: primIrType = IrType.I64; return false;
+    }
+  }
+
+  // Diagnostic for bare ranged primitives in type positions or as cast targets.
+  // `bool` never reaches this — it has no range and is always accepted bare.
+  private static string BarePrimitiveTypeMessage(string typeName) => typeName switch {
+    "int" => "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
+    "float" => "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
+    "byte" => "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to u8.max)",
+    _ => throw new InvalidOperationException($"BarePrimitiveTypeMessage: '{typeName}' is not a ranged primitive")
+  };
+
+  private static string BarePrimitiveCastMessage(string typeName) => typeName switch {
+    "int" => "Cannot cast to bare 'int'. Define a typealias with range constraints, e.g., 'value as MyInt' where 'typealias MyInt = int(0 to 100)'",
+    "float" => "Cannot cast to bare 'float'. Define a typealias with range constraints, e.g., 'value as MyFloat' where 'typealias MyFloat = float(0.0 to 1.0)'",
+    "byte" => "Cannot cast to bare 'byte'. Define a typealias with range constraints, e.g., 'value as MyByte' where 'typealias MyByte = byte(0 to u8.max)'",
+    _ => throw new InvalidOperationException($"BarePrimitiveCastMessage: '{typeName}' is not a ranged primitive")
+  };
 
   // Returns true if `field` (declared on `structType`) is visible from the current
   // parser's source file. Public fields (IsExported=true) are always visible.
@@ -6780,10 +6810,16 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   private MaxonValueKind ParseTypeKeyword() {
-    if (Check(TokenType.Int)) { Advance(); return MaxonValueKind.Integer; }
-    if (Check(TokenType.Float)) { Advance(); return MaxonValueKind.Float; }
+    // Bare `int`/`float`/`byte` cast targets are not allowed — every primitive
+    // value flowing through the compiler must travel as a named ranged type so
+    // the range-narrowing intent is explicit at every call site. Use a
+    // typealias (e.g. `value as Score`, `value as JsonFloat`). `bool` is
+    // unranged and stays accepted bare.
+    if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Byte)) {
+      var bad = Current();
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, BarePrimitiveCastMessage(bad.Value), bad.Line, bad.Column);
+    }
     if (Check(TokenType.Bool)) { Advance(); return MaxonValueKind.Bool; }
-    if (Check(TokenType.Byte)) { Advance(); return MaxonValueKind.Byte; }
     // Accept ranged typealias names (e.g., "value as Age" or "value as FunctionPool.Index")
     if (Check(TokenType.Identifier)) {
       var name = Current().Value;

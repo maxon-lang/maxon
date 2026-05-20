@@ -7,7 +7,7 @@
 | `int` | 64-bit signed integer | `42`, `-17` |
 | `float` | Floating-point | `3.14`, `-2.5` |
 | `bool` | Boolean | `true`, `false` |
-| `byte` | 0-255 | `255 as byte` |
+| `byte` | 0-255 | `255 as Octet` (where `typealias Octet = byte(0 to u8.max)`) |
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
 | `byte string literal` | ByteArray from string | `b"hello"` |
@@ -416,8 +416,8 @@ type Point implements Hashable, Describable   // interface conformance
 				return x * 31 + y
 		end 'hash'
 
-		function magnitude() returns float     // regular method
-				return sqrt((x * x + y * y) as float)
+		function magnitude() returns Real      // regular method (Real is a ranged float typealias)
+				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 
 		static function origin() returns Point  // static method
@@ -916,9 +916,12 @@ Math.pow(base, exponent: e)  // base raised to exponent
 // Implicit: int -> float in arithmetic
 // Implicit: 'A' -> 65 (char literal to codepoint when used with int)
 
-// Explicit with 'as'
-var f = 5 as float
-var by = 255 as byte
+// Explicit with 'as' — bare `int`/`float`/`byte` are rejected;
+// route every primitive cast through a named ranged typealias.
+typealias Real = float(f64.min to f64.max)
+typealias Octet = byte(0 to u8.max)
+var f = 5 as Real
+var by = 255 as Octet
 
 // Float to int (no direct cast)
 trunc(x)   // toward zero

@@ -8,11 +8,18 @@
 ///
 /// @category Compiler-internal
 
+// Raw machine word — covers pointers, sizes, byte values, refcounts, and
+// any other i64-sized scalar that flows through the runtime intrinsics.
+// Internals.maxon traffics in raw bits and addresses; the full i64 range
+// is intentional here so signed-arithmetic on byte offsets, atomic xadd
+// with negative deltas, and pointer values all flow through one type.
+typealias MachineWord = int(i64.min to i64.max)
+
 // Atomically increment the refcount at [ptr - 8]. Caller must ensure ptr is
 // the user-region pointer (24-byte mm header sits at ptr-24..ptr-1; refcount
 // is the trailing word at ptr-8). Migrated from runtime.std's mm_incref so
 // the inliner can see this 2-op body at every call site.
-function __mm_incref(ptr int)
+function __mm_incref(ptr MachineWord)
 	__Internals.atomicInc(ptr - 8)
 end '__mm_incref'
 
@@ -23,7 +30,7 @@ end '__mm_incref'
 // We use atomicXadd with -1 rather than atomicDec because we need the prior
 // value to detect the transition to zero across architectures uniformly —
 // the bare atomic_dec op has no result Id in Std-IR.
-function __mm_decref(ptr int)
+function __mm_decref(ptr MachineWord)
 	let prior = __Internals.atomicXadd(ptr - 8, value: -1)
 	if prior == 1 'lastRef'
 		__mm_free(ptr)
@@ -40,7 +47,7 @@ end '__mm_decref'
 // `tag` is currently unused — preserved in the signature for parity with the
 // older runtime body and for forward compatibility with allocation-site
 // tagging. Sizes below 1 are clamped to 1; we don't panic.
-function __mm_alloc(size int, destructor int, tag int) returns int
+function __mm_alloc(size MachineWord, destructor MachineWord, tag MachineWord) returns MachineWord
 	// `tag` is currently a placeholder; binding it to the discard pattern
 	// keeps the param name labelable from call sites without tripping E3012.
 	_ = tag
@@ -62,7 +69,7 @@ end '__mm_alloc'
 // __mm_free only releases the surrounding allocation.
 //
 // Tolerates ptr == 0 as a no-op so callers don't have to null-check.
-function __mm_free(ptr int)
+function __mm_free(ptr MachineWord)
 	if ptr == 0 'nullPtr'
 		return
 	end 'nullPtr'
@@ -84,7 +91,7 @@ end '__mm_free'
 // cascade compiles to a binary-search-like pattern after canonicalize/cse
 // see through the loop. A precomputed size→class table would be a future
 // micro-optimization.
-function __slab_alloc(size int) returns int
+function __slab_alloc(size MachineWord) returns MachineWord
 	if size > 32768 'osPath'
 		return __Internals.slabOsDirectAlloc(size)
 	end 'osPath'
@@ -105,7 +112,7 @@ end '__slab_alloc'
 // Top-level slab free entry point. Recovers the owning mspan via the
 // two-level arena map; if the lookup misses, the pointer came from the
 // OS-direct path. Migrated from runtime.std.
-function __slab_free(ptr int)
+function __slab_free(ptr MachineWord)
 	let mspan = __slab_arena_map_get(ptr)
 	if mspan == 0 'osDirect'
 		__slab_os_direct_free(ptr)
@@ -120,7 +127,7 @@ end '__slab_free'
 // __slab_alloc, the call site's class index is often a constant (when
 // callers explicitly route through a fixed class), enabling constant
 // folding of the entire lookup down to a single immediate.
-function __slab_class_size(idx int) returns int
+function __slab_class_size(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 8
 	end 'c'
@@ -179,7 +186,7 @@ end '__slab_class_size'
 // class N's mspan holds `__slab_objs_per_span(N)` slots of `__slab_class_size(N)`
 // bytes each, packed in chunks totaling roughly the class's natural span
 // budget (8KB for small classes, larger for larger ones).
-function __slab_objs_per_span(idx int) returns int
+function __slab_objs_per_span(idx MachineWord) returns MachineWord
 	if idx == 0 'c'
 		return 1024
 	end 'c'
@@ -239,7 +246,7 @@ end '__slab_objs_per_span'
 // `__slab_memzero` so the inliner can see this body at every caller (the
 // lazy-init paths in __slab_arena_map_ensure and __slab_os_direct_alloc each
 // hit it once per fresh chunk).
-function __slab_memzero(ptr int, size int)
+function __slab_memzero(ptr MachineWord, size MachineWord)
 	for i in 0 upto size 'loop'
 		__Internals.storeByte(ptr, offset: i, value: 0)
 	end 'loop'
@@ -288,7 +295,7 @@ end '__slab_arena_init'
 //
 // Avoid binding any globalAddr result to a local — drop-injection would treat
 // it as heap-owned and emit a stray sys.free at function exit.
-function __slab_arena_alloc_chunks(numChunks int) returns int
+function __slab_arena_alloc_chunks(numChunks MachineWord) returns MachineWord
 	var arenaPtr = __Internals.loadIndirect(__Internals.slabArenaListHeadAddr())
 	while true 'arenaLoop'
 		if arenaPtr == 0 'grow'
@@ -362,7 +369,7 @@ end '__slab_arena_alloc_chunks'
 // Marks chunks [chunkIndex, chunkIndex + numChunks) as free in the bitmap of
 // the given arena. Bit-by-bit OR; the C# version uses qword masks for speed,
 // but this is on the cold free path.
-function __slab_arena_free_chunks(arenaBase int, chunkIndex int, numChunks int)
+function __slab_arena_free_chunks(arenaBase MachineWord, chunkIndex MachineWord, numChunks MachineWord)
 	for j in chunkIndex upto chunkIndex + numChunks 'loop'
 		let qwordIdx = j shr 6
 		let qwordAddr = arenaBase + 0x10 + (qwordIdx shl 3)
@@ -390,7 +397,7 @@ end '__slab_init'
 //   3. Otherwise grab a fresh 8 KiB chunk from the chunk allocator (one
 //      chunk = 128 mspans), reserve its first 64B as the return value, and
 //      reseed bump_ptr / bump_end.
-function __slab_meta_alloc() returns int
+function __slab_meta_alloc() returns MachineWord
 	let head = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
 	if head != 0 'popFree'
 		// result = head; head = [head]
@@ -421,7 +428,7 @@ end '__slab_meta_alloc'
 // Pushes `ptr` onto the metadata free list. `[ptr] = old_head; head = ptr.`
 // The slot's first 8 bytes get clobbered with the next pointer — fine, the
 // caller is done with the contents.
-function __slab_meta_free(ptr int)
+function __slab_meta_free(ptr MachineWord)
 	let oldHead = __Internals.loadIndirect(__Internals.slabMetaFreeHeadAddr())
 	__Internals.storeIndirect(ptr, value: oldHead)
 	__Internals.storeIndirect(__Internals.slabMetaFreeHeadAddr(), value: ptr)
@@ -442,7 +449,7 @@ end '__slab_meta_free'
 // mspan layout (64 bytes):
 //   +0x00 base_addr   +0x08 slot_size   +0x10 free_list   +0x18 free_count
 //   +0x20 next_span   +0x28 class_idx   +0x30 total_slots +0x38 arena_base
-function __slab_refill_mcache(classIdx int)
+function __slab_refill_mcache(classIdx MachineWord)
 	// mcentral entry address = base + classIdx * 16 (two pointer-slot pairs
 	// per class). mcache slot address = base + classIdx * 8.
 	let mcentralEntry = __Internals.slabMcentralArrayAddr() + (classIdx shl 4)
@@ -508,7 +515,7 @@ end '__slab_refill_mcache'
 // then proceeds with the pop. A successful pop that drains the span clears
 // the mcache entry so the next allocation triggers a refill rather than
 // walking a depleted span on every call.
-function __slab_alloc_class(classIdx int) returns int
+function __slab_alloc_class(classIdx MachineWord) returns MachineWord
 	let mcacheBase = __Internals.slabMcacheBaseAddr()
 	let mcacheSlot = mcacheBase + (classIdx shl 3)
 	let initialSpan = __Internals.loadIndirect(mcacheSlot)
@@ -553,7 +560,7 @@ end '__slab_alloc_class'
 //
 // Building block for __slab_free; the caller is expected to have resolved
 // the owning mspan via the arena map.
-function __slab_free_class_with_mspan(slot int, mspan int)
+function __slab_free_class_with_mspan(slot MachineWord, mspan MachineWord)
 	let oldFreeList = __Internals.loadIndirect(mspan + 0x10)
 	__Internals.storeIndirect(slot, value: oldFreeList)
 	__Internals.storeIndirect(mspan + 0x10, value: slot)
@@ -572,7 +579,7 @@ end '__slab_free_class_with_mspan'
 //
 // Single-threaded today — see step 6a.17 TODO in runtime.std for the
 // lock-acquire / lock-release plan when threads land.
-function __slab_arena_map_ensure(addr int)
+function __slab_arena_map_ensure(addr MachineWord)
 	// Lazy-allocate L1 if missing.
 	if __Internals.loadIndirect(__Internals.slabArenaMapL1Addr()) == 0 'allocL1'
 		let l1Chunk = __slab_arena_alloc_chunks(1)
@@ -611,7 +618,7 @@ end '__slab_arena_map_ensure'
 // The bridge's middle param name `endAddr` is misleading legacy from the
 // initial registration — semantically it's `numPages`. Both the runtime
 // callee and this body treat it as a page count.
-function __slab_arena_map_set(base int, endAddr int, mspan int)
+function __slab_arena_map_set(base MachineWord, endAddr MachineWord, mspan MachineWord)
 	let numPages = endAddr
 	for i in 0 upto numPages 'loop'
 		let pageAddr = base + (i shl 13)
@@ -635,7 +642,7 @@ end '__slab_arena_map_set'
 // none. Performs the three-level lookup with no locks — reads are
 // race-safe in single-threaded mode (thread safety arrives with step
 // 6a.17, alongside the locks for ensure/set).
-function __slab_arena_map_get(ptr int) returns int
+function __slab_arena_map_get(ptr MachineWord) returns MachineWord
 	let l1Base = __Internals.loadIndirect(__Internals.slabArenaMapL1Addr())
 	if l1Base == 0 'noL1'
 		return 0
@@ -662,7 +669,7 @@ end '__slab_arena_map_get'
 // Exits with sentinel code 135 if `ptr` is not found — the only way that
 // happens in a correctly-paired alloc/free workload is a double-free or
 // pointer corruption.
-function __slab_os_direct_free(ptr int)
+function __slab_os_direct_free(ptr MachineWord)
 	let count = __Internals.loadIndirect(__Internals.slabOsDirectCountAddr())
 	let arrayBase = __Internals.loadIndirect(__Internals.slabOsDirectArrayAddr())
 
@@ -705,7 +712,7 @@ end '__slab_os_direct_free'
 // entries, lazy-allocated on first call. The C# bootstrap binary-searches
 // a sorted array; we keep the simpler linear approach until a workload
 // justifies the complexity. Exits with sentinel 134 if the array is full.
-function __slab_os_direct_alloc(size int) returns int
+function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 	// Align up to 8KB.
 	let aligned = (size + 8191) and -8192
 	let ptr = __Internals.osAllocPages(aligned)
@@ -781,7 +788,7 @@ end '__slab_os_direct_alloc'
 // signature across every callable destructor, and the wasm backend's
 // call_indirect needs the static call-site type to match exactly. The
 // returned 0 is silently discarded.
-function __destruct___ManagedMemory(self int) returns int
+function __destruct___ManagedMemory(self MachineWord) returns MachineWord
 	let parent = __Internals.loadIndirect(self + 32)
 	if parent == -1 'root'
 		let buffer = __Internals.loadIndirect(self)
@@ -803,7 +810,7 @@ end '__destruct___ManagedMemory'
 
 // setLength(self, n) — bounds-check n against capacity, then write to
 // self.length. Throws invalidLength (wire 4) on n > capacity.
-function __managed_mem_set_length(self int, n int) returns int throws __ManagedMemoryError
+function __managed_mem_set_length(self MachineWord, n MachineWord) returns MachineWord throws __ManagedMemoryError
 	let capacity = __Internals.loadIndirect(self + 16)
 	if n > capacity 'tooLong'
 		throw __ManagedMemoryError.invalidLength
@@ -821,7 +828,7 @@ end '__managed_mem_set_length'
 // source_ptr @32. Each load is zero-extending; source-level signed
 // narrow types are sign-extended at the call site by the
 // `maybeSignExtendCallResult` shim in LowerMaxonToStd.
-function __managed_mem_cursor_current(cursor int) returns int
+function __managed_mem_cursor_current(cursor MachineWord) returns MachineWord
 	let buffer = __Internals.loadIndirect(cursor)
 	let position = __Internals.loadIndirect(cursor + 8)
 	let elemSize = __Internals.loadIndirect(cursor + 24)
@@ -843,7 +850,7 @@ end '__managed_mem_cursor_current'
 // fall through to qword (loadIndirect). Unsigned reads — typed sign-extension
 // is handled by the source-level field-load path with signed: true.
 // Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_get(self int, idx int) returns int throws __ManagedMemoryError
+function __managed_mem_get(self MachineWord, idx MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -871,7 +878,7 @@ end '__managed_mem_get'
 // capacity < 0 (rdata=-2 or slice=-1), materialize a private heap buffer
 // first via cow_check, then re-bounds-check against the post-COW capacity
 // (now == length). Throws indexOutOfBounds (wire 1) on OOB.
-function __managed_mem_set(self int, idx int, value int) returns int throws __ManagedMemoryError
+function __managed_mem_set(self MachineWord, idx MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -909,7 +916,7 @@ end '__managed_mem_set'
 // The old rdata/slice buffer is intentionally NOT freed (rdata is in the
 // binary's read-only section; slice buffers are owned by their parent).
 // Non-throwing.
-function __managed_mem_cow_check(self int) returns int
+function __managed_mem_cow_check(self MachineWord) returns MachineWord
 	let capacity = __Internals.loadIndirect(self + 16)
 	if capacity >= 0 'noCopy'
 		return 0
@@ -932,7 +939,7 @@ end '__managed_mem_cow_check'
 // (no-op when capacity >= 0), then reallocate via mm_realloc. Throws
 // invalidCapacity (wire 5) on newCap < capacity. mm_realloc is still in
 // runtime.std, so we cross the bridge via `__Internals.mmRealloc`.
-function __managed_mem_grow(self int, newCap int) returns int throws __ManagedMemoryError
+function __managed_mem_grow(self MachineWord, newCap MachineWord) returns MachineWord throws __ManagedMemoryError
 	_ = __managed_mem_cow_check(self)
 	let capacity = __Internals.loadIndirect(self + 16)
 	if newCap < capacity 'tooSmall'
@@ -949,7 +956,7 @@ end '__managed_mem_grow'
 
 // byteAt(self, i) — load a single byte at byte-offset `i` from the buffer.
 // Bound: 0 <= i < length * element_size. Throws invalidByteRange (wire 7).
-function __managed_mem_byte_at(self int, i int) returns int throws __ManagedMemoryError
+function __managed_mem_byte_at(self MachineWord, i MachineWord) returns MachineWord throws __ManagedMemoryError
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
@@ -966,7 +973,7 @@ end '__managed_mem_byte_at'
 // setByte(self, i, value) — store a single byte at byte-offset `i`. Bound:
 // 0 <= i < length * element_size. COWs the buffer first so rdata-backed
 // MMs become writable. Throws invalidByteRange (wire 7).
-function __managed_mem_set_byte(self int, i int, value int) returns int throws __ManagedMemoryError
+function __managed_mem_set_byte(self MachineWord, i MachineWord, value MachineWord) returns MachineWord throws __ManagedMemoryError
 	if i < 0 'lo'
 		throw __ManagedMemoryError.invalidByteRange
 	end 'lo'
@@ -985,7 +992,7 @@ end '__managed_mem_set_byte'
 // remove(self, idx) — load the element at idx, shift the tail left by one
 // element via a byte-by-byte ascending loop (overlap-safe), decrement
 // length, and return the loaded value. Throws indexOutOfBounds (wire 1).
-function __managed_mem_remove(self int, idx int) returns int throws __ManagedMemoryError
+function __managed_mem_remove(self MachineWord, idx MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'lo'
 		throw __ManagedMemoryError.indexOutOfBounds
 	end 'lo'
@@ -1029,7 +1036,7 @@ end '__managed_mem_remove'
 // right by one element. Bounds: idx >= 0, count >= 0, idx + count <=
 // capacity. Implemented as a descending byte-loop so overlapping copies
 // are safe. Throws shiftOutOfBounds (wire 6).
-function __managed_mem_shift_right(self int, idx int, count int) returns int throws __ManagedMemoryError
+function __managed_mem_shift_right(self MachineWord, idx MachineWord, count MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 0 'idxNeg'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxNeg'
@@ -1058,7 +1065,7 @@ end '__managed_mem_shift_right'
 // by one element. Bounds: idx >= 1 (so idx-1 is valid), count >= 0,
 // idx + count <= capacity. Ascending byte-loop for overlap safety.
 // Throws shiftOutOfBounds (wire 6).
-function __managed_mem_shift_left(self int, idx int, count int) returns int throws __ManagedMemoryError
+function __managed_mem_shift_left(self MachineWord, idx MachineWord, count MachineWord) returns MachineWord throws __ManagedMemoryError
 	if idx < 1 'idxLow'
 		throw __ManagedMemoryError.shiftOutOfBounds
 	end 'idxLow'
@@ -1086,7 +1093,7 @@ end '__managed_mem_shift_left'
 // onto the end of self.buffer. Element-size compatibility is the caller's
 // responsibility (we use self.element_size for byte arithmetic on both
 // sides — same as the bootstrap). Non-throwing.
-function __managed_mem_append(self int, other int) returns int
+function __managed_mem_append(self MachineWord, other MachineWord) returns MachineWord
 	let selfLen = __Internals.loadIndirect(self + 8)
 	let otherLen = __Internals.loadIndirect(other + 8)
 	let newLength = selfLen + otherLen
@@ -1126,7 +1133,7 @@ end '__managed_mem_append'
 // bytes in, and return the new MM pointer. The slice owns its buffer
 // (parent_ptr = -1), we don't hold a reference to the source. Bounds:
 // 0 <= start <= end <= length. Throws sliceOutOfBounds (wire 3).
-function __managed_mem_slice(self int, start int, endIdx int) returns int throws __ManagedMemoryError
+function __managed_mem_slice(self MachineWord, start MachineWord, endIdx MachineWord) returns MachineWord throws __ManagedMemoryError
 	if start < 0 'startNeg'
 		throw __ManagedMemoryError.sliceOutOfBounds
 	end 'startNeg'
@@ -1162,7 +1169,7 @@ end '__managed_mem_slice'
 // untagged buffer sized for `count` elements. Initializes length=0,
 // capacity=count, element_size=elemSize, parent_ptr=-1 (root).
 // Non-throwing (allocation-failure signalling is reserved for a future hook).
-function __managed_mem_create(count int, elemSize int) returns int
+function __managed_mem_create(count MachineWord, elemSize MachineWord) returns MachineWord
 	let destructor = __Internals.destructManagedMemoryAddr()
 	let newStruct = __mm_alloc(40, destructor: destructor, tag: 0)
 	var newBuf = 0

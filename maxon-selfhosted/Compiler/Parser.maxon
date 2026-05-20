@@ -561,6 +561,23 @@ export type Parser
 			return MaxonType.unresolved
 		end 'badType'
 
+		// Bare `int`/`float` are only legal as the RHS of a typealias (handled
+		// via parseTypealiasRhs's dedicated `int(...)`/`float(...)` branches,
+		// which never reach this path). Every use site outside a typealias must
+		// travel through a named ranged typealias; inside `extension int`/`float`
+		// the primitive is referenced via the `Self` keyword (handled above).
+		// `bool` stays accepted bare — it has no range.
+		if typeToken.kind == TokenKind.int 'isBareInt'
+			reportBarePrimitiveType(typeToken, primitive: "int")
+			synchronize()
+			return MaxonType.unresolved
+		end 'isBareInt'
+		if typeToken.kind == TokenKind.float 'isBareFloat'
+			reportBarePrimitiveType(typeToken, primitive: "float")
+			synchronize()
+			return MaxonType.unresolved
+		end 'isBareFloat'
+
 		// Phase 11.0: a bare identifier matching one of the in-scope type
 		// parameters lowers to `MaxonType.typeParameter(id)`. The lookup
 		// table is empty outside generic type bodies, so non-generic code
@@ -6135,11 +6152,11 @@ export type Parser
 		var ownerEnumName = ""
 		for (name, enumType) in project.enumTypes 'searchResolved'
 			if enumType.caseByName.contains(loCaseName) and (hasMaxSentinel or enumType.caseByName.contains(hiCaseName)) 'isHit'
-				loOrdinal = (try enumType.caseByName.get(loCaseName) otherwise -1) as int
+				loOrdinal = try enumType.caseByName.get(loCaseName) otherwise -1
 				if hasMaxSentinel 'maxHi'
-					hiOrdinal = enumType.cases.count() as int - 1
+					hiOrdinal = enumType.cases.count() - 1
 				end 'maxHi' else 'lookupHi'
-					hiOrdinal = (try enumType.caseByName.get(hiCaseName) otherwise -1) as int
+					hiOrdinal = try enumType.caseByName.get(hiCaseName) otherwise -1
 				end 'lookupHi'
 				ownerEnumName = name
 				foundEnum = true
@@ -6153,15 +6170,15 @@ export type Parser
 				for i in 0 upto enumType.cases.count() 'cases'
 					let c = try enumType.cases.get(i) otherwise panic("parseEnumRangePattern: cases OOB at {i}")
 					if c.name == loCaseName 'loHit'
-						foundLo = i as int
+						foundLo = i
 					end 'loHit'
 					if not hasMaxSentinel and c.name == hiCaseName 'hiHit'
-						foundHi = i as int
+						foundHi = i
 					end 'hiHit'
 				end 'cases'
 				if foundLo >= 0 and (hasMaxSentinel or foundHi >= 0) 'matchedEnum'
 					loOrdinal = foundLo
-					hiOrdinal = (enumType.cases.count() as int - 1) if hasMaxSentinel else foundHi
+					hiOrdinal = (enumType.cases.count() - 1) if hasMaxSentinel else foundHi
 					ownerEnumName = name
 					foundEnum = true
 					break
@@ -9377,10 +9394,12 @@ export type Parser
 	function parseCastTargetType() returns MaxonType throws ParserError
 		let typeToken = try consume()
 		if typeToken.kind == TokenKind.int 'isInt'
-			return MaxonType.integer
+			reportBarePrimitiveCast(typeToken, primitive: "int")
+			return MaxonType.unresolved
 		end 'isInt'
 		if typeToken.kind == TokenKind.float 'isFloat'
-			return MaxonType.float
+			reportBarePrimitiveCast(typeToken, primitive: "float")
+			return MaxonType.unresolved
 		end 'isFloat'
 		if typeToken.kind == TokenKind.bool 'isBool'
 			return MaxonType.boolean
@@ -12197,6 +12216,22 @@ export type Parser
 			try cursor.advance() otherwise return
 		end 'skip'
 	end 'skipToNextLine'
+
+	// Centralizes the bare-primitive diagnostic for a type position. The
+	// `primitive` parameter is "int" or "float"; `bool` is unranged and
+	// never reaches this helper.
+	function reportBarePrimitiveType(typeToken Token, primitive String)
+		let example = "int(0 to 100)" if primitive == "int" else "float(0.0 to 1.0)"
+		let message = "Cannot use bare '{primitive}' as a type. Define a typealias with range constraints, e.g., typealias My{primitive} = {example}"
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: message, line: typeToken.line, column: typeToken.column, filePath: filePath)
+	end 'reportBarePrimitiveType'
+
+	// Same diagnostic, phrased for cast targets after `as`.
+	function reportBarePrimitiveCast(typeToken Token, primitive String)
+		let example = "int(0 to 100)" if primitive == "int" else "float(0.0 to 1.0)"
+		let message = "Cannot cast to bare '{primitive}'. Define a typealias with range constraints, e.g., 'value as My{primitive}' where 'typealias My{primitive} = {example}'"
+		reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: message, line: typeToken.line, column: typeToken.column, filePath: filePath)
+	end 'reportBarePrimitiveCast'
 
 	// Error recovery: skip to next statement boundary.
 	// Always advances at least 1 token to prevent infinite loops. Swallows

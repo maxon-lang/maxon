@@ -202,10 +202,11 @@ Underscore separators for readability:
 0x0000_0001_4000_0000  // Large hex with separators
 ```
 
-**Byte Values** (use `as byte` cast)
+**Byte Values** (cast through a ranged `byte` typealias)
 ```maxon
-42 as byte
-0xff as byte
+typealias Octet = byte(0 to u8.max)
+42 as Octet
+0xff as Octet
 ```
 
 **Float Literals** (must contain decimal point)
@@ -339,13 +340,22 @@ false
 
 **Explicit Conversions** (using `as` operator)
 
-Only safe (widening) casts are allowed. The compiler rejects casts that could lose data:
+Only safe (widening) casts are allowed. The compiler rejects casts that could lose data.
+
+Cast targets MUST be either a named ranged typealias (for `int`, `float`, or
+`byte`) or the bare keyword `bool`. Bare `int`/`float`/`byte` as cast targets
+are rejected — every primitive cast must travel through a typealias so the
+range-narrowing intent is explicit.
 
 ```maxon
-var b = 42 as byte         // int literal 0-255 to byte (OK)
-var i = b as int           // byte to int (OK)
-var f = b as float         // byte to float (OK)
-var g = 100 as float       // int to float (OK)
+typealias Octet = byte(0 to u8.max)
+typealias Tally = int(0 to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+var b = 42 as Octet        // int literal 0-255 to byte (OK)
+var i = b as Tally         // byte to int (OK)
+var f = b as Real          // byte to float (OK)
+var g = 100 as Real        // int to float (OK)
 ```
 
 Supported casts:
@@ -626,7 +636,7 @@ type Point
 		end 'add'
 
 		export function magnitude() returns float
-				return sqrt((x * x + y * y) as float)
+				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 end 'Point'
 ```
@@ -688,7 +698,7 @@ type Point
 		end 'create'
 
 		function magnitude() returns float
-				return sqrt((x * x + y * y) as float)
+				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 end 'Point'
 ```

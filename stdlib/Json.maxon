@@ -632,7 +632,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 		if b < 0x30 or b > 0x39 'stopInt'
 			break
 		end 'stopInt'
-		intValue = intValue * 10.0 + (b - 0x30) as float
+		intValue = intValue * 10.0 + (b - 0x30) as JsonFloat
 		i = i + 1
 	end 'intLoop'
 	var fracValue = 0.0
@@ -651,7 +651,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 					break
 				end 'stopFrac'
 				fracScale = fracScale * 10.0
-				fracValue = fracValue + ((fb - 0x30) as float) / fracScale
+				fracValue = fracValue + ((fb - 0x30) as JsonFloat) / fracScale
 				i = i + 1
 			end 'fracLoop'
 		end 'dot'
@@ -695,7 +695,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 		if expNegative 'negExp'
 			signedExp = -expValue
 		end 'negExp'
-		let factor = Math.pow(10.0, exponent: signedExp as float)
+		let factor = Math.pow(10.0, exponent: signedExp as JsonFloat)
 		result = result * factor
 	end 'applyExp'
 	if negative 'applyNeg'
@@ -896,7 +896,7 @@ function writeNumber(n JsonFloat, out ByteArray)
 	let intMin = -9223372036854775808.0
 	if n >= intMin and n <= intMax 'intRange'
 		let asInt = trunc(n)
-		let backToFloat = asInt as float
+		let backToFloat = asInt as JsonFloat
 		if backToFloat == n 'isInt'
 			let s = "{asInt}"
 			writeBytes(out, src: s.toByteArray())

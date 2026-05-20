@@ -363,7 +363,7 @@ export type Point
 	var internal VisitCount  // private
 
 	function magnitude() returns Coord
-		return sqrt((self.x * self.x + self.y * self.y) as float)
+		return sqrt((self.x * self.x + self.y * self.y) as Coord)
 	end 'magnitude'
 
 	function magnitudeSquared() returns Coord
@@ -792,11 +792,20 @@ Math.pow(base, exponent: e)  // base raised to exponent
 
 Type casting:
 ```maxon
-5 as float     // widening OK
-42 as byte     // int literal 0-255 OK
-b as int       // byte to int OK
+typealias Real = float(f64.min to f64.max)
+typealias Tally = int(0 to i64.max)
+typealias OctetValue = byte(0 to u8.max)
+
+5 as Real            // widening to a ranged float typealias
+42 as OctetValue     // int literal 0-255 fits the ranged byte typealias
+b as Tally           // byte to int via a ranged int typealias
+true as bool         // bool stays bare; no range to declare
 // Float to int — use: trunc(), round(), floor(), ceil()
 ```
+
+Bare `int`, `float`, or `byte` as cast targets are rejected — every
+primitive cast must travel through a named ranged typealias so the
+range-narrowing intent is explicit. `bool` is unranged and stays bare.
 
 ---
 
