@@ -2093,14 +2093,28 @@ public partial class RuntimeEmitter {
     var retryLabel = UniqueLabel("slab_alloc_retry");
     _b.DefineLabel(retryLabel);
 
+    // Span free-list manipulation must be serialised against concurrent
+    // __slab_free calls on the same span. The mcache slot is per-P, so only
+    // ONE P pulls from a given span via __slab_alloc — but ANY P can call
+    // __slab_free on an object that happens to live in that span (via
+    // __slab_span_lookup), since the lookup goes through the global arena
+    // map, not through any P's mcache. Without the lock, __slab_alloc's
+    // "read free_count, read free_list, dereference free_list" sequence races
+    // with __slab_free's "read free_list, link slot, write free_list,
+    // increment free_count": a sufficiently unlucky interleaving lets
+    // __slab_alloc observe free_count > 0 but free_list = NULL, then nil-deref.
+    // Symptom: intermittent SIGSEGV inside __slab_alloc under multi-worker
+    // load, with the fault address = 0.
+    _b.LockAcquire(MspanPoolLockLabel);
+
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // span = *mcache_slot
-    var needRefill = UniqueLabel("slab_need_refill");
-    _b.JumpIfZero(VReg.Scratch1, needRefill);
+    var needRefillUnlock = UniqueLabel("slab_need_refill_unlock");
+    _b.JumpIfZero(VReg.Scratch1, needRefillUnlock);
 
     // Check if span has free slots
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
-    _b.JumpIfZero(VReg.Scratch2, needRefill);
+    _b.JumpIfZero(VReg.Scratch2, needRefillUnlock);
 
     // --- Fast path: pop from free list ---
     _b.StoreLocal(4, VReg.Scratch1); // save span_ptr
@@ -2117,6 +2131,8 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeCount);
     _b.SubRegImm(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
+
+    _b.LockRelease(MspanPoolLockLabel);
 
     // Clear the free-list next pointer at slot[0]
     _b.LoadLocal(VReg.Scratch0, 5);
@@ -2140,8 +2156,13 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
-    // --- Refill path ---
-    _b.DefineLabel(needRefill);
+    // --- Refill path (entered with the lock held, must release before
+    // calling __slab_mcentral_get_span which acquires the same lock — the
+    // lock is a recursive CRITICAL_SECTION on Windows so re-entry would be
+    // safe, but releasing first keeps contention down and matches the lock's
+    // single-acquisition convention elsewhere in the allocator). ---
+    _b.DefineLabel(needRefillUnlock);
+    _b.LockRelease(MspanPoolLockLabel);
 
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.ZeroReg(VReg.Scratch1);
@@ -2269,7 +2290,11 @@ public partial class RuntimeEmitter {
       _b.Call("__slab_memzero");
     }
 
-    // Push slot_base onto span's free list
+    // Push slot_base onto span's free list. Must be serialised against
+    // concurrent __slab_alloc on the same span — see the corresponding
+    // comment in __slab_alloc for the race details.
+    _b.LockAcquire(MspanPoolLockLabel);
+
     _b.LoadLocal(VReg.Scratch1, 1); // span_ptr
     _b.LoadLocal(VReg.Scratch0, 0); // slot_base
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, MspanOffFreeList);
@@ -2280,16 +2305,20 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
 
-    // If span fully free, return to mcentral
+    // If span fully free, return to mcentral. Release the lock first so
+    // __slab_mcentral_return_span can take it without recursion.
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffTotalSlots);
     _b.CmpRegReg(VReg.Scratch2, VReg.Scratch0);
     var notFullyFree = UniqueLabel("slab_free_not_fully_free");
     _b.JumpIf(Condition.NotEqual, notFullyFree);
 
+    _b.LockRelease(MspanPoolLockLabel);
     _b.LoadLocal(VReg.Arg0, 1);
     _b.Call("__slab_mcentral_return_span");
+    _b.FunctionEnd();
 
     _b.DefineLabel(notFullyFree);
+    _b.LockRelease(MspanPoolLockLabel);
     _b.FunctionEnd();
 
     // --- Not a slab span: try OS-direct ---

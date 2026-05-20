@@ -19,17 +19,44 @@ public partial class RuntimeEmitter {
   // Static panic message strings — referenced by `LeaSymdata` from the diagnostic.
   // Defined unconditionally so the runtime always has them available, even for
   // fault codes the per-backend handler does not currently produce.
+  //
+  // Messages omit a trailing newline because the diagnostic appends " at rip="
+  // and a hex address before the newline.
   public void EmitFaultHandlerData() {
     _b.DefineSymdata("__gt_panic_msg_nil_deref",
-      "panic: nil pointer or invalid memory access\n\0"u8.ToArray());
+      "panic: nil pointer or invalid memory access\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_div_zero",
-      "panic: integer divide by zero\n\0"u8.ToArray());
+      "panic: integer divide by zero\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_int_overflow",
-      "panic: integer overflow\n\0"u8.ToArray());
+      "panic: integer overflow\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_stack_overflow",
-      "panic: stack overflow\n\0"u8.ToArray());
+      "panic: stack overflow\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_other",
-      "panic: unhandled CPU fault\n\0"u8.ToArray());
+      "panic: unhandled CPU fault\0"u8.ToArray());
+
+    // Label tags for the per-value hex fields the diagnostic appends after
+    // the panic message. Pairing rip with diag_base (the absolute runtime
+    // address of __gt_fault_diagnostic) is ASLR-resilient: an external tool
+    // computes
+    //   rva_of_diag = static address of __gt_fault_diagnostic in the binary
+    //   load_base   = rip_diag_base - rva_of_diag
+    //   rva_of_fault = rip - load_base
+    // and resolves the faulting instruction against `llvm-objdump -d` without
+    // knowing how Windows ASLR slid the image this run. See
+    // EmitGtFaultDiagnostic for the meaning of each tag.
+    _b.DefineSymdata("__gt_panic_msg_at_rip", " at rip=\0"u8.ToArray());
+    _b.DefineSymdata("__gt_panic_msg_diag_base", " diag_base=\0"u8.ToArray());
+    _b.DefineSymdata("__gt_panic_msg_addr", " addr=\0"u8.ToArray());
+    _b.DefineSymdata("__gt_panic_msg_rbp", " rbp=\0"u8.ToArray());
+    _b.DefineSymdata("__gt_panic_msg_nl", "\n\0"u8.ToArray());
+
+    // Per-AV stash: the bad VA (ExceptionInformation[1]) the faulting load/store
+    // tried to access. The per-backend fault-thunk writes this just before
+    // calling the shared handler; the diagnostic reads it. Globals here are
+    // safe-ish because two concurrent fatal faults already produce interleaved
+    // exit-time output today.
+    _b.DefineGlobal("__gt_fault_last_addr", 8, 0);
+    _b.DefineGlobal("__gt_fault_last_rbp", 8, 0);
   }
 
   /// <summary>
@@ -62,12 +89,19 @@ public partial class RuntimeEmitter {
     _b.FunctionEnd();
     _b.DefineLabel(gtOkLabel);
 
-    // Stash diagnostic info on the gt: { fault_rip, fault_msg }.
+    // Stash diagnostic info on the gt: { fault_rip, fault_msg }. Also save the
+    // RBP at fault time into a global so the diagnostic can print it — useful
+    // for diagnosing faults whose RIP points at a non-memory instruction (which
+    // happens on some microarchitectures where AV reporting is imprecise; the
+    // adjacent stack load is the real culprit and RBP tells us whether it was
+    // corrupted to a small value).
     _b.LoadLocal(VReg.Scratch0, 4);
     _b.LoadLocal(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch0, GtOffFaultRip, VReg.Scratch2);
     _b.LoadLocal(VReg.Scratch2, 5);
     _b.StoreIndirect(VReg.Scratch0, GtOffFaultMsg, VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch2, 3);                                       // RBP at fault (slot 3)
+    _b.StoreGlobal("__gt_fault_last_rbp", VReg.Scratch2);
 
     // Redirect target: pc=__gt_fault_diagnostic, fp=0, sp=faultRsp (intact stack)
     // OR gt.stack_base+4096 for stack-overflow (exhausted stack needs a clean spot).
@@ -156,11 +190,55 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, GtOffFaultMsg);
     _b.Call(_b.WriteStderrLabel);
 
+    // Append "<label>0xHEX" tags so the operator can resolve the faulting
+    // address against `llvm-objdump -d`:
+    //   at rip=       — faulting RIP (read from gt.fault_rip stash)
+    //   diag_base=    — runtime addr of __gt_fault_diagnostic. Pairing it
+    //                   with the same function's static addr from the binary
+    //                   recovers the ASLR slide so rip → RVA is computable.
+    //   addr=         — bad VA for AVs. Tiny value (e.g. 0xFF8) on a
+    //                   `[rbp+offset]` deref means RBP itself was NULL; a
+    //                   wildly-out-of-range value indicates a corrupt pointer.
+    //   rbp=          — RBP at fault. When the OS-reported RIP doesn't touch
+    //                   memory (a known quirk on some CPUs where AV reporting
+    //                   is imprecise), a small RBP value (e.g. 0x10) reveals
+    //                   that an adjacent `mov -offset(rbp), reg` was the
+    //                   real culprit.
+    // mm_trace_print_hex is emitted regardless of --mm-trace so this works
+    // in release builds.
+    EmitPrintTaggedHex("__gt_panic_msg_at_rip", () => {
+      _b.LoadCurrentP(VReg.Scratch0);
+      _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, POffCurrentGt);
+      _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, GtOffFaultRip);
+    });
+    EmitPrintTaggedHex("__gt_panic_msg_diag_base", () => {
+      _b.LeaGlobal(VReg.Scratch0, "__gt_fault_diagnostic_addr");
+      _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 0);
+    });
+    EmitPrintTaggedHex("__gt_panic_msg_addr",
+      () => _b.LoadGlobal(VReg.Arg0, "__gt_fault_last_addr"));
+    EmitPrintTaggedHex("__gt_panic_msg_rbp",
+      () => _b.LoadGlobal(VReg.Arg0, "__gt_fault_last_rbp"));
+
+    _b.LeaSymdata(VReg.Arg0, "__gt_panic_msg_nl");
+    _b.Call(_b.WriteStderrLabel);
+
     // Exit the process with status 1.
     _b.MovRegImm(VReg.Arg0, 1);
     _b.CallImport("os_exit");
     // os_exit does not return.
     _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Emit `<symdata-label-text> + hex(value)` where `loadValueIntoArg0` is
+  /// responsible for placing the 64-bit value to print into VReg.Arg0.
+  /// </summary>
+  private void EmitPrintTaggedHex(string labelSymdata, Action loadValueIntoArg0) {
+    _b.LeaSymdata(VReg.Arg0, labelSymdata);
+    _b.Call(_b.WriteStderrLabel);
+    loadValueIntoArg0();
+    _b.Call("mm_trace_print_hex");
   }
 
   /// <summary>

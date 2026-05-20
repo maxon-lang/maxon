@@ -38,7 +38,16 @@ public static partial class MaxonToStandardConversion {
     var storeCount = new StdStoreIndirectOp(countConst.Result, argBuf, 0, IrType.I64);
     block.AddOp(storeCount);
 
-    // Compute the managed-mask while we're already walking the args.
+    // Compute the managed-mask first so it can be stored before the arg loop
+    // emits any side-effecting ops. The trampoline reads [buf+8] for the mask;
+    // keeping the mask store close to the count store (and ahead of the arg
+    // stores) preserves the original buffer-initialisation order.
+    //
+    // Invariant: every set bit in managedMask corresponds to an arg that the
+    // arg loop will (a) be a heap-pointer-shaped StdI64 and (b) incref. The
+    // arg loop below asserts (a) so any asymmetry between mask-driven trampoline
+    // decrefs and spawn-site increfs is caught at compile time, not by a
+    // refcount underflow at runtime.
     long managedMask = 0;
     for (int i = 0; i < argCount; i++) {
       if (IsManagedAsyncArg(asyncOp.Args[i]))
@@ -67,8 +76,17 @@ public static partial class MaxonToStandardConversion {
       var storeArg = new StdStoreIndirectOp(argVal, argBuf, 16 + i * 8, IrType.I64);
       block.AddOp(storeArg);
 
-      if (IsManagedAsyncArg(maxonArg) && argVal is StdI64 heapPtr)
+      if (IsManagedAsyncArg(maxonArg)) {
+        // The mask bit for this arg was set above; the trampoline will emit a
+        // paired decref. If the lowered value isn't a StdI64 heap pointer the
+        // pairing is broken — throw rather than silently skip the incref and
+        // leave the trampoline to over-decref a buffer slot of unknown shape.
+        if (argVal is not StdI64 heapPtr)
+          throw new InvalidOperationException(
+            $"Async managed arg {i} ({maxonArg.GetType().Name}) lowered to {argVal.GetType().Name}, expected StdI64. " +
+            "Mask/incref asymmetry would cause trampoline-side over-decref.");
         EmitIncrefValueIfNonnull(block, heapPtr, scopeName: $"async.arg.{i}");
+      }
     }
 
     // Get function pointer

@@ -1265,7 +1265,9 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Check runtime stderr
 	if fragment.expectation.hasRuntimeStderr 'checkStderr'
 		let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
-		var actualErr = trimWhitespace(runStderr)
+		// CPU-fault panics now carry an " at rip=0xHEX" suffix that varies per
+		// build; strip it so spec expectations match the panic message itself.
+		var actualErr = trimWhitespace(stripFaultRipSuffix(runStderr))
 		// Convert wasmtime trap output into Maxon-style stack trace
 		if target.os == Os.wasi 'convertWasmtimeOutput'
 			actualErr = convertWasmtimeStderr(actualErr)
@@ -1332,8 +1334,31 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	return TestResult.create(testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
 end 'runTestFromFragment'
 
-// Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
-// and strip file paths from error messages so temp paths match fragment paths.
+// Strip the " at rip=0xHEX diag_base=0xHEX addr=0xHEX rbp=0xHEX" suffix the
+// runtime appends to CPU-fault panics. These addresses identify the faulting
+// instruction and ASLR slide — useful for diagnosis but non-deterministic
+// across builds, so spec expectations match only the panic message itself.
+function stripFaultRipSuffix(s String) returns String
+	let marker = " at rip=0x"
+	var out = ""
+	var first = true
+	for line in s.split("\n") 'eachLine'
+		let stripped = stripAtMarker(line, marker: marker)
+		if first 'firstLine'
+			out = stripped
+			first = false
+		end 'firstLine' else 'appendLine'
+			out = "{out}\n{stripped}"
+		end 'appendLine'
+	end 'eachLine'
+	return out
+end 'stripFaultRipSuffix'
+
+function stripAtMarker(line String, marker String) returns String
+	let markerIdx = try line.findFirst(marker) otherwise return line
+	return line.slice(line.startIndex(), endIndex: markerIdx)
+end 'stripAtMarker'
+
 // Convert wasmtime's trap stderr into a Maxon-style stack trace.
 // Input:  "panic at ...\nError: failed to run...\n...wasm backtrace:\n  0: 0x445 - <unknown>!mrt_panic\n  1: 0x485 - <unknown>!main\n..."
 // Output: "panic at ...\nStack trace:\n  in main\n  in mrt_start"

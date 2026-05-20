@@ -7273,8 +7273,22 @@ public partial class X86CodeEmitter {
 
     DefineLabel("__gt_ftp_code_chosen");
     // RCX = faultCode. Pack (rip, rsp, rbp) from ContextRecord into the shared
-    // handler's argument registers (RDX, R8, R9).
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    // handler's argument registers (RDX, R8, R9). For access violations we
+    // also stash the bad VA (ExceptionInformation[1]) into a global so the
+    // diagnostic printer can include it in its output. Globals aren't ideal
+    // when two threads can fault concurrently, but two concurrent fatal AVs
+    // already produces interleaved output today; the diagnostic exit is
+    // racing-by-design and we accept the small loss of fidelity in exchange
+    // for not threading another argument through the shared-handler ABI.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = EXCEPTION_POINTERS*
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.Rax, ExceptionPointersOffExceptionRecord);
+    // ExceptionInformation[1] is at offset 0x28 of EXCEPTION_RECORD on x64
+    // (4 ExceptionCode + 4 ExceptionFlags + 8 chain ptr + 8 ExceptionAddress
+    // + 4 NumberParameters + 4 pad + 8 ExceptionInformation[0] = 40 bytes,
+    // then [1] at +40 = 0x28).
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, 0x28);
+    EmitGlobalStoreReg(X86Register.R11, "__gt_fault_last_addr");
+
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRip);
     EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, ContextOffRsp);

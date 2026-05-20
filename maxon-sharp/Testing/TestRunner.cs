@@ -837,7 +837,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (successExpectation.Stderr != null) {
           var normalize = fragment.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
           var expectedStderr = normalize(successExpectation.Stderr);
-          var actualStderr = normalize(Stderr);
+          var actualStderr = normalize(StripFaultRipSuffix(Stderr));
           if (expectedStderr != actualStderr) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -1179,6 +1179,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         kept.Add(line);
     }
     return string.Join('\n', kept).Trim();
+  }
+
+  // CPU-fault panics from __gt_fault_diagnostic carry a
+  //   " at rip=0xHEX diag_base=0xHEX"
+  // suffix identifying the faulting instruction and the ASLR slide of the
+  // image. Both addresses are build- and run-specific, so strip the entire
+  // suffix before comparing against spec expectations.
+  private static string StripFaultRipSuffix(string stderr) {
+    var lines = stderr.Replace("\r\n", "\n").Split('\n');
+    for (int i = 0; i < lines.Length; i++) {
+      var idx = lines[i].IndexOf(" at rip=0x", StringComparison.Ordinal);
+      if (idx >= 0) lines[i] = lines[i].Substring(0, idx);
+    }
+    return string.Join('\n', lines);
   }
 
   // ============================================================================
@@ -1610,7 +1624,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               var (_, _, actualStderr) = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs);
               var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
               var oldStderr = normalize(success.Stderr);
-              var newStderr = normalize(actualStderr);
+              var newStderr = normalize(StripFaultRipSuffix(actualStderr));
               if (oldStderr != newStderr) {
                 // Re-find marker since specContent may have shifted from RequiredIR update
                 var markerMatch2 = Regex.Match(specContent, markerPattern);
