@@ -60,7 +60,7 @@ The work breaks into 7 sub-phases over an estimated 12–20 weeks. Each sub-phas
 - [maxon-selfhosted/Compiler/Lexer.maxon](maxon-selfhosted/Compiler/Lexer.maxon) — keywords `interface`, `extension`, `extends`, `implements`, `with`, `where`, `from`, `uses` already tokenized; verify precedence and contextual handling
 - [maxon-selfhosted/Compiler/Parser.maxon](maxon-selfhosted/Compiler/Parser.maxon) — add productions for:
   - `interface Name uses T1, T2 ... end` (with optional associated types)
-  - `type Name uses T1 implements I1, I2 with(...) ... end`
+  - `type Name uses T1 implements I1, I2 with (...) ... end`
   - `where T: Comparable`, `where T: Equatable and Hashable`
   - `function foo<T>(x T) returns T where T: Comparable`
   - `extension Iterable uses Element ... end`
@@ -104,7 +104,7 @@ export type GenericTypeDecl
 end
 
 export type TypeSubstitution
-    var bindings Map with(String, MaxonType)  // "Element" -> .named(Int)
+    var bindings Map with (String, MaxonType)  // "Element" -> .named(Int)
 end
 ```
 

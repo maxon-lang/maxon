@@ -2340,7 +2340,7 @@ The `returns` clause is omitted for a void-returning function type. Once defined
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
-typealias HandlerMap = Map with(String, UnaryOp)
+typealias HandlerMap = Map with (String, UnaryOp)
 
 function apply(f UnaryOp, x Integer) returns Integer
 		return f(x)

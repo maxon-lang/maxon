@@ -247,7 +247,7 @@ let n = f(21)                             // 42
 ```
 
 Function-typed values can also live in collections — e.g.
-`typealias HandlerMap = Map with(String, UnaryOp)` lets the caller dispatch by
+`typealias HandlerMap = Map with (String, UnaryOp)` lets the caller dispatch by
 key.
 
 ## Visibility

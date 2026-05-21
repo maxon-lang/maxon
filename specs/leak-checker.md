@@ -138,7 +138,7 @@ union ReturnType
 	value(inner MaxonType)
 end 'ReturnType'
 
-typealias TypeMap = Map with(String, ReturnType)
+typealias TypeMap = Map with (String, ReturnType)
 
 function dispatch(m TypeMap, key String) returns MaxonType
 	var resultType = MaxonType.integer

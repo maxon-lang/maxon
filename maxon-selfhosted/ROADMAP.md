@@ -676,7 +676,7 @@ x64-windows** and **969/986 on wasm32-wasi**, **C# bootstrap parity held at
 
 **Changes**:
 - **Lexer** ([`Lexer.maxon`](Compiler/Lexer.maxon)): keywords `interface`, `extension`, `extends`, `implements`, `with`, `where`, `from`, `uses` are already tokenized — verify precedence and contextual handling.
-- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon)): add productions for `interface Name uses T1, T2 ... end`, `type Name uses T1 implements I1, I2 with(...) ... end`, `where T: Comparable`, `function foo<T>(x T) returns T where T: Comparable`, `extension Iterable uses Element ... end`, `from Type implements Interface ... end`.
+- **Parser** ([`Parser.maxon`](Compiler/Parser.maxon)): add productions for `interface Name uses T1, T2 ... end`, `type Name uses T1 implements I1, I2 with (...) ... end`, `where T: Comparable`, `function foo<T>(x T) returns T where T: Comparable`, `extension Iterable uses Element ... end`, `from Type implements Interface ... end`.
 - **MaxonDialect**: extend `MaxonType` with `typeParameter(id TypeNameId)` (unresolved `T`) and `genericInstance(baseId TypeNameId, args MaxonTypeArray)` (`Array with Int`).
 - **Project** ([`Project.maxon`](Compiler/Project.maxon)): add `interfaces InterfaceMap`, `conformances ConformanceMap`, `typeParameters TypeParamMap`.
 
@@ -1283,7 +1283,7 @@ with same case-name collided (e.g. `notFound`) — fixed via type-driven
   via Self's conformance row.
 - prereq.4: parser extensions for bare-comma typealias args
   (`typealias X = Y with A, B`) and tuple-collapse in implements
-  clause (`T with(A, B)` against single-uses interface).
+  clause (`T with (A, B)` against single-uses interface).
 - prereq.5: implicit witness inference (`inferImplicitWitnessConstraints` infers
   `T is Iterator` when an interface declares `createIterator()` returning T) +
   `forwardCallerWitness` upgraded to look up caller-side paramName when callee

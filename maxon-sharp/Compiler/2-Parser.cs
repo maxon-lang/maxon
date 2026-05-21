@@ -2173,7 +2173,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var ifaceName = Expect(TokenType.Identifier).Value;
     names.Add(ifaceName);
     if (Check(TokenType.With)) {
-      Advance();
+      var withTok = Advance();
+      EnsureWithFollowedBySpace(withTok);
       int expectedCount = GetAssociatedTypeCount(ifaceName);
       var withTypes = ParseWithTypeArgs(expectedCount);
       ResolveWithTypeParams(ifaceName, withTypes, typeParams);
@@ -2183,7 +2184,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       ifaceName = Expect(TokenType.Identifier).Value;
       names.Add(ifaceName);
       if (Check(TokenType.With)) {
-        Advance();
+        var withTok = Advance();
+        EnsureWithFollowedBySpace(withTok);
         int expectedCount = GetAssociatedTypeCount(ifaceName);
         var withTypes = ParseWithTypeArgs(expectedCount);
         ResolveWithTypeParams(ifaceName, withTypes, typeParams);
@@ -4153,7 +4155,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (assocTypeNames.Count == 0)
           throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
-        Expect(TokenType.With);
+        EnsureWithFollowedBySpace(Expect(TokenType.With));
         var ifaceConcreteTypes = new List<IrType>();
         if (Check(TokenType.LeftParen)) {
           Advance();
@@ -4185,7 +4187,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       // Generic enum alias: typealias IntNode = ListNode with Integer
       if (sourceType is IrEnumType sourceEnum && sourceEnum.AssociatedTypeNames.Count > 0) {
-        Expect(TokenType.With);
+        EnsureWithFollowedBySpace(Expect(TokenType.With));
 
         var concreteTypes = ParseWithTypeArgs(sourceEnum.AssociatedTypeNames.Count);
         RejectBarePrimitiveTypeArgs(concreteTypes, aliasNameToken);
@@ -4211,7 +4213,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (sourceStruct.AssociatedTypeNames.Count == 0)
         throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
-      Expect(TokenType.With);
+      EnsureWithFollowedBySpace(Expect(TokenType.With));
 
       var concreteTypes2 = new List<IrType>();
       var constParams = new Dictionary<string, long>();
@@ -19670,6 +19672,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       throw ExpectedTokenError(Token.DisplayName(type), Current());
     }
     return Advance();
+  }
+
+  /// <summary>
+  /// After consuming a `with` keyword, enforce that any following `(` is
+  /// separated by whitespace. Adjacency (`with(`) is rejected — the canonical
+  /// form is `with (...)`. Whitespace detection is line+column adjacency:
+  /// `with` is 4 chars long, so no-space means the `(` lands at column+4 on
+  /// the same line. Any newline or space lifts adjacency naturally.
+  /// </summary>
+  private void EnsureWithFollowedBySpace(Token withToken) {
+    if (!Check(TokenType.LeftParen)) return;
+    var lp = Current();
+    if (withToken.Line == lp.Line && withToken.Column + 4 == lp.Column) {
+      throw new CompileError(ErrorCode.ParserExpectedToken,
+        "'with(' is not allowed; write 'with (' with a space between the keyword and the opening parenthesis",
+        lp.Line, lp.Column);
+    }
   }
 
   /// Build the appropriate "expected X" diagnostic for `tok`: ParserUnexpectedEof

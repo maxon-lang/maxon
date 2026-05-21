@@ -1162,25 +1162,25 @@ end 'namedTypeIsManagedRef'
 // `Map<ValueId, ValueId>` is enough — we don't need the fancier address-
 // taken bookkeeping here because the closure ABI is uniform: every
 // indirect call has exactly one env in flight at a time.
-typealias FnEnvMap = Map with(ValueId, ValueId)
+typealias FnEnvMap = Map with (ValueId, ValueId)
 // C1.c: per-function map from an interface-typed slot id to its witness
 // companion slot id. Populated by `assignInterfaceWitnessSlots` after
 // `collectSlotMaxonTypes` allocates fresh trailing slots for each
 // interface-typed slot found in the function. Read at every interface-
 // typed varDecl/varStore site to emit the second store (witness pointer)
 // alongside the first (value or box pointer).
-typealias InterfaceWitnessSlotMap = Map with(VarSlot, VarSlot)
+typealias InterfaceWitnessSlotMap = Map with (VarSlot, VarSlot)
 // C1.d: per-function pairing of an interface-typed loaded value with its
 // witness pointer (also a ValueId). Populated by `lowerVarLoad` whenever it
 // reads a fat-pointer slot — the load emits two ops (value + witness) and
 // stashes the pair here so a downstream `methodCall` can recover the
 // witness without re-walking back to the slot. Mirrors `fnEnvVarNames`'s
 // shape for the closure ABI.
-typealias InterfaceWitnessValueIdMap = Map with(ValueId, ValueId)
+typealias InterfaceWitnessValueIdMap = Map with (ValueId, ValueId)
 // Per-function map from a String-literal ValueId (the outer `String` struct
 // produced by `lowerStringConst`) to its parser-interned StringId. Lets
 // builtin-lowering recover the literal bytes for label-shaped arguments.
-typealias StringLiteralProvenanceMap = Map with(ValueId, StringId)
+typealias StringLiteralProvenanceMap = Map with (ValueId, StringId)
 
 // Thrown by `resolveLabelToSlot` when a `name:` label doesn't bind to a
 // user-visible parameter slot — covers both the unknown-label case and the
@@ -3778,7 +3778,7 @@ type MaxonToStdLowering
 
 	// `Type.staticMethod()` calls where TypeResolution couldn't recover the
 	// generic-instance shape (because the source-level return type was a
-	// bare `Self`/`Type` rather than `Type with(...)`) land here. If the
+	// bare `Self`/`Type` rather than `Type with (...)`) land here. If the
 	// receiver's declaring type is itself generic AND the caller's
 	// enclosing type has the same type-parameter names, promote the bare
 	// `named` to a `genericInstance` using the caller's typeParameter ids.
@@ -8926,7 +8926,7 @@ end 'StripPrefixError'
 // `aliasName`) hit this map on every Maxon op being lowered, so any
 // per-element scan would compound across thousands of ops per function.
 
-export typealias NameToValueIdMap = Map with(ByteArray, ValueId)
+export typealias NameToValueIdMap = Map with (ByteArray, ValueId)
 
 // Byte-sequence equality. `ByteArray` is `Array with Byte`, and `Array`
 // does not today expose a generic `==` over slices — this little helper

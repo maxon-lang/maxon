@@ -177,7 +177,7 @@ end 'Array'
 // Typealias (with range)
 export typealias Score = int(0 to 100)
 export typealias ScoreArray = Array with Score
-export typealias ScoreMap = Map with(String, Score)
+export typealias ScoreMap = Map with (String, Score)
 
 // Ranged type construction
 var p = Port{8080}          // TypeName{value}
@@ -360,7 +360,7 @@ arr.remove(at: 0)
 arr.clear()
 
 // Maps
-typealias StringIntMap = Map with(String, Integer)
+typealias StringIntMap = Map with (String, Integer)
 var m = ["hello": 42]
 let val = try m.get("hello") otherwise 0
 m.set("world", value: 99)

@@ -86,7 +86,7 @@ hello
 ### Try-otherwise: source is mutable inside the otherwise handler
 The borrow created by `try map.get(name)` only lives on the success path. Inside the `otherwise` block the get failed — `existing` was never bound, so there is no live borrow and mutating the same map must be allowed.
 ```maxon
-typealias ByteArrayMap = Map with(String, ByteArray)
+typealias ByteArrayMap = Map with (String, ByteArray)
 
 function intern(lookup ByteArrayMap, name String) returns ByteArray
 	let existing = try lookup.get(name) otherwise 'fresh'

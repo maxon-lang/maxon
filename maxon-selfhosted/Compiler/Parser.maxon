@@ -55,7 +55,7 @@ export typealias BoolArray = Array with bool
 // initializer is a known struct-backed enum-case literal. Keyed on the
 // let's bare local name; value is the qualified `EnumName.caseName` of
 // the case. Reset by `resetSymbolTable` between functions.
-export typealias StructBackedEnumCaseBindingMap = Map with(String, String)
+export typealias StructBackedEnumCaseBindingMap = Map with (String, String)
 
 typealias TokenIter = ArrayIterator with Token
 
@@ -626,7 +626,9 @@ export type Parser
 		// type name is the next param's name (matching C# behavior — generic
 		// instances only land in typealias RHS / conformance contexts).
 		if at(TokenKind.with) and not inFunctionParam 'isGenericInstance'
+			let withToken = cursor.current()
 			try eat(TokenKind.with)
+			try ensureWithFollowedBySpace(withToken)
 			var args = MaxonTypeArray.create()
 			if accept(TokenKind.leftParen) 'parenList'
 				while not at(TokenKind.rightParen) 'argLoop'
@@ -867,7 +869,7 @@ export type Parser
 	// the bare-identifier `with` form takes exactly one type argument; the
 	// next identifier opens the next conformance.
 	//
-	// `parenForm` on each `Conformance` records whether the `with(...)` arg
+	// `parenForm` on each `Conformance` records whether the `with (...)` arg
 	// list used parens. TypeResolution uses this to collapse a parenthesized
 	// multi-arg list against a single-`uses` interface into one `__TupleN`
 	// generic-instance (mirrors maxon-sharp's `ParseWithTypeArgs`
@@ -885,7 +887,10 @@ export type Parser
 			let nameToken = try consumeExpecting("interface name")
 			var withArgs = StringArray.create()
 			var parenForm = false
-			if accept(TokenKind.with) 'hasWith'
+			if at(TokenKind.with) 'hasWith'
+				let withToken = cursor.current()
+				try eat(TokenKind.with)
+				try ensureWithFollowedBySpace(withToken)
 				if accept(TokenKind.leftParen) 'parenList'
 					parenForm = true
 					while at(TokenKind.identifier) 'argLoop'
@@ -3153,7 +3158,7 @@ export type Parser
 		// `expr` is the captured RHS; `sawValidBase` tracks whether we saw
 		// something we know how to capture. Recognized RHS forms are `bool`,
 		// `int(L to U)`, `byte(L to U)`, `float(L to U)`, a bare identifier
-		// (`typealias A = B`), and a generic instance (`Base with(A,B)` or
+		// (`typealias A = B`), and a generic instance (`Base with (A,B)` or
 		// `Base with X`). The resolver pass takes the captured form and
 		// computes the eventual StdType (or, for genericAlias, MaxonType).
 		var expr = UnresolvedTypeExpr.boolPrim
@@ -3252,7 +3257,7 @@ export type Parser
 		// the target alias is itself resolved, so source-text order doesn't
 		// matter — `A` can be declared before or after `B`.
 		//
-		// Phase 11.0 step 2: generalized `typealias Foo = Base with(Args...)`.
+		// Phase 11.0 step 2: generalized `typealias Foo = Base with (Args...)`.
 		// Any base name is accepted; resolution into a `MaxonType.genericInstance`
 		// is the resolver pass's job (TypeResolution.resolveAllGenericTypealiases).
 		// The legacy `__ManagedMemory → i64` typealias-table seeding is preserved
@@ -3261,11 +3266,13 @@ export type Parser
 		// StdType-typed `project.typealiases` map until step 5 swaps them over.
 		if not sawValidBase and baseToken.kind == TokenKind.identifier 'isAliasName'
 			let targetToken = try consume()
-			// E3062: `typealias B = A` and `typealias E = Base with(A,B)` both
+			// E3062: `typealias B = A` and `typealias E = Base with (A,B)` both
 			// reference the named base/args explicitly.
 			usedTypeAliases.insert(element: targetToken.value)
 			if at(TokenKind.with) 'hasWith'
+				let withToken = cursor.current()
 				try eat(TokenKind.with)
+				try ensureWithFollowedBySpace(withToken)
 				var argNames = StringArray.create()
 				// Phase 13 (sized typealiases): `typealias Vec1 = Vector with 1 Int`
 				// — an int literal in the first positional slot encodes a
@@ -3292,7 +3299,7 @@ export type Parser
 					while not at(TokenKind.rightParen) 'argLoop'
 						let argToken = cursor.current()
 						if not isTypeNameToken(argToken) 'badArg'
-							reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': expected type-name argument in 'with(...)', got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
+							reportCompileError(project, code: ErrorCode.parserExpectedType, message: "typealias '{nameToken.value}': expected type-name argument in 'with (...)', got '{tokenValueToString(argToken.value)}'", line: argToken.line, column: argToken.column, filePath: filePath)
 							skipToNextLine()
 							throw ParserError.unhandledToken
 						end 'badArg'
@@ -5027,7 +5034,7 @@ export type Parser
 		currentTypeParams = targetTypeParams
 		currentTypeVisibility = visibility
 
-		// Optional `implements I1, I2 [with(...)]` clause for added
+		// Optional `implements I1, I2 [with (...)]` clause for added
 		// conformances. Step 5 validates these against the target type
 		// once the where-clause is satisfied for an observed instantiation.
 		let addedConformances = try parseImplementsClause()
@@ -10345,7 +10352,7 @@ export type Parser
 	end 'emitCallAndResult'
 
 	// Best-effort method-call companion: when a method call's receiver is a
-	// generic instance (e.g. `Map with(String, UnaryOp)`) and the Value /
+	// generic instance (e.g. `Map with (String, UnaryOp)`) and the Value /
 	// Element type parameter binds to a function-type alias, return that
 	// function type. This is a narrowly-scoped hack — most method calls
 	// resolve types in TypeResolution, but `let f = m.get("d")` needs the
@@ -10474,7 +10481,7 @@ export type Parser
 	//
 	// Also handles the static-factory case `TypeAlias.create()`: when the
 	// dotted head is a generic typealias whose binding has a function in a
-	// value position (e.g. `HandlerMap = Map with(String, UnaryOp)`), the
+	// value position (e.g. `HandlerMap = Map with (String, UnaryOp)`), the
 	// `Self`-returning factory should propagate `genericInstance(Map,
 	// [String, function(id)])` to its binding. Surfacing that as a return
 	// type here lets the receiver's slot type carry the generic instance so
@@ -10497,7 +10504,7 @@ export type Parser
 			end 'isFn'
 		end 'fromBare'
 		// Static-factory promotion for function-valued generics only:
-		// `HandlerMap.create()` where `HandlerMap = Map with(String, UnaryOp)`
+		// `HandlerMap.create()` where `HandlerMap = Map with (String, UnaryOp)`
 		// — without this, the binding's slot type stays `unresolved` and
 		// follow-on method calls (`m.get("d")`) can't surface the function-
 		// typed Value for the parser's indirect-call check.
@@ -12142,6 +12149,24 @@ export type Parser
 		end 'mismatch'
 		try cursor.advance() otherwise throw ParserError.unexpectedEof
 	end 'eat'
+
+	// After consuming a `with` keyword, enforce that any following `(` is
+	// separated by whitespace. Adjacency (`with(`) is rejected — the canonical
+	// form is `with (...)`. Whitespace detection is line+column adjacency:
+	// `with` is 4 chars long, so no-space means the `(` lands at column+4 on
+	// the same line. Any newline or space lifts adjacency naturally.
+	function ensureWithFollowedBySpace(withToken Token) throws ParserError
+		if not at(TokenKind.leftParen) 'noParen'
+			return
+		end 'noParen'
+
+		let lp = cursor.current()
+		if withToken.line == lp.line and withToken.column + 4 == lp.column 'noSpace'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "'with(' is not allowed; write 'with (' with a space between the keyword and the opening parenthesis", line: lp.line, column: lp.column, filePath: filePath)
+			synchronize()
+			throw ParserError.unhandledToken
+		end 'noSpace'
+	end 'ensureWithFollowedBySpace'
 
 	// Advance past consecutive newline tokens. Exits with cursor AT the next
 	// non-newline. Throws ParserError.unexpectedEof if the cursor exhausts

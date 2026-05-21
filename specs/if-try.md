@@ -479,7 +479,7 @@ suffices via `if let`/`if var`. Flagged as a compile-time error to push users to
 single-lookup form.
 
 ```maxon
-typealias StrMap = Map with(String, String)
+typealias StrMap = Map with (String, String)
 
 function main() returns ExitCode
 	var m = StrMap.create()
@@ -502,7 +502,7 @@ The double-lookup lint matches receivers structurally, so field-access chains
 the same as bare-local receivers.
 
 ```maxon
-typealias StrMap = Map with(String, String)
+typealias StrMap = Map with (String, String)
 
 type Holder
 	export var cache StrMap

@@ -231,7 +231,7 @@ end 'buildGenericInstanceType'
 // failing constraint. Runs after `validateConformances` has populated
 // `project.conformances`, so `typeConformsTo` returns accurate verdicts.
 //
-// Also walks each generic-typealias `Base with(Args...)` to flag any arg
+// Also walks each generic-typealias `Base with (Args...)` to flag any arg
 // name that doesn't resolve to a real type, mirroring the bootstrap's
 // parse-time `Unknown type: X` (E2003) emission. The bootstrap fires the
 // check while parsing the typealias body; the self-hosted parser captures
@@ -446,7 +446,7 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 	var resolvedNames = StringArray.create()
 
 	for (name, entry) in project.unresolvedTypealiases 'sweep'
-		// Phase 11.0 step 2: generic typealiases (`E = Base with(...)`) build a
+		// Phase 11.0 step 2: generic typealiases (`E = Base with (...)`) build a
 		// `MaxonType.genericInstance(...)` and live in `project.genericTypealiases`,
 		// not the StdType-typed `typealiases` map. Resolve out-of-band so the
 		// rest of the drain stays focused on primitive/aliasName handling.
@@ -726,7 +726,7 @@ end 'findInheritedBindings'
 // family below. A map (rather than two parallel arrays) keeps the per-name
 // lookup O(1) so the inner loop of `substituteNamedId` doesn't turn the
 // conformance walk into O(M·I·K·P²).
-typealias TypeBindingMap = Map with(String, MaxonType)
+typealias TypeBindingMap = Map with (String, MaxonType)
 
 // Build the substituted method set a conforming type is expected to
 // provide. Each `Conformance` in `conformances` names an interface and
@@ -751,7 +751,7 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 
 		// Resolve the parser-time bare names into MaxonTypes, applying the
 		// parenthesized-tuple collapse when the interface has exactly one
-		// `uses` param. This lets `Iterator with(Source, Element)` bind
+		// `uses` param. This lets `Iterator with (Source, Element)` bind
 		// `Element = __Tuple2(Source, Element)` instead of erroring on arity.
 		var resolvedWithArgs = resolveConformanceWithArgs(project, conf: conf, usesCount: iface.usesParams.count())
 
@@ -1261,7 +1261,7 @@ end 'validateConformancesForResolved'
 //   1. `usesCount == 1` and `parenForm` is true with `withArgs.count() >= 2`:
 //      collapse the parenthesized comma list into a single `__TupleN`
 //      generic-instance. Mirrors maxon-sharp's `ParseWithTypeArgs`
-//      `expectedCount == 1` branch — `Iterator with(Source, Element)` against
+//      `expectedCount == 1` branch — `Iterator with (Source, Element)` against
 //      `Iterator uses Element` binds `Element = (Source, Element)`.
 //
 //   2. Otherwise: each bare name interns into its own `MaxonType.named(...)`
@@ -2484,8 +2484,8 @@ end 'leadingSegment'
 // every op once, then walks again replacing every MaxonType.unresolved
 // operand with the concrete type sourced from the map.
 
-export typealias ProducerTypeMap = Map with(ByteArray, MaxonType)
-export typealias SlotTypeMap = Map with(VarSlot, MaxonType)
+export typealias ProducerTypeMap = Map with (ByteArray, MaxonType)
+export typealias SlotTypeMap = Map with (VarSlot, MaxonType)
 export typealias SlotTypeMapArray = Array with SlotTypeMap
 
 // Per-function map from a value-name (the result of a `stringConst` op)
@@ -2494,8 +2494,8 @@ export typealias SlotTypeMapArray = Array with SlotTypeMap
 // (varDecl(slot, stringConstResult); varLoad → consumer(varLoadResult))
 // is captured by also threading slot-id → StringId through the same map
 // indirected via slotTypes.
-export typealias StringIdNameMap = Map with(ByteArray, StringId)
-export typealias SlotStringIdMap = Map with(VarSlot, StringId)
+export typealias StringIdNameMap = Map with (ByteArray, StringId)
+export typealias SlotStringIdMap = Map with (VarSlot, StringId)
 
 function recordResultType(producerTypes ProducerTypeMap, name ByteArray, t MaxonType)
 	if name.isEmpty() 'noName'
@@ -3528,7 +3528,7 @@ export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliase
 end 'applyInnerAliasIfNamed'
 
 // Recurse `applyInnerAliasIfNamed` into a genericInstance's arg list so
-// that paramTypes like `Iterable with(Element, ElementIterator)` — where
+// that paramTypes like `Iterable with (Element, ElementIterator)` — where
 // `ElementIterator` is itself an inner-alias — collapse all the way to
 // the underlying generic-instance form. Without this, a cast/compare
 // validator that walks the args (or a downstream substitution that
@@ -4227,7 +4227,7 @@ function deriveUnopResultType(producerTypes ProducerTypeMap, operandType MaxonTy
 	return lookupProducerType(producerTypes, name: operand)
 end 'deriveUnopResultType'
 
-typealias TuplePartialArgsMap = Map with(ByteArray, MaxonTypeArray)
+typealias TuplePartialArgsMap = Map with (ByteArray, MaxonTypeArray)
 
 // Phase 15e: track tuple-allocation field stores by collecting the value type
 // for each `_N` field via a per-function `tuplePartialArgs` side-table. The
@@ -7563,7 +7563,7 @@ end 'substituteParamTypes'
 // `propagateClosureArgTypesFromCalls` on demand so the lookup that connects
 // `methodCall(args=[...])` to the matching `functionRef`/`closureCreate`
 // producer doesn't have to re-scan the function for every argument.
-typealias NameToOpIdxMap = Map with(ByteArray, OpIndex)
+typealias NameToOpIdxMap = Map with (ByteArray, OpIndex)
 
 // J.4f.2 implementation: walk every methodCall/call/tryMethodCall/tryCall
 // op in `module`. For each closure-typed argument whose lifted-function
@@ -8122,9 +8122,9 @@ end 'validateMethodCallArgLabels'
 // always says "expected = call type, got = fallback type" regardless
 // of block-emission order.
 typealias TrySlotSet = Set with VarSlot
-typealias SlotCastCategoryMap = Map with(VarSlot, CastCategory)
-typealias SlotSourceRangeMap = Map with(VarSlot, SourceRange)
-typealias SlotMaxonTypeMap = Map with(VarSlot, MaxonType)
+typealias SlotCastCategoryMap = Map with (VarSlot, CastCategory)
+typealias SlotSourceRangeMap = Map with (VarSlot, SourceRange)
+typealias SlotMaxonTypeMap = Map with (VarSlot, MaxonType)
 typealias TryCallResultSet = Set with ByteArray
 
 // Track everything we need per try-result slot to validate the fallback

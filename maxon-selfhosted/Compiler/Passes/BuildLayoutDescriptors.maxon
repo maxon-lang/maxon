@@ -267,14 +267,14 @@ end 'maxonTypeIsConditional'
 //   - a bare `named(Element)` where `Element` is a typeParameter on the
 //     enclosing scope, or a bare reference to a generic type
 //   - a `genericInstance(...)` whose nested args are themselves parametric
-//     under the same rules (e.g. `MapIterator with(Key, Value)` where Key
+//     under the same rules (e.g. `MapIterator with (Key, Value)` where Key
 //     and Value are MapIterator's own typeParameters)
 //
 // `anyMaxonTypeIsConditional` only catches the literal-typeParameter arm
 // at the top level; it does NOT recurse into genericInstance args. Both
 // `BuildWitnessTables.gidIsConditional` and
 // `BuildLayoutDescriptors.emitDescriptorForInstance` need the deeper check
-// so a wrapping gid like `WithIterIterator with(MapIterator with(Key, Value), ...)`
+// so a wrapping gid like `WithIterIterator with (MapIterator with (Key, Value), ...)`
 // is correctly recognised as parametric.
 export function anyNamedArgIsParametric(project Project, args MaxonTypeArray) returns bool
 	for a in args 'each'
@@ -305,7 +305,7 @@ function isNamedIdParametric(project Project, id TypeNameId) returns bool
 	let name = project.typeNames.get(id)
 	if project.structTypes.contains(name) 'isStruct'
 		// Generic struct referenced bare (e.g. `named(MapIterator)`
-		// instead of `genericInstance(MapIterator with(Key,Value))`)
+		// instead of `genericInstance(MapIterator with (Key,Value))`)
 		// is still parametric — its concrete shape depends on the
 		// caller-supplied type-arg list, so per-instance emission
 		// must skip it. Non-generic struct (no `uses` clause) is a

@@ -464,7 +464,7 @@ end 'Array'
 ```maxon
 export typealias Score = int(0 to 100)
 export typealias ScoreArray = Array with Score
-export typealias ScoreMap = Map with(String, Score)
+export typealias ScoreMap = Map with (String, Score)
 ```
 
 ### Ranged type construction
@@ -683,7 +683,7 @@ arr.clear()                               // remove all
 ### Maps
 
 ```maxon
-typealias StringIntMap = Map with(String, Integer)
+typealias StringIntMap = Map with (String, Integer)
 
 var m = ["hello": 42]
 let val = try m.get("hello") otherwise 0  // ALWAYS use try
