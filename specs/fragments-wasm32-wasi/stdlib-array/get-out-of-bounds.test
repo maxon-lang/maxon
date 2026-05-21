@@ -1,0 +1,76 @@
+// Test: get-out-of-bounds
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+
+	let val = try arr.get(5) otherwise -1
+	if val == -1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %24 = mir.mov_imm 8 : i64
+    %25 = mir.call @mrt_alloc(%24)
+    %26 = mir.mov_imm 40 : i64
+    %27 = mir.call @mrt_alloc(%26)
+    %28 = mir.mov_imm 0 : i64
+    mir.store %28, %27, 0 width: qword
+    %29 = mir.mov_imm 0 : i64
+    mir.store %29, %27, 8 width: qword
+    %30 = mir.mov_imm 0 : i64
+    mir.store %30, %27, 16 width: qword
+    %31 = mir.mov_imm 8 : i64
+    mir.store %31, %27, 24 width: qword
+    %32 = mir.mov_imm 0 : i64
+    mir.store %32, %27, 32 width: qword
+    mir.store %27, %25, 0 width: qword
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.global_addr @__layout_Array_Int
+    %5 = mir.call @Array.push(%25, %3, %4)
+    %7 = mir.mov_imm 5 : i64
+    mir.br inlined_Array.get_0()
+  inlined_Array.get_0:
+    %33 = mir.load %25, 0 width: qword
+    %34, %35 = mir.try_call @stdlib.__managed_mem_get(%33, %7)
+    %36 = mir.mov_imm 0 : i64
+    %37 = mir.cmp ne, %35, %36
+    mir.cond_br %37 [then: inlined_Array.get_1(), else: inlined_Array.get_2()]
+  inlined_Array.get_1:
+    %38 = mir.mov_imm 0 : i64
+    %39 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%38, %39)
+  inlined_Array.get_2:
+    %40 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%34, %40)
+  inline_cont_main_0:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp ne, %42, %11
+    mir.cond_br %12 [then: try_0.otherwise(), else: try_0.merge(%41)]
+  try_0.otherwise:
+    %14 = mir.mov_imm 1 : i64
+    %15 = mir.neg.i64 %14
+    mir.br try_0.merge(%15)
+  try_0.merge:
+    %18 = mir.mov_imm 1 : i64
+    %19 = mir.neg.i64 %18
+    %20 = mir.cmp eq, %23, %19
+    mir.cond_br %20 [then: check_0(), else: check_0.after()]
+  check_0:
+    %21 = mir.mov_imm 0 : i64
+    mir.ret %21
+  check_0.after:
+    %22 = mir.mov_imm 1 : i64
+    mir.ret %22
+  }
+}
+---

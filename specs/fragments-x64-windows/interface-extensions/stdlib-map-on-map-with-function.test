@@ -18,7 +18,7 @@ ExitCode: 6
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=96
     x64.mov ecx, 40
     x64.call mrt_alloc
     x64.mov r12, r8
@@ -48,10 +48,10 @@ module {
     x64.mov [r12+32], r14 (8b)
     x64.mov ecx, 16
     x64.call mrt_alloc
-    x64.mov [rbp+-24], r8
-    x64.mov r8, [rbp+-24]
+    x64.mov [rbp+-32], r8
+    x64.mov r8, [rbp+-32]
     x64.mov [r8+0], r12 (8b)
-    x64.mov r8, [rbp+-24]
+    x64.mov r8, [rbp+-32]
     x64.mov [r8+8], r13 (8b)
     x64.mov ecx, 40
     x64.call mrt_alloc
@@ -65,29 +65,29 @@ module {
     x64.mov [r12+32], r14 (8b)
     x64.mov ecx, 16
     x64.call mrt_alloc
-    x64.mov [rbp+-32], r8
-    x64.mov r8, [rbp+-32]
+    x64.mov [rbp+-40], r8
+    x64.mov r8, [rbp+-40]
     x64.mov [r8+0], r12 (8b)
-    x64.mov r8, [rbp+-32]
+    x64.mov r8, [rbp+-40]
     x64.mov [r8+8], r13 (8b)
     x64.mov edx, 8
     x64.mov r12d, 3
     x64.mov rcx, r12
     x64.call stdlib.__managed_mem_create
-    x64.mov [rbp+-40], r8
-    x64.mov rcx, [rbp+-40]
+    x64.mov [rbp+-48], r8
+    x64.mov rcx, [rbp+-48]
     x64.mov rdx, r14
     x64.mov rax, r15
     x64.call stdlib.__managed_mem_set
-    x64.mov rcx, [rbp+-40]
+    x64.mov rcx, [rbp+-48]
     x64.mov rdx, r13
-    x64.mov rax, [rbp+-24]
-    x64.call stdlib.__managed_mem_set
-    x64.mov edx, 2
-    x64.mov rcx, [rbp+-40]
     x64.mov rax, [rbp+-32]
     x64.call stdlib.__managed_mem_set
-    x64.mov rcx, [rbp+-40]
+    x64.mov edx, 2
+    x64.mov rcx, [rbp+-48]
+    x64.mov rax, [rbp+-40]
+    x64.call stdlib.__managed_mem_set
+    x64.mov rcx, [rbp+-48]
     x64.mov rdx, r12
     x64.call stdlib.__managed_mem_set_length
     x64.lea rdx, [rip+stdlib.__destruct___ManagedMemory]
@@ -106,7 +106,7 @@ module {
     x64.lea rsi, [rip+__witness_String_Equatable]
     x64.lea r9, [rip+__witness_String_Hashable]
     x64.lea rax, [rip+__layout_Map_String_Int]
-    x64.mov rcx, [rbp+-40]
+    x64.mov rcx, [rbp+-48]
     x64.mov rdx, r8
     x64.call Map.init
     x64.lea rdi, [rip+__witness_String_Equatable]
@@ -131,7 +131,7 @@ module {
   inline_cont_main_0:
     x64.test rdx, rdx
     x64.je loop_0
-    x64.mov r8, r14
+    x64.mov r9, r14
     x64.jmp loop_0.exit
   inlined_ArrayIterator.advance_0:
     x64.mov rsi, [r8+0] (8b)
@@ -156,10 +156,10 @@ module {
     x64.je __phi_trampoline_9_0
   inlined_ArrayIterator.advance_1:
     x64.mov edx, 1
+    x64.mov rdi, rdx
   inline_cont_main_1:
-    x64.test rdx, rdx
+    x64.test rdi, rdi
     x64.je __phi_trampoline_12_0
-    x64.mov r8, r9
     x64.jmp loop_0.exit
   loop_0:
     x64.mov r9, [r8+0] (8b)
@@ -180,7 +180,7 @@ module {
     x64.mov [rbp-8], rdi
     x64.mov [rbp-16], r9
     x64.movzx rax, byte ptr [rax+0]
-    x64.mov r9, [rbp-8]
+    x64.mov r9, [rbp-24]
     x64.jmp inline_cont_main_2
   inlined_stdlib.__managed_mem_cursor_current_2:
     x64.cmp rax, 2
@@ -202,17 +202,19 @@ module {
     x64.add r9, rsi
     x64.jmp inlined_ArrayIterator.advance_0
   loop_0.exit:
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
+    x64.mov r8d, 4294967295
+    x64.cmp r9, r8
     x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
+    x64.mov r8, r9
     x64.epilogue
     x64.ret
   __phi_trampoline_9_0:
-    x64.mov rdx, rsi
+    x64.mov rdi, rsi
     x64.jmp inline_cont_main_1
   __phi_trampoline_12_0:
     x64.mov r14, r9

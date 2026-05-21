@@ -107,8 +107,11 @@ end 'buildBlockArgCopies'
 // Handles dependencies via topological ordering and breaks cycles
 // with xchg (x64) or 3-mov via scratch register (arm64). Each move carries
 // an isFloat tag so GPR and FP block args route to the matching emit funcs;
-// since the GPR/FP ordinal spaces overlap, mixing them in one parallel copy
-// is only safe within the same class.
+// since the GPR/FP ordinal spaces overlap, the resolver partitions moves
+// by class first and processes each independently — without that split a
+// GPR move to r2 (RDX) and an FP move to r2 (XMM2) would collide in the
+// per-ordinal scratch arrays and produce a malformed move topology that
+// trips the cycle walker.
 export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	if moves.count() == 0 'empty'
 		return
@@ -116,6 +119,29 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 
 	logTrace(LogCategory.ir, message: function() gives "copy-resolve: block {dstBlock.id} moves={moves.count()}")
 
+	var gprMoves = CopyMoveArray.create()
+	var fpMoves = CopyMoveArray.create()
+	for move in moves 'partition'
+		if move.isFloat 'fpClass'
+			fpMoves.push(move)
+		end 'fpClass' else 'gprClass'
+			gprMoves.push(move)
+		end 'gprClass'
+	end 'partition'
+
+	if gprMoves.count() > 0 'hasGpr'
+		sequentializeMovesForClass(module, moves: gprMoves, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	end 'hasGpr'
+	if fpMoves.count() > 0 'hasFp'
+		sequentializeMovesForClass(module, moves: fpMoves, dstBlock: dstBlock, state: state, regTarget: regTarget)
+	end 'hasFp'
+end 'sequentializeParallelCopy'
+
+// Resolve a parallel copy where every move uses the same register class
+// (all GPR or all FP). Each move's ordinal is a unique key in that class's
+// ordinal space, so the per-dest needsMove / moveFrom / pendingReaders
+// scratch arrays can be addressed by raw ordinal without collisions.
+function sequentializeMovesForClass(module TargetModule, moves CopyMoveArray, dstBlock IrBlock, state RegState, regTarget RegAllocTarget)
 	// Build move map: needsMove[dstOrd] = 1, moveFrom[dstOrd] = srcOrd.
 	// pendingReaders[ord] tracks how many still-pending moves read from
 	// `ord`; a destination is "blocked" iff some other pending move still
@@ -212,7 +238,7 @@ export function sequentializeParallelCopy(module TargetModule, moves CopyMoveArr
 			try needsMove.set(cur, value: 0) otherwise panic("invariant: needsMove.set OOB")
 		end 'longerCycle'
 	end 'breakCycles'
-end 'sequentializeParallelCopy'
+end 'sequentializeMovesForClass'
 
 // Dispatch a single move to GPR or FP emit based on the move's class. The
 // register-class flag rides on each CopyMove because GPR and FP share the

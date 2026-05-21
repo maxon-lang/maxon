@@ -56,6 +56,34 @@ export function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
 	return b
 end 'maxOf'
 
+// Mutating-method self-assignment helper, shared by every target's call
+// lowering. The parser desugars `arr = arr.push(...)` (and similar mutating
+// methods on void-returning callees) into a MIR call whose RHS is a
+// void-returning method: the MIR carries `%R = mir.call @void_fn(%recv, ...)`
+// where `R` has no defining op in the lowered backend because void calls
+// leave nothing in the return register. Downstream consumers still read `R`
+// as the new (mutated) receiver, so each target emits a synthetic
+// `mov virtual(R), virtual(receiver)` after the call.
+//
+// Returns the receiver value-id when an alias should be emitted. Throws
+// `VoidResultAliasNotApplicable.notApplicable` when no alias is needed,
+// either because resultId is the tailCall sentinel (0) or because the
+// call has no arguments to use as the receiver. Callers `try ... otherwise
+// return` to short-circuit, then issue their target-specific mov.
+export enum VoidResultAliasNotApplicable implements Error
+	notApplicable
+end 'VoidResultAliasNotApplicable'
+
+export function voidResultAliasReceiverId(resultId ValueId, argIds ValueIdArray) returns ValueId throws VoidResultAliasNotApplicable
+	if resultId == 0 'noResult'
+		throw VoidResultAliasNotApplicable.notApplicable
+	end 'noResult'
+	if argIds.count() == 0 'noArgs'
+		throw VoidResultAliasNotApplicable.notApplicable
+	end 'noArgs'
+	return try argIds.get(0) otherwise panic("voidResultAliasReceiverId: argIds.count() > 0 just checked but get(0) failed")
+end 'voidResultAliasReceiverId'
+
 // ============================================================
 // Jump kind determination (MIR phase, reads block ops backward)
 // ============================================================

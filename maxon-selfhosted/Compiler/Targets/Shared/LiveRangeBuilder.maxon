@@ -3,6 +3,7 @@
 
 export typealias LiveRangeArray = Array with LiveRange
 export typealias IntervalArray = Array with Interval
+export typealias CopyEdgeArray = Array with CopyEdge
 
 let LR_NO_DEF = i64.max
 
@@ -36,6 +37,24 @@ export type Interval
 	end 'create'
 end 'Interval'
 
+// CopyEdge anchors a copy site between two live ranges (partner ↔ self).
+// `blockId` is the block in which the copy executes; `copyPos` is the
+// position within that block where the move lives. For 2-address ops and
+// movRegReg the copy is at the op's own position. For block-arg parallel
+// copies the copy lives in the PREDECESSOR block at `predBlockLen - 1`
+// (the slot right before the terminator). Multiple edges are recorded
+// when a range participates in multiple distinct copy sites (e.g. a
+// block-arg dest receives one edge per predecessor).
+export type CopyEdge
+	export var partnerValueId ValueId
+	export var blockId BlockId
+	export var copyPos RegInt
+
+	export static function create(partnerValueId ValueId, blockId BlockId, copyPos RegInt) returns CopyEdge
+		return Self{partnerValueId: partnerValueId, blockId: blockId, copyPos: copyPos}
+	end 'create'
+end 'CopyEdge'
+
 export type LiveRange
 	export var valueId ValueId
 	export var defBlock BlockId
@@ -50,6 +69,14 @@ export type LiveRange
 	export var constantValue RegInt
 	export var hint RegOrdinal
 	export var copyHintValueId RegInt
+	// Per-edge copy-link sidetable. Lets the interference graph builder
+	// suppress the 1-position copy-boundary overlap only at the EXACT
+	// (block, position) where a parallel copy or 2-addr move executes.
+	// Replaces the suppression role of `copyHintValueId`, which was a
+	// single-slot last-writer-wins link and over-coalesced block-arg
+	// destinations against values still live through other predecessors.
+	// `copyHintValueId` remains for color-hint propagation only.
+	export var copyEdges CopyEdgeArray
 	// True when this range is live across a call instruction. Drives the
 	// caller-saved-vs-callee-saved decision in the coloring fallback: ranges
 	// that don't cross a call should land in caller-saved registers (no
@@ -72,16 +99,44 @@ export type LiveRange
 			constantValue: 0,
 			hint: RM_NONE,
 			copyHintValueId: -1,
+			copyEdges: CopyEdgeArray.create(),
 			crossesCall: false
 		}
 	end 'create'
 end 'LiveRange'
 
+// Record a copy edge from `range` to `partner` at (blockId, copyPos).
+// Linear-time dedup against an existing identical entry so multiple
+// callers that anchor the same edge don't bloat the list.
+export function addCopyEdge(range LiveRange, partner ValueId, blockId BlockId, copyPos RegInt)
+	if partner < 0 'invalid'
+		return
+	end 'invalid'
+	for existing in range.copyEdges 'dedup'
+		if existing.partnerValueId == partner and existing.blockId == blockId and existing.copyPos == copyPos 'match'
+			return
+		end 'match'
+	end 'dedup'
+	range.copyEdges.push(CopyEdge.create(partner, blockId: blockId, copyPos: copyPos))
+end 'addCopyEdge'
+
+// True if `range` carries a copy edge to `partner` anchored at exactly
+// (blockId, copyPos). Linear scan; per-range edge lists are small
+// (typically 1-3 entries even for multi-pred block args).
+export function hasCopyEdgeAt(range LiveRange, partner ValueId, blockId BlockId, copyPos RegInt) returns bool
+	for edge in range.copyEdges 'scan'
+		if edge.partnerValueId == partner and edge.blockId == blockId and edge.copyPos == copyPos 'match'
+			return true
+		end 'match'
+	end 'scan'
+	return false
+end 'hasCopyEdgeAt'
+
 // ============================================================
 // Public entry point
 // ============================================================
 
-export function buildLiveRanges(module TargetModule, func IrFunction, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery, reloadIds BoolArray) returns LiveRangeArray
+export function buildLiveRanges(module TargetModule, func IrFunction, cfg CfgInfo, liveness LivenessInfo, loopDepth RegIntArray, regTarget RegAllocTarget, opQuery TargetOpQuery, reloadIds BoolArray) returns LiveRangeArray
 	let maxVal = liveness.maxValueId
 
 	// Phase 1: Build definition map — defBlockId[valueId] and defPos[valueId]
@@ -152,9 +207,126 @@ export function buildLiveRanges(module TargetModule, func IrFunction, liveness L
 		vid = vid + 1
 	end 'eachValue'
 
+	// Step 6: Add a 1-position tail interval on every block-arg destination
+	// inside each of its predecessor blocks. The parallel-copy that materializes
+	// the block-arg lives at predBlockLen - 1 in the predecessor, so the
+	// destination value is "born" at that slot — without this interval, the
+	// interference graph would miss conflicts between the block-arg dest and
+	// values that die at the predecessor's terminator. Pairs with the matching
+	// suppression in isCopyBoundaryOverlap, which uses `copyEdges` to ignore
+	// the legitimate copy-boundary touch at exactly (predId, predBlockLen - 1).
+	addBlockArgEdgeIntervals(module, func: func, cfg: cfg, ranges: ranges)
+
 	logDebug(LogCategory.ir, message: function() gives "liverange: func={func.name} ranges={ranges.count()} vregs={maxVal}")
 	return ranges
 end 'buildLiveRanges'
+
+// For each block B and each blockArg in B, push a [copyPos, copyPos+1)
+// interval into the arg's LiveRange anchored to every predecessor of B.
+// copyPos is `predBlockLen - 1` — the slot just before the predecessor's
+// terminator, which is where lowerMirToTarget materializes the parallel
+// copies that bind block args. Dedup is per (blockId, startPos) on the
+// destination's intervals list; multiple predecessors with the same id
+// can't exist (CFG edge add is set-like), so a (predId, copyPos) probe is
+// sufficient.
+function addBlockArgEdgeIntervals(module TargetModule, func IrFunction, cfg CfgInfo, ranges LiveRangeArray)
+	// Build valueId -> ranges index for O(1) blockArg lookup. ranges are
+	// appended only when defBlockId[vid] >= 0, so the array is not vid-
+	// indexed; instead we materialize a sparse map keyed by valueId.
+	var maxValueId = 0
+	for range in ranges 'findMax'
+		if range.valueId >= maxValueId 'higher'
+			maxValueId = range.valueId + 1
+		end 'higher'
+	end 'findMax'
+
+	var vidToRange = RegIntArray.create()
+	var initIdx = 0
+	while initIdx < maxValueId 'init'
+		vidToRange.push(-1)
+		initIdx = initIdx + 1
+	end 'init'
+
+	var ri = 0
+	let rangeCount = ranges.count()
+	while ri < rangeCount 'index'
+		let range = try ranges.get(ri) otherwise panic("addBlockArgEdgeIntervals.index: ri < rangeCount but get({ri}) failed")
+		if range.valueId < maxValueId 'inBounds'
+			try vidToRange.set(range.valueId, value: ri) otherwise panic("invariant: vidToRange.set OOB")
+		end 'inBounds'
+		ri = ri + 1
+	end 'index'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		if block.blockArgs.count() == 0 'noArgs'
+			continue
+		end 'noArgs'
+
+		let preds = try cfg.predecessors.get(block.id) otherwise 'noPreds'
+			// Entry block (or unreachable): no predecessors, no edge copies
+			// to model. Block args of the entry block are bound to function
+			// parameters via the calling convention, not via a parallel copy.
+			continue
+		end 'noPreds'
+
+		for blockArg in block.blockArgs 'eachArg'
+			let vid = blockArg.valueId
+			if vid >= maxValueId 'outOfRange'
+				// blockArg references a value with no live range entry — can
+				// happen if the value was DCE'd from `ranges` but the block
+				// arg slot survives. Nothing to attach an interval to.
+				continue
+			end 'outOfRange'
+			let rangeIdx = try vidToRange.get(vid) otherwise panic("addBlockArgEdgeIntervals.eachArg: vid < maxValueId but vidToRange.get({vid}) failed")
+			if rangeIdx < 0 'noRange'
+				continue
+			end 'noRange'
+			var range = try ranges.get(rangeIdx) otherwise panic("addBlockArgEdgeIntervals.eachArg: rangeIdx populated from ranges scan but get({rangeIdx}) failed")
+
+			for predId in preds 'eachPred'
+				let predBlock = findBlockById(module, func: func, blockId: predId)
+				let predBlockLen = predBlock.opRefs.count() + 1
+				let copyPos = predBlockLen - 1
+
+				// Dedup: skip if an interval anchored to this predecessor at
+				// copyPos already exists. addBlockArgEdgeIntervals can be
+				// called repeatedly across spill iterations.
+				if intervalsContain(range.intervals, blockId: predId, startPos: copyPos) 'alreadyHave'
+					continue
+				end 'alreadyHave'
+
+				range.intervals.push(Interval.create(predId, startPos: copyPos, endPos: predBlockLen))
+			end 'eachPred'
+		end 'eachArg'
+	end 'eachBlock'
+end 'addBlockArgEdgeIntervals'
+
+// Linear scan over `func.blockRefs` to map a raw BlockId back to its IrBlock.
+// Block lists are small (typically <100 even in large functions) and this
+// helper is only used by addBlockArgEdgeIntervals, so we avoid carrying an
+// extra sidetable up the call chain.
+function findBlockById(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		if block.id == blockId 'match'
+			return block
+		end 'match'
+	end 'eachBlock'
+	panic("findBlockById: blockId {blockId} not found in func.blockRefs")
+end 'findBlockById'
+
+// True if `intervals` already contains an entry with the given anchor.
+// Per-range interval lists are small (one per live block); a linear scan
+// keeps the dedup honest without growing the LiveRange type.
+function intervalsContain(intervals IntervalArray, blockId BlockId, startPos RegInt) returns bool
+	for existing in intervals 'each'
+		if existing.blockId == blockId and existing.startPos == startPos 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'intervalsContain'
 
 // ============================================================
 // Call-position scanning (for crossesCall analysis)
@@ -615,7 +787,7 @@ export function insertPhysicalConstraints(module TargetModule, ranges LiveRangeA
 				// instead of routing through a scratch register first.
 				let probe = opQuery.decodeReturnMovProbe(module, packed: packed)
 				if probe.found and probe.destOrd != RM_NONE and probe.srcId >= 0 'isPhysToVirtMov'
-					linkClobberToVirtSrc(ranges, firstPseudoId: firstPseudoId, lastPseudoId: nextPseudoId, physOrd: probe.destOrd, virtSrcId: probe.srcId)
+					linkClobberToVirtSrc(ranges, firstPseudoId: firstPseudoId, lastPseudoId: nextPseudoId, physOrd: probe.destOrd, virtSrcId: probe.srcId, blockId: blockId, opPos: opIdx + 1)
 				end 'isPhysToVirtMov'
 			end 'hasClobbers'
 
@@ -723,10 +895,14 @@ end 'emitClobberRanges'
 // interference graph that the 1-position boundary overlap between the
 // vreg's death and the clobber's birth is a copy artifact, not a real
 // conflict — symmetrical to how the existing copy-hint flow handles
-// vreg-to-vreg movRegReg.
-function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastPseudoId RegInt, physOrd RegOrdinal, virtSrcId RegInt)
+// vreg-to-vreg movRegReg. The (blockId, opPos) pair anchors a CopyEdge
+// so the edge-aware suppression check in isCopyBoundaryOverlap can match
+// this pair exactly at the overlap position.
+function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastPseudoId RegInt, physOrd RegOrdinal, virtSrcId RegInt, blockId BlockId, opPos RegInt)
 	let total = ranges.count()
 	var i = total - 1
+	var clobberValueId = -1
+
 	while i >= 0 'scanBack'
 		var range = try ranges.get(i) otherwise break
 		if range.valueId < firstPseudoId 'beforeWindow'
@@ -734,10 +910,30 @@ function linkClobberToVirtSrc(ranges LiveRangeArray, firstPseudoId RegInt, lastP
 		end 'beforeWindow'
 		if range.valueId < lastPseudoId and range.fixedReg == physOrd 'isTarget'
 			range.copyHintValueId = virtSrcId
-			return
+			addCopyEdge(range, partner: virtSrcId, blockId: blockId, copyPos: opPos)
+			clobberValueId = range.valueId
+			break
 		end 'isTarget'
 		i = i - 1
 	end 'scanBack'
+
+	// Push the reverse edge on the virtual source range too. vidToRangeIdx
+	// isn't built yet at this phase (insertPhysicalConstraints runs before
+	// coalesceRanges), so locate the source range by linear scan. Either
+	// direction matching is enough for isCopyBoundaryOverlap, but recording
+	// both keeps the model symmetric with setGprCopyHintEdge.
+	if clobberValueId >= 0 'foundClobber'
+		var j = 0
+		let rangeCount = ranges.count()
+		while j < rangeCount 'findSrc'
+			var srcRange = try ranges.get(j) otherwise break
+			if srcRange.valueId == virtSrcId 'isVirtSrc'
+				addCopyEdge(srcRange, partner: clobberValueId, blockId: blockId, copyPos: opPos)
+				break
+			end 'isVirtSrc'
+			j = j + 1
+		end 'findSrc'
+	end 'foundClobber'
 end 'linkClobberToVirtSrc'
 
 // Emit one pseudo LiveRange per set bit in a register mask.

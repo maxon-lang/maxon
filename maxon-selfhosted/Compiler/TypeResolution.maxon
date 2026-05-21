@@ -6853,6 +6853,15 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// doesn't either silently skip the type-check (`coerceArgToParam`'s
 	// unresolved-passthrough) or trip a generic-instance panic later.
 	validateNoUnresolvedAfterTypeResolution(project, module: module, filePath: filePath)
+
+	// Resolver-contract tripwire: every `call` / `methodCall` / `tryCall` /
+	// `tryMethodCall` op must either have a `resolvedCallees` entry (the
+	// normal path) or dispatch through an intentionally-dynamic shape
+	// (interface receiver → fat-pointer dispatch; typeParameter receiver →
+	// witness dispatch). A miss here means the resolver or the
+	// propagation chain left a hole — surface it now with a source range
+	// instead of letting `lowerMethodCall` / `lowerCall` panic later.
+	validateAllCallsResolved(project, module: module, producerTypesPerFunc: producerTypesPerFunc, filePath: filePath)
 end 'runTypeResolution'
 
 // Walk every function's `convert` ops, looking for compile-time literal
@@ -6982,6 +6991,159 @@ function validateNoUnresolvedAfterTypeResolution(project Project, module MaxonMo
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateNoUnresolvedAfterTypeResolution'
+
+// Resolver-contract tripwire (Phase 6 Step 12). Walks every function's
+// call-shaped ops and confirms either:
+//   * `project.resolvedCallees` has an entry for the op, OR
+//   * the op is an intentionally-dynamic dispatch — methodCall/tryMethodCall
+//     whose receiver MaxonType is an interface (fat-pointer dispatch) or
+//     contains a typeParameter (witness dispatch); call/tryCall on a math
+//     intrinsic or `__mm_alloc_count`, which `shouldSkipCallSite` removes
+//     from the normal resolver path.
+//
+// A miss here means the resolver or `propagateClosureArgTypesFromCalls` left
+// a hole that would otherwise reach `lowerMethodCall` / `lowerCall` and panic
+// with an `invariant violated` message at a downstream stage. Reporting at
+// TypeResolution gives a source range anchored at the original call site so
+// the diagnostic points at user code, not at the lowering pass.
+//
+// We deliberately under-report when the receiver-type lookup is ambiguous:
+// any `MaxonType.unresolved` receiver in `producerTypes` is treated as
+// "not enough information to assert a regression" and skipped. The cost of
+// under-reporting is a missed catch on a future regression; the cost of
+// over-reporting is a hard block on legitimate code. The latter is worse.
+function validateAllCallsResolved(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, filePath FilePath)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("validateAllCallsResolved: funcIdx OOB")
+		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("validateAllCallsResolved: producerTypesPerFunc.get({funcIdx}) failed")
+		let readerPath = readerPathOrFallback(func, fallback: filePath)
+		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateAllCallsResolved: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateAllCallsResolved: opIdx OOB")
+				if not isCallShapedOpName(op.name) 'notCall'
+					continue
+				end 'notCall'
+				if project.resolvedCallees.contains(opIdx) 'resolved'
+					continue
+				end 'resolved'
+				if callOpHasIntentionalDynamicDispatch(project, op: op, producerTypes: producerTypes, enclosingType: enclosingType) 'dynamic'
+					continue
+				end 'dynamic'
+				let calleeName = callOpDisplayName(project, opIdx: opIdx, op: op)
+				let opRange = callOpRange(op)
+				reportCompileError(project, code: ErrorCode.irUnresolvedCall, message: "internal: call op left unresolved by TypeResolution at opIdx={opIdx} (op='{op.name}', callee='{calleeName}') — resolver/propagation contract violated", line: opRange.line, column: opRange.column, filePath: readerPath)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateAllCallsResolved'
+
+// True iff `name` is one of the four call-shaped op names. Centralised so
+// the validator above and `validateNoUnresolvedAfterTypeResolution` don't
+// drift on future op-name additions.
+function isCallShapedOpName(name String) returns bool
+	return name == "call" or name == "methodCall" or name == "tryCall" or name == "tryMethodCall"
+end 'isCallShapedOpName'
+
+// True when the op's dispatch shape is intentionally dynamic, so the
+// resolver legitimately left no `resolvedCallees` entry:
+//   * methodCall / tryMethodCall whose receiver MaxonType is interface or
+//     references a typeParameter (directly or as a genericInstance arg);
+//   * methodCall / tryMethodCall whose receiver MaxonType is unresolved
+//     (under-report: we can't prove this is a bug without more context);
+//   * call / tryCall whose callee bytes match `shouldSkipCallSite`
+//     (math intrinsics, `__mm_alloc_count`).
+function callOpHasIntentionalDynamicDispatch(project Project, op MaxonOp, producerTypes ProducerTypeMap, enclosingType String) returns bool
+	if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodShape'
+		let receiverName = extractMethodCallReceiverName(op)
+		let rawReceiverType = lookupProducerType(producerTypes, name: receiverName)
+		// Normalize through the same chase the resolver runs so a typealias
+		// like `ElementIterable = Iterable with (Element, ElementIterator)`
+		// unwraps to its genericInstance form — without this the validator
+		// sees `named("ElementIterable")` and misses the interface dispatch.
+		let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingType)
+		return maxonTypeIsDynamicDispatch(project, t: receiverType)
+	end 'isMethodShape'
+	if op.name == "call" or op.name == "tryCall" 'isCallShape'
+		let bareCallee = extractCallCalleeName(op)
+		return shouldSkipCallSite(bareCallee)
+	end 'isCallShape'
+	return false
+end 'callOpHasIntentionalDynamicDispatch'
+
+// Receiver value-name extractor for methodCall / tryMethodCall. The caller
+// filters by op name, so a non-method shape here is a compiler bug.
+function extractMethodCallReceiverName(op MaxonOp) returns ByteArray
+	return match op 'pick'
+		methodCall(_, receiver, _, _, _, _, _, _) gives receiver
+		tryMethodCall(_, receiver, _, _, _, _, _, _, _) gives receiver
+		default panic("extractMethodCallReceiverName: caller did not filter by methodCall/tryMethodCall (op='{op.name}')")
+	end 'pick'
+end 'extractMethodCallReceiverName'
+
+// Callee bare-name extractor for call / tryCall. The caller filters by op
+// name, so a non-call shape here is a compiler bug.
+function extractCallCalleeName(op MaxonOp) returns String
+	return match op 'pick'
+		call(_, callee, _, _, _, _, _, _) gives String.from(callee)
+		tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
+		default panic("extractCallCalleeName: caller did not filter by call/tryCall (op='{op.name}')")
+	end 'pick'
+end 'extractCallCalleeName'
+
+// True when `t` indicates an intentionally-dynamic methodCall dispatch:
+//   * `interface(_)` — fat-pointer dispatch in lowering;
+//   * `typeParameter(_)` — witness dispatch in lowering;
+//   * `genericInstance(...)` whose args transitively reference a
+//     typeParameter — the body is still polymorphic at this point and the
+//     resolver legitimately skips it (mono will fill in later);
+//   * `unresolved` — under-report. We can't distinguish "resolver gap" from
+//     "no producer recorded for synthetic name" cheaply at this stage.
+function maxonTypeIsDynamicDispatch(project Project, t MaxonType) returns bool
+	return match t 'pick'
+		interface gives true
+		typeParameter gives true
+		genericInstance(gid) gives genericInstanceArgsContainTypeParameter(project, gid: gid)
+		unresolved gives true
+		boolean to string gives false
+		function gives false
+		named gives false
+		constInt gives false
+	end 'pick'
+end 'maxonTypeIsDynamicDispatch'
+
+// True when any arg of the genericInstance contains a typeParameter (e.g.
+// `Array with Element` where `Element` is the enclosing type's parameter).
+// Walks one level deep — generic args can themselves be generic, but in
+// practice methodCall receivers only need shallow detection because the
+// monomorphizer collapses fully-concrete instantiations before this guard
+// runs.
+function genericInstanceArgsContainTypeParameter(project Project, gid GenericInstanceId) returns bool
+	let (_, args) = project.genericInstances.get(gid)
+	for a in args 'each'
+		if maxonTypeContainsTypeParameter(project, t: a) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'genericInstanceArgsContainTypeParameter'
+
+// Recursive walk: `t` is or contains a typeParameter. Used by the
+// receiver-dispatch guard so a `Foo with T` receiver type is recognised as
+// witness-dispatched without flagging the call site.
+function maxonTypeContainsTypeParameter(project Project, t MaxonType) returns bool
+	return match t 'pick'
+		typeParameter gives true
+		genericInstance(gid) gives genericInstanceArgsContainTypeParameter(project, gid: gid)
+		boolean to string gives false
+		function gives false
+		named gives false
+		interface gives false
+		unresolved gives false
+		constInt gives false
+	end 'pick'
+end 'maxonTypeContainsTypeParameter'
 
 // Returns the callee's qualified name (preferring the resolved entry from
 // TypeResolution; falling back to the parser-stamped bytes when none was
@@ -7289,16 +7451,27 @@ function resolveAllCalls(project Project, module MaxonModule, producerTypesPerFu
 		end 'onDemand'
 		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("resolveAllCalls: producerTypesPerFunc.get({funcIdx}) failed after on-demand build")
 		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCalls: blockRef OOB")
-			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("resolveAllCalls: opIdx OOB")
-				resolveOneCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType, funcName: func.name)
-			end 'eachOp'
-		end 'eachBlock'
+		resolveAllCallsForFunc(project, module: module, func: func, producerTypes: producerTypes, enclosingType: enclosingType)
 		funcIdx = funcIdx + 1
 	end 'eachFunc'
 end 'resolveAllCalls'
+
+// Walk every op in `func` and route it through `resolveOneCallOp`. Lifted
+// out of `resolveAllCalls` so `propagateClosureArgTypesFromCalls` can
+// re-resolve calls in a function whose producer-type map was rebuilt
+// after closure-arg type propagation refined receiver types — without
+// re-resolving, a methodCall whose receiver was `unresolved` at
+// resolve-time but is now concrete leaves `resolvedCallees[opIdx]` unset
+// and trips the lowering invariant at `lowerMethodCall`.
+function resolveAllCallsForFunc(project Project, module MaxonModule, func IrFunction, producerTypes ProducerTypeMap, enclosingType String)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("resolveAllCallsForFunc: blockRef OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("resolveAllCallsForFunc: opIdx OOB")
+			resolveOneCallOp(project, module: module, op: op, opIdx: opIdx, producerTypes: producerTypes, currentNamespace: func.namespace, readerFilePath: func.sourceFilePath, enclosingTypeName: enclosingType, funcName: func.name)
+		end 'eachOp'
+	end 'eachBlock'
+end 'resolveAllCallsForFunc'
 
 // Per-op dispatcher: routes `call` / `methodCall` to its resolver and
 // passes other ops through. Centralising here keeps the per-function
@@ -7350,6 +7523,14 @@ end 'resolveOneCallOp'
 // and inner-aliases of the base do still resolve through
 // `applyInnerAliasIfNamed`.
 function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callContext CallContext, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, result ByteArray, producerTypes ProducerTypeMap, currentNamespace String, readerFilePath FilePath, enclosingTypeName String, funcName String, range SourceRange)
+	// Idempotency guard for the post-propagation re-resolve pass; see the
+	// matching block in `resolveMethodCallSite`. `resolveCallSite` always
+	// inserts to `resolvedCallees` before returning (every reachable path
+	// hits the insert), so this guard is solely a duplicate-work +
+	// duplicate-diagnostic shield on the second pass.
+	if project.resolvedCallees.contains(opIdx) 'alreadyResolved'
+		return
+	end 'alreadyResolved'
 	let bareCallee = String.from(callee)
 	if shouldSkipCallSite(bareCallee) 'skip'
 		return
@@ -7541,6 +7722,17 @@ end 'renderSignatureParams'
 // interface-dispatch site that lowering will route through its stub
 // emitter, so we skip both the resolved-name and paramTypes inserts.
 function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpIndex, receiver ByteArray, methodName ByteArray, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, producerTypes ProducerTypeMap, enclosingTypeName String, readerFilePath FilePath, funcName String, range SourceRange)
+	// Idempotency guard. `propagateClosureArgTypesFromCalls` re-runs the
+	// call walker for every function after refining producer types, so any
+	// op the first pass already wrote to `resolvedCallees` (including
+	// error-emitting early-return paths that record a sentinel below)
+	// would otherwise re-emit duplicate diagnostics. The silent-miss path
+	// at the receiver-name check does NOT insert, which is precisely how a
+	// methodCall whose receiver became concrete only post-propagation
+	// re-enters this resolver on the second pass and resolves cleanly.
+	if project.resolvedCallees.contains(opIdx) 'alreadyResolved'
+		return
+	end 'alreadyResolved'
 	let rawReceiverType = retypeCharByteReceiver(project, receiver: receiver, receiverType: lookupProducerType(producerTypes, name: receiver), funcName: funcName)
 	let receiverType = normalizeReceiverInContext(project, t: rawReceiverType, enclosingType: enclosingTypeName)
 	// Phase 11.4 / Phase 7: primitive receiver (`int.toString()`,
@@ -7597,6 +7789,13 @@ function resolveMethodCallSite(project Project, module MaxonModule, opIdx OpInde
 	// existing fat-pointer dispatch handles those today).
 	if not unresolvedExtensionWhereClausesSatisfiedForCallee(project, callee: resolved, receiverType: receiverType) 'whereFailed'
 		reportConditionalExtensionUnsatisfied(project, callee: resolved, receiverType: receiverType, methodName: bareMethodName, range: range, filePath: readerFilePath)
+		// Insert a sentinel so the second-pass re-resolve (from
+		// `propagateClosureArgTypesFromCalls`) sees this site as already
+		// attempted and skips it — otherwise the diagnostic above would
+		// fire twice. The value is the unresolved callee (it's not used
+		// downstream because lowering will not reach a code-emit path for
+		// this op given the reported error).
+		try project.resolvedCallees.insert(opIdx, value: resolved) otherwise ignore
 		return
 	end 'whereFailed'
 	// J.4b: per-receiver monomorphization for user-declared interface
@@ -7809,6 +8008,45 @@ function propagateClosureArgTypesFromCalls(project Project, module MaxonModule, 
 			end 'haveResolved'
 		end 'resolveRet'
 	end 'rebuildLoop'
+
+	// Refresh producer types and re-resolve calls for EVERY function.
+	// Two stale-producer sources sit between the initial `resolveAllCalls`
+	// pass and lowering:
+	//   1. The lifted-body rebuild above refines closure-arg slot types.
+	//   2. `backfillTopLevelVarSlotTypes` (called pre-`resolveAllCalls`)
+	//      mutates `globalLoad` op slotTypes inline without refreshing the
+	//      per-function producer-type maps that `buildProducerTypes` had
+	//      already stamped from the pre-backfill values.
+	// Either source can leave a methodCall whose receiver was `unresolved`
+	// at `resolveAllCalls` time but is concrete at lowering time —
+	// `resolveMethodCallSite`'s silent-miss path (early-return when the
+	// receiver isn't a struct/primitive yet) would skip the
+	// `resolvedCallees` insert, and `lowerMethodCall`'s invariant tripwire
+	// would then panic. Re-recording producers and re-running the call
+	// walker is idempotent (`resolveOneCallOp` overwrites entries) and
+	// covers both cases without having to track which functions were
+	// touched by which refinement pass.
+	for funcIdx in 0 upto module.functions.count() 'reresolveLoop'
+		let func = try module.functions.get(funcIdx) otherwise panic("propagateClosureArgTypesFromCalls: reresolve funcIdx OOB")
+		var freshProducers = ProducerTypeMap.create()
+		var freshSlots = SlotTypeMap.create()
+		recordFuncOpResults(project, module: module, func: func, producerTypes: freshProducers, slotTypes: freshSlots)
+		// `resolveAllCalls`'s on-demand block only pushes onto
+		// `producerTypesPerFunc` for newly-appended monomorphized clones
+		// — `slotTypesPerFunc` lags behind. Push fresh entries when the
+		// per-func arrays haven't caught up to the current function index,
+		// then set them to the freshly-recorded maps.
+		while producerTypesPerFunc.count() <= funcIdx 'padProducers'
+			producerTypesPerFunc.push(ProducerTypeMap.create())
+		end 'padProducers'
+		while slotTypesPerFunc.count() <= funcIdx 'padSlots'
+			slotTypesPerFunc.push(SlotTypeMap.create())
+		end 'padSlots'
+		try producerTypesPerFunc.set(funcIdx, value: freshProducers) otherwise panic("propagateClosureArgTypesFromCalls: reresolve producerTypesPerFunc.set OOB after pad")
+		try slotTypesPerFunc.set(funcIdx, value: freshSlots) otherwise panic("propagateClosureArgTypesFromCalls: reresolve slotTypesPerFunc.set OOB after pad")
+		let enclosingType = try enclosingTypeNameForCallee(project, callee: func.name) otherwise ""
+		resolveAllCallsForFunc(project, module: module, func: func, producerTypes: freshProducers, enclosingType: enclosingType)
+	end 'reresolveLoop'
 
 	// After the lifted return types are concrete, walk closureCreate /
 	// functionRef ops one more time so any FunctionTypeRegistry entry

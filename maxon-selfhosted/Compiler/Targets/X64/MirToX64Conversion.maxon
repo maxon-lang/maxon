@@ -1270,7 +1270,7 @@ type X64FunctionLowering
 
 		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
-			void then break 'capture'
+			void then emitVoidResultAliasIfNeeded(resultId: resultId, argIds: argIds, dstBlock: dstBlock)
 			value(inner) then emitCallResultCapture(resultId: resultId, dstBlock: dstBlock, resultType: inner)
 		end 'capture'
 
@@ -1278,6 +1278,16 @@ type X64FunctionLowering
 			appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(errorFlagId), srcReg: physReg(X64Register.rdx)))
 		end 'errFlag'
 	end 'emitDirectCall'
+
+	// Mutating-method self-assignment (`arr = arr.push(...)`): X64 emit
+	// step for the shared decision in voidResultAliasReceiverId. Without
+	// this, the SSA backend hit `colorLookupGpr: virtual GPR v{N} has no
+	// coloring assignment` because resultId had no defining op anywhere
+	// in the lowered code.
+	function emitVoidResultAliasIfNeeded(resultId ValueId, argIds ValueIdArray, dstBlock IrBlock)
+		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds) otherwise return
+		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(receiverId)))
+	end 'emitVoidResultAliasIfNeeded'
 
 	function lowerIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock IrBlock)
 		// Move args to calling convention registers

@@ -7,11 +7,11 @@
 #if os(Windows)
 	export typealias ExitCode = int(0 to u32.max)
 #else
-	#if os(Wasi)
-		export typealias ExitCode = int(0 to 125)
-	#else
-		export typealias ExitCode = int(0 to 255)
-	#endif
+	// POSIX-style byte-sized exit codes on every non-Windows target
+	// (Linux, macOS, WASI). WASI's `proc_exit` accepts a u32 and
+	// wasmtime passes it through, but the POSIX 0..255 convention is
+	// what portable programs target.
+	export typealias ExitCode = int(0 to 255)
 #endif
 
 /// Errors raised by current-process introspection APIs (e.g. `Process.executablePath`).

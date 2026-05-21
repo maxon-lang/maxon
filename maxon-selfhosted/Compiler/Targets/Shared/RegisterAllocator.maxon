@@ -700,7 +700,7 @@ type FunctionRegAllocator
 	// Run once initially and again after every spill iteration.
 	function runLivenessAndRanges()
 		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
-		ranges = buildLiveRanges(module, func: func, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds)
+		ranges = buildLiveRanges(module, func: func, cfg: cfg, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds)
 		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
 		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, errorFlagOrd: state.desc.errorFlagOrd, opQuery: opQuery)
 	end 'runLivenessAndRanges'
@@ -766,7 +766,7 @@ type FunctionRegAllocator
 		self.runSpillColorLoop()
 
 		// Phase 6: Apply coloring (virtual -> physical)
-		applyColoring(module, func: func, coloring: coloring, regTarget: regTarget)
+		applyColoring(module, func: func, coloring: coloring, ranges: ranges, regTarget: regTarget)
 
 		// Phase 7: Destroy SSA (parallel copies at CFG edges)
 		destroySSA(module, func: func, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)

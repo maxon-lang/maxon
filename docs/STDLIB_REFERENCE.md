@@ -771,7 +771,7 @@ end 'postData'
 
 `Process` exposes introspection of the currently-running process. For launching child processes, see [Subprocess](#subprocess); for monotonic time, see [Clock](#clock).
 
-**Exit codes:** `Process.ExitCode` is a platform-narrowed alias that ranges over `0 .. u32.max` on Windows, `0 .. 255` on Unix, and `0 .. 125` on WASI. Use it as the return type of `main`.
+**Exit codes:** `Process.ExitCode` is a platform-narrowed alias that ranges over `0 .. u32.max` on Windows and `0 .. 255` on every non-Windows target (Linux, macOS, WASI), matching the POSIX byte-sized exit-code convention that portable programs target. Use it as the return type of `main`.
 
 ```maxon
 function main() returns ExitCode

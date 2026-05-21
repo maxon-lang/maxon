@@ -30,7 +30,12 @@ export interface TargetOpQuery
 	// --- Return mov probe (SSAColoring) ---
 	function decodeReturnMovProbe(module TargetModule, packed OpIndex) returns ReturnMovProbe
 	// --- Copy hints (SSAColoring) ---
-	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	// `blockId` is the enclosing block; `opPos` is the 1-indexed position of
+	// `packed` within that block, matching the convention used by
+	// `scanDefinitions` and the live-range interval space (terminator lives at
+	// `block.opRefs.count() + 1`). Step 3 will use this to anchor per-edge
+	// CopyEdge entries; Step 2 only widens the signature.
+	function extractCopyHints(module TargetModule, packed OpIndex, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	// --- Conditional branch (RegisterAllocator) ---
 	function terminatorIsConditionalBranch(module TargetModule, packed OpIndex) returns bool
 end 'TargetOpQuery'

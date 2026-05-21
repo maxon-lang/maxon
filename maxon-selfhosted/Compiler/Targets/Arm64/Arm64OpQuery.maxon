@@ -108,11 +108,11 @@ export type Arm64OpQuery implements TargetOpQuery
 
 	// --- Copy hints ---
 
-	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	function extractCopyHints(module TargetModule, packed OpIndex, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 		let a64Op = try module.arm64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.arm64Ops")
 		match a64Op 'check'
-			movRegReg(destReg, srcReg) then setGprCopyHint(destReg: extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-			fmovRegReg(destFp, srcFp, _) then setFpCopyHint(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			movRegReg(destReg, srcReg) then setGprCopyHintEdge(destReg: extractArm64VRegId(destReg), srcReg: extractArm64VRegId(srcReg), blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			fmovRegReg(destFp, srcFp, _) then setFpCopyHintEdge(destReg: extractArm64FpVRegId(destFp), srcReg: extractArm64FpVRegId(srcFp), blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			prologue to memcpyOp then break 'check'
 			spillToStack to strToSpOffset then break 'check'
 			spillFpToStack to atomicXaddMem then break 'check'

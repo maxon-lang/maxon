@@ -788,7 +788,7 @@ export type Arm64Backend implements TargetBackend
 
 		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
-			void then break 'capture'
+			void then emitArm64VoidResultAliasIfNeeded(resultId: resultId, argIds: argIds, dstBlock: dstBlock)
 			value(inner) then emitArm64CallResultCapture(resultId, dstBlock: dstBlock, resultType: inner)
 		end 'capture'
 
@@ -796,6 +796,15 @@ export type Arm64Backend implements TargetBackend
 			appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(errorFlagId), src: arm64PhysReg(Arm64Register.x1)))
 		end 'errFlag'
 	end 'emitArm64DirectCall'
+
+	// Mutating-method self-assignment (`arr = arr.push(...)`): Arm64 emit
+	// step for the shared decision in voidResultAliasReceiverId — mirrors
+	// the X64 path. Without this, the SSA backend would fail to color the
+	// resultId vreg because no op in the lowered code defines it.
+	function emitArm64VoidResultAliasIfNeeded(resultId ValueId, argIds ValueIdArray, dstBlock IrBlock)
+		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds) otherwise return
+		appendArm64Op(targetModule, block: dstBlock, op: Arm64Op.movRegReg(Arm64VReg.virtual(resultId), src: Arm64VReg.virtual(receiverId)))
+	end 'emitArm64VoidResultAliasIfNeeded'
 
 	function lowerIndirectCallArm64(resultId ValueId, calleeId ValueId, argIds ValueIdArray, dstBlock IrBlock)
 		// Move args to calling convention registers

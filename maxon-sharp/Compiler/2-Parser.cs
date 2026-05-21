@@ -178,6 +178,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
   private readonly HashSet<string> _locallyDefinedTypes = [];
   private string? _currentTypeName;
+  // SSA result of the `self` MaxonStructParamOp for the currently-parsing instance
+  // method. Used by InvalidateCachedSelfFields() to re-emit MaxonFieldAccessOps
+  // after function calls that may have mutated self-field aliases. Null when
+  // parsing top-level / non-instance / non-struct-self functions.
+  private MaxonValue? _currentSelfParamResult;
+  // Self-field aliases whose cached SSA value is potentially stale (last touched
+  // by a function call that may have written to the field via the heap). The
+  // next read in the current block emits a fresh MaxonFieldAccessOp and clears
+  // the entry. Reset on function-body entry / exit alongside
+  // _currentSelfParamResult.
+  private readonly HashSet<string> _staleSelfFields = [];
 
   private readonly List<CompileError> _errors = [];
   private const int MaxErrorsPerFile = 20;
@@ -5760,6 +5771,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       MaxonValueKind.Enum,
       enumType.Name);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
     return new ExprResult.Direct(callOp.Result!);
   }
 
@@ -5875,6 +5887,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       MaxonValueKind.Enum,
       enumType.Name);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
     return new ExprResult.Direct(callOp.Result!);
   }
 
@@ -6040,6 +6053,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
         _currentBlock!.AddOp(selfParamOp);
         _variables.Declare("self", MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, OwnershipFlags.IsParam, structTypeName: typeName);
+        // Remember the self SSA so InvalidateCachedSelfFields() can re-emit
+        // field accesses after every function call this body emits.
+        _currentSelfParamResult = selfParamOp.Result;
 
         // Register all fields of 'self' as directly accessible variables
         foreach (var field in structType.Fields) {
@@ -6266,6 +6282,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     _currentFunction = null;
     _currentBlock = null;
+    _currentSelfParamResult = null;
+    _staleSelfFields.Clear();
   }
 
   /// Runs forward dataflow over the current factory function's CFG to prove
@@ -6381,6 +6399,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     func.Body.Blocks.Clear();
     _currentFunction = null;
     _currentBlock = null;
+    _currentSelfParamResult = null;
+    _staleSelfFields.Clear();
     _variables.Reset();
     _referencedVars.Clear();
     _paramLocations.Clear();
@@ -7921,6 +7941,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
       var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName);
       _currentBlock!.AddOp(tryAwaitOp);
+      InvalidateCachedSelfFields();
       _lastExprCallOp = null;
 
       tryInfo = new TryResultInfo(tryAwaitOp.ErrorFlag, tryAwaitOp.Result, tryAwaitOp.ResultKind, tryAwaitOp.ResultStructTypeName);
@@ -8870,9 +8891,15 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (varInfo.PayloadBinding is { } pb) {
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
       }
+      // Preserve IsSelfField so InvalidateCachedSelfFields() still recognizes
+      // this entry as a self-field alias on the next post-call refresh.
       _variables[name] = fnType != null
-        ? new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, FnType: fnType)
-        : new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, varInfo.StructTypeName, PayloadBinding: varInfo.PayloadBinding);
+        ? new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, FnType: fnType, IsSelfField: varInfo.IsSelfField)
+        : new VarInfo(name, varInfo.Kind, true, newVal, _currentBlock!, varInfo.Flags, varInfo.StructTypeName, IsSelfField: varInfo.IsSelfField, PayloadBinding: varInfo.PayloadBinding);
+      // The fresh assignment is the post-mutation value; clear any stale marker
+      // left by an earlier call so a same-block read uses this value, not a
+      // redundant heap reload of what we just stored.
+      if (varInfo.IsSelfField) _staleSelfFields.Remove(name);
     }
   }
 
@@ -10401,6 +10428,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
     var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
     return new ExprResult.Direct(callOp.Result ?? selfVal);
   }
 
@@ -10434,6 +10462,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, methodToken);
     var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
   }
 
   private void ParseIf() {
@@ -11129,6 +11158,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Call try createIterator() — throws IterationError.exhausted on empty collections.
       var createIterTryOp = new MaxonTryCallOp(createIteratorMethodName, [iterableValue], MaxonValueKind.Struct, iteratorTypeName);
       _currentBlock!.AddOp(createIterTryOp);
+      InvalidateCachedSelfFields();
       createErrorFlag = createIterTryOp.ErrorFlag;
       _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, createIterTryOp.Result!, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
       _variables.Declare(iterVarName, MaxonValueKind.Struct, true, createIterTryOp.Result!, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: iteratorTypeName);
@@ -14628,6 +14658,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
           var indirectCallOp = new MaxonIndirectCallOp(calleeValue, fnType, indirectArgs, resultKind, resultStructTypeName);
           _currentBlock!.AddOp(indirectCallOp);
+          InvalidateCachedSelfFields();
           if (indirectCallOp.Result != null)
             return new ExprResult.Direct(indirectCallOp.Result);
           if (_inTryContext)
@@ -15137,6 +15168,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           var (resultKind, resultStructTypeName) = ResolveCallResultType(toStringFunc.ReturnType, callArgs, toStringFunc);
           var callOp = new MaxonCallOp(toStringFunc.Name, callArgs, resultKind, resultStructTypeName);
           _currentBlock!.AddOp(callOp);
+          InvalidateCachedSelfFields();
 
           var tempName = $"__interp_tostr_{callOp.Result!.Id}";
           var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind ?? MaxonValueKind.Struct);
@@ -15366,6 +15398,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       [keysManagedStruct.Result, valuesManagedStruct.Result],
       MaxonValueKind.Struct, concreteMapTypeName);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
 
     return new ExprResult.Direct(callOp.Result!);
   }
@@ -16287,6 +16320,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Create the call to init using the resolved function name (may be mangled)
     var callOp = new MaxonCallOp(initFunc.Name, [initArg], resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
 
     if (callOp.Result == null) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -16376,6 +16410,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var callOp = new MaxonCallOp(initFunc.Name, [literalValue], MaxonValueKind.Struct, typeName);
     _currentBlock!.AddOp(callOp);
+    InvalidateCachedSelfFields();
 
     if (callOp.Result == null) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -16431,30 +16466,36 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (v.Info.IsCaptured && _closureCaptures != null) {
           return EmitClosureCapture(v.VarName, v.Info);
         }
+        // Self-field aliases whose cache was marked stale by a preceding function
+        // call (see InvalidateCachedSelfFields) must re-emit a fresh field-access
+        // op at THIS read site so the loaded value reflects the post-call heap
+        // contents. The refreshed VarInfo replaces v.Info for the remainder of
+        // this read path so the same-block check below sees the new SSA value.
+        var info = RefreshStaleSelfFieldIfNeeded(v.VarName, v.Info);
         // Struct/enum variables always need a fresh var_ref op so each reference
         // gets a unique SSA value ID (prevents aliasing in structVarNames when
         // multiple variables share the same underlying value).
-        if (v.Info.Kind == MaxonValueKind.Struct) {
-          var structRefOp = new MaxonStructVarRefOp(v.VarName, v.Info.StructTypeName!);
+        if (info.Kind == MaxonValueKind.Struct) {
+          var structRefOp = new MaxonStructVarRefOp(v.VarName, info.StructTypeName!);
           _currentBlock!.AddOp(structRefOp);
           return structRefOp.Result;
         }
-        if (v.Info.Kind == MaxonValueKind.Enum) {
-          var enumType = (IrEnumType)_typeRegistry[v.Info.StructTypeName!];
+        if (info.Kind == MaxonValueKind.Enum) {
+          var enumType = (IrEnumType)_typeRegistry[info.StructTypeName!];
           var backingKind = GetEnumBackingKind(enumType);
-          var enumRefOp = new MaxonEnumVarRefOp(v.VarName, v.Info.StructTypeName!, backingKind);
+          var enumRefOp = new MaxonEnumVarRefOp(v.VarName, info.StructTypeName!, backingKind);
           _currentBlock!.AddOp(enumRefOp);
           return enumRefOp.Result;
         }
-        if (v.Info.DefinedInBlock == _currentBlock) {
-          return v.Info.Value;
+        if (info.DefinedInBlock == _currentBlock) {
+          return info.Value;
         }
         // Cross-block reference for non-struct/enum types
-        var refOp = new MaxonVarRefOp(v.VarName, v.Info.Kind);
+        var refOp = new MaxonVarRefOp(v.VarName, info.Kind);
         _currentBlock!.AddOp(refOp);
         // Promise variables need to preserve their type metadata across blocks
         // so await can verify the value is a promise and access InnerKind/Throws.
-        if (v.Info.Value is MaxonPromise origPromise) {
+        if (info.Value is MaxonPromise origPromise) {
           return new MaxonPromise(refOp.Result.Id, origPromise.InnerKind, origPromise.InnerStructTypeName, origPromise.Throws);
         }
         return refOp.Result;
@@ -18509,6 +18550,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var tryOp = new MaxonTryCallOp(callee, args, resultKind, resultStructTypeName);
     SetBuiltinCallReceiver(tryOp);
     _currentBlock!.AddOp(tryOp);
+    InvalidateCachedSelfFields();
     return RouteAndRebindBuiltinTryCall(tryOp, errorEnum);
   }
 
@@ -18636,7 +18678,91 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
     }
     RouteBareThrowingCallToTryBlock(callOp, callee);
+    InvalidateCachedSelfFields();
     return callOp;
+  }
+
+  /// <summary>
+  /// Bug D root-cause fix: the parser caches self-field SSA values in
+  /// <c>_variables[fieldName].Value</c> so same-block reads can skip the redundant
+  /// field-access op. A function call that mutates a self-field (via `self` or
+  /// via another struct alias) leaves that cached SSA value stale.
+  ///
+  /// Marking the cached self-field aliases as stale lets the next read
+  /// (<see cref="RefreshStaleSelfFieldIfNeeded"/>, called from
+  /// <c>ResolveExprValue</c>) emit a fresh <c>MaxonFieldAccessOp</c> at the read
+  /// site and update <c>_variables[field.Name]</c> with the new SSA value. We
+  /// do NOT emit the field-access op here because many callers of the call-emit
+  /// helpers (e.g. <c>ParseTryExpression</c>, <c>PromoteTrailingThrowingCallToTryCall</c>,
+  /// <c>RouteBareThrowingCallToTryBlock</c>) immediately inspect
+  /// <c>_currentBlock.Operations[^1]</c> and depend on it being the just-emitted
+  /// call op. Inserting field-accesses behind their back would break the "try
+  /// requires a function call" check and the call-op rewrite logic.
+  ///
+  /// No-op when we're not parsing an instance-method body whose self is a struct
+  /// (the only case that seeds self-field aliases at function entry).
+  /// </summary>
+  private void InvalidateCachedSelfFields() {
+    if (_currentSelfParamResult == null || _currentTypeName == null) return;
+    if (!_typeRegistry.TryGetValue(_currentTypeName, out var typeEntry) || typeEntry is not IrStructType structType) return;
+
+    foreach (var field in structType.Fields) {
+      if (!_variables.TryGetValue(field.Name, out var info)) continue;
+      if (!info.IsSelfField) continue;
+      // Inside a closure body the captured self-field entries must be loaded via
+      // the closure environment (see EmitClosureCapture), not via a fresh field
+      // access against the outer self. Leave captured entries alone.
+      if (info.IsCaptured) continue;
+      // Struct/enum reads in ResolveExprValue always emit a fresh
+      // MaxonStructVarRefOp / MaxonEnumVarRefOp, never reusing the cached
+      // SSA value — so they can't go stale in the first place.
+      if (info.Kind is MaxonValueKind.Struct or MaxonValueKind.Enum) continue;
+
+      _staleSelfFields.Add(field.Name);
+    }
+  }
+
+  /// <summary>
+  /// Companion to <see cref="InvalidateCachedSelfFields"/>: if the given
+  /// variable is a self-field alias whose cache was marked stale by a recent
+  /// function call, emit a fresh <c>MaxonFieldAccessOp</c> at the read site,
+  /// replace the cached <c>VarInfo.Value</c>/<c>DefinedInBlock</c>, and clear
+  /// the stale marker. Returns the (possibly refreshed) VarInfo.
+  ///
+  /// Only refreshes scalar self-field aliases. Struct- and enum-typed self
+  /// fields are read in <c>ResolveExprValue</c> via a fresh
+  /// <c>MaxonStructVarRefOp</c> / <c>MaxonEnumVarRefOp</c> on every reference,
+  /// which the lowering's per-block <c>selfFieldCache</c> already invalidates
+  /// across calls (and clearing the stale marker keeps that path honest).
+  /// </summary>
+  private VarInfo RefreshStaleSelfFieldIfNeeded(string varName, VarInfo info) {
+    if (!_staleSelfFields.Contains(varName)) return info;
+    _staleSelfFields.Remove(varName);
+    if (info.Kind is MaxonValueKind.Struct or MaxonValueKind.Enum) return info;
+    if (_currentSelfParamResult == null || _currentTypeName == null || _currentBlock == null) return info;
+    if (!_typeRegistry.TryGetValue(_currentTypeName, out var typeEntry) || typeEntry is not IrStructType structType) return info;
+    var field = structType.GetField(varName);
+    if (field == null) return info;
+
+    var fieldKind = field.Type.ToValueKind();
+    var fieldStructName = GetFieldStructName(field.Type);
+    // Type parameter fields with where constraints: keep the same alias treatment
+    // used at function entry (see ParseInstanceMethod) so method dispatch through
+    // the interface continues to resolve through monomorphization.
+    if (fieldStructName == null && field.Type is IrTypeParameterType tp
+        && structType.WhereConstraints.ContainsKey(tp.ParameterName)) {
+      fieldStructName = tp.ParameterName;
+      fieldKind = MaxonValueKind.Struct;
+    }
+
+    var fieldAccessOp = new MaxonFieldAccessOp(_currentSelfParamResult, _currentTypeName, field.Name, fieldKind, fieldStructName);
+    _currentBlock.AddOp(fieldAccessOp);
+    var refreshed = info with {
+      Value = fieldAccessOp.Result,
+      DefinedInBlock = _currentBlock,
+    };
+    _variables[varName] = refreshed;
+    return refreshed;
   }
 
   /// <summary>
@@ -18734,6 +18860,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var awaitOp = new MaxonAwaitOp(promise, promise.InnerKind, promise.InnerStructTypeName);
     _currentBlock!.AddOp(awaitOp);
+    InvalidateCachedSelfFields();
     if (awaitOp.Result != null)
       return new ExprResult.Direct(awaitOp.Result);
     // Void promise: the await has no result value. Statement-form callers discard this.
@@ -19257,6 +19384,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var savedFunction = _currentFunction;
     var savedReferencedVars = new HashSet<string>(_referencedVars);
     var savedClosureCaptures = _closureCaptures;
+    var savedSelfParamResult = _currentSelfParamResult;
+    var savedStaleSelfFields = new HashSet<string>(_staleSelfFields);
+    // Closure body is a separate function with no `self` of its own; clear so the
+    // post-call self-field cache invalidation skips and doesn't accidentally
+    // re-emit field accesses against the outer self.
+    _currentSelfParamResult = null;
+    _staleSelfFields.Clear();
     var savedParamLocations = new List<(string, int, int)>(_paramLocations);
     var savedLocalVarLocations = new List<(string, int, int)>(_localVarLocations);
     var savedReassignedVars = new HashSet<string>(_reassignedVars);
@@ -19386,6 +19520,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Captured variables are used by the outer function (passed into the closure environment)
     foreach (var c in captures) _referencedVars.Add(c.Name);
     _closureCaptures = savedClosureCaptures;
+    _currentSelfParamResult = savedSelfParamResult;
+    _staleSelfFields.Clear();
+    foreach (var n in savedStaleSelfFields) _staleSelfFields.Add(n);
     _paramLocations.Clear();
     _paramLocations.AddRange(savedParamLocations);
     _localVarLocations.Clear();

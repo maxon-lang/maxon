@@ -1,0 +1,121 @@
+// Test: first-last
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let f = try arr.first() otherwise -1
+	if f != 10 'fc'
+		return 1
+	end 'fc'
+
+	let l = try arr.last() otherwise -1
+	if l != 30 'lc'
+		return 3
+	end 'lc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %45 = mir.mov_imm 8 : i64
+    %46 = mir.call @mrt_alloc(%45)
+    %47 = mir.mov_imm 40 : i64
+    %48 = mir.call @mrt_alloc(%47)
+    %49 = mir.mov_imm 0 : i64
+    mir.store %49, %48, 0 width: qword
+    %50 = mir.mov_imm 0 : i64
+    mir.store %50, %48, 8 width: qword
+    %51 = mir.mov_imm 0 : i64
+    mir.store %51, %48, 16 width: qword
+    %52 = mir.mov_imm 8 : i64
+    mir.store %52, %48, 24 width: qword
+    %53 = mir.mov_imm 0 : i64
+    mir.store %53, %48, 32 width: qword
+    mir.store %48, %46, 0 width: qword
+    %3 = mir.mov_imm 10 : i64
+    %4 = mir.global_addr @__layout_Array_Int
+    %5 = mir.call @Array.push(%46, %3, %4)
+    %7 = mir.mov_imm 20 : i64
+    %8 = mir.global_addr @__layout_Array_Int
+    %9 = mir.call @Array.push(%46, %7, %8)
+    %11 = mir.mov_imm 30 : i64
+    %12 = mir.global_addr @__layout_Array_Int
+    %13 = mir.call @Array.push(%46, %11, %12)
+    mir.br inlined_Array.first_0()
+  inlined_Array.first_0:
+    %54 = mir.load %46, 0 width: qword
+    %55 = mir.mov_imm 0 : i64
+    %56, %57 = mir.try_call @stdlib.__managed_mem_get(%54, %55)
+    %58 = mir.mov_imm 0 : i64
+    %59 = mir.cmp ne, %57, %58
+    mir.cond_br %59 [then: inlined_Array.first_1(), else: inlined_Array.first_2()]
+  inlined_Array.first_1:
+    %60 = mir.mov_imm 0 : i64
+    %61 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_0(%60, %61)
+  inlined_Array.first_2:
+    %62 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%56, %62)
+  inline_cont_main_0:
+    %18 = mir.mov_imm 0 : i64
+    %19 = mir.cmp ne, %64, %18
+    mir.cond_br %19 [then: try_0.otherwise(), else: try_0.merge(%63)]
+  try_0.otherwise:
+    %21 = mir.mov_imm 1 : i64
+    %22 = mir.neg.i64 %21
+    mir.br try_0.merge(%22)
+  try_0.merge:
+    %25 = mir.mov_imm 10 : i64
+    %26 = mir.cmp ne, %43, %25
+    mir.cond_br %26 [then: fc_0(), else: inlined_Array.last_0()]
+  fc_0:
+    %27 = mir.mov_imm 1 : i64
+    mir.ret %27
+  inlined_Array.last_0:
+    %65 = mir.load %46, 0 width: qword
+    %66 = mir.load %65, 8 width: qword
+    %67 = mir.load %46, 0 width: qword
+    %68 = mir.mov_imm 1 : i64
+    %69 = mir.sub.i64 %66, %68
+    %70, %71 = mir.try_call @stdlib.__managed_mem_get(%67, %69)
+    %72 = mir.mov_imm 0 : i64
+    %73 = mir.cmp ne, %71, %72
+    mir.cond_br %73 [then: inlined_Array.last_1(), else: inlined_Array.last_2()]
+  inlined_Array.last_1:
+    %74 = mir.mov_imm 0 : i64
+    %75 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%74, %75)
+  inlined_Array.last_2:
+    %76 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%70, %76)
+  inline_cont_main_1:
+    %32 = mir.mov_imm 0 : i64
+    %33 = mir.cmp ne, %78, %32
+    mir.cond_br %33 [then: try_1.otherwise(), else: try_1.merge(%77)]
+  try_1.otherwise:
+    %35 = mir.mov_imm 1 : i64
+    %36 = mir.neg.i64 %35
+    mir.br try_1.merge(%36)
+  try_1.merge:
+    %39 = mir.mov_imm 30 : i64
+    %40 = mir.cmp ne, %44, %39
+    mir.cond_br %40 [then: lc_0(), else: lc_0.after()]
+  lc_0:
+    %41 = mir.mov_imm 3 : i64
+    mir.ret %41
+  lc_0.after:
+    %42 = mir.mov_imm 0 : i64
+    mir.ret %42
+  }
+}
+---

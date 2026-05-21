@@ -46,12 +46,66 @@ export type ColoringResult
 	end 'create'
 end 'ColoringResult'
 
+// Diagnostic context for colorLookupGpr/Fp panics. Populated by applyColoring
+// at the start of each function so that an uncolored-vreg panic can dump the
+// failing range's full state (def block/pos, intervals) before aborting,
+// without threading the LiveRangeArray through every per-op color helper.
+// The dump is no-overhead in the success path — it only fires when a panic
+// is already inevitable.
+//
+// Wrapped in a holder type so a single module-level var works (Maxon does not
+// allow module-level vars to be initialized with String values directly).
+type ColoringDiagContext
+	export var funcName String
+	export var ranges LiveRangeArray
+	export var isSet bool
+
+	export static function create() returns ColoringDiagContext
+		return Self{funcName: "", ranges: LiveRangeArray.create(), isSet: false}
+	end 'create'
+end 'ColoringDiagContext'
+
+var diagContext = ColoringDiagContext.create()
+
+export function setColoringDiagnosticContext(funcName String, ranges LiveRangeArray)
+	diagContext.funcName = funcName
+	diagContext.ranges = ranges
+	diagContext.isSet = true
+end 'setColoringDiagnosticContext'
+
+function dumpFailingVreg(id ValueId, kind String)
+	if not diagContext.isSet 'noContext'
+		logError(LogCategory.ir, message: function() gives "{kind}: vreg v{id} dump skipped — diagnostic context not set")
+		return
+	end 'noContext'
+	logError(LogCategory.ir, message: function() gives "{kind}: vreg v{id} in func={diagContext.funcName} (ranges.count={diagContext.ranges.count()})")
+	var found = false
+	for range in diagContext.ranges 'scan'
+		if range.valueId == id 'match'
+			found = true
+			logError(LogCategory.ir, message: function() gives "  range: defBlock={range.defBlock} defPosition={range.defPosition} regClass={range.regClass.name} fixedReg={range.fixedReg} hint={range.hint} assignedReg={range.assignedReg} spillWeight={range.spillWeight} crossesCall={range.crossesCall}")
+			logError(LogCategory.ir, message: function() gives "  intervals.count={range.intervals.count()}")
+			for iv in range.intervals 'eachIv'
+				logError(LogCategory.ir, message: function() gives "    interval blockId={iv.blockId} startPos={iv.startPos} endPos={iv.endPos}")
+			end 'eachIv'
+			logError(LogCategory.ir, message: function() gives "  copyEdges.count={range.copyEdges.count()}")
+			for ce in range.copyEdges 'eachCe'
+				logError(LogCategory.ir, message: function() gives "    copyEdge partner=v{ce.partnerValueId} blockId={ce.blockId} copyPos={ce.copyPos}")
+			end 'eachCe'
+		end 'match'
+	end 'scan'
+	if not found 'notFound'
+		logError(LogCategory.ir, message: function() gives "  NO live range was built for v{id} — scanDefinitions never recorded a def for this vreg (likely a missing noteOpDefs arm or a spill/reload rewrite that drops the def)")
+	end 'notFound'
+end 'dumpFailingVreg'
+
 // Look up the physical GPR ordinal assigned to a virtual value, panicking
 // with a helpful message if the value was never colored. Used by every
 // target's colorXxxGpr helper.
 export function colorLookupGpr(id ValueId, coloring ColoringResult) returns RegOrdinal
 	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
 	if result == RM_NONE 'uncolored'
+		dumpFailingVreg(id, kind: "colorLookupGpr")
 		panic("colorLookupGpr: virtual GPR v{id} has no coloring assignment (coloring.count={coloring.assignment.count()})")
 	end 'uncolored'
 	return result
@@ -63,6 +117,7 @@ end 'colorLookupGpr'
 export function colorLookupFp(id ValueId, coloring ColoringResult) returns RegOrdinal
 	let result = getOr(coloring.assignment, index: id, fallback: RM_NONE)
 	if result == RM_NONE 'uncolored'
+		dumpFailingVreg(id, kind: "colorLookupFp")
 		panic("colorLookupFp: virtual FP vf{id} has no coloring assignment (uncolored/spilled)")
 	end 'uncolored'
 	return result
@@ -482,7 +537,7 @@ function buildInterferenceGraph(ranges LiveRangeArray) returns InterferenceGraph
 				// exactly 1 position at the copy boundary. This happens when
 				// the source's interval is [_, P+1) and the dest starts at [P, _):
 				// they share only position P (the movRegReg instruction).
-				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, ranges: ranges, ri1: ri1, ri2: ri2)
+				let isCopyBoundary = isCopyBoundaryOverlap(s1, e1: e1, s2: s2, e2: e2, blockId: blockId, ranges: ranges, ri1: ri1, ri2: ri2)
 				if not isCopyBoundary 'realOverlap'
 					addInterference(ig, a: ri1, b: ri2)
 				end 'realOverlap'
@@ -536,11 +591,16 @@ function sortBlockIndicesByStart(bs RegIntArray) returns RegIntArray
 end 'sortBlockIndicesByStart'
 
 // Check if two overlapping intervals only share a single position at a copy boundary.
-function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
-	if not areCopyConnected(ranges, ri1: ri1, ri2: ri2) 'notCopy'
-		return false
-	end 'notCopy'
-	// Compute overlap size: min(e1,e2) - max(s1,s2)
+// Edge-aware: the new `copyEdges` sidetable on each LiveRange anchors every
+// copy site at its exact (blockId, copyPos). Two ranges may overlap by exactly
+// one position at multiple distinct copy boundaries throughout the function;
+// the previous global single-link check (areCopyConnected) over-coalesced when
+// a block-arg destination had multiple predecessors, because the last writer
+// to `copyHintValueId` won the suppression for every other edge too. Now we
+// require the overlap to coincide with a recorded edge on either range.
+function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, blockId BlockId, ranges LiveRangeArray, ri1 RegInt, ri2 RegInt) returns bool
+	// Half-open overlap size: min(e1,e2) - max(s1,s2). Exactly 1 means
+	// they share a single position — the copy boundary.
 	var minEnd = e1
 	if e2 < minEnd 'e2Smaller'
 		minEnd = e2
@@ -549,7 +609,18 @@ function isCopyBoundaryOverlap(s1 RegInt, e1 RegInt, s2 RegInt, e2 RegInt, range
 	if s2 > maxStart 's2Bigger'
 		maxStart = s2
 	end 's2Bigger'
-	return minEnd - maxStart == 1
+	if minEnd - maxStart != 1 'notBoundary'
+		return false
+	end 'notBoundary'
+
+	let overlapPos = maxStart
+
+	let r1 = try ranges.get(ri1) otherwise panic("isCopyBoundaryOverlap: ri1={ri1} out of bounds (ranges.count={ranges.count()})")
+	let r2 = try ranges.get(ri2) otherwise panic("isCopyBoundaryOverlap: ri2={ri2} out of bounds (ranges.count={ranges.count()})")
+
+	let edge1 = hasCopyEdgeAt(r1, partner: r2.valueId, blockId: blockId, copyPos: overlapPos)
+	let edge2 = hasCopyEdgeAt(r2, partner: r1.valueId, blockId: blockId, copyPos: overlapPos)
+	return edge1 or edge2
 end 'isCopyBoundaryOverlap'
 
 // Resolve a copy-link hint: if the partner is colored, return its color.
@@ -796,20 +867,29 @@ export function coalesceRanges(module TargetModule, ranges LiveRangeArray, func 
 		ri = ri + 1
 	end 'buildVidMap'
 
-	// Scan all ops for copy-like patterns
+	// Scan all ops for copy-like patterns. opIdx is the 0-indexed position
+	// within the block; opPos = opIdx + 1 matches the interval space used by
+	// scanDefinitions (block-arg defs at 0, ops at 1..N, terminator at N+1).
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		var opIdx = 0
 		for packed in block.opRefs 'eachOp'
-			extractCopyHintsWith(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
+			extractCopyHintsWith(module, packed: packed, blockId: block.id, opPos: opIdx + 1, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
+			opIdx = opIdx + 1
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			extractCopyHintsWith(module, packed: block.terminatorIndex(), ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
+			extractCopyHintsWith(module, packed: block.terminatorIndex(), blockId: block.id, opPos: opIdx + 1, ranges: ranges, vidToRangeIdx: vidToRangeIdx, opQuery: opQuery)
 		end 'hasTerm'
 
 		// Hint from outgoing branch edge args -> successor block args.
+		// The parallel copy for each branch edge executes in the predecessor
+		// block (`block`) at the slot immediately before its terminator —
+		// see CopyResolution.buildBlockArgCopies. Anchor the CopyEdge there.
+		let predBlockLen = block.opRefs.count() + 1
+		let copyPos = predBlockLen - 1
 		for edge in block.branchEdges 'eachEdge'
-			hintBranchArgs(edge.argIds, targetBlockId: edge.targetBlockId, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
+			hintBranchArgs(edge.argIds, targetBlockId: edge.targetBlockId, predBlockId: block.id, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx, func: func, module: module)
 		end 'eachEdge'
 	end 'eachBlock'
 
@@ -975,13 +1055,15 @@ function tryApplyReturnHint(destOrd RegOrdinal, srcId RegInt, returnGprOrd RegOr
 	setPhysHintForce(returnGprOrd, virtualId: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'tryApplyReturnHint'
 
-function extractCopyHintsWith(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray, opQuery TargetOpQuery)
-	opQuery.extractCopyHints(module, packed: packed, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+function extractCopyHintsWith(module TargetModule, packed OpIndex, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray, opQuery TargetOpQuery)
+	opQuery.extractCopyHints(module, packed: packed, blockId: blockId, opPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'extractCopyHintsWith'
 
 // For each branch arg, set a copy hint between the arg value and the
-// corresponding block arg in the target block.
-function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func IrFunction, module TargetModule)
+// corresponding block arg in the target block. The parallel copy for this
+// edge executes in the predecessor block at `copyPos`; CopyEdges anchored
+// there let isCopyBoundaryOverlap distinguish per-edge interference (Step 7).
+function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, predBlockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray, func IrFunction, module TargetModule)
 	if argIds.count() == 0 'noArgs'
 		return
 	end 'noArgs'
@@ -997,7 +1079,7 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, ranges LiveR
 			continue
 		end 'skipBlockArg'
 		let destId = blockArg.valueId
-		setGprCopyHint(destReg: destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setGprCopyHintEdge(destReg: destId, srcReg: srcId, blockId: predBlockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 		i = i + 1
 	end 'eachArg'
 end 'hintBranchArgs'
@@ -1104,7 +1186,38 @@ export function setGprCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeAr
 	end 'destHasHint'
 end 'setGprCopyHint'
 
-export function setFpCopyHint(destReg RegInt, srcReg RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
-	// Same logic as GPR copy hint
-	setGprCopyHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-end 'setFpCopyHint'
+// Edge-aware variant of setGprCopyHint. Performs the same hint propagation
+// and bidirectional copyHintValueId seeding as setGprCopyHint, then also
+// records a CopyEdge on both ranges anchored at (blockId, copyPos). The
+// CopyEdge entries are what isCopyBoundaryOverlap will consult (in Step 7)
+// to decide whether to suppress interference at exactly this copy site,
+// replacing the global single-slot copyHintValueId match.
+export function setGprCopyHintEdge(destReg RegInt, srcReg RegInt, blockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	if destReg < 0 or srcReg < 0 'physical'
+		return
+	end 'physical'
+
+	// Delegate hint/link seeding to setGprCopyHint. The bidirectional
+	// copyHintValueId remains useful for resolveCopyLinkHint's color-hint
+	// propagation, so we keep that pathway intact and only add the
+	// per-edge anchor on top.
+	setGprCopyHint(destReg: destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+
+	let srcRangeIdx = getOr(vidToRangeIdx, index: srcReg, fallback: -1)
+	let destRangeIdx = getOr(vidToRangeIdx, index: destReg, fallback: -1)
+
+	if srcRangeIdx < 0 or destRangeIdx < 0 'noRange'
+		return
+	end 'noRange'
+
+	var srcRange = try ranges.get(srcRangeIdx) otherwise panic("invariant: srcRangeIdx from vidToRangeIdx out of bounds in ranges")
+	var destRange = try ranges.get(destRangeIdx) otherwise panic("invariant: destRangeIdx from vidToRangeIdx out of bounds in ranges")
+
+	addCopyEdge(destRange, partner: srcReg, blockId: blockId, copyPos: copyPos)
+	addCopyEdge(srcRange, partner: destReg, blockId: blockId, copyPos: copyPos)
+end 'setGprCopyHintEdge'
+
+export function setFpCopyHintEdge(destReg RegInt, srcReg RegInt, blockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	// Same logic as GPR edge-aware copy hint
+	setGprCopyHintEdge(destReg: destReg, srcReg: srcReg, blockId: blockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+end 'setFpCopyHintEdge'

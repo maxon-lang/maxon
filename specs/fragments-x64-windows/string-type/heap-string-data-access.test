@@ -74,18 +74,18 @@ module {
     x64.mov rcx, r12
     x64.call ByteIterator.advance
     x64.test rdx, rdx
-    x64.mov r8, [rbp+-32]
+    x64.mov r8, [rbp+-40]
     x64.je read_first_0
     x64.jmp read_first_0.exit
   read_first_0:
-    x64.mov [rbp+-40], r8
+    x64.mov [rbp+-48], r8
     x64.mov rcx, r12
     x64.call ByteIterator.current
     x64.mov [rbp+-32], r8
-    x64.mov r8, [rbp+-40]
+    x64.mov r8, [rbp+-48]
     x64.xor r8, r13
-    x64.mov r8, [rbp+-40]
-    x64.je print_first_0.after
+    x64.mov r8, [rbp+-48]
+    x64.je __phi_trampoline_3_0
     x64.jmp print_first_0
   read_first_0.exit:
     x64.mov rcx, [r15+0] (8b)
@@ -106,7 +106,7 @@ module {
   inline_cont_main_1:
     x64.test rdx, rdx
     x64.je read_all_0
-    x64.mov r12, r14
+    x64.mov r15, r14
     x64.jmp read_all_0.exit
   print_first_0:
     x64.mov ecx, 21
@@ -170,18 +170,20 @@ module {
     x64.mov [r8+8], r14 (8b)
     x64.mov r9, [r8+0] (8b)
     x64.mov rdx, [r9+8] (8b)
-    x64.mov rcx, [r9+0] (8b)
-    x64.call mrt_write_stdout
-    x64.mov r8, r13
-  print_first_0.after:
+    x64.mov r8, [r9+0] (8b)
     x64.mov [rbp+-32], r8
+    x64.mov rcx, [rbp+-32]
+    x64.call mrt_write_stdout
+    x64.mov r8, [rbp+-32]
+    x64.mov r9, r13
+  print_first_0.after:
+    x64.mov [rbp+-40], r9
     x64.jmp read_first_0.header
   read_all_0.header:
     x64.mov rcx, r12
     x64.call ByteIterator.advance
     x64.test rdx, rdx
     x64.je read_all_0
-    x64.mov r12, r15
     x64.jmp read_all_0.exit
   read_all_0:
     x64.mov rcx, r12
@@ -191,12 +193,12 @@ module {
   read_all_0.exit:
     x64.mov ecx, 21
     x64.call mrt_alloc
-    x64.mov r15, r8
-    x64.mov rcx, r12
-    x64.mov rdx, r15
-    x64.call mrt_i64_to_string
     x64.mov r12, r8
-    x64.mov r8, r12
+    x64.mov rcx, r15
+    x64.mov rdx, r12
+    x64.call mrt_i64_to_string
+    x64.mov r15, r8
+    x64.mov r8, r15
     x64.add r8, 0
     x64.mov [rbp+-32], r8
     x64.mov r8, [rbp+-32]
@@ -215,11 +217,11 @@ module {
     x64.mov r8, [rbp+-40]
     x64.add r8, 0
     x64.mov [rbp-8], r8
-    x64.mov [rbp-16], r15
-    x64.mov [rbp-24], r12
+    x64.mov [rbp-16], r12
+    x64.mov [rbp-24], r15
     x64.rep_movsb
     x64.lea r9, [rip+__istr_2]
-    x64.add r8, r12
+    x64.add r8, r15
     x64.mov [rbp-8], r8
     x64.mov [rbp-16], r9
     x64.mov [rbp-24], r13
@@ -241,7 +243,8 @@ module {
     x64.mov [r8+8], r14 (8b)
     x64.mov r9, [r8+0] (8b)
     x64.mov rdx, [r9+8] (8b)
-    x64.mov rcx, [r9+0] (8b)
+    x64.mov r12, [r9+0] (8b)
+    x64.mov rcx, r12
     x64.call mrt_write_stdout
     x64.mov r8, r14
     x64.epilogue
@@ -249,6 +252,9 @@ module {
   __phi_trampoline_14_0:
     x64.mov r8, r14
     x64.jmp read_first_0
+  __phi_trampoline_3_0:
+    x64.mov r9, r8
+    x64.jmp print_first_0.after
   }
 }
 ---

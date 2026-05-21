@@ -1535,7 +1535,9 @@ type WasmFunctionLowering
 		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
 			body.push(opLocalSet)
 			writeUleb128(body, value: resultId as Wasm32Index)
-		end 'hasReturnValue'
+		end 'hasReturnValue' else 'voidReturn'
+			emitVoidResultAliasIfNeeded(resultId: resultId, argIds: argIds)
+		end 'voidReturn'
 	end 'emitCall'
 
 	// Lower MirOp.tryCall: like emitCall, but the callee is throwing so its
@@ -1551,8 +1553,23 @@ type WasmFunctionLowering
 		if not lookupReturnsVoid(callee: callee) 'hasReturnValue'
 			body.push(opLocalSet)
 			writeUleb128(body, value: resultId as Wasm32Index)
-		end 'hasReturnValue'
+		end 'hasReturnValue' else 'voidReturn'
+			emitVoidResultAliasIfNeeded(resultId: resultId, argIds: argIds)
+		end 'voidReturn'
 	end 'emitTryCall'
+
+	// Mutating-method self-assignment (`arr = arr.push(...)`): wasm emit
+	// step for the shared decision in voidResultAliasReceiverId. Without
+	// this, the resultId local stays at its zero-init default (or a stale
+	// earlier value), and the next use of `arr` dereferences garbage —
+	// observed as `Array.push: set OOB` and similar runtime panics on wasm.
+	function emitVoidResultAliasIfNeeded(resultId ValueId, argIds ValueIdArray)
+		let receiverId = try voidResultAliasReceiverId(resultId, argIds: argIds) otherwise return
+		body.push(opLocalGet)
+		writeUleb128(body, value: receiverId as Wasm32Index)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as Wasm32Index)
+	end 'emitVoidResultAliasIfNeeded'
 
 	// Shared call-site arg push + `call` opcode emission. Used by both
 	// emitCall and emitTryCall; result-stack handling differs and is done

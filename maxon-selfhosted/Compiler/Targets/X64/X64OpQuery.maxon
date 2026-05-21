@@ -115,11 +115,11 @@ export type X64OpQuery implements TargetOpQuery
 
 	// --- Copy hints ---
 
-	function extractCopyHints(module TargetModule, packed OpIndex, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+	function extractCopyHints(module TargetModule, packed OpIndex, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		match x64Op 'check'
-			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
-			movXmmXmm(destFp, srcFp, _) then extractX64MovXmmXmmHint(destFp, srcFp: srcFp, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			movRegReg(destReg, srcReg) then extractX64MovRegRegHint(destReg, srcReg: srcReg, blockId: blockId, opPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+			movXmmXmm(destFp, srcFp, _) then extractX64MovXmmXmmHint(destFp, srcFp: srcFp, blockId: blockId, opPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 			prologue to memcpyOp then break 'check'
 			cmpRegReg to xchgRegReg then break 'check'
 			spillXmmToStack to lockXaddMemReg then break 'check'
@@ -174,12 +174,12 @@ function extractX64FpVRegId(vreg X64FpVReg) returns RegInt
 	end 'getId'
 end 'extractX64FpVRegId'
 
-function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	let destId = extractX64VRegId(destReg)
 	let srcId = extractX64VRegId(srcReg)
 
 	if destId >= 0 and srcId >= 0 'bothVirtual'
-		setGprCopyHint(destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setGprCopyHintEdge(destReg: destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
 		let srcOrd = x64VRegOrdinal(srcReg)
 		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
@@ -192,12 +192,12 @@ end 'extractX64MovRegRegHint'
 // FP analogue of extractX64MovRegRegHint. Without the physical-side cases the
 // regalloc never sees that a `movXmmXmm phys, virt` pins the virtual to the
 // dest physical xmm — leading to swap-shaped sequential moves at call sites.
-function extractX64MovXmmXmmHint(destFp X64FpVReg, srcFp X64FpVReg, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
+function extractX64MovXmmXmmHint(destFp X64FpVReg, srcFp X64FpVReg, blockId BlockId, opPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	let destId = extractX64FpVRegId(destFp)
 	let srcId = extractX64FpVRegId(srcFp)
 
 	if destId >= 0 and srcId >= 0 'bothVirtual'
-		setFpCopyHint(destReg: destId, srcReg: srcId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setFpCopyHintEdge(destReg: destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
 		let srcOrd = x64FpVRegOrdinal(srcFp)
 		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
