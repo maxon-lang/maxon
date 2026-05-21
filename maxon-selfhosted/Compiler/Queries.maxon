@@ -358,16 +358,16 @@ function stampStdContentHash(project Project, module StdModule, funcIdx FuncInde
 	end 'alreadyStamped'
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount as ContentHash)
-	h = mix(h, value: func.blockRefs.count() as ContentHash)
+	h = mix(h, value: func.blockRefs.count())
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("stampStdContentHash: blocks.get OOB")
 		h = mixString(h, s: block.label)
-		h = mix(h, value: block.opRefs.count() as ContentHash)
+		h = mix(h, value: block.opRefs.count())
 		let termKind = match block.terminator 'tk'
 			unset gives 0 as ContentHash
-			dead gives 1 as ContentHash
-			fallthrough gives 2 as ContentHash
-			opIndex gives 3 as ContentHash
+			dead gives 1
+			fallthrough gives 2
+			opIndex gives 3
 		end 'tk'
 		h = mix(h, value: termKind)
 	end 'eachBlock'
@@ -383,7 +383,7 @@ end 'stampStdContentHash'
 function mix(state ContentHash, value ContentHash) returns ContentHash
 	var s = state xor value
 	s = s * 1099511628211 as ContentHash
-	return s as ContentHash
+	return s
 end 'mix'
 
 function mixString(state ContentHash, s String) returns ContentHash
@@ -395,7 +395,7 @@ function mixString(state ContentHash, s String) returns ContentHash
 		h = mix(h, value: b as ContentHash)
 		i = i + 1
 	end 'each'
-	return mix(h, value: n as ContentHash)
+	return mix(h, value: n)
 end 'mixString'
 
 // Locate a function by name in the cached whole-module StdModule. Returns
@@ -411,7 +411,7 @@ function findStdFunctionIndex(module StdModule, name String) returns StdFuncInde
 			return i as StdFuncIndexResult
 		end 'match'
 	end 'scan'
-	return u64.max as StdFuncIndexResult
+	return u64.max
 end 'findStdFunctionIndex'
 
 export function queryMidForFunction(project Project, funcName String) returns IrFunction throws CompileError
@@ -491,7 +491,7 @@ export function queryMirForFunction(project Project, funcName String) returns Ir
 			break
 		end 'match'
 	end 'scan'
-	if foundIdx == u64.max as StdFuncIndexResult 'missing'
+	if foundIdx == u64.max 'missing'
 		popQuery(project)
 		throw CompileError.compileError
 	end 'missing'
@@ -556,7 +556,7 @@ end 'queryCodeForFunction'
 function extractFunctionChunk(result CodeResult, funcName String) returns FunctionCodeChunk
 	var chunk = FunctionCodeChunk.create(funcName)
 	var startOffset = u64.max as CodeOffset
-	var endOffset = result.code.count() as CodeOffset
+	var endOffset = result.code.count()
 	for i in 0 upto result.debugSymbols.count() 'scan'
 		let sym = try result.debugSymbols.get(i) otherwise panic("extractFunctionChunk: debugSymbols.get OOB at {i}")
 		if sym.name == funcName 'match'
@@ -578,8 +578,8 @@ function extractFunctionChunk(result CodeResult, funcName String) returns Functi
 	// Slice the byte range. ByteArray doesn't expose a slice primitive
 	// in this codebase yet, so the copy is the obvious byte-by-byte
 	// loop — this runs once per function, off the hot path.
-	var i = startOffset as ContentHash
-	let stop = endOffset as ContentHash
+	var i = startOffset
+	let stop = endOffset
 	while i < stop 'copy'
 		let b = try result.code.get(i) otherwise panic("extractFunctionChunk: code.get OOB at {i}")
 		chunk.code.push(b)

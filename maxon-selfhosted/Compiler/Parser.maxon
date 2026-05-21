@@ -1020,7 +1020,7 @@ export type Parser
 				abiParamTypes.push(MaxonType.integer)
 			end 'addWitnessSlot'
 		end 'expandAbi'
-		let abiParamCount = abiParamTypes.count() as ParamCount
+		let abiParamCount = abiParamTypes.count()
 
 		let returnType = try parseOptionalReturnType()
 		// Capture the void-ness up front so we can release the `returnType`
@@ -1400,11 +1400,11 @@ export type Parser
 			offset = offset + 2
 		end 'count'
 		if depth == 0 'noDots'
-			return 0 as FieldChainDepth
+			return 0
 		end 'noDots'
-		let trailing = try cursor.peek(offset) otherwise return 0 as FieldChainDepth
+		let trailing = try cursor.peek(offset) otherwise return 0
 		if trailing.kind != TokenKind.equals 'notAssign'
-			return 0 as FieldChainDepth
+			return 0
 		end 'notAssign'
 		return depth
 	end 'chainedFieldAssignDepth'
@@ -1830,7 +1830,7 @@ export type Parser
 		if moduleInitName != "" 'cached'
 			return moduleInitName
 		end 'cached'
-		let suffix = project.moduleInitFuncs.count() as ParsedInt
+		let suffix = project.moduleInitFuncs.count()
 		let name = "__module_init_{suffix}"
 		var func = IrFunction.create(name, maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		// Inits run from `mrt_start`, so they need `global` visibility — file
@@ -4228,7 +4228,7 @@ export type Parser
 			end 'skipDup'
 
 			let ordinalSlot = cases.count() as CaseOrdinal
-			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: ordinalSlot as IntConstant, line: caseToken.line, column: caseToken.column, payloadFields: payloadFields, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
+			cases.push(EnumCase.create(caseName, ordinal: ordinalSlot, rawValue: ordinalSlot, line: caseToken.line, column: caseToken.column, payloadFields: payloadFields, backingStructName: caseBackingTypeName, backingStructExprId: caseBackingExprId))
 
 			// Phase 9 Stage 3: every union case — bare or payload-bearing —
 			// is heap-boxed so all values of the union type share a uniform
@@ -4406,7 +4406,7 @@ export type Parser
 		// slots in declaration order, so slot 0 = first param, etc.
 		// Mirrors how a user-written `function name(args) ...` body
 		// observes its parameters.
-		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: ThrowsClause.none)
+		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: ThrowsClause.none)
 		func.namespace = namespace
 		func.visibility = visibility
 		func.sourceFilePath = filePath
@@ -6201,7 +6201,7 @@ export type Parser
 			reportCompileError(project, code: ErrorCode.parserMatchDuplicatePattern, message: "range pattern '{displayName}' covers a single value; use the bare value instead", line: loToken.line, column: loToken.column, filePath: filePath)
 		end 'singleValue'
 
-		return MatchPatternSpec.enumRange(loToken, loOrdinal: loOrdinal as ParsedInt, hiOrdinal: hiOrdinal as ParsedInt, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: ownerEnumName)
+		return MatchPatternSpec.enumRange(loToken, loOrdinal: loOrdinal as ParsedInt, hiOrdinal: hiOrdinal, isUpto: isUpto, hasMaxSentinel: hasMaxSentinel, displayName: displayName, enumOwnerName: ownerEnumName)
 	end 'parseEnumRangePattern'
 
 	// True when `cursor.peek(offset)` is the `to` or `upto` keyword. Used
@@ -10392,15 +10392,15 @@ export type Parser
 		let nameId = match receiverType 'extract'
 			named(id) gives id
 			boolean gives 0 as TypeNameId
-			integer gives 0 as TypeNameId
-			float gives 0 as TypeNameId
-			string gives 0 as TypeNameId
-			genericInstance gives 0 as TypeNameId
-			function gives 0 as TypeNameId
-			unresolved gives 0 as TypeNameId
-			typeParameter gives 0 as TypeNameId
-			interface gives 0 as TypeNameId
-			constInt gives 0 as TypeNameId
+			integer gives 0
+			float gives 0
+			string gives 0
+			genericInstance gives 0
+			function gives 0
+			unresolved gives 0
+			typeParameter gives 0
+			interface gives 0
+			constInt gives 0
 		end 'extract'
 		if nameId == 0 'noEnumName'
 			return MaxonType.unresolved
@@ -11013,7 +11013,7 @@ export type Parser
 		// the per-element MaxonType through TypeResolution to a real
 		// elementSize, or (b) lowering the array literal in a later pass
 		// after types are resolved.
-		let elemCount = elemNames.count() as ParsedInt
+		let elemCount = elemNames.count()
 		let countLitName = emitLiteral(block, value: elemCount, valueType: MaxonType.integer, range: literalRange)
 		let elemSizeLitName = emitLiteral(block, value: 8, valueType: MaxonType.integer, range: literalRange)
 

@@ -1,13 +1,15 @@
 // Test: chained-byte-int-float
 
-typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
 
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
 function main() returns ExitCode
 	let b = 25 as Byte
-	let i = b as Integer
-	let f = i as Float
+	let f = toFloat(b)
 	return trunc(f)
 end 'main'
 ---
@@ -18,16 +20,18 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 25 : i64
-    %3 = mir.sitofp.f64 %0
-    %5 = mir.fptosi.i64 %3
-    %6 = mir.mov_imm 125 : i64
-    %7 = mir.cmp ugt, %5, %6
-    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+    %5 = mir.mov_imm 0 : f64
+    %6 = mir.sitofp.f64 %0
+    %7 = mir.add.f64 %6, %5
+    %4 = mir.fptosi.i64 %7
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %4, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %8 = mir.global_addr @__panic_msg_0
-    %9 = mir.call @mrt_panic(%8)
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
   __range_ok_0:
-    mir.ret %5
+    mir.ret %4
   }
 }
 ---

@@ -3,9 +3,13 @@
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
 
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
 function main() returns ExitCode
 	let b = 50 as Byte
-	let f = b as Float
+	let f = toFloat(b)
 	return trunc(f)
 end 'main'
 ---
@@ -16,14 +20,16 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 50 : i64
-    %2 = mir.sitofp.f64 %0
-    %4 = mir.fptosi.i64 %2
-    %5 = mir.mov_imm 125 : i64
-    %6 = mir.cmp ugt, %4, %5
-    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+    %5 = mir.mov_imm 0 : f64
+    %6 = mir.sitofp.f64 %0
+    %7 = mir.add.f64 %6, %5
+    %4 = mir.fptosi.i64 %7
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %4, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    %7 = mir.global_addr @__panic_msg_0
-    %8 = mir.call @mrt_panic(%7)
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
   __range_ok_0:
     mir.ret %4
   }

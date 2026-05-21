@@ -53,7 +53,7 @@ function mixString(state ContentHash, s String) returns ContentHash
 		i = i + 1
 	end 'each'
 	// Length tag: keeps "ab"+"c" distinct from "a"+"bc".
-	return mix(h, value: n as ContentHash)
+	return mix(h, value: n)
 end 'mixString'
 
 // Mix a MaxonType into the hash. Uses the mangled string form so that
@@ -65,8 +65,8 @@ end 'mixMaxonType'
 
 function mixMaxonReturnType(state ContentHash, project Project, ret MaxonReturnType) returns ContentHash
 	return match ret 'r'
-		void gives mix(state, value: 0 as ContentHash)
-		value(inner) gives mixMaxonType(mix(state, value: 1 as ContentHash), project: project, t: inner)
+		void gives mix(state, value: 0)
+		value(inner) gives mixMaxonType(mix(state, value: 1), project: project, t: inner)
 	end 'r'
 end 'mixMaxonReturnType'
 
@@ -77,25 +77,25 @@ export function computeFunctionSignatureHash(project Project, func IrFunction) r
 	var h = fnvOffsetBasis()
 	h = mixString(h, s: func.name)
 	h = mixString(h, s: func.namespace)
-	h = mix(h, value: func.visibility.ordinal as ContentHash)
-	h = mix(h, value: func.paramCount as ContentHash)
+	h = mix(h, value: func.visibility.ordinal)
+	h = mix(h, value: func.paramCount)
 	// `throwsTypeName` is now sum-typed: prefix with a 0/1 tag so `none` and
 	// `throwing("")` (which shouldn't legitimately occur) hash differently
 	// from `throwing("X")`. Mirrors the pattern used by `mixMaxonReturnType`.
 	h = match func.throwsTypeName 'hash'
-		none gives mix(h, value: 0 as ContentHash)
-		throwing(n) gives mixString(mix(h, value: 1 as ContentHash), s: n)
+		none gives mix(h, value: 0)
+		throwing(n) gives mixString(mix(h, value: 1), s: n)
 	end 'hash'
 	h = mixMaxonReturnType(h, project: project, ret: func.maxonReturnType)
 	for pt in func.maxonParamTypes 'eachParam'
 		h = mixMaxonType(h, project: project, t: pt)
 	end 'eachParam'
 	if func.hasImplicitLayoutParam 'layoutOn'
-		h = mix(h, value: 1 as ContentHash)
+		h = mix(h, value: 1)
 	end 'layoutOn' else 'layoutOff'
-		h = mix(h, value: 0 as ContentHash)
+		h = mix(h, value: 0)
 	end 'layoutOff'
-	h = mix(h, value: func.implicitWitnessConstraints.count() as ContentHash)
+	h = mix(h, value: func.implicitWitnessConstraints.count())
 	for wc in func.implicitWitnessConstraints 'eachWitness'
 		h = mixString(h, s: wc.paramName)
 		h = mixString(h, s: wc.requiredTraitName)
@@ -115,16 +115,16 @@ end 'computeFunctionSignatureHash'
 export function computeFunctionContentHash(project Project, module MaxonModule, func IrFunction) returns ContentHash
 	var h = computeFunctionSignatureHash(project, func: func)
 	h = mix(h, value: func.varSlotCount as ContentHash)
-	h = mix(h, value: func.blockRefs.count() as ContentHash)
+	h = mix(h, value: func.blockRefs.count())
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("computeFunctionContentHash: blockRef {blockRef} OOB (blocks.count={module.blocks.count()})")
 		h = mixString(h, s: block.label)
-		h = mix(h, value: block.opRefs.count() as ContentHash)
+		h = mix(h, value: block.opRefs.count())
 		let termKind = match block.terminator 'tk'
 			unset gives 0 as ContentHash
-			dead gives 1 as ContentHash
-			fallthrough gives 2 as ContentHash
-			opIndex gives 3 as ContentHash
+			dead gives 1
+			fallthrough gives 2
+			opIndex gives 3
 		end 'tk'
 		h = mix(h, value: termKind)
 	end 'eachBlock'

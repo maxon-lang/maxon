@@ -17,15 +17,15 @@
 // becomes the new "host" for any subsequent castCheck originally in the
 // same source block.
 
-export function expandCastRangeChecks(project Project, module MaxonModule, sourceFileName String)
+export function expandCastRangeChecks(project Project, module MaxonModule, sourceFileName String, sourcePath FilePath)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(funcIdx) otherwise panic("expandCastRangeChecks: funcIdx OOB")
-		processCastChecksInFunc(project, module: module, func: func, sourceFileName: sourceFileName)
+		processCastChecksInFunc(project, module: module, func: func, sourceFileName: sourceFileName, sourcePath: sourcePath)
 		try module.functions.set(funcIdx, value: func) otherwise panic("expandCastRangeChecks: functions.set OOB")
 	end 'eachFunc'
 end 'expandCastRangeChecks'
 
-function processCastChecksInFunc(project Project, module MaxonModule, func IrFunction, sourceFileName String)
+function processCastChecksInFunc(project Project, module MaxonModule, func IrFunction, sourceFileName String, sourcePath FilePath)
 	// Snapshot the block ref list because new continueBlocks get appended
 	// during the walk. Iterating over the live list would visit the
 	// continueBlocks we just split off and try to process them again —
@@ -34,10 +34,102 @@ function processCastChecksInFunc(project Project, module MaxonModule, func IrFun
 	for ref in func.blockRefs 'snap'
 		snapshot.push(ref)
 	end 'snap'
+	// E3010 diagnostic walk runs BEFORE expansion so it sees the original
+	// per-block op layout exactly as the parser emitted it (every `convert`
+	// still sits in its source block, no synthetic split blocks yet). The
+	// walk is read-only: it inspects each `MaxonOp.convert` and reports a
+	// diagnostic when the target alias range covers the source alias range,
+	// leaving the op untouched for downstream lowering.
+	for blockRef in snapshot 'diagBlock'
+		reportUnneededCastsInBlock(project, module: module, blockRef: blockRef, sourcePath: sourcePath)
+	end 'diagBlock'
 	for blockRef in snapshot 'eachBlock'
 		processCastChecksInBlock(project, module: module, func: func, initialBlockRef: blockRef, sourceFileName: sourceFileName)
 	end 'eachBlock'
 end 'processCastChecksInFunc'
+
+// E3010 walk: scan every `MaxonOp.convert` in `blockRef`. When both source
+// and target alias resolve to a `TypealiasRange` and the target range
+// covers the source range (target ⊇ source), the cast loses no values and
+// is reported as unneeded. Compiler-inserted converts (`implicit: true`)
+// are exempt because the user never wrote them.
+function reportUnneededCastsInBlock(project Project, module MaxonModule, blockRef BlockRef, sourcePath FilePath)
+	let block = try module.blocks.get(blockRef) otherwise panic("reportUnneededCastsInBlock: blockRef OOB")
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("reportUnneededCastsInBlock: opIdx OOB")
+		if op.name != "convert" 'notConvert'
+			continue
+		end 'notConvert'
+		match op 'check'
+			convert(_, _, fromType, toType, implicit, range) then checkConvertForUnneededCast(project, fromType: fromType, toType: toType, implicit: implicit, range: range, sourcePath: sourcePath)
+			default panic("reportUnneededCastsInBlock: op.name == convert but match did not extract")
+		end 'check'
+	end 'eachOp'
+end 'reportUnneededCastsInBlock'
+
+function checkConvertForUnneededCast(project Project, fromType MaxonType, toType MaxonType, implicit bool, range SourceRange, sourcePath FilePath)
+	if implicit 'compilerInserted'
+		return
+	end 'compilerInserted'
+	let sourceAlias = fromType.namedAliasNameOrEmpty(project)
+	let targetAlias = toType.namedAliasNameOrEmpty(project)
+	if sourceAlias.isEmpty() or targetAlias.isEmpty() 'notAliased'
+		return
+	end 'notAliased'
+	let sourceRange = try project.typealiasRanges.get(sourceAlias) otherwise return
+	let targetRange = try project.typealiasRanges.get(targetAlias) otherwise return
+	let sourceIsFloat = aliasIsFloatType(project, name: sourceAlias)
+	let targetIsFloat = aliasIsFloatType(project, name: targetAlias)
+	if not rangeCoversOther(targetRange: targetRange, sourceRange: sourceRange, targetIsFloat: targetIsFloat, sourceIsFloat: sourceIsFloat) 'narrowing'
+		return
+	end 'narrowing'
+	reportCompileError(project, code: ErrorCode.semanticUnneededCast, message: "unneeded cast: '{sourceAlias}' already fits in '{targetAlias}'", line: range.line, column: range.column, filePath: sourcePath)
+end 'checkConvertForUnneededCast'
+
+// Mirrors C# bootstrap's `TargetCoversSource`. Same-kind: numeric range
+// containment. Int → Float: always covered (float ranges used in practice
+// span the full f64 range, which contains every i64 within ±2^53 exactly).
+// Float → Int: never covered (E3009 fires upstream so this branch is
+// unreachable in practice, but the helper stays total for safety).
+//
+// Integer subset uses unsigned semantics when both ranges' lower bounds
+// are >= 0 — bounds above i64.max (e.g. `u64.max`) are stored as negative
+// values via two's-complement wrap, and a plain signed compare would
+// wrongly treat `MachineWord = int(0 to u64.max)` (upper = -1) as a
+// subset of `ParsedInt = int(i64.min to i64.max)` (upper = i64.max).
+// When the two ranges disagree on signedness (one allows negatives, the
+// other extends past i64.max), we can't represent the union in 64 bits;
+// conservatively report "not covered" so E3010 doesn't misfire.
+function rangeCoversOther(targetRange TypealiasRange, sourceRange TypealiasRange, targetIsFloat bool, sourceIsFloat bool) returns bool
+	if sourceIsFloat != targetIsFloat 'crossKind'
+		// Only int → float widens losslessly for diagnostic purposes.
+		return targetIsFloat and not sourceIsFloat
+	end 'crossKind'
+	if targetIsFloat 'floatCompare'
+		return targetRange.lower <= sourceRange.lower and targetRange.upper >= sourceRange.upper
+	end 'floatCompare'
+	let targetUnsigned = targetRange.lower >= 0 and targetRange.upper < 0
+	let sourceUnsigned = sourceRange.lower >= 0 and sourceRange.upper < 0
+	if targetUnsigned != sourceUnsigned 'mixedSignedness'
+		return false
+	end 'mixedSignedness'
+	if targetUnsigned 'unsignedCompare'
+		return unsignedLE(targetRange.lower, b: sourceRange.lower) and unsignedLE(sourceRange.upper, b: targetRange.upper)
+	end 'unsignedCompare'
+	return targetRange.lower <= sourceRange.lower and targetRange.upper >= sourceRange.upper
+end 'rangeCoversOther'
+
+// Unsigned <= on i64-stored values. Negative values represent bit
+// patterns above i64.max — i.e. larger than any non-negative value.
+function unsignedLE(a RangeBound, b RangeBound) returns bool
+	if a < 0 and b >= 0 'aLarger'
+		return false
+	end 'aLarger'
+	if a >= 0 and b < 0 'bLarger'
+		return true
+	end 'bLarger'
+	return a <= b
+end 'unsignedLE'
 
 // Walk a single source block, expanding castCheck ops as they appear.
 // `hostBlockRef` tracks the current host: it starts as the original block

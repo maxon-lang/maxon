@@ -807,6 +807,14 @@ Bare `int`, `float`, or `byte` as cast targets are rejected — every
 primitive cast must travel through a named ranged typealias so the
 range-narrowing intent is explicit. `bool` is unranged and stays bare.
 
+An `as` cast whose target alias already covers the source alias's full
+range is rejected as **E3010 "unneeded cast"** — the surrounding context
+auto-widens, so the cast contributes nothing. Drop redundant casts like
+`x as Integer` when `x` is already `Integer`, and `b as Integer` when the
+context (binary op, return, function argument) already widens `Byte` to
+`Integer`. Bare-literal sources (`42 as Byte`) are exempt because the
+literal has no source alias to compare against.
+
 ---
 
 ## Other Features

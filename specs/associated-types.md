@@ -397,7 +397,6 @@ end 'main'
 <!-- test: byte-element-type -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 interface ByteSource uses Element
@@ -419,7 +418,7 @@ end 'SingleByte'
 function main() returns ExitCode
 	let s = SingleByte.create(b: 42 as Byte)
 	let b = s.getByte()
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode

@@ -64,12 +64,11 @@ For float-to-integer conversion, use the explicit conversion functions:
 <!-- test: int-literal-to-byte -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode
@@ -79,12 +78,11 @@ end 'main'
 <!-- test: int-literal-zero-to-byte -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 0 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode
@@ -94,12 +92,11 @@ end 'main'
 <!-- test: int-literal-max-to-byte -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 255 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode
@@ -109,12 +106,11 @@ end 'main'
 <!-- test: byte-to-int -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 100 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode
@@ -127,9 +123,13 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
 
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
 function main() returns ExitCode
 	let b = 50 as Byte
-	let f = b as Float
+	let f = toFloat(b)
 	return trunc(f)
 end 'main'
 ```
@@ -166,60 +166,14 @@ end 'main'
 99
 ```
 
-<!-- test: same-type-int -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function main() returns ExitCode
-	let x = 42
-	return x as Integer
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: same-type-float -->
-```maxon
-
-typealias Float = float(f64.min to f64.max)
-
-function main() returns ExitCode
-	let f = 42.0
-	let g = f as Float
-	return trunc(g)
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: same-type-byte -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-
-function main() returns ExitCode
-	let b = 42 as Byte
-	let c = b as Byte
-	return c as Integer
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: cast-in-expression -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 10 as Byte
-	let result = b as Integer + 32
+	let result = b + 32
 	return result
 end 'main'
 ```
@@ -230,14 +184,16 @@ end 'main'
 <!-- test: chained-byte-int-float -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
 
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
 function main() returns ExitCode
 	let b = 25 as Byte
-	let i = b as Integer
-	let f = i as Float
+	let f = toFloat(b)
 	return trunc(f)
 end 'main'
 ```
@@ -369,4 +325,173 @@ end 'main'
 ```
 ```maxoncstderr
 error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot cast from int to bool
+```
+
+### Unneeded Casts (Compile Error E3010)
+
+A cast that does not narrow the source range is rejected: the surrounding context
+already auto-widens, so the explicit cast contributes nothing.
+
+<!-- test: error.unneeded.same-type-int -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function identity(x Integer) returns Integer
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let x = identity(42)
+	let y = x as Integer
+	return y
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-type-int.test:11:12: unneeded cast: 'Integer' already fits in 'Integer'
+```
+
+<!-- test: error.unneeded.same-type-float -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function identity(x Float) returns Float
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let f = identity(42.0)
+	let g = f as Float
+	return trunc(g)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-type-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
+```
+
+<!-- test: error.unneeded.same-type-byte -->
+```maxon
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 42 as Byte
+	let c = b as Byte
+	return c
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-type-byte.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: error.unneeded.same-alias-byte -->
+```maxon
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let b = 42 as Byte
+	let c = b as Byte
+	return c
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-alias-byte.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: error.unneeded.same-alias-int -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function identity(x Integer) returns Integer
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let x = identity(42)
+	let y = x as Integer
+	return y
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-alias-int.test:11:12: unneeded cast: 'Integer' already fits in 'Integer'
+```
+
+<!-- test: error.unneeded.same-alias-float -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function identity(x Float) returns Float
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let f = identity(42.0)
+	let g = f as Float
+	return trunc(g)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.same-alias-float.test:11:12: unneeded cast: 'Float' already fits in 'Float'
+```
+
+<!-- test: error.unneeded.widening-byte-to-integer -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+
+function asInteger(x Integer) returns Integer
+	return x
+end 'asInteger'
+
+function main() returns ExitCode
+	let b = 42 as Byte
+	let i = b as Integer
+	return asInteger(i)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.widening-byte-to-integer.test:12:12: unneeded cast: 'Byte' already fits in 'Integer'
+```
+
+<!-- test: error.unneeded.widening-int-to-float -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias JsonFloat = float(f64.min to f64.max)
+
+function identity(x Integer) returns Integer
+	return x
+end 'identity'
+
+function main() returns ExitCode
+	let i = identity(42)
+	let f = i as JsonFloat
+	return trunc(f)
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.widening-int-to-float.test:12:12: unneeded cast: 'Integer' already fits in 'JsonFloat'
+```
+
+<!-- test: error.unneeded.call-result-same-alias -->
+```maxon
+
+typealias Score = int(0 to 100)
+
+function getScore() returns Score
+	return 42
+end 'getScore'
+
+function main() returns ExitCode
+	let result = getScore() as Score
+	return result
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.call-result-same-alias.test:10:26: unneeded cast: 'Score' already fits in 'Score'
 ```

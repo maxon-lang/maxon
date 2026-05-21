@@ -918,6 +918,8 @@ Math.pow(base, exponent: e)  // base raised to exponent
 
 // Explicit with 'as' — bare `int`/`float`/`byte` are rejected;
 // route every primitive cast through a named ranged typealias.
+// An `as` that doesn't narrow (target alias already covers the source's
+// range) is rejected with E3010 "unneeded cast".
 typealias Real = float(f64.min to f64.max)
 typealias Octet = byte(0 to u8.max)
 var f = 5 as Real

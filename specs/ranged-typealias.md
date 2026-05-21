@@ -289,12 +289,11 @@ Stack trace:
 
 <!-- test: byte-range -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 typealias AsciiCode = int(0 to 127)
 
 function main() returns ExitCode
 	let c = 65 as AsciiCode
-	return c as Integer
+	return c
 end 'main'
 ```
 ```exitcode

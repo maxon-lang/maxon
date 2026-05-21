@@ -3,9 +3,13 @@
 typealias Float = float(f64.min to f64.max)
 typealias Byte = int(0 to u8.max)
 
+function toFloat(b Byte) returns Float
+	return b + 0.0
+end 'toFloat'
+
 function main() returns ExitCode
 	let b = 50 as Byte
-	let f = b as Float
+	let f = toFloat(b)
 	return trunc(f)
 end 'main'
 ---
@@ -17,9 +21,11 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov r8d, 50
-    x64.cvtsi2sd xmm0, r8
+    x64.movsd xmm0, [rip+__float_0]
+    x64.cvtsi2sd xmm1, r8
+    x64.addsd xmm1, xmm0
     x64.mov r9d, 4294967295
-    x64.cvttsd2si r8, xmm0
+    x64.cvttsd2si r8, xmm1
     x64.cmp r8, r9
     x64.jbe __range_ok_0
   __range_panic_0:

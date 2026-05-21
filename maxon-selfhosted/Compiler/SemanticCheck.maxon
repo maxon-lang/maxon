@@ -634,7 +634,7 @@ function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func
 	end 'noKey'
 
 	let slotNames = buildSlotNameTable(func: func)
-	let containsLimit = containsIdx as OpIndexOrMissing
+	let containsLimit = containsIdx
 	let receiverPath = buildAccessPath(module, block: block, limitOpIdx: containsLimit, name: info.receiver, slotNames: slotNames)
 	if receiverPath.isEmpty() 'unresolvableReceiver'
 		return
@@ -870,7 +870,7 @@ function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limi
 	end 'isSelfFieldLoad'
 	if producer.name == "fieldLoad" 'isFieldLoad'
 		return match producer 'extract'
-			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module: module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: (producerIdx as OpIndexOrMissing), slotNames: slotNames)
+			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module: module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: producerIdx, slotNames: slotNames)
 			default panic("buildAccessPath: name==fieldLoad but match arm missed it")
 		end 'extract'
 	end 'isFieldLoad'

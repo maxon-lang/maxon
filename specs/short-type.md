@@ -47,12 +47,15 @@ end 'main'
 typealias U16 = int(0 to 65535)
 typealias Result = int(0 to u32.max)
 
+function sumWide(a U16, b U16) returns Result
+	return a + b
+end 'sumWide'
+
 function main() returns ExitCode
 	let arr = [65535 as U16, 0 as U16, 1 as U16]
 	let a = try arr.get(0) otherwise 0
 	let b = try arr.get(2) otherwise 0
-	let sum = a as Result + b as Result
-	return sum
+	return sumWide(a, b: b)
 end 'main'
 ```
 ```exitcode
@@ -167,7 +170,7 @@ typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
 	var arr = [0 as U16, 0 as U16, 0 as U16]
-	try arr.set(1, value: 42 as U16) otherwise panic("test invariant: set OOB")
+	try arr.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise 0
 	return v
 end 'main'

@@ -220,7 +220,7 @@ export type PassPipeline
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
-			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName)
+			expandCastRangeChecks then expandCastRangeChecks(project, module: maxonModule, sourceFileName: sourceFileName, sourcePath: sourcePath)
 			constantArrayLiteralRdata then runConstantArrayLiteralRdata(project, module: maxonModule, globalData: globalData)
 
 			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
@@ -629,7 +629,7 @@ end 'recordPassTime'
 // Capture a wall-clock start point only when timings are active. Returns 0
 // when inactive — a no-op so callers can write the same shape regardless.
 export function passTimerStart() returns PassMillis
-	return (Clock.nowMs() if passTimingsEnabled else 0) as PassMillis
+	return (Clock.nowMs() if passTimingsEnabled else 0)
 end 'passTimerStart'
 
 // Record `now - startMs` against `passName` when timings are active. Pair
@@ -639,7 +639,7 @@ export function recordPassSince(passName String, startMs PassMillis)
 	if not passTimingsEnabled 'inactive'
 		return
 	end 'inactive'
-	recordPassTime(passName, elapsedMs: ((Clock.nowMs() as PassMillis) - startMs) as PassMillis)
+	recordPassTime(passName, elapsedMs: ((Clock.nowMs()) - startMs))
 end 'recordPassSince'
 
 // Print per-pass totals + invocation counts, descending by total ms. Selection

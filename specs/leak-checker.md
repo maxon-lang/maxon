@@ -163,7 +163,7 @@ function main() returns ExitCode
 	var m = TypeMap.create()
 	m.upsert("a", value: ReturnType.value(MaxonType.named(42)))
 	let t = dispatch(m, key: "a")
-	return decode(t) as ExitCode
+	return decode(t)
 end 'main'
 ```
 ```exitcode

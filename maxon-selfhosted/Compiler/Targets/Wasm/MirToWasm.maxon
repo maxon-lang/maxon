@@ -302,10 +302,10 @@ export function emitWasmPerFunction(module MirModule, globalData GlobalDataTable
 		try globalDataOffsets.insert(entry.name, value: dataOffset) otherwise panic("emitWasmPerFunction: duplicate data section entry '{entry.name}' at offset {dataOffset}")
 		dataOffset = (dataOffset + entry.initialBytes.count()) as Wasm32Offset
 		while dataOffset mod 8 != 0 'align'
-			dataOffset = (dataOffset + 1) as Wasm32Offset
+			dataOffset = dataOffset + 1
 		end 'align'
 	end 'dataEntries'
-	let stackBase = alignUp(dataOffset as ByteCount, alignment: 16) as Wasm32Offset
+	let stackBase = alignUp(dataOffset, alignment: 16) as Wasm32Offset
 
 	// Emit each function body with fixable call indices
 	var lowering = WasmFunctionLowering.create(module, funcNames: funcNames, funcSigs: funcSigs, globalDataOffsets: globalDataOffsets, stackBase: stackBase, fixedCalls: true)
@@ -453,7 +453,7 @@ function patchOneFuncAbs64InRdataWasm(globalData GlobalDataTable, funcName Strin
 	// canonical bytes stored in `globalData.values` — `patchQword` mutates
 	// in place and no write-back is needed.
 	var blob = try globalData.values.get(blobIdx) otherwise panic("patchOneFuncAbs64InRdataWasm: values.get failed for blob '{rdataLabel}'")
-	patchQword(blob, offset: offsetInLabel, value: tableIdx as MachineWord)
+	patchQword(blob, offset: offsetInLabel, value: tableIdx)
 end 'patchOneFuncAbs64InRdataWasm'
 
 // Lay out the wasm linear-memory image of the global data table starting at
@@ -482,7 +482,7 @@ function layoutWasmGlobalData(globalData GlobalDataTable, baseOffset Wasm32Offse
 		// `buildDataPreludeSection`). Wasm linear memory is zero-initialized,
 		// so the gap doesn't need an explicit segment.
 		while dataOffset mod 8 != 0 'align'
-			dataOffset = (dataOffset + 1) as Wasm32Offset
+			dataOffset = dataOffset + 1
 		end 'align'
 	end 'dataEntries'
 	return (chunks, dataOffset)
@@ -976,7 +976,7 @@ type WasmFunctionLowering
 			isVoidReturn: true,
 			funcThrows: false,
 			dispatchLocal: 0 as Wasm32Index,
-			loopDepth: 0 as Wasm32Index,
+			loopDepth: 0,
 			blockIndex: BlockIndexMap.create(),
 			funcFloatSet: BoolArray.create()
 		}
@@ -1261,7 +1261,7 @@ type WasmFunctionLowering
 
 		// then: set dispatch to thenIdx
 		body.push(opI32Const)
-		writeSleb128(body, value: thenIdx as ParsedInt)
+		writeSleb128(body, value: thenIdx)
 		body.push(opLocalSet)
 		writeUleb128(body, value: dispatchLocal)
 
@@ -1269,7 +1269,7 @@ type WasmFunctionLowering
 
 		// else: set dispatch to elseIdx
 		body.push(opI32Const)
-		writeSleb128(body, value: elseIdx as ParsedInt)
+		writeSleb128(body, value: elseIdx)
 		body.push(opLocalSet)
 		writeUleb128(body, value: dispatchLocal)
 
@@ -1290,7 +1290,7 @@ type WasmFunctionLowering
 
 		// Set dispatch local to target block index
 		body.push(opI32Const)
-		writeSleb128(body, value: targetIdx as ParsedInt)
+		writeSleb128(body, value: targetIdx)
 		body.push(opLocalSet)
 		writeUleb128(body, value: dispatchLocal)
 
@@ -1338,7 +1338,7 @@ type WasmFunctionLowering
 		// Store to linear memory at stackBase + slotId * 8
 		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI32Const)
-		writeSleb128(body, value: slotOffset as ParsedInt)
+		writeSleb128(body, value: slotOffset)
 		body.push(opLocalGet)
 		writeUleb128(body, value: valueId as Wasm32Index)
 		body.push(opI64Store)
@@ -1350,7 +1350,7 @@ type WasmFunctionLowering
 		// Load from linear memory at stackBase + slotId * 8
 		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI32Const)
-		writeSleb128(body, value: slotOffset as ParsedInt)
+		writeSleb128(body, value: slotOffset)
 		body.push(opI64Load)
 		body.push(0x03)
 		writeUleb128(body, value: 0)
@@ -1697,7 +1697,7 @@ type WasmFunctionLowering
 		// Stack area starts after global data.
 		let slotOffset = (stackBase + (slotId * 8)) as Wasm32Offset
 		body.push(opI64Const)
-		writeSleb128(body, value: slotOffset as ParsedInt)
+		writeSleb128(body, value: slotOffset)
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as Wasm32Index)
 	end 'emitStackSlotAddr'
@@ -1758,7 +1758,7 @@ type WasmFunctionLowering
 
 		// Call fd_write(fd, iovs=iovecBase, iovs_len=1, nwritten=nwrittenBase)
 		body.push(opI32Const)
-		writeSleb128(body, value: fd as ParsedInt)
+		writeSleb128(body, value: fd)
 
 		body.push(opI32Const)
 		writeSleb128(body, value: iovecBase as ParsedInt)
@@ -1804,7 +1804,7 @@ type WasmFunctionLowering
 
 		// Call fd_read(fd, iovs=iovecBase, iovs_len=1, nread=nreadBase)
 		body.push(opI32Const)
-		writeSleb128(body, value: fd as ParsedInt)
+		writeSleb128(body, value: fd)
 
 		body.push(opI32Const)
 		writeSleb128(body, value: iovecBase as ParsedInt)
@@ -2033,14 +2033,14 @@ type WasmFunctionLowering
 				funcAddrFixups.push(WasmFuncAddrFixup.create(body.count(), targetName: name))
 				writeSleb128Fixed5(body, value: 0 as ParsedInt)
 			end 'recordFixup' else 'haveIdx'
-				writeSleb128Fixed5(body, value: tableIdx as ParsedInt)
+				writeSleb128Fixed5(body, value: tableIdx)
 			end 'haveIdx'
 		end 'cacheMode' else 'userMode'
 			// User-build pipeline: table is finalized, miss is a bug for a
 			// real funcAddr op but tolerated for fallback paths like
 			// `mrt_panic_print_frame` that emit zero on miss.
 			let tableIdx = try funcTableIndices.get(name) otherwise 0 as MachineWord
-			writeSleb128(body, value: tableIdx as ParsedInt)
+			writeSleb128(body, value: tableIdx)
 		end 'userMode'
 		body.push(opI64ExtendI32U)
 		body.push(opLocalSet)
@@ -2071,7 +2071,7 @@ type WasmFunctionLowering
 			end 'isInt'
 		end 'eachArg'
 		s.append(") -> ")
-		if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
+		if isFloatLocal(funcFloatSet, localIdx: resultId) 'floatRes'
 			s.append("f64")
 		end 'floatRes' else 'intRes'
 			s.append("i64")
@@ -2096,7 +2096,7 @@ type WasmFunctionLowering
 		// (the body's `gives <expr>` desugars to a non-void return), so
 		// emitIndirectCall passes isVoid=false.
 		if not isVoid 'hasResult'
-			if isFloatLocal(funcFloatSet, localIdx: resultId as MachineWord) 'floatRes'
+			if isFloatLocal(funcFloatSet, localIdx: resultId) 'floatRes'
 				results.push(wasmTypeF64)
 			end 'floatRes' else 'intRes'
 				results.push(wasmTypeI64)
@@ -2214,7 +2214,7 @@ type WasmFunctionLowering
 	end 'findBlockIndex'
 
 	function findMaxValueId() returns MachineWord
-		return scanMaxMirValueId(module, func: func) as MachineWord
+		return scanMaxMirValueId(module, func: func)
 	end 'findMaxValueId'
 
 	// ============================================================
@@ -2271,7 +2271,7 @@ type WasmFunctionLowering
 			unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
 			call(resultId, callee, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee)
 			param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))
-			movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
+			movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId)
 			cmp to branch then break 'dispatch'
 			indirectCall then break 'dispatch'
 			witnessCall then break 'dispatch'
@@ -2876,7 +2876,7 @@ function lookupOrRegisterIndirectType(types ByteArrayArray, typeIndexMap WasmTyp
 	let existing = try typeIndexMap.get(signatureBytes) otherwise 'register'
 		let newIdx = types.count() as Wasm32Index
 		types.push(signatureBytes)
-		typeIndexMap.upsert(signatureBytes, value: newIdx as MachineWord)
+		typeIndexMap.upsert(signatureBytes, value: newIdx)
 		return newIdx
 	end 'register'
 	return existing as Wasm32Index
@@ -2897,7 +2897,7 @@ function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeInd
 	// `call_indirect` traps with "indirect call type mismatch" if the
 	// expected type carries a result the actual callee doesn't push.
 	if not isVoid 'hasResult'
-		if isFloatLocal(floatSet, localIdx: resultId as MachineWord) 'floatRes'
+		if isFloatLocal(floatSet, localIdx: resultId) 'floatRes'
 			results.push(wasmTypeF64)
 		end 'floatRes' else 'intRes'
 			results.push(wasmTypeI64)
@@ -2908,7 +2908,7 @@ function registerIndirectCallType(types ByteArrayArray, typeIndexMap WasmTypeInd
 	if typeIndexMap.contains(funcType) 'alreadyInterned'
 		return
 	end 'alreadyInterned'
-	let newIdx = types.count() as MachineWord
+	let newIdx = types.count()
 	types.push(funcType)
 	typeIndexMap.upsert(funcType, value: newIdx)
 end 'registerIndirectCallType'
@@ -2919,7 +2919,7 @@ end 'registerIndirectCallType'
 // mirrors findFloatValueIds exactly: seed block-arg floats, then walk
 // ops marking results based on opcode / source.
 function computeFloatValueIdsForFunc(module MirModule, func IrFunction) returns BoolArray
-	let maxId = scanMaxMirValueId(module, func: func) as MachineWord
+	let maxId = scanMaxMirValueId(module, func: func)
 	var floatSet = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'
 		floatSet.push(false)
@@ -2966,8 +2966,8 @@ end 'computeFloatValueIdsForFunc'
 // indirect-call signature dedup).
 function markFloatMirOpStandalone(op MirOp, floatSet BoolArray)
 	match op 'dispatch'
-		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
-		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
+		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId, condition: isFloat)
+		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId)
 		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
 		unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
 		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: stdTypeIsFloat(paramType))

@@ -40,12 +40,11 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 <!-- test: byte-cast -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function main() returns ExitCode
 	let b = 42 as Byte
-	return b as Integer
+	return b
 end 'main'
 ```
 ```exitcode

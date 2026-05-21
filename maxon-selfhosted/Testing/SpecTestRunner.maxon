@@ -804,7 +804,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	let covMapPath = batchExePath.changeExtension(".covmap")
 	emitWorkerCompiling("{specName} (batch of {tests.count()})")
 	let cr = try compileSourceWithIr(batchedSource, virtualPath: virtualPath, target: target, outputPath: batchExePath, coverage: false, covMapPath: covMapPath) otherwise 'batchCompileFailed'
-		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
+		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 		let capturedErrors = stopCapturingErrors()
 		// The shared compile didn't identify any single test — re-run every
 		// batchable test via the per-fragment path so callers see real
@@ -813,7 +813,7 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 		pushBatchableForFallback(outcome, tests: tests, alreadySkipped: buildResult.skippedNames)
 		return outcome
 	end 'batchCompileFailed'
-	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
+	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 	cancelCapturingErrors()
 	logDebug(LogCategory.testing, message: function() gives "[BATCH OK] {specName} compiled to {cr.outputPath}")
 
@@ -965,7 +965,7 @@ function parseBatchSlice(stdout String, testName String) returns BatchSlice
 	// (The test's own stdout content gets compared after another trim at the
 	// expectation site, so this is symmetric.)
 	let cleaned = trimWhitespace(testStdoutRaw)
-	return BatchSlice.present(cleaned, exitCode: ec as ProcessExitCode)
+	return BatchSlice.present(cleaned, exitCode: ec)
 end 'parseBatchSlice'
 
 // Return the substring of `s` starting at byte position `bytePos`. Falls
@@ -1212,7 +1212,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	let compileStart = Clock.nowMs()
 	emitWorkerCompiling("{specName}/{testName}")
 	let compileResult = try compileFragmentInMemory(fragment, virtualSourcePath: virtualSourcePath, target: target, outputExe: outputExe) otherwise 'compileFailed'
-		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
+		totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 		let capturedErrors = stopCapturingErrors()
 		if needTrace 'cancelTrace'
 			cancelCapturingTrace()
@@ -1234,7 +1234,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		cleanup(outputExe)
 		return TestResult.create(testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileFailed'
-	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart) as Millis
+	totalCompileMs = totalCompileMs + (Clock.nowMs() - compileStart)
 	cancelCapturingErrors()
 	let outputPath = compileResult.outputPath
 	let compileIr = compileResult.ir
@@ -1259,7 +1259,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	end 'runFail'
 	let runStdout = runResult.stdout
 	let runStderr = runResult.stderr
-	let runEc = runResult.exitCode() as ProcessExitCode
+	let runEc = runResult.exitCode()
 
 	var passed = true
 	var errorMsg = ""
@@ -2734,7 +2734,7 @@ end 'buildFallbackWorkerCommand'
 // through the IOCP-backed subprocessWaitCollect path.
 function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount) returns (TestCount, TestCount)
 	if fallbackUnits.count() == 0 'noWork'
-		return (0 as TestCount, 0 as TestCount)
+		return (0, 0)
 	end 'noWork'
 
 	// Build a flat list of (specName, testName) pairs so we can round-robin
@@ -2756,7 +2756,7 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 
 	let totalTestsInFallback = testNames.count()
 	if totalTestsInFallback == 0 'noTests'
-		return (0 as TestCount, 0 as TestCount)
+		return (0 as TestCount, 0)
 	end 'noTests'
 	markPhase("fallback: {seenSpecs.count()} units, {totalTestsInFallback} tests")
 
@@ -2764,8 +2764,8 @@ function runFallbackPhase(fallbackUnits SpecWorkUnitArray, exePath String, targe
 	// individual tests so each worker compiles ~total/N tests (one compile per
 	// test). With 36 tests across 8 workers, worst-case worker gets 5 compiles.
 	var fallbackWorkerCount = numWorkers
-	if (totalTestsInFallback as TestCount) < fallbackWorkerCount 'fewerTests'
-		fallbackWorkerCount = totalTestsInFallback as TestCount
+	if totalTestsInFallback < fallbackWorkerCount 'fewerTests'
+		fallbackWorkerCount = totalTestsInFallback
 	end 'fewerTests'
 	if fallbackWorkerCount < 1 'tooFew'
 		fallbackWorkerCount = 1 as TestCount
@@ -3000,8 +3000,8 @@ function retryFallbackTestsIndividually(specName String, tests SpecTestArray, ex
 			// One subprocess per test, so a missing result means *this* test's
 			// compile crashed. Charge the failure to it specifically rather
 			// than re-blaming the whole spec.
-			failed = failed + (1 as TestCount)
-			crashed = crashed + (1 as TestCount)
+			failed = failed + 1
+			crashed = crashed + 1
 			failOwners.push(specName)
 			failPayloads.push("  {specName}/{t.name}: worker crashed (panic, timeout, or non-zero exit)")
 		end 'workerCrashed'
@@ -3048,7 +3048,7 @@ function parseSinglesResultLine(line String) returns SinglesWorkerResult
 	let failed = try int.fromString(failedStr) otherwise return SinglesWorkerResult.invalid()
 	let compileMsStr = try parts.get(5) otherwise return SinglesWorkerResult.invalid()
 	let compileMs = try int.fromString(compileMsStr) otherwise return SinglesWorkerResult.invalid()
-	return SinglesWorkerResult.create(specName, passed: passed as TestCount, failed: failed as TestCount, compileMs: compileMs as Millis, failures: TextLineArray.create())
+	return SinglesWorkerResult.create(specName, passed: passed as TestCount, failed: failed, compileMs: compileMs, failures: TextLineArray.create())
 end 'parseSinglesResultLine'
 
 // Extract the failure-text payload from a WORKER_SINGLE_FAIL line, given the
@@ -3113,12 +3113,12 @@ export typealias SinglesWorkerOutcomeArray = Array with SinglesWorkerOutcome
 function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath String, targetStr String, filter String, verbose bool, numWorkers TestCount, phaseLabel String) returns (TestCount, TestCount)
 	let count = specNames.count()
 	if count == 0 'noWork'
-		return (0 as TestCount, 0 as TestCount)
+		return (0 as TestCount, 0)
 	end 'noWork'
 
 	var effectiveWorkers = numWorkers
-	if (count as TestCount) < effectiveWorkers 'fewerSpecs'
-		effectiveWorkers = count as TestCount
+	if count < effectiveWorkers 'fewerSpecs'
+		effectiveWorkers = count
 	end 'fewerSpecs'
 	if effectiveWorkers < 1 'tooFew'
 		effectiveWorkers = 1 as TestCount
@@ -3244,7 +3244,7 @@ function runSinglesPhase(specNames StringArray, units SpecWorkUnitArray, exePath
 				continue
 			end 'emptyName'
 			let unit = findUnitByName(units, specName: pn)
-			let nonBatchableCount = unit.nonBatchable.count() as TestCount
+			let nonBatchableCount = unit.nonBatchable.count()
 			let crashedCount = nonBatchableCount + unit.missingLoweringCount
 			if crashedCount == 0 'noSingles'
 				continue
@@ -3349,7 +3349,7 @@ function parseBatchWorkerResult(line String) returns BatchWorkerResult
 			end 'nonEmpty'
 		end 'eachName'
 	end 'hasSkipped'
-	return BatchWorkerResult.create(specName, passed: passed as TestCount, compileMs: compileMs as Millis, skippedNames: skippedNames)
+	return BatchWorkerResult.create(specName, passed: passed as TestCount, compileMs: compileMs, skippedNames: skippedNames)
 end 'parseBatchWorkerResult'
 
 // Find a SpecWorkUnit by spec name. Panics if not found — callers only query
@@ -3659,9 +3659,9 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	end 'collectBatchable'
 
 	let batchableCount = batchableSpecNames.count()
-	var numWorkers = workerCount as TestCount
+	var numWorkers = workerCount
 	if batchableCount < numWorkers 'fewerSpecsThanWorkers'
-		numWorkers = batchableCount as TestCount
+		numWorkers = batchableCount
 	end 'fewerSpecsThanWorkers'
 
 	// Round-robin: worker i gets specs at positions i, i+numWorkers, i+2*numWorkers, ...

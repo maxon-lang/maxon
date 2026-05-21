@@ -1023,15 +1023,12 @@ end 'main'
 
 <!-- test: heap-string-iteration -->
 ```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
 	var sum = 0
 	// Iterate over bytes directly to test heap string iteration
 	for b in s.bytes() 'loop'
-		sum = sum + (b as Integer)
+		sum = sum + b
 	end 'loop'
 	print("{sum}\n")  // 65+66+...+80 = 1160
 	return 0

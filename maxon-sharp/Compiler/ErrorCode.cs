@@ -59,6 +59,7 @@ public enum ErrorCode {
   SemanticAmbiguousFunctionCall = 3007,
   SemanticSymbolNotExported = 3008,
   SemanticUnsafeCast = 3009,
+  SemanticUnneededCast = 3010,
   SemanticUnknownType = 3011,
   SemanticUnusedVariable = 3012,
   SemanticMissingReturn = 3013,

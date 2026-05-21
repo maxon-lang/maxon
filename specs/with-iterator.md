@@ -55,12 +55,11 @@ end 'main'
 <!-- test: withIterator.bytes -->
 Iterate over string bytes via the ByteView iterable.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let s = "abc"
 	var sum = 0
 	for b in s.bytes() 'loop'
-		sum = sum + (b as Integer)
+		sum = sum + b
 	end 'loop'
 	print("{sum}\n")
 	return 0

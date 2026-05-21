@@ -1448,8 +1448,6 @@ end 'main'
 <!-- test: byte-vector -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
-
 typealias Byte = int(0 to u8.max)
 typealias ByteVec4 = Vector with 4 Byte
 
@@ -1461,7 +1459,7 @@ function main() returns ExitCode
 	try v.set(3, value: 40) otherwise panic("test invariant: set OOB")
 	let a = try v.get(0) otherwise 0
 	let b = try v.get(3) otherwise 0
-	return (a as Integer) + (b as Integer)
+	return a + b
 end 'main'
 ```
 ```exitcode

@@ -87,7 +87,7 @@ end
 
 function main() returns ExitCode
 	let b = getVal() as Bounded
-	return b as ExitCode
+	return b
 end
 ```
 ```exitcode

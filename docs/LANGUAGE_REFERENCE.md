@@ -366,6 +366,12 @@ Supported casts:
 
 Casts to or from `bool` are not allowed. Narrowing casts (`int` variable → `byte`, `float` → `int`, `float` → `byte`) are not allowed. Attempting an unsupported cast produces error **E3009**.
 
+A cast whose target alias already covers the source alias's full range — for
+example `let x Integer = ...; let y = x as Integer` — is rejected with **E3010
+"unneeded cast"**. The compiler auto-widens at use sites, so any explicit cast
+must actually narrow or refine. Bare-literal sources (`42 as Byte`) are exempt
+because the literal has no source alias to compare against.
+
 **Converting floats to integers:**
 The `float → int` cast is not supported because it silently truncates. Use explicit functions instead to make your intent clear:
 - `trunc(x)` - Truncate toward zero (removes fractional part)

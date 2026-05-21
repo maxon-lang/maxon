@@ -241,7 +241,7 @@ function extendSlotsForInterfaceWitnesses(func IrFunction)
 	if originalSlotCount == 0 'noSlots'
 		return
 	end 'noSlots'
-	let paramCount = func.maxonParamTypes.count() as VarSlot
+	let paramCount = func.maxonParamTypes.count()
 	for slotId in 0 upto originalSlotCount 'eachSlot'
 		let slotType = try func.slotMaxonTypes.get(slotId) otherwise continue
 		if not interfaceTypeIsFat(slotType) 'notInterface'
@@ -272,7 +272,7 @@ function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessS
 	if totalSlots == 0 'noSlots'
 		return map
 	end 'noSlots'
-	let paramCount = func.maxonParamTypes.count() as VarSlot
+	let paramCount = func.maxonParamTypes.count()
 	// Count only LOCAL interface slots — those are the ones that grew
 	// trailing companions. Param interface slots use their pre-allocated
 	// `slotId+1` and don't shift the original-slot boundary.
@@ -294,7 +294,7 @@ function buildInterfaceWitnessSlotMap(func IrFunction) returns InterfaceWitnessS
 			continue
 		end 'notInterface'
 		if slotId < paramCount 'isParam'
-			map.upsert(slotId as VarSlot, value: (slotId + 1) as VarSlot)
+			map.upsert(slotId as VarSlot, value: (slotId + 1))
 		end 'isParam' else 'isLocal'
 			map.upsert(slotId as VarSlot, value: nextCompanion)
 			nextCompanion = nextCompanion + 1
@@ -1096,7 +1096,7 @@ end 'UnionTypeLookup'
 function unionMaxPayloadArity(unionType EnumType) returns ParsedInt
 	var maxArity = 0
 	for c in unionType.cases 'scan'
-		let arity = c.payloadFields.count() as ParsedInt
+		let arity = c.payloadFields.count()
 		if arity > maxArity 'wider'
 			maxArity = arity
 		end 'wider'
@@ -1751,7 +1751,7 @@ type MaxonToStdLowering
 			// `maxonParamTypes.count() - 1` still names the env slot even
 			// when layout/witness are present.
 			if isLiftedClosureName(srcFunc.name) and srcFunc.maxonParamTypes.count() > 0 'envParam'
-				self.liftedEnvValueId = (srcFunc.maxonParamTypes.count() - 1) as ValueId
+				self.liftedEnvValueId = (srcFunc.maxonParamTypes.count() - 1)
 			end 'envParam'
 
 			// Phase 11.4: emit explicit `param` ops at the entry block for
@@ -2383,7 +2383,7 @@ type MaxonToStdLowering
 	function materializeFormatSpecAsString(formatSpecId StringId, dstBlock IrBlock) returns ValueId
 		let data = self.project.strings.get(formatSpecId)
 		let dataBytes = data.toByteArray()
-		let dataLen = dataBytes.count() as ParsedInt
+		let dataLen = dataBytes.count()
 		let symName = addInternedString(self.globalData, stringId: formatSpecId, data: dataBytes)
 
 		let bufPtrId = allocValueId(self.funcIdRef)
@@ -2514,7 +2514,7 @@ type MaxonToStdLowering
 			let caseBufId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(caseBufId, name: caseSym)))
 			self.setValueType(caseBufId, t: MaxonType.integer)
-			let caseLenId = self.emitConstI64(renderedBytes.count() as ParsedInt, dstBlock: dstBlock)
+			let caseLenId = self.emitConstI64(renderedBytes.count(), dstBlock: dstBlock)
 			// Match the runtime value the parser laid down for the case —
 			// the ordinal, which is what default / string / char backed
 			// enums store at runtime.
@@ -2686,7 +2686,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.globalAddr(fmtPtrId, name: symName)))
 		self.setValueType(fmtPtrId, t: MaxonType.integer)
 		let fmtLenId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: fmtLenId, value: dataBytes.count() as ParsedInt))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: fmtLenId, value: dataBytes.count()))))
 		self.setValueType(fmtLenId, t: MaxonType.integer)
 		return (fmtPtrId, fmtLenId)
 	end 'materializeFormatSpecBuffer'
@@ -2737,7 +2737,17 @@ type MaxonToStdLowering
 			self.lowerInterfaceSlotStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			return
 		end 'fat'
-		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
+		// Phase A widening: when this varStore feeds a slot whose declared
+		// MaxonType is a float (e.g. a match-expression result slot whose
+		// type was widened to float across arms) and the incoming value is
+		// an int, splice in an siToFp so float bits land in the slot. Mirror
+		// of the C# bootstrap's match-arm-result auto-widening — the slot
+		// type is computed by TypeResolution's `recordVarStore` pass, which
+		// upgrades int→float when any arm produces a float value.
+		let storedValueId = self.resolveName(value)
+		let storedValueType = self.getValueType(storedValueId)
+		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: slotType, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: widenedValueId)))
 	end 'lowerVarStore'
 
 	function lookupSlotMaxonType(slotId VarSlot) returns MaxonType
@@ -2821,7 +2831,7 @@ type MaxonToStdLowering
 			return valueId
 		end 'fitsInline'
 		let sizeId = allocValueId(self.funcIdRef)
-		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: widthBytes as IntConstant))))
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: sizeId, value: widthBytes))))
 		self.setValueType(sizeId, t: MaxonType.integer)
 		let boxId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.boxValue(boxId, valueId: valueId, sizeId: sizeId)))
@@ -2890,7 +2900,7 @@ type MaxonToStdLowering
 		// var copies, struct-field stores, etc. — every load resolves to
 		// a fresh env binding rooted at the original param.
 		if isFunctionMaxonType(slotType) 'pairEnv'
-			if let envSlot = try self.fnEnvVarNames.get(slotId as ValueId) 'hasEnv'
+			if let envSlot = try self.fnEnvVarNames.get(slotId) 'hasEnv'
 				let envLoadId = allocValueId(self.funcIdRef)
 				self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(envLoadId, slotId: envSlot as VarSlot)))
 				self.fnEnvVarNames.upsert(resultId, value: envLoadId)
@@ -3309,8 +3319,8 @@ type MaxonToStdLowering
 		let gid = match receiverContext 'pickGid'
 			genericInstance(g) gives g
 			boolean to typeParameter gives 0 as GenericInstanceId
-			interface gives 0 as GenericInstanceId
-			constInt gives 0 as GenericInstanceId
+			interface gives 0
+			constInt gives 0
 		end 'pickGid'
 		if not maxonTypeIsGenericInstance(receiverContext) 'notGid'
 			return
@@ -3338,8 +3348,8 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmPtrId, addrId: resultId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(mmPtrId, t: MaxonType.integer)
 		self.storeI64Const(addrId: mmPtrId, offset: 16, value: n, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmPtrId, offset: 24, value: elementSize as ParsedInt, dstBlock: dstBlock)
-		let totalBytes = (n * (elementSize as ParsedInt)) as ParsedInt
+		self.storeI64Const(addrId: mmPtrId, offset: 24, value: elementSize, dstBlock: dstBlock)
+		let totalBytes = n * (elementSize as ParsedInt)
 		let totalBytesId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: totalBytesId, value: totalBytes))))
 		self.setValueType(totalBytesId, t: MaxonType.integer)
@@ -3724,7 +3734,7 @@ type MaxonToStdLowering
 	// a signed-shift StdOp (today's `shrI64` lowers to SHR on x64 and
 	// `i64.shr_u` on wasm).
 	function emitNarrowSignExtend(rawId ValueId, widthBytes MachineWord, dstBlock IrBlock) returns ValueId
-		let signBit = (1 shl ((widthBytes * 8 - 1) as ParsedInt)) as ParsedInt
+		let signBit = (1 shl ((widthBytes * 8 - 1) as ParsedInt))
 		let signBitId = self.emitConstI64(signBit, dstBlock: dstBlock)
 		self.setValueType(signBitId, t: MaxonType.integer)
 		let xoredId = self.emitBinaryI64(StdArithBinaryOpcode.xorI64, leftId: rawId, rightId: signBitId, dstBlock: dstBlock)
@@ -4019,7 +4029,7 @@ type MaxonToStdLowering
 		// anchor for register-class allocation (mirrors what `lower()`
 		// does for hasImplicitLayoutParam functions earlier in this pass).
 		for pIdx in 0 upto userParamCount 'eachParam'
-			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(pIdx as ValueId, paramIndex: pIdx as VarSlot, paramType: StdType.i64)))
+			self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(pIdx as ValueId, paramIndex: pIdx, paramType: StdType.i64)))
 		end 'eachParam'
 
 		// Build the implicit-arg tail. `Array.equals` is registered with
@@ -6186,6 +6196,27 @@ type MaxonToStdLowering
 		panic("coerceValueToParam: no implicit conversion from {castCategoryName(fromCategory)} to {castCategoryName(toCategory)} (compiler-emitted default)")
 	end 'coerceValueToParam'
 
+	// Phase A widening-only coercion: emit an implicit int→float convert if
+	// `fromType`'s category is `int` and `toType`'s category is `float`.
+	// Returns the original `valueId` for every other pair (same-category,
+	// narrowing, bool / string / unresolved involvement) — the caller is
+	// expected to be a position where ANY non-widening mismatch is either
+	// already accepted (existing kind-equal case) or a separate concern.
+	// Used by `lowerFieldStore` and `lowerVarStore` to mirror the C#
+	// bootstrap's Phase A struct-field-store and match-arm-result auto-
+	// widening, without ever performing a narrowing.
+	function widenValueToType(valueId ValueId, fromType MaxonType, toType MaxonType, dstBlock IrBlock) returns ValueId
+		if isUnresolvedType(fromType) or isUnresolvedType(toType) 'unresolvedSkip'
+			return valueId
+		end 'unresolvedSkip'
+		let fromCategory = convertCastCategory(self.project, t: fromType)
+		let toCategory = convertCastCategory(self.project, t: toType)
+		if not isWideningCategory(fromCategory, to: toCategory) 'notWidening'
+			return valueId
+		end 'notWidening'
+		return self.emitImplicitConvert(valueId, fromCategory: fromCategory, toCategory: toCategory, dstBlock: dstBlock)
+	end 'widenValueToType'
+
 	// Emit the Std-level conversion ops for one of the supported implicit
 	// conversions. Categorical dispatch keeps the convert kernel small —
 	// caller has already validated that the (from, to) pair is admissible.
@@ -6414,7 +6445,7 @@ type MaxonToStdLowering
 		// Param op anchors the receiver-rawValue slot for the backend's
 		// register allocator. The param's ValueId is 0 by construction
 		// (ValueIdRef.create(1) reserves id 0 for the single param).
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
 		self.setValueType(0 as ValueId, t: MaxonType.integer)
 
 		let caseCount = enumType.cases.count()
@@ -6490,7 +6521,7 @@ type MaxonToStdLowering
 		// both `funcSignatures` and `funcReturnTypes`.
 		let targetSig = try self.project.funcSignatures.get(targetName) otherwise panic("synthesizeOneFnRefThunk: funcSignatures.get failed for target '{targetName}' (functionRef must have referenced a registered function)")
 		let targetReturn = try self.project.funcReturnTypes.get(targetName) otherwise panic("synthesizeOneFnRefThunk: funcReturnTypes.get failed for target '{targetName}'")
-		let userParamCount = targetSig.paramTypes.count() as VarSlot
+		let userParamCount = targetSig.paramTypes.count()
 		let thunkParamCount = (userParamCount + 1) as VarSlot
 		let thunkName = "__fnref_{targetName}"
 		var stdParamTypes = StdTypeArray.create()
@@ -6516,7 +6547,7 @@ type MaxonToStdLowering
 		// Anchor the trailing `__env` param even though we don't use it;
 		// the regalloc needs the param op so the wasm signature includes
 		// the slot.
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(userParamCount as ValueId, paramIndex: userParamCount, paramType: StdType.i64)))
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(userParamCount, paramIndex: userParamCount, paramType: StdType.i64)))
 		// Function-typed value calls (`apply(f, x)`) always consume a non-
 		// void return — `f(x)` always produces a result the caller uses,
 		// and parser-level type-checking rejects passing a void-returning
@@ -6577,7 +6608,7 @@ type MaxonToStdLowering
 		var entryBlock = self.stdModule.addBlock(func, label: "entry")
 		// Anchor the self pointer as the synthesized function's only param.
 		// ValueIdRef.create(1) reserves id 0 for it.
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
 		self.setValueType(0 as ValueId, t: MaxonType.named(self.project.typeNames.intern(unionType.name)))
 		let selfId = 0 as ValueId
 
@@ -6768,7 +6799,7 @@ type MaxonToStdLowering
 		let snapshot = self.beginSynthesizedFunc(1)
 
 		var entryBlock = self.stdModule.addBlock(func, label: "entry")
-		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0 as VarSlot, paramType: StdType.i64)))
+		self.stdModule.appendOp(entryBlock, op: StdOp.call(StdCallOp.param(0 as ValueId, paramIndex: 0, paramType: StdType.i64)))
 		self.setValueType(0 as ValueId, t: MaxonType.integer)
 
 		let caseCount = enumType.cases.count()
@@ -6837,7 +6868,15 @@ type MaxonToStdLowering
 		let fieldStdType = maxonTypeToStdType(self.project, ref: resolvedFieldType)
 		let fieldWidth = storeWidthOfStdType(fieldStdType)
 		let isFloat = stdTypeIsFloat(fieldStdType)
-		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: self.resolveName(value), width: fieldWidth, isFloat: isFloat)))
+		// Phase A widening: when the value's recorded MaxonType is an int
+		// and the field's type is float, splice in an siToFp before the
+		// storeIndirect so the float field receives an IEEE-754 bit pattern
+		// rather than an integer bit pattern reinterpreted as float. Mirror
+		// of the C# bootstrap's struct-field-store auto-widening.
+		let storedValueId = self.resolveName(value)
+		let storedValueType = self.getValueType(storedValueId)
+		let widenedValueId = self.widenValueToType(storedValueId, fromType: storedValueType, toType: resolvedFieldType, dstBlock: dstBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: hit.offset, valueId: widenedValueId, width: fieldWidth, isFloat: isFloat)))
 	end 'lowerFieldStore'
 
 	// Emit a fat-pointer store into an interface-typed struct field. The
@@ -7297,7 +7336,7 @@ type MaxonToStdLowering
 	// reliance on raw-value monotonicity — ordinal-range coverage is
 	// strictly by declared case order.
 	function lowerFloatBackedEnumRangeArm(scrutineeId ValueId, enumType EnumType, loOrdinal ParsedInt, hiOrdinal ParsedInt, isUpto bool, hasMinSentinel bool, hasMaxSentinel bool, thenTarget BlockId, elseTarget BlockId, dstBlock IrBlock)
-		let caseCount = enumType.cases.count() as ParsedInt
+		let caseCount = enumType.cases.count()
 		let loBound = 0 as ParsedInt if hasMinSentinel else loOrdinal
 		var hiBound = (caseCount - 1) as ParsedInt if hasMaxSentinel else hiOrdinal
 		if isUpto and not hasMaxSentinel 'uptoAdjust'
@@ -7320,7 +7359,7 @@ type MaxonToStdLowering
 				combinedId = eqId
 				hasCombined = true
 			end 'firstEq'
-			ord = (ord + 1) as ParsedInt
+			ord = ord + 1
 		end 'eachOrdinal'
 		if not hasCombined 'emptyRange'
 			panic("lowerFloatBackedEnumRangeArm: empty ordinal range [{loBound}, {hiBound}] for enum '{enumType.name}' (parser should have rejected single-value / inverted ranges earlier)")
@@ -8381,6 +8420,18 @@ export function implicitlyConvertible(from CastCategory, to CastCategory) return
 	end 'floatToInt'
 	return false
 end 'implicitlyConvertible'
+
+// Categorical predicate: is `from → to` a non-narrowing widening? Unlike
+// `implicitlyConvertible`, this rejects float→int (which loses fractional
+// values). Used by Phase A auto-widening at sites where narrowing would be
+// unsafe — struct field stores, match arm result-slot unification — and the
+// C# bootstrap parser only inserts widening casts.
+export function isWideningCategory(from CastCategory, to CastCategory) returns bool
+	if from == CastCategory.int and to == CastCategory.float 'intToFloat'
+		return true
+	end 'intToFloat'
+	return false
+end 'isWideningCategory'
 
 // Recover the enclosing struct-type name from a parser-qualified function
 // name. The parser qualifies methods as `Type.method` (with no module

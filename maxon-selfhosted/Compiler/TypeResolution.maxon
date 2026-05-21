@@ -1413,6 +1413,20 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
+// Phase A widening predicate: true when `from`'s category is `int` and
+// `to`'s category is `float`. Used at every widening site in TR (varStore
+// merge, varLoad re-publish, varDecl restamp, cmp/binop operand restamp)
+// to keep the rule in one place — narrowing or any non-numeric kind is
+// out-of-scope.
+function isIntToFloatWidening(project Project, from MaxonType, to MaxonType) returns bool
+	if isUnresolvedType(from) or isUnresolvedType(to) 'unresolved'
+		return false
+	end 'unresolved'
+	let fromCategory = convertCastCategory(project, t: from)
+	let toCategory = convertCastCategory(project, t: to)
+	return fromCategory == CastCategory.int and toCategory == CastCategory.float
+end 'isIntToFloatWidening'
+
 function namedIdCastCategory(project Project, id TypeNameId) returns CastCategory
 	let name = project.typeNames.get(id)
 	if not namedIdIsKnown(project, id: id) 'unknown'
@@ -2185,7 +2199,7 @@ function resolveOneEnumMatchArm(project Project, module MaxonModule, opIdx OpInd
 		// always valid against any payload arity.
 		if bindingNames.count() > 0 'haveBindings'
 			let info = lookupUnionCasePayloadArity(project, unionName: enumName, caseName: caseName)
-			if info.isUnion and info.payloadArity != bindingNames.count() as ParsedInt 'arityMismatch'
+			if info.isUnion and info.payloadArity != bindingNames.count() 'arityMismatch'
 				reportCompileError(project, code: ErrorCode.semanticMatchPayloadArityMismatch, message: "wrong binding count: '{caseName}'", line: range.line, column: range.column, filePath: filePath)
 			end 'arityMismatch'
 		end 'haveBindings'
@@ -2573,6 +2587,15 @@ function recordVarLoad(project Project, producerTypes ProducerTypeMap, slotTypes
 			recordResultType(producerTypes, name: result, t: fromSlot)
 			return
 		end 'preferRefined'
+		// Phase A widening: when the parser-stamped slotType is int but
+		// the slot's effective type (after `recordVarStore` upgraded it
+		// across arms) is float, prefer the slot-type-map entry so the
+		// consumer's cmp/binop validation sees the widened type. Mirrors
+		// `fillVarLoad`'s int→float rewrite at the op level.
+		if isIntToFloatWidening(project, from: slotType, to: fromSlot) 'widenInt2Float'
+			recordResultType(producerTypes, name: result, t: fromSlot)
+			return
+		end 'widenInt2Float'
 		recordResultType(producerTypes, name: result, t: slotType)
 		return
 	end 'haveType'
@@ -2622,6 +2645,20 @@ function recordVarStore(project Project, producerTypes ProducerTypeMap, slotType
 		slotTypes.upsert(slotId, value: fromValue)
 		return
 	end 'replaceSeed'
+	// Phase A widening: when an earlier arm pinned the slot to `int` (the
+	// literal-zero seed's category, or a prior arm that produced an int)
+	// and a later arm produces a `float`, upgrade the slot to the value's
+	// float-category type so the merge varLoad reads an IEEE-754 value and
+	// so `lowerVarStore` emits siToFp for the earlier int-typed arms.
+	// Mirrors the C# bootstrap's `BackPromotePriorMatchArms` — narrowing
+	// (float → int) stays pinned to the original kind so no fractional
+	// data is silently lost. Preserves the incoming float type (which may
+	// carry a named-typealias decoration, e.g. `JsonFloat`) rather than
+	// forcing bare `float`, matching the upstream "first arm pins" rule.
+	if isIntToFloatWidening(project, from: current, to: fromValue) 'widenIntToFloat'
+		slotTypes.upsert(slotId, value: fromValue)
+		return
+	end 'widenIntToFloat'
 	// Refine `named(X)` → `genericInstance(X, [...])` when the bases
 	// agree. Static-method return types parsed as `Self` (e.g.
 	// `Array.slice` returning `Self`) collapse to `named(Array)` at
@@ -4705,8 +4742,8 @@ end 'retValueTypeFromProducers'
 function fillUnresolvedTypes(project Project, module MaxonModule, producerTypesPerFunc ProducerTypeMapArray, slotTypesPerFunc SlotTypeMapArray)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("fillUnresolvedTypes: funcIdx < count but get failed")
-		let producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: producerTypesPerFunc.get({funcIdx}) failed")
-		let slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: slotTypesPerFunc.get({funcIdx}) failed")
+		var producerTypes = try producerTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: producerTypesPerFunc.get({funcIdx}) failed")
+		var slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("fillUnresolvedTypes: slotTypesPerFunc.get({funcIdx}) failed")
 		runFillUnresolvedTypesForFunc(project, module: module, func: func, producerTypes: producerTypes, slotTypes: slotTypes)
 	end 'eachFunc'
 end 'fillUnresolvedTypes'
@@ -4733,11 +4770,11 @@ end 'runFillUnresolvedTypesForFunc'
 
 function fillUnresolvedTypesForOp(project Project, module MaxonModule, opIdx OpIndex, op MaxonOp, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	match op 'fill'
-		varDecl(slotId, value, slotType, range) then fillVarDecl(module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
-		varLoad(result, slotId, slotType, range) then fillVarLoad(project, module: module, opIdx: opIdx, result: result, slotId: slotId, slotType: slotType, range: range, slotTypes: slotTypes)
+		varDecl(slotId, value, slotType, range) then fillVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, producerTypes: producerTypes, slotTypes: slotTypes)
+		varLoad(result, slotId, slotType, range) then fillVarLoad(project, module: module, opIdx: opIdx, result: result, slotId: slotId, slotType: slotType, range: range, producerTypes: producerTypes, slotTypes: slotTypes)
 		globalStore(name, value, slotType, range) then fillGlobalStore(module, opIdx: opIdx, name: name, value: value, slotType: slotType, range: range, producerTypes: producerTypes)
 		convert(result, operand, fromType, toType, implicit, range) then fillConvert(module, opIdx: opIdx, result: result, operand: operand, fromType: fromType, toType: toType, implicit: implicit, range: range, producerTypes: producerTypes)
-		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
+		cmp(result, left, right, predicate, leftType, rightType, operandType, range) then fillCmp(project, module: module, opIdx: opIdx, result: result, left: left, right: right, predicate: predicate, leftType: leftType, rightType: rightType, operandType: operandType, range: range, producerTypes: producerTypes)
 		binop(result, left, right, opKind, operandType, range) then fillBinop(module, opIdx: opIdx, result: result, left: left, right: right, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
 		unop(result, operand, opKind, operandType, range) then fillUnop(module, opIdx: opIdx, result: result, operand: operand, opKind: opKind, operandType: operandType, range: range, producerTypes: producerTypes)
 		call(result, callee, callContext, args, argLabels, argTypes, argRanges, range) then fillCall(module, opIdx: opIdx, result: result, callee: callee, callContext: callContext, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, range: range, producerTypes: producerTypes)
@@ -4810,13 +4847,68 @@ function fillEnumMatchArmType(module MaxonModule, opIdx OpIndex, scrutineeName B
 	try module.ops.set(opIdx, value: MaxonOp.enumMatchArm(scrutineeName, caseName: caseName, scrutineeType: filled, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, bindingNames: bindingNames, range: range)) otherwise panic("fillEnumMatchArmType: ops.set OOB at idx={opIdx}")
 end 'fillEnumMatchArmType'
 
-function fillVarDecl(module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+function fillVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	let filled = fillType(producerTypes, t: slotType, source: value)
 	if isUnresolvedType(filled) == isUnresolvedType(slotType) and not isUnresolvedType(slotType) 'noChange'
+		// Phase A widening: when the user wrote `let r = match ... end`
+		// and the match's first arm seeded the parser-stamped slotType at
+		// `integer` but a later arm produced a `float`, the initializer
+		// value's recorded producer type is now `float`. Promote the
+		// `let r` slot to float so downstream reads see f64 bits. This
+		// catches the chain: match-internal-slot → widened-float varLoad
+		// →  varDecl(slot_r, value, slotType: integer) — the integer
+		// stamp here would otherwise pin slot_r's slotTypes entry to int.
+		let fromValue = lookupProducerType(producerTypes, name: value)
+		if isIntToFloatWidening(project, from: slotType, to: fromValue) 'widenInt2Float'
+			try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: fromValue, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
+			slotTypes.upsert(slotId, value: fromValue)
+			return
+		end 'widenInt2Float'
 		return
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: filled, range: range)) otherwise panic("fillVarDecl: ops.set OOB at idx={opIdx}")
 end 'fillVarDecl'
+
+// Phase A widening: rewrite varDecl ops whose recorded `slotType` is `int`
+// but whose effective slot type (after `recordVarStore` upgraded it across
+// arms) became `float`. Mirrors the C# bootstrap's match-expression
+// post-pass that swaps the entry-block seed literal + declaration to the
+// final wider kind. Walks every varDecl after the main TR fill passes have
+// converged so any first-arm-seeded match slot picks up the widening.
+function widenVarDeclTypesFromSlotTypes(project Project, module MaxonModule, slotTypesPerFunc SlotTypeMapArray)
+	for funcIdx in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: funcIdx OOB")
+		let slotTypes = try slotTypesPerFunc.get(funcIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: slotTypesPerFunc.get({funcIdx}) failed")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("widenVarDeclTypesFromSlotTypes: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("widenVarDeclTypesFromSlotTypes: opIdx OOB")
+				if op.name != "varDecl" 'notVarDecl'
+					continue
+				end 'notVarDecl'
+				match op 'widen'
+					varDecl(slotId, value, slotType, range) then widenOneVarDecl(project, module: module, opIdx: opIdx, slotId: slotId, value: value, slotType: slotType, range: range, slotTypes: slotTypes)
+					default panic("widenVarDeclTypesFromSlotTypes: unreachable — op.name == varDecl but match did not extract")
+				end 'widen'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'widenVarDeclTypesFromSlotTypes'
+
+function widenOneVarDecl(project Project, module MaxonModule, opIdx OpIndex, slotId VarSlot, value ByteArray, slotType MaxonType, range SourceRange, slotTypes SlotTypeMap)
+	let effective = try slotTypes.get(slotId) otherwise return
+	if maxonTypesStructurallyEqual(effective, b: slotType) 'sameType'
+		return
+	end 'sameType'
+	// Only restamp when the effective type strictly widens the recorded
+	// slotType from CastCategory.int to CastCategory.float. Any other
+	// transition (struct refinement, genericInstance promotion) is owned
+	// by `fillVarDecl` / other passes and shouldn't be touched here.
+	if not isIntToFloatWidening(project, from: slotType, to: effective) 'notWidening'
+		return
+	end 'notWidening'
+	try module.ops.set(opIdx, value: MaxonOp.varDecl(slotId, value: value, slotType: effective, range: range)) otherwise panic("widenOneVarDecl: ops.set OOB at idx={opIdx}")
+end 'widenOneVarDecl'
 
 // Resolve the field type for a union case's payload at the given index.
 // The parser emits `enumPayloadRead` with `fieldType = unresolved` because
@@ -5010,7 +5102,7 @@ function interpPartsEqual(a StringInterpPart, b StringInterpPart) returns bool
 	end 'mA'
 end 'interpPartsEqual'
 
-function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, slotTypes SlotTypeMap)
+function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, slotId VarSlot, slotType MaxonType, range SourceRange, producerTypes ProducerTypeMap, slotTypes SlotTypeMap)
 	let filled = try slotTypes.get(slotId) otherwise MaxonType.unresolved
 	if isUnresolvedType(slotType) 'fillEmpty'
 		// Slot type was recorded by an earlier varDecl into the slot-type
@@ -5023,6 +5115,20 @@ function fillVarLoad(project Project, module MaxonModule, opIdx OpIndex, result 
 		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
 		return
 	end 'fillEmpty'
+	// Phase A widening: when the slot's effective type is float (because
+	// `recordVarStore` widened across arms) but the varLoad op still
+	// carries the parser-stamped int type (parseMatchExpression sets
+	// `resultType` from the first arm's literal), restamp so the load
+	// reads f64 bits instead of i64. Also re-publish the load's producer
+	// type — `buildProducerTypes` walks in block order, so the merge-
+	// block varLoad ran before the arm-block varStores recorded the
+	// wider type and producer map still says int. Downstream cmp/binop
+	// validators consult producerTypes via `widenStampedOpType`.
+	if isIntToFloatWidening(project, from: slotType, to: filled) 'widenInt2Float'
+		try module.ops.set(opIdx, value: MaxonOp.varLoad(result, slotId: slotId, slotType: filled, range: range)) otherwise panic("fillVarLoad: ops.set OOB at idx={opIdx}")
+		recordResultType(producerTypes, name: result, t: filled)
+		return
+	end 'widenInt2Float'
 	// Refine `named(X)` → `genericInstance(X, [...])` when the slot-type
 	// map carries a more specific entry. The parser stamps the merge
 	// varLoad of `try EXPR otherwise FALLBACK` with the call's declared
@@ -5057,9 +5163,9 @@ function fillConvert(module MaxonModule, opIdx OpIndex, result ByteArray, operan
 	try module.ops.set(opIdx, value: MaxonOp.convert(result, operand: operand, fromType: filledFrom, toType: toType, implicit: implicit, range: range)) otherwise panic("fillConvert: ops.set OOB at idx={opIdx}")
 end 'fillConvert'
 
-function fillCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
-	let filledLeft = fillType(producerTypes, t: leftType, source: left)
-	let filledRight = fillType(producerTypes, t: rightType, source: right)
+function fillCmp(project Project, module MaxonModule, opIdx OpIndex, result ByteArray, left ByteArray, right ByteArray, predicate CmpPredicate, leftType MaxonType, rightType MaxonType, operandType MaxonType, range SourceRange, producerTypes ProducerTypeMap)
+	let filledLeft = widenStampedOpType(project, producerTypes: producerTypes, stamped: leftType, source: left)
+	let filledRight = widenStampedOpType(project, producerTypes: producerTypes, stamped: rightType, source: right)
 	let filledOperand = pickOperandType(filledLeft, right: filledRight, current: operandType)
 	let unchanged = maxonTypesStructurallyEqual(filledLeft, b: leftType) and maxonTypesStructurallyEqual(filledRight, b: rightType) and maxonTypesStructurallyEqual(filledOperand, b: operandType)
 	if unchanged 'noChange'
@@ -5067,6 +5173,23 @@ function fillCmp(module MaxonModule, opIdx OpIndex, result ByteArray, left ByteA
 	end 'noChange'
 	try module.ops.set(opIdx, value: MaxonOp.cmp(result, left: left, right: right, predicate: predicate, leftType: filledLeft, rightType: filledRight, operandType: filledOperand, range: range)) otherwise panic("fillCmp: ops.set OOB at idx={opIdx}")
 end 'fillCmp'
+
+// Phase A widening helper: like `fillType`, but additionally re-stamps a
+// concrete int-typed slot with the producer's float type when the producer
+// has been widened (e.g. a match-result slot whose effective type became
+// float because of a back-promoting arm). Without this, cmp/binop operand
+// types stay stale at `int` and `validateCompareOp` fires E3005 on a load
+// that actually produces a float SSA value.
+function widenStampedOpType(project Project, producerTypes ProducerTypeMap, stamped MaxonType, source ByteArray) returns MaxonType
+	if isUnresolvedType(stamped) 'fillUnresolved'
+		return lookupProducerType(producerTypes, name: source)
+	end 'fillUnresolved'
+	let fromProducer = lookupProducerType(producerTypes, name: source)
+	if isIntToFloatWidening(project, from: stamped, to: fromProducer) 'widen'
+		return fromProducer
+	end 'widen'
+	return stamped
+end 'widenStampedOpType'
 
 function pickOperandType(left MaxonType, right MaxonType, current MaxonType) returns MaxonType
 	if not isUnresolvedType(current) 'keepCurrent'
@@ -5369,11 +5492,11 @@ function maybeRewriteCmpToEquals(project Project, module MaxonModule, opIdx OpIn
 	// caught downstream by validateCompareOp, so we leave those cmps as-is.
 	let dispatch = match predicate 'classify'
 		eq gives 1 as ParsedInt  // dispatch as ==
-		ne gives -1 as ParsedInt  // dispatch as !=
-		lt gives 0 as ParsedInt  // not dispatched
-		le gives 0 as ParsedInt
-		gt gives 0 as ParsedInt
-		ge gives 0 as ParsedInt
+		ne gives -1  // dispatch as !=
+		lt gives 0  // not dispatched
+		le gives 0
+		gt gives 0
+		ge gives 0
 	end 'classify'
 	if dispatch == 0 'orderedOnRef'
 		return
@@ -6388,6 +6511,14 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// gets the right receiver type.
 	patchClosureEnvLoadCaptureTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
 	fillUnresolvedTypes(project, module: module, producerTypesPerFunc: producerTypesPerFunc, slotTypesPerFunc: slotTypesPerFunc)
+
+	// Phase A widening: re-stamp varDecl ops whose recorded `slotType` is
+	// `integer` but whose effective `slotTypes` entry (after
+	// `recordVarStore` upgraded the slot across arms) became `float`.
+	// Mirrors the C# bootstrap's match-expression seed-replacement pass —
+	// keeps the lowering view consistent so `lowerVarStore` sees the wider
+	// slot type and inserts the int→float promote on int-typed arms.
+	widenVarDeclTypesFromSlotTypes(project, module: module, slotTypesPerFunc: slotTypesPerFunc)
 
 	// Backfill `topLevelVars[name].slotType` for any entry whose slot was
 	// registered with `MaxonType.unresolved` (currently only the array-literal

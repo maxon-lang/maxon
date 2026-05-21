@@ -301,7 +301,6 @@ end 'main'
 <!-- test: byte-array-push-get -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
@@ -316,7 +315,7 @@ function main() returns ExitCode
 	let v1 = try arr.get(1) otherwise 0 as Byte
 	let v2 = try arr.get(2) otherwise 0 as Byte
 
-	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+	return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode
@@ -328,7 +327,6 @@ end 'main'
 <!-- test: byte-array-initialized -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
@@ -343,7 +341,7 @@ function main() returns ExitCode
 	let v1 = try arr.get(1) otherwise 0 as Byte
 	let v2 = try arr.get(2) otherwise 0 as Byte
 
-	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+	return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode
@@ -355,7 +353,6 @@ end 'main'
 <!-- test: byte-array-set -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
@@ -369,7 +366,7 @@ function main() returns ExitCode
 	try arr.set(1, value: 99 as Byte) otherwise panic("test invariant: set OOB")
 
 	let val = try arr.get(1) otherwise 0 as Byte
-	return val as Integer
+	return val
 end 'main'
 ```
 ```exitcode
@@ -381,7 +378,6 @@ end 'main'
 <!-- test: byte-array-max-values -->
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 typealias ByteArray = Array with Byte
@@ -396,13 +392,13 @@ function main() returns ExitCode
 	let v1 = try arr.get(1) otherwise 99 as Byte
 	let v2 = try arr.get(2) otherwise 0 as Byte
 
-	if (v0 as Integer) != 255 'c0'
+	if v0 != 255 'c0'
 		return 1
 	end 'c0'
-	if (v1 as Integer) != 0 'c1'
+	if v1 != 0 'c1'
 		return 2
 	end 'c1'
-	if (v2 as Integer) != 128 'c2'
+	if v2 != 128 'c2'
 		return 3
 	end 'c2'
 

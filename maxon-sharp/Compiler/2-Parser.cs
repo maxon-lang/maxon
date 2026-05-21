@@ -9001,6 +9001,17 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         errorToken.Line, errorToken.Column);
     }
 
+    // Phase A auto-widening: if the field is a numeric primitive whose kind is
+    // wider than the RHS value's kind, promote the RHS first so the store sees
+    // the field's declared kind. Same-kind / non-widening combinations pass
+    // through unchanged.
+    var newValueKind = DetermineValueKind(newValue);
+    var fieldKind = field.Type.ToValueKind();
+    if (newValueKind != fieldKind
+        && IsWideningCastSafe(newValueKind, fieldKind)) {
+      newValue = PromoteValue(newValue, fieldKind);
+    }
+
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
   }
 
@@ -13319,10 +13330,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     // Initialized as Integer; the kind is updated when the first case value is parsed.
     var resultVarName = $"__matchexpr_{matchLabel}";
     var resultKind = MaxonValueKind.Integer;
-    var zeroLit = new MaxonLiteralOp(0L);
-    entryBlock.AddOp(zeroLit);
-    entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, resultKind));
-    _variables.Declare(resultVarName, resultKind, true, zeroLit.Result, entryBlock);
+    var seedLitOp = new MaxonLiteralOp(0L);
+    entryBlock.AddOp(seedLitOp);
+    var seedLitIdx = entryBlock.Operations.Count - 1;
+    entryBlock.AddOp(new MaxonAssignOp(resultVarName, seedLitOp.Result, isDeclaration: true, isMutable: true, resultKind));
+    var seedAssignIdx = entryBlock.Operations.Count - 1;
+    _variables.Declare(resultVarName, resultKind, true, seedLitOp.Result, entryBlock);
 
     // Store scrutinee for cross-block access
     var scrutTempName = $"__match_{matchLabel}";
@@ -13338,6 +13351,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     bool hasDefault = false;
     bool defaultSeen = false;
     string? resultStructTypeName = null;
+
+    // Phase A auto-widening across arms: track the running widest result kind
+    // and the prior arms' value-store ops so a later arm whose kind is wider
+    // (e.g. arm 0 gives Integer, arm 1 gives Float) can back-promote earlier
+    // arms instead of leaving inconsistent kinds in the IR.
+    MaxonValueKind? effectiveResultKind = null;
+    var priorValueArms = new List<(IrBlock<MaxonOp> Block, int AssignIdx)>();
 
     int caseIndex = 0;
     while (!IsMatchBlockEnd(enumType) && !IsAtEnd()) {
@@ -13475,7 +13495,27 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       }
 
       var caseValue = ResolveExprValue(ParseExpression());
-      resultKind = DetermineValueKind(caseValue);
+      var caseValueKind = DetermineValueKind(caseValue);
+
+      // Phase A auto-widening across match arms: reconcile this arm's kind
+      // with the running effectiveResultKind. Three cases:
+      //   1. First value-producing arm: adopt its kind.
+      //   2. New kind widens to established: promote this arm's value down.
+      //   3. Established widens to new kind: back-promote all prior arms.
+      // If neither widens (cross-kind narrowing, bool involvement), leave the
+      // arms unreconciled — the existing downstream pipeline will surface the
+      // mismatch (or, for today's silent-broken behavior, preserve it).
+      if (effectiveResultKind == null) {
+        effectiveResultKind = caseValueKind;
+      } else if (caseValueKind != effectiveResultKind.Value) {
+        if (IsWideningCastSafe(caseValueKind, effectiveResultKind.Value)) {
+          caseValue = PromoteValue(caseValue, effectiveResultKind.Value);
+        } else if (IsWideningCastSafe(effectiveResultKind.Value, caseValueKind)) {
+          BackPromotePriorMatchArms(priorValueArms, resultVarName, caseValueKind);
+          effectiveResultKind = caseValueKind;
+        }
+      }
+      resultKind = effectiveResultKind.Value;
 
       // Update variable info to reflect the actual result type (may differ from initial Integer placeholder)
       resultStructTypeName = GetManagedTypeName(caseValue);
@@ -13487,7 +13527,9 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           Current().Line, Current().Column);
       }
 
-      _currentBlock.AddOp(new MaxonAssignOp(resultVarName, caseValue, isDeclaration: false, isMutable: true, resultKind));
+      var armAssignOp = new MaxonAssignOp(resultVarName, caseValue, isDeclaration: false, isMutable: true, resultKind);
+      _currentBlock.AddOp(armAssignOp);
+      priorValueArms.Add((_currentBlock, _currentBlock.Operations.Count - 1));
       var caseInnerScope = _variables.KeysSince(caseOuterScope);
       // Clean up arm-local bindings before branching to merge. resultVarName
       // was declared at the outer match scope (SnapshotKeys ran after it was
@@ -13512,6 +13554,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
         "match expression is not exhaustive: add a 'default' arm",
         endToken.Line, endToken.Column);
+    }
+
+    // If Phase A cross-arm widening upgraded the result kind, replace the
+    // entry-block seed literal + declaration with ones of the right kind so
+    // downstream lowering allocates the slot correctly and the placeholder
+    // type-tag matches the values actually stored.
+    if (effectiveResultKind != null && effectiveResultKind.Value != MaxonValueKind.Integer) {
+      var finalKind = effectiveResultKind.Value;
+      MaxonLiteralOp replacementLit = finalKind switch {
+        MaxonValueKind.Float => new MaxonLiteralOp(0.0, MaxonValueKind.Float),
+        MaxonValueKind.Float32 => new MaxonLiteralOp(0.0, MaxonValueKind.Float32),
+        _ => new MaxonLiteralOp(0L)
+      };
+      entryBlock.Operations[seedLitIdx] = replacementLit;
+      entryBlock.Operations[seedAssignIdx] = new MaxonAssignOp(
+        resultVarName, replacementLit.Result, isDeclaration: true, isMutable: true, finalKind);
     }
 
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
@@ -13545,6 +13603,13 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
     while (Check(TokenType.As)) {
+      // Snapshot the inbound ranged-type name BEFORE ParseTypeKeyword runs
+      // and BEFORE this iteration's tail propagates the target's name. This
+      // captures the source's ranged identity for the E3010 check below
+      // (handles chained casts and call-result-with-ranged-return — for
+      // direct var refs the VarInfo path in TryGetSourceRangedType wins).
+      var snapshottedRangedName = _lastRangedTypeName;
+      var sourceRanged = TryGetSourceRangedType(lhs, snapshottedRangedName);
       var asToken = Advance(); // consume 'as'
       _lastCastRangedType = null;
       var targetKind = ParseTypeKeyword();
@@ -13571,6 +13636,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // is therefore not preserved by `as`.
       MaxonValue valueToCast = inputVal;
       IrRangedPrimitiveType? rangedTarget = _lastCastRangedType;
+      // E3010: when the target's range fully covers the source's range,
+      // the `as` cast is a no-op that should be deleted from source. Fires
+      // only when BOTH sides resolve to a named ranged-primitive type;
+      // bare-literal sources (`42 as Byte`) and bare-bool targets are
+      // skipped. Position: after ValidateCast (so kind-incompatible
+      // casts hit E3009 first) and before ValidateAndEmitRangeCheck (no
+      // point synthesizing runtime guard code for code about to error).
+      if (sourceRanged != null && rangedTarget != null
+          && TargetCoversSource(rangedTarget, sourceRanged)) {
+        throw new CompileError(ErrorCode.SemanticUnneededCast,
+          $"unneeded cast: '{sourceRanged.Name}' already fits in '{rangedTarget.Name}'",
+          asToken.Line, asToken.Column);
+      }
       if (rangedTarget != null) {
         var expectedKind = rangedTarget.BaseType.ToValueKind();
         valueToCast = ValidateAndEmitRangeCheck(inputVal, rangedTarget, expectedKind, asToken);
@@ -13938,6 +14016,20 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var falseVal = ResolveExprValue(falseExpr);
     var trueKind = DetermineValueKind(trueVal);
     var falseKind = DetermineValueKind(falseVal);
+
+    // Phase A auto-widening: if the two arms differ only by a widening cast
+    // (e.g. one arm yields an integer and the other a float), promote the
+    // narrower arm to the wider arm's kind so the merge sees a single kind.
+    // Cross-kind narrowing (float -> int) and bool <-> numeric remain errors.
+    if (trueKind != falseKind) {
+      if (IsWideningCastSafe(trueKind, falseKind)) {
+        trueVal = PromoteValue(trueVal, falseKind);
+        trueKind = falseKind;
+      } else if (IsWideningCastSafe(falseKind, trueKind)) {
+        falseVal = PromoteValue(falseVal, trueKind);
+        falseKind = trueKind;
+      }
+    }
 
     // Validate both arms produce the same type
     if (trueKind != falseKind) {
@@ -16430,6 +16522,70 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     };
   }
 
+  /// Resolves the source value's ranged-primitive type for the E3010
+  /// "unneeded cast" diagnostic. Two sources are tried in order:
+  ///   1. The LHS is a direct variable reference whose VarInfo records a
+  ///      ranged-primitive struct-type name (`let s Score = ...`).
+  ///   2. A snapshot of `_lastRangedTypeName` captured at the top of the
+  ///      current `as`-loop iteration. This handles chained casts
+  ///      (`x as A as B` — at iteration 2 the LHS is a Direct holding the
+  ///      result of `x as A`, but `_lastRangedTypeName` still carries `A`)
+  ///      and call returns (e.g. `score() as Score` where the callee
+  ///      return propagates via `_lastRangedTypeName`).
+  /// Returns null when neither source resolves — bare literals and
+  /// anonymous arithmetic deliberately skip the diagnostic so
+  /// literal-narrowing (`42 as Byte`) stays legal.
+  private IrRangedPrimitiveType? TryGetSourceRangedType(ExprResult lhs, string? snapshottedRangedName) {
+    if (lhs is ExprResult.VarRef vr && vr.Info.StructTypeName != null
+        && _typeRegistry.TryGetValue(vr.Info.StructTypeName, out var t)
+        && t is IrRangedPrimitiveType rpt) return rpt;
+    if (snapshottedRangedName != null
+        && _typeRegistry.TryGetValue(snapshottedRangedName, out var t2)
+        && t2 is IrRangedPrimitiveType rpt2) return rpt2;
+    return null;
+  }
+
+  /// Returns true when `target`'s range fully contains `source`'s range —
+  /// meaning the cast loses no representable values. Used to detect
+  /// unneeded `as` casts (E3010). Cross-kind int → float and
+  /// byte/short → float are treated as covered because the float ranges
+  /// used in practice (JsonFloat, ParsedFloat) span the full f64 range
+  /// and contain every i64 value within ±2^53 exactly. Cross-kind
+  /// narrowing combinations are unreachable here — ValidateCast already
+  /// rejects them with E3009 before this helper runs.
+  private static bool TargetCoversSource(IrRangedPrimitiveType target, IrRangedPrimitiveType source) {
+    var srcKind = source.BaseType.ToValueKind();
+    var tgtKind = target.BaseType.ToValueKind();
+    if ((srcKind == MaxonValueKind.Integer || srcKind == MaxonValueKind.Byte || srcKind == MaxonValueKind.Short)
+        && (tgtKind == MaxonValueKind.Float || tgtKind == MaxonValueKind.Float32)) {
+      return true;
+    }
+    if (srcKind != tgtKind) return false;
+    // When the two integer ranges disagree on signedness — e.g.
+    // `MachineWord = int(0 to u64.max)` (upper wraps to -1) vs.
+    // `ParsedInt = int(i64.min to i64.max)` — neither subsumes the
+    // other in a single 64-bit representation, so don't fire E3010.
+    if (!source.IsFloatBased) {
+      var srcUnsigned = source.IntLower >= 0 && source.IntUpper < 0;
+      var tgtUnsigned = target.IntLower >= 0 && target.IntUpper < 0;
+      if (srcUnsigned != tgtUnsigned) return false;
+    }
+    return source.IsSubsetOf(target);
+  }
+
+  /// Numeric-kind widening table guard. Returns false (without throwing) when
+  /// either operand falls outside the primitive numeric set IsWideningCast
+  /// handles. Used by Phase A auto-widening at sites where either side could
+  /// be a struct/enum/function (e.g. ternary arms, match arm result values).
+  private static bool IsWideningCastSafe(MaxonValueKind source, MaxonValueKind target) {
+    if (!IsNumericKind(source) || !IsNumericKind(target)) return false;
+    return IsWideningCast(source, target);
+  }
+
+  private static bool IsNumericKind(MaxonValueKind k) =>
+    k is MaxonValueKind.Byte or MaxonValueKind.Short or MaxonValueKind.Integer
+      or MaxonValueKind.Float or MaxonValueKind.Float32 or MaxonValueKind.Bool;
+
   private static bool IsWideningCast(MaxonValueKind source, MaxonValueKind target) {
     return (source, target) switch {
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => true,
@@ -16691,6 +16847,42 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var op = new MaxonIntToFloatOp(intValue);
     _currentBlock!.AddOp(op);
     return op.Result;
+  }
+
+  /// Back-promotes already-emitted match-expression arm value stores so they
+  /// match a wider kind discovered in a later arm. For each prior arm, splices
+  /// a PromoteValue sequence in front of its result-var assign and rewrites
+  /// the assign to use the promoted value at the wider kind.
+  private void BackPromotePriorMatchArms(
+      List<(IrBlock<MaxonOp> Block, int AssignIdx)> priorValueArms,
+      string resultVarName, MaxonValueKind newKind) {
+    var savedBlock = _currentBlock;
+    try {
+      for (int armIdx = 0; armIdx < priorValueArms.Count; armIdx++) {
+        var (block, assignIdx) = priorValueArms[armIdx];
+        var assign = (MaxonAssignOp)block.Operations[assignIdx];
+
+        // Splice promote ops at the assign's position by temporarily routing
+        // emissions into a scratch block, then inserting them in order.
+        var scratchBlock = new IrBlock<MaxonOp>("__match_promote_scratch__");
+        _currentBlock = scratchBlock;
+        var promoted = PromoteValue(assign.Value, newKind);
+        _currentBlock = savedBlock;
+
+        // Insert scratchBlock's ops just before the assign and replace the
+        // assign with one that stores the promoted value at the wider kind.
+        for (int j = 0; j < scratchBlock.Operations.Count; j++) {
+          block.Operations.Insert(assignIdx + j, scratchBlock.Operations[j]);
+        }
+        var insertedCount = scratchBlock.Operations.Count;
+        var newAssignIdx = assignIdx + insertedCount;
+        block.Operations[newAssignIdx] = new MaxonAssignOp(
+          resultVarName, promoted, isDeclaration: false, isMutable: true, newKind);
+        priorValueArms[armIdx] = (block, newAssignIdx);
+      }
+    } finally {
+      _currentBlock = savedBlock;
+    }
   }
 
   /// <summary>
