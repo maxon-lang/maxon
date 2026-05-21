@@ -2185,7 +2185,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     names.Add(ifaceName);
     if (Check(TokenType.With)) {
       var withTok = Advance();
-      EnsureWithFollowedBySpace(withTok);
+      EnsureKeywordFollowedBySpaceBeforeParen(withTok);
       int expectedCount = GetAssociatedTypeCount(ifaceName);
       var withTypes = ParseWithTypeArgs(expectedCount);
       ResolveWithTypeParams(ifaceName, withTypes, typeParams);
@@ -2196,7 +2196,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       names.Add(ifaceName);
       if (Check(TokenType.With)) {
         var withTok = Advance();
-        EnsureWithFollowedBySpace(withTok);
+        EnsureKeywordFollowedBySpaceBeforeParen(withTok);
         int expectedCount = GetAssociatedTypeCount(ifaceName);
         var withTypes = ParseWithTypeArgs(expectedCount);
         ResolveWithTypeParams(ifaceName, withTypes, typeParams);
@@ -4166,7 +4166,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         if (assocTypeNames.Count == 0)
           throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
-        EnsureWithFollowedBySpace(Expect(TokenType.With));
+        EnsureKeywordFollowedBySpaceBeforeParen(Expect(TokenType.With));
         var ifaceConcreteTypes = new List<IrType>();
         if (Check(TokenType.LeftParen)) {
           Advance();
@@ -4198,7 +4198,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       // Generic enum alias: typealias IntNode = ListNode with Integer
       if (sourceType is IrEnumType sourceEnum && sourceEnum.AssociatedTypeNames.Count > 0) {
-        EnsureWithFollowedBySpace(Expect(TokenType.With));
+        EnsureKeywordFollowedBySpaceBeforeParen(Expect(TokenType.With));
 
         var concreteTypes = ParseWithTypeArgs(sourceEnum.AssociatedTypeNames.Count);
         RejectBarePrimitiveTypeArgs(concreteTypes, aliasNameToken);
@@ -4224,7 +4224,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       if (sourceStruct.AssociatedTypeNames.Count == 0)
         throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
-      EnsureWithFollowedBySpace(Expect(TokenType.With));
+      EnsureKeywordFollowedBySpaceBeforeParen(Expect(TokenType.With));
 
       var concreteTypes2 = new List<IrType>();
       var constParams = new Dictionary<string, long>();
@@ -7760,7 +7760,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         "try block requires 'otherwise ...' clause",
         Current().Line, Current().Column);
     }
-    Advance(); // consume 'otherwise'
+    var otherwiseTok = Advance(); // consume 'otherwise'
+    EnsureKeywordFollowedBySpaceBeforeParen(otherwiseTok);
 
     Token? bindingToken = null;
     if (Check(TokenType.LeftParen)) {
@@ -8040,7 +8041,8 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
 
     // Parse 'otherwise' clause
-    Advance(); // consume 'otherwise'
+    var otherwiseTok = Advance(); // consume 'otherwise'
+    EnsureKeywordFollowedBySpaceBeforeParen(otherwiseTok);
 
     // Check for 'ignore' form
     if (Check(TokenType.Ignore)) {
@@ -13675,11 +13677,24 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // skipped. Position: after ValidateCast (so kind-incompatible
       // casts hit E3009 first) and before ValidateAndEmitRangeCheck (no
       // point synthesizing runtime guard code for code about to error).
+      //
+      // Recorded as a recoverable diagnostic instead of thrown: the cast is
+      // a no-op by definition (source already fits), so the source value
+      // can flow through unchanged. This lets the parser keep walking the
+      // function and report every unneeded cast in the file in one compile.
       if (sourceRanged != null && rangedTarget != null
           && TargetCoversSource(rangedTarget, sourceRanged)) {
-        throw new CompileError(ErrorCode.SemanticUnneededCast,
+        _errors.Add(new CompileError(ErrorCode.SemanticUnneededCast,
           $"unneeded cast: '{sourceRanged.Name}' already fits in '{rangedTarget.Name}'",
-          asToken.Line, asToken.Column);
+          asToken.Line, asToken.Column) {
+          FilePath = _sourceFilePath
+        });
+        // Propagate the target's ranged-name (the cast's nominal effect)
+        // so chained `as` and downstream type-sensitive code keep working.
+        _lastRangedTypeName = rangedTarget.Name;
+        _lastCastRangedType = null;
+        lhs = new ExprResult.Direct(inputVal);
+        continue;
       }
       if (rangedTarget != null) {
         var expectedKind = rangedTarget.BaseType.ToValueKind();
@@ -19812,18 +19827,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   }
 
   /// <summary>
-  /// After consuming a `with` keyword, enforce that any following `(` is
-  /// separated by whitespace. Adjacency (`with(`) is rejected — the canonical
-  /// form is `with (...)`. Whitespace detection is line+column adjacency:
-  /// `with` is 4 chars long, so no-space means the `(` lands at column+4 on
-  /// the same line. Any newline or space lifts adjacency naturally.
+  /// After consuming a keyword that can legally be followed by `(`, enforce
+  /// whitespace between the keyword and the parenthesis. The adjacent form
+  /// (`with(`, `otherwise(`) is rejected — the canonical form is `with (` /
+  /// `otherwise (`. Whitespace detection is line+column adjacency: the `(` is
+  /// adjacent when it lands at `keyword.Column + keyword.Value.Length` on the
+  /// same line. Any newline or space lifts adjacency naturally.
   /// </summary>
-  private void EnsureWithFollowedBySpace(Token withToken) {
+  private void EnsureKeywordFollowedBySpaceBeforeParen(Token keyword) {
     if (!Check(TokenType.LeftParen)) return;
     var lp = Current();
-    if (withToken.Line == lp.Line && withToken.Column + 4 == lp.Column) {
+    if (keyword.Line == lp.Line && keyword.Column + keyword.Value.Length == lp.Column) {
       throw new CompileError(ErrorCode.ParserExpectedToken,
-        "'with(' is not allowed; write 'with (' with a space between the keyword and the opening parenthesis",
+        $"'{keyword.Value}(' is not allowed; write '{keyword.Value} (' with a space between the keyword and the opening parenthesis",
         lp.Line, lp.Column);
     }
   }

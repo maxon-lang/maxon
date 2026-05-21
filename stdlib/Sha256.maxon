@@ -1,6 +1,5 @@
 /// SHA-256 cryptographic hash function.
 /// @category Crypto
-
 typealias Word32 = int(i64.min to i64.max)
 typealias Sha256Words = Array with Word32
 
@@ -26,45 +25,45 @@ let sha256KTable = [
 
 function sha256RotR(v Word32, n Word32) returns Word32
 	let right = v shr n
-	let left = (v shl(32 - n)) and 0xFFFFFFFF
-	return(right or left) and 0xFFFFFFFF
+	let left = (v shl (32 - n)) and 0xFFFFFFFF
+	return (right or left) and 0xFFFFFFFF
 end 'sha256RotR'
 
 function sha256Ch(a Word32, b Word32, c Word32) returns Word32
 	let notA = (0xFFFFFFFF xor a) and 0xFFFFFFFF
-	return((a and b) xor(notA and c)) and 0xFFFFFFFF
+	return ((a and b) xor (notA and c)) and 0xFFFFFFFF
 end 'sha256Ch'
 
 function sha256Maj(a Word32, b Word32, c Word32) returns Word32
-	return((a and b) xor(a and c) xor(b and c)) and 0xFFFFFFFF
+	return ((a and b) xor (a and c) xor (b and c)) and 0xFFFFFFFF
 end 'sha256Maj'
 
 function sha256BigSigma0(v Word32) returns Word32
 	let r2 = sha256RotR(v, n: 2)
 	let r13 = sha256RotR(v, n: 13)
 	let r22 = sha256RotR(v, n: 22)
-	return(r2 xor r13 xor r22) and 0xFFFFFFFF
+	return (r2 xor r13 xor r22) and 0xFFFFFFFF
 end 'sha256BigSigma0'
 
 function sha256BigSigma1(v Word32) returns Word32
 	let r6 = sha256RotR(v, n: 6)
 	let r11 = sha256RotR(v, n: 11)
 	let r25 = sha256RotR(v, n: 25)
-	return(r6 xor r11 xor r25) and 0xFFFFFFFF
+	return (r6 xor r11 xor r25) and 0xFFFFFFFF
 end 'sha256BigSigma1'
 
 function sha256SmSigma0(v Word32) returns Word32
 	let r7 = sha256RotR(v, n: 7)
 	let r18 = sha256RotR(v, n: 18)
 	let s3 = (v shr 3) and 0xFFFFFFFF
-	return(r7 xor r18 xor s3) and 0xFFFFFFFF
+	return (r7 xor r18 xor s3) and 0xFFFFFFFF
 end 'sha256SmSigma0'
 
 function sha256SmSigma1(v Word32) returns Word32
 	let r17 = sha256RotR(v, n: 17)
 	let r19 = sha256RotR(v, n: 19)
 	let s10 = (v shr 10) and 0xFFFFFFFF
-	return(r17 xor r19 xor s10) and 0xFFFFFFFF
+	return (r17 xor r19 xor s10) and 0xFFFFFFFF
 end 'sha256SmSigma1'
 
 function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
@@ -74,7 +73,7 @@ function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
 	let b1 = try buf.get(off + 1) otherwise 0
 	let b2 = try buf.get(off + 2) otherwise 0
 	let b3 = try buf.get(off + 3) otherwise 0
-	return(b0 shl 24) or(b1 shl 16) or(b2 shl 8) or b3
+	return (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
 end 'sha256ReadBE32'
 
 /// Compute the SHA-256 hash of data. Returns a 32-byte ByteArray.

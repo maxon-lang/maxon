@@ -1216,7 +1216,7 @@ function main() returns ExitCode
     try 'work'
         var inner = outer.get(0)
         inner.push(7)
-    end 'work' otherwise(e) 'h'
+    end 'work' otherwise (e) 'h'
         match e 'k'
             indexOutOfBounds then panic("oob")
             emptySlot then panic("empty")
@@ -1255,7 +1255,7 @@ function main() returns ExitCode
             var inner = outer.get(0)
             inner.push(7)
         end 'gate'
-    end 'wrap' otherwise(e) 'h'
+    end 'wrap' otherwise (e) 'h'
         match e 'k'
             indexOutOfBounds then panic("oob")
             emptySlot then panic("empty")
@@ -1299,7 +1299,7 @@ function main() returns ExitCode
     var sum = 0
     try 'work'
         workFunc(IntArray.create())
-    end 'work' otherwise(e) 'h'
+    end 'work' otherwise (e) 'h'
         match e 'k'
             failed then sum = 42
         end 'k'

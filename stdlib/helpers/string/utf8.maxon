@@ -2,6 +2,7 @@
 
 typealias RawByte = int(0 to u8.max)
 typealias ByteWidth = int(1 to 4)
+
 // BytePos exported by stdlib/String.maxon.
 
 // UTF-8 encoding:
@@ -119,7 +120,7 @@ export function utf8DecodeAt(managed __ManagedMemory, pos BytePos) returns Codep
 		let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err'
 			panic("utf8DecodeAt: 2-byte seq continuation out of bounds")
 		end 'b1Err'
-		return((b0 mod 32) * 64) + (b1 mod 64)
+		return ((b0 mod 32) * 64) + (b1 mod 64)
 	end 'two'
 	if b0 < 240 'three'
 		let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err2'
@@ -128,7 +129,7 @@ export function utf8DecodeAt(managed __ManagedMemory, pos BytePos) returns Codep
 		let b2 = try managed.byteAt(pos + 2) otherwise 'b2Err'
 			panic("utf8DecodeAt: 3-byte seq byte 2 out of bounds")
 		end 'b2Err'
-		return((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+		return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 	end 'three'
 	let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err3'
 		panic("utf8DecodeAt: 4-byte seq byte 1 out of bounds")
@@ -139,5 +140,5 @@ export function utf8DecodeAt(managed __ManagedMemory, pos BytePos) returns Codep
 	let b3 = try managed.byteAt(pos + 3) otherwise 'b3Err'
 		panic("utf8DecodeAt: 4-byte seq byte 3 out of bounds")
 	end 'b3Err'
-	return((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
+	return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 end 'utf8DecodeAt'

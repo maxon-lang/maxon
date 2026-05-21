@@ -9,6 +9,7 @@
 export typealias CacheChecksum = int(0 to u64.max)
 export typealias StdlibFuncIndexMap = Map with (String, MachineWord)
 export typealias StdlibFuncNameSet = Set with String
+
 // `decodeStdlibCache`'s id-space rebuild snapshots per-(declaringType,param)
 // constraints into a flat lookup so the rebuild can re-attach them at the
 // project-aligned ids without mutating the cached registry.
@@ -459,7 +460,7 @@ function writeThrowsClauseField(buf ByteArray, clause ThrowsClause) throws Cache
 end 'writeThrowsClauseField'
 
 function readThrowsClauseField(buf ByteArray, offset ByteOffset) returns (ThrowsClause, ByteOffset) throws CacheCorruption
-	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
 		match e 'kind'
 			absent then return (ThrowsClause.none, offset + 1)
 			invalidEncoding then throw CacheCorruption.invalidEncoding
@@ -481,7 +482,7 @@ function writeParentWitnessLabelField(buf ByteArray, label ParentWitnessLabel) t
 end 'writeParentWitnessLabelField'
 
 function readParentWitnessLabelField(buf ByteArray, offset ByteOffset) returns (ParentWitnessLabel, ByteOffset) throws CacheCorruption
-	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
 		match e 'kind'
 			absent then return (ParentWitnessLabel.none, offset + 1)
 			invalidEncoding then throw CacheCorruption.invalidEncoding
@@ -503,7 +504,7 @@ function writeBuiltinArrayLiteralNameField(buf ByteArray, value BuiltinArrayLite
 end 'writeBuiltinArrayLiteralNameField'
 
 function readBuiltinArrayLiteralNameField(buf ByteArray, offset ByteOffset) returns (BuiltinArrayLiteralName, ByteOffset) throws CacheCorruption
-	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
 		match e 'kind'
 			absent then return (BuiltinArrayLiteralName.none, offset + 1)
 			invalidEncoding then throw CacheCorruption.invalidEncoding
@@ -522,7 +523,7 @@ function writeBuiltinDictionaryLiteralNameField(buf ByteArray, value BuiltinDict
 end 'writeBuiltinDictionaryLiteralNameField'
 
 function readBuiltinDictionaryLiteralNameField(buf ByteArray, offset ByteOffset) returns (BuiltinDictionaryLiteralName, ByteOffset) throws CacheCorruption
-	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
 		match e 'kind'
 			absent then return (BuiltinDictionaryLiteralName.none, offset + 1)
 			invalidEncoding then throw CacheCorruption.invalidEncoding
@@ -546,7 +547,7 @@ end 'readBuiltinDictionaryLiteralNameField'
 export function writeStdlibCache(project Project, path FilePath, data StdlibCacheData, target Target, contentChecksum CacheChecksum)
 	var buf = ByteArray.create()
 	buf.reserve(4096)
-	try encodeStdlibCacheBody(project, buf: buf, data: data, target: target, contentChecksum: contentChecksum) otherwise(e) 'corrupt'
+	try encodeStdlibCacheBody(project, buf: buf, data: data, target: target, contentChecksum: contentChecksum) otherwise (e) 'corrupt'
 		match e 'kind'
 			absent then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: unexpected `absent` from optional-string codec — skipping persist")
 			invalidEncoding then logError(LogCategory.compiler, message: function() gives "writeStdlibCache: malformed in-memory cache state (length-0 mandatory string) — skipping persist")
@@ -894,7 +895,7 @@ export function readStdlibCache(project Project, path FilePath, target Target, e
 
 	let buf = try File.readBinary(path) otherwise return invalid
 
-	let result = try decodeStdlibCache(project, buf: buf, target: target, expectedChecksum: expectedChecksum) otherwise(e) 'corrupt'
+	let result = try decodeStdlibCache(project, buf: buf, target: target, expectedChecksum: expectedChecksum) otherwise (e) 'corrupt'
 		match e 'kind'
 			absent then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} reports unexpected `absent` from optional-string codec; treating as corrupt and rebuilding")
 			invalidEncoding then logInfo(LogCategory.compiler, message: function() gives "Stdlib cache at {path} is corrupt (CacheCorruption.invalidEncoding); rebuilding from source")
@@ -936,7 +937,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		m1 = buf.get(1)
 		m2 = buf.get(2)
 		m3 = buf.get(3)
-	end 'readMagic' otherwise(e) 'badMagic2'
+	end 'readMagic' otherwise (e) 'badMagic2'
 		match e 'kind'
 			indexOutOfBounds then panic("loadCache: buf.count() >= 36 just verified but magic-byte read OOB")
 			emptySlot then panic("loadCache: magic byte slot empty (push-init invariant)")
@@ -1695,7 +1696,7 @@ function translateMaxonType(project Project, data StdlibCacheData, t MaxonType) 
 		function(id) gives translateCapturedFunctionType(project, data: data, id: id)
 		typeParameter(id) gives translateCapturedTypeParameter(project, data: data, id: id)
 		genericInstance(id) gives translateCapturedGenericInstance(project, data: data, id: id)
-		interface (id) gives translateCapturedInterface(project, data: data, id: id)
+		interface(id) gives translateCapturedInterface(project, data: data, id: id)
 		// `constInt` arms carry a literal payload, not a registry id —
 		// no captured-data lookup needed, pass the literal through.
 		constInt gives t
@@ -2380,7 +2381,7 @@ function writeOptionalStringDefaultEmpty(buf ByteArray, value String) throws Cac
 end 'writeOptionalStringDefaultEmpty'
 
 function readOptionalStringDefaultEmpty(buf ByteArray, offset ByteOffset) returns (String, ByteOffset) throws CacheCorruption
-	let result = try readOptionalString(buf, offset: offset) otherwise(e) 'pickArm'
+	let result = try readOptionalString(buf, offset: offset) otherwise (e) 'pickArm'
 		match e 'kind'
 			absent then return ("", offset + 1)
 			invalidEncoding then throw CacheCorruption.invalidEncoding

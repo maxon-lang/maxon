@@ -32,6 +32,7 @@ public class LspServer {
         .WithHandler<PrepareRenameHandler>()
         .WithHandler<DidChangeWatchedFilesHandler>()
         .WithHandler<FormattingHandler>()
+        .WithHandler<CodeActionHandler>()
         .WithServices(services => {
           services.AddSingleton(this);
         })
@@ -1614,6 +1615,170 @@ public class LspServer {
     return new WorkspaceEdit { Changes = changes };
   }
 
+  /// Compute code actions (quick fixes) for diagnostics in the requested range.
+  /// The editor narrows by selection range itself, so per-diagnostic fixes are
+  /// keyed off `context.Diagnostics`. Fix-all variants pull from the project's
+  /// full diagnostic set so they cover diagnostics outside the selection.
+  /// Currently handles:
+  ///   - E3010 (unneeded cast): per-diagnostic + fix-all-in-file + fix-all-in-project.
+  public List<CodeAction>? GetCodeActions(DocumentUri uri, CodeActionContext context) {
+    if (!_documents.TryGetValue(uri, out var content))
+      return null;
+
+    var actions = new List<CodeAction>();
+    var lines = content.Split('\n');
+
+    // Per-diagnostic fixes — one CodeAction per E3010 diagnostic the editor
+    // told us is in scope. These attach to the diagnostic so lightbulbs show
+    // up next to the squiggle.
+    foreach (var diag in context.Diagnostics) {
+      if (diag.Code?.String != "E3010") continue;
+      var edit = ComputeUnneededCastEdit(diag, lines);
+      if (edit == null) continue;
+      actions.Add(new CodeAction {
+        Title = "Remove unneeded cast",
+        Kind = CodeActionKind.QuickFix,
+        Diagnostics = new Container<Diagnostic>(diag),
+        Edit = new WorkspaceEdit {
+          Changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>> {
+            [uri] = [edit]
+          }
+        },
+        IsPreferred = true
+      });
+    }
+
+    AppendFixAllActions(uri, context.Diagnostics, actions);
+
+    return actions;
+  }
+
+  /// Add "fix all unneeded casts in file" and "fix all unneeded casts in
+  /// project" actions when there are at least two E3010s to combine.
+  /// Single-diagnostic case is already covered by the per-diagnostic fix.
+  ///
+  /// These are advertised under the `quickfix` kind with the diagnostics
+  /// attached so they appear in the diagnostic-attached lightbulb menu next
+  /// to the squiggle rather than only the "Source Action..." menu.
+  private void AppendFixAllActions(DocumentUri uri, IEnumerable<Diagnostic> contextDiagnostics, List<CodeAction> actions) {
+    var filePath = uri.GetFileSystemPath();
+    if (filePath == null) return;
+    var project = ProjectManager.FindProjectForFile(filePath);
+    if (project == null) return;
+
+    var attachedDiags = new Container<Diagnostic>(
+      contextDiagnostics.Where(d => d.Code?.String == "E3010"));
+
+    // Fix-all-in-file: collect every E3010 stored for this file and combine.
+    var fileEdits = CollectUnneededCastEditsForFile(filePath, project);
+    if (fileEdits.Count >= 2) {
+      actions.Add(new CodeAction {
+        Title = $"Remove all unneeded casts in file ({fileEdits.Count})",
+        Kind = CodeActionKind.QuickFix,
+        Diagnostics = attachedDiags,
+        Edit = new WorkspaceEdit {
+          Changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>> {
+            [uri] = fileEdits
+          }
+        }
+      });
+    }
+
+    // Fix-all-in-project: walk every file with diagnostics, union their edits.
+    var projectChanges = new Dictionary<DocumentUri, IEnumerable<TextEdit>>();
+    int projectCount = 0;
+    var normalizedActiveFile = Project.NormalizePath(filePath);
+    foreach (var (path, _) in project.GetAllDiagnostics()) {
+      var edits = path == normalizedActiveFile
+        ? fileEdits
+        : CollectUnneededCastEditsForFile(path, project);
+      if (edits.Count == 0) continue;
+      try {
+        projectChanges[DocumentUri.FromFileSystemPath(path)] = edits;
+        projectCount += edits.Count;
+      } catch {
+        // URI conversion may fail for unusual paths
+      }
+    }
+    if (projectCount > fileEdits.Count && projectChanges.Count > 0) {
+      actions.Add(new CodeAction {
+        Title = $"Remove all unneeded casts in project ({projectCount})",
+        Kind = CodeActionKind.QuickFix,
+        Diagnostics = attachedDiags,
+        Edit = new WorkspaceEdit { Changes = projectChanges }
+      });
+    }
+  }
+
+  /// Collect TextEdits for every E3010 diagnostic stored for `filePath`.
+  /// Returned in reverse source order so the editor can apply them in
+  /// sequence without invalidating earlier positions.
+  private static List<TextEdit> CollectUnneededCastEditsForFile(string filePath, Project project) {
+    var content = project.GetFileContent(filePath);
+    if (content == null) return [];
+    var lines = content.Split('\n');
+
+    var edits = new List<TextEdit>();
+    foreach (var err in project.GetDiagnostics(filePath)) {
+      if (err.Code.Format() != "E3010") continue;
+      // Project diagnostics carry 1-based line/column; convert to the
+      // 0-based LSP form used by ComputeUnneededCastEdit.
+      var synthetic = new Diagnostic {
+        Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+          new Position((err.Line ?? 1) - 1, (err.Column ?? 1) - 1),
+          new Position((err.Line ?? 1) - 1, err.Column ?? 1)
+        )
+      };
+      var edit = ComputeUnneededCastEdit(synthetic, lines);
+      if (edit != null) edits.Add(edit);
+    }
+
+    // Sort by descending start position so applying edits top-down can't
+    // shift the indices of later edits within the same file.
+    edits.Sort((a, b) => {
+      var lineCmp = b.Range.Start.Line.CompareTo(a.Range.Start.Line);
+      if (lineCmp != 0) return lineCmp;
+      return b.Range.Start.Character.CompareTo(a.Range.Start.Character);
+    });
+    return edits;
+  }
+
+  /// Compute the TextEdit that deletes the ` as TypeName` suffix flagged by
+  /// an E3010 diagnostic. The diagnostic's start position must land on the
+  /// `a` of `as`; we widen left through preceding whitespace and right
+  /// through `as`, whitespace, and the target identifier.
+  private static TextEdit? ComputeUnneededCastEdit(Diagnostic diag, string[] lines) {
+    var lineIdx = (int)diag.Range.Start.Line;
+    if (lineIdx < 0 || lineIdx >= lines.Length) return null;
+    var line = lines[lineIdx];
+    var asCol = (int)diag.Range.Start.Character;
+
+    // Diagnostic column must land on the `a` of `as`.
+    if (asCol < 0 || asCol + 2 > line.Length) return null;
+    if (line[asCol] != 'a' || line[asCol + 1] != 's') return null;
+
+    // Look back to find the start of the whitespace preceding `as`.
+    var deleteStart = asCol;
+    while (deleteStart > 0 && (line[deleteStart - 1] == ' ' || line[deleteStart - 1] == '\t'))
+      deleteStart--;
+
+    // Walk past `as` plus the following whitespace and the target identifier.
+    var cursor = asCol + 2;
+    while (cursor < line.Length && (line[cursor] == ' ' || line[cursor] == '\t')) cursor++;
+    if (cursor >= line.Length) return null;
+    var idStart = cursor;
+    while (cursor < line.Length && (char.IsLetterOrDigit(line[cursor]) || line[cursor] == '_')) cursor++;
+    if (cursor == idStart) return null;
+    var deleteEnd = cursor;
+
+    return new TextEdit {
+      Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+        new Position(lineIdx, deleteStart),
+        new Position(lineIdx, deleteEnd)
+      ),
+      NewText = ""
+    };
+  }
 }
 
 public record CompletionInfo(

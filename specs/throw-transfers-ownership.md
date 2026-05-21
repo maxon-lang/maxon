@@ -81,7 +81,7 @@ function outer() returns N throws OuterErr
 end 'outer'
 
 function main() returns ExitCode
-	let v = try outer() otherwise(e) 'fail'
+	let v = try outer() otherwise (e) 'fail'
 		match e 'kind'
 			unterminatedString(line, column) then return (line + column)
 			unexpectedEof(line, column) then return (line + column + 100)

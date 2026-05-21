@@ -17,6 +17,7 @@
 let runProgramDefaultTimeoutMs = 30000
 let buildTimeoutMs = 60000
 let rawTailMaxBytes = 4096
+
 // Cap stdout/stderr we surface in the response. Larger outputs are
 // truncated; a separate `<stream>Truncated` flag flags the case so callers
 // can re-run with a smaller workload if they need the full text.
@@ -93,7 +94,7 @@ function buildOutcomeBuildOnlyWithRunError(buildResult BuildPhase, runErrorReaso
 	var doc = JsonDoc.create()
 	let buildId = buildPhaseToJson(doc, build: buildResult)
 	let runErrId = doc.add(JsonNode.stringNode(runErrorReason))
-	let runDurId = doc.add(JsonNode.numberNode(runDurationMs as JsonFloat))
+	let runDurId = doc.add(JsonNode.numberNode(runDurationMs))
 	var runKeys = StringArray.create()
 	var runChildren = JsonNodeIdArray.create()
 	runKeys.push("durationMs")
@@ -127,7 +128,7 @@ function buildOutcomeFull(buildResult BuildPhase, runResult CollectedOutput, run
 end 'buildOutcomeFull'
 
 function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
-	let exitId = doc.add(JsonNode.numberNode(build.exitCode() as JsonFloat))
+	let exitId = doc.add(JsonNode.numberNode(build.exitCode()))
 	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
 	let durId = doc.add(JsonNode.numberNode(build.durationMs as JsonFloat))
 	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
@@ -147,9 +148,9 @@ function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
 end 'buildPhaseToJson'
 
 function runPhaseToJson(doc JsonDoc, run CollectedOutput, durationMs DurationMs) returns JsonNodeId
-	let exitId = doc.add(JsonNode.numberNode(run.exitCode() as JsonFloat))
+	let exitId = doc.add(JsonNode.numberNode(run.exitCode()))
 	let successId = doc.add(JsonNode.boolNode(run.succeeded()))
-	let durId = doc.add(JsonNode.numberNode(durationMs as JsonFloat))
+	let durId = doc.add(JsonNode.numberNode(durationMs))
 	let stdoutBytes = run.stdout.toByteArray()
 	let stderrBytes = run.stderr.toByteArray()
 	let stdoutTruncated = stdoutBytes.count() > outputMaxBytes

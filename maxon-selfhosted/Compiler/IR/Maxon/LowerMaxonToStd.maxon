@@ -1163,6 +1163,7 @@ end 'namedTypeIsManagedRef'
 // taken bookkeeping here because the closure ABI is uniform: every
 // indirect call has exactly one env in flight at a time.
 typealias FnEnvMap = Map with (ValueId, ValueId)
+
 // C1.c: per-function map from an interface-typed slot id to its witness
 // companion slot id. Populated by `assignInterfaceWitnessSlots` after
 // `collectSlotMaxonTypes` allocates fresh trailing slots for each
@@ -1170,6 +1171,7 @@ typealias FnEnvMap = Map with (ValueId, ValueId)
 // typed varDecl/varStore site to emit the second store (witness pointer)
 // alongside the first (value or box pointer).
 typealias InterfaceWitnessSlotMap = Map with (VarSlot, VarSlot)
+
 // C1.d: per-function pairing of an interface-typed loaded value with its
 // witness pointer (also a ValueId). Populated by `lowerVarLoad` whenever it
 // reads a fat-pointer slot — the load emits two ops (value + witness) and
@@ -1177,6 +1179,7 @@ typealias InterfaceWitnessSlotMap = Map with (VarSlot, VarSlot)
 // witness without re-walking back to the slot. Mirrors `fnEnvVarNames`'s
 // shape for the closure ABI.
 typealias InterfaceWitnessValueIdMap = Map with (ValueId, ValueId)
+
 // Per-function map from a String-literal ValueId (the outer `String` struct
 // produced by `lowerStringConst`) to its parser-interned StringId. Lets
 // builtin-lowering recover the literal bytes for label-shaped arguments.
@@ -1256,7 +1259,6 @@ end 'LoweringFuncStateSnapshot'
 enum NotAStringLiteral implements Error
 	notLiteral
 end 'NotAStringLiteral'
-
 
 // ============================================================
 // MaxonToStdLowering type
@@ -4730,7 +4732,6 @@ type MaxonToStdLowering
 		return true
 	end 'lowerInternalsOsExit'
 
-
 	// Phase 7 / 11.4: lower `__Builtins.floatToBits(f float) returns int` to a
 	// single `bitcastF64ToI64` Std unary op. The op carries the standard
 	// FP-to-GPR semantics — `movq xmm→gpr` on x64, `fmov gpr,d` on ARM64,
@@ -7027,7 +7028,7 @@ type MaxonToStdLowering
 			// in R8/X0 and the error flag (`ordinal+1`, 0 reserved for "no
 			// error") in RDX/X1. The caller's `try` reads the flag from the
 			// post-call mov.
-			throw(enumName, variantName, payloadValueName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, payloadValueName: payloadValueName, dstBlock: dstBlock)
+			throw (enumName, variantName, payloadValueName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, payloadValueName: payloadValueName, dstBlock: dstBlock)
 			rethrow(flagName, _) then self.lowerRethrow(flagName: flagName, dstBlock: dstBlock)
 			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
@@ -9115,7 +9116,6 @@ function predicateIsEqOrNe(predicate CmpPredicate) returns bool
 		ge gives false
 	end 'p'
 end 'predicateIsEqOrNe'
-
 
 function predicateIsNe(predicate CmpPredicate) returns bool
 	return match predicate 'p'

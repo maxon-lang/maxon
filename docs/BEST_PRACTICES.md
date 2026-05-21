@@ -96,7 +96,7 @@ try readFile(path) otherwise 'fail'
 end 'fail'
 
 ' Good: block form earns its weight when it branches on the error
-try readFile(path) otherwise(e) 'fail'
+try readFile(path) otherwise (e) 'fail'
 	match e 'report'
 		notFound(p) then printError("missing: {p}")
 		permissionDenied(p) then printError("denied: {p}")

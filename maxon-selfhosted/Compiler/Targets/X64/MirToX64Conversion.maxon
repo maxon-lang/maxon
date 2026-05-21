@@ -472,9 +472,11 @@ end 'predicateToSetcc'
 // first stack arg).
 let X64_CALLCONV_GPR_COUNT = 7
 let X64_CALLCONV_FP_COUNT = 8
+
 // First incoming stack arg sits at `[rbp + X64_STACK_ARG_RBP_BASE]`; subsequent
 // args follow at 8-byte strides. 0x10 = saved RBP (8) + return address (8).
 let X64_STACK_ARG_RBP_BASE = 0x10
+
 function getCallConvGpr(index VarSlot) returns X64Register
 	let regs = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rbx]
 	return try regs.get(index) otherwise panic("getCallConvGpr: param index {index} exceeds register count")
@@ -2055,12 +2057,12 @@ type X64FunctionLowering
 		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
 
 		let nullSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		var allocFlags = 0x3000              // MEM_COMMIT | MEM_RESERVE
+		var allocFlags = 0x3000  // MEM_COMMIT | MEM_RESERVE
 		if large 'usingLargePages'
-			allocFlags = 0x20003000          // | MEM_LARGE_PAGES
+			allocFlags = 0x20003000  // | MEM_LARGE_PAGES
 		end 'usingLargePages'
 		let flagsSlot = materializeConstSlot(value: allocFlags, dstBlock: dstBlock)
-		let protectSlot = materializeConstSlot(value: 0x04, dstBlock: dstBlock) // PAGE_READWRITE
+		let protectSlot = materializeConstSlot(value: 0x04, dstBlock: dstBlock)  // PAGE_READWRITE
 
 		var args = VarSlotArray.create()
 		args.push(nullSlot)
@@ -2082,9 +2084,9 @@ type X64FunctionLowering
 		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
 
 		let addrSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let protSlot = materializeConstSlot(value: 0x03, dstBlock: dstBlock)        // PROT_READ | PROT_WRITE
-		let flagsSlot = materializeConstSlot(value: 0x22, dstBlock: dstBlock)       // MAP_ANON | MAP_PRIVATE
-		let fdSlot = materializeConstSlot(value: u64.max, dstBlock: dstBlock)       // -1 sign-extended
+		let protSlot = materializeConstSlot(value: 0x03, dstBlock: dstBlock)  // PROT_READ | PROT_WRITE
+		let flagsSlot = materializeConstSlot(value: 0x22, dstBlock: dstBlock)  // MAP_ANON | MAP_PRIVATE
+		let fdSlot = materializeConstSlot(value: u64.max, dstBlock: dstBlock)  // -1 sign-extended
 		let offsetSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
@@ -2096,7 +2098,7 @@ type X64FunctionLowering
 		args.push(offsetSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 9, argSlots: args)) // SYS_mmap
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 9, argSlots: args))  // SYS_mmap
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
 		appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: resultSlot))
 		nextTempSlot = nextTempSlot + 1
@@ -2117,7 +2119,7 @@ type X64FunctionLowering
 	function lowerOsFreePagesWindows(ptrId ValueId, dstBlock IrBlock)
 		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
 		let zeroSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let releaseSlot = materializeConstSlot(value: 0x8000, dstBlock: dstBlock) // MEM_RELEASE
+		let releaseSlot = materializeConstSlot(value: 0x8000, dstBlock: dstBlock)  // MEM_RELEASE
 
 		var args = VarSlotArray.create()
 		args.push(ptrSlot)
@@ -2139,7 +2141,7 @@ type X64FunctionLowering
 		args.push(sizeSlot)
 
 		let resultSlot = nextTempSlot
-		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 11, argSlots: args)) // SYS_munmap
+		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 11, argSlots: args))  // SYS_munmap
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsFreePagesLinux'
 

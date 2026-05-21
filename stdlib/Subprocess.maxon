@@ -1,21 +1,20 @@
 /// Launch and manage child processes.
-///
+/// 
 /// Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path
 /// is `Subprocess.run(.name("git"), arguments: ["status"])`, which captures
 /// stdout/stderr into a `CollectedOutput` value. For more control, build a
 /// `Configuration` and call `.run()` on it.
-///
+/// 
 /// Async use: `let p = async Subprocess.run(...); let r = try await p`. The
 /// same `Subprocess.run` is callable from both sync and async contexts —
 /// from a green thread it yields to the scheduler at the wait, from a plain
 /// call it blocks the OS thread.
-///
+/// 
 /// Not available on `wasm32-wasi` — WASI has no process-spawn primitives.
 /// Code that needs to compile on every supported target must `#if os(Wasi)`
 /// around its Subprocess use.
-///
+/// 
 /// @category System
-
 // Subprocess: child-process execution. Not supported on WASI; do not target WASI from code that uses Subprocess.
 
 // =============================================================================
@@ -41,10 +40,10 @@ typealias Byte = int(0 to u8.max)
 // Stdin discriminator passed across the builtin boundary. Raw values match
 // the runtime contract (see X86/ARM64 emitters and the parent plan).
 enum StdinKind
-	none     = 0
-	inherit  = 1
-	bytes    = 2
-	file     = 3
+	none = 0
+	inherit = 1
+	bytes = 2
+	file = 3
 end 'StdinKind'
 
 // Stdout / stderr discriminator passed across the builtin boundary. Shared
@@ -53,7 +52,7 @@ enum OutputKind
 	discard = 0
 	inherit = 1
 	collect = 2
-	file    = 3
+	file = 3
 end 'OutputKind'
 
 // Spawn-flags bitfield bits passed in the `flags` argument to
@@ -62,17 +61,17 @@ end 'OutputKind'
 // `.rawValue`s. Kept as enum (rather than constants) so the set of legal
 // bits is named in one place.
 enum SpawnFlag
-	hideWindow      = 1
+	hideWindow = 1
 	newProcessGroup = 2
-	detach          = 4
+	detach = 4
 end 'SpawnFlag'
 
 // Result-struct status-kind discriminator. Matches the runtime's
 // `subprocessResultStatusKind` return values.
 enum ResultStatusKind
-	exited    = 0
+	exited = 0
 	signalled = 1
-	timedOut  = 2
+	timedOut = 2
 end 'ResultStatusKind'
 
 // =============================================================================
@@ -121,12 +120,12 @@ end 'Executable'
 typealias EnvMap = Map with String, String
 
 /// How the child process's environment is constructed.
-///
+/// 
 /// - `inherit` — the child sees the parent's environment unchanged.
 /// - `inheritUpdating(map)` — the child inherits, then `map`'s entries
 ///   overwrite any colliding keys.
 /// - `custom(map)` — the child sees exactly `map` and nothing else.
-///
+/// 
 /// The three-arm union (rather than a single `Map` field) makes
 /// `inherit`-vs-empty unambiguous.
 export union Environment
@@ -140,12 +139,12 @@ end 'Environment'
 // =============================================================================
 
 /// What the child reads on stdin.
-///
+/// 
 /// - `none` — stdin is closed immediately.
 /// - `inherit` — pass through the parent's stdin.
 /// - `bytes(s)` — write `s` to stdin, then close.
 /// - `file(p)` — read stdin from a file on disk.
-///
+/// 
 /// Each variant routes its payload through the `subprocessSpawn` stdio
 /// triple; the runtime stubs currently fail spawns with -1 until the real
 /// OS-side implementation lands.
@@ -157,13 +156,13 @@ export union InputSource
 end 'InputSource'
 
 /// Where the child's stdout (or stderr) is sent.
-///
+/// 
 /// - `discard` — output is dropped.
 /// - `inherit` — pass through to the parent's stream.
 /// - `collect(limitBytes)` — read into the `CollectedOutput.stdout`/`.stderr`
 ///   field, truncated at `limitBytes`.
 /// - `file(p)` — redirect to a file on disk.
-///
+/// 
 /// Each variant routes through the `subprocessSpawn` stdio triple; the
 /// runtime stubs currently fail spawns with -1 until the real OS-side
 /// implementation lands.
@@ -179,14 +178,14 @@ end 'OutputDestination'
 // =============================================================================
 
 /// How the child terminated.
-///
+/// 
 /// - `exited(code)` — the child called `exit(code)` (or its main returned
 ///   `code`). On Windows this includes any value `GetExitCodeProcess` returned
 ///   that isn't an NTSTATUS-class abnormal exit.
 /// - `signalled(code)` — Unix: the child was killed by signal `code`. Windows:
 ///   the child terminated abnormally with NTSTATUS exit code `code` (e.g.
 ///   `0xC0000005` for an access violation).
-///
+/// 
 /// The current runtime stubs never produce `signalled`; that decoding lands
 /// alongside the real OS implementation of `subprocessWaitCollect`.
 export union TerminationStatus
@@ -586,4 +585,3 @@ function lastErrorMessage() returns String
 	let managed = __Builtins.subprocessLastErrorMessage()
 	return String.init(managed)
 end 'lastErrorMessage'
-

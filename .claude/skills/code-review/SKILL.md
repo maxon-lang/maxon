@@ -20,7 +20,9 @@ Create a task list to perform these steps.
 
 4. Refactor all modified files to eliminate duplicated code, regardless if it was pre-existing or introduced by you. Our goal is to continuously improve the code quality.
 
-5. Measure how long each of the following steps take and record it in specs/code-review-timings.md. This will allow
+5. Use "maxon fmt" to format all modified maxon files, ensuring consistent code style.
+
+6. Measure how long each of the following steps take and record it in specs/code-review-timings.md. This will allow
 us to track performance regressions.
 - compiling the C# compiler
 - running the C# compiler spec tests
@@ -28,4 +30,4 @@ us to track performance regressions.
 - running the self-hosted compiler spec tests
 - running the self-hosted wasm target spec tests
 
-6. Write a git commit message that summaries the changes in this commit, not what happened in the code review.
+7. Write a git commit message that summaries the changes in this commit, not what happened in the code review.

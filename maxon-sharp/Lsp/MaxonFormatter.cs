@@ -551,19 +551,22 @@ private record SourceComment(string Text, bool WholeLine);
   // These are the only contexts where we suppress the space before '('.
   // Every other keyword (for, if, or, and, return, not, in, upto, ...) is treated as
   // a non-callable and gets a mandatory space before '('.
+  //
+  // `with` and `otherwise` are NOT in this set: the parser rejects `with(` and
+  // `otherwise(` (see EnsureKeywordFollowedBySpaceBeforeParen). The canonical
+  // form is `with (` and `otherwise (` — the keyword names a clause, not a
+  // call target.
   private static readonly HashSet<TokenType> CallableBeforeLeftParen = [
     TokenType.Identifier, TokenType.RightParen, TokenType.RightBracket,
     // Type keywords that introduce a parameterized type or range cast, e.g. int(0 to 10).
     TokenType.Int, TokenType.Float, TokenType.Bool, TokenType.Byte,
-    // Keyword callables: panic("msg") and otherwise(e) 'label' (error binding capture).
-    TokenType.Panic, TokenType.Otherwise,
-    // Type-param-list keyword: Map with(Key, Value), Array with(T), etc.
-    TokenType.With,
-    // Match-arm pattern destructuring keywords: enum(name), union(name), function(name).
+    // Keyword callable: panic("msg")
+    TokenType.Panic,
+    // Match-arm pattern destructuring keywords: enum(name), union(name), function(name), interface(name).
     // These keywords can appear as destructure patterns inside match arms, where the tight
     // `keyword(binding)` form is user idiom. Top-level `export enum Foo` has an identifier,
     // not '(', after the keyword, so adding these here doesn't affect declaration headers.
-    TokenType.Enum, TokenType.Union, TokenType.Function,
+    TokenType.Enum, TokenType.Union, TokenType.Function, TokenType.Interface,
     // Match-arm result expression: `pattern gives(val1, val2)`.
     TokenType.Gives,
     // 'default' is used as a function name: `static function default()` / `ValueInfo.default()`.

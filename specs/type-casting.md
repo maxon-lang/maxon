@@ -495,3 +495,52 @@ end 'main'
 ```maxoncstderr
 error E3010: specs/fragments/type-casting/error.unneeded.call-result-same-alias.test:10:26: unneeded cast: 'Score' already fits in 'Score'
 ```
+
+E3010 is a recoverable diagnostic: the parser keeps walking the function so every
+unneeded cast in the file is reported in a single compile, not just the first.
+
+<!-- test: error.unneeded.multiple-in-one-function -->
+```maxon
+
+typealias Byte = int(0 to u8.max)
+
+function main() returns ExitCode
+	let a = 1 as Byte
+	let b = a as Byte
+	let c = b as Byte
+	let d = c as Byte
+	return d
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:7:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:8:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/fragments/type-casting/error.unneeded.multiple-in-one-function.test:9:12: unneeded cast: 'Byte' already fits in 'Byte'
+```
+
+<!-- test: error.unneeded.multiple-across-functions -->
+```maxon
+
+typealias Byte = int(0 to u8.max)
+
+function first(b Byte) returns Byte
+	let x = b as Byte
+	return x
+end 'first'
+
+function second(b Byte) returns Byte
+	let y = b as Byte
+	return y
+end 'second'
+
+function main() returns ExitCode
+	let a = 1 as Byte
+	let b = first(a)
+	let c = second(b)
+	return c
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:6:12: unneeded cast: 'Byte' already fits in 'Byte'
+error E3010: specs/fragments/type-casting/error.unneeded.multiple-across-functions.test:11:12: unneeded cast: 'Byte' already fits in 'Byte'
+```

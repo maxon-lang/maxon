@@ -1495,19 +1495,19 @@ type RdataCheckResult
 end 'RdataCheckResult'
 
 enum RdataParseError implements Error
-	missingType            // line had no space between type tag and value
-	unknownType            // unrecognised type tag
-	badInteger             // int.fromString failed
-	outOfRange             // integer literal outside the requested type's range
-	badFloat               // float.fromString failed
-	badQuotedString        // utf8 form missing surrounding quotes
-	badEscapeSequence      // unknown / malformed escape inside utf8 string
+	missingType  // line had no space between type tag and value
+	unknownType  // unrecognised type tag
+	badInteger  // int.fromString failed
+	outOfRange  // integer literal outside the requested type's range
+	badFloat  // float.fromString failed
+	badQuotedString  // utf8 form missing surrounding quotes
+	badEscapeSequence  // unknown / malformed escape inside utf8 string
 end 'RdataParseError'
 
 enum PeParseError implements Error
-	notPeFile          // missing DOS magic or PE signature
-	truncated          // header read off the end of the buffer
-	sectionMissing     // requested section name not present
+	notPeFile  // missing DOS magic or PE signature
+	truncated  // header read off the end of the buffer
+	sectionMissing  // requested section name not present
 end 'PeParseError'
 
 type PeSectionInfo
@@ -1983,7 +1983,7 @@ end 'findSection'
 // Trailing zero file-alignment padding is excluded by capping the read at
 // `virtualSize` in readPeSectionBytes.
 export function checkRequiredRdataBytes(expectedSpec String, exePath FilePath) returns RdataCheckResult
-	let expected = try parseRequiredRdataBytes(expectedSpec) otherwise(e) 'parseFail'
+	let expected = try parseRequiredRdataBytes(expectedSpec) otherwise (e) 'parseFail'
 		let reason = match e 'kind'
 			missingType gives "missing type tag (expected '<type> <value>')"
 			unknownType gives "unknown type tag"
@@ -2000,7 +2000,7 @@ export function checkRequiredRdataBytes(expectedSpec String, exePath FilePath) r
 		return RdataCheckResult.create(false, message: "Failed to read executable at {exePath}")
 	end 'readFail'
 
-	let sections = try parsePeSections(exeBytes) otherwise(e) 'peFail'
+	let sections = try parsePeSections(exeBytes) otherwise (e) 'peFail'
 		let reason = match e 'kind'
 			notPeFile gives "not a PE file (DOS/PE signature missing)"
 			truncated gives "PE headers truncated"

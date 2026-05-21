@@ -107,13 +107,13 @@ end 'spec_test_selfhosted'
 /// Build the maxon-dev MCP server (the Claude Code tool host).
 // Depends on the C# bootstrap; the server is a Maxon project built through
 // `./bin/maxon.exe build`.
-export function build_mcp() returns ExitCode
+export function build_dev_mcp() returns ExitCode
 	let bootstrapResult = build_sharp()
 	if bootstrapResult != 0 'failed'
 		return bootstrapResult
 	end 'failed'
 
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("build_mcp: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("build_dev_mcp: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("build")
 	argv.push("maxon-dev-mcp")
@@ -124,19 +124,19 @@ export function build_mcp() returns ExitCode
 
 	print("maxon-dev MCP server built successfully\n")
 	return 0
-end 'build_mcp'
+end 'build_dev_mcp'
 
 /// Build and run the MCP server's test suite.
 // Chains: C# bootstrap, MCP server, test runner, then runs the runner. The
 // runner pipes fixture JSON-RPC into the server and walks structural
 // assertions over the responses; non-zero exit on any fixture failure.
-export function test_mcp() returns ExitCode
-	let mcpResult = build_mcp()
+export function test_dev_mcp() returns ExitCode
+	let mcpResult = build_dev_mcp()
 	if mcpResult != 0 'failed'
 		return mcpResult
 	end 'failed'
 
-	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("test_mcp: literal path should be valid")
+	let sharpExe = try FilePath.from("./bin/maxon.exe") otherwise panic("test_dev_mcp: literal path should be valid")
 	var buildArgv = StringArray.create()
 	buildArgv.push("build")
 	buildArgv.push("maxon-dev-mcp-test")
@@ -145,7 +145,7 @@ export function test_mcp() returns ExitCode
 		return runnerBuild
 	end 'runnerFail'
 
-	let runnerExe = try FilePath.from("./maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test.exe") otherwise panic("test_mcp: literal runner path should be valid")
+	let runnerExe = try FilePath.from("./maxon-dev-mcp-test/.maxon/maxon-dev-mcp-test.exe") otherwise panic("test_dev_mcp: literal runner path should be valid")
 	let runResult = run("Running MCP tests", exe: Executable.path(runnerExe), argv: StringArray.create(), timeoutMs: 1200000)
 	if runResult != 0 'testFail'
 		return runResult
@@ -153,7 +153,7 @@ export function test_mcp() returns ExitCode
 
 	print("MCP tests passed\n")
 	return 0
-end 'test_mcp'
+end 'test_dev_mcp'
 
 /// Compile the self-hosted compiler and run its Wasm spec tests.
 export function spec_test_wasm() returns ExitCode

@@ -7,6 +7,7 @@
 
 let wasiProcExit = 0
 let wasiFdWrite = 1
+
 // WASI argv discovery: `args_sizes_get(argc_out, buf_size_out) -> errno`
 // followed by `args_get(argv_ptrs_out, buf_out) -> errno`. The first call
 // learns the count + total bytes needed; the second fills the argv pointer
@@ -16,6 +17,7 @@ let wasiFdWrite = 1
 // then call args_get; subsequent invocations hit the cached buffer.
 let wasiArgsSizesGet = 2
 let wasiArgsGet = 3
+
 // fd_read(fd, iovs, iovs_len, nread_ptr) -> errno. Mirrors fd_write's signature
 // so it shares the same wasm function-type entry; we just import it as a
 // separate function pointing at the existing (i32, i32, i32, i32) -> (i32) type.
@@ -48,6 +50,7 @@ let wasiImportCount = 5
 
 let iovecBase = 0
 let nwrittenBase = 8
+
 // nread out-pointer for fd_read. fd_write and fd_read are never in flight
 // at the same time, but we keep them at separate addresses for clarity.
 // The iovec at 0..8 is reused (fd_read writes INTO the buffer, so it still
@@ -130,7 +133,7 @@ type WasmFuncSigs
 
 	// O(1) check: does the named callee throw? Unknown callees (imports,
 	// not-yet-registered) are treated as non-throwing.
-	export function throws(name String) returns bool
+	export function throws (name String) returns bool
 		let idx = try self.indexOf(name) otherwise return false
 		let tn = try self.throwsTypeNames.get(idx) otherwise ThrowsClause.none
 		return match tn 'kind'
@@ -1688,10 +1691,10 @@ type WasmFunctionLowering
 			return (opF64Load, 0x03)
 		end 'fp'
 		return match width 'w'
-			qword gives (opI64Load, 0x03)
-			word gives (opI64Load32S if signed else opI64Load32U, 0x02)
-			halfword gives (opI64Load16S if signed else opI64Load16U, 0x01)
-			byte gives (opI64Load8S if signed else opI64Load8U, 0x00)
+			qword gives(opI64Load, 0x03)
+			word gives(opI64Load32S if signed else opI64Load32U, 0x02)
+			halfword gives(opI64Load16S if signed else opI64Load16U, 0x01)
+			byte gives(opI64Load8S if signed else opI64Load8U, 0x00)
 		end 'w'
 	end 'selectWasmLoadOpcode'
 
@@ -1702,10 +1705,10 @@ type WasmFunctionLowering
 			return (opF64Store, 0x03)
 		end 'fp'
 		return match width 'w'
-			qword gives (opI64Store, 0x03)
-			word gives (opI64Store32, 0x02)
-			halfword gives (opI64Store16, 0x01)
-			byte gives (opI64Store8, 0x00)
+			qword gives(opI64Store, 0x03)
+			word gives(opI64Store32, 0x02)
+			halfword gives(opI64Store16, 0x01)
+			byte gives(opI64Store8, 0x00)
 		end 'w'
 	end 'selectWasmStoreOpcode'
 
@@ -2307,7 +2310,6 @@ type WasmFunctionLowering
 			try floatSet.set(id, value: true) otherwise panic("invariant: floatSet.set OOB")
 		end 'isFloat'
 	end 'markIfFloatCall'
-
 end 'WasmFunctionLowering'
 
 // O(1) lookup of a function's WASM index, given its name and the

@@ -51,6 +51,7 @@
 // failing, etc. Those are parser bugs, not user errors.
 
 export typealias BoolArray = Array with bool
+
 // Phase 9 Stage 5 (struct-backing): per-function let bindings whose
 // initializer is a known struct-backed enum-case literal. Keyed on the
 // let's bare local name; value is the qualified `EnumName.caseName` of
@@ -310,7 +311,7 @@ export type Parser
 
 			try 'dispatch'
 				dispatchTopLevel()
-			end 'dispatch' otherwise(e) 'propagate'
+			end 'dispatch' otherwise (e) 'propagate'
 				match e 'kind'
 					unhandledToken then return handleTopLevelUnhandledToken(token, diagCountBefore: diagCountBefore)
 					typeError then throw ParserError.typeError
@@ -704,7 +705,7 @@ export type Parser
 
 		let savedInFunctionParam = inFunctionParam
 		inFunctionParam = true
-		try parseFunctionParametersInner(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults) otherwise(e) 'restoreOnErr'
+		try parseFunctionParametersInner(paramCount, paramTypes: paramTypes, paramNames: paramNames, paramDefaults: paramDefaults) otherwise (e) 'restoreOnErr'
 			inFunctionParam = savedInFunctionParam
 			throw e
 		end 'restoreOnErr'
@@ -3051,7 +3052,7 @@ export type Parser
 
 		try 'dispatchInner'
 			dispatchInner(visibility: visibility)
-		end 'dispatchInner' otherwise(e) 'maybeRecover'
+		end 'dispatchInner' otherwise (e) 'maybeRecover'
 			if isExport 'exportRecovery'
 				// `export <garbage>` — report the bad token then skip to the
 				// next line. Without the report, malformed exports vanished
@@ -11681,7 +11682,7 @@ export type Parser
 		//     but parsing the rest of it ran out of input. Re-throw so the
 		//     caller can surface the precise downstream diagnostic — the
 		//     primary identifier itself isn't the problem.
-		let result = try parsePrimaryMatch(block) otherwise(e) 'primaryFail'
+		let result = try parsePrimaryMatch(block) otherwise (e) 'primaryFail'
 			match e 'kind'
 				unhandledToken then return raiseUnexpectedToken(block, token: token)
 				typeError then throw ParserError.typeError
@@ -12105,8 +12106,8 @@ export type Parser
 	// free function (test 3), where `parseSelfInstanceExpr` reports E2001
 	// before the body finishes parsing.
 	function parseClosure(block IrBlock) returns ExprResult throws ParserError
-		let functionToken = try consume() // 'function' keyword
-		let leftParenToken = try consume() // '('
+		let functionToken = try consume()  // 'function' keyword
+		let leftParenToken = try consume()  // '('
 		let closureRange = SourceRange.ofToken(functionToken)
 
 		// Parse closure parameters. The `_` underscore name is allowed (it

@@ -26,14 +26,17 @@ let IAT_SLOT_VIRTUAL_FREE = 8
 let IAT_SLOT_INITIALIZE_CRITICAL_SECTION = 9
 let IAT_SLOT_ENTER_CRITICAL_SECTION = 10
 let IAT_SLOT_LEAVE_CRITICAL_SECTION = 11
+
 // Phase 15b: command-line argument retrieval.
 let IAT_SLOT_GET_COMMAND_LINE_W = 12
 let IAT_SLOT_LOCAL_FREE = 13
 let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 14
+
 // Phase 15f: executable-path retrieval. kernel32!GetModuleFileNameW writes the
 // running module's path into a caller-supplied UTF-16 buffer; the runtime
 // helper then re-encodes via WideCharToMultiByte (slot 13). Kernel32 slot.
 let IAT_SLOT_GET_MODULE_FILE_NAME_W = 15
+
 // shell32.dll's CommandLineToArgvW. Lives in a second DLL import directory.
 let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 16
 let IAT_SLOT_COUNT = 17
@@ -57,7 +60,7 @@ end 'ImportSection'
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
 let KERNEL32_IAT_END = 16  // exclusive; slots 0..15 are kernel32
-let SHELL32_IAT_START = 16 // slot 16 is shell32 (CommandLineToArgvW)
+let SHELL32_IAT_START = 16  // slot 16 is shell32 (CommandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 function buildImportSection(idataRva Rva) returns ImportSection
@@ -293,12 +296,12 @@ function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, codeS
 		totalSymbolCount = totalSymbolCount + 1
 		// Auxiliary format 5 (section definition): 18 bytes total.
 		writeDword(pe, value: section.rawSize)  // Length
-		writeWord(pe, value: 0)                  // NumberOfRelocations
-		writeWord(pe, value: 0)                  // NumberOfLinenumbers
-		writeDword(pe, value: 0)                 // CheckSum
-		writeWord(pe, value: 0)                  // Number (COMDAT)
-		pe.push(0)                               // Selection
-		writeZeros(pe, n: 3)                     // Unused
+		writeWord(pe, value: 0)  // NumberOfRelocations
+		writeWord(pe, value: 0)  // NumberOfLinenumbers
+		writeDword(pe, value: 0)  // CheckSum
+		writeWord(pe, value: 0)  // Number (COMDAT)
+		pe.push(0)  // Selection
+		writeZeros(pe, n: 3)  // Unused
 		totalSymbolCount = totalSymbolCount + 1
 	end 'sectionSyms'
 
@@ -535,13 +538,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	writeWord(pe, value: numSections)
 	// TimeDateStamp stays zero; PointerToSymbolTable + NumberOfSymbols are
 	// backpatched after the COFF symbol table is appended at the end of the file.
-	writeZeros(pe, n: 4)                              // TimeDateStamp
-	let pointerToSymbolTableOffset = pe.count()       // file offset 76
-	writeZeros(pe, n: 4)                              // PointerToSymbolTable (patched later)
-	let numberOfSymbolsOffset = pe.count()            // file offset 80
-	writeZeros(pe, n: 4)                              // NumberOfSymbols (patched later)
-	writeWord(pe, value: 240)                         // SizeOfOptionalHeader
-	writeWord(pe, value: 0x22)                        // Characteristics
+	writeZeros(pe, n: 4)  // TimeDateStamp
+	let pointerToSymbolTableOffset = pe.count()  // file offset 76
+	writeZeros(pe, n: 4)  // PointerToSymbolTable (patched later)
+	let numberOfSymbolsOffset = pe.count()  // file offset 80
+	writeZeros(pe, n: 4)  // NumberOfSymbols (patched later)
+	writeWord(pe, value: 240)  // SizeOfOptionalHeader
+	writeWord(pe, value: 0x22)  // Characteristics
 
 	// === Optional Header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")

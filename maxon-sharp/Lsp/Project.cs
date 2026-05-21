@@ -126,6 +126,28 @@ public class Project(
     return _diagnostics.TryGetValue(NormalizePath(filePath), out var errors) ? errors : [];
   }
 
+  /// Enumerates every file in the project that currently has stored
+  /// diagnostics. Used by LSP code actions that need to operate across the
+  /// whole project (e.g. "fix all unneeded casts in project").
+  public IEnumerable<KeyValuePair<string, List<CompileError>>> GetAllDiagnostics() {
+    foreach (var kv in _diagnostics)
+      yield return kv;
+  }
+
+  /// Returns the editor buffer for `filePath` if the file is open, otherwise
+  /// reads from disk. Used by LSP code actions that need to inspect file
+  /// content for files not currently open in the editor.
+  public string? GetFileContent(string filePath) {
+    var normalized = NormalizePath(filePath);
+    if (_fileContents.TryGetValue(normalized, out var content))
+      return content;
+    try {
+      return File.ReadAllText(filePath);
+    } catch {
+      return null;
+    }
+  }
+
   /// <summary>
   /// Build the source array for this project exactly like <c>maxon build</c>
   /// would: delegate to the shared <see cref="SourceCollector"/>. Editor

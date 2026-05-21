@@ -1,6 +1,5 @@
 /// TCP client networking with automatic resource cleanup.
 /// @category System
-
 typealias NetworkPort = int(1 to 65535)
 typealias ByteCount = int(0 to u64.max)
 
@@ -21,7 +20,7 @@ export type TcpClient
 	/// Resolves the hostname, creates a TCP socket, and connects.
 	/// The returned TcpClient auto-closes when it goes out of scope.
 	export static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
-		let sock = try __ManagedSocket.tcpConnect(host.managed, port) otherwise(e) 'connErr'
+		let sock = try __ManagedSocket.tcpConnect(host.managed, port) otherwise (e) 'connErr'
 			match e 'matchConn'
 				resolveFailed then throw NetworkError.resolveFailed
 				default throws NetworkError.connectFailed
@@ -38,7 +37,7 @@ export type TcpClient
 		var remaining = data.managed.length()
 		while remaining > 0 'send_loop'
 			// bufferOutOfBounds is impossible here: remaining <= data.managed.length() by loop invariant.
-			let sent = try socket.sendFrom(data.managed, totalSent, remaining) otherwise(e) 'sendErr'
+			let sent = try socket.sendFrom(data.managed, totalSent, remaining) otherwise (e) 'sendErr'
 				match e 'matchSend'
 					bufferOutOfBounds then panic("TcpClient.send: sendFrom OOB — loop invariant violated")
 					default throws NetworkError.sendFailed
