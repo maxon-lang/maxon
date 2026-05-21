@@ -1,0 +1,20 @@
+// Test: directives.dead-branch-unparsed
+function main() returns ExitCode
+	#if not os(Windows) and not os(Linux) and not os(Macos) and not os(Wasi)
+		this_function_does_not_exist_and_should_not_be_parsed()
+	#else
+		return 13
+	#endif
+end 'main'
+---
+ExitCode: 13
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 13 : i64
+    mir.ret %0
+  }
+}
+---

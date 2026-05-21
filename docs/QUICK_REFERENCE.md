@@ -288,7 +288,7 @@ module var featureState = 0                     // visible to this directory sub
 	// x86-specific code
 #endif
 ```
-Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x64)`, `arch(arm64)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`). Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
+Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)`, `arch(x64)`, `arch(arm64)`, `arch(wasm32)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Can appear at top-level, inside function bodies, and inside `type`, `enum`, `union`, `interface`, and `extension` bodies. Nested `#if` blocks are supported.
 
 ## Control Flow
 

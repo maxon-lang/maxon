@@ -300,6 +300,14 @@ export type Parser
 			let diagCountBefore = project.diagnostics.count()
 			let token = cursor.current()
 
+			// Compiler directives at top level: `#if`, `#else`, `#endif`. The
+			// active branch is parsed inline by the surrounding loop; the
+			// inactive branch is skipped token-wise.
+			let topDirective = try tryHandleDirective(token.kind)
+			if topDirective 'topDirective'
+				continue
+			end 'topDirective'
+
 			try 'dispatch'
 				dispatchTopLevel()
 			end 'dispatch' otherwise(e) 'propagate'
@@ -1271,6 +1279,12 @@ export type Parser
 			if stmtToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
+
+			// Compiler directives inside a function body.
+			let stmtDirective = try tryHandleDirective(stmtToken.kind)
+			if stmtDirective 'stmtDirective'
+				continue
+			end 'stmtDirective'
 
 			lastWasReturn = false
 
@@ -2602,8 +2616,7 @@ export type Parser
 			let valueId = try parseConstStructFieldValue()
 			fieldNamesOut.push(fieldNameToken.value)
 			fieldExprsOut.push(valueId)
-			_ = accept(TokenKind.comma)
-			try skipNewlines()
+			try expectListSeparator(stopKind: TokenKind.rightBrace)
 		end 'fields'
 		try expect(TokenKind.rightBrace)
 	end 'parseConstStructLiteralBraceBody'
@@ -2636,8 +2649,7 @@ export type Parser
 			fieldNamesOut.push(resolvedFieldName)
 			fieldExprsOut.push(valueId)
 			positionalIndex = positionalIndex + 1
-			_ = accept(TokenKind.comma)
-			try skipNewlines()
+			try expectListSeparator(stopKind: TokenKind.rightParen)
 		end 'args'
 		try expect(TokenKind.rightParen)
 	end 'parseConstStructLiteralCreateBody'
@@ -3646,6 +3658,12 @@ export type Parser
 				break
 			end 'isEnd'
 
+			// Compiler directives inside a type body.
+			let typeDirective = try tryHandleDirective(memberToken.kind)
+			if typeDirective 'typeDirective'
+				continue
+			end 'typeDirective'
+
 			// Field/method-level visibility modifiers. The `export` keyword
 			// on a `var`/`let` field marks it as externally accessible
 			// (`v.field` outside the type's own methods); without it the
@@ -3888,6 +3906,12 @@ export type Parser
 			if memberToken.kind == TokenKind.end and lookaheadIsBlockEnd() 'isEnd'
 				break
 			end 'isEnd'
+
+			// Compiler directives inside an enum body.
+			let enumDirective = try tryHandleDirective(memberToken.kind)
+			if enumDirective 'enumDirective'
+				continue
+			end 'enumDirective'
 
 			// Disambiguate `function` as method-keyword vs `function` as a
 			// keyword-named enum case. Method form is always followed by an
@@ -4326,6 +4350,12 @@ export type Parser
 			if memberToken.kind == TokenKind.end and lookaheadIsBlockEnd() 'isEnd'
 				break
 			end 'isEnd'
+
+			// Compiler directives inside a union body.
+			let unionDirective = try tryHandleDirective(memberToken.kind)
+			if unionDirective 'unionDirective'
+				continue
+			end 'unionDirective'
 
 			// `function` as method-keyword vs `function` as a keyword-named
 			// union case mirrors the enum rule: method form is always followed
@@ -5060,6 +5090,12 @@ export type Parser
 				break
 			end 'isEnd'
 
+			// Compiler directives inside an interface body.
+			let ifaceDirective = try tryHandleDirective(memberToken.kind)
+			if ifaceDirective 'ifaceDirective'
+				continue
+			end 'ifaceDirective'
+
 			// Visibility modifiers on interface members are accepted and
 			// ignored — interface methods are public requirements regardless.
 			if memberToken.kind == TokenKind.export 'isExport'
@@ -5320,6 +5356,12 @@ export type Parser
 			if memberToken.kind == TokenKind.end 'isEnd'
 				break
 			end 'isEnd'
+
+			// Compiler directives inside an extension body.
+			let extDirective = try tryHandleDirective(memberToken.kind)
+			if extDirective 'extDirective'
+				continue
+			end 'extDirective'
 
 			// Visibility prefix on extension methods is allowed — the
 			// extension's own visibility tier is the inherited default,
@@ -10849,8 +10891,7 @@ export type Parser
 			module.appendOp(currentBlock, op: MaxonOp.fieldStore(ptrName, fieldName: fieldNameToken.value.toByteArray(), value: exprName(fieldValue), isInit: true, range: SourceRange.between(fieldNameToken, last: fieldLastToken)))
 			providedFieldNames.push(fieldNameToken.value)
 
-			_ = accept(TokenKind.comma)
-			try skipNewlines()
+			try expectListSeparator(stopKind: TokenKind.rightBrace)
 		end 'fields'
 		try eat(TokenKind.rightBrace)
 
@@ -12488,6 +12529,35 @@ export type Parser
 		return cursor.index() < tokens.count()
 	end 'skipOptionalNewlines'
 
+	// After parsing one item of a delimited list, require a separator before
+	// the next item. The separator may be a comma, one or more newlines, or
+	// both. If the next non-newline token is the list terminator (`stopKind`),
+	// the list ends cleanly — no separator required after the last item, and
+	// trailing commas before the terminator are tolerated. A bare adjacency
+	// like `{a: 1 b: 2}` reports parserExpectedToken and throws.
+	//
+	// Entry: cursor AT the first token after the previous item.
+	// Exit:  cursor AT the next item's first token, OR at `stopKind`.
+	function expectListSeparator(stopKind TokenKind) throws ParserError
+		let hadComma = accept(TokenKind.comma)
+		let hadNewline = at(TokenKind.newline)
+		try skipNewlines()
+		// Tolerate a comma that follows newlines: `foo: 1\n,\n bar: 2`.
+		if not hadComma and accept(TokenKind.comma) 'lateComma'
+			try skipNewlines()
+		end 'lateComma'
+		// List ending at terminator — no separator needed before it.
+		if at(stopKind) 'atTerminator'
+			return
+		end 'atTerminator'
+		if not hadComma and not hadNewline 'noSeparator'
+			let token = cursor.current()
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected ',' or newline between list items, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+			synchronize()
+			throw ParserError.unhandledToken
+		end 'noSeparator'
+	end 'expectListSeparator'
+
 	function expectNewlineAfterLabel() throws ParserError
 		if cursor.current().kind != TokenKind.newline 'noNewline'
 			let token = cursor.current()
@@ -12495,6 +12565,241 @@ export type Parser
 		end 'noNewline'
 		try skipNewlines()
 	end 'expectNewlineAfterLabel'
+
+	// --- Conditional compilation (#if / #else / #endif) ---
+	//
+	// Mirrors the C# bootstrap: at parse time the active build target's OS and
+	// CPU are matched against the directive's condition. The active branch is
+	// parsed normally; the inactive branch is token-walked with a depth counter
+	// so nested `#if`/`#endif` pairs balance correctly. Body-loop callers
+	// dispatch through `tryHandleDirective`, which consumes the directive
+	// token + branch-skip work and returns true so the caller can `continue`.
+
+	// Single dispatch point for all body loops (top-level / function / type /
+	// enum / union / interface / extension). If `kind` is one of the directive
+	// tokens, consume it (plus the active or inactive branch's work) and
+	// return true; otherwise the cursor is untouched and we return false.
+	function tryHandleDirective(kind TokenKind) returns bool throws ParserError
+		if kind == TokenKind.hashIf 'isIf'
+			try handleConditional()
+			return true
+		end 'isIf'
+		if kind == TokenKind.hashElse 'isElse'
+			try handleConditionalElse()
+			return true
+		end 'isElse'
+		if kind == TokenKind.hashEndif 'isEndif'
+			try handleConditionalEndif()
+			return true
+		end 'isEndif'
+		return false
+	end 'tryHandleDirective'
+
+	// Cursor is AT `#if`. Consume the directive, evaluate its condition, and
+	// either fall through (active branch — caller's loop parses the next
+	// tokens) or skip to the matching `#else`/`#endif`.
+	function handleConditional() throws ParserError
+		try eat(TokenKind.hashIf)
+		try skipNewlines()
+		let active = try evaluateConditionalCondition()
+		try skipNewlines()
+		if active 'isActive'
+			return
+		end 'isActive'
+		try skipConditionalBranch()
+		try skipNewlines()
+		if at(TokenKind.hashElse) 'hasElse'
+			try eat(TokenKind.hashElse)
+			try skipNewlines()
+		end 'hasElse' else if at(TokenKind.hashEndif) 'hasEndif'
+			try eat(TokenKind.hashEndif)
+			try skipNewlines()
+		end 'hasEndif'
+	end 'handleConditional'
+
+	// Cursor is AT `#else`. We were inside the active `#if` branch and have
+	// reached its end-of-branch marker. Skip the dead `#else` branch and
+	// consume the matching `#endif`.
+	function handleConditionalElse() throws ParserError
+		try eat(TokenKind.hashElse)
+		try skipNewlines()
+		try skipConditionalBranch()
+		try skipNewlines()
+		if at(TokenKind.hashEndif) 'hasEndif'
+			try eat(TokenKind.hashEndif)
+			try skipNewlines()
+		end 'hasEndif'
+	end 'handleConditionalElse'
+
+	// Cursor is AT `#endif`. Consume it and any trailing newlines.
+	function handleConditionalEndif() throws ParserError
+		try eat(TokenKind.hashEndif)
+		try skipNewlines()
+	end 'handleConditionalEndif'
+
+	// Token-walk past the inactive branch of a `#if`/`#else`. Stops AT (without
+	// consuming) the matching `#else` (at depth 1) or the matching `#endif`.
+	// Tracks nested `#if`/`#endif` pairs via a depth counter so a nested
+	// conditional inside the skipped branch doesn't bleed out.
+	function skipConditionalBranch() throws ParserError
+		var depth = 1
+		while cursor.index() < tokens.count() 'walk'
+			let tok = cursor.current()
+			if tok.kind == TokenKind.eof 'atEof'
+				return
+			end 'atEof'
+			if tok.kind == TokenKind.hashIf 'nestIf'
+				depth = depth + 1
+				try cursor.advance() otherwise return
+				continue
+			end 'nestIf'
+			if tok.kind == TokenKind.hashElse and depth == 1 'topElse'
+				return
+			end 'topElse'
+			if tok.kind == TokenKind.hashEndif 'endif'
+				depth = depth - 1
+				if depth == 0 'matchedEndif'
+					return
+				end 'matchedEndif'
+				try cursor.advance() otherwise return
+				continue
+			end 'endif'
+			try cursor.advance() otherwise return
+		end 'walk'
+	end 'skipConditionalBranch'
+
+	// Evaluate a `#if` condition. Grammar mirrors the C# bootstrap:
+	//     condition = or
+	//     or        = and ('or' and)*
+	//     and       = unary ('and' unary)*
+	//     unary     = 'not' unary | atom
+	//     atom      = IDENT '(' (IDENT | true | false) ')'
+	// Atoms recognized: `os(Name)`, `arch(Name)`, `testing(true|false)`.
+	// Boolean operators must consume both operands (no short-circuit), so the
+	// token cursor stays in sync with the source structure regardless of which
+	// side decides the result.
+	function evaluateConditionalCondition() returns bool throws ParserError
+		return try evaluateConditionalOr()
+	end 'evaluateConditionalCondition'
+
+	function evaluateConditionalOr() returns bool throws ParserError
+		var result = try evaluateConditionalAnd()
+		while at(TokenKind.or) 'orLoop'
+			try eat(TokenKind.or)
+			let rhs = try evaluateConditionalAnd()
+			result = result or rhs
+		end 'orLoop'
+		return result
+	end 'evaluateConditionalOr'
+
+	function evaluateConditionalAnd() returns bool throws ParserError
+		var result = try evaluateConditionalUnary()
+		while at(TokenKind.and) 'andLoop'
+			try eat(TokenKind.and)
+			let rhs = try evaluateConditionalUnary()
+			result = result and rhs
+		end 'andLoop'
+		return result
+	end 'evaluateConditionalAnd'
+
+	function evaluateConditionalUnary() returns bool throws ParserError
+		if accept(TokenKind.not) 'isNot'
+			let inner = try evaluateConditionalUnary()
+			return not inner
+		end 'isNot'
+		return try evaluateConditionalAtom()
+	end 'evaluateConditionalUnary'
+
+	function evaluateConditionalAtom() returns bool throws ParserError
+		// Parenthesized sub-expression: `(cond)`. Parse the inner condition and
+		// expect a matching close paren.
+		if accept(TokenKind.leftParen) 'isParen'
+			let inner = try evaluateConditionalCondition()
+			try expect(TokenKind.rightParen)
+			return inner
+		end 'isParen'
+		let funcToken = try consumeExpecting("conditional predicate ('os', 'arch', or 'testing')")
+		try expect(TokenKind.leftParen)
+		let valueToken = cursor.current()
+		if valueToken.kind == TokenKind.true or valueToken.kind == TokenKind.false 'isBool'
+			try cursor.advance() otherwise throw ParserError.unexpectedEof
+		end 'isBool' else 'isIdent'
+			_ = try consumeExpecting("identifier")
+		end 'isIdent'
+		try expect(TokenKind.rightParen)
+
+		let funcName = funcToken.value
+		let value = valueToken.value
+		if funcName == "os" 'isOs'
+			return matchesTargetOs(value)
+		end 'isOs'
+		if funcName == "arch" 'isArch'
+			return matchesTargetArch(value)
+		end 'isArch'
+		if funcName == "testing" 'isTesting'
+			// `testing` is true when the compiler is running spec tests. The
+			// self-hosted parser does not currently surface that flag, so
+			// `testing(true)` always evaluates to false and `testing(false)`
+			// to true. This matches the C# bootstrap's behavior when its
+			// `_testing` is unset.
+			return equalsIgnoreCase(value, b: "false")
+		end 'isTesting'
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', or 'testing'.", line: funcToken.line, column: funcToken.column, filePath: filePath)
+		throw ParserError.unhandledToken
+	end 'evaluateConditionalAtom'
+
+	function matchesTargetOs(name String) returns bool
+		let targetOs = project.target.os
+		if equalsIgnoreCase(name, b: "windows") 'isWindows'
+			return targetOs == Os.windows
+		end 'isWindows'
+		if equalsIgnoreCase(name, b: "linux") 'isLinux'
+			return targetOs == Os.linux
+		end 'isLinux'
+		if equalsIgnoreCase(name, b: "macos") 'isMacos'
+			return targetOs == Os.macos
+		end 'isMacos'
+		if equalsIgnoreCase(name, b: "wasi") 'isWasi'
+			return targetOs == Os.wasi
+		end 'isWasi'
+		// Unknown OS literal — treat as false (no match) to mirror the C#
+		// bootstrap's `OrdinalIgnoreCase` compare against the target string.
+		return false
+	end 'matchesTargetOs'
+
+	function matchesTargetArch(name String) returns bool
+		let targetCpu = project.target.cpu
+		if equalsIgnoreCase(name, b: "x64") 'isX64'
+			return targetCpu == CpuArch.x64
+		end 'isX64'
+		if equalsIgnoreCase(name, b: "arm64") 'isArm64'
+			return targetCpu == CpuArch.arm64
+		end 'isArm64'
+		if equalsIgnoreCase(name, b: "wasm32") 'isWasm32'
+			return targetCpu == CpuArch.wasm32
+		end 'isWasm32'
+		return false
+	end 'matchesTargetArch'
+
+	// ASCII case-insensitive string equality. Walks the byte buffers without
+	// mutating either input, so callers can pass `let` bindings.
+	function equalsIgnoreCase(a String, b String) returns bool
+		let aBytes = a.toByteArray()
+		let bBytes = b.toByteArray()
+		if aBytes.count() != bBytes.count() 'lenMismatch'
+			return false
+		end 'lenMismatch'
+		for i in 0 upto aBytes.count() 'walk'
+			let ab = try aBytes.get(i) otherwise panic("equalsIgnoreCase: index {i} within count {aBytes.count()}")
+			let bb = try bBytes.get(i) otherwise panic("equalsIgnoreCase: index {i} within count {bBytes.count()}")
+			let aLower = (ab + 32) if (ab >= 65 and ab <= 90) else ab
+			let bLower = (bb + 32) if (bb >= 65 and bb <= 90) else bb
+			if aLower != bLower 'noMatch'
+				return false
+			end 'noMatch'
+		end 'walk'
+		return true
+	end 'equalsIgnoreCase'
 
 	// Parse an optional block label of the form `'label'` after control-flow
 	// keywords like `if` or `while`. Returns the label string if present,

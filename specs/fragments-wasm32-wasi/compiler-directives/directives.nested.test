@@ -1,0 +1,24 @@
+// Test: directives.nested
+function main() returns ExitCode
+	#if os(Windows)
+		#if arch(x64)
+			return 11
+		#else
+			return 22
+		#endif
+	#else
+		return 33
+	#endif
+end 'main'
+---
+ExitCode: 11
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 33 : i64
+    mir.ret %0
+  }
+}
+---

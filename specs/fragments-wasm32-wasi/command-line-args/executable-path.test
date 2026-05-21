@@ -14,14 +14,15 @@ ExitCode: 0
 module {
   func @main() -> u8 {
   entry:
-    %14 = mir.call @mrt_executable_path()
-    %15 = mir.mov_imm 8 : i64
-    %16 = mir.call @mrt_alloc(%15)
-    %17 = mir.call @String.init(%14)
-    mir.store %17, %16, 0 width: qword
-    mir.br try_0.merge()
+    %0, %1 = mir.try_call @Process.executablePath()
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.cmp ne, %1, %2
+    mir.cond_br %3 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %5 = mir.mov_imm 2 : i64
+    mir.ret %5
   try_0.merge:
-    %8 = mir.load %16, 0 width: qword
+    %8 = mir.load %0, 0 width: qword
     %9 = mir.call @String.byteLength(%8)
     %10 = mir.mov_imm 0 : i64
     %11 = mir.cmp gt, %9, %10

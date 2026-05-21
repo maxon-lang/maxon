@@ -17,6 +17,10 @@ export union LexerError implements Error
 	// diagnostic underlines the brace itself rather than the EOF position.
 	// Use `\{` to embed a literal `{` in a string literal.
 	unescapedBrace(line LineNumber, column ColumnNumber)
+	// A `#`-prefixed directive whose name is not one of the recognized
+	// directive keywords (`if`, `else`, `endif`). Carries the bare name so
+	// the surfacing diagnostic can quote the offending text.
+	unknownDirective(name String, line LineNumber, column ColumnNumber)
 end 'LexerError'
 
 // --- Character classes ---
@@ -227,6 +231,12 @@ export enum TokenKind
 	dot = "."
 	colon = ":"
 	comma = ","
+	// Conditional-compilation directives. Emitted as standalone tokens by the
+	// lexer; the parser consults the build target to decide which branch to
+	// keep and skips the others at the token-stream level.
+	hashIf = "#if"
+	hashElse = "#else"
+	hashEndif = "#endif"
 	newline = "newline"
 	eof = "end of file"
 end 'TokenKind'
@@ -558,6 +568,13 @@ type Lexer
 	// the top-level run() loop and scanInterp() so the two share one driver.
 	function stepDfa(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
 		let ch = cursor.current()
+		// `#` opens a compiler directive (e.g. `#if`, `#else`, `#endif`). It
+		// sits outside the table-driven DFA because the directive name is a
+		// run of letters following the `#`, and we want to emit a dedicated
+		// TokenKind based on the name rather than two separate tokens.
+		if ch == Ascii.hash 'isDirective'
+			return try scanDirective(startLine: startLine, startCol: startCol)
+		end 'isDirective'
 		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 		var atEnd = false
 		try advance() otherwise 'lastChar'
@@ -1070,6 +1087,58 @@ type Lexer
 		end 'identDone'
 	end 'scanIdentifier'
 
+	// Consume a `#`-prefixed compiler directive starting at the current cursor
+	// position (which is AT the `#`). Reads the directive name (a run of
+	// lowercase letters following `#`) and emits the matching hashIf / hashElse
+	// / hashEndif token. A bare `#` at EOF stashes unexpectedEof; an
+	// unrecognized name stashes `unknownDirective` so the surfacing diagnostic
+	// can name the offending text instead of misreporting an EOF. Returns
+	// true if the directive consumed the source's final byte.
+	function scanDirective(startLine LineNumber, startCol ColumnNumber) returns bool throws CursorError
+		let hashStart = cursor.index()
+		// Consume the `#`.
+		try advance() otherwise 'eofAtHash'
+			// `#` at EOF with no name following — treat as malformed directive.
+			hasPendingError = true
+			pendingError = LexerError.unexpectedEof(line: startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'eofAtHash'
+		let nameStart = cursor.index()
+		var atEof = false
+		while cursor.index() < len 'directiveBody'
+			let dc = cursor.current()
+			if not isAlpha(dc) 'endName'
+				break
+			end 'endName'
+			if not tryAdvance() 'eofInName'
+				atEof = true
+				break
+			end 'eofInName'
+		end 'directiveBody'
+		var nameEnd = cursor.index()
+		if atEof and isAlpha(cursor.current()) 'includeLastByte'
+			nameEnd = nameEnd + 1
+		end 'includeLastByte'
+		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: invariant violated")
+		let name = String.from(nameBytes)
+		let kind = classifyDirective(name)
+		if kind.rawValue == TokenKind.identifier.rawValue 'unknown'
+			// Unknown directive name — stash a distinct lexer error so the
+			// diagnostic can quote the offending name; run()'s caller maps
+			// this to ErrorCode.lexerUnexpectedCharacter.
+			hasPendingError = true
+			pendingError = LexerError.unknownDirective(name: name, line: startLine, column: startCol)
+			throw CursorError.exhausted
+		end 'unknown'
+		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		let fullSpan = String.from(fullSpanBytes)
+		emitWithSource(kind, value: fullSpan, valueBytes: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
+		if atEof 'directiveDone'
+			try finishAtEof()
+		end 'directiveDone'
+		return false
+	end 'scanDirective'
+
 	// Both '/' characters already consumed. Advances to (but not past) the newline.
 	// Only increments cursor position, not column — column will be reset by the newline handler.
 	function scanComment() throws CursorError
@@ -1276,10 +1345,28 @@ function classifyIdentifier(name String) returns TokenKind
 	return info.kind
 end 'classifyIdentifier'
 
+// Map a directive name (the text following `#`) to its TokenKind. Returns
+// TokenKind.identifier for unrecognized names so the lexer caller can
+// distinguish "valid directive" from "junk after `#`" without a separate
+// channel.
+function classifyDirective(name String) returns TokenKind
+	if name == "if" 'isIf'
+		return TokenKind.hashIf
+	end 'isIf'
+	if name == "else" 'isElse'
+		return TokenKind.hashElse
+	end 'isElse'
+	if name == "endif" 'isEndif'
+		return TokenKind.hashEndif
+	end 'isEndif'
+	return TokenKind.identifier
+end 'classifyDirective'
+
 // ASCII byte enum
 enum Ascii
 	lf = 10
 	dquote = 34
+	hash = 35
 	quote = 39
 	star = 42
 	plus = 43

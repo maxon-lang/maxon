@@ -217,66 +217,40 @@ let stdlibWhitelist = [
 	"stdlib/Vector.maxon",
 	"stdlib/Clock.maxon",
 	"stdlib/CommandLine.maxon",
+	"stdlib/Process.maxon",
 ]
 
-// A synthesized stdlib prelude. The real `stdlib/Process.maxon` declares
-// `ExitCode` behind `#if os(...)` — a directive form the self-hosted compiler
-// doesn't understand yet — so we substitute a single platform-agnostic alias
-// here. SemanticCheck enforces `main returns ExitCode` by name match, so this
-// has to land in the stdlib namespace before any user code is parsed. The
-// range matches the wasi target's tightest cap (0..125), which is the strictest
-// of the platform variants and so works across all targets.
-// Synthesized stdlib declarations. Beyond `ExitCode` (see comment above), we
-// also pre-seed the cross-cutting interface family (`Error`, `Iterator`,
-// `BidirectionalIterator`, `Iterable`, plus the Hashable/Equatable/Comparable/
-// Cloneable/Stringable/FormattedStringable/BuiltinArrayLiteral protocol set
-// and the `Ordering` enum) and `IterationError` so user code can reference
-// them by name without us having to whitelist `stdlib/Interfaces.maxon`
-// itself — that file uses extensions and `Array with Element` machinery the
-// self-hosted compiler doesn't yet support. We omit the extension blocks
-// (those bring in `Array with Element` machinery that's not yet supported).
+// Synthesized stdlib prelude. Pre-seeds declarations the self-hosted compiler
+// still can't parse out of the real stdlib sources:
+//   • `Parsable`, `__BuiltinParseError`, `ParsedInt`, `ParsedFloat`, and the
+//     four `__*_fromString` helpers mirror declarations in
+//     `stdlib/Builtins.maxon`. We can't whitelist `Builtins.maxon` directly
+//     yet — the file declares `InitableFromArrayLiteral.init(value
+//     ElementArray)` whose generic-shape interaction with the parser's
+//     `BuiltinArrayLiteral` discovery confuses `Array.init` paramTypes during
+//     stdlib cache lowering. Once the parser handles those interfaces,
+//     switch to whitelisting the file and drop the inline copies here.
+//   • The `BuiltinArrayLiteral` / `BuiltinDictionaryLiteral` / `Initable*` /
+//     `BuiltinStringLiteral` / `BuiltinCharLiteral` interface family must
+//     exist before any other stdlib file is parsed.
+//   • `__Tuple2` / `__Tuple3`, `print`, and the `FilePath` type, which
+//     `stdlib/Process.maxon` depends on. The real `stdlib/FilePath.maxon`
+//     is not yet whitelisted (it depends on string/byte-array machinery the
+//     self-hosted lowering doesn't fully support).
 //
-// ExitCode is target-specific: the real stdlib (`stdlib/Process.maxon`) gates
-// its range on `#if os(...)` — Windows gets the widest range (32-bit DWORD
-// from GetExitCodeProcess), wasi caps at 125 (POSIX-style truncated exit),
-// other Unix-likes get 0..255 (the standard `wait`-status byte). We mirror
-// that here so spec tests with exit codes > 125 (e.g. ExitCode: 200) pass on
-// Windows like they do under the C# bootstrap. `bootstrapPrelude` returns
-// the rest of the synthesized declarations unchanged.
-function exitCodeRangeForOs(os Os) returns String
-	return match os 'select'
-		windows gives "0 to u32.max"
-		linux gives "0 to 255"
-		macos gives "0 to 255"
-		wasi gives "0 to 125"
-	end 'select'
-end 'exitCodeRangeForOs'
+// The cross-cutting interface family (`Error`, `Iterator`,
+// `BidirectionalIterator`, `Iterable`, `Hashable`, `Equatable`,
+// `Cloneable`, `Stringable`, `FormattedStringable`, `Comparable`) plus
+// `Ordering`, `IterationError`, `HashValue`, and `IterStep` are provided by
+// the whitelisted `stdlib/Interfaces.maxon` and must NOT be synthesized
+// here — duplicating them would trigger E2001 duplicate-name errors.
+//
+// `ExitCode`, `ProcessIntrospectionError`, and `Process` are now provided by
+// the whitelisted `stdlib/Process.maxon`; its `#if os(...)` gating works now
+// that the parser handles the directive.
 
-function stdlibBootstrapSourceForTarget(target Target) returns String
-	// Declarations kept here are those that the self-hosted compiler still
-	// can't parse out of the real stdlib sources, plus the target-specific
-	// `ExitCode` typealias which the real `Process.maxon` gates behind
-	// `#if os(...)` (a directive form the parser doesn't yet understand).
-	//
-	// `Parsable`, `__BuiltinParseError`, `ParsedInt`, `ParsedFloat`, and the four
-	// `__*_fromString` helpers mirror the declarations in
-	// `stdlib/Builtins.maxon`. We can't whitelist `Builtins.maxon` directly
-	// yet — the file declares `InitableFromArrayLiteral.init(value
-	// ElementArray)` whose generic-shape interaction with the parser's
-	// `BuiltinArrayLiteral` discovery confuses `Array.init` paramTypes during
-	// stdlib cache lowering. Once the parser handles those interfaces, switch
-	// to whitelisting the file and drop the inline copies here. Keep the
-	// `throws Error` clause and `int(i64.min to i64.max)` /
-	// `float(f64.min to f64.max)` ranges in sync with `Builtins.maxon`.
-	//
-	// The cross-cutting interface family (`Error`, `Iterator`,
-	// `BidirectionalIterator`, `Iterable`, `Hashable`, `Equatable`,
-	// `Cloneable`, `Stringable`, `FormattedStringable`, `Comparable`) plus
-	// `Ordering`, `IterationError`, `HashValue`, and `IterStep` are now
-	// provided by the whitelisted `stdlib/Interfaces.maxon` and must NOT be
-	// synthesized here — duplicating them would trigger E2001 duplicate-name
-	// errors at parse time.
-	return "export typealias ExitCode = int({exitCodeRangeForOs(target.os)})\nexport interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface InitableFromArrayLiteral uses Element\nend 'InitableFromArrayLiteral'\nexport interface InitableFromStringLiteral\nend 'InitableFromStringLiteral'\nexport interface InitableFromCharLiteral\nend 'InitableFromCharLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Parsable\n\tstatic function fromString(input String) returns Self throws Error\nend 'Parsable'\nexport enum __BuiltinParseError implements Error\n\tinvalidFormat\nend '__BuiltinParseError'\nexport typealias ParsedInt = int(i64.min to i64.max)\nexport typealias ParsedFloat = float(f64.min to f64.max)\nexport function __int_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tvar result = 0\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '-' 'minus'\n\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'minus_after_digits'\n\t\t\tnegative = true\n\t\tend 'minus' else 'not_minus'\n\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\thasDigits = true\n\t\t\t\t\tresult = result * 10 + (cp - '0')\n\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'not_digit'\n\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'below_zero'\n\t\tend 'not_minus'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tif negative 'negate'\n\t\tresult = 0 - result\n\tend 'negate'\n\treturn result\nend '__int_fromString'\nexport function __float_fromString(input String) returns ParsedFloat throws __BuiltinParseError\n\tvar intPart = 0\n\tvar fracPart = 0.0\n\tvar fracDiv = 1.0\n\tvar pastDot = false\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '.' 'dot'\n\t\t\tif pastDot 'double_dot'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'double_dot'\n\t\t\tpastDot = true\n\t\tend 'dot' else 'not_dot'\n\t\t\tif cp == '-' 'minus'\n\t\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_digits'\n\t\t\t\tif pastDot 'minus_after_dot'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_dot'\n\t\t\t\tnegative = true\n\t\t\tend 'minus' else 'not_minus'\n\t\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\t\thasDigits = true\n\t\t\t\t\t\tlet digit = cp - '0'\n\t\t\t\t\t\tif pastDot 'after_dot'\n\t\t\t\t\t\t\tfracDiv = fracDiv * 10.0\n\t\t\t\t\t\t\tfracPart = fracPart + digit / fracDiv\n\t\t\t\t\t\tend 'after_dot' else 'before_dot'\n\t\t\t\t\t\t\tintPart = intPart * 10 + digit\n\t\t\t\t\t\tend 'before_dot'\n\t\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\t\tend 'not_digit'\n\t\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'below_zero'\n\t\t\tend 'not_minus'\n\t\tend 'not_dot'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tvar result = intPart + fracPart\n\tif negative 'negate'\n\t\tresult = 0.0 - result\n\tend 'negate'\n\treturn result\nend '__float_fromString'\nexport function __bool_fromString(input String) returns bool throws __BuiltinParseError\n\tif input == \"true\" 'is_true'\n\t\treturn true\n\tend 'is_true'\n\tif input == \"false\" 'is_false'\n\t\treturn false\n\tend 'is_false'\n\tthrow __BuiltinParseError.invalidFormat\nend '__bool_fromString'\nexport function __byte_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tlet result = try __int_fromString(input) otherwise 'err'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'err'\n\tif result < 0 'too_low'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_low'\n\tif result > 255 'too_high'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_high'\n\treturn result\nend '__byte_fromString'\nexport type __Tuple2 uses _T0, _T1\n\texport var _0 _T0\n\texport var _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\texport var _0 _T0\n\texport var _1 _T1\n\texport var _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\nexport enum FilePathError implements Error\n\tinvalidCharacter\n\tnotFileURL\n\tnoParent\nend 'FilePathError'\nexport type FilePath implements InitableFromStringLiteral, Stringable\n\texport let path String\n\texport static function init(value String) returns FilePath\n\t\treturn FilePath\{path: value\}\n\tend 'init'\n\texport static function from(value String) returns FilePath throws FilePathError\n\t\treturn FilePath\{path: value\}\n\tend 'from'\n\texport function toString() returns String\n\t\treturn path\n\tend 'toString'\nend 'FilePath'\nexport enum ProcessIntrospectionError implements Error\n\tpathUnavailable\nend 'ProcessIntrospectionError'\nexport type Process\n\texport static function executablePath() returns FilePath throws ProcessIntrospectionError\n\t\tlet managed = __Builtins.executablePath()\n\t\treturn FilePath\{path: String.init(managed)\}\n\tend 'executablePath'\nend 'Process'\n"
+function stdlibBootstrapSourceForTarget(_ Target) returns String
+	return "export interface BuiltinArrayLiteral\nend 'BuiltinArrayLiteral'\nexport interface BuiltinDictionaryLiteral\nend 'BuiltinDictionaryLiteral'\nexport interface InitableFromArrayLiteral uses Element\nend 'InitableFromArrayLiteral'\nexport interface InitableFromStringLiteral\nend 'InitableFromStringLiteral'\nexport interface InitableFromCharLiteral\nend 'InitableFromCharLiteral'\nexport interface BuiltinStringLiteral\nend 'BuiltinStringLiteral'\nexport interface BuiltinCharLiteral\nend 'BuiltinCharLiteral'\nexport interface Parsable\n\tstatic function fromString(input String) returns Self throws Error\nend 'Parsable'\nexport enum __BuiltinParseError implements Error\n\tinvalidFormat\nend '__BuiltinParseError'\nexport typealias ParsedInt = int(i64.min to i64.max)\nexport typealias ParsedFloat = float(f64.min to f64.max)\nexport function __int_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tvar result = 0\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '-' 'minus'\n\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'minus_after_digits'\n\t\t\tnegative = true\n\t\tend 'minus' else 'not_minus'\n\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\thasDigits = true\n\t\t\t\t\tresult = result * 10 + (cp - '0')\n\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'not_digit'\n\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'below_zero'\n\t\tend 'not_minus'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tif negative 'negate'\n\t\tresult = 0 - result\n\tend 'negate'\n\treturn result\nend '__int_fromString'\nexport function __float_fromString(input String) returns ParsedFloat throws __BuiltinParseError\n\tvar intPart = 0\n\tvar fracPart = 0.0\n\tvar fracDiv = 1.0\n\tvar pastDot = false\n\tvar negative = false\n\tvar hasDigits = false\n\tfor cp in input.codepoints() 'chars'\n\t\tif cp == '.' 'dot'\n\t\t\tif pastDot 'double_dot'\n\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\tend 'double_dot'\n\t\t\tpastDot = true\n\t\tend 'dot' else 'not_dot'\n\t\t\tif cp == '-' 'minus'\n\t\t\t\tif hasDigits 'minus_after_digits'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_digits'\n\t\t\t\tif pastDot 'minus_after_dot'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'minus_after_dot'\n\t\t\t\tnegative = true\n\t\t\tend 'minus' else 'not_minus'\n\t\t\t\tif cp >= '0' 'maybe_digit'\n\t\t\t\t\tif cp <= '9' 'is_digit'\n\t\t\t\t\t\thasDigits = true\n\t\t\t\t\t\tlet digit = cp - '0'\n\t\t\t\t\t\tif pastDot 'after_dot'\n\t\t\t\t\t\t\tfracDiv = fracDiv * 10.0\n\t\t\t\t\t\t\tfracPart = fracPart + digit / fracDiv\n\t\t\t\t\t\tend 'after_dot' else 'before_dot'\n\t\t\t\t\t\t\tintPart = intPart * 10 + digit\n\t\t\t\t\t\tend 'before_dot'\n\t\t\t\t\tend 'is_digit' else 'not_digit'\n\t\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\t\tend 'not_digit'\n\t\t\t\tend 'maybe_digit' else 'below_zero'\n\t\t\t\t\tthrow __BuiltinParseError.invalidFormat\n\t\t\t\tend 'below_zero'\n\t\t\tend 'not_minus'\n\t\tend 'not_dot'\n\tend 'chars'\n\tif not hasDigits 'empty'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'empty'\n\tvar result = intPart + fracPart\n\tif negative 'negate'\n\t\tresult = 0.0 - result\n\tend 'negate'\n\treturn result\nend '__float_fromString'\nexport function __bool_fromString(input String) returns bool throws __BuiltinParseError\n\tif input == \"true\" 'is_true'\n\t\treturn true\n\tend 'is_true'\n\tif input == \"false\" 'is_false'\n\t\treturn false\n\tend 'is_false'\n\tthrow __BuiltinParseError.invalidFormat\nend '__bool_fromString'\nexport function __byte_fromString(input String) returns ParsedInt throws __BuiltinParseError\n\tlet result = try __int_fromString(input) otherwise 'err'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'err'\n\tif result < 0 'too_low'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_low'\n\tif result > 255 'too_high'\n\t\tthrow __BuiltinParseError.invalidFormat\n\tend 'too_high'\n\treturn result\nend '__byte_fromString'\nexport type __Tuple2 uses _T0, _T1\n\texport var _0 _T0\n\texport var _1 _T1\nend '__Tuple2'\nexport type __Tuple3 uses _T0, _T1, _T2\n\texport var _0 _T0\n\texport var _1 _T1\n\texport var _2 _T2\nend '__Tuple3'\nexport function print(value String)\n\t__Builtins.writeStdout(value.managed)\nend 'print'\nexport enum FilePathError implements Error\n\tinvalidCharacter\n\tnotFileURL\n\tnoParent\nend 'FilePathError'\nexport type FilePath implements InitableFromStringLiteral, Stringable\n\texport let path String\n\texport static function init(value String) returns FilePath\n\t\treturn FilePath\{path: value\}\n\tend 'init'\n\texport static function from(value String) returns FilePath throws FilePathError\n\t\treturn FilePath\{path: value\}\n\tend 'from'\n\texport function toString() returns String\n\t\treturn path\n\tend 'toString'\nend 'FilePath'\n"
 end 'stdlibBootstrapSourceForTarget'
 
 let stdlibBootstrapVirtualPath = "stdlib-bootstrap.maxon"

@@ -95,14 +95,14 @@ Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional 
 ```
 
 Supported conditions:
-- `os(Windows)`, `os(Linux)`, `os(Macos)` — match the target operating system
-- `arch(x64)`, `arch(arm64)` — match the target CPU architecture
+- `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)` — match the target operating system
+- `arch(x64)`, `arch(arm64)`, `arch(wasm32)` — match the target CPU architecture
 - `testing(true)`, `testing(false)` — match whether the code is compiled in test mode
 
-**Boolean operators** (precedence: `or` < `and` < `not`):
+**Boolean operators** (precedence: `or` < `and` < `not`), plus parentheses for grouping:
 ```maxon
 #if not os(Windows)
-		// runs on Linux and macOS
+		// runs on non-Windows targets
 #endif
 
 #if os(Linux) or os(Macos)
@@ -112,12 +112,16 @@ Supported conditions:
 #if os(Linux) and arch(arm64)
 		// runs on ARM Linux only
 #endif
+
+#if (os(Linux) or os(Macos)) and arch(x64)
+		// runs on Linux or macOS, but only on x64
+#endif
 ```
 
 Conditional compilation directives can appear at:
 - Top level (around functions, types, variables)
 - Inside function bodies (around statements)
-- Inside type bodies (around fields and methods)
+- Inside `type`, `enum`, `union`, `interface`, or `extension` bodies (around members)
 
 Nested `#if` blocks are supported.
 

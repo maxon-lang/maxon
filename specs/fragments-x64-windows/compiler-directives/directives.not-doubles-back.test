@@ -1,0 +1,28 @@
+// Test: directives.not-doubles-back
+function main() returns ExitCode
+	#if not os(Wasi)
+		#if os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#else
+		#if not os(Wasi)
+			return 99
+		#else
+			return 10
+		#endif
+	#endif
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 10
+    x64.ret
+  }
+}
+---

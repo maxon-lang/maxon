@@ -132,9 +132,10 @@ unary_expr    = 'not' unary_expr | atom
 atom          = 'os' '(' IDENTIFIER ')'
               | 'arch' '(' IDENTIFIER ')'
               | 'testing' '(' BOOL ')'
+              | '(' condition ')'
 ```
 
-Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`). Supported `os` values: `Windows`, `Linux`, `Macos`. Supported `arch` values: `x64`, `arm64`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
+Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`), plus parentheses for grouping. Supported `os` values: `Windows`, `Linux`, `Macos`, `Wasi`. Supported `arch` values: `x64`, `arm64`, `wasm32`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
 
 ---
 
