@@ -240,12 +240,39 @@ end 'buildGenericInstanceType'
 // (typealiases, structs, enums, type parameters of the enclosing decl).
 export function drainPendingConstraintChecks(project Project)
 	for check in project.pendingConstraintChecks 'eachCheck'
+		// Snapshot the diagnostic count so we can detect whether this
+		// alias's validation emitted any error (E3017 / E2003 / E3015 /
+		// E3016). If it did, mark the alias name so the deferred
+		// unused-typealias drain skips it — matches the bootstrap's
+		// behavior of throwing on the constraint failure before ever
+		// reaching the unused-check.
+		let beforeCount = project.diagnostics.count()
 		validateGenericInstanceConstraints(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 		validateGenericInstanceArgs(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 		validateGenericInstanceArity(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
+		if project.diagnostics.count() > beforeCount 'aliasHadError'
+			project.constraintFailedTypealiases.insert(element: check.name)
+		end 'aliasHadError'
 	end 'eachCheck'
 	project.pendingConstraintChecks = PendingConstraintCheckArray.create()
 end 'drainPendingConstraintChecks'
+
+// Phase 11.7: drain the deferred unused-typealias queue. The parser
+// populates `project.pendingUnusedTypealiases` at end-of-parse with every
+// file-private alias whose name never appeared in a type position. This
+// runs AFTER `drainPendingConstraintChecks` so an alias whose RHS failed
+// validation has been recorded in `constraintFailedTypealiases` and we
+// can drop its E3062 — matches the bootstrap's single-diagnostic shape
+// when a `typealias X = Base with BadArg` triggers E3017.
+export function drainPendingUnusedTypealiases(project Project)
+	for entry in project.pendingUnusedTypealiases 'eachEntry'
+		if project.constraintFailedTypealiases.contains(entry.name) 'hadConstraintError'
+			continue
+		end 'hadConstraintError'
+		reportCompileError(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{entry.name}'", line: entry.line, column: entry.column, filePath: entry.filePath)
+	end 'eachEntry'
+	project.pendingUnusedTypealiases = PendingUnusedTypealiasArray.create()
+end 'drainPendingUnusedTypealiases'
 
 // Emit E2003 ("Unknown type: X") for every arg-name in a `genericAlias` that
 // can't be resolved as a primitive, typealias, struct, enum, interface, or
@@ -385,6 +412,13 @@ function validateConstraintsFor(project Project, baseName String, args StringArr
 		let argType = internMaxonType(project, name: argName)
 		if not typeConformsTo(project, t: argType, interfaceName: wc.requiredTraitName) 'violation'
 			reportCompileError(project, code: ErrorCode.semanticConstraintViolation, message: "Type '{argName}' does not satisfy constraint '{wc.requiredTraitName}' required by type parameter '{wc.paramName}' of '{baseName}'", line: declLine, column: declColumn, filePath: declFilePath)
+			// Match bootstrap's throw-on-first-error semantics: stop after
+			// the first constraint violation for this generic instantiation.
+			// Continuing would emit a cascade of related errors (e.g. Map's
+			// `Key is Hashable and Equatable` would fire E3017 for both
+			// constraints when `Key` is neither) that the bootstrap doesn't
+			// produce, breaking spec-test diagnostic-text parity.
+			return
 		end 'violation'
 	end 'eachClause'
 end 'validateConstraintsFor'
@@ -775,6 +809,19 @@ function computeExpectedMethodsForConformances(project Project, declName String,
 		end 'maybeInherit'
 
 		if resolvedWithArgs.count() != iface.usesParams.count() 'arityMismatch'
+			// The "conformer provides zero `with` clauses but the interface
+			// declares one or more `uses` params" case has a dedicated
+			// diagnostic (E3016, "does not define required associated type
+			// '<Param>' from interface '<Iface>'") — the bootstrap fires
+			// this shape so the user knows to add `with <Type>` clauses.
+			// The arity-mismatch shape (E3015) covers the case where SOME
+			// args were provided but not enough (`Pair with Int` against
+			// `Pair uses First, Second`).
+			if conf.withArgs.count() == 0 and iface.usesParams.count() > 0 'missingBinding'
+				let firstParam = try iface.usesParams.get(0) otherwise ""
+				reportCompileError(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Type '{declName}' does not define required associated type '{firstParam}' from interface '{conf.interfaceName}'", line: conf.line, column: conf.column, filePath: declFilePath)
+				continue
+			end 'missingBinding'
 			reportCompileError(project, code: ErrorCode.semanticUnknownInterface, message: "interface '{conf.interfaceName}' expects {iface.usesParams.count()} type parameter(s), got {conf.withArgs.count()}", line: conf.line, column: conf.column, filePath: declFilePath)
 			continue
 		end 'arityMismatch'
@@ -1873,6 +1920,131 @@ function validateConvert(project Project, fromType MaxonType, toType MaxonType, 
 	reportCompileError(project, code: ErrorCode.semanticInvalidCast, message: "Cannot cast from {castCategoryName(sourceCategory)} to {castCategoryName(targetCategory)}", line: 0, column: 0, filePath: filePath)
 	return true
 end 'validateConvert'
+
+// Phase 11.7: walk every function's cmp ops and emit E3005 when either
+// operand is a type-parameter-typed value whose declaring type's `where`
+// clause (struct-level OR extension-scoped) doesn't constrain it with the
+// required interface (`Equatable` for `==`/`!=`, `Comparable` for ordering
+// predicates). Mirrors `ValidateTypeParameterConstraints` in the bootstrap.
+//
+// Runs after `fillCmp` has populated operand types and after
+// `extensionMethodWhereClauses` has been seeded by the parser, but BEFORE
+// DCE — so a `Box uses T; function eq(x T) ... item == x` body still
+// triggers the diagnostic even if no `Box.eq` call site monomorphizes.
+function validateTypeParamComparisonConstraints(project Project, module MaxonModule, filePath FilePath)
+	for func in module.functions 'eachFunc'
+		let enclosingType = enclosingTypeNameOrEmpty(func.name)
+		var structConstraints = WhereClauseArray.create()
+		if not enclosingType.isEmpty() 'haveRecv'
+			structConstraints = lookupWhereClausesForBase(project, baseName: enclosingType)
+		end 'haveRecv'
+		let extClauses = try project.extensionMethodWhereClauses.get(stripFunctionOverloadSuffix(func.name)) otherwise WhereClauseArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("validateTypeParamComparisonConstraints: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("validateTypeParamComparisonConstraints: opIdx OOB")
+				if op.name != "cmp" 'notCmp'
+					continue
+				end 'notCmp'
+				match op 'extract'
+					cmp(_, _, _, predicate, _, _, operandType, range) then checkTypeParamComparison(project, predicate: predicate, operandType: operandType, range: range, filePath: filePath, structConstraints: structConstraints, extClauses: extClauses)
+					default panic("validateTypeParamComparisonConstraints: cmp op shape mismatch")
+				end 'extract'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'validateTypeParamComparisonConstraints'
+
+// Non-throwing variant of `enclosingTypeName` — returns empty string for free
+// functions. Used by passes that walk every function (method or not) and want
+// a single uniform path rather than `if let`/`else` at every call site.
+function enclosingTypeNameOrEmpty(funcName String) returns String
+	return try enclosingTypeName(funcName) otherwise ""
+end 'enclosingTypeNameOrEmpty'
+
+// Strip the `$<overloadDiscriminator>` suffix from a function name.
+// `project.extensionMethodWhereClauses` is keyed by the bare
+// `<Type>.<method>` form so overload-suffixed function names need this
+// transform before lookup.
+function stripFunctionOverloadSuffix(name String) returns String
+	let bytes = name.toByteArray()
+	let dollarByte = 0x24
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise panic("invariant: i < count but get failed")
+		if b == dollarByte 'hit'
+			return byteSliceToString(bytes, startIndex: 0, endIndex: i)
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return name
+end 'stripFunctionOverloadSuffix'
+
+// True iff `clauses` constrains `paramName` with `interfaceName`.
+function whereClausesCoverConstraint(clauses WhereClauseArray, paramName String, interfaceName String) returns bool
+	for i in 0 upto clauses.count() 'scan'
+		let wc = try clauses.get(i) otherwise panic("whereClausesCoverConstraint: clauses.get OOB at {i}")
+		if wc.paramName == paramName and wc.requiredTraitName == interfaceName 'hit'
+			return true
+		end 'hit'
+	end 'scan'
+	return false
+end 'whereClausesCoverConstraint'
+
+// E3005 when a cmp's operand is a bare type parameter and neither the
+// struct-level nor extension-level `where` clause supplies the required
+// interface. The required interface is `Equatable` for eq/ne and
+// `Comparable` for ordering predicates — same classification as the
+// bootstrap's `ValidateTypeParameterConstraints`.
+function checkTypeParamComparison(project Project, predicate CmpPredicate, operandType MaxonType, range SourceRange, filePath FilePath, structConstraints WhereClauseArray, extClauses WhereClauseArray)
+	let paramName = match operandType 'extract'
+		typeParameter(id) gives project.typeParameters.getName(id)
+		boolean gives ""
+		integer gives ""
+		float gives ""
+		string gives ""
+		named gives ""
+		function gives ""
+		unresolved gives ""
+		genericInstance gives ""
+		interface gives ""
+		constInt gives ""
+	end 'extract'
+	if paramName.isEmpty() 'notTypeParam'
+		return
+	end 'notTypeParam'
+	let requiredIface = requiredInterfaceForCmpPredicate(predicate)
+	if whereClausesCoverConstraint(structConstraints, paramName: paramName, interfaceName: requiredIface) 'structCovers'
+		return
+	end 'structCovers'
+	if whereClausesCoverConstraint(extClauses, paramName: paramName, interfaceName: requiredIface) 'extCovers'
+		return
+	end 'extCovers'
+	let opStr = cmpPredicateOpStr(predicate)
+	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Operator '{opStr}' requires type parameter '{paramName}' to be constrained with 'where {paramName} is {requiredIface}'", line: range.line, column: range.column, filePath: filePath)
+end 'checkTypeParamComparison'
+
+function requiredInterfaceForCmpPredicate(predicate CmpPredicate) returns String
+	return match predicate 'p'
+		eq gives "Equatable"
+		ne gives "Equatable"
+		lt gives "Comparable"
+		le gives "Comparable"
+		gt gives "Comparable"
+		ge gives "Comparable"
+	end 'p'
+end 'requiredInterfaceForCmpPredicate'
+
+function cmpPredicateOpStr(predicate CmpPredicate) returns String
+	return match predicate 'p'
+		eq gives "=="
+		ne gives "!="
+		lt gives "<"
+		le gives "<="
+		gt gives ">"
+		ge gives ">="
+	end 'p'
+end 'cmpPredicateOpStr'
 
 // Validate a cmp op's operand types. Comparisons are category-strict: both
 // sides must land in the same CastCategory (int/float/bool). Any mismatch
@@ -6450,6 +6622,10 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 	// processExtensions. Runs before the struct drain so a constraint
 	// violation surfaces before lowering attempts to use the bad alias.
 	drainPendingConstraintChecks(project)
+	// Now that constraint failures have been recorded, drain the deferred
+	// unused-typealias queue. Aliases whose RHS failed validation are
+	// suppressed to match the bootstrap's single-diagnostic shape.
+	drainPendingUnusedTypealiases(project)
 	resolveAllStructTypes(project)
 	resolveAllEnumTypes(project)
 	// Phase 9 function-backed enums: every case's bare function identifier
@@ -6643,6 +6819,18 @@ export function runTypeResolution(project Project, module MaxonModule, filePath 
 			end 'extract'
 		end 'isCmp'
 	end 'validateOps'
+
+	// Phase 11.7: a comparison operator on a type-parameter-typed operand
+	// (e.g. `item == other` where both are `T` in `type Box uses T`) needs
+	// the enclosing function's `where` clause to constrain `T : Equatable`
+	// (for `==`/`!=`) or `T : Comparable` (for `<`/`<=`/`>`/`>=`). The C#
+	// bootstrap raises E3005 at parse time via `ValidateTypeParameter-
+	// Constraints`; the self-hosted parser defers the check until type
+	// parameters are interned so the typeParameter arm is reliably visible
+	// here. Running at TypeResolution catches the case before dead-code
+	// elimination prunes the unmonomorphized generic body (e.g. `Box.eq`
+	// declared but never instantiated still needs to fail with E3005).
+	validateTypeParamComparisonConstraints(project, module: module, filePath: filePath)
 
 	// Convert validation runs per-function so the literal-range walker can
 	// stay function-local — synthetic value names (`$t1`, …) repeat across

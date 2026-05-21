@@ -2219,17 +2219,31 @@ end 'X64FunctionLowering'
 // ============================================================
 
 export function lowerMirToX64(module MirModule, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns TargetModule
-	logDebug(LogCategory.ir, message: function() gives "Lowering Mid to X64 dialect")
+	return lowerMirToX64Subset(module, funcsToLower: module.functions, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions)
+end 'lowerMirToX64'
+
+// Stage P Step 3.5b: Per-subset entry to X64 target lowering. Identical to
+// `lowerMirToX64` except the inner iteration is limited to `funcsToLower`
+// while `allFunctions` (used for callee-signature lookup) keeps pointing at
+// the full `module.functions`. The chunk-driven incremental path uses this
+// to target-lower only the cache-miss functions while still resolving their
+// calls to functions whose chunks were served from cache (and therefore
+// never re-lowered this build).
+export function lowerMirToX64Subset(module MirModule, funcsToLower IrFunctionArray, target Target, globalData GlobalDataTable, stdlibFunctions ObjectFunctionArray) returns TargetModule
+	logDebug(LogCategory.ir, message: function() gives "Lowering {funcsToLower.count()} of {module.functions.count()} functions to X64 dialect")
 	let osDesc = makeOsDescriptor(target)
 
-	// Create the destination TargetModule.
 	var targetModule = TargetModule.create(CpuArch.x64)
 
+	// `allFunctions: module.functions` (not `funcsToLower`) so callees outside
+	// the miss subset still resolve to their MIR `paramTypes` / `returnType`
+	// at call-emission time; without this, a miss-function calling a hit-
+	// function would panic in `lookupFuncParamTypes`.
 	var lowering = X64FunctionLowering.create(module, target: targetModule, osDesc: osDesc, allFunctions: module.functions, globalData: globalData, stdlibFunctions: stdlibFunctions)
-	for func in module.functions 'eachFunc'
+	for func in funcsToLower 'eachFunc'
 		logTrace(LogCategory.ir, message: function() gives "mid-to-x64: === lowering function: {func.name} ===")
 		lowering.lowerFunction(func)
 	end 'eachFunc'
 
 	return targetModule
-end 'lowerMirToX64'
+end 'lowerMirToX64Subset'

@@ -1,0 +1,476 @@
+// Per-file parser-side-effect tracking and rollback.
+//
+// The parser writes to ~25 distinct registries on `Project` during a file's
+// parseModule call (funcReturnTypes, funcSignatures, methodNameIndex,
+// unresolvedTypealiases, unresolvedStructTypes, …). When `queryParseOps`
+// re-runs after a file's content changes, those writes from the prior parse
+// remain — `insert` calls on the second parse collide with their own prior
+// registrations (E2001 "Duplicate function"). Without an undo path, same-
+// `Project` incremental rebuild is impossible.
+//
+// This module records every parser-side write to a per-file `FileParseDelta`
+// and provides a rollback helper that removes those writes before re-parsing.
+// Resolved-tier maps (`structTypes`, `enumTypes`, `interfaces`, `typealiases`,
+// …) that TypeResolution populates from the parser's unresolved-tier entries
+// are rolled back transitively — the rollback helper removes the same key
+// from both tiers.
+//
+// Per-file scope: every recorded write is attributable to exactly the file
+// the parser is currently working through. Cross-file writes (StdlibCache
+// restore path, LowerMaxonToStd helpers, MonomorphizeExtensions) happen
+// outside parseModule and are intentionally not tracked here.
+
+// Per-file accumulator. One instance per file path in `Project.fileParseDeltas`.
+// Stores only keys (not values) — rollback is `registry.remove(key)`.
+export type FileParseDelta
+	// String-keyed parser-side registries
+	export var funcReturnTypesKeys StringArray
+	export var funcSignaturesKeys StringArray
+	export var funcVisibilitiesKeys StringArray
+	export var funcThrowsTypesKeys StringArray
+	// Qualified names recorded via MethodNameIndex.record (also dual-indexed
+	// under bare names; rollback uses methodNameIndexRemove which handles
+	// both buckets).
+	export var methodNameIndexKeys StringArray
+	export var overloadedNamesKeys StringArray
+	export var topLevelConstantsKeys StringArray
+	export var topLevelVarsKeys StringArray
+	export var unresolvedTopLevelDeclsKeys StringArray
+	// Rolling back these keys also removes from typealiases, typealiasRanges,
+	// typealiasCastCategories, typealiasVisibilities, genericTypealiases,
+	// constraintFailedTypealiases (all populated by TypeResolution drain).
+	export var unresolvedTypealiasesKeys StringArray
+	// Also rolls back structTypes.
+	export var unresolvedStructTypesKeys StringArray
+	// Also rolls back enumTypes.
+	export var unresolvedEnumsKeys StringArray
+	// Also rolls back interfaces.
+	export var unresolvedInterfacesKeys StringArray
+	export var extensionMethodWhereClausesKeys StringArray
+	export var structInnerAliasNamesKeys StringArray
+	export var arrayLiteralProducerKeys StringArray
+	export var mapLiteralProducerKeys StringArray
+	export var charByteLiteralsKeys StringArray
+	// ByteArray-keyed (tuple alloc gids use a ByteArray of the ptr name bytes
+	// as their key).
+	export var tupleAllocGidsKeys ByteArrayArray
+	// Push-only arrays — record appended values, rollback by identity removal.
+	// (Entries do not carry filePath, so identity is the only way to attribute.)
+	export var moduleInitFuncsAppended StringArray
+	export var livenessRootsAppended StringArray
+	export var immutableArrayLitNamesAppended StringArray
+
+	export static function create() returns FileParseDelta
+		return Self{
+			funcReturnTypesKeys: StringArray.create(),
+			funcSignaturesKeys: StringArray.create(),
+			funcVisibilitiesKeys: StringArray.create(),
+			funcThrowsTypesKeys: StringArray.create(),
+			methodNameIndexKeys: StringArray.create(),
+			overloadedNamesKeys: StringArray.create(),
+			topLevelConstantsKeys: StringArray.create(),
+			topLevelVarsKeys: StringArray.create(),
+			unresolvedTopLevelDeclsKeys: StringArray.create(),
+			unresolvedTypealiasesKeys: StringArray.create(),
+			unresolvedStructTypesKeys: StringArray.create(),
+			unresolvedEnumsKeys: StringArray.create(),
+			unresolvedInterfacesKeys: StringArray.create(),
+			extensionMethodWhereClausesKeys: StringArray.create(),
+			structInnerAliasNamesKeys: StringArray.create(),
+			arrayLiteralProducerKeys: StringArray.create(),
+			mapLiteralProducerKeys: StringArray.create(),
+			charByteLiteralsKeys: StringArray.create(),
+			tupleAllocGidsKeys: ByteArrayArray.create(),
+			moduleInitFuncsAppended: StringArray.create(),
+			livenessRootsAppended: StringArray.create(),
+			immutableArrayLitNamesAppended: StringArray.create()
+		}
+	end 'create'
+end 'FileParseDelta'
+
+export typealias FilePathToFileParseDelta = Map with (FilePath, FileParseDelta)
+
+// Idempotent: removes a string `value` from a `StringArray` by identity,
+// scanning left-to-right. Used by rollback to undo push-only arrays whose
+// entries don't carry filePath attribution.
+function removeStringFromArray(arr StringArray, value String) returns bool
+	var i = 0
+	while i < arr.count() 'scan'
+		let cur = try arr.get(i) otherwise panic("removeStringFromArray: get OOB at {i}")
+		if cur == value 'hit'
+			_ = try arr.remove(at: i) otherwise panic("removeStringFromArray: remove failed at {i}")
+			return true
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return false
+end 'removeStringFromArray'
+
+// Remove a qualified name from `methodNameIndex`. Mirrors `record`'s dual-
+// indexing: the qualifiedName was recorded under both its bare-method name
+// (the trailing segment after the last '.') and, for overload-mangled names,
+// under the source-level method name (with the `$<suffix>` stripped). Both
+// buckets need the qualifiedName removed on rollback.
+function methodNameIndexRemove(index MethodNameIndex, qualifiedName String)
+	let bareName = try bareMethodNameForRollback(qualifiedName) otherwise return
+	removeFromMethodBucket(index, key: bareName, qualifiedName: qualifiedName)
+	if let unsuffixed = try stripFirstDollarForRollback(bareName) 'alsoBare'
+		if unsuffixed != bareName 'distinct'
+			removeFromMethodBucket(index, key: unsuffixed, qualifiedName: qualifiedName)
+		end 'distinct'
+	end 'alsoBare'
+end 'methodNameIndexRemove'
+
+function removeFromMethodBucket(index MethodNameIndex, key String, qualifiedName String)
+	if var bucket = try index.byBareName.get(key) 'haveBucket'
+		_ = removeStringFromArray(bucket, value: qualifiedName)
+		if bucket.count() == 0 'empty'
+			_ = index.byBareName.remove(key)
+		end 'empty'
+	end 'haveBucket'
+end 'removeFromMethodBucket'
+
+// Local-to-rollback copies of the name-split helpers in Project.maxon. They
+// cannot be shared because `bareMethodName` / `stripFirstDollar` are
+// file-private there; pulling them across modules would couple ParseDelta to
+// the MethodNameIndex internals, while local copies keep the rollback
+// boundary clean.
+function bareMethodNameForRollback(s String) returns String throws NameSplitError
+	let bytes = s.toByteArray()
+	let dotByte = 0x2E
+	var lastDot = -1
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise panic("bareMethodNameForRollback: get OOB at {i}")
+		if b == dotByte 'hit'
+			lastDot = i
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	if lastDot < 0 'noDot'
+		throw NameSplitError.noSeparator
+	end 'noDot'
+	let startIdx = lastDot + 1
+	let tail = try bytes.slice(startIdx, endIndex: bytes.count()) otherwise panic("bareMethodNameForRollback: slice failed at {startIdx}")
+	return String.from(tail)
+end 'bareMethodNameForRollback'
+
+function stripFirstDollarForRollback(s String) returns String throws NameSplitError
+	let bytes = s.toByteArray()
+	let dollarByte = 0x24
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise panic("stripFirstDollarForRollback: get OOB at {i}")
+		if b == dollarByte 'hit'
+			let head = try bytes.slice(0, endIndex: i) otherwise panic("stripFirstDollarForRollback: slice failed at {i}")
+			return String.from(head)
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	throw NameSplitError.noSeparator
+end 'stripFirstDollarForRollback'
+
+// Remove every key the file's parse-and-drain inserted into the various
+// registries on `project`. Drain-target maps (resolved-tier registries
+// populated by TypeResolution from parser-side unresolved entries) are
+// rolled back transitively here using the same keys.
+//
+// Entries with filePath attribution in append-only arrays are also filtered
+// out (unresolvedExtensions, pendingUnusedTypealiases, pendingUnusedChecks).
+//
+// Idempotent: every removal uses Map.remove (returns bool, leaves the map
+// unchanged on miss) or array remove-by-identity (also a no-op on miss).
+export function rollbackFileParseDelta(project Project, filePath FilePath)
+	let delta = try project.fileParseDeltas.get(filePath) otherwise return
+
+	// String-keyed maps + their drain-target propagations
+	for key in delta.funcReturnTypesKeys 'eachFuncRt'
+		_ = project.funcReturnTypes.remove(key)
+	end 'eachFuncRt'
+	for key in delta.funcSignaturesKeys 'eachFuncSig'
+		_ = project.funcSignatures.remove(key)
+	end 'eachFuncSig'
+	for key in delta.funcVisibilitiesKeys 'eachFuncVis'
+		_ = project.funcVisibilities.remove(key)
+	end 'eachFuncVis'
+	for key in delta.funcThrowsTypesKeys 'eachFuncThrows'
+		_ = project.funcThrowsTypes.remove(key)
+	end 'eachFuncThrows'
+	for key in delta.methodNameIndexKeys 'eachMethodName'
+		methodNameIndexRemove(project.methodNameIndex, qualifiedName: key)
+	end 'eachMethodName'
+	for key in delta.overloadedNamesKeys 'eachOverload'
+		_ = project.overloadedNames.remove(key)
+	end 'eachOverload'
+
+	// Top-level const/var registries (drain target of unresolvedTopLevelDecls
+	// for plain `let`/`var`; populated directly by parser for enum-case and
+	// local-let constants).
+	for key in delta.topLevelConstantsKeys 'eachConst'
+		_ = project.topLevelConstants.remove(key)
+	end 'eachConst'
+	for key in delta.topLevelVarsKeys 'eachVar'
+		_ = project.topLevelVars.remove(key)
+	end 'eachVar'
+	for key in delta.unresolvedTopLevelDeclsKeys 'eachDecl'
+		_ = project.unresolvedTopLevelDecls.remove(key)
+		// Drain target: the decl's resolved value may already have moved to
+		// topLevelConstants or topLevelVars by the time rollback runs.
+		_ = project.topLevelConstants.remove(key)
+		_ = project.topLevelVars.remove(key)
+	end 'eachDecl'
+
+	// Typealias family: parser tracks `unresolvedTypealiasesKeys` only;
+	// rollback removes from every drain target keyed by the same name.
+	for key in delta.unresolvedTypealiasesKeys 'eachAlias'
+		_ = project.unresolvedTypealiases.remove(key)
+		_ = project.typealiases.remove(key)
+		_ = project.typealiasRanges.remove(key)
+		_ = project.typealiasCastCategories.remove(key)
+		_ = project.typealiasVisibilities.remove(key)
+		_ = project.genericTypealiases.remove(key)
+		_ = project.constraintFailedTypealiases.remove(key)
+	end 'eachAlias'
+
+	// Struct family.
+	for key in delta.unresolvedStructTypesKeys 'eachStruct'
+		_ = project.unresolvedStructTypes.remove(key)
+		_ = project.structTypes.remove(key)
+	end 'eachStruct'
+
+	// Enum family.
+	for key in delta.unresolvedEnumsKeys 'eachEnum'
+		_ = project.unresolvedEnums.remove(key)
+		_ = project.enumTypes.remove(key)
+	end 'eachEnum'
+
+	// Interface family.
+	for key in delta.unresolvedInterfacesKeys 'eachIface'
+		_ = project.unresolvedInterfaces.remove(key)
+		_ = project.interfaces.remove(key)
+	end 'eachIface'
+
+	for key in delta.extensionMethodWhereClausesKeys 'eachExtWhere'
+		_ = project.extensionMethodWhereClauses.remove(key)
+	end 'eachExtWhere'
+
+	// Struct inner-alias name set.
+	for key in delta.structInnerAliasNamesKeys 'eachInner'
+		_ = project.structInnerAliasNames.remove(key)
+	end 'eachInner'
+
+	// Function-body literal sidecars.
+	for key in delta.arrayLiteralProducerKeys 'eachArrProd'
+		_ = project.arrayLiteralProducers.remove(key)
+	end 'eachArrProd'
+	for key in delta.mapLiteralProducerKeys 'eachMapProd'
+		_ = project.mapLiteralProducers.remove(key)
+	end 'eachMapProd'
+	for key in delta.charByteLiteralsKeys 'eachCharByte'
+		_ = project.charByteLiterals.remove(key)
+	end 'eachCharByte'
+
+	// ByteArray-keyed tuple alloc gids.
+	for key in delta.tupleAllocGidsKeys 'eachTuple'
+		_ = project.tupleAllocGids.remove(key)
+	end 'eachTuple'
+
+	// Push-only arrays — identity rollback by tracked value.
+	for name in delta.moduleInitFuncsAppended 'eachInitFn'
+		_ = removeStringFromArray(project.moduleInitFuncs, value: name)
+		// moduleInitFuncs entries are also recorded as livenessRoots, so the
+		// rollback walk over `livenessRootsAppended` handles that side.
+	end 'eachInitFn'
+	for name in delta.livenessRootsAppended 'eachRoot'
+		_ = removeStringFromArray(project.livenessRoots, value: name)
+	end 'eachRoot'
+	for name in delta.immutableArrayLitNamesAppended 'eachImmutable'
+		_ = removeStringFromArray(project.immutableArrayLitNames, value: name)
+	end 'eachImmutable'
+
+	// filePath-attributed append arrays: filter in place.
+	filterUnresolvedExtensionsByFilePath(project, filePath: filePath)
+	filterPendingUnusedTypealiasesByFilePath(project, filePath: filePath)
+	filterPendingUnusedChecksByFilePath(project, filePath: filePath)
+
+	// Reset the delta to empty so the upcoming re-parse starts fresh.
+	_ = project.fileParseDeltas.remove(filePath)
+end 'rollbackFileParseDelta'
+
+// Filter `project.unresolvedExtensions` in place, removing every entry whose
+// `filePath` matches the rollback target. Scans backward so removals don't
+// shift the unscanned tail.
+function filterUnresolvedExtensionsByFilePath(project Project, filePath FilePath)
+	var i = project.unresolvedExtensions.count() - 1
+	while i >= 0 'scan'
+		let entry = try project.unresolvedExtensions.get(i) otherwise panic("filterUnresolvedExtensionsByFilePath: get OOB at {i}")
+		if entry.filePath.toString() == filePath.toString() 'match'
+			_ = try project.unresolvedExtensions.remove(i) otherwise panic("filterUnresolvedExtensionsByFilePath: remove failed at {i}")
+		end 'match'
+		i = i - 1
+	end 'scan'
+end 'filterUnresolvedExtensionsByFilePath'
+
+function filterPendingUnusedTypealiasesByFilePath(project Project, filePath FilePath)
+	var i = project.pendingUnusedTypealiases.count() - 1
+	while i >= 0 'scan'
+		let entry = try project.pendingUnusedTypealiases.get(i) otherwise panic("filterPendingUnusedTypealiasesByFilePath: get OOB at {i}")
+		if entry.filePath.toString() == filePath.toString() 'match'
+			_ = try project.pendingUnusedTypealiases.remove(i) otherwise panic("filterPendingUnusedTypealiasesByFilePath: remove failed at {i}")
+		end 'match'
+		i = i - 1
+	end 'scan'
+end 'filterPendingUnusedTypealiasesByFilePath'
+
+function filterPendingUnusedChecksByFilePath(project Project, filePath FilePath)
+	var i = project.pendingUnusedChecks.count() - 1
+	while i >= 0 'scan'
+		let entry = try project.pendingUnusedChecks.get(i) otherwise panic("filterPendingUnusedChecksByFilePath: get OOB at {i}")
+		if entry.filePath.toString() == filePath.toString() 'match'
+			_ = try project.pendingUnusedChecks.remove(i) otherwise panic("filterPendingUnusedChecksByFilePath: remove failed at {i}")
+		end 'match'
+		i = i - 1
+	end 'scan'
+end 'filterPendingUnusedChecksByFilePath'
+
+// Marker called by `queryParseOps` at the start of every parse (whether the
+// file is new or being re-parsed after invalidation). Rolls back any prior
+// delta for this filePath, then installs a fresh empty delta ready for the
+// upcoming parse to populate.
+export function beginFileParse(project Project, filePath FilePath)
+	rollbackFileParseDelta(project, filePath: filePath)
+	let fresh = FileParseDelta.create()
+	project.fileParseDeltas.upsert(filePath, value: fresh)
+end 'beginFileParse'
+
+// Helper: fetch (or lazily create) the delta for `filePath`. Tolerates calls
+// from sites that bypass `beginFileParse` (e.g. parser-internal synthetic
+// helper functions registered after the entry point but still under the
+// file's parse umbrella).
+function ensureDelta(project Project, filePath FilePath) returns FileParseDelta
+	if let existing = try project.fileParseDeltas.get(filePath) 'have'
+		return existing
+	end 'have'
+	let fresh = FileParseDelta.create()
+	project.fileParseDeltas.upsert(filePath, value: fresh)
+	// `upsert` doesn't return the inserted value; the next `get` is the only
+	// way to obtain a stable reference.
+	return try project.fileParseDeltas.get(filePath) otherwise panic("ensureDelta: upsert/get inconsistency for {filePath}")
+end 'ensureDelta'
+
+// Transactional record helpers. Call AFTER a successful `.insert(...)` /
+// `.record(...)` / `.upsert(...)` / `.push(...)` so a duplicate-key error
+// path (the `otherwise 'dup…'` branch in the parser) doesn't leave a stale
+// delta entry. There is one helper per logical registry; the per-registry
+// fan-out is intentional (compile-time dispatch instead of a runtime tag
+// enum on the hot path).
+
+export function recordFuncReturnTypeInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.funcReturnTypesKeys.push(key)
+end 'recordFuncReturnTypeInsert'
+
+export function recordFuncSignatureInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.funcSignaturesKeys.push(key)
+end 'recordFuncSignatureInsert'
+
+export function recordFuncVisibilityInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.funcVisibilitiesKeys.push(key)
+end 'recordFuncVisibilityInsert'
+
+export function recordFuncThrowsInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.funcThrowsTypesKeys.push(key)
+end 'recordFuncThrowsInsert'
+
+export function recordMethodNameIndexInsert(project Project, filePath FilePath, qualifiedName String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.methodNameIndexKeys.push(qualifiedName)
+end 'recordMethodNameIndexInsert'
+
+export function recordOverloadedNamesUpsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.overloadedNamesKeys.push(key)
+end 'recordOverloadedNamesUpsert'
+
+export function recordTopLevelConstantInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.topLevelConstantsKeys.push(key)
+end 'recordTopLevelConstantInsert'
+
+export function recordTopLevelVarInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.topLevelVarsKeys.push(key)
+end 'recordTopLevelVarInsert'
+
+export function recordUnresolvedTopLevelDeclInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.unresolvedTopLevelDeclsKeys.push(key)
+end 'recordUnresolvedTopLevelDeclInsert'
+
+export function recordUnresolvedTypealiasUpsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.unresolvedTypealiasesKeys.push(key)
+end 'recordUnresolvedTypealiasUpsert'
+
+export function recordUnresolvedStructTypeInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.unresolvedStructTypesKeys.push(key)
+end 'recordUnresolvedStructTypeInsert'
+
+export function recordUnresolvedEnumInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.unresolvedEnumsKeys.push(key)
+end 'recordUnresolvedEnumInsert'
+
+export function recordUnresolvedInterfaceUpsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.unresolvedInterfacesKeys.push(key)
+end 'recordUnresolvedInterfaceUpsert'
+
+export function recordExtensionMethodWhereClauseInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.extensionMethodWhereClausesKeys.push(key)
+end 'recordExtensionMethodWhereClauseInsert'
+
+export function recordStructInnerAliasInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.structInnerAliasNamesKeys.push(key)
+end 'recordStructInnerAliasInsert'
+
+export function recordArrayLiteralProducerInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.arrayLiteralProducerKeys.push(key)
+end 'recordArrayLiteralProducerInsert'
+
+export function recordMapLiteralProducerInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.mapLiteralProducerKeys.push(key)
+end 'recordMapLiteralProducerInsert'
+
+export function recordCharByteLiteralInsert(project Project, filePath FilePath, key String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.charByteLiteralsKeys.push(key)
+end 'recordCharByteLiteralInsert'
+
+export function recordTupleAllocGidUpsert(project Project, filePath FilePath, key ByteArray)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.tupleAllocGidsKeys.push(key)
+end 'recordTupleAllocGidUpsert'
+
+export function recordModuleInitFuncPush(project Project, filePath FilePath, name String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.moduleInitFuncsAppended.push(name)
+end 'recordModuleInitFuncPush'
+
+export function recordLivenessRootPush(project Project, filePath FilePath, name String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.livenessRootsAppended.push(name)
+end 'recordLivenessRootPush'
+
+export function recordImmutableArrayLitNamePush(project Project, filePath FilePath, name String)
+	var delta = ensureDelta(project, filePath: filePath)
+	delta.immutableArrayLitNamesAppended.push(name)
+end 'recordImmutableArrayLitNamePush'

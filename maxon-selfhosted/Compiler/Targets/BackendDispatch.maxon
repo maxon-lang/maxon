@@ -134,6 +134,21 @@ end 'findRuntimePath'
 //     `mrt_cov_hit` / `mrt_cov_dump` reachable from the coverage-aware start.
 //     Also reserves the `__data_cov_*` globals so the counter array and site
 //     count are visible to the backend's data-section emission.
+//
+// Per-function dispatch note: `augmentWithRuntime` is inherently
+// **whole-module** and is not eligible for per-function dispatch. It runs
+// a transitive call-graph walk (`filterRuntimeByReachability`) starting
+// from the user module's `call` ops and chasing edges through both user-
+// defined and runtime helpers to compute the closure of actually-reachable
+// runtime functions. The walk is interprocedural — knowing whether
+// `__slab_init` is reachable requires seeing every user call op plus the
+// call edges inside `mrt_start`, `mrt_panic`, etc. A per-function entry
+// point would have to re-walk the entire graph for each function (no win)
+// or rely on a pre-computed closure (the closure IS the whole-module
+// operation). It therefore stays classified as `wholeModule` in
+// `PassPipeline.classifyPass` and runs once at the head of the MIR-tier
+// section of `dispatch()`, feeding its augmented `StdModule` to the
+// downstream per-function lowering / MIR passes.
 export function augmentWithRuntime(module StdModule, project Project) returns StdModule
 	let runtimeModule = loadRuntimeModule()
 	let osFilteredRuntime = filterRuntimeForOs(runtimeModule, os: project.target.os)
@@ -744,27 +759,18 @@ end 'stripStubSuffix'
 // machine code bytes. For WASM: branches from MIR directly — skips target
 // lowering, regalloc, and scheduling.
 export function emitBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
-	// emitBackend starts from the optimized StdModule produced by queryAllMid.
-	// The pipeline carries a placeholder MaxonModule (the Maxon phase already
-	// ran upstream) and the incoming stdModule seeded into pipeline.stdModule.
-	var pipeline = PassPipeline.create(MaxonModule.create(), project: project, globalData: globalData, target: target, sourceFileName: "")
-	pipeline.stdModule = stdModule
-
+	var pipeline = try buildNativeOrWasmPipeline(stdModule, target: target, globalData: globalData, project: project)
 	if target.cpu == CpuArch.wasm32 'isWasm'
-		// WASM pipeline: only augmentWithRuntime + lowerStdToMir, then emit directly.
-		// WASM reads the MIR module out of `mirModule`; `targetModule` is an empty
-		// dummy TargetModule since WASM never reaches the Target phase.
-		pipeline.addPasses(buildWasmBackendPipeline())
-		try pipeline.run()
-		return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: pipeline.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+		return emitWasmCodeResult(pipeline, globalData: globalData)
 	end 'isWasm'
 
-	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)
-	pipeline.addPass(PassKind.augmentWithRuntime)
-	pipeline.addPass(PassKind.lowerStdToMir)
-	pipeline.addPass(PassKind.commuteForCoalescing)
-	pipeline.addPass(PassKind.scheduleInstructions)
-	try pipeline.run()
+	// `registerPanicStrings` mutates `globalData` and was previously called
+	// at the top of `X64Backend.emitTargetCode` / `Arm64Backend.emitTargetCode`.
+	// Lifted into the dispatch layer so both this whole-module path and the
+	// chunk-driven `emitBackendIncremental` call it exactly once — the chunk
+	// path can pull pre-emitted chunks from `db.codePerFunc` without going
+	// through `emitTargetCode` at all, so the registration must happen here.
+	registerPanicStrings(globalData)
 
 	// Phase 7: target lowering + regalloc + prologue/epilogue + code emission
 	// Create the backend once with all state, then pass it through.
@@ -775,7 +781,77 @@ export function emitBackend(stdModule StdModule, target Target, globalData Globa
 	end 'dispatchCpu'
 end 'emitBackend'
 
-function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
+// Chunk-driven sibling of `emitBackend` (Phase 11.5 / Stage P Step 2). Native
+// targets here pull each function's `FunctionCodeChunk` from the per-function
+// query cache (`db.codePerFunc`) — concat then reassembles `.text` with the
+// same stdlib link / rdata / symbol-table post-process as the whole-module
+// path, so the bytes are identical. The whole-module path remains the
+// authoritative cold-build emitter (it stamps the cache via Step 1); the
+// chunk path turns subsequent same-`Project` rebuilds into N cache reads +
+// one concat. WASM stays on the whole-module driver: Stage O.5 notes WASM is
+// structurally per-function but the chunk-driven rollout is PE-only, so the
+// wasm branch delegates to `emitBackend` unchanged.
+export function emitBackendIncremental(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, stdlibCache StdlibCacheData) returns CodeResult throws CompileError
+	if target.cpu == CpuArch.wasm32 'isWasm'
+		// The chunk-driven path is PE-only per Stage O.5. Hand WASM back to
+		// the whole-module driver so the chunk-driven path stays focused on
+		// native.
+		return try emitBackend(stdModule, target: target, globalData: globalData, project: project, stdlibCache: stdlibCache)
+	end 'isWasm'
+
+	var pipeline = try buildNativeOrWasmPipeline(stdModule, target: target, globalData: globalData, project: project)
+
+	// Mirror `emitBackend`'s single registration of panic strings — see the
+	// comment there for why this lives in the dispatch layer.
+	registerPanicStrings(globalData)
+
+	match target.cpu 'dispatchCpu'
+		x64 then return try emitBackendIncrementalWith(pipeline, stdlibCache: stdlibCache, backend: X64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
+		arm64 then return try emitBackendIncrementalWith(pipeline, stdlibCache: stdlibCache, backend: Arm64Backend.create(pipeline.mirModule, target: project.target, globalData: pipeline.globalData, stdlibFunctions: stdlibCache.functions))
+		wasm32 then panic("unreachable: WASM handled above")
+	end 'dispatchCpu'
+end 'emitBackendIncremental'
+
+// Build the `PassPipeline` shared by `emitBackend` and `emitBackendIncremental`:
+// the pre-emit lowering work (augmentWithRuntime, lowerStdToMir,
+// commuteForCoalescing, scheduleInstructions for native; the WASM-only
+// pipeline otherwise). Returning the populated pipeline lets both callers
+// dispatch their own emit strategy without re-running the lowering passes.
+function buildNativeOrWasmPipeline(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns PassPipeline throws CompileError
+	var pipeline = PassPipeline.create(MaxonModule.create(), project: project, globalData: globalData, target: target, sourceFileName: "")
+	pipeline.stdModule = stdModule
+
+	if target.cpu == CpuArch.wasm32 'isWasm'
+		// WASM pipeline: only augmentWithRuntime + lowerStdToMir, then the
+		// caller emits directly from MIR — no target lowering / regalloc.
+		pipeline.addPasses(buildWasmBackendPipeline())
+		try pipeline.run()
+		return pipeline
+	end 'isWasm'
+
+	// Native pipeline: run Phases 5-6 (Std→MIR + MIR passes)
+	pipeline.addPass(PassKind.augmentWithRuntime)
+	pipeline.addPass(PassKind.lowerStdToMir)
+	pipeline.addPass(PassKind.commuteForCoalescing)
+	pipeline.addPass(PassKind.scheduleInstructions)
+	try pipeline.run()
+	return pipeline
+end 'buildNativeOrWasmPipeline'
+
+// Build the WASM `CodeResult` from a pipeline whose MIR module is fully
+// lowered. Factored out of `emitBackend` so both the whole-module and
+// chunk-driven paths can short-circuit through the same shape for WASM.
+// `targetModule` stays an empty dummy because WASM never reaches the
+// target-lowering phase — downstream readers consume `mirModule` instead.
+function emitWasmCodeResult(pipeline PassPipeline, globalData GlobalDataTable) returns CodeResult
+	return CodeResult.create(ByteArray.create(), mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: TargetModule.create(CpuArch.x64), mirModule: pipeline.mirModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+end 'emitWasmCodeResult'
+
+// Run the target-lowering / regalloc / prologue-epilogue passes on a
+// freshly-built backend. Shared by `emitBackendWith` (whole-module emit) and
+// `emitBackendIncrementalWith` (chunk-driven emit) so the prepared
+// `pipeline.targetModule` is byte-identical between the two paths.
+function prepareTargetModule(pipeline PassPipeline, backend TargetBackend) throws CompileError
 	logDebug(LogCategory.ir, message: function() gives "=== Running pass: lower-mir-to-target ===")
 	let lmtStart = passTimerStart()
 	pipeline.targetModule = backend.lowerMirToTarget()
@@ -795,14 +871,182 @@ function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, bac
 	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
 	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
 	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
+end 'prepareTargetModule'
+
+function emitBackendWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
+	try prepareTargetModule(pipeline, backend: backend)
 
 	// Emit machine code from the fully-lowered target module
 	let emitStart = passTimerStart()
-	var result = backend.emitTargetCode(stdlibCache)
+	var result = backend.emitTargetCode(pipeline.project, stdlibCache: stdlibCache)
 	recordPassSince("__emitTargetCode", startMs: emitStart)
 	result.targetModule = pipeline.targetModule
 	return result
 end 'emitBackendWith'
+
+// Chunk-driven counterpart to `emitBackendWith`. After the shared
+// `prepareTargetModule` populates `pipeline.targetModule`, this loops over
+// the function list and assembles each function's `FunctionCodeChunk` from
+// `db.codePerFunc`. Concat then rebases every fixup and runs the same stdlib
+// link / rdata / symbol post-process as the whole-module path, so the
+// resulting `.text` and `.rdata` bytes are identical between the two emit
+// strategies.
+//
+// Step 3 (recursion break): the miss path emits the function chunk directly
+// via `backend.emitFunctionChunk(func)` rather than recursing through
+// `queryCodeForFunction` → `queryCodeResult` → `dispatchBackendEmit` →
+// `emitBackendIncremental` (which would loop). Calling
+// `queryCodeForFunction` from here was the load-bearing recursion bug Step 2
+// flagged; with this direct-emit miss tail the chunk-driven path is self-
+// contained — every chunk either hits the per-function cache or gets
+// computed inline, and the result is stamped into `db.codePerFunc` so the
+// next same-`Project` rebuild hits.
+//
+// Per-function dep tracking still flows: `assembleFunctionChunk` records
+// each `codeForFunction(funcName)` dep against the active `codeResult`
+// query (pushed by `queryCodeResult` before it called us) regardless of
+// hit-vs-miss. The outer `queryCodeResult` cache thereby learns "this
+// whole-binary result depends on each function chunk" without any function
+// chunk depending on the whole-binary result. Step 3.5a moved per-function
+// invalidation off the dep graph and onto a content-hash comparison inside
+// `lookupCachedChunkByKeyHash`, so the outer codeResult dep is the only
+// signal flowing through the dep graph itself.
+function emitBackendIncrementalWith(pipeline PassPipeline, stdlibCache StdlibCacheData, backend TargetBackend) returns CodeResult throws CompileError
+	// Stage P Step 3.5b: pre-compute cache hits / misses BEFORE running the
+	// expensive target-lowering / regalloc / prologue-epilogue pipeline. The
+	// chunk for a cache-hit function carries its target-lowered bytes baked
+	// in (stamped on cold compile), so re-running Phase 7 on those functions
+	// just to throw the work away on the per-function emit was the regalloc
+	// bottleneck Step 4 traced (`__regalloc-user: ~127ms per invocation` on
+	// the 100-function synthetic). Restricting Phase 7 to the miss set drops
+	// the warm-rebuild cost roughly linearly in (1 / N) for N-function edits.
+	var freshKeyHashByName = StringContentHashMap.create()
+	var missFuncs = IrFunctionArray.create()
+	for func in pipeline.mirModule.functions 'precheck'
+		// Record the per-function dep here so the outer `queryCodeResult`
+		// memo knows the whole-binary result transitively depends on each
+		// function chunk — same edge `assembleFunctionChunk` would have
+		// recorded on the post-prepareTargetModule loop.
+		recordDependency(pipeline.project, dependency: QueryKey.codeForFunction(func.name))
+		// Refresh the per-function content hash off the freshly-rebuilt
+		// queryAllMid so the chunk-cache validator sees the post-edit shape.
+		// Runtime / stdlib helpers (`mrt_*`, `__slab_*`, …) aren't in
+		// queryAllMid's StdModule — the refresh is a no-op for those names,
+		// and their chunk memos rely on the stable `mix(0, mirPassVersion,
+		// backendVersion)` keyHash.
+		try refreshMidContentHashForFunction(pipeline.project, funcName: func.name)
+		let freshKeyHash = computeChunkKeyHash(pipeline.project, funcName: func.name)
+		freshKeyHashByName.upsert(func.name, value: freshKeyHash)
+		if isCachedChunkValid(pipeline.project, funcName: func.name, freshKeyHash: freshKeyHash) 'isHit'
+			continue
+		end 'isHit'
+		missFuncs.push(func)
+	end 'precheck'
+
+	// Only run the target-lowering pipeline when there's at least one cache
+	// miss — a same-source rebuild after a no-op edit gets a free pass.
+	if missFuncs.count() > 0 'hasMisses'
+		try prepareTargetModuleForFunctions(pipeline, backend: backend, funcsToLower: missFuncs)
+	end 'hasMisses'
+
+	let emitStart = passTimerStart()
+	var chunks = FunctionCodeChunkArray.create()
+	// Assemble in `mirModule.functions` order — the same order target-lowering
+	// would have emitted them in on a cold compile — so concat lays bytes out
+	// byte-identically across the two emission strategies.
+	for func in pipeline.mirModule.functions 'collect'
+		let freshKeyHash = try freshKeyHashByName.get(func.name) otherwise panic("emitBackendIncrementalWith: freshKeyHashByName missing entry for '{func.name}'")
+		if let hit = try lookupCachedChunkByKeyHash(pipeline.project, funcName: func.name, freshKeyHash: freshKeyHash) 'cached'
+			chunks.push(hit)
+			continue
+		end 'cached'
+		// Miss tail: pull the freshly-target-lowered IrFunction out of the
+		// backend's `targetModule.functions` (populated by the
+		// `prepareTargetModuleForFunctions` call above) and emit its chunk.
+		// The lookup is a linear scan, but `targetModule.functions` is the
+		// miss set only — typically one function on a single-edit rebuild —
+		// so the cost is negligible.
+		let targetFunc = try findTargetFuncByName(pipeline.targetModule, name: func.name) otherwise panic("emitBackendIncrementalWith: missing target func '{func.name}' after prepareTargetModuleForFunctions ({pipeline.targetModule.functions.count()} lowered)")
+		pipeline.project.db.codePerFuncMisses = pipeline.project.db.codePerFuncMisses + 1
+		let chunk = backend.emitFunctionChunk(targetFunc)
+		stampChunkMemo(pipeline.project, funcName: func.name, chunk: chunk)
+		chunks.push(chunk)
+	end 'collect'
+
+	var result = concatFunctionChunksForTarget(chunks, targetModule: pipeline.targetModule, mirModule: pipeline.mirModule, globalData: pipeline.globalData, stdlibCache: stdlibCache, cpu: pipeline.target.cpu)
+	recordPassSince("__emitTargetCode", startMs: emitStart)
+	result.targetModule = pipeline.targetModule
+	return result
+end 'emitBackendIncrementalWith'
+
+// Stage P Step 3.5b: chunk-cache hit predicate that mirrors
+// `lookupCachedChunkByKeyHash`'s validation but does NOT touch the hit
+// counter or refresh `verifiedAt`. Used by the pre-check loop in
+// `emitBackendIncrementalWith` to bucket functions into hit/miss before any
+// chunks are actually pulled — the real hit counter increments later when
+// the assembly loop calls `lookupCachedChunkByKeyHash` on each hit.
+function isCachedChunkValid(project Project, funcName String, freshKeyHash ContentHash) returns bool
+	if let memo = try project.db.codePerFunc.get(funcName) 'checkCache'
+		if memo.computedAt > 0 and memo.keyHash == freshKeyHash 'valid'
+			return true
+		end 'valid'
+	end 'checkCache'
+	return false
+end 'isCachedChunkValid'
+
+// Stage P Step 3.5b: linear lookup over `targetModule.functions`. The lookup
+// is called once per cache-miss function; on a single-function-edit rebuild
+// (the dominant warm-rebuild shape) there's exactly one miss and one entry to
+// scan. Used by the chunk-driven path to find the target-lowered IrFunction
+// corresponding to a MIR function whose chunk needs fresh emission.
+function findTargetFuncByName(targetModule TargetModule, name String) returns IrFunction throws ChunkCacheLookupError
+	for func in targetModule.functions 'scan'
+		if func.name == name 'match'
+			return func
+		end 'match'
+	end 'scan'
+	throw ChunkCacheLookupError.miss
+end 'findTargetFuncByName'
+
+// Stage P Step 3.5b: chunk-driven Phase 7 driver. Same as `prepareTargetModule`
+// but restricts target lowering / regalloc / prologue-epilogue to
+// `funcsToLower`. Regalloc and prologue/epilogue iterate
+// `targetModule.functions` and therefore self-limit to the miss subset once
+// `lowerMirToTargetForFunctions` populated it with only those entries.
+function prepareTargetModuleForFunctions(pipeline PassPipeline, backend TargetBackend, funcsToLower IrFunctionArray) throws CompileError
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: lower-mir-to-target (subset: {funcsToLower.count()} functions) ===")
+	let lmtStart = passTimerStart()
+	pipeline.targetModule = backend.lowerMirToTargetForFunctions(funcsToLower)
+	recordPassSince("__lowerMirToTarget", startMs: lmtStart)
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "lower-mir-to-target"))
+
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: allocate-registers (subset) ===")
+	let regStart = passTimerStart()
+	pipeline.targetModule = allocateRegisters(pipeline.targetModule, target: pipeline.target)
+	recordPassSince("__allocateRegisters", startMs: regStart)
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "allocate-registers"))
+
+	logDebug(LogCategory.ir, message: function() gives "=== Running pass: insert-prologue-epilogue (subset) ===")
+	let peStart = passTimerStart()
+	insertPrologueEpilogueWith(pipeline.targetModule, backend: backend)
+	recordPassSince("__insertPrologueEpilogue", startMs: peStart)
+	logTrace(LogCategory.ir, message: function() gives dumpTargetSummary(pipeline.targetModule, passName: "insert-prologue-epilogue"))
+end 'prepareTargetModuleForFunctions'
+
+typealias StringContentHashMap = Map with (String, ContentHash)
+
+// Per-CPU dispatch for the chunk concat helpers. The two backends carry
+// distinct fixup vocabularies (ARM64 has ADR fixups; X64 doesn't) so the
+// concat functions live in their respective backend modules. WASM is
+// unreachable here because `emitBackendIncremental` delegates wasm builds
+// to the whole-module driver before this point.
+function concatFunctionChunksForTarget(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData, cpu CpuArch) returns CodeResult
+	return match cpu 'cpu'
+		x64 gives concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache)
+		arm64 gives concatArm64FunctionChunks(chunks, targetModule: targetModule, mirModule: mirModule, globalData: globalData, stdlibCache: stdlibCache)
+		wasm32 panic("unreachable: emitBackendIncremental delegates WASM to emitBackend")
+	end 'cpu'
+end 'concatFunctionChunksForTarget'
 
 function dumpTargetSummary(module TargetModule, passName String) returns String
 	return dumpModuleSummary(module.functions.count(), blockCount: module.blocks.count(), opCount: module.x64Ops.count() + module.arm64Ops.count(), dialect: module.cpu.name, passName: passName)

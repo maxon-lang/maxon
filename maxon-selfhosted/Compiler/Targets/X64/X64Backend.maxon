@@ -29,106 +29,89 @@ export type X64Backend implements TargetBackend
 		return targetModule
 	end 'lowerMirToTarget'
 
-	function emitTargetCode(stdlibCache StdlibCacheData) returns CodeResult
-		logInfo(LogCategory.codegen, message: function() gives "X64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
-		var code = ByteArray.create()
-		code.reserve(1024)
-		var relocations = RelocationArray.create()
-		var callFixups = CallFixupArray.create()
-		var rdataRelocs = RdataRelocationArray.create()
+	function lowerMirToTargetForFunctions(funcsToLower IrFunctionArray) returns TargetModule
+		targetModule = lowerMirToX64Subset(module, funcsToLower: funcsToLower, target: target, globalData: globalData, stdlibFunctions: stdlibFunctions)
+		return targetModule
+	end 'lowerMirToTargetForFunctions'
 
-		// Register panic string constants before emitting functions
-		registerPanicStrings(globalData)
+	// Emit a single function into a FunctionCodeChunk with chunk-local fixup
+	// offsets. The caller is responsible for prepending the chunk's bytes
+	// into the final `.text` and shifting every chunk-local fixup by the
+	// chunk's start offset (see `concatX64FunctionChunks`).
+	//
+	// Used by both the whole-module emit path (`emitTargetCode`, which loops
+	// over `targetModule.functions` and concatenates the chunks) and the
+	// chunk-driven incremental path, which calls this directly on a per-
+	// function-cache miss — bypassing `queryCodeResult` keeps the chunk-
+	// driven path from recursing through itself when `enableIncremental` is
+	// on. Block-jump resolution is intra-function and call / rdata fixups
+	// carry chunk-local offsets that the concat step rebases, so the
+	// per-function emit produces byte-identical output to a single-pass
+	// emission.
+	function emitFunctionChunk(func IrFunction) returns FunctionCodeChunk
+		var chunk = FunctionCodeChunk.create(func.name)
+		chunk.code.reserve(256)
 
-		// Function label tables for inter-function call resolution.
-		// `funcLabelOffsetMap` is the O(1) hash view; the parallel arrays
-		// remain for ordered traversal (symbol table, logging).
-		var funcLabelNames = StringArray.create()
-		var funcLabelOffsets = CodeOffsetArray.create()
-		var funcLabelOffsetMap = CodeLabelOffsetMap.create()
-
-		// Track callee-saved registers for the current function
 		var stackTracker = X64StackTracker.create()
+		stackTracker.calleeSavedGprs = func.calleeSavedGprs
+		stackTracker.outgoingArgSize = func.outgoingArgSize
 
-		// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
-		// are now included in the module as regular functions)
+		// Block offset table for this function (indexed by BlockId). Offsets
+		// recorded here are chunk-local; block-jump fixups (also chunk-local)
+		// resolve to chunk-local jump targets in one shot.
+		var blockOffsets = CodeOffsetArray.create()
+		for _ in 0 upto func.nextBlockId 'alloc'
+			blockOffsets.push(0)
+		end 'alloc'
+
+		var blockFixups = BlockJumpFixupArray.create()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
+			try blockOffsets.set(block.id, value: chunk.code.count()) otherwise panic("invariant: blockOffsets.set OOB")
+
+			for packed in block.opRefs 'emitOps'
+				emitPackedOp(packed, code: chunk.code, blockFixups: blockFixups, callFixups: chunk.callFixups, relocations: chunk.iatRelocs, rdataRelocs: chunk.rdataRelocs, tracker: stackTracker)
+			end 'emitOps'
+
+			if block.hasTerminatorOp() 'hasTerm'
+				emitPackedOp(block.terminatorIndex(), code: chunk.code, blockFixups: blockFixups, callFixups: chunk.callFixups, relocations: chunk.iatRelocs, rdataRelocs: chunk.rdataRelocs, tracker: stackTracker)
+			end 'hasTerm'
+		end 'eachBlock'
+
+		// Resolve intra-function block jumps using chunk-local offsets.
+		resolveBlockFixups(chunk.code, blockOffsets: blockOffsets, blockFixups: blockFixups)
+		return chunk
+	end 'emitFunctionChunk'
+
+	function emitTargetCode(project Project, stdlibCache StdlibCacheData) returns CodeResult
+		logInfo(LogCategory.codegen, message: function() gives "X64: Emitting machine code from TargetModule ({targetToString(target)}), stdlib cache has {stdlibCache.functions.count()} functions")
+
+		// `registerPanicStrings(globalData)` runs in the caller (`emitBackend` /
+		// `emitBackendIncremental`) once per build so both the whole-module
+		// emit and the chunk-driven path mutate `globalData` exactly once.
+		// Calling it here would double-register when the chunk-driven path
+		// dispatches whole-module via this helper as a fallback.
+
+		// Emit each function into its own chunk. Iteration order matches
+		// `targetModule.functions`; concatX64FunctionChunks lays chunks out
+		// in that same order so `.text` byte layout is identical to a
+		// single-pass whole-module emission.
+		var chunks = FunctionCodeChunkArray.create()
 		for func in targetModule.functions 'eachFunc'
-			// Record function name -> code offset
-			recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: func.name, offset: code.count())
-
-			// Set callee-saved register list + outgoing-arg block size for
-			// this function — the prologue/epilogue need both to lay out the
-			// callee-save slots above the outgoing-arg area.
-			stackTracker.calleeSavedGprs = func.calleeSavedGprs
-			stackTracker.outgoingArgSize = func.outgoingArgSize
-
-			// Block offset table for this function (indexed by BlockId)
-			var blockOffsets = CodeOffsetArray.create()
-			for _ in 0 upto func.nextBlockId 'alloc'
-				blockOffsets.push(0)
-			end 'alloc'
-
-			// Block jump fixups collected during emission, resolved per function
-			var blockFixups = BlockJumpFixupArray.create()
-
-			// Emit all blocks in order
-			for blockRef in func.blockRefs 'eachBlock'
-				let block = try targetModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in targetModule.blocks")
-				// Record this block's code offset
-				try blockOffsets.set(block.id, value: code.count()) otherwise panic("invariant: blockOffsets.set OOB")
-
-				// Emit all ops in the block
-				for packed in block.opRefs 'emitOps'
-					emitPackedOp(packed, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
-				end 'emitOps'
-
-				// Emit terminator if present (should already be lowered to x64 ops
-				// pushed into block.opRefs by MidToX64, but handle hasTerminator for safety)
-				if block.hasTerminatorOp() 'hasTerm'
-					emitPackedOp(block.terminatorIndex(), code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs, tracker: stackTracker)
-				end 'hasTerm'
-			end 'eachBlock'
-
-			// Resolve block jump fixups for this function
-			resolveBlockFixups(code, blockOffsets: blockOffsets, blockFixups: blockFixups)
+			let chunk = emitFunctionChunk(func)
+			// Stamp the freshly-emitted chunk into the per-function cache
+			// here so the next same-`Project` rebuild can hit it without
+			// re-running the whole-module emit. Shares `stampChunkMemo`
+			// with the chunk-driven miss path so the keyHash recipe and
+			// memo shape stay in lockstep across writers.
+			if project.db.enableIncremental 'stamp'
+				stampChunkMemo(project, funcName: func.name, chunk: chunk)
+			end 'stamp'
+			chunks.push(chunk)
 		end 'eachFunc'
 
-		// Link pre-compiled stdlib functions (if cache is available)
-		if stdlibCache.functions.count() > 0 'hasStdlib'
-			linkX64StdlibFunctions(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, stdlibCache: stdlibCache)
-		end 'hasStdlib'
-
-		// Build symbol table as a separate section
-		let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
-
-		// Resolve inter-function call fixups (__symtable is handled via rdata relocs, not call fixups)
-		resolveCallFixups(code, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups)
-
-		// mrt_start must be at offset 0 -- look up its offset for the main call fixup
-		let startOffset = lookupLabel(funcLabelOffsetMap, name: "mrt_start")
-
-		// Serialize global data into rdata section and resolve relocations.
-		// __data_cov_* entries are serialized separately into .covdata so they
-		// can own an independent RVA from the writable .data region. The data
-		// prelude (top-level / static-field globals) is laid out at the start
-		// of .data; the slab allocator grows the heap dynamically via
-		// osAllocPages, so no fixed heap region is reserved here.
-		var rdataOffsetMap = RdataOffsetMap.create()
-		let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
-		let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
-		let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
-		// Phase 11.2: layout-descriptor / witness-table relocations live on
-		// `globalData.pendingRdataRelocs` — they originate from Maxon-level
-		// passes, not per-function emit, so they aren't in the local
-		// `rdataRelocs` accumulator. Concat now before the offset resolve
-		// so each one's `rdataOffset` gets filled in from the same map.
-		rdataRelocs.append(globalData.pendingRdataRelocs)
-		let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
-
-		var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: module, rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
-		result.dataPrelude = dataPrelude
-		result.debugSymbols = buildDebugSymbols(funcLabelNames, labelOffsets: funcLabelOffsets)
-		return result
+		return concatX64FunctionChunks(chunks, targetModule: targetModule, mirModule: module, globalData: globalData, stdlibCache: stdlibCache)
 	end 'emitTargetCode'
 
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
@@ -267,6 +250,119 @@ export type X64Backend implements TargetBackend
 		logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
 	end 'linkX64StdlibFunctions'
 end 'X64Backend'
+
+// Concat path — lay each chunk's bytes into the final `.text`, rebase every
+// chunk-local fixup to the chunk's absolute placement, then run the post-
+// emit pipeline (stdlib link, symbol table, call-fixup resolve, rdata
+// serialize). Iteration over `chunks` matches `targetModule.functions`
+// order, preserving the byte layout a single-pass whole-module emit would
+// produce.
+//
+// Inputs come pre-bundled so the same concat works whether chunks were
+// emitted fresh by the whole-module `emitTargetCode` driver or pulled from
+// the per-function query cache by `emitBackendIncrementalWith`. The same
+// downstream rdata/IAT/symbol post-process applies — the only thing that
+// changes between the two callers is where the chunks came from.
+export function concatX64FunctionChunks(chunks FunctionCodeChunkArray, targetModule TargetModule, mirModule MirModule, globalData GlobalDataTable, stdlibCache StdlibCacheData) returns CodeResult
+	var code = ByteArray.create()
+	code.reserve(1024)
+	var relocations = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+
+	var funcLabelNames = StringArray.create()
+	var funcLabelOffsets = CodeOffsetArray.create()
+	var funcLabelOffsetMap = CodeLabelOffsetMap.create()
+
+	for chunk in chunks 'eachChunk'
+		let funcStart = code.count()
+		recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, name: chunk.funcName, offset: funcStart)
+		code.append(chunk.code)
+
+		// Rewrite chunk-local fixup offsets to absolute `.text` offsets by
+		// shifting each by the chunk's start position. CallFixup, IAT
+		// Relocation, and RdataRelocation all share the same chunk-local
+		// → absolute translation rule.
+		for fx in chunk.callFixups 'rebaseCalls'
+			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+		end 'rebaseCalls'
+		for r in chunk.iatRelocs 'rebaseIat'
+			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+		end 'rebaseIat'
+		for r in chunk.rdataRelocs 'rebaseRdata'
+			rdataRelocs.push(RdataRelocation.create(funcStart + r.codeOffset, rdataLabel: r.rdataLabel, kind: r.kind))
+		end 'rebaseRdata'
+	end 'eachChunk'
+
+	// Link pre-compiled stdlib functions. Mirrors the old whole-module flow:
+	// stdlib bodies append to `code` after all user/runtime chunks, and their
+	// fixups arrive with already-shifted offsets via `linkX64StdlibFunctions`.
+	if stdlibCache.functions.count() > 0 'hasStdlib'
+		linkX64StdlibFunctionsConcat(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups, rdataRelocs: rdataRelocs, relocations: relocations, globalData: globalData, stdlibCache: stdlibCache)
+	end 'hasStdlib'
+
+	let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
+
+	resolveCallFixups(code, labelOffsetMap: funcLabelOffsetMap, callFixups: callFixups)
+
+	let startOffset = lookupLabel(funcLabelOffsetMap, name: "mrt_start")
+
+	var rdataOffsetMap = RdataOffsetMap.create()
+	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+	let covDataSectionBytes = buildCovDataSection(globalData, map: rdataOffsetMap)
+	let dataPrelude = buildDataPreludeSection(globalData, map: rdataOffsetMap)
+	rdataRelocs.append(globalData.pendingRdataRelocs)
+	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
+
+	var result = CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, mirModule: mirModule, rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata, covDataSectionBytes: covDataSectionBytes)
+	result.dataPrelude = dataPrelude
+	result.debugSymbols = buildDebugSymbols(funcLabelNames, labelOffsets: funcLabelOffsets)
+	return result
+end 'concatX64FunctionChunks'
+
+// Free-function variant of `X64Backend.linkX64StdlibFunctions`. The method
+// version is a member on the backend type so it can read `globalData` from
+// the backend; the concat path doesn't have a backend instance handy, so we
+// take `globalData` as an explicit parameter. Body is otherwise identical.
+function linkX64StdlibFunctionsConcat(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, labelOffsetMap CodeLabelOffsetMap, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, relocations RelocationArray, globalData GlobalDataTable, stdlibCache StdlibCacheData)
+	var seeds = StringArray.create()
+	for fixup in callFixups 'collectSeeds'
+		seeds.push(fixup.targetName)
+	end 'collectSeeds'
+	appendFuncAbs64Seeds(seeds, relocs: rdataRelocs)
+	appendFuncAbs64Seeds(seeds, relocs: globalData.pendingRdataRelocs)
+
+	let needed = computeNeededStdlibFunctions(seeds, stdlibCache: stdlibCache)
+
+	for func in stdlibCache.functions 'linkFuncs'
+		if not needed.contains(func.name) 'skip'
+			continue
+		end 'skip'
+
+		let funcStart = code.count()
+		logDebug(LogCategory.compiler, message: function() gives "  Linking '{func.name}': {func.code.count()} bytes at offset {funcStart}")
+
+		labelNames.push(func.name)
+		labelOffsets.push(funcStart)
+		labelOffsetMap.upsert(func.name, value: funcStart)
+		code.append(func.code)
+
+		for fixup in func.callFixups 'adjustFixups'
+			callFixups.push(CallFixup.create(funcStart + fixup.codeOffset, targetName: fixup.targetName))
+		end 'adjustFixups'
+
+		for reloc in func.rdataRelocs 'adjustRdata'
+			rdataRelocs.push(RdataRelocation.create(funcStart + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind))
+		end 'adjustRdata'
+
+		for reloc in func.relocations 'adjustRelocs'
+			relocations.push(Relocation.create(funcStart + reloc.codeOffset, slotIndex: reloc.slotIndex))
+		end 'adjustRelocs'
+	end 'linkFuncs'
+
+	mergeStdlibGlobalData(globalData, rdataRelocs: rdataRelocs, stdlibCache: stdlibCache)
+	logInfo(LogCategory.compiler, message: function() gives "Linked {needed.count()} stdlib functions ({stdlibCache.functions.count()} available)")
+end 'linkX64StdlibFunctionsConcat'
 
 // Block jump fixup: records where a jump instruction needs its target patched.
 export type BlockJumpFixup

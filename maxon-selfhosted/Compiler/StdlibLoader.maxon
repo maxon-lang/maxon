@@ -82,7 +82,7 @@ function ensureStdlibSandboxParsed(target Target)
 	registerBuiltinsIntrinsicSignatures(sandbox)
 	registerInternalsIntrinsicSignatures(sandbox)
 	var module = MaxonModule.create()
-	parseStdlibSource(sandbox, allModule: module, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("ensureStdlibSandboxParsed: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(target))
+	parseStdlibBootstrapInto(sandbox, allModule: module)
 	for fp in collectStdlibFiles() 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -341,10 +341,32 @@ end 'parseStdlibSource'
 // fast-paths in getStdlibModule call this so unresolvedInterfaces (Error,
 // Iterator, etc.) is populated before typealiases are restored. The merged
 // module is discarded — the bootstrap exists purely to seed parser registries.
+//
+// Idempotent per-project: a second call against the same `project` is a no-op.
+// `getStdlibModule` runs on every `queryAllModule` call, so after a source-file
+// edit invalidates `codeCache` the cached fast-path re-enters here. Without
+// this guard the parser's `project.typealiases.insert` collides on the names
+// (`ExitCode`, `ParsedInt`, ...) the first parse already laid down (E3061).
+// The parser registries the bootstrap populates are append-only at the project
+// level, so re-parsing produces zero new information.
 function parseStdlibBootstrap(project Project)
-	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected")
-	parseStdlibSource(project, allModule: MaxonModule.create(), filePath: bootstrapFp, content: stdlibBootstrapSourceForTarget(project.target))
+	if project.stdlibBootstrapParsed 'alreadyParsed'
+		return
+	end 'alreadyParsed'
+	parseStdlibBootstrapInto(project, allModule: MaxonModule.create())
 end 'parseStdlibBootstrap'
+
+// Bootstrap-parse helper shared by the three from-source entry points
+// (`ensureStdlibSandboxParsed`, `getStdlibModule` cache-miss, and
+// `loadCacheForTarget` cache-miss). Each path needs the bootstrap parsed
+// into `project` AND the `stdlibBootstrapParsed` flag set so the cached
+// fast-path's idempotency guard (`parseStdlibBootstrap`) doesn't double-
+// register the bootstrap typealiases on the next `queryAllModule`.
+function parseStdlibBootstrapInto(project Project, allModule MaxonModule)
+	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("parseStdlibBootstrapInto: bootstrap virtual path rejected")
+	parseStdlibSource(project, allModule: allModule, filePath: bootstrapFp, content: stdlibBootstrapSourceForTarget(project.target))
+	project.stdlibBootstrapParsed = true
+end 'parseStdlibBootstrapInto'
 
 export function getStdlibModule(project Project) returns MaxonModule
 	// Register the allocator-runtime intrinsics (`__mm_alloc`,
@@ -483,7 +505,7 @@ export function getStdlibModule(project Project) returns MaxonModule
 	let stdlibFiles = collectStdlibFiles()
 
 	var allModule = MaxonModule.create()
-	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
+	parseStdlibBootstrapInto(project, allModule: allModule)
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
@@ -774,7 +796,7 @@ function loadCacheForTarget(project Project)
 	// id-space with `project`'s.
 	let stdlibFiles = collectStdlibFiles()
 	var allModule = MaxonModule.create()
-	parseStdlibSource(project, allModule: allModule, filePath: try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("StdlibLoader: bootstrap virtual path rejected"), content: stdlibBootstrapSourceForTarget(project.target))
+	parseStdlibBootstrapInto(project, allModule: allModule)
 	for fp in stdlibFiles 'iter'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")

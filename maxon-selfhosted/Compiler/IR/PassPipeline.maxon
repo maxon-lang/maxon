@@ -212,6 +212,14 @@ export type PassPipeline
 	// runs the standalone algorithm, and writes the result back. Keeping the
 	// algorithms as free functions preserves their reusability outside the
 	// pipeline; the pipeline just wires them up to the pipeline's fields.
+	//
+	// Per-function-classified Std/MIR passes route through the singleton-wrap
+	// shim: each iteration wraps one function in a singleton StdModule/
+	// MirModule (sharing `blocks` / `ops` / `blockSourceInfo` with the
+	// parent), calls the existing pass body on that singleton, and writes the
+	// resulting function back. Because each pass body already iterates
+	// `for func in module.functions { perFunctionWork(func) }`, the singleton-
+	// wrap loop produces byte-identical output to a whole-module call.
 	function dispatch(pass PassKind)
 		match pass 'dispatch'
 			// Phase 2: Maxon-level passes
@@ -226,29 +234,40 @@ export type PassPipeline
 			// Phase 3: Maxon → Std. The lowerer reads `self.panicLabelCounter`
 			// through `nextPanicLabel` so panic labels across lowerMaxonToStd
 			// and insertRangeChecks all number monotonically from one counter.
+			// The lowering itself stays whole-module — it synthesizes enum-name
+			// / union-destructor helpers post-loop and the panic-label counter
+			// is monotonic across all functions, so a singleton-wrap-per-
+			// function would emit divergent helpers.
 			lowerMaxonToStd then stdModule = lowerMaxonToStd(self, maxonModule: maxonModule, project: project, globalData: globalData)
 
-			// Phase 4: Std passes
-			borrowCheck then stdModule = runBorrowCheck(project, module: stdModule)
-			injectDrops then stdModule = injectDrops(stdModule)
-			mem2reg then stdModule = promoteMem2Reg(stdModule)
-			canonicalize then stdModule = canonicalize(stdModule, project: project)
-			cse then stdModule = eliminateCommonSubexpressions(stdModule)
-			licm then stdModule = hoistLoopInvariants(stdModule)
-			dce then stdModule = runDceAndSnapshot(self, module: stdModule)
+			// Phase 4: Std passes — each `perFunction`-classified pass runs through
+			// the shared singleton-wrap loop; `inliner` and `dceFunctions` stay
+			// whole-module.
+			borrowCheck then runStdPassPerFunction(self, kind: pass)
+			injectDrops then runStdPassPerFunction(self, kind: pass)
+			mem2reg then runStdPassPerFunction(self, kind: pass)
+			canonicalize then runStdPassPerFunction(self, kind: pass)
+			cse then runStdPassPerFunction(self, kind: pass)
+			licm then runStdPassPerFunction(self, kind: pass)
+			dce then runDcePerFunctionAndSnapshot(self)
 			inliner then stdModule = runInlinerWithStdlibSnapshot(stdModule, project: project)
 			dceFunctions then stdModule = eliminateDeadStdFunctions(stdModule, project: project)
-			insertRangeChecks then stdModule = insertRangeChecks(self, module: stdModule, project: project, funcReturnTypes: project.funcReturnTypes, typealiasRanges: project.typealiasRanges, sourceFileName: sourceFileName, globalData: globalData)
-			lowerABI then stdModule = lowerABI(stdModule, target: target)
+			insertRangeChecks then runStdPassPerFunction(self, kind: pass)
+			lowerABI then runStdPassPerFunction(self, kind: pass)
 			instrumentCoverage then stdModule = instrumentCoverage(stdModule, project: project)
 
-			// Phase 5: Std → MIR
+			// Phase 5: Std → MIR. `augmentWithRuntime` is inherently whole-module
+			// (call-graph reachability over user + runtime to filter the
+			// runtime down to actually-reachable helpers). See its comment at
+			// `BackendDispatch.maxon`. `lowerStdToMir` runs the whole-module
+			// skeleton sweep followed by per-function lowering calls.
 			augmentWithRuntime then stdModule = augmentWithRuntime(stdModule, project: project)
-			lowerStdToMir then mirModule = lowerStdToMir(stdModule)
+			lowerStdToMir then runLowerStdToMirPerFunction(self)
 
-			// Phase 6: MIR passes
-			commuteForCoalescing then mirModule = commuteForCoalescing(mirModule)
-			scheduleInstructions then mirModule = scheduleInstructions(mirModule, target: target)
+			// Phase 6: MIR passes — singleton-wrap shim, mirroring the Std-tier
+			// pattern with MIR-flavored types.
+			commuteForCoalescing then runMirPassPerFunction(self, kind: pass)
+			scheduleInstructions then runMirPassPerFunction(self, kind: pass)
 		end 'dispatch'
 	end 'dispatch'
 
@@ -371,19 +390,150 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 	return inlined
 end 'runInlinerWithStdlibSnapshot'
 
-// Phase 11.5: classification of a pass for the per-function pipeline.
+// =============================================================================
+// Per-function dispatch shim (Std + MIR)
+// =============================================================================
+//
+// Every `perFunction`-classified pass body already iterates
+// `for f in module.functions { perFunctionWork(f) }`, so wrapping the
+// pipeline's module into a one-function singleton and re-invoking the same
+// body produces output byte-identical to a whole-module call.
+//
+// The pack/unpack helpers below produce a singleton StdModule / MirModule
+// that shares `blocks` / `ops` / `blockSourceInfo` with the source module
+// (so block-level mutations land in shared storage) but holds its own
+// single-element `functions` array. `runStdPassPerFunction` and
+// `runMirPassPerFunction` carry the loop body; the per-pass arguments live
+// inside their `match`-on-PassKind dispatch so each call site reduces to
+// `runStdPassPerFunction(self, kind: pass)`.
+
+function packSingletonStdModule(src StdModule, func IrFunction) returns StdModule
+	var singleton = StdModule.create()
+	singleton.functions.push(func)
+	singleton.blocks = src.blocks
+	singleton.ops = src.ops
+	singleton.blockSourceInfo = src.blockSourceInfo
+	return singleton
+end 'packSingletonStdModule'
+
+function unpackSingletonStdModule(singleton StdModule) returns IrFunction
+	if singleton.functions.count() != 1 'badShape'
+		panic("unpackSingletonStdModule: expected singleton (1 function), got {singleton.functions.count()}")
+	end 'badShape'
+	return try singleton.functions.get(0) otherwise panic("unpackSingletonStdModule: functions.get(0) OOB after count check")
+end 'unpackSingletonStdModule'
+
+function packSingletonMirModule(src MirModule, func IrFunction) returns MirModule
+	var singleton = MirModule.create()
+	singleton.functions.push(func)
+	singleton.blocks = src.blocks
+	singleton.ops = src.ops
+	singleton.blockSourceInfo = src.blockSourceInfo
+	return singleton
+end 'packSingletonMirModule'
+
+function unpackSingletonMirModule(singleton MirModule) returns IrFunction
+	if singleton.functions.count() != 1 'badShape'
+		panic("unpackSingletonMirModule: expected singleton (1 function), got {singleton.functions.count()}")
+	end 'badShape'
+	return try singleton.functions.get(0) otherwise panic("unpackSingletonMirModule: functions.get(0) OOB after count check")
+end 'unpackSingletonMirModule'
+
+// Run one Std-tier `perFunction`-classified pass through the singleton-wrap
+// loop. The `match` body invokes the pass with its own parameter shape; all
+// pass bodies are write-through into the shared `blocks`/`ops` storage on
+// the singleton, so the only thing the caller has to project back is the
+// (possibly mutated) function in `singleton.functions[0]`.
+//
+// `dce` has a post-loop side effect: it captures the post-dce StdModule into
+// `pipeline.stdModulePostDceSnapshot` for the cross-module inliner. The
+// snapshot intentionally covers every function in one read, so it runs once
+// after the per-function loop completes.
+//
+// `insertRangeChecks` is dispatched here through the whole-module entry on
+// the singleton (rather than calling an inner per-function helper) because
+// the entry creates one inserter per call and the loop runs exactly once on
+// `func`. `pipeline.panicLabelCounter` lives on the pipeline so panic-label
+// uniqueness is preserved across functions.
+// `kind` selects the pass body via a `match` inside the loop. After the
+// loop, callers that need a whole-module post-pass side effect (today: the
+// `dce` → `stdModulePostDceSnapshot` capture for the cross-module inliner)
+// drive it through the dispatch site in `PassPipeline.dispatch` — see the
+// `dce` arm there.
+export function runStdPassPerFunction(pipeline PassPipeline, kind PassKind)
+	var dstFuncs = IrFunctionArray.create()
+	for funcIdx in 0 upto pipeline.stdModule.functions.count() 'eachFunc'
+		let func = try pipeline.stdModule.functions.get(funcIdx) otherwise panic("runStdPassPerFunction: functions.get OOB at {funcIdx}")
+		var singleton = packSingletonStdModule(pipeline.stdModule, func: func)
+		match kind 'invoke'
+			borrowCheck then _ = runBorrowCheck(pipeline.project, module: singleton)
+			injectDrops then _ = injectDrops(singleton)
+			mem2reg then _ = promoteMem2Reg(singleton)
+			canonicalize then _ = canonicalize(singleton, project: pipeline.project)
+			cse then _ = eliminateCommonSubexpressions(singleton)
+			licm then _ = hoistLoopInvariants(singleton)
+			dce then _ = eliminateDeadCode(singleton)
+			insertRangeChecks then _ = insertRangeChecks(pipeline, module: singleton, project: pipeline.project, funcReturnTypes: pipeline.project.funcReturnTypes, typealiasRanges: pipeline.project.typealiasRanges, sourceFileName: pipeline.sourceFileName, globalData: pipeline.globalData)
+			lowerABI then _ = lowerABI(singleton, target: pipeline.target)
+			default panic("runStdPassPerFunction: unsupported pass {passKindToString(kind)}")
+		end 'invoke'
+		dstFuncs.push(unpackSingletonStdModule(singleton))
+	end 'eachFunc'
+	pipeline.stdModule.functions = dstFuncs
+end 'runStdPassPerFunction'
+
+// `dce` is the only Std-tier per-function pass with a whole-module side
+// effect: it captures the post-dce StdModule into
+// `pipeline.stdModulePostDceSnapshot` for the cross-module inliner. The
+// snapshot covers every function in one read, so it runs once after the
+// per-function loop completes.
+export function runDcePerFunctionAndSnapshot(pipeline PassPipeline)
+	runStdPassPerFunction(pipeline, kind: PassKind.dce)
+	pipeline.stdModulePostDceSnapshot = pipeline.stdModule
+end 'runDcePerFunctionAndSnapshot'
+
+// `lowerStdToMir` needs its own driver: it runs `prepareMirSkeleton` once
+// (whole-module read-only sweep that copies `stdModule.functions` and
+// `stdModule.blocks` 1:1 into the destination MirModule), then calls
+// `lowerStdFunctionToMir` once per source function in source order. The
+// iteration order matches the historical whole-module entry, preserving
+// the order ops are appended into `mirModule.ops` and therefore byte
+// parity with the pre-refactor shape.
+export function runLowerStdToMirPerFunction(pipeline PassPipeline)
+	var lowering = prepareMirSkeleton(pipeline.stdModule)
+	for srcFunc in pipeline.stdModule.functions 'eachFunc'
+		lowerStdFunctionToMir(lowering, srcFunc: srcFunc)
+	end 'eachFunc'
+	pipeline.mirModule = takeMirModule(lowering)
+end 'runLowerStdToMirPerFunction'
+
+// Run one MIR-tier `perFunction`-classified pass through the singleton-wrap
+// loop. Mirrors `runStdPassPerFunction` with MIR types.
+export function runMirPassPerFunction(pipeline PassPipeline, kind PassKind)
+	var dstFuncs = IrFunctionArray.create()
+	for funcIdx in 0 upto pipeline.mirModule.functions.count() 'eachFunc'
+		let func = try pipeline.mirModule.functions.get(funcIdx) otherwise panic("runMirPassPerFunction: functions.get OOB at {funcIdx}")
+		var singleton = packSingletonMirModule(pipeline.mirModule, func: func)
+		match kind 'invoke'
+			commuteForCoalescing then _ = commuteForCoalescing(singleton)
+			scheduleInstructions then _ = scheduleInstructions(singleton, target: pipeline.target)
+			default panic("runMirPassPerFunction: unsupported pass {passKindToString(kind)}")
+		end 'invoke'
+		dstFuncs.push(unpackSingletonMirModule(singleton))
+	end 'eachFunc'
+	pipeline.mirModule.functions = dstFuncs
+end 'runMirPassPerFunction'
+
+// Pass classification consumed by the chunk-driven incremental emit path
+// and by the per-function dispatch shims in `dispatch()`.
 //
 // `wholeModule` passes need to see every function at once (call-graph
-// walks, name-table population). They keep running through `run()` on
+// walks, name-table population, post-loop helper synthesis) and stay on
 // the merged module.
 //
 // `perFunction` passes are intra-function only — none reach into another
-// function's blocks/ops. They're eligible for `runForFunction`. The
-// current implementation lists them for documentation but `runForFunction`
-// itself defers to the whole-module pipeline; the per-function passes
-// will get their own entry points as 11.6's inliner forces a real
-// per-function dispatch path. Today's spine is correctness + caching
-// first; speed lands when the inliner needs it.
+// function's blocks/ops. They run through the singleton-wrap shim in
+// `runStdPassPerFunction` / `runMirPassPerFunction`.
 //
 // `moduleFixup` runs only after every per-function pass has finished,
 // linking per-function code chunks back into the final `.text`.

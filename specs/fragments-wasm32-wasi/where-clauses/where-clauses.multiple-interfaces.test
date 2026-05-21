@@ -46,28 +46,25 @@ ExitCode: 30
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r12, r8
-    x64.mov r8d, 30
-    x64.mov [r12+0], r8 (8b)
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov [r8+0], r12 (8b)
-    x64.mov r9, [r8+0] (8b)
-    x64.mov r8, [r9+0] (8b)
-    x64.mov r9d, 4294967295
-    x64.cmp r8, r9
-    x64.jbe __range_ok_0
+    %0 = mir.mov_imm 30 : i64
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0 width: qword
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    mir.store %11, %13, 0 width: qword
+    %8 = mir.load %13, 0 width: qword
+    %14 = mir.load %8, 0 width: qword
+    %15 = mir.mov_imm 125 : i64
+    %16 = mir.cmp ugt, %14, %15
+    mir.cond_br %16 [then: __range_panic_0(), else: __range_ok_0()]
   __range_panic_0:
-    x64.lea rcx, [rip+__panic_msg_0]
-    x64.call mrt_panic
+    %17 = mir.global_addr @__panic_msg_0
+    %18 = mir.call @mrt_panic(%17)
   __range_ok_0:
-    x64.epilogue
-    x64.ret
+    mir.ret %14
   }
 }
 ---

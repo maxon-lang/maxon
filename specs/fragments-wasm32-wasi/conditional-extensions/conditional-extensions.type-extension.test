@@ -31,19 +31,20 @@ module {
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 42 : i64
-    %9 = mir.mov_imm 8 : i64
-    %10 = mir.call @mrt_alloc(%9)
-    mir.store %0, %10, 0 width: qword
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0 width: qword
     %4 = mir.mov_imm 42 : i64
-    %11 = mir.load %10, 0 width: qword
-    %12 = mir.cmp eq, %11, %4
-    mir.cond_br %12 [then: yes_0(), else: yes_0.after()]
+    %6 = mir.global_addr @__witness_int_Equatable
+    %12 = mir.load %11, 0 width: qword
+    %13 = mir.witness_call %6, [0](%12, %4)
+    mir.cond_br %13 [then: yes_0(), else: yes_0.after()]
   yes_0:
-    %7 = mir.mov_imm 1 : i64
-    mir.ret %7
-  yes_0.after:
-    %8 = mir.mov_imm 0 : i64
+    %8 = mir.mov_imm 1 : i64
     mir.ret %8
+  yes_0.after:
+    %9 = mir.mov_imm 0 : i64
+    mir.ret %9
   }
 }
 ---

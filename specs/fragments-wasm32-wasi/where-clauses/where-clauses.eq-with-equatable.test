@@ -26,28 +26,23 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov ecx, 8
-    x64.call mrt_alloc
-    x64.mov r9d, 42
-    x64.mov [r8+0], r9 (8b)
-    x64.mov rcx, [r8+0] (8b)
-    x64.mov edx, 42
-    x64.lea r8, [rip+__witness_int_Equatable]
-    x64.mov r10, [r8+24] (8b)
-    x64.call r10
-    x64.test r8, r8
-    x64.je yes_0.after
+    %0 = mir.mov_imm 42 : i64
+    %11 = mir.mov_imm 8 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    mir.store %0, %12, 0 width: qword
+    %5 = mir.mov_imm 42 : i64
+    %7 = mir.global_addr @__witness_int_Equatable
+    %13 = mir.load %12, 0 width: qword
+    %14 = mir.witness_call %7, [0](%13, %5)
+    mir.cond_br %14 [then: yes_0(), else: yes_0.after()]
   yes_0:
-    x64.mov r8d, 1
-    x64.epilogue
-    x64.ret
+    %9 = mir.mov_imm 1 : i64
+    mir.ret %9
   yes_0.after:
-    x64.xor r8d, r8d
-    x64.epilogue
-    x64.ret
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
   }
 }
 ---

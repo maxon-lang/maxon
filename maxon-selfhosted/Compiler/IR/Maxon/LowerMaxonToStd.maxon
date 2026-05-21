@@ -3039,6 +3039,13 @@ type MaxonToStdLowering
 			if self.tryLowerTypeParamEquality(result, left: left, right: right, predicate: predicate, operandType: operandType, dstBlock: dstBlock) 'didDispatch'
 				return
 			end 'didDispatch'
+			// The constraint check that gates this lives in TypeResolution's
+			// `validateTypeParamComparisonConstraints` — by the time lowering
+			// reaches here, an unconstrained type-param compare has already
+			// emitted E3005 with the right source range. Fall through to the
+			// raw integer compare for recovery so downstream passes have a
+			// well-formed op to consume; the user-facing signal is the E3005
+			// the earlier pass produced.
 		end 'witnessEq'
 		// J.4b: when the operand resolves to a concrete struct that implements
 		// Equatable (post-monomorphization of an interface-extension method
@@ -6353,10 +6360,19 @@ type MaxonToStdLowering
 		// Phase 15e: for a tuple receiver like `genericInstance(__Tuple2, [int, float])`,
 		// the raw struct field type is `_T1` (typeParameter). Substitute through the
 		// receiver's args so the load width / float-ness matches the actual element
-		// type. Restricted to tuple receivers because for other generic types the
-		// substitution may collapse typeParameter to MaxonType.unresolved (a missed
-		// binding returns unresolved, not raw), which would break Array/Map fieldLoads.
-		let resolvedFieldType = pickTupleFieldType(self.project, raw: hit.fieldType, receiverType: receiverType)
+		// type.
+		//
+		// Phase 11.7: also substitute for any other concrete generic instance whose
+		// args don't themselves mention type parameters — `WrapperHolder = Holder
+		// with Wrapper` (gid args: [named(Wrapper)]) needs its `T item` field to
+		// surface as `Wrapper` at the use site so `h.item.value()` lowers to a
+		// concrete `Wrapper.value` call rather than hitting the type-param
+		// dispatch stub. The "args have no type parameters" gate avoids
+		// substituting through a partially-bound generic receiver (e.g. inside an
+		// extension method on `Array`, the receiver still mentions
+		// `typeParameter(Element)`) where the substitution would return
+		// `MaxonType.unresolved` and break downstream lowering.
+		let resolvedFieldType = pickFieldTypeViaReceiver(self.project, raw: hit.fieldType, receiverType: receiverType)
 		let fieldStdType = maxonTypeToStdType(self.project, ref: resolvedFieldType)
 		let fieldWidth = storeWidthOfStdType(fieldStdType)
 		let fieldSigned = stdTypeIsSigned(fieldStdType)
@@ -8693,8 +8709,51 @@ function collectFunctionWitnessConstraints(project Project, func IrFunction) ret
 		end 'scan'
 		inferImplicitWitnessConstraints(project, recvType: recvType, out: out)
 	end 'haveRecv'
+	// Extension-scoped where-clauses (e.g. `extension Array where Element is
+	// Equatable`) attach constraints to the methods declared inside the
+	// extension body, not to the underlying struct's TypeParamRegistry entry.
+	// Pull those in by methodKey so witness-routed dispatch sees the
+	// constraints the user wrote on the extension. Without this, an extension
+	// body using `item == element` would fail witness lookup and (post-Stream
+	// A E3005 emission) report "type parameter not constrained" even though
+	// the user did constrain it.
+	// Overloaded extension methods get a `$<paramTypeName>` suffix in the
+	// IrFunction name (e.g. `Array.contains$Element`, `Array.contains$ElementArray`).
+	// `project.extensionMethodWhereClauses` is keyed by the bare
+	// `<Type>.<method>` form the parser captured during extension-body parsing,
+	// so strip the suffix before lookup. Mirror in TypeResolution's
+	// `stripFunctionOverloadSuffix`.
+	let bareName = stripOverloadSuffix(func.name)
+	if let extClauses = try project.extensionMethodWhereClauses.get(bareName) 'haveExtWhere'
+		for i in 0 upto extClauses.count() 'eachExtClause'
+			let clause = try extClauses.get(i) otherwise panic("collectFunctionWitnessConstraints: extClauses.get OOB at {i}")
+			if whereClauseArrayContains(out, clause: clause) 'duplicate'
+				continue
+			end 'duplicate'
+			out.push(clause)
+		end 'eachExtClause'
+	end 'haveExtWhere'
 	return out
 end 'collectFunctionWitnessConstraints'
+
+// Strip the `$<overloadDiscriminator>` suffix from a fully-qualified function
+// name. The parser appends this to disambiguate overloads (e.g.
+// `Array.contains$Element` vs `Array.contains$ElementArray`); registries
+// keyed by the unique-suffixed name need this when looked up against keys
+// that were recorded under the bare overload-shared form.
+function stripOverloadSuffix(name String) returns String
+	let bytes = name.toByteArray()
+	let dollarByte = 0x24
+	var i = 0
+	while i < bytes.count() 'scan'
+		let b = try bytes.get(i) otherwise panic("invariant: i < bytes.count() but get failed")
+		if b == dollarByte 'hit'
+			return byteSliceToString(bytes, startIndex: 0, endIndex: i)
+		end 'hit'
+		i = i + 1
+	end 'scan'
+	return name
+end 'stripOverloadSuffix'
 
 // J.4a prereq.5: append structurally-implied constraints that the source
 // doesn't write down explicitly but the language semantics guarantee.
@@ -9057,6 +9116,7 @@ function predicateIsEqOrNe(predicate CmpPredicate) returns bool
 	end 'p'
 end 'predicateIsEqOrNe'
 
+
 function predicateIsNe(predicate CmpPredicate) returns bool
 	return match predicate 'p'
 		ne gives true
@@ -9131,6 +9191,89 @@ function pickTupleFieldType(project Project, raw MaxonType, receiverType MaxonTy
 	end 'notTuple'
 	return substituteReturnTypeViaReceiver(project, raw: raw, receiverContext: receiverType)
 end 'pickTupleFieldType'
+
+// Phase 11.7: substitute a struct field's declared type through the receiver
+// when the receiver is a fully concrete generic instance. Returns `raw`
+// unchanged for non-generic receivers, tuple receivers (handled by the
+// `pickTupleFieldType` legacy path), or receivers whose args still mention
+// type parameters (extension methods on a generic struct see the receiver as
+// `Array<typeParameter(Element)>`, where substituting would collapse to
+// `MaxonType.unresolved`). This is the gate that lets `WrapperHolder.item`
+// surface as `Wrapper` rather than as the unsubstituted `typeParameter(T)`,
+// which downstream method-call lowering would route through the type-param
+// dispatch stub.
+function pickFieldTypeViaReceiver(project Project, raw MaxonType, receiverType MaxonType) returns MaxonType
+	if receiverIsTupleGenericInstance(project, t: receiverType) 'tupleReceiver'
+		return substituteReturnTypeViaReceiver(project, raw: raw, receiverContext: receiverType)
+	end 'tupleReceiver'
+	if not maxonTypeIsConcreteGenericInstance(project, t: receiverType) 'notConcrete'
+		return raw
+	end 'notConcrete'
+	let substituted = substituteReturnTypeViaReceiver(project, raw: raw, receiverContext: receiverType)
+	// Defensive: a typeParameter raw whose param-name isn't in the receiver's
+	// substitution table comes back as `MaxonType.unresolved` from
+	// `substituteType`. Fall back to `raw` in that case so we don't hand the
+	// downstream loader an unresolved field type.
+	if maxonTypeIsUnresolved(substituted) 'fellThrough'
+		return raw
+	end 'fellThrough'
+	return substituted
+end 'pickFieldTypeViaReceiver'
+
+// True when `t` is a `genericInstance` whose args contain no
+// `typeParameter` arm at the top level. Conservative: doesn't recurse into
+// nested generic instances, since the current substitution machinery only
+// resolves one level deep.
+function maxonTypeIsConcreteGenericInstance(project Project, t MaxonType) returns bool
+	let isGeneric = match t 'isGen'
+		genericInstance gives true
+		boolean gives false
+		integer gives false
+		float gives false
+		string gives false
+		named gives false
+		function gives false
+		unresolved gives false
+		typeParameter gives false
+		interface gives false
+		constInt gives false
+	end 'isGen'
+	if not isGeneric 'notGeneric'
+		return false
+	end 'notGeneric'
+	let gid = match t 'extractGid'
+		genericInstance(id) gives id
+		boolean gives 0 as GenericInstanceId
+		integer gives 0
+		float gives 0
+		string gives 0
+		named gives 0
+		function gives 0
+		unresolved gives 0
+		typeParameter gives 0
+		interface gives 0
+		constInt gives 0
+	end 'extractGid'
+	let (_, args) = project.genericInstances.get(gid)
+	for i in 0 upto args.count() 'eachArg'
+		let arg = try args.get(i) otherwise panic("maxonTypeIsConcreteGenericInstance: args.get OOB at {i}")
+		if maxonTypeMentionsTypeParam(arg) 'hasParam'
+			return false
+		end 'hasParam'
+	end 'eachArg'
+	return true
+end 'maxonTypeIsConcreteGenericInstance'
+
+function maxonTypeIsUnresolved(t MaxonType) returns bool
+	return match t 'extract'
+		unresolved gives true
+		boolean to function gives false
+		typeParameter gives false
+		genericInstance gives false
+		interface gives false
+		constInt gives false
+	end 'extract'
+end 'maxonTypeIsUnresolved'
 
 // Substitute type parameters in `raw` (the callee's declared return type)
 // through the receiver context's generic-instance args. Mirrors what

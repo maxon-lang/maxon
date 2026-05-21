@@ -11,8 +11,28 @@ export interface TargetBackend
 	// Lower MIR ops to target-specific dialect (X64Op / Arm64Op).
 	// The result is stored on the backend for use by subsequent methods.
 	function lowerMirToTarget() returns TargetModule
-	// Emit machine code bytes from the fully-lowered target module.
-	function emitTargetCode(stdlibCache StdlibCacheData) returns CodeResult
+	// Stage P Step 3.5b: per-subset variant of `lowerMirToTarget`. Only the
+	// functions in `funcsToLower` get target-lowered (and pushed onto the
+	// backend's `targetModule.functions`); the full mirModule.functions list
+	// is still consulted for callee-signature lookups during emission. Used
+	// by the chunk-driven incremental path to skip target lowering for
+	// functions whose chunks were already served from `db.codePerFunc`.
+	function lowerMirToTargetForFunctions(funcsToLower IrFunctionArray) returns TargetModule
+	// Emit machine code bytes from the fully-lowered target module. Takes
+	// `project` so the whole-module emit can stamp freshly-built per-function
+	// chunks into `project.db.codePerFunc` (when `enableIncremental`) as a
+	// side effect, populating the cache for the next rebuild without a
+	// separate extraction pass.
+	function emitTargetCode(project Project, stdlibCache StdlibCacheData) returns CodeResult
+	// Emit a single function into a `FunctionCodeChunk` with chunk-local
+	// fixup offsets. Used by the chunk-driven incremental path
+	// (`emitBackendIncrementalWith`) to recompute a single function on a
+	// per-function-cache miss without going back through the whole-module
+	// `emitTargetCode` path — which would otherwise recurse into
+	// `queryCodeResult` and loop indefinitely under `tier=full` with
+	// `enableIncremental` on. The caller is responsible for stamping the
+	// returned chunk into `project.db.codePerFunc`.
+	function emitFunctionChunk(func IrFunction) returns FunctionCodeChunk
 	// Scan a single target op for frame-relevant information (stack slots, prints, calls).
 	function scanOpForFrameInfo(packed OpIndex, state FrameScanState)
 	// Detect which callee-saved physical registers this function uses and

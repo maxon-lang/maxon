@@ -537,6 +537,38 @@ export type Project
 	// a diagnostic.
 	export var pendingUnusedChecks PendingUnusedCheckArray
 
+	// Deferred unused-typealias checks (E3062). See PendingUnusedTypealias for
+	// the why. Drained after `drainPendingConstraintChecks` so an alias whose
+	// RHS failed constraint validation (E3017) doesn't double-report.
+	export var pendingUnusedTypealiases PendingUnusedTypealiasArray
+
+	// Names of typealiases that failed constraint validation during
+	// `drainPendingConstraintChecks` (E3017 / E2003). Read by the deferred
+	// unused-typealias drain to suppress E3062 for the same alias, matching
+	// the bootstrap's single-diagnostic shape.
+	export var constraintFailedTypealiases ReferencedNameSet
+
+	// Per-file parser-side-effect deltas. Each entry records the keys the
+	// file's parse-and-drain inserted into the various registries on this
+	// project (funcReturnTypes, methodNameIndex, unresolvedStructTypes, …).
+	// `queryParseOps` calls `beginFileParse(project, filePath)` before every
+	// re-parse, which rolls back the prior delta — removing the file's
+	// previous contributions so the upcoming parse doesn't collide with
+	// itself. See `Compiler/ParseDelta.maxon` for the full machinery.
+	export var fileParseDeltas FilePathToFileParseDelta
+
+	// True after `parseStdlibBootstrap` has populated this project's parser
+	// registries with the synthesized stdlib bootstrap source. Gates the
+	// re-parse on a second `getStdlibModule` call against the same project
+	// (which fires whenever `queryAllModule` runs after a source-file edit
+	// invalidates the codeCache). Without this guard the second parse hits
+	// E3061 "Duplicate typealias 'ExitCode'" against the registrations the
+	// first parse already laid down. The transient parser state populated by
+	// the bootstrap (unresolvedInterfaces, typealias declarations) persists
+	// across re-resolution because the parser registries are append-only at
+	// the project level — re-parsing produces zero new information.
+	export var stdlibBootstrapParsed bool
+
 	// Provenance for char-byte literals — see `CharByteLiteralSet` for the why.
 	// Populated by the parser at every single-byte char-literal site and
 	// expanded by TypeResolution's producer-types walk through varDecl/varLoad
@@ -631,9 +663,13 @@ export type Project
 			pendingWitnessThunkInterfaces: StringArray.create(),
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create(),
+			pendingUnusedTypealiases: PendingUnusedTypealiasArray.create(),
+			constraintFailedTypealiases: ReferencedNameSet.create(),
+			stdlibBootstrapParsed: false,
 			charByteLiterals: CharByteLiteralSet.create(),
 			monomorphCache: MonomorphCache.create(),
-			extensionMethodWhereClauses: WhereClauseMapByName.create()
+			extensionMethodWhereClauses: WhereClauseMapByName.create(),
+			fileParseDeltas: FilePathToFileParseDelta.create()
 		}
 	end 'create'
 end 'Project'
@@ -714,6 +750,28 @@ end 'PendingUnusedCheck'
 
 export typealias PendingUnusedCheckArray = Array with PendingUnusedCheck
 export typealias ReferencedNameSet = Set with String
+
+// File-private typealias whose end-of-parse "unused" check needs to be
+// deferred until after TypeResolution. The bootstrap throws on the first
+// constraint violation, so a typealias like `BadMap = Map with (NotHashable,
+// Integer)` (declared as a constraint-violation test fixture, never used in
+// expression position) never reaches the unused check there. The self-hosted
+// parser accumulates errors and would emit E3062 ("unused typealias") in
+// addition to the E3017 ("constraint violation") that the test asserts on.
+// Deferring lets us drop E3062 retroactively for aliases whose RHS failed
+// constraint validation, matching the bootstrap's single-diagnostic shape.
+export type PendingUnusedTypealias
+	export let name String
+	export let line LineNumber
+	export let column ColumnNumber
+	export let filePath FilePath
+
+	export static function create(name String, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingUnusedTypealias
+		return Self{name: name, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'PendingUnusedTypealias'
+
+export typealias PendingUnusedTypealiasArray = Array with PendingUnusedTypealias
 
 // Parser-recorded provenance for char literals. The single-byte fast path in
 // `parseCharLiteralExpr` emits a `MaxonType.integer` literal so existing

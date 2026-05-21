@@ -344,7 +344,7 @@ export type Parser
 		// resolution in MaxonDialect, interpolation lowering in
 		// LowerMaxonToStd) read the project-level set at their site and
 		// don't need a separate per-function pass.
-		propagateCharByteThroughVarChains(project, module: module)
+		propagateCharByteThroughVarChains(project, module: module, filePath: filePath)
 
 		return module
 	end 'parseModule'
@@ -362,13 +362,21 @@ export type Parser
 	// double-report the same alias as both E3061 (or E3060 etc.) and E3062.
 	// Skip the unused-check when the file already has a typealias-related
 	// diagnostic so the wording stays in sync with the bootstrap.
+	//
+	// Deferral: the actual E3062 emission is queued onto
+	// `project.pendingUnusedTypealiases` and drained AFTER TypeResolution's
+	// `drainPendingConstraintChecks`. This lets `BadMap = Map with NotHashable`
+	// (a constraint-violation test fixture, declared but never used) get its
+	// E3017 reported without also tripping the unused-alias warning — the
+	// bootstrap throws on the constraint failure first and never reaches the
+	// unused check, so single-error parity requires the same suppression here.
 	function checkUnusedTypeAliases()
 		if fileHasTypealiasDiagnostic() 'alreadyReported'
 			return
 		end 'alreadyReported'
 		for entry in localTypealiases 'eachAlias'
 			if not usedTypeAliases.contains(entry.name) 'isUnused'
-				reportCompileError(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{entry.name}'", line: entry.line, column: entry.column, filePath: filePath)
+				project.pendingUnusedTypealiases.push(PendingUnusedTypealias.create(entry.name, line: entry.line, column: entry.column, filePath: filePath))
 			end 'isUnused'
 		end 'eachAlias'
 	end 'checkUnusedTypeAliases'
@@ -862,18 +870,36 @@ export type Parser
 	// Grammar:
 	//     implementsClause = 'implements' conformance (',' conformance)*
 	//     conformance      = IDENT ('with' withArgs)?
-	//     withArgs         = IDENT | '(' IDENT (',' IDENT)* ')'
+	//     withArgs         = IDENT (',' IDENT)* | '(' IDENT (',' IDENT)* ')'
 	//
 	// The case `Iterator with RangeBound, BidirectionalIterator` parses as two
 	// conformances (`Iterator with RangeBound` and `BidirectionalIterator`):
-	// the bare-identifier `with` form takes exactly one type argument; the
-	// next identifier opens the next conformance.
+	// `Iterator` declares exactly one `uses` param so the comma after
+	// `RangeBound` necessarily begins the next conformance. By contrast,
+	// `Pair with First, Second` (where `Pair uses First, Second`) reads both
+	// bindings into one conformance because `Pair` has arity 2. Self-hosted
+	// queries the interface registry via `lookupInterfaceUsesParamCount` to
+	// know how many comma-separated args to consume — mirrors maxon-sharp's
+	// `ParseWithTypeArgs(GetAssociatedTypeCount(ifaceName))`.
 	//
 	// `parenForm` on each `Conformance` records whether the `with (...)` arg
 	// list used parens. TypeResolution uses this to collapse a parenthesized
 	// multi-arg list against a single-`uses` interface into one `__TupleN`
 	// generic-instance (mirrors maxon-sharp's `ParseWithTypeArgs`
 	// `expectedCount == 1` branch).
+	function lookupInterfaceUsesParamCount(interfaceName String) returns ParsedInt
+		if let unresolved = try project.unresolvedInterfaces.get(interfaceName) 'fromUnresolved'
+			return unresolved.usesParams.count()
+		end 'fromUnresolved'
+		if let resolved = try project.interfaces.get(interfaceName) 'fromResolved'
+			return resolved.usesParams.count()
+		end 'fromResolved'
+		// Unknown interface (forward-declared, typo, or stdlib not yet loaded).
+		// Default to 1 so single-arg `with X` keeps working; the conformance
+		// check later will surface an error if the arity is actually wrong.
+		return 1
+	end 'lookupInterfaceUsesParamCount'
+
 	function parseImplementsClause() returns ConformanceArray throws ParserError
 		var list = ConformanceArray.create()
 		if not accept(TokenKind.implements) 'noImpl'
@@ -896,6 +922,10 @@ export type Parser
 					while at(TokenKind.identifier) 'argLoop'
 						let argToken = try consumeExpecting("type parameter name")
 						withArgs.push(argToken.value)
+						// `implements I with (X, Y)` references each type-alias
+						// candidate as a type position; mark them used so
+						// E3062 doesn't fire on aliases consumed only here.
+						usedTypeAliases.insert(element: argToken.value)
 						if at(TokenKind.rightParen) 'doneArgs'
 							break
 						end 'doneArgs'
@@ -905,6 +935,28 @@ export type Parser
 				end 'parenList' else 'singleArg'
 					let argToken = try consumeExpecting("type parameter name")
 					withArgs.push(argToken.value)
+					// `implements I with X` references X as a type position;
+					// mark it used so E3062 doesn't fire on aliases consumed
+					// only via single-arg `with` binding.
+					usedTypeAliases.insert(element: argToken.value)
+					// Support paren-less multi-arg form `implements I with X, Y`
+					// when the interface declares multiple `uses` params (mirrors
+					// the bootstrap's ParseWithTypeArgs that consults
+					// GetAssociatedTypeCount). The interface may already be
+					// resolved or still unresolved at this point; either way the
+					// parser can read the `usesParams` array via the project.
+					let expectedCount = lookupInterfaceUsesParamCount(nameToken.value)
+					while withArgs.count() < expectedCount and at(TokenKind.comma) 'moreSingle'
+						// Peek the next identifier without consuming so we don't
+						// accidentally eat the comma that introduces a sibling
+						// conformance (`implements A with X, B` — the `B` after a
+						// 1-arity A's binding belongs to the outer loop, not this
+						// `with`).
+						try eat(TokenKind.comma)
+						let nextToken = try consumeExpecting("type parameter name")
+						withArgs.push(nextToken.value)
+						usedTypeAliases.insert(element: nextToken.value)
+					end 'moreSingle'
 				end 'singleArg'
 			end 'hasWith'
 			list.push(Conformance.create(nameToken.value, withArgs: withArgs, parenForm: parenForm, line: nameToken.line, column: nameToken.column))
@@ -1073,7 +1125,9 @@ export type Parser
 		// Same suffixes still report E2001 — that's a real duplicate.
 		var funcIsDuplicate = false
 		var registrationName = qualifiedName
+		var insertedFuncReturnType = true
 		try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise 'dupFunc'
+			insertedFuncReturnType = false
 			let resolution = tryRegisterOverload(qualifiedName, paramTypes: paramTypes, paramNames: paramNames, hasSelf: isInstance, returnType: returnType)
 			if resolution.isOverload 'isOverload'
 				registrationName = resolution.mangledName
@@ -1086,6 +1140,9 @@ export type Parser
 				end 'freeDisplay'
 			end 'realDup'
 		end 'dupFunc'
+		if insertedFuncReturnType 'recordRt'
+			recordFuncReturnTypeInsert(project, filePath: filePath, key: qualifiedName)
+		end 'recordRt'
 		// Stamp the (possibly-mangled) registration name onto the IrFunction
 		// so downstream passes (LowerMaxonToStd, codegen) emit the function
 		// under the same key the call-site lookup hits.
@@ -1099,10 +1156,24 @@ export type Parser
 		// candidates by the reader's path.
 		if not funcIsDuplicate 'registerSignature'
 			try project.funcSignatures.insert(registrationName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("funcSignatures.insert: duplicate for '{registrationName}' but funcReturnTypes reported none")
+			recordFuncSignatureInsert(project, filePath: filePath, key: registrationName)
 			project.methodNameIndex.record(registrationName)
-			try project.funcVisibilities.insert(registrationName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
+			recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: registrationName)
+			var insertedVis = true
+			try project.funcVisibilities.insert(registrationName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupVis'
+				insertedVis = false
+			end 'dupVis'
+			if insertedVis 'recVis'
+				recordFuncVisibilityInsert(project, filePath: filePath, key: registrationName)
+			end 'recVis'
 			// Register the throws-clause type name (empty string = non-throwing).
-			try project.funcThrowsTypes.insert(registrationName, value: throwsTypeName) otherwise ignore
+			var insertedThrows = true
+			try project.funcThrowsTypes.insert(registrationName, value: throwsTypeName) otherwise 'dupTh'
+				insertedThrows = false
+			end 'dupTh'
+			if insertedThrows 'recTh'
+				recordFuncThrowsInsert(project, filePath: filePath, key: registrationName)
+			end 'recTh'
 		end 'registerSignature'
 		var block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: nameToken.line)
 		// Seed the parser's current-function/block tracker — expression-level
@@ -1637,10 +1708,12 @@ export type Parser
 		end 'fresh'
 		bucket.push(newMangled)
 		project.overloadedNames.upsert(qualifiedName, value: bucket)
+		recordOverloadedNamesUpsert(project, filePath: filePath, key: qualifiedName)
 		// Insert the new function's funcReturnTypes entry under its mangled
 		// name; the caller handles funcSignatures / funcVisibilities /
 		// funcThrowsTypes / methodNameIndex inserts under `registrationName`.
 		try project.funcReturnTypes.insert(newMangled, value: returnType) otherwise panic("tryRegisterOverload: funcReturnTypes.insert collision on freshly-mangled name '{newMangled}'")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: newMangled)
 		return OverloadResolution.overload(newMangled)
 	end 'tryRegisterOverload'
 
@@ -1652,22 +1725,47 @@ export type Parser
 	// when funcReturnTypes.contains returns false.
 	function rekeyExistingFunction(bareName String, mangledName String)
 		if let rt = try project.funcReturnTypes.get(bareName) 'haveRt'
-			try project.funcReturnTypes.insert(mangledName, value: rt) otherwise ignore
+			var rekeyedRt = true
+			try project.funcReturnTypes.insert(mangledName, value: rt) otherwise 'dupRt'
+				rekeyedRt = false
+			end 'dupRt'
 			_ = project.funcReturnTypes.remove(bareName)
+			if rekeyedRt 'recRt'
+				recordFuncReturnTypeInsert(project, filePath: filePath, key: mangledName)
+			end 'recRt'
 		end 'haveRt'
 		if let sig = try project.funcSignatures.get(bareName) 'haveSig'
-			try project.funcSignatures.insert(mangledName, value: sig) otherwise ignore
+			var rekeyedSig = true
+			try project.funcSignatures.insert(mangledName, value: sig) otherwise 'dupSig'
+				rekeyedSig = false
+			end 'dupSig'
 			_ = project.funcSignatures.remove(bareName)
+			if rekeyedSig 'recSig'
+				recordFuncSignatureInsert(project, filePath: filePath, key: mangledName)
+			end 'recSig'
 		end 'haveSig'
 		if let vis = try project.funcVisibilities.get(bareName) 'haveVis'
-			try project.funcVisibilities.insert(mangledName, value: vis) otherwise ignore
+			var rekeyedVis = true
+			try project.funcVisibilities.insert(mangledName, value: vis) otherwise 'dupVis2'
+				rekeyedVis = false
+			end 'dupVis2'
 			_ = project.funcVisibilities.remove(bareName)
+			if rekeyedVis 'recVis2'
+				recordFuncVisibilityInsert(project, filePath: filePath, key: mangledName)
+			end 'recVis2'
 		end 'haveVis'
 		if let th = try project.funcThrowsTypes.get(bareName) 'haveTh'
-			try project.funcThrowsTypes.insert(mangledName, value: th) otherwise ignore
+			var rekeyedTh = true
+			try project.funcThrowsTypes.insert(mangledName, value: th) otherwise 'dupTh2'
+				rekeyedTh = false
+			end 'dupTh2'
 			_ = project.funcThrowsTypes.remove(bareName)
+			if rekeyedTh 'recTh2'
+				recordFuncThrowsInsert(project, filePath: filePath, key: mangledName)
+			end 'recTh2'
 		end 'haveTh'
 		project.methodNameIndex.record(mangledName)
+		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: mangledName)
 		// Walk the current module's functions for an IrFunction whose .name
 		// matches the bare key and rewrite it. Cross-file overloads aren't
 		// supported in this minimal pass — the existing function is expected
@@ -1770,7 +1868,13 @@ export type Parser
 			try skipPastStructLiteralInitializer()
 			skipToNextLine()
 			let placeholder = TopLevelConstant.create(ConstantValue.intValue(0), visibility: visibility, sourceFilePath: filePath)
-			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise ignore
+			var insertedPlaceholder = true
+			try project.topLevelConstants.insert(qualifiedName, value: placeholder) otherwise 'dupPlaceholder'
+				insertedPlaceholder = false
+			end 'dupPlaceholder'
+			if insertedPlaceholder 'recPlaceholder'
+				recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
+			end 'recPlaceholder'
 			logTrace(LogCategory.parser, message: function() gives "parser: deferred struct-literal decl '{qualifiedName}' (no init emitted)")
 			return
 		end 'isStructLit'
@@ -1846,7 +1950,9 @@ export type Parser
 		let block = module.addBlockAt(func, label: "entry", filePath: filePath.toString(), firstLine: 1)
 		module.functions.push(func)
 		project.moduleInitFuncs.push(name)
+		recordModuleInitFuncPush(project, filePath: filePath, name: name)
 		project.livenessRoots.push(name)
+		recordLivenessRootPush(project, filePath: filePath, name: name)
 		moduleInitName = name
 		moduleInitFunc = func
 		moduleInitBlock = block
@@ -1940,12 +2046,18 @@ export type Parser
 		module.appendOp(moduleInitBlock, op: MaxonOp.globalStore(qualifiedName, value: exprName(result), slotType: exprType(result), range: initRange))
 
 		let info = TopLevelVarInfo.create(qualifiedName, slotType: exprType(result), initialValue: 0 as IntConstant, visibility: visibility, sourceFilePath: filePath)
+		var insertedTopLevelVar = true
 		try project.topLevelVars.insert(qualifiedName, value: info) otherwise 'dupVar'
+			insertedTopLevelVar = false
 			reportDuplicateConstant(nameToken)
 		end 'dupVar'
+		if insertedTopLevelVar 'recTopLevelVar'
+			recordTopLevelVarInsert(project, filePath: filePath, key: qualifiedName)
+		end 'recTopLevelVar'
 
 		if not mutable 'isLet'
 			project.immutableArrayLitNames.push(qualifiedName)
+			recordImmutableArrayLitNamePush(project, filePath: filePath, name: qualifiedName)
 		end 'isLet'
 
 		logTrace(LogCategory.parser, message: function() gives "parser: top-level {kindLabel} '{qualifiedName}' → {moduleInitName}")
@@ -2021,10 +2133,34 @@ export type Parser
 		// registration when a duplicate exists (shouldn't happen — the
 		// `<TypeName>.__field_init_<fieldName>` key is unique by
 		// construction — but the insert API is contract-checked).
-		try project.funcReturnTypes.insert(helperName, value: returnType) otherwise ignore
-		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise ignore
-		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise ignore
-		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise ignore
+		var insertedHelperRt = true
+		try project.funcReturnTypes.insert(helperName, value: returnType) otherwise 'dupHelperRt'
+			insertedHelperRt = false
+		end 'dupHelperRt'
+		if insertedHelperRt 'recHelperRt'
+			recordFuncReturnTypeInsert(project, filePath: filePath, key: helperName)
+		end 'recHelperRt'
+		var insertedHelperSig = true
+		try project.funcSignatures.insert(helperName, value: FuncSignature.create(StringArray.create(), paramTypes: MaxonTypeArray.create(), paramDefaults: ParamDefaultArray.create())) otherwise 'dupHelperSig'
+			insertedHelperSig = false
+		end 'dupHelperSig'
+		if insertedHelperSig 'recHelperSig'
+			recordFuncSignatureInsert(project, filePath: filePath, key: helperName)
+		end 'recHelperSig'
+		var insertedHelperVis = true
+		try project.funcVisibilities.insert(helperName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise 'dupHelperVis'
+			insertedHelperVis = false
+		end 'dupHelperVis'
+		if insertedHelperVis 'recHelperVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: helperName)
+		end 'recHelperVis'
+		var insertedHelperTh = true
+		try project.funcThrowsTypes.insert(helperName, value: ThrowsClause.none) otherwise 'dupHelperTh'
+			insertedHelperTh = false
+		end 'dupHelperTh'
+		if insertedHelperTh 'recHelperTh'
+			recordFuncThrowsInsert(project, filePath: filePath, key: helperName)
+		end 'recHelperTh'
 		// Stage K.4: no livenessRoot push. Every `Self{}` literal that
 		// omits a defaulted field emits a `MaxonOp.call(__field_init_<name>)`
 		// op in `parseStructLiteral`, so the regular DFE call-edge walk
@@ -2174,9 +2310,14 @@ export type Parser
 			return
 		end 'dupResolved'
 		let entry = UnresolvedTopLevelDecl.create(qualifiedName, rootExprId: rootExprId, mutable: mutable, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath)
+		var insertedPending = true
 		try project.unresolvedTopLevelDecls.insert(qualifiedName, value: entry) otherwise 'dupPending'
+			insertedPending = false
 			reportDuplicateConstant(nameToken)
 		end 'dupPending'
+		if insertedPending 'recPending'
+			recordUnresolvedTopLevelDeclInsert(project, filePath: filePath, key: qualifiedName)
+		end 'recPending'
 		logTrace(LogCategory.parser, message: function() gives "parser: deferred top-level decl '{qualifiedName}' rootExprId={rootExprId} mutable={mutable} visibility={visibility.name}")
 	end 'registerUnresolvedTopLevelDecl'
 
@@ -3092,6 +3233,7 @@ export type Parser
 		// existing entry stays canonical in the global map.
 		if not hasExisting 'firstEntry'
 			project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+			recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: nameToken.value)
 		end 'firstEntry'
 		// File-private aliases participate in the unused-typealias check.
 		// Exported / module-visible aliases skip it because cross-file uses
@@ -3605,9 +3747,14 @@ export type Parser
 		// byteSize is a placeholder; `layoutAllStructs` in TypeResolution
 		// overwrites it once every field's width is known.
 		let unresolved = UnresolvedStructType.create(currentTypeName, fields: fields, byteSize: 0, visibility: visibility, line: typeNameToken.line, column: typeNameToken.column, filePath: filePath, implementedInterfaces: conformances, typeParams: usesParams, whereClauses: whereClauses, innerAliases: innerAliases)
+		var insertedStructType = true
 		try project.unresolvedStructTypes.insert(currentTypeName, value: unresolved) otherwise 'dupType'
+			insertedStructType = false
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate type '{currentTypeName}'", line: typeNameToken.line, column: typeNameToken.column, filePath: filePath)
 		end 'dupType'
+		if insertedStructType 'recStructType'
+			recordUnresolvedStructTypeInsert(project, filePath: filePath, key: currentTypeName)
+		end 'recStructType'
 
 		// Maintain the `structInnerAliasNames` reverse index alongside
 		// every write into a struct's `innerAliases` map. Even on the
@@ -3617,6 +3764,7 @@ export type Parser
 		// E3009s for the same name.
 		for (aliasName, _) in innerAliases 'recordAliasNames'
 			project.structInnerAliasNames.insert(aliasName)
+			recordStructInnerAliasInsert(project, filePath: filePath, key: aliasName)
 		end 'recordAliasNames'
 
 		// Eager BuiltinArrayLiteral / BuiltinDictionaryLiteral discovery.
@@ -3690,12 +3838,17 @@ export type Parser
 		// `match self` against the enum's named MaxonType. The full case list
 		// is patched in once the body has been walked.
 		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances)
+		var insertedEnumPre = true
 		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupEnumPre'
+			insertedEnumPre = false
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate enum '{currentTypeName}'", line: enumNameToken.line, column: enumNameToken.column, filePath: filePath)
 			currentTypeName = ""
 			synchronize()
 			return
 		end 'dupEnumPre'
+		if insertedEnumPre 'recEnumPre'
+			recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
+		end 'recEnumPre'
 
 		try skipNewlines()
 
@@ -4047,7 +4200,13 @@ export type Parser
 				constValue = ConstantValue.floatValue(rawValue)
 			end 'isFloatConst'
 			let caseEntry = TopLevelConstant.create(constValue, visibility: currentEnumVisibility, sourceFilePath: filePath)
-			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise ignore
+			var insertedCaseConst = true
+			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise 'dupCaseConst'
+				insertedCaseConst = false
+			end 'dupCaseConst'
+			if insertedCaseConst 'recCaseConst'
+				recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
+			end 'recCaseConst'
 
 			try skipNewlines()
 
@@ -4068,6 +4227,7 @@ export type Parser
 		end 'asFloatExpr'
 		if not project.typealiases.contains(currentTypeName) and not project.unresolvedTypealiases.contains(currentTypeName) 'registerAlias'
 			project.unresolvedTypealiases.upsert(currentTypeName, value: UnresolvedTypealias.create(currentTypeName, expr: enumTypeExpr, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath))
+			recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: currentTypeName)
 		end 'registerAlias'
 
 		// Patch the pre-registered placeholder with the full case list. The
@@ -4075,6 +4235,7 @@ export type Parser
 		// insert the placeholder, so this upsert is unconditional.
 		let unresolvedEnum = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: isFloatBacked, visibility: visibility, line: enumNameToken.line, column: enumNameToken.column, filePath: filePath, implementedInterfaces: conformances, isStringBacked: isStringBacked, isCharBacked: isCharBacked, isFunctionBacked: isFunctionBacked)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedEnum)
+		recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
 
 		// Phase 9 Stage 5: synthesize the per-enum `.fromRawValue` /
 		// `.fromName` lookup helpers. The parser-side call-site rewrite
@@ -4137,12 +4298,17 @@ export type Parser
 		// resolve `match self` against the union's named MaxonType. Patched
 		// once the body has been walked.
 		let preRegisterEntry = UnresolvedEnumType.create(currentTypeName, cases: EnumCaseArray.create(), isFloatBacked: false, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true)
+		var insertedUnionPre = true
 		try project.unresolvedEnums.insert(currentTypeName, value: preRegisterEntry) otherwise 'dupUnionPre'
+			insertedUnionPre = false
 			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate union '{currentTypeName}'", line: unionNameToken.line, column: unionNameToken.column, filePath: filePath)
 			currentTypeName = ""
 			synchronize()
 			return
 		end 'dupUnionPre'
+		if insertedUnionPre 'recUnionPre'
+			recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
+		end 'recUnionPre'
 
 		try skipNewlines()
 
@@ -4260,6 +4426,7 @@ export type Parser
 		// was already issued above when the placeholder insert failed.
 		let unresolvedUnion = UnresolvedEnumType.create(currentTypeName, cases: cases, isFloatBacked: false, visibility: visibility, line: unionNameToken.line, column: unionNameToken.column, filePath: filePath, implementedInterfaces: conformances, isUnion: true)
 		project.unresolvedEnums.upsert(currentTypeName, value: unresolvedUnion)
+		recordUnresolvedEnumInsert(project, filePath: filePath, key: currentTypeName)
 
 		// Phase 9 Stage 4: synthesize the `.unionCases` companion bare-enum
 		// per `specs/union-cases.md`. One bare case per variant of the
@@ -4308,14 +4475,26 @@ export type Parser
 			companionCases.push(EnumCase.create(c.name, ordinal: c.ordinal, rawValue: c.ordinal as IntConstant, line: c.line, column: c.column, payloadFields: EnumPayloadFieldArray.create()))
 		end 'eachCase'
 		let companionUnresolved = UnresolvedEnumType.create(companionName, cases: companionCases, isFloatBacked: false, visibility: visibility, line: line, column: column, filePath: filePath, implementedInterfaces: ConformanceArray.create(), isUnion: false)
-		try project.unresolvedEnums.insert(companionName, value: companionUnresolved) otherwise ignore
+		var insertedCompanion = true
+		try project.unresolvedEnums.insert(companionName, value: companionUnresolved) otherwise 'dupCompanion'
+			insertedCompanion = false
+		end 'dupCompanion'
+		if insertedCompanion 'recCompanion'
+			recordUnresolvedEnumInsert(project, filePath: filePath, key: companionName)
+		end 'recCompanion'
 		// Register each case as a top-level integer constant so the lookup
 		// path in `parseIdentifierExpr` finds `Shape.unionCases.circle`.
 		for i in 0 upto companionCases.count() 'eachConst'
 			let c = try companionCases.get(i) otherwise panic("registerUnionCasesCompanion: companionCases.get OOB at {i}")
 			let qualifiedName = "{companionName}.{c.name}"
 			let caseEntry = TopLevelConstant.create(ConstantValue.intValue(c.rawValue), visibility: visibility, sourceFilePath: filePath)
-			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise ignore
+			var insertedCompCaseConst = true
+			try project.topLevelConstants.insert(qualifiedName, value: caseEntry) otherwise 'dupCompCaseConst'
+				insertedCompCaseConst = false
+			end 'dupCompCaseConst'
+			if insertedCompCaseConst 'recCompCaseConst'
+				recordTopLevelConstantInsert(project, filePath: filePath, key: qualifiedName)
+			end 'recCompCaseConst'
 		end 'eachConst'
 		// Register a typealias `companionName → int(0 to N)` so a value of
 		// the companion enum can flow through let/var/param slots the same
@@ -4323,6 +4502,7 @@ export type Parser
 		let aliasExpr = UnresolvedTypeExpr.rangedInt(0, upper: enumIntUpperBound(companionCases))
 		if not project.typealiases.contains(companionName) and not project.unresolvedTypealiases.contains(companionName) 'registerAlias'
 			project.unresolvedTypealiases.upsert(companionName, value: UnresolvedTypealias.create(companionName, expr: aliasExpr, visibility: visibility, line: line, column: column, filePath: filePath))
+			recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: companionName)
 		end 'registerAlias'
 
 		// Phase 9 Stage 5: the companion is itself a bare enum, so it gets
@@ -4400,10 +4580,25 @@ export type Parser
 		// and named-arg defaults pick the synthetic function up exactly like
 		// a user-written `static function`.
 		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeUnionConstructor: funcReturnTypes collision on '{funcName}'")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
 		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeUnionConstructor: funcSignatures collision on '{funcName}'")
+		recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
 		project.methodNameIndex.record(funcName)
-		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
-		try project.funcThrowsTypes.insert(funcName, value: ThrowsClause.none) otherwise ignore
+		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+		var insertedSynVis = true
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupSynVis'
+			insertedSynVis = false
+		end 'dupSynVis'
+		if insertedSynVis 'recSynVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+		end 'recSynVis'
+		var insertedSynTh = true
+		try project.funcThrowsTypes.insert(funcName, value: ThrowsClause.none) otherwise 'dupSynTh'
+			insertedSynTh = false
+		end 'dupSynTh'
+		if insertedSynTh 'recSynTh'
+			recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+		end 'recSynTh'
 
 		// Build the synthetic body: declare a slot per payload field,
 		// `varLoad` each (so the resulting name is bound for the
@@ -4563,10 +4758,25 @@ export type Parser
 		let throwsClause = ThrowsClause.throwing(enumName)
 
 		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromRawValueHelper: funcReturnTypes collision on '{funcName}'")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
 		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromRawValueHelper: funcSignatures collision on '{funcName}'")
+		recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
 		project.methodNameIndex.record(funcName)
-		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
-		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise ignore
+		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+		var insertedRawVis = true
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupRawVis'
+			insertedRawVis = false
+		end 'dupRawVis'
+		if insertedRawVis 'recRawVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+		end 'recRawVis'
+		var insertedRawTh = true
+		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupRawTh'
+			insertedRawTh = false
+		end 'dupRawTh'
+		if insertedRawTh 'recRawTh'
+			recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+		end 'recRawTh'
 
 		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
 		func.namespace = namespace
@@ -4679,10 +4889,25 @@ export type Parser
 		let throwsClause = ThrowsClause.throwing(enumName)
 
 		try project.funcReturnTypes.insert(funcName, value: returnType) otherwise panic("synthesizeEnumFromNameHelper: funcReturnTypes collision on '{funcName}'")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: funcName)
 		try project.funcSignatures.insert(funcName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise panic("synthesizeEnumFromNameHelper: funcSignatures collision on '{funcName}'")
+		recordFuncSignatureInsert(project, filePath: filePath, key: funcName)
 		project.methodNameIndex.record(funcName)
-		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise ignore
-		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise ignore
+		recordMethodNameIndexInsert(project, filePath: filePath, qualifiedName: funcName)
+		var insertedNameVis = true
+		try project.funcVisibilities.insert(funcName, value: FuncVisibilityInfo.create(visibility, sourceFilePath: filePath)) otherwise 'dupNameVis'
+			insertedNameVis = false
+		end 'dupNameVis'
+		if insertedNameVis 'recNameVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: funcName)
+		end 'recNameVis'
+		var insertedNameTh = true
+		try project.funcThrowsTypes.insert(funcName, value: throwsClause) otherwise 'dupNameTh'
+			insertedNameTh = false
+		end 'dupNameTh'
+		if insertedNameTh 'recNameTh'
+			recordFuncThrowsInsert(project, filePath: filePath, key: funcName)
+		end 'recNameTh'
 
 		var func = IrFunction.create(funcName, maxonReturnType: returnType, paramCount: 1 as ParamCount, maxonParamTypes: paramTypes, returnLine: line, throwsTypeName: throwsClause)
 		func.namespace = namespace
@@ -4884,6 +5109,7 @@ export type Parser
 		end 'duplicate' else 'register'
 			let unresolved = UnresolvedInterfaceType.create(nameToken.value, extendsNames: extendsNames, usesParams: usesParams, methods: methods, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath)
 			project.unresolvedInterfaces.upsert(nameToken.value, value: unresolved)
+			recordUnresolvedInterfaceUpsert(project, filePath: filePath, key: nameToken.value)
 		end 'register'
 
 		try skipEndAndLabel()
@@ -5152,7 +5378,13 @@ export type Parser
 		// E4006 for un-satisfied conditional availability without rescanning
 		// the unresolvedExtensions list at every call site.
 		for methodKey in extensionMethodNames 'recordWhere'
-			try project.extensionMethodWhereClauses.insert(methodKey, value: whereClauses) otherwise ignore
+			var insertedExtWhere = true
+			try project.extensionMethodWhereClauses.insert(methodKey, value: whereClauses) otherwise 'dupExtWhere'
+				insertedExtWhere = false
+			end 'dupExtWhere'
+			if insertedExtWhere 'recExtWhere'
+				recordExtensionMethodWhereClauseInsert(project, filePath: filePath, key: methodKey)
+			end 'recExtWhere'
 		end 'recordWhere'
 
 		// Phase 11.0 step 8a: merge inner-typealias entries declared inside
@@ -5191,8 +5423,10 @@ export type Parser
 				// it — Set.insert is idempotent and the "novel" check
 				// above only gates the per-struct map write.
 				project.structInnerAliasNames.insert(aliasName)
+				recordStructInnerAliasInsert(project, filePath: filePath, key: aliasName)
 			end 'eachAlias'
 			project.unresolvedStructTypes.upsert(targetTypeName, value: target)
+			recordUnresolvedStructTypeInsert(project, filePath: filePath, key: targetTypeName)
 			return
 		end 'structTarget'
 
@@ -5203,6 +5437,7 @@ export type Parser
 				end 'novelIface'
 			end 'eachIfaceAlias'
 			project.unresolvedInterfaces.upsert(targetTypeName, value: iface)
+			recordUnresolvedInterfaceUpsert(project, filePath: filePath, key: targetTypeName)
 			return
 		end 'ifaceTarget'
 	end 'mergeExtensionInnerAliases'
@@ -7930,9 +8165,14 @@ export type Parser
 		if isLet and exprIsStringConst(exprResult) 'registerLetConst'
 			let stringId = exprStringConstId(exprResult)
 			let localStrEntry = TopLevelConstant.create(ConstantValue.stringValue(stringId), visibility: Visibility.file, sourceFilePath: filePath)
+			var insertedLocalStr = true
 			try project.topLevelConstants.insert(nameToken.value, value: localStrEntry) otherwise 'dupConst3'
+				insertedLocalStr = false
 				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			end 'dupConst3'
+			if insertedLocalStr 'recLocalStr'
+				recordTopLevelConstantInsert(project, filePath: filePath, key: nameToken.value)
+			end 'recLocalStr'
 		end 'registerLetConst'
 
 		// Phase 9 Stage 5 (struct-backing): record the struct-backed
@@ -10206,8 +10446,22 @@ export type Parser
 		module.appendOp(currentBlock, op: MaxonOp.call(arrName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
 
 		let producer = ArrayLiteralProducer.create(typeToken.value, mmResultName: mmName, initResultName: arrName, elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: filePath)
-		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmName), value: producer) otherwise ignore
-		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName), value: producer) otherwise ignore
+		let producerKey1 = arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmName)
+		var insertedArrProd1 = true
+		try project.arrayLiteralProducers.insert(producerKey1, value: producer) otherwise 'dupArrProd1'
+			insertedArrProd1 = false
+		end 'dupArrProd1'
+		if insertedArrProd1 'recArrProd1'
+			recordArrayLiteralProducerInsert(project, filePath: filePath, key: producerKey1)
+		end 'recArrProd1'
+		let producerKey2 = arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName)
+		var insertedArrProd2 = true
+		try project.arrayLiteralProducers.insert(producerKey2, value: producer) otherwise 'dupArrProd2'
+			insertedArrProd2 = false
+		end 'dupArrProd2'
+		if insertedArrProd2 'recArrProd2'
+			recordArrayLiteralProducerInsert(project, filePath: filePath, key: producerKey2)
+		end 'recArrProd2'
 		usedTypeAliases.insert(element: typeToken.value)
 
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
@@ -11000,7 +11254,14 @@ export type Parser
 		module.appendOp(currentBlock, op: MaxonOp.call(initResultName, callee: project.calleeNames.intern(initCallee), callContext: CallContext.qualified, args: initArgs, argLabels: initLabels, argTypes: initArgTypes, argRanges: initArgRanges, range: literalRange))
 
 		let producer = MapLiteralProducer.create(mapTypeName, initResultName: initResultName, keyMmResultName: keyMmName, valueMmResultName: valueMmName, sourceRange: literalRange, sourceFilePath: filePath)
-		try project.mapLiteralProducers.insert(mapLiteralProducerKey(funcName: currentFunc.name, valueName: initResultName), value: producer) otherwise ignore
+		let mapProducerKey = mapLiteralProducerKey(funcName: currentFunc.name, valueName: initResultName)
+		var insertedMapProd = true
+		try project.mapLiteralProducers.insert(mapProducerKey, value: producer) otherwise 'dupMapProd'
+			insertedMapProd = false
+		end 'dupMapProd'
+		if insertedMapProd 'recMapProd'
+			recordMapLiteralProducerInsert(project, filePath: filePath, key: mapProducerKey)
+		end 'recMapProd'
 
 		return ExprResult.direct(initResultName, valueType: MaxonType.unresolved)
 	end 'parseMapLiteralBodyAfterFirstKey'
@@ -11135,8 +11396,22 @@ export type Parser
 		// `freshSynthName` counters from colliding (e.g.
 		// `__module_init_0`'s `$t5` and `main`'s `$t5` are distinct).
 		let producer = ArrayLiteralProducer.create(arrayTypeName, mmResultName: mmName, initResultName: arrName, elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: filePath)
-		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmName), value: producer) otherwise ignore
-		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName), value: producer) otherwise ignore
+		let arrProdKey1 = arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmName)
+		var insertedEmitArr1 = true
+		try project.arrayLiteralProducers.insert(arrProdKey1, value: producer) otherwise 'dupEmitArr1'
+			insertedEmitArr1 = false
+		end 'dupEmitArr1'
+		if insertedEmitArr1 'recEmitArr1'
+			recordArrayLiteralProducerInsert(project, filePath: filePath, key: arrProdKey1)
+		end 'recEmitArr1'
+		let arrProdKey2 = arrayLiteralProducerKey(funcName: currentFunc.name, valueName: arrName)
+		var insertedEmitArr2 = true
+		try project.arrayLiteralProducers.insert(arrProdKey2, value: producer) otherwise 'dupEmitArr2'
+			insertedEmitArr2 = false
+		end 'dupEmitArr2'
+		if insertedEmitArr2 'recEmitArr2'
+			recordArrayLiteralProducerInsert(project, filePath: filePath, key: arrProdKey2)
+		end 'recEmitArr2'
 
 		return ExprResult.direct(arrName, valueType: MaxonType.unresolved)
 	end 'emitArrayLiteralResult'
@@ -11227,7 +11502,14 @@ export type Parser
 	// `mmResultName == name` branch.
 	function registerArrayLiteralAxis(mmResultName ByteArray, elemNames ByteArrayArray, elemRanges SourceRangeArray)
 		let producer = ArrayLiteralProducer.create("", mmResultName: mmResultName, initResultName: ByteArray.create(), elemNames: elemNames, elemRanges: elemRanges, sourceFilePath: filePath)
-		try project.arrayLiteralProducers.insert(arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmResultName), value: producer) otherwise ignore
+		let axisKey = arrayLiteralProducerKey(funcName: currentFunc.name, valueName: mmResultName)
+		var insertedAxis = true
+		try project.arrayLiteralProducers.insert(axisKey, value: producer) otherwise 'dupAxis'
+			insertedAxis = false
+		end 'dupAxis'
+		if insertedAxis 'recAxis'
+			recordArrayLiteralProducerInsert(project, filePath: filePath, key: axisKey)
+		end 'recAxis'
 	end 'registerArrayLiteralAxis'
 
 	// The preceding op publishes its error flag via the multi-value-return
@@ -11287,7 +11569,9 @@ export type Parser
 			// distinguish int from byte-char everywhere.
 			let byteVal = try decoded.get(0) otherwise panic("parseCharLiteralExpr: count==1 but get(0) failed")
 			let name = emitLiteral(block, value: byteVal as ParsedInt, valueType: MaxonType.integer, range: range)
-			project.charByteLiterals.insert(charByteLiteralKey(funcName: currentFunc.name, valueName: name))
+			let charKey = charByteLiteralKey(funcName: currentFunc.name, valueName: name)
+			project.charByteLiterals.insert(charKey)
+			recordCharByteLiteralInsert(project, filePath: filePath, key: charKey)
 			return ExprResult.direct(name, valueType: MaxonType.integer)
 		end 'singleByte'
 		// Phase 7 step 6: multi-byte character literal — intern the decoded
@@ -11728,6 +12012,7 @@ export type Parser
 			let baseId = project.typeNames.intern(baseName)
 			let giid = project.genericInstances.intern(baseId, args: elemTypes)
 			project.tupleAllocGids.upsert(ptrName, value: giid)
+			recordTupleAllocGidUpsert(project, filePath: filePath, key: ptrName)
 			return ExprResult.direct(ptrName, valueType: MaxonType.genericInstance(giid))
 		end 'concreteAtParse'
 		return ExprResult.direct(ptrName, valueType: internMaxonType(project, name: baseName))
@@ -11981,8 +12266,16 @@ export type Parser
 			closureParamDefaults.push(ParamDefault.none)
 		end 'pushDefaults'
 		try project.funcReturnTypes.insert(closureName, value: actualReturn) otherwise panic("parseClosure: duplicate closure name '{closureName}' — counter desync")
+		recordFuncReturnTypeInsert(project, filePath: filePath, key: closureName)
 		try project.funcSignatures.insert(closureName, value: FuncSignature.create(userParamNames, paramTypes: userParamTypes, paramDefaults: closureParamDefaults)) otherwise panic("parseClosure: duplicate funcSignatures entry for '{closureName}'")
-		try project.funcVisibilities.insert(closureName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise ignore
+		recordFuncSignatureInsert(project, filePath: filePath, key: closureName)
+		var insertedClosureVis = true
+		try project.funcVisibilities.insert(closureName, value: FuncVisibilityInfo.create(Visibility.file, sourceFilePath: filePath)) otherwise 'dupClosureVis'
+			insertedClosureVis = false
+		end 'dupClosureVis'
+		if insertedClosureVis 'recClosureVis'
+			recordFuncVisibilityInsert(project, filePath: filePath, key: closureName)
+		end 'recClosureVis'
 
 		let resultName = freshSynthName()
 		if captureCount > 0 'emitCreate'
@@ -12672,25 +12965,25 @@ typealias CharByteSlotSet = Set with VarSlot
 //
 // All keys go through `charByteLiteralKey` so the per-function value-name
 // space matches the `arrayLiteralProducerKey` scheme used elsewhere.
-function propagateCharByteThroughVarChains(project Project, module MaxonModule)
+function propagateCharByteThroughVarChains(project Project, module MaxonModule, filePath FilePath)
 	for func in module.functions 'eachFunc'
 		var charByteSlots = CharByteSlotSet.create()
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("propagateCharByteThroughVarChains: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("propagateCharByteThroughVarChains: opIdx OOB")
-				propagateCharByteForOp(project, op: op, funcName: func.name, charByteSlots: charByteSlots)
+				propagateCharByteForOp(project, op: op, funcName: func.name, charByteSlots: charByteSlots, filePath: filePath)
 			end 'eachOp'
 			if block.hasTerminatorOp() 'hasTerm'
 				let termIdx = block.terminatorIndex()
 				let termOp = try module.ops.get(termIdx) otherwise panic("propagateCharByteThroughVarChains: terminator OOB")
-				propagateCharByteForOp(project, op: termOp, funcName: func.name, charByteSlots: charByteSlots)
+				propagateCharByteForOp(project, op: termOp, funcName: func.name, charByteSlots: charByteSlots, filePath: filePath)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'propagateCharByteThroughVarChains'
 
-function propagateCharByteForOp(project Project, op MaxonOp, funcName String, charByteSlots CharByteSlotSet)
+function propagateCharByteForOp(project Project, op MaxonOp, funcName String, charByteSlots CharByteSlotSet, filePath FilePath)
 	// Cheap pre-filter on op tag avoids exhaustively listing every other
 	// MaxonOp arm just to skip them. The three arms below are the only ones
 	// that participate in char-byte slot taint flow.
@@ -12699,7 +12992,7 @@ function propagateCharByteForOp(project Project, op MaxonOp, funcName String, ch
 	end 'unrelated'
 	match op 'rec'
 		varDecl(slotId, value, _, _) then handleCharByteVarDecl(project, funcName: funcName, slotId: slotId, value: value, charByteSlots: charByteSlots)
-		varLoad(result, slotId, _, _) then handleCharByteVarLoad(project, funcName: funcName, result: result, slotId: slotId, charByteSlots: charByteSlots)
+		varLoad(result, slotId, _, _) then handleCharByteVarLoad(project, funcName: funcName, result: result, slotId: slotId, charByteSlots: charByteSlots, filePath: filePath)
 		varStore(slotId, value, _) then handleCharByteVarStore(project, funcName: funcName, slotId: slotId, value: value, charByteSlots: charByteSlots)
 		default panic("propagateCharByteForOp: pre-filter let through op.name={op.name}")
 	end 'rec'
@@ -12711,9 +13004,11 @@ function handleCharByteVarDecl(project Project, funcName String, slotId VarSlot,
 	end 'inherit'
 end 'handleCharByteVarDecl'
 
-function handleCharByteVarLoad(project Project, funcName String, result ByteArray, slotId VarSlot, charByteSlots CharByteSlotSet)
+function handleCharByteVarLoad(project Project, funcName String, result ByteArray, slotId VarSlot, charByteSlots CharByteSlotSet, filePath FilePath)
 	if charByteSlots.contains(slotId) 'tainted'
-		project.charByteLiterals.insert(charByteLiteralKey(funcName: funcName, valueName: result))
+		let key = charByteLiteralKey(funcName: funcName, valueName: result)
+		project.charByteLiterals.insert(key)
+		recordCharByteLiteralInsert(project, filePath: filePath, key: key)
 	end 'tainted'
 end 'handleCharByteVarLoad'
 

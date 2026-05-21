@@ -1,0 +1,66 @@
+// Test: associated-type-in-param
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Accumulator uses Item
+	function add(item Item) returns Self
+	function total() returns Integer
+end 'Accumulator'
+
+type IntSum implements Accumulator with Integer
+	let sum Integer
+
+	function add(item Integer) returns IntSum
+		return IntSum{sum: sum + item}
+	end 'add'
+
+	function total() returns Integer
+		return sum
+	end 'total'
+
+	static function create(sum Integer) returns Self
+		return Self{sum: sum}
+	end 'create'
+end 'IntSum'
+
+function main() returns ExitCode
+	var acc = IntSum.create(sum: 0)
+	acc = acc.add(10)
+	acc = acc.add(32)
+	return acc.total()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %10 = mir.mov_imm 8 : i64
+    %11 = mir.call @mrt_alloc(%10)
+    mir.store %0, %11, 0 width: qword
+    %3 = mir.mov_imm 10 : i64
+    %12 = mir.mov_imm 8 : i64
+    %13 = mir.call @mrt_alloc(%12)
+    %14 = mir.load %11, 0 width: qword
+    %15 = mir.add.i64 %14, %3
+    mir.store %15, %13, 0 width: qword
+    %6 = mir.mov_imm 32 : i64
+    %16 = mir.mov_imm 8 : i64
+    %17 = mir.call @mrt_alloc(%16)
+    %18 = mir.load %13, 0 width: qword
+    %19 = mir.add.i64 %18, %6
+    mir.store %19, %17, 0 width: qword
+    %20 = mir.load %17, 0 width: qword
+    %21 = mir.mov_imm 125 : i64
+    %22 = mir.cmp ugt, %20, %21
+    mir.cond_br %22 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %23 = mir.global_addr @__panic_msg_0
+    %24 = mir.call @mrt_panic(%23)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+---

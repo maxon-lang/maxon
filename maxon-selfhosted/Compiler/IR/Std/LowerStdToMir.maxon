@@ -4,22 +4,68 @@
 // MirModule contains only MirOps.
 
 // ============================================================
-// Public entry point
+// Public entry points
 // ============================================================
+//
+// Two entry shapes, both byte-identical in output:
+//
+//   - `lowerStdToMir(stdModule)` — whole-module driver. Builds the MIR
+//     skeleton (blocks 1:1 + functions transferred), then iterates per-
+//     function lowering. Kept as a single-call entry for the unit tests
+//     and any caller that does not need to interleave per-function work.
+//
+//   - `prepareMirSkeleton(stdModule)` + `lowerStdFunctionToMir(...)` —
+//     per-function entry shape used by `runLowerStdToMirPerFunction` in
+//     `PassPipeline.maxon`. `prepareMirSkeleton` is called once at the top
+//     of the MIR-pipeline driver to produce the shared MIR skeleton, then
+//     `lowerStdFunctionToMir` is called once per function. Because the
+//     skeleton-build phase is whole-module read-only over `stdModule` and
+//     the per-function op-walk only touches its own function's blocks
+//     (and the shared `mirModule.ops` array via `appendOp` /
+//     `setTerminator`), byte parity holds as long as the per-function
+//     calls happen in the same order as the whole-module loop.
 
 export function lowerStdToMir(stdModule StdModule) returns MirModule
-	return StdToMirLowering.create(stdModule).lower()
+	var lowering = StdToMirLowering.create(stdModule)
+	lowering.prepareSkeleton()
+	for srcFunc in stdModule.functions 'eachFunc'
+		lowering.lowerFunction(srcFunc)
+	end 'eachFunc'
+	return lowering.mirModule
 end 'lowerStdToMir'
+
+// Per-function MIR entry point. Builds the shared MIR skeleton once, then
+// exposes a `lowerFunction` call per source function. The caller drives
+// the per-function loop so downstream MIR-tier work can interleave per-
+// function lowering with later passes.
+//
+// Byte-parity contract: the caller MUST invoke `lowerFunction` in the same
+// order as `stdModule.functions` to preserve op-array ordering. The whole-
+// module entry above is the reference order; the per-function dispatch
+// shim in `runLowerStdToMirPerFunction` mirrors it.
+export function prepareMirSkeleton(stdModule StdModule) returns StdToMirLowering
+	var lowering = StdToMirLowering.create(stdModule)
+	lowering.prepareSkeleton()
+	return lowering
+end 'prepareMirSkeleton'
+
+export function lowerStdFunctionToMir(lowering StdToMirLowering, srcFunc IrFunction)
+	lowering.lowerFunction(srcFunc)
+end 'lowerStdFunctionToMir'
+
+export function takeMirModule(lowering StdToMirLowering) returns MirModule
+	return lowering.mirModule
+end 'takeMirModule'
 
 // ============================================================
 // StdToMirLowering type
 // ============================================================
 
-type StdToMirLowering
-	var stdModule StdModule
-	var mirModule MirModule
+export type StdToMirLowering
+	export var stdModule StdModule
+	export var mirModule MirModule
 	// Per-function fresh-id allocator — re-seeded at the top of every
-	// function walk in `lower()`. Used by sub-lowerings (dropTypeParam)
+	// function walk in `lowerFunction()`. Used by sub-lowerings (dropTypeParam)
 	// that need to mint extra ValueIds for the descriptorField/indirectCall
 	// pair.
 	var nextValueIdRef ValueIdRef
@@ -28,7 +74,13 @@ type StdToMirLowering
 		return Self{stdModule: stdModule, mirModule: MirModule.create(), nextValueIdRef: ValueIdRef.create(0)}
 	end 'create'
 
-	export function lower() returns MirModule
+	// Whole-module setup phase. Clones every StdModule block 1:1 into
+	// `mirModule.blocks` (preserving flat-block indices that `IrFunction.blockRefs`
+	// references) and transfers every function into `mirModule.functions`. Must
+	// run before any `lowerFunction` call. Idempotent in the sense that it does
+	// not mutate the source `stdModule`; calling it twice would push the blocks
+	// twice and is a caller bug.
+	export function prepareSkeleton()
 		// Clone blocks 1:1 in the same order so blockRef indices stay valid.
 		// Each IrBlock starts empty; ops are appended during function walking.
 		for srcBlock in self.stdModule.blocks 'cloneBlocks'
@@ -43,35 +95,35 @@ type StdToMirLowering
 		for srcFunc in self.stdModule.functions 'transferFuncs'
 			self.mirModule.functions.push(srcFunc)
 		end 'transferFuncs'
+	end 'prepareSkeleton'
 
-		// Walk each function's blocks and lower their ops.
-		for srcFunc in self.stdModule.functions 'eachFunc'
-			logTrace(LogCategory.ir, message: function() gives "lower-std-to-mir: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
+	// Per-function lowering phase. Walks the function's blocks and lowers each
+	// op into the matching `mirModule.blocks` entry (indexed by the same
+	// blockRef the function's `blockRefs` carries).
+	export function lowerFunction(srcFunc IrFunction)
+		logTrace(LogCategory.ir, message: function() gives "lower-std-to-mir: func={srcFunc.name} blocks={srcFunc.blockRefs.count()}")
 
-			// Seed the per-function id allocator so dropTypeParam (and any
-			// future helper that needs fresh ids) can mint ValueIds without
-			// colliding with the existing op definitions.
-			let maxFuncId = scanMaxValueId(srcFunc, module: self.stdModule)
-			self.nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
+		// Seed the per-function id allocator so dropTypeParam (and any
+		// future helper that needs fresh ids) can mint ValueIds without
+		// colliding with the existing op definitions.
+		let maxFuncId = scanMaxValueId(srcFunc, module: self.stdModule)
+		self.nextValueIdRef = ValueIdRef.create(maxFuncId + 1)
 
-			for blockRef in srcFunc.blockRefs 'eachBlock'
-				let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in stdModule.blocks")
-				var dstBlock = try self.mirModule.blocks.get(blockRef) otherwise panic("invariant: mirModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("invariant: blockRef from srcFunc.blockRefs not in stdModule.blocks")
+			var dstBlock = try self.mirModule.blocks.get(blockRef) otherwise panic("invariant: mirModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
-				for opIdx in srcBlock.opRefs 'eachOp'
-					let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("invariant: opIdx from srcBlock.opRefs not in stdModule.ops")
-					self.convertStdOp(stdOp, dstBlock: dstBlock)
-				end 'eachOp'
+			for opIdx in srcBlock.opRefs 'eachOp'
+				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("invariant: opIdx from srcBlock.opRefs not in stdModule.ops")
+				self.convertStdOp(stdOp, dstBlock: dstBlock)
+			end 'eachOp'
 
-				if srcBlock.hasTerminatorOp() 'hasTerm'
-					let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in stdModule.ops")
-					self.convertStdTerminator(termOp, dstBlock: dstBlock)
-				end 'hasTerm'
-			end 'eachBlock'
-		end 'eachFunc'
-
-		return self.mirModule
-	end 'lower'
+			if srcBlock.hasTerminatorOp() 'hasTerm'
+				let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("invariant: terminatorIndex not in stdModule.ops")
+				self.convertStdTerminator(termOp, dstBlock: dstBlock)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'lowerFunction'
 
 	// ============================================================
 	// StdOp category dispatch (regular ops)

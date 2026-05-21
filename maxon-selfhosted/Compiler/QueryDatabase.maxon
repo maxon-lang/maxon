@@ -188,12 +188,16 @@ export type QueryDatabase
 
 	// Phase 11.5: per-function caches and the incremental-mode toggle.
 	//
-	// `enableIncremental` defaults to false so batch CLI builds produce the
-	// exact same artifacts they did before this layer existed — the
-	// incremental path only runs when an LSP / `--watch` driver opts in.
-	// Whole-module emission and incremental emission must produce
-	// byte-identical output for the same input; the off-by-default flag
-	// makes the safety invariant easy to enforce at boundaries.
+	// `enableIncremental` defaults to true. Every default invocation routes
+	// through `emitBackendIncremental` (chunk-driven emit) so the per-
+	// function cache is populated on the first build and warm rebuilds on
+	// the same `Project` skip the N-1 unchanged functions. Whole-module
+	// emission and incremental emission produce byte-identical output for
+	// the same input; the self-hosted spec-test matrix gates the invariant.
+	// WASM delegates back to the whole-module driver in
+	// `emitBackendIncremental`, so the flip is native-PE-only in observable
+	// behavior. Tests that need to assert classical query-counter semantics
+	// (Scenarios A/C/E) pin this to false.
 	export var enableIncremental bool
 	export var midPerFunc MidFuncCacheMap
 	export var mirPerFunc MirFuncCacheMap
@@ -224,7 +228,7 @@ export type QueryDatabase
 			allModuleHits: 0, allModuleMisses: 0,
 			allMidHits: 0, allMidMisses: 0,
 			codeHits: 0, codeMisses: 0,
-			enableIncremental: false,
+			enableIncremental: true,
 			midPerFunc: MidFuncCacheMap.create(),
 			mirPerFunc: MirFuncCacheMap.create(),
 			codePerFunc: CodeChunkCacheMap.create(),

@@ -15,6 +15,23 @@ end 'Relocation'
 
 export typealias RelocationArray = Array with Relocation
 
+// `codeOffset` semantics depend on the chunk the fixup belongs to:
+//
+//   - In the whole-module `CodeResult.code` byte array (the historical
+//     emission path used by `emitTargetCode`) the offset is absolute in
+//     `.text` and ready to be patched directly by `resolveCallFixups`.
+//   - In a per-function `FunctionCodeChunk.callFixups` array (produced by
+//     `TargetBackend.emitFunctionChunk` and consumed by the chunk-driven
+//     incremental backend) the offset is **chunk-local** — relative to the
+//     start of `chunk.code` — and must be shifted by the chunk's final
+//     placement in `.text` before patching. `concatFunctionChunks` performs
+//     that rewrite.
+//   - In a cached stdlib `ObjectFunction.callFixups` array the offset is
+//     also chunk-local; `linkX64StdlibFunctions` / `linkArm64StdlibFunctions`
+//     do the post-hoc shift at link time.
+//
+// Code that consumes a `CallFixupArray` must know which space the offsets
+// live in; mixing them silently writes to the wrong patch site.
 export type CallFixup
 	export var codeOffset CodeOffset
 	export var targetName String
@@ -194,6 +211,13 @@ export type FunctionCodeChunk
 	export var callFixups CallFixupArray
 	export var rdataRelocs RdataRelocationArray
 	export var iatRelocs RelocationArray
+	// ARM64 ADR fixups produced by `Arm64Backend.emitFunctionChunk`. Offsets
+	// are chunk-local and rebased to absolute `.text` offsets by
+	// `concatArm64FunctionChunks` — same shape as the other fixup arrays
+	// above. Stays empty for X64 chunks; the field lives on the shared
+	// type so the per-function cache memo carries every fixup needed to
+	// reconstruct the binary without a parallel per-architecture array.
+	export var arm64AdrFixups Arm64AdrFixupArray
 
 	export static function create(funcName String) returns FunctionCodeChunk
 		return Self{
@@ -202,7 +226,8 @@ export type FunctionCodeChunk
 			entryOffset: 0,
 			callFixups: CallFixupArray.create(),
 			rdataRelocs: RdataRelocationArray.create(),
-			iatRelocs: RelocationArray.create()
+			iatRelocs: RelocationArray.create(),
+			arm64AdrFixups: Arm64AdrFixupArray.create()
 		}
 	end 'create'
 end 'FunctionCodeChunk'
