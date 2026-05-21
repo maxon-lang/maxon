@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **117 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1379 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2753/2753 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **118 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1409 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2767/2767 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -90,11 +90,19 @@ Phase 12:  Global Variables       [x] top-level-let (16/16, 1 tagged for Phase 1
                                       validator (E2003 "Type 'X' expects N type argument(s)") added.
                                       Chained global-field assignment (`state.inner.x = 99`) parsed.
                                       `Type from <literal>` initializer routes through __module_init.
-Phase 13:  Collections            [~] Map (31/31, 2 tagged), array-hashable (6/6, 1 tagged),
-                                      map-struct-bytearray (3/3), map-try-otherwise-block (2/2)
-                                      all whitelisted. Set + Vector tagged out pending
-                                      `Set from [...]` generic-inference parser feature + sized
-                                      `Vector with N` typealias parsing.
+Phase 13:  Collections            [x] map (50/50), set (23/23), vector (23/23),
+                                      array-hashable (7/7), map-struct-bytearray (4/4),
+                                      map-try-otherwise-block (2/2), collection (16/16)
+                                      all whitelisted, fully green on both x64-windows
+                                      and wasm32-wasi. The four previously-"tagged"
+                                      fragments (map.for-in.nested,
+                                      map.insert.duplicate-error-binding,
+                                      array-hashable.int-array-map-key,
+                                      set.typealias-of-array-element) all pass.
+                                      `Set from [...]` generic-inference and
+                                      `Vector with N` sized typealias parsing both
+                                      shipped earlier — Stage D's tagged-out claims
+                                      were stale on closeout.
 Phase 14:  Math Functions         [x] All 16 specs whitelisted: abs/sqrt/floor/ceil/round/trunc/
                                       sin/cos/tan/atan2/exp/log/log2/log10/min/max. Hardware ops
                                       for abs/sqrt/floor/ceil/round/trunc/min/max via Std + MIR
@@ -940,7 +948,7 @@ The last three `static-variables` fragments needed two unrelated fixes:
 
 ---
 
-## Phase 13: Collections (Map, Set, Vector) (~8 specs) — PARTIALLY DONE
+## Phase 13: Collections (Map, Set, Vector) — DONE
 
 **Goal**: hash map, hash set, vector.
 
@@ -974,23 +982,76 @@ The last three `static-variables` fragments needed two unrelated fixes:
   5. `__Tuple2` / `__Tuple3` field declarations marked `export` so user code
      can access tuple components without tripping E3014.
 
-### Tagged out for downstream phases
+### Closeout (2026-05-20)
 
-- **`set` (1/14 baseline)** — needs `Set from [...]` generic-inference parser
-  feature. Phase-11.4 sub-feature (generic-instantiation-from-literal). One
-  fragment (`typealias-of-array-element`) additionally needs conditional Array
-  Hashable conformance.
-- **`vector` (0/23 baseline)** — all fragments use `Vector with N Element`
-  (sized typealias syntax) or `Vector from [...]` (generic inference). Both
-  unsupported. Sized typealiases need a parser extension to allow size-int
-  positional args alongside type args.
-- **2 `map` fragments** — `for-in.nested` (MapIterator.advance layout-forwarding
-  gap, Phase-11.4); `insert.duplicate-error-binding` (try-otherwise binding
-  scope, Phase-8 follow-up).
-- **1 `array-hashable` fragment** — `int-array-map-key` needs conditional-conformance
-  `extension Array implements Hashable, Equatable where Element is Hashable and
-  Equatable`. BuildWitnessTables doesn't emit per-instance witness for the
-  conditional Array → Hashable conformance.
+The four fragments Stage D listed as "tagged out for downstream phases" all
+verified green on x64-windows AND wasm32-wasi without any further compiler
+changes — Stages H / I / J had already shipped the underlying fixes
+(per-instance witness tables for conditional conformance, MapIterator
+layout-forwarding, try-otherwise binding scope, `Set from [...]` /
+`Vector with N` parser support). Stage D's tagged-out claims were stale
+on closeout. Final state, both targets:
+
+- `map`: 50/50
+- `set`: 23/23 (including `typealias-of-array-element` with conditional
+  `Array with Byte` Hashable witness)
+- `vector`: 23/23 (including all `Vector with N Element` sized-typealias
+  shapes and `Vector from [...]` literal-inferred shapes)
+- `array-hashable`: 7/7 (including `int-array-map-key` exercising the
+  per-instance Array→Hashable conditional witness)
+- `map-struct-bytearray`: 4/4
+- `map-try-otherwise-block`: 2/2
+
+Also enabled `collection` (16/16) — the `Collection` interface spec is
+collection-adjacent and already green on the existing compiler/stdlib
+infrastructure.
+
+### Tracked: stdlib-array residuals (NOT enabled)
+
+`specs/stdlib-array.md` has 41 fragments; 29 pass individually but 12
+fail with three distinct symptoms when enabled (12 → 12 categorisation
+done 2026-05-20):
+
+1. **Runtime exit-code mismatches** (e.g. `isEmpty-transitions` returns
+   42 instead of 0). Root cause: SSA-destruction over-coalesces a
+   block-arg destination with a value that is still live across a
+   different predecessor edge. Specifically `isCopyBoundaryOverlap`
+   ([SSAColoring.maxon:539](Compiler/Targets/Shared/SSAColoring.maxon#L539))
+   suppresses interference when `overlap == 1` and the two ranges are
+   copy-connected via `copyHintValueId`. This is correct for 2-address
+   ops (where the source dies at the copy) but unsafe for block-arg
+   parallel copies with multiple predecessors: when dest is coalesced
+   with source-from-predecessor-A, the parallel copy on
+   predecessor-B's edge writes B's source into the shared register,
+   clobbering A's value if A is still live downstream. Concretely,
+   `%merge_param` (block param of `try_0.merge`) gets coalesced with
+   `%5` (constant 0 used in entry, body, AND `e3_0.after: mir.ret %5`)
+   into r13. The `try_0.ok → try_0.merge` edge then copies
+   `r13 := r14`, destroying `%5`'s value before the return. Proper fix
+   requires modelling the parallel-copy position in the interference
+   graph (add an interval for each block-arg dest at the END of every
+   predecessor, where the parallel copy lives), and making
+   copy-link tracking edge-aware (per-edge source/dest pairs rather
+   than one bidirectional link per range). Multi-day work touching
+   LiveRangeBuilder, SSAColoring, and possibly CopyResolution.
+2. **Register-allocator panic** `colorLookupGpr: virtual GPR vN has no
+   coloring assignment` triggered by a subset of insert/remove
+   fragments — likely a downstream symptom of (1) or a related
+   coalescing miscount. Needs investigation after (1) is fixed.
+3. **Access violation in `build-sorted-with-inserts`** — runtime
+   crash; unknown root cause, may be the same SSA-destruction bug
+   manifesting through a different value or a separate issue.
+
+Plus a **batch-only** `lowerMethodCall: opIdx=N (receiver=Array,
+method=get) missing from project.resolvedCallees` panic when all 41
+fragments compile in one batch — does not reproduce per-fragment.
+Likely cross-fragment state leakage in `project.resolvedCallees`
+similar to the cache-miss pollution fixed in Phase 7 finish
+(2026-05-07) for stdlib-vs-user OpIndex collisions.
+
+The `stdlib-array` spec stays commented out in the whitelist with the
+above pointer; it is the gating work for the next regalloc-correctness
+push. Enabling it is straightforward once (1) lands.
 
 ---
 
