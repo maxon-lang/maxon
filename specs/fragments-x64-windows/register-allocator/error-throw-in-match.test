@@ -25,7 +25,7 @@ ExitCode: 242
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     %8 = maxon.param {index = 0 : i32} {name = key} {type = i64}
     maxon.assign %8 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
@@ -57,7 +57,7 @@ module {
   func @main() -> i64 {
   entry:
     %18 = maxon.literal {value = 2 : i64}
-    %21, %20 = maxon.try_call @register-allocator.lookup %18
+    %21, %20 = maxon.try_call @lookup %18
     %22 = maxon.literal {value = 0 : i64}
     maxon.assign %22 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -72,7 +72,7 @@ module {
     %26 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %26 {var = a} {kind = i64} {decl = 1 : i1}
     %27 = maxon.literal {value = 99 : i64}
-    %30, %29 = maxon.try_call @register-allocator.lookup %27
+    %30, %29 = maxon.try_call @lookup %27
     %31 = maxon.literal {value = 42 : i64}
     maxon.assign %31 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %30 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -105,7 +105,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     %0 = func.param key : StdI64
     memref.store %0, __match_dispatch_0
@@ -136,7 +136,7 @@ module {
   func @main() -> u32 {
   entry:
     %12 = arith.constant {value = 2 : i64}
-    %13, %14 = func.try_call @register-allocator.lookup %12
+    %13, %14 = func.try_call @lookup %12
     %15 = arith.constant {value = 0 : i64}
     memref.store %15, __try_default_0
     memref.store %13, __try_result_0
@@ -151,7 +151,7 @@ module {
     %19 = memref.load __try_result_0 : i64
     memref.store %19, a
     %20 = arith.constant {value = 99 : i64}
-    %21, %22 = func.try_call @register-allocator.lookup %20
+    %21, %22 = func.try_call @lookup %20
     %23 = arith.constant {value = 42 : i64}
     memref.store %23, __try_default_1
     memref.store %21, __try_result_1
@@ -184,16 +184,16 @@ module {
 }
 === x86
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.jmp register-allocator.lookup.dispatch_0.cmp0
+    x64.jmp lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne register-allocator.lookup.dispatch_0.cmp1
+    x64.jne lookup.dispatch_0.cmp1
   dispatch_0.case0:
     x64.mov rax, 100
     x64.xor edx, edx
@@ -203,7 +203,7 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, 2
     x64.cmp rax, rcx
-    x64.jne register-allocator.lookup.dispatch_0.case2
+    x64.jne lookup.dispatch_0.case2
   dispatch_0.case1:
     x64.mov rax, 200
     x64.xor edx, edx
@@ -223,7 +223,7 @@ module {
   entry:
     x64.prologue stack_size=48
     x64.mov rcx, 2
-    x64.call register-allocator.lookup
+    x64.call lookup
     x64.xor ecx, ecx
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax
@@ -238,7 +238,7 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
     x64.mov rcx, 99
-    x64.call register-allocator.lookup
+    x64.call lookup
     x64.mov rcx, 42
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rax

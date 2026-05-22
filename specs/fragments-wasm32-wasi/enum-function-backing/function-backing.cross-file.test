@@ -1,6 +1,6 @@
 // Test: function-backing.cross-file
-// --- file: ops.maxon
-export typealias Integer = int(i64.min to i64.max)
+// --- file: api/ops.maxon
+typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -10,13 +10,13 @@ export function tripleFn(x Integer) returns Integer
 	return x * 3
 end 'tripleFn'
 
-// --- file: dispatch.maxon
+// --- file: api/dispatch.maxon
 export enum Op
 	doubleOp = doubleFn
 	tripleOp = tripleFn
 end 'Op'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let f = Op.tripleOp.rawValue
 	return f(14)
@@ -26,14 +26,14 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @ops.doubleFn(local0: i64) -> i64 {
+  func @api.doubleFn(local0: i64) -> i64 {
   entry:
     %4 = mir.param local0 : i64
     %2 = mir.mov_imm 2 : i64
     %3 = mir.mul.i64 %4, %2
     mir.ret %3
   }
-  func @ops.tripleFn(local0: i64) -> i64 {
+  func @api.tripleFn(local0: i64) -> i64 {
   entry:
     %4 = mir.param local0 : i64
     %2 = mir.mov_imm 3 : i64
@@ -49,10 +49,10 @@ module {
     %8 = mir.cmp eq, %0, %7
     mir.cond_br %8 [then: inlined___enum_Op_fnRaw_1(), else: inlined___enum_Op_fnRaw_2()]
   inlined___enum_Op_fnRaw_1:
-    %9 = mir.func_addr @__fnref_ops.doubleFn
+    %9 = mir.func_addr @__fnref_api.doubleFn
     mir.br inline_cont_main_0(%9)
   inlined___enum_Op_fnRaw_2:
-    %10 = mir.func_addr @__fnref_ops.tripleFn
+    %10 = mir.func_addr @__fnref_api.tripleFn
     mir.br inline_cont_main_0(%10)
   inline_cont_main_0:
     %4 = mir.mov_imm 0 : i64

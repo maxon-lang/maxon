@@ -27,7 +27,7 @@ ExitCode: 55
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     maxon.scope_end [x]
@@ -57,17 +57,17 @@ module {
     maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = maxon.var_ref {var = b} {type = i64}
-    %12 = maxon.call @register-allocator.identity %11
+    %12 = maxon.call @identity %11
     %13 = maxon.var_ref {var = a} {type = i64}
     %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
     %15 = maxon.var_ref {var = d} {type = i64}
-    %16 = maxon.call @register-allocator.identity %15
+    %16 = maxon.call @identity %15
     %17 = maxon.var_ref {var = c} {type = i64}
     %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
     %19 = maxon.var_ref {var = f} {type = i64}
-    %20 = maxon.call @register-allocator.identity %19
+    %20 = maxon.call @identity %19
     %21 = maxon.var_ref {var = e} {type = i64}
     %22 = maxon.binop %21, %20 {op = add}
     maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
@@ -104,7 +104,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     func.return %0
@@ -133,17 +133,17 @@ module {
     cf.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = memref.load b : i64
-    %12 = func.call @register-allocator.identity %11
+    %12 = func.call @identity %11
     %13 = memref.load a : i64
     %14 = arith.addi %13, %12
     memref.store %14, a
     %15 = memref.load d : i64
-    %16 = func.call @register-allocator.identity %15
+    %16 = func.call @identity %15
     %17 = memref.load c : i64
     %18 = arith.addi %17, %16
     memref.store %18, c
     %19 = memref.load f : i64
-    %20 = func.call @register-allocator.identity %19
+    %20 = func.call @identity %19
     %21 = memref.load e : i64
     %22 = arith.addi %21, %20
     memref.store %22, e
@@ -180,7 +180,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     x64.mov rax, rcx
     x64.ret
@@ -211,19 +211,19 @@ module {
   loop_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov [rbp-8], rcx
     x64.mov rdx, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rbx, [rbp-24]
     x64.add rbx, rax
     x64.mov [rbp-24], rbx
     x64.mov rsi, [rbp-48]
     x64.mov rcx, [rbp-48]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rdi, [rbp-40]
     x64.add rdi, rax
     x64.mov [rbp-40], rdi

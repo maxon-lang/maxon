@@ -44,7 +44,7 @@ mm_alloc Box #1 size=8 [Box.create]
   sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [Box.create]
 mm_transfer Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [optimizer-refcount.pair]
+mm_transfer Box #1 rc=1 [pair]
 mm_decref Box #1 rc=0 [main]
   mm_free Box #1
     sl_free Box #1 size=48 class=4
@@ -75,7 +75,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.peek(b: i64) -> i64 {
+  func @peek(b: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -83,7 +83,7 @@ module {
     x64.mov rdx, [rax+0]
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.jge optimizer-refcount.peek.neg_0.after
+    x64.jge peek.neg_0.after
   neg_0:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -100,7 +100,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.pair() -> i64 {
+  func @pair() -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 42
@@ -113,7 +113,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=48
-    x64.call optimizer-refcount.pair
+    x64.call pair
     x64.mov [rbp-8], rax
     x64.xor eax, eax
     x64.mov [rbp-16], rax
@@ -124,7 +124,7 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov [rbp-24], rax
     x64.mov rcx, [rbp-24]
-    x64.call optimizer-refcount.peek
+    x64.call peek
     x64.xor ecx, ecx
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rax

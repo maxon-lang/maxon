@@ -51,7 +51,7 @@ end 'main'
 ```stderr
 panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
 Stack trace:
-  in range-check-panic.clamp
+  in clamp
   in main
   in mrt_start
 ```
@@ -75,7 +75,7 @@ end 'main'
 ```stderr
 panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
 Stack trace:
-  in range-check-panic.check
+  in check
   in main
   in mrt_start
 ```
@@ -119,8 +119,8 @@ end 'main'
 ```stderr
 panic at range-check-panic.nested-call.test:5: Range check failed: value outside typealias 'Score'
 Stack trace:
-  in range-check-panic.validate
-  in range-check-panic.process
+  in validate
+  in process
   in main
   in mrt_start
 ```

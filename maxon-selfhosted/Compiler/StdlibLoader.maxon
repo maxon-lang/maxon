@@ -91,7 +91,7 @@ function ensureStdlibSandboxParsed(target Target)
 			let content = try File.readText(fp) otherwise 'readErr'
 				continue
 			end 'readErr'
-			parseStdlibSource(sandbox, allModule: module, filePath: fp, content: content)
+			parseStdlibSource(sandbox, allModule: module, filePath: fp, rootPath: projectRoot, content: content)
 		end 'exists'
 	end 'eachFile'
 	stdlibParsedModuleArr.push(StdlibParseSnapshot.create(sandbox, module: module))
@@ -305,10 +305,33 @@ end 'currentStdlibChecksum'
 // Bundled stdlib content (whitelisted files + the synthesized bootstrap) is
 // trusted: any lex/parse failure is a compiler bug rather than a user input
 // problem, so we panic with a precise message instead of skipping silently.
-function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, content String)
+//
+// `rootPath` is the per-file compile anchor for namespace derivation — for
+// stdlib files this is the parent of the `stdlib/` install dir
+// (`findStdlibProjectRoot()`). The directory-as-module redesign derives
+// each file's namespace from its path relative to that anchor, so
+// `stdlib/Math.maxon` parses with namespace `stdlib` and
+// `stdlib/helpers/string/utf8.maxon` parses with namespace
+// `stdlib.helpers.string`. Decl-registration in the parser then qualifies
+// every free function under the file's directory namespace, matching the
+// C# bootstrap's behavior.
+function parseStdlibSource(project Project, allModule MaxonModule, filePath FilePath, rootPath FilePath, content String)
 	logDebug(LogCategory.compiler, message: function() gives "  Parsing {filePath}")
 	let tokens = try tokenize(content) otherwise panic("StdlibLoader: lexer error in bundled stdlib file {filePath}")
-	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, namespace: "stdlib") otherwise panic("StdlibLoader: empty or malformed stdlib file {filePath}")
+	// The synthesized stdlib bootstrap has no on-disk parent directory; its
+	// virtual filename (`stdlib-bootstrap.maxon`) does not relativize against
+	// the stdlib project root, so `deriveNamespace` would fall through to its
+	// "notUnderRoot" branch and return the empty parent. The bootstrap's
+	// synthesized decls (Parsable, FilePath, __Tuple2/3, etc.) belong in the
+	// flat `stdlib` namespace alongside files like `stdlib/Array.maxon`, so
+	// short-circuit the derivation for that one virtual path.
+	var ns = ""
+	if filePath.filename() == stdlibBootstrapVirtualPath 'isBootstrap'
+		ns = "stdlib"
+	end 'isBootstrap' else 'fromPath'
+		ns = deriveNamespace(filePath, rootPath: rootPath)
+	end 'fromPath'
+	var parser = try Parser.create(project, tokens: tokens, filePath: filePath, rootPath: rootPath, namespace: ns) otherwise panic("StdlibLoader: empty or malformed stdlib file {filePath}")
 	let parsed = try parser.parseModule() otherwise panic("StdlibLoader: parse failed for stdlib file {filePath}")
 	parsed.assertAllBlocksTerminated()
 	allModule.merge(parsed)
@@ -341,7 +364,14 @@ end 'parseStdlibBootstrap'
 // register the bootstrap typealiases on the next `queryAllModule`.
 function parseStdlibBootstrapInto(project Project, allModule MaxonModule)
 	let bootstrapFp = try FilePath.from(stdlibBootstrapVirtualPath) otherwise panic("parseStdlibBootstrapInto: bootstrap virtual path rejected")
-	parseStdlibSource(project, allModule: allModule, filePath: bootstrapFp, content: stdlibBootstrapSourceForTarget(project.target))
+	// The bootstrap is virtual and has no parent directory on disk. We pass
+	// the stdlib project root for symmetry with every other stdlib file, but
+	// `parseStdlibSource` special-cases this virtual filename to force the
+	// flat `stdlib` namespace — `deriveNamespace`'s "notUnderRoot" fallback
+	// would otherwise produce the empty string and the bootstrap's synth
+	// decls (Parsable, FilePath, __Tuple2/3, etc.) would land in the
+	// global namespace.
+	parseStdlibSource(project, allModule: allModule, filePath: bootstrapFp, rootPath: findStdlibProjectRoot(), content: stdlibBootstrapSourceForTarget(project.target))
 	project.stdlibBootstrapParsed = true
 end 'parseStdlibBootstrapInto'
 
@@ -483,13 +513,14 @@ export function getStdlibModule(project Project) returns MaxonModule
 
 	var allModule = MaxonModule.create()
 	parseStdlibBootstrapInto(project, allModule: allModule)
+	let stdlibRoot = findStdlibProjectRoot()
 	for fp in stdlibFiles 'eachFile'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise 'readErr'
 				logDebug(LogCategory.compiler, message: function() gives "  Failed to read {fp}")
 				continue
 			end 'readErr'
-			parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
+			parseStdlibSource(project, allModule: allModule, filePath: fp, rootPath: stdlibRoot, content: content)
 		end 'exists'
 	end 'eachFile'
 
@@ -774,10 +805,11 @@ function loadCacheForTarget(project Project)
 	let stdlibFiles = collectStdlibFiles()
 	var allModule = MaxonModule.create()
 	parseStdlibBootstrapInto(project, allModule: allModule)
+	let stdlibRoot = findStdlibProjectRoot()
 	for fp in stdlibFiles 'iter'
 		if File.exists(fp) 'exists'
 			let content = try File.readText(fp) otherwise panic("StdlibLoader: failed to read bundled stdlib file {fp}")
-			parseStdlibSource(project, allModule: allModule, filePath: fp, content: content)
+			parseStdlibSource(project, allModule: allModule, filePath: fp, rootPath: stdlibRoot, content: content)
 		end 'exists'
 	end 'iter'
 

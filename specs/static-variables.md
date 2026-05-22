@@ -313,14 +313,14 @@ end 'main'
 <!-- test: top-level-var-enum-initializer-cross-file -->
 Cross-file: enum defined in one file, top-level var initialized with it in another.
 ```maxon
-// --- file: defs.maxon
+// --- file: api/defs.maxon
 export enum CpuArch
 	x64
 	arm64
 	wasm32
 end 'CpuArch'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 var currentCpu = CpuArch.x64
 
 function main() returns ExitCode

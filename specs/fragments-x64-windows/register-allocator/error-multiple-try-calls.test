@@ -29,19 +29,19 @@ ExitCode: 42
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     %8 = maxon.literal {value = 10 : i64}
     maxon.scope_end []
     maxon.return %8
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     %9 = maxon.literal {value = 20 : i64}
     maxon.scope_end []
     maxon.return %9
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     %10 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -49,7 +49,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %13, %12 = maxon.try_call @register-allocator.getA
+    %13, %12 = maxon.try_call @getA
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -63,7 +63,7 @@ module {
   otherwise_default_continue_0:
     %18 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
-    %21, %20 = maxon.try_call @register-allocator.getB
+    %21, %20 = maxon.try_call @getB
     %22 = maxon.literal {value = 0 : i64}
     maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -77,7 +77,7 @@ module {
   otherwise_default_continue_1:
     %26 = maxon.var_ref {var = __try_result_1} {type = i64}
     maxon.assign %26 {var = b} {kind = i64} {decl = 1 : i1}
-    %29, %28 = maxon.try_call @register-allocator.getC
+    %29, %28 = maxon.try_call @getC
     %30 = maxon.literal {value = 12 : i64}
     maxon.assign %30 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %29 {var = __try_result_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -110,17 +110,17 @@ module {
 }
 === standard
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     func.return %0
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     %1 = arith.constant {value = 20 : i64}
     func.return %1
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.constant {value = 1 : i64}
@@ -129,7 +129,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %5, %6 = func.try_call @register-allocator.getA
+    %5, %6 = func.try_call @getA
     %7 = arith.constant {value = 0 : i64}
     memref.store %7, __try_default_0
     memref.store %5, __try_result_0
@@ -143,7 +143,7 @@ module {
   otherwise_default_continue_0:
     %11 = memref.load __try_result_0 : i64
     memref.store %11, a
-    %12, %13 = func.try_call @register-allocator.getB
+    %12, %13 = func.try_call @getB
     %14 = arith.constant {value = 0 : i64}
     memref.store %14, __try_default_1
     memref.store %12, __try_result_1
@@ -157,7 +157,7 @@ module {
   otherwise_default_continue_1:
     %18 = memref.load __try_result_1 : i64
     memref.store %18, b
-    %19, %20 = func.try_call @register-allocator.getC
+    %19, %20 = func.try_call @getC
     %21 = arith.constant {value = 12 : i64}
     memref.store %21, __try_default_2
     memref.store %19, __try_result_2
@@ -190,19 +190,19 @@ module {
 }
 === x86
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     x64.mov rax, 10
     x64.xor edx, edx
     x64.ret
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     x64.mov rax, 20
     x64.xor edx, edx
     x64.ret
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -214,7 +214,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.call register-allocator.getA
+    x64.call getA
     x64.xor ecx, ecx
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax
@@ -228,7 +228,7 @@ module {
   otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.call register-allocator.getB
+    x64.call getB
     x64.xor ecx, ecx
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rax
@@ -242,7 +242,7 @@ module {
   otherwise_default_continue_1:
     x64.mov rax, [rbp-40]
     x64.mov [rbp-48], rax
-    x64.call register-allocator.getC
+    x64.call getC
     x64.mov rcx, 12
     x64.mov [rbp-56], rcx
     x64.mov [rbp-64], rax

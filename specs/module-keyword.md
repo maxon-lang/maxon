@@ -76,12 +76,14 @@ error E2001: specs/fragments/module-keyword/error.module-and-export-conflict.tes
 
 <!-- test: module-function-same-file -->
 ```maxon
+// --- file: feature/helper.maxon
 typealias Integer = int(i64.min to i64.max)
 
 module function helper() returns Integer
 	return 42
 end 'helper'
 
+// --- file: feature/main.maxon
 function main() returns ExitCode
 	return helper()
 end 'main'

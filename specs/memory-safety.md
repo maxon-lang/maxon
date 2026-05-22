@@ -2066,7 +2066,7 @@ module {
     maxon.scope_end [val]
     maxon.return %1
   }
-  func @memory-safety.compute(flag: i64) -> i64 {
+  func @compute(flag: i64) -> i64 {
   entry:
     %11 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
     %12 = maxon.literal {value = 0 : i64}
@@ -2091,7 +2091,7 @@ module {
   func @main() -> i64 {
   entry:
     %21 = maxon.literal {value = 5 : i64}
-    %22 = maxon.call @memory-safety.compute %21
+    %22 = maxon.call @compute %21
     %23 = maxon.literal {value = 0 : i64}
     %24 = maxon.binop %22, %23 {op = lt}
     %25 = maxon.literal {value = 4294967295 : i64}
@@ -2122,7 +2122,7 @@ module {
     %7 = memref.load __struct_0 : i64
     func.return %7
   }
-  func @memory-safety.compute(flag: i64) -> i64 {
+  func @compute(flag: i64) -> i64 {
   entry:
     %8 = func.param flag : StdI64
     memref.store %8, flag
@@ -2147,7 +2147,7 @@ module {
   func @main() -> u32 {
   entry:
     %23 = arith.constant {value = 5 : i64}
-    %24 = func.call @memory-safety.compute %23
+    %24 = func.call @compute %23
     %25 = arith.constant {value = 0 : i64}
     %26 = arith.cmpi lt %24, %25
     %27 = arith.constant {value = 4294967295 : i64}
@@ -2190,13 +2190,13 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @memory-safety.compute(flag: i64) -> i64 {
+  func @compute(flag: i64) -> i64 {
   entry:
     x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.cmp rcx, rax
-    x64.jle memory-safety.compute.check_0.after
+    x64.jle compute.check_0.after
   check_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -2225,7 +2225,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 5
-    x64.call memory-safety.compute
+    x64.call compute
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx

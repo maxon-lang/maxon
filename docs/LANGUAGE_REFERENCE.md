@@ -2307,7 +2307,7 @@ end 'main'
 **Mutability rules:**
 
 - If the caller passes a `var` variable, the parameter is mutable and assignments propagate back to the caller.
-- If the caller passes a `let` variable to a function that mutates its parameter, the compiler raises error **E3063**.
+- If the caller passes a `let` variable to a function that mutates its parameter, the compiler raises error **E3019**.
 - If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
 
 ```maxon
@@ -2320,7 +2320,7 @@ function main() returns ExitCode
 		double(x)       // OK — x is var; x becomes 10
 
 		let y = 5
-		double(y)       // ERROR E3063: cannot pass let variable to mutating parameter
+		double(y)       // ERROR E3019: cannot pass let variable to mutating parameter
 
 		double(5)       // OK — literal creates a temporary; mutation has no visible effect
 		return x
@@ -3829,6 +3829,15 @@ If unambiguous, use short name:
 ```maxon
 var result = format_int(42)   // Finds stdlib.fmt.format_int
 ```
+
+### Cross-File Bare-Name Ambiguity
+
+When two files in different directories both expose a declaration with the same bare name and a third file references it without qualification, the compiler reports an ambiguity error and asks the user to qualify with the appropriate directory namespace.
+
+- **Functions** — bare-name calls with multiple visible definitions trigger **E3095** (`Ambiguous bare-name call to 'X': multiple visible definitions found. Qualify with a directory name.`). Qualify the call with the directory namespace (`api.format(...)`, `lib.fmt.format(...)`).
+- **Typealiases** — bare-name type references with multiple reachable definitions trigger **E3063** (`Ambiguous typealias 'X': multiple visible definitions found. Qualify with a directory name.`). Write the qualified form (`api.Score`, `lib.fmt.Score`) at the use site. Same-file duplicates remain **E3061** since qualification cannot disambiguate two declarations in the same file. File-private aliases (no modifier) are scoped to their declaring file and never contribute to cross-file ambiguity.
+
+See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical tests.
 
 ---
 

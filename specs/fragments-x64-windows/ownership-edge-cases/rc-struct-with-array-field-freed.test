@@ -60,10 +60,10 @@ mm_alloc Entry #5 size=8 [Entry.create]
 mm_incref Entry #5 rc=1 [Entry.create]
 mm_transfer Entry #5 rc=1 [Entry.create]
 mm_incref Entry #5 rc=2 [EntryArray.push]
-mm_decref Entry #5 rc=1 [ownership-edge-cases.fill]
-mm_decref Entry #4 rc=1 [ownership-edge-cases.fill]
-mm_decref EntryArray #2 rc=1 [ownership-edge-cases.fill]
-mm_decref Bucket #3 rc=0 [ownership-edge-cases.fill]
+mm_decref Entry #5 rc=1 [fill]
+mm_decref Entry #4 rc=1 [fill]
+mm_decref EntryArray #2 rc=1 [fill]
+mm_decref Bucket #3 rc=0 [fill]
   mm_decref EntryArray #2 rc=0 [~Bucket]
     mm_decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
       mm_decref Entry #4 rc=0 [~ManagedElements]
@@ -128,7 +128,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @ownership-edge-cases.fill() -> i64 {
+  func @fill() -> i64 {
   entry:
     x64.prologue stack_size=64
     x64.call EntryArray.create
@@ -196,7 +196,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call ownership-edge-cases.fill
+    x64.call fill
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx

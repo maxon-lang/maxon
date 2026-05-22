@@ -26,15 +26,15 @@ different file.
 
 <!-- test: type-as-parameter-name-crossfile -->
 ```maxon
-// --- file: shared.maxon
-export typealias StdType = int(i64.min to i64.max)
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
 
-// --- file: helper.maxon
+// --- file: api/helper.maxon
 export function identity(type StdType) returns StdType
 	return type
 end 'identity'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return identity(42)
 end 'main'
@@ -45,15 +45,15 @@ end 'main'
 
 <!-- test: enum-as-parameter-name-crossfile -->
 ```maxon
-// --- file: shared.maxon
-export typealias StdType = int(i64.min to i64.max)
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
 
-// --- file: helper.maxon
+// --- file: api/helper.maxon
 export function pickOne(enum StdType) returns StdType
 	return enum
 end 'pickOne'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return pickOne(7)
 end 'main'
@@ -64,15 +64,15 @@ end 'main'
 
 <!-- test: union-as-parameter-name-crossfile -->
 ```maxon
-// --- file: shared.maxon
-export typealias StdType = int(i64.min to i64.max)
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
 
-// --- file: helper.maxon
+// --- file: api/helper.maxon
 export function asis(union StdType) returns StdType
 	return union
 end 'asis'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return asis(3)
 end 'main'
@@ -83,15 +83,15 @@ end 'main'
 
 <!-- test: interface-as-parameter-name-crossfile -->
 ```maxon
-// --- file: shared.maxon
-export typealias StdType = int(i64.min to i64.max)
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
 
-// --- file: helper.maxon
+// --- file: api/helper.maxon
 export function passthrough(interface StdType) returns StdType
 	return interface
 end 'passthrough'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return passthrough(5)
 end 'main'

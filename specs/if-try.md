@@ -550,7 +550,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:10:5: try requires a throwing function: 'if-try.noThrow' does not throw'
+error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:10:5: try requires a throwing function: 'noThrow' does not throw'
 ```
 
 <!-- test: if-try-binding-struct-multiple-managed-fields -->

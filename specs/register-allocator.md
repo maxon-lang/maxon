@@ -2851,7 +2851,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.getForty() -> i64 {
+  func @getForty() -> i64 {
   entry:
     %0 = maxon.literal {value = 40 : i64}
     maxon.scope_end []
@@ -2861,7 +2861,7 @@ module {
   entry:
     %1 = maxon.literal {value = 2 : i64}
     maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.call @register-allocator.getForty
+    %2 = maxon.call @getForty
     maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 0 : i64}
@@ -2879,7 +2879,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.getForty() -> i64 {
+  func @getForty() -> i64 {
   entry:
     %0 = arith.constant {value = 40 : i64}
     func.return %0
@@ -2887,7 +2887,7 @@ module {
   func @main() -> u32 {
   entry:
     %1 = arith.constant {value = 2 : i64}
-    %2 = func.call @register-allocator.getForty
+    %2 = func.call @getForty
     %3 = arith.addi %1, %2
     %4 = arith.constant {value = 0 : i64}
     %5 = arith.cmpi lt %3, %4
@@ -2905,7 +2905,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.getForty() -> i64 {
+  func @getForty() -> i64 {
   entry:
     x64.mov rax, 40
     x64.ret
@@ -2914,7 +2914,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rax, 2
-    x64.call register-allocator.getForty
+    x64.call getForty
     x64.mov rcx, 2
     x64.add rcx, rax
     x64.xor edx, edx
@@ -3054,13 +3054,13 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.getTen() -> i64 {
+  func @getTen() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     maxon.scope_end []
     maxon.return %0
   }
-  func @register-allocator.getTwo() -> i64 {
+  func @getTwo() -> i64 {
   entry:
     %1 = maxon.literal {value = 2 : i64}
     maxon.scope_end []
@@ -3070,11 +3070,11 @@ module {
   entry:
     %2 = maxon.literal {value = 5 : i64}
     maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1}
-    %3 = maxon.call @register-allocator.getTen
+    %3 = maxon.call @getTen
     maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 7 : i64}
     maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1}
-    %5 = maxon.call @register-allocator.getTwo
+    %5 = maxon.call @getTwo
     maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1}
     %6 = maxon.binop %2, %3 {op = add} {optimalType = i64}
     %7 = maxon.binop %6, %4 {op = add}
@@ -3094,12 +3094,12 @@ module {
 }
 === standard
 module {
-  func @register-allocator.getTen() -> i64 {
+  func @getTen() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     func.return %0
   }
-  func @register-allocator.getTwo() -> i64 {
+  func @getTwo() -> i64 {
   entry:
     %1 = arith.constant {value = 2 : i64}
     func.return %1
@@ -3107,9 +3107,9 @@ module {
   func @main() -> u32 {
   entry:
     %2 = arith.constant {value = 5 : i64}
-    %3 = func.call @register-allocator.getTen
+    %3 = func.call @getTen
     %4 = arith.constant {value = 7 : i64}
-    %5 = func.call @register-allocator.getTwo
+    %5 = func.call @getTwo
     %6 = arith.addi %2, %3
     %7 = arith.addi %6, %4
     %8 = arith.addi %7, %5
@@ -3129,12 +3129,12 @@ module {
 }
 === x86
 module {
-  func @register-allocator.getTen() -> i64 {
+  func @getTen() -> i64 {
   entry:
     x64.mov rax, 10
     x64.ret
   }
-  func @register-allocator.getTwo() -> i64 {
+  func @getTwo() -> i64 {
   entry:
     x64.mov rax, 2
     x64.ret
@@ -3143,10 +3143,10 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rax, 5
-    x64.call register-allocator.getTen
+    x64.call getTen
     x64.mov rcx, 7
     x64.mov [rbp-8], rax
-    x64.call register-allocator.getTwo
+    x64.call getTwo
     x64.mov rdx, [rbp-8]
     x64.mov rbx, 5
     x64.add rbx, rdx
@@ -3317,7 +3317,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.scope_end []
@@ -3325,9 +3325,9 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %1 = maxon.call @register-allocator.compute
+    %1 = maxon.call @compute
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.call @register-allocator.compute
+    %2 = maxon.call @compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 256 : i64}
@@ -3347,15 +3347,15 @@ module {
 }
 === standard
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     func.return %0
   }
   func @main() -> u32 {
   entry:
-    %1 = func.call @register-allocator.compute
-    %2 = func.call @register-allocator.compute
+    %1 = func.call @compute
+    %2 = func.call @compute
     %3 = arith.addi %1, %2
     %4 = arith.constant {value = 256 : i64}
     %5 = arith.remsi %3, %4
@@ -3375,7 +3375,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     x64.mov rax, 100
     x64.ret
@@ -3383,9 +3383,9 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.compute
+    x64.call compute
     x64.mov [rbp-8], rax
-    x64.call register-allocator.compute
+    x64.call compute
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov rax, 256
@@ -3556,7 +3556,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -3568,7 +3568,7 @@ module {
   entry:
     %3 = maxon.literal {value = 30 : i64}
     %4 = maxon.literal {value = 12 : i64}
-    %5 = maxon.call @register-allocator.add %3, %4
+    %5 = maxon.call @add %3, %4
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
     %8 = maxon.literal {value = 4294967295 : i64}
@@ -3584,7 +3584,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -3595,7 +3595,7 @@ module {
   entry:
     %3 = arith.constant {value = 30 : i64}
     %4 = arith.constant {value = 12 : i64}
-    %5 = func.call @register-allocator.add %3, %4
+    %5 = func.call @add %3, %4
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi lt %5, %6
     %8 = arith.constant {value = 4294967295 : i64}
@@ -3612,7 +3612,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     x64.lea rax, [rcx + rdx]
     x64.ret
@@ -3622,7 +3622,7 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 30
     x64.mov rdx, 12
-    x64.call register-allocator.add
+    x64.call add
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -3754,7 +3754,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -3768,7 +3768,7 @@ module {
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 22 : i64}
     maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1}
-    %5 = maxon.call @register-allocator.add %4, %3
+    %5 = maxon.call @add %4, %3
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
     %8 = maxon.literal {value = 4294967295 : i64}
@@ -3784,7 +3784,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -3795,7 +3795,7 @@ module {
   entry:
     %3 = arith.constant {value = 20 : i64}
     %4 = arith.constant {value = 22 : i64}
-    %5 = func.call @register-allocator.add %4, %3
+    %5 = func.call @add %4, %3
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi lt %5, %6
     %8 = arith.constant {value = 4294967295 : i64}
@@ -3812,7 +3812,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.add(a: i64, b: i64) -> i64 {
+  func @add(a: i64, b: i64) -> i64 {
   entry:
     x64.lea rax, [rcx + rdx]
     x64.ret
@@ -3822,7 +3822,7 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 22
     x64.mov rdx, 20
-    x64.call register-allocator.add
+    x64.call add
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -6478,7 +6478,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -6500,7 +6500,7 @@ module {
     maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.call @register-allocator.double %8
+    %9 = maxon.call @double %8
     %10 = maxon.var_ref {var = sum} {type = i64}
     %11 = maxon.binop %10, %9 {op = add}
     maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
@@ -6527,7 +6527,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     %1 = arith.constant {value = 2 : i64}
@@ -6548,7 +6548,7 @@ module {
     cf.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = memref.load i : i64
-    %9 = func.call @register-allocator.double %8
+    %9 = func.call @double %8
     %10 = memref.load sum : i64
     %11 = arith.addi %10, %9
     memref.store %11, sum
@@ -6575,7 +6575,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     x64.mov rax, 2
     x64.imul rcx, rax
@@ -6598,7 +6598,7 @@ module {
   loop_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call register-allocator.double
+    x64.call double
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov [rbp-8], rcx
@@ -7187,7 +7187,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+  func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -7208,7 +7208,7 @@ module {
     %11 = maxon.literal {value = 8 : i64}
     %12 = maxon.literal {value = 12 : i64}
     %13 = maxon.literal {value = 7 : i64}
-    %14 = maxon.call @register-allocator.sum5 %9, %10, %11, %12, %13
+    %14 = maxon.call @sum5 %9, %10, %11, %12, %13
     %15 = maxon.literal {value = 0 : i64}
     %16 = maxon.binop %14, %15 {op = lt}
     %17 = maxon.literal {value = 4294967295 : i64}
@@ -7224,7 +7224,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+  func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -7244,7 +7244,7 @@ module {
     %11 = arith.constant {value = 8 : i64}
     %12 = arith.constant {value = 12 : i64}
     %13 = arith.constant {value = 7 : i64}
-    %14 = func.call @register-allocator.sum5 %9, %10, %11, %12, %13
+    %14 = func.call @sum5 %9, %10, %11, %12, %13
     %15 = arith.constant {value = 0 : i64}
     %16 = arith.cmpi lt %14, %15
     %17 = arith.constant {value = 4294967295 : i64}
@@ -7261,7 +7261,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+  func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
     x64.add rcx, rdx
     x64.add rcx, r8
@@ -7277,7 +7277,7 @@ module {
     x64.mov r8, 8
     x64.mov r9, 12
     x64.mov rsi, 7
-    x64.call register-allocator.sum5
+    x64.call sum5
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -7431,7 +7431,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -7464,7 +7464,7 @@ module {
     %23 = maxon.literal {value = 7 : i64}
     %24 = maxon.literal {value = 8 : i64}
     %25 = maxon.literal {value = 9 : i64}
-    %26 = maxon.call @register-allocator.sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    %26 = maxon.call @sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
     %27 = maxon.literal {value = 0 : i64}
     %28 = maxon.binop %26, %27 {op = lt}
     %29 = maxon.literal {value = 4294967295 : i64}
@@ -7480,7 +7480,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -7512,7 +7512,7 @@ module {
     %23 = arith.constant {value = 7 : i64}
     %24 = arith.constant {value = 8 : i64}
     %25 = arith.constant {value = 9 : i64}
-    %26 = func.call @register-allocator.sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    %26 = func.call @sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
     %27 = arith.constant {value = 0 : i64}
     %28 = arith.cmpi lt %26, %27
     %29 = arith.constant {value = 4294967295 : i64}
@@ -7529,7 +7529,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -7562,7 +7562,7 @@ module {
     x64.mov rdi, 6
     x64.mov rax, 7
     x64.mov rbx, 8
-    x64.call register-allocator.sum9
+    x64.call sum9
     x64.add rsp, 16
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
@@ -7758,7 +7758,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
@@ -7772,7 +7772,7 @@ module {
     %4 = maxon.literal {value = 1 : i64}
     %5 = maxon.var_ref {var = n} {type = i64}
     %6 = maxon.binop %5, %4 {op = sub}
-    %7 = maxon.call @register-allocator.factorial %6
+    %7 = maxon.call @factorial %6
     %8 = maxon.var_ref {var = n} {type = i64}
     %9 = maxon.binop %8, %7 {op = mul}
     maxon.scope_end [n]
@@ -7781,7 +7781,7 @@ module {
   func @main() -> i64 {
   entry:
     %10 = maxon.literal {value = 5 : i64}
-    %11 = maxon.call @register-allocator.factorial %10
+    %11 = maxon.call @factorial %10
     %12 = maxon.literal {value = 256 : i64}
     %13 = maxon.binop %11, %12 {op = mod}
     %14 = maxon.literal {value = 0 : i64}
@@ -7799,7 +7799,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
     memref.store %0, n
@@ -7813,7 +7813,7 @@ module {
     %4 = arith.constant {value = 1 : i64}
     %5 = memref.load n : i64
     %6 = arith.subi %5, %4
-    %7 = func.call @register-allocator.factorial %6
+    %7 = func.call @factorial %6
     %8 = memref.load n : i64
     %9 = arith.muli %8, %7
     func.return %9
@@ -7821,7 +7821,7 @@ module {
   func @main() -> u32 {
   entry:
     %10 = arith.constant {value = 5 : i64}
-    %11 = func.call @register-allocator.factorial %10
+    %11 = func.call @factorial %10
     %12 = arith.constant {value = 256 : i64}
     %13 = arith.remsi %11, %12
     %14 = arith.constant {value = 0 : i64}
@@ -7840,13 +7840,13 @@ module {
 }
 === x86
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, 1
     x64.cmp rcx, rax
-    x64.jg register-allocator.factorial.base_0.after
+    x64.jg factorial.base_0.after
   base_0:
     x64.mov rax, 1
     x64.epilogue
@@ -7855,7 +7855,7 @@ module {
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.sub rcx, rax
-    x64.call register-allocator.factorial
+    x64.call factorial
     x64.mov rdx, [rbp-8]
     x64.imul rdx, rax
     x64.mov rax, rdx
@@ -7866,7 +7866,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 5
-    x64.call register-allocator.factorial
+    x64.call factorial
     x64.mov rcx, 256
     x64.mov [rbp-8], rax
     x64.cqo
@@ -8063,7 +8063,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     maxon.scope_end [x]
@@ -8093,17 +8093,17 @@ module {
     maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = maxon.var_ref {var = b} {type = i64}
-    %12 = maxon.call @register-allocator.identity %11
+    %12 = maxon.call @identity %11
     %13 = maxon.var_ref {var = a} {type = i64}
     %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
     %15 = maxon.var_ref {var = d} {type = i64}
-    %16 = maxon.call @register-allocator.identity %15
+    %16 = maxon.call @identity %15
     %17 = maxon.var_ref {var = c} {type = i64}
     %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
     %19 = maxon.var_ref {var = f} {type = i64}
-    %20 = maxon.call @register-allocator.identity %19
+    %20 = maxon.call @identity %19
     %21 = maxon.var_ref {var = e} {type = i64}
     %22 = maxon.binop %21, %20 {op = add}
     maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
@@ -8140,7 +8140,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     func.return %0
@@ -8169,17 +8169,17 @@ module {
     cf.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = memref.load b : i64
-    %12 = func.call @register-allocator.identity %11
+    %12 = func.call @identity %11
     %13 = memref.load a : i64
     %14 = arith.addi %13, %12
     memref.store %14, a
     %15 = memref.load d : i64
-    %16 = func.call @register-allocator.identity %15
+    %16 = func.call @identity %15
     %17 = memref.load c : i64
     %18 = arith.addi %17, %16
     memref.store %18, c
     %19 = memref.load f : i64
-    %20 = func.call @register-allocator.identity %19
+    %20 = func.call @identity %19
     %21 = memref.load e : i64
     %22 = arith.addi %21, %20
     memref.store %22, e
@@ -8216,7 +8216,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.identity(x: i64) -> i64 {
+  func @identity(x: i64) -> i64 {
   entry:
     x64.mov rax, rcx
     x64.ret
@@ -8247,19 +8247,19 @@ module {
   loop_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov [rbp-8], rcx
     x64.mov rdx, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rbx, [rbp-24]
     x64.add rbx, rax
     x64.mov [rbp-24], rbx
     x64.mov rsi, [rbp-48]
     x64.mov rcx, [rbp-48]
-    x64.call register-allocator.identity
+    x64.call identity
     x64.mov rdi, [rbp-40]
     x64.add rdi, rax
     x64.mov [rbp-40], rdi
@@ -9535,7 +9535,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
+  func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -9558,7 +9558,7 @@ module {
     %9 = maxon.literal {value = 2 : i64}
     %10 = maxon.literal {value = 3 : i64}
     %11 = maxon.literal {value = 4 : i64}
-    %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
+    %12 = maxon.call @useRegs %8, %9, %10, %11
     maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1}
     %13 = maxon.binop %7, %12 {op = add} {optimalType = i64}
     %14 = maxon.literal {value = 0 : i64}
@@ -9576,7 +9576,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
+  func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -9594,7 +9594,7 @@ module {
     %9 = arith.constant {value = 2 : i64}
     %10 = arith.constant {value = 3 : i64}
     %11 = arith.constant {value = 4 : i64}
-    %12 = func.call @register-allocator.useRegs %8, %9, %10, %11
+    %12 = func.call @useRegs %8, %9, %10, %11
     %13 = arith.addi %7, %12
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.cmpi lt %13, %14
@@ -9612,7 +9612,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
+  func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
     x64.add rcx, rdx
     x64.add r8, r9
@@ -9627,7 +9627,7 @@ module {
     x64.mov rdx, 2
     x64.mov r8, 3
     x64.mov r9, 4
-    x64.call register-allocator.useRegs
+    x64.call useRegs
     x64.mov rcx, 42
     x64.add rcx, rax
     x64.xor edx, edx
@@ -9791,7 +9791,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.getInt() -> i64 {
+  func @getInt() -> i64 {
   entry:
     %0 = maxon.literal {value = 40 : i64}
     maxon.scope_end []
@@ -9801,7 +9801,7 @@ module {
   entry:
     %1 = maxon.literal {value = 3.14 : f64}
     maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1}
-    %2 = maxon.call @register-allocator.getInt
+    %2 = maxon.call @getInt
     maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1}
     %3 = maxon.trunc %1
     %4 = maxon.binop %3, %2 {op = add} {optimalType = i64}
@@ -9820,7 +9820,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.getInt() -> i64 {
+  func @getInt() -> i64 {
   entry:
     %0 = arith.constant {value = 40 : i64}
     func.return %0
@@ -9828,7 +9828,7 @@ module {
   func @main() -> u32 {
   entry:
     %1 = arith.float_constant {value = 3.14 : f64}
-    %2 = func.call @register-allocator.getInt
+    %2 = func.call @getInt
     %3 = arith.fptosi %1
     %4 = arith.addi %3, %2
     %5 = arith.constant {value = 0 : i64}
@@ -9847,7 +9847,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.getInt() -> i64 {
+  func @getInt() -> i64 {
   entry:
     x64.mov rax, 40
     x64.ret
@@ -9857,7 +9857,7 @@ module {
     x64.prologue stack_size=16
     x64.movsd xmm0, [rip+__float_3.14]
     x64.movsd [rbp-8], xmm0
-    x64.call register-allocator.getInt
+    x64.call getInt
     x64.movsd xmm0, [rbp-8]
     x64.cvttsd2si rcx, xmm0
     x64.add rcx, rax
@@ -10188,7 +10188,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.sub(a: i64, b: i64) -> i64 {
+  func @sub(a: i64, b: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
@@ -10202,7 +10202,7 @@ module {
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
     %4 = maxon.literal {value = 3 : i64}
     maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1}
-    %5 = maxon.call @register-allocator.sub %4, %3
+    %5 = maxon.call @sub %4, %3
     maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1}
     %6 = maxon.literal {value = 45 : i64}
     %7 = maxon.binop %5, %6 {op = add} {optimalType = i64}
@@ -10221,7 +10221,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.sub(a: i64, b: i64) -> i64 {
+  func @sub(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     %1 = func.param b : StdI64
@@ -10232,7 +10232,7 @@ module {
   entry:
     %3 = arith.constant {value = 10 : i64}
     %4 = arith.constant {value = 3 : i64}
-    %5 = func.call @register-allocator.sub %4, %3
+    %5 = func.call @sub %4, %3
     %6 = arith.constant {value = 45 : i64}
     %7 = arith.addi %5, %6
     %8 = arith.constant {value = 0 : i64}
@@ -10251,7 +10251,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.sub(a: i64, b: i64) -> i64 {
+  func @sub(a: i64, b: i64) -> i64 {
   entry:
     x64.sub rcx, rdx
     x64.mov rax, rcx
@@ -10262,7 +10262,7 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 3
     x64.mov rdx, 10
-    x64.call register-allocator.sub
+    x64.call sub
     x64.mov rcx, 45
     x64.add rax, rcx
     x64.xor ecx, ecx
@@ -13197,7 +13197,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -13220,7 +13220,7 @@ module {
     maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = maxon.literal {value = 10 : i64}
-    %9 = maxon.call @register-allocator.double %8
+    %9 = maxon.call @double %8
     maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br process_0.merge
@@ -13231,7 +13231,7 @@ module {
     maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = maxon.literal {value = 20 : i64}
-    %14 = maxon.call @register-allocator.double %13
+    %14 = maxon.call @double %13
     maxon.assign %14 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br process_0.merge
@@ -13257,7 +13257,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
     %1 = arith.constant {value = 2 : i64}
@@ -13276,7 +13276,7 @@ module {
     cf.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = arith.constant {value = 10 : i64}
-    %9 = func.call @register-allocator.double %8
+    %9 = func.call @double %8
     memref.store %9, result
     cf.br process_0.merge
   process_0.cmp1:
@@ -13286,7 +13286,7 @@ module {
     cf.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = arith.constant {value = 20 : i64}
-    %14 = func.call @register-allocator.double %13
+    %14 = func.call @double %13
     memref.store %14, result
     cf.br process_0.merge
   process_0.case2:
@@ -13311,7 +13311,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     x64.mov rax, 2
     x64.imul rcx, rax
@@ -13331,7 +13331,7 @@ module {
     x64.jne main.process_0.cmp1
   process_0.case0:
     x64.mov rcx, 10
-    x64.call register-allocator.double
+    x64.call double
     x64.mov [rbp-16], rax
     x64.jmp main.process_0.merge
   process_0.cmp1:
@@ -13341,7 +13341,7 @@ module {
     x64.jne main.process_0.case2
   process_0.case1:
     x64.mov rcx, 20
-    x64.call register-allocator.double
+    x64.call double
     x64.mov [rbp-16], rax
     x64.jmp main.process_0.merge
   process_0.case2:
@@ -13577,7 +13577,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -13585,7 +13585,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %11, %10 = maxon.try_call @register-allocator.mayFail
+    %11, %10 = maxon.try_call @mayFail
     %12 = maxon.literal {value = 42 : i64}
     maxon.scope_end []
     maxon.return %12
@@ -13593,7 +13593,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
@@ -13602,14 +13602,14 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %3, %4 = func.try_call @register-allocator.mayFail
+    %3, %4 = func.try_call @mayFail
     %5 = arith.constant {value = 42 : i64}
     func.return %5
   }
 }
 === x86
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -13621,7 +13621,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.mayFail
+    x64.call mayFail
     x64.mov rcx, 42
     x64.mov rax, rcx
     x64.epilogue
@@ -13713,7 +13713,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -13723,7 +13723,7 @@ module {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %12, %11 = maxon.try_call @register-allocator.mayFail
+    %12, %11 = maxon.try_call @mayFail
     maxon.assign %11 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %12 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.literal {value = 0 : i64}
@@ -13751,7 +13751,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
@@ -13762,7 +13762,7 @@ module {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
-    %4, %5 = func.try_call @register-allocator.mayFail
+    %4, %5 = func.try_call @mayFail
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi ne %5, %6
     cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_0]
@@ -13788,7 +13788,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -13802,7 +13802,7 @@ module {
     x64.prologue stack_size=16
     x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.call register-allocator.mayFail
+    x64.call mayFail
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.je main.otherwise_continue_0
@@ -13985,15 +13985,15 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
     maxon.throw @MyError %8
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
-    %11, %10 = maxon.try_call @register-allocator.inner
+    %11, %10 = maxon.try_call @inner
     maxon.assign %10 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %11 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
@@ -14011,7 +14011,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %18, %17 = maxon.try_call @register-allocator.middle
+    %18, %17 = maxon.try_call @middle
     %19 = maxon.literal {value = 99 : i64}
     maxon.assign %19 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14040,16 +14040,16 @@ module {
 }
 === standard
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
-    %3, %4 = func.try_call @register-allocator.inner
+    %3, %4 = func.try_call @inner
     memref.store %4, __try_error_0
     memref.store %3, __try_result_0
     %5 = arith.constant {value = 0 : i64}
@@ -14064,7 +14064,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %9, %10 = func.try_call @register-allocator.middle
+    %9, %10 = func.try_call @middle
     %11 = arith.constant {value = 99 : i64}
     memref.store %11, __try_default_0
     memref.store %9, __try_result_0
@@ -14093,7 +14093,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -14102,15 +14102,15 @@ module {
     x64.xor eax, eax
     x64.ret
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.inner
+    x64.call inner
     x64.mov [rbp-8], rdx
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je register-allocator.middle.try_continue_0
+    x64.je middle.try_continue_0
   propagate_error_0:
     x64.mov rdx, [rbp-8]
     x64.xor eax, eax
@@ -14125,7 +14125,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.middle
+    x64.call middle
     x64.mov rcx, 99
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax
@@ -14374,19 +14374,19 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     %8 = maxon.literal {value = 10 : i64}
     maxon.scope_end []
     maxon.return %8
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     %9 = maxon.literal {value = 20 : i64}
     maxon.scope_end []
     maxon.return %9
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     %10 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -14394,7 +14394,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %13, %12 = maxon.try_call @register-allocator.getA
+    %13, %12 = maxon.try_call @getA
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14408,7 +14408,7 @@ module {
   otherwise_default_continue_0:
     %18 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
-    %21, %20 = maxon.try_call @register-allocator.getB
+    %21, %20 = maxon.try_call @getB
     %22 = maxon.literal {value = 0 : i64}
     maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14422,7 +14422,7 @@ module {
   otherwise_default_continue_1:
     %26 = maxon.var_ref {var = __try_result_1} {type = i64}
     maxon.assign %26 {var = b} {kind = i64} {decl = 1 : i1}
-    %29, %28 = maxon.try_call @register-allocator.getC
+    %29, %28 = maxon.try_call @getC
     %30 = maxon.literal {value = 12 : i64}
     maxon.assign %30 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %29 {var = __try_result_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14455,17 +14455,17 @@ module {
 }
 === standard
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     func.return %0
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     %1 = arith.constant {value = 20 : i64}
     func.return %1
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.constant {value = 1 : i64}
@@ -14474,7 +14474,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %5, %6 = func.try_call @register-allocator.getA
+    %5, %6 = func.try_call @getA
     %7 = arith.constant {value = 0 : i64}
     memref.store %7, __try_default_0
     memref.store %5, __try_result_0
@@ -14488,7 +14488,7 @@ module {
   otherwise_default_continue_0:
     %11 = memref.load __try_result_0 : i64
     memref.store %11, a
-    %12, %13 = func.try_call @register-allocator.getB
+    %12, %13 = func.try_call @getB
     %14 = arith.constant {value = 0 : i64}
     memref.store %14, __try_default_1
     memref.store %12, __try_result_1
@@ -14502,7 +14502,7 @@ module {
   otherwise_default_continue_1:
     %18 = memref.load __try_result_1 : i64
     memref.store %18, b
-    %19, %20 = func.try_call @register-allocator.getC
+    %19, %20 = func.try_call @getC
     %21 = arith.constant {value = 12 : i64}
     memref.store %21, __try_default_2
     memref.store %19, __try_result_2
@@ -14535,19 +14535,19 @@ module {
 }
 === x86
 module {
-  func @register-allocator.getA() -> i64 {
+  func @getA() -> i64 {
   entry:
     x64.mov rax, 10
     x64.xor edx, edx
     x64.ret
   }
-  func @register-allocator.getB() -> i64 {
+  func @getB() -> i64 {
   entry:
     x64.mov rax, 20
     x64.xor edx, edx
     x64.ret
   }
-  func @register-allocator.getC() -> i64 {
+  func @getC() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -14559,7 +14559,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=64
-    x64.call register-allocator.getA
+    x64.call getA
     x64.xor ecx, ecx
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax
@@ -14573,7 +14573,7 @@ module {
   otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
-    x64.call register-allocator.getB
+    x64.call getB
     x64.xor ecx, ecx
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rax
@@ -14587,7 +14587,7 @@ module {
   otherwise_default_continue_1:
     x64.mov rax, [rbp-40]
     x64.mov [rbp-48], rax
-    x64.call register-allocator.getC
+    x64.call getC
     x64.mov rcx, 12
     x64.mov [rbp-56], rcx
     x64.mov [rbp-64], rax
@@ -14917,7 +14917,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     %8 = maxon.param {index = 0 : i32} {name = key} {type = i64}
     maxon.assign %8 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
@@ -14949,7 +14949,7 @@ module {
   func @main() -> i64 {
   entry:
     %18 = maxon.literal {value = 2 : i64}
-    %21, %20 = maxon.try_call @register-allocator.lookup %18
+    %21, %20 = maxon.try_call @lookup %18
     %22 = maxon.literal {value = 0 : i64}
     maxon.assign %22 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14964,7 +14964,7 @@ module {
     %26 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %26 {var = a} {kind = i64} {decl = 1 : i1}
     %27 = maxon.literal {value = 99 : i64}
-    %30, %29 = maxon.try_call @register-allocator.lookup %27
+    %30, %29 = maxon.try_call @lookup %27
     %31 = maxon.literal {value = 42 : i64}
     maxon.assign %31 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %30 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14997,7 +14997,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     %0 = func.param key : StdI64
     memref.store %0, __match_dispatch_0
@@ -15028,7 +15028,7 @@ module {
   func @main() -> u32 {
   entry:
     %12 = arith.constant {value = 2 : i64}
-    %13, %14 = func.try_call @register-allocator.lookup %12
+    %13, %14 = func.try_call @lookup %12
     %15 = arith.constant {value = 0 : i64}
     memref.store %15, __try_default_0
     memref.store %13, __try_result_0
@@ -15043,7 +15043,7 @@ module {
     %19 = memref.load __try_result_0 : i64
     memref.store %19, a
     %20 = arith.constant {value = 99 : i64}
-    %21, %22 = func.try_call @register-allocator.lookup %20
+    %21, %22 = func.try_call @lookup %20
     %23 = arith.constant {value = 42 : i64}
     memref.store %23, __try_default_1
     memref.store %21, __try_result_1
@@ -15076,16 +15076,16 @@ module {
 }
 === x86
 module {
-  func @register-allocator.lookup(key: i64) -> i64 {
+  func @lookup(key: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
-    x64.jmp register-allocator.lookup.dispatch_0.cmp0
+    x64.jmp lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne register-allocator.lookup.dispatch_0.cmp1
+    x64.jne lookup.dispatch_0.cmp1
   dispatch_0.case0:
     x64.mov rax, 100
     x64.xor edx, edx
@@ -15095,7 +15095,7 @@ module {
     x64.mov rax, [rbp-8]
     x64.mov rcx, 2
     x64.cmp rax, rcx
-    x64.jne register-allocator.lookup.dispatch_0.case2
+    x64.jne lookup.dispatch_0.case2
   dispatch_0.case1:
     x64.mov rax, 200
     x64.xor edx, edx
@@ -15115,7 +15115,7 @@ module {
   entry:
     x64.prologue stack_size=48
     x64.mov rcx, 2
-    x64.call register-allocator.lookup
+    x64.call lookup
     x64.xor ecx, ecx
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax
@@ -15130,7 +15130,7 @@ module {
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
     x64.mov rcx, 99
-    x64.call register-allocator.lookup
+    x64.call lookup
     x64.mov rcx, 42
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rax

@@ -1,0 +1,24 @@
+// Test: cross-file-bare-name-resolves
+// --- file: utils/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function bareHelper() returns Integer
+	return 42
+end 'bareHelper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return bareHelper()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    mir.ret %1
+  }
+}
+---

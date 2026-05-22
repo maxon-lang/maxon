@@ -22,7 +22,7 @@ ExitCode: 42
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -32,7 +32,7 @@ module {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %12, %11 = maxon.try_call @register-allocator.mayFail
+    %12, %11 = maxon.try_call @mayFail
     maxon.assign %11 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %12 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.literal {value = 0 : i64}
@@ -60,7 +60,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
@@ -71,7 +71,7 @@ module {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
-    %4, %5 = func.try_call @register-allocator.mayFail
+    %4, %5 = func.try_call @mayFail
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi ne %5, %6
     cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_0]
@@ -97,7 +97,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -111,7 +111,7 @@ module {
     x64.prologue stack_size=16
     x64.xor eax, eax
     x64.mov [rbp-8], rax
-    x64.call register-allocator.mayFail
+    x64.call mayFail
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
     x64.je main.otherwise_continue_0

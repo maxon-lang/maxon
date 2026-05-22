@@ -195,15 +195,19 @@ public class Compiler {
         s => Path.GetFullPath(s.Path) == normalizedPath);
 
       if (stdlibIndex >= 0) {
-        // Stdlib file changed - must re-parse stdlib from scratch
+        // Stdlib file changed - must re-parse stdlib from scratch.
+        // Preserve the original SourceFile's RootPath so the replaced entry
+        // retains the stdlib anchor (parent of stdlib dir).
         var module = new IrModule<MaxonOp>();
         var modifiedSources = (SourceFile[])stdlibSources.Clone();
-        modifiedSources[stdlibIndex] = new SourceFile(filePath, content);
+        modifiedSources[stdlibIndex] = new SourceFile(filePath, content, modifiedSources[stdlibIndex].RootPath);
         return CompileSources(module, modifiedSources, true);
       } else {
         var module = StdlibLoader.GetStdlibModule();
         ResetStaticCompileState(context);
-        return CompileSources(module, [new SourceFile(filePath, content)], false);
+        // Single-file Check: anchor at the file's parent dir (decision #3).
+        var rootPath = Path.GetDirectoryName(Path.GetFullPath(filePath));
+        return CompileSources(module, [new SourceFile(filePath, content, rootPath)], false);
       }
     } catch (CompileError ex) {
       ex.FilePath ??= filePath;
@@ -287,7 +291,7 @@ public class Compiler {
       try {
         var tokens = TokensFor(source);
         ReportLexerErrors(tokens, source.Path, errors);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
         parser.PreScanTypeAliasesOnly(module);
         // PreScanTypeAliasesOnly recovers from per-block errors (e.g. duplicate
         // enum raw value) so the rest of the file's typealiases still register.
@@ -312,7 +316,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -333,7 +337,7 @@ public class Compiler {
         if (!module.DeferredExtensionFiles.Contains(source.Path)) continue;
         try {
           var tokens = TokensFor(source);
-          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
           parser.RescanExtensionBlocks(module);
         } catch (CompileError ex) {
           ex.FilePath ??= source.Path;
@@ -384,7 +388,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
         parser.PreScanTypeAliasesOnly(module, rescan: true);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -416,7 +420,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
         var parsed = parser.Parse();
         module.Merge(parsed);
         // Collect declaration-level errors from parser recovery
@@ -804,9 +808,13 @@ public static class StdlibLoader {
       return string.Compare(a, b, StringComparison.Ordinal);
     });
 
+    // Per Phase 1 of the directory-as-module redesign, stdlib files anchor
+    // at the parent of the stdlib directory so that rel(file, root) yields
+    // "stdlib/<subdirs>/<name>.maxon" and namespace = "stdlib.<subdirs>".
+    var stdlibRoot = Path.GetDirectoryName(stdlibPath);
     var sources = new List<SourceFile>();
     foreach (var filePath in files)
-      sources.Add(new SourceFile(filePath, File.ReadAllText(filePath)));
+      sources.Add(new SourceFile(filePath, File.ReadAllText(filePath), stdlibRoot));
     _cachedSources = [.. sources];
     return _cachedSources;
   }
@@ -819,4 +827,4 @@ public static class StdlibLoader {
   }
 }
 
-public record SourceFile(string Path, string Content);
+public record SourceFile(string Path, string Content, string? RootPath = null);

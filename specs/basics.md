@@ -69,7 +69,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @basics.getValue() -> i64 {
+  func @getValue() -> i64 {
   entry:
     %0 = maxon.literal {value = 42 : i64}
     maxon.scope_end []
@@ -77,7 +77,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %1 = maxon.call @basics.getValue
+    %1 = maxon.call @getValue
     %2 = maxon.literal {value = 0 : i64}
     %3 = maxon.binop %1, %2 {op = lt}
     %4 = maxon.literal {value = 4294967295 : i64}
@@ -93,14 +93,14 @@ module {
 }
 === standard
 module {
-  func @basics.getValue() -> i64 {
+  func @getValue() -> i64 {
   entry:
     %0 = arith.constant {value = 42 : i64}
     func.return %0
   }
   func @main() -> u32 {
   entry:
-    %1 = func.call @basics.getValue
+    %1 = func.call @getValue
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.cmpi lt %1, %2
     %4 = arith.constant {value = 4294967295 : i64}
@@ -117,7 +117,7 @@ module {
 }
 === x86
 module {
-  func @basics.getValue() -> i64 {
+  func @getValue() -> i64 {
   entry:
     x64.mov rax, 42
     x64.ret
@@ -125,7 +125,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call basics.getValue
+    x64.call getValue
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx

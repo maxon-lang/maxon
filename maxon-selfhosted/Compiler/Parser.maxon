@@ -99,6 +99,13 @@ export type Parser
 	var tokens TokenArray
 	var cursor TokenIter
 	var filePath FilePath
+	// Per-file compile root anchor used to derive this file's namespace from
+	// its on-disk path. User files take their project's rootPath; stdlib files
+	// use the parent of the `stdlib/` install dir; spec-fragment files use the
+	// fragment directory itself. Currently stored only — namespace derivation
+	// still runs off `filePath` alone; a later phase rewires `deriveNamespace`
+	// to relativize against this anchor.
+	var rootPath FilePath
 	// Module namespace supplied by the caller — used to qualify declarations
 	// and resolve unqualified calls within this module.
 	var namespace String
@@ -277,7 +284,7 @@ export type Parser
 	// a fresh function starts with no stale bindings.
 	var letStructBackedEnumCases StructBackedEnumCaseBindingMap
 
-	export static function create(project Project, tokens TokenArray, filePath FilePath, namespace String) returns Parser throws ParserError
+	export static function create(project Project, tokens TokenArray, filePath FilePath, rootPath FilePath, namespace String) returns Parser throws ParserError
 		// Empty token array (empty or whitespace-only source) is a legitimate
 		// input — caller must handle by throwing ParserError.unexpectedEof so
 		// empty-file handling is explicit rather than a silent empty module.
@@ -286,7 +293,7 @@ export type Parser
 		// before any expression is parsed.
 		let placeholderFunc = IrFunction.create("", maxonReturnType: MaxonReturnType.void, paramCount: 0, maxonParamTypes: MaxonTypeArray.create(), returnLine: 0)
 		let placeholderBlock = IrBlock.create(0, label: "")
-		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
+		return Self{project: project, tokens: tokens, cursor: cursor, filePath: filePath, rootPath: rootPath, namespace: namespace, currentTypeName: "", currentTypeParams: StringArray.create(), currentTypeConformances: ConformanceArray.create(), currentTypeVisibility: Visibility.file, currentEnumVisibility: Visibility.file, scope: Scope.create(), loopStack: LoopContextArray.create(), matchStack: MatchContextArray.create(), abortBody: false, bodyStmtParsed: false, paramLocations: ParamLocationArray.create(), localVarLocations: ParamLocationArray.create(), referencedVars: ReferencedVarSet.create(), synthNameCounter: 0, synthNameCache: ByteArrayArray.create(), currentBlock: placeholderBlock, currentFunc: placeholderFunc, module: MaxonModule.create(), consumeExpectedDisplay: "more input", inMatchArmBody: false, inClosure: false, inFunctionParam: false, inForInHeader: false, atTopOfTypeAliasRhs: false, inIfCondition: false, currentInnerAliases: InnerAliasMap.create(), closureOuterScope: Scope.create(), closureCaptures: CaptureInfoArray.create(), moduleInitName: "", moduleInitFunc: placeholderFunc, moduleInitBlock: placeholderBlock, moduleInitSynthCounter: 0, localTypealiases: LocalTypealiasArray.create(), usedTypeAliases: ReferencedVarSet.create(), letStructBackedEnumCases: StructBackedEnumCaseBindingMap.create()}
 	end 'create'
 
 	export function parseModule() returns MaxonModule throws ParserError
@@ -615,24 +622,62 @@ export type Parser
 		end 'trackUse'
 
 		// Phase 9 Stage 4: accept dotted type names like `Shape.unionCases`
-		// for the union-cases companion enum. The companion is registered as
-		// a typealias under the dotted name, so the regular `internMaxonType`
-		// path resolves it once we glue the segments back together. Only
-		// applied when the dotted name is a known type/alias/enum —
-		// otherwise we leave the `.` for the surrounding caller (typealias
-		// args, type-resolution placeholders) to handle.
+		// for the union-cases companion enum, and namespace-qualified
+		// typealiases like `api.Score` or `stdlib.fmt.Score`. The companion /
+		// qualified alias is registered under the dotted name, so the regular
+		// `internMaxonType` path resolves it once we glue the segments back
+		// together. Walks the dotted chain greedily — the longest prefix that
+		// matches a registered name wins. Single-segment dotted hits remain
+		// supported via the inner loop's first iteration.
 		if typeToken.kind == TokenKind.identifier and at(TokenKind.dot) 'maybeDottedType'
-			let dotPeek = try cursor.peek(1) otherwise Token.eof()
-			if dotPeek.kind == TokenKind.identifier 'haveDottedMember'
-				let dottedName = "{typeToken.value}.{dotPeek.value}"
-				if project.unresolvedTypealiases.contains(dottedName) or project.typealiases.contains(dottedName) or project.unresolvedEnums.contains(dottedName) or project.enumTypes.contains(dottedName) 'isDottedType'
+			var assembled = typeToken.value.clone()
+			var matchedName = ""
+			var matchedSegments = 0 as ParsedInt
+			var currentSegments = 0 as ParsedInt
+			var peekOffset = 1 as ParsedInt
+			while true 'walk'
+				let dotTok = try cursor.peek(peekOffset - 1) otherwise break
+				if dotTok.kind != TokenKind.dot 'noMoreDots'
+					break
+				end 'noMoreDots'
+				let idTok = try cursor.peek(peekOffset) otherwise break
+				if idTok.kind != TokenKind.identifier 'noIdAfterDot'
+					break
+				end 'noIdAfterDot'
+				assembled = "{assembled}.{idTok.value}"
+				currentSegments = currentSegments + 1
+				if project.unresolvedTypealiases.contains(assembled) or project.typealiases.contains(assembled) or project.unresolvedEnums.contains(assembled) or project.enumTypes.contains(assembled) 'isDottedType'
+					matchedName = assembled.clone()
+					matchedSegments = currentSegments
+				end 'isDottedType'
+				peekOffset = peekOffset + 2
+			end 'walk'
+			if matchedSegments > 0 'consumeMatched'
+				// Consume `.id` pairs for each matched segment.
+				for _ in 0 upto matchedSegments 'eachSegment'
 					try eat(TokenKind.dot)
 					_ = try consume()
-					usedTypeAliases.insert(element: dottedName)
-					return internMaxonType(project, name: dottedName)
-				end 'isDottedType'
-			end 'haveDottedMember'
+				end 'eachSegment'
+				usedTypeAliases.insert(element: matchedName)
+				return internMaxonType(project, name: matchedName)
+			end 'consumeMatched'
 		end 'maybeDottedType'
+
+		// E3063 ambiguity detection: bare-name type reference with two or more
+		// reachable typealias declarations under directory-as-module rules.
+		// Mirrors E3095 for functions — the user must write the directory-
+		// qualified form (`dir.Name`) to disambiguate. Only fires for bare
+		// identifier tokens (keyword type names route elsewhere) and only when
+		// the reachable set has 2+ declarations from distinct files.
+		if typeToken.kind == TokenKind.identifier 'maybeAmbiguous'
+			let reachable = reachableTypealiasDefinitions(project, name: typeToken.value, readerFilePath: filePath)
+			if reachable.count() > 1 'isAmbiguous'
+				let candidateList = renderTypealiasCandidateList(reachable, bare: typeToken.value)
+				reportCompileError(project, code: ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{typeToken.value}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidateList}", line: typeToken.line, column: typeToken.column, filePath: filePath)
+				synchronize()
+				return MaxonType.unresolved
+			end 'isAmbiguous'
+		end 'maybeAmbiguous'
 
 		// Phase 11.0: extend `Base with Args`. After consuming the base name,
 		// peek for `with`; if present, parse a comma-separated arg list (or a
@@ -761,7 +806,7 @@ export type Parser
 			let chasedParam = parserChaseFnAlias(paramMaxonType)
 			if isFunctionMaxonType(chasedParam) 'expandEnv'
 				let envName = "__env_{paramNameToken.value}"
-				_ = scope.declare(envName, varType: MaxonType.integer, mutable: true)
+				_ = scope.declare(envName, varType: MaxonType.opaquePointer, mutable: true)
 			end 'expandEnv'
 			// C1.d: an interface-typed param ABI-expands to (value,
 			// witness). Reserve a hidden slot for the witness here so
@@ -769,7 +814,7 @@ export type Parser
 			// VarSlot ids contiguous with `abiParamTypes` indexing.
 			if interfaceTypeIsFat(paramMaxonType) 'expandWitness'
 				let witnessName = "__witness_{paramNameToken.value}"
-				_ = scope.declare(witnessName, varType: MaxonType.integer, mutable: true)
+				_ = scope.declare(witnessName, varType: MaxonType.opaquePointer, mutable: true)
 			end 'expandWitness'
 
 			if cursor.current().kind == TokenKind.rightParen 'endParams'
@@ -1049,7 +1094,7 @@ export type Parser
 			// user-visible param shadows the witness slot and the body reads
 			// the witness pointer when it intends to read its first argument.
 			if interfaceTypeIsFat(selfMaxonType) 'expandSelfWitness'
-				_ = scope.declare("__witness___self", varType: MaxonType.integer, mutable: true)
+				_ = scope.declare("__witness___self", varType: MaxonType.opaquePointer, mutable: true)
 			end 'expandSelfWitness'
 		end 'addSelfParam'
 
@@ -1073,7 +1118,7 @@ export type Parser
 			// the scope-level allocation in parseFunctionParametersInner.
 			let chasedAbi = parserChaseFnAlias(pt)
 			if isFunctionMaxonType(chasedAbi) 'addEnv'
-				abiParamTypes.push(MaxonType.integer)
+				abiParamTypes.push(MaxonType.opaquePointer)
 			end 'addEnv'
 			// C1.d: an interface-typed param is a fat pointer (value,
 			// witness) — append the witness slot after the value slot so
@@ -1083,7 +1128,7 @@ export type Parser
 			// `__witness_<paramName>` so the witness slot has a stable
 			// VarSlot id that lowering can resolve via interfaceWitnessSlots.
 			if interfaceTypeIsFat(pt) 'addWitnessSlot'
-				abiParamTypes.push(MaxonType.integer)
+				abiParamTypes.push(MaxonType.opaquePointer)
 			end 'addWitnessSlot'
 		end 'expandAbi'
 		let abiParamCount = abiParamTypes.count()
@@ -3194,11 +3239,18 @@ export type Parser
 		let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise filePath
 
 		// Stage K.X.A: Classify the relationship with each existing entry.
-		// A duplicate only fires when both this and the existing decl are
-		// simultaneously observable from each other's file (same file, or
-		// both non-file-private). Cross-file invisibility silences the
-		// check entirely — no separate "shadows" path.
-		var collides = false
+		// Three outcomes:
+		//   - Same-file collision → E3061. Two `typealias Score = ...` in the
+		//     same file can never be disambiguated by namespace qualification.
+		//   - Cross-file collision, both observable to each other → ALLOWED.
+		//     The second decl is staged under the qualified key
+		//     `{thisNamespace}.{name}`; the bare key keeps whichever was parsed
+		//     first. The use-site `parseTypeRef` falls back to E3063 when the
+		//     reader sees two reachable definitions for a bare name.
+		//   - Cross-file collision where one side is invisible to the other →
+		//     no-op (each file privately defines its own).
+		var sameFileCollision = false
+		var crossFileBothObservable = false
 		if project.typealiases.contains(nameToken.value) 'haveResolved'
 			var infos = TypealiasVisibilityInfoArray.create()
 			if let storedInfos = try project.typealiasVisibilities.get(nameToken.value) 'haveInfos'
@@ -3213,7 +3265,7 @@ export type Parser
 				let resolvedIsFilePrivate = info.visibility == Visibility.file
 				let resolvedFromOtherFile = not (info.sourceFilePath.toString() == filePath.toString())
 				if not resolvedFromOtherFile 'sameFile'
-					collides = true
+					sameFileCollision = true
 					continue
 				end 'sameFile'
 				let existingInvisibleHere = resolvedIsFilePrivate
@@ -3221,26 +3273,50 @@ export type Parser
 				if existingInvisibleHere or thisInvisibleThere 'oneIsInvisible'
 					continue
 				end 'oneIsInvisible'
-				collides = true
+				crossFileBothObservable = true
 			end 'classifyEach'
 		end 'haveResolved'
-		if not collides and hasExisting 'checkUnresolved'
+		if not sameFileCollision and hasExisting 'checkUnresolved'
 			if not existingFromOtherFile 'sameFile'
-				collides = true
+				sameFileCollision = true
 			end 'sameFile' else 'differentFiles'
 				let existingInvisibleHere = existingIsFilePrivate
 				let thisInvisibleThere = isFilePrivate
 				if not existingInvisibleHere and not thisInvisibleThere 'bothObservable'
-					collides = true
+					crossFileBothObservable = true
 				end 'bothObservable'
 			end 'differentFiles'
 		end 'checkUnresolved'
 
-		if collides 'duplicate'
+		if sameFileCollision 'duplicate'
 			reportCompileError(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
 			skipToNextLine()
 			return
 		end 'duplicate'
+
+		// Cross-file collision where both decls are observable to each other:
+		// register the new decl under the qualified key `{namespace}.{name}`
+		// so the use-site lookup can resolve `api.Score` and `legacy.Score`
+		// independently. The bare key keeps the first-parsed entry.
+		if crossFileBothObservable 'crossFileCollision'
+			let thisNamespace = deriveNamespace(filePath, rootPath: rootPath)
+			let qualifiedKey = qualifyName(thisNamespace, name: nameToken.value)
+			if not project.unresolvedTypealiases.contains(qualifiedKey) and not project.typealiases.contains(qualifiedKey) 'register'
+				project.unresolvedTypealiases.upsert(qualifiedKey, value: UnresolvedTypealias.create(qualifiedKey, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+				recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: qualifiedKey)
+			end 'register'
+			// Mirror the visibility entry under the BARE name so use-site
+			// `reachableTypealiasDefinitions` sees every cross-file declaration
+			// before TypeResolution's drain has run. Each declaring file
+			// contributes one entry; the drain pass later writes the same info
+			// (idempotent) when the qualified entry is resolved.
+			appendTypealiasVisibility(project, name: nameToken.value, info: TypealiasVisibilityInfo.create(visibility, sourceFilePath: filePath))
+			if visibility == Visibility.file and not isInvalidTypealiasExpr(expr) 'isLocal'
+				localTypealiases.push(LocalTypealias.create(nameToken.value, line: nameToken.line, column: nameToken.column))
+			end 'isLocal'
+			skipToNextLine()
+			return
+		end 'crossFileCollision'
 
 		// First-parsed entry wins on cross-file file-private collisions; the
 		// existing entry stays canonical in the global map.
@@ -3248,6 +3324,28 @@ export type Parser
 			project.unresolvedTypealiases.upsert(nameToken.value, value: UnresolvedTypealias.create(nameToken.value, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
 			recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: nameToken.value)
 		end 'firstEntry'
+		// Also register under the qualified key `{namespace}.{name}` whenever
+		// the declaration is observable from outside its declaring file
+		// (exported or module-visible). The bare slot is still authoritative
+		// for in-file lookups; the qualified slot is what use-site
+		// `parseTypeRef`'s dotted-name walk resolves for `api.Score` /
+		// `lib.fmt.Score`. File-private aliases skip this — they can never be
+		// referenced via a directory qualifier anyway.
+		if visibility != Visibility.file 'registerQualified'
+			let thisNamespace = deriveNamespace(filePath, rootPath: rootPath)
+			if not thisNamespace.isEmpty() 'haveNs'
+				let qualifiedKey = qualifyName(thisNamespace, name: nameToken.value)
+				if qualifiedKey != nameToken.value and not project.unresolvedTypealiases.contains(qualifiedKey) and not project.typealiases.contains(qualifiedKey) 'register'
+					project.unresolvedTypealiases.upsert(qualifiedKey, value: UnresolvedTypealias.create(qualifiedKey, expr: expr, visibility: visibility, line: nameToken.line, column: nameToken.column, filePath: filePath))
+					recordUnresolvedTypealiasUpsert(project, filePath: filePath, key: qualifiedKey)
+				end 'register'
+			end 'haveNs'
+		end 'registerQualified'
+		// Mirror the visibility entry under the bare name so use-site
+		// `reachableTypealiasDefinitions` sees every declaration during the
+		// current parse, before the drain pass has populated the sidecar.
+		// Idempotent — the drain pass coalesces duplicates.
+		appendTypealiasVisibility(project, name: nameToken.value, info: TypealiasVisibilityInfo.create(visibility, sourceFilePath: filePath))
 		// File-private aliases participate in the unused-typealias check.
 		// Exported / module-visible aliases skip it because cross-file uses
 		// aren't visible to a single Parser instance. A typealias whose RHS
@@ -6661,6 +6759,7 @@ export type Parser
 			genericInstance gives true
 			interface gives true
 			constInt gives false
+			opaquePointer gives true
 		end 'check'
 	end 'matchScrutineeIsKnownNonEnum'
 
@@ -7554,8 +7653,7 @@ export type Parser
 		return match t 'check'
 			unresolved gives true
 			boolean to function gives false
-			typeParameter to interface gives false
-			constInt gives false
+			typeParameter to opaquePointer gives false
 		end 'check'
 	end 'isUnresolvedMaxonType'
 
@@ -8707,9 +8805,7 @@ export type Parser
 			boolean to string gives false
 			function gives false
 			unresolved gives false
-			genericInstance gives false
-			interface gives false
-			constInt gives false
+			genericInstance to opaquePointer gives false
 		end 'check'
 	end 'shouldCarryAsBinopOperandType'
 
@@ -8717,9 +8813,7 @@ export type Parser
 		return match t 'check'
 			named gives true
 			boolean to string gives false
-			function to unresolved gives false
-			typeParameter to interface gives false
-			constInt gives false
+			function to opaquePointer gives false
 		end 'check'
 	end 'isNamedMaxonType'
 
@@ -9624,9 +9718,7 @@ export type Parser
 			float gives MaxonType.float
 			boolean gives MaxonType.integer
 			integer gives MaxonType.integer
-			string to unresolved gives MaxonType.integer
-			typeParameter to interface gives MaxonType.integer
-			constInt gives MaxonType.integer
+			string to opaquePointer gives MaxonType.integer
 		end 'pick'
 	end 'defaultLiteralTypeOfInner'
 
@@ -9695,6 +9787,53 @@ export type Parser
 			return MaxonType.boolean
 		end 'isBool'
 		if typeToken.kind == TokenKind.identifier 'isIdent'
+			// Namespace-qualified typealias names (`api.Score`, `lib.fmt.Score`)
+			// land here as `ident . ident (. ident)*`. Walk the dotted chain
+			// greedily and pick the longest prefix that matches a registered
+			// alias / enum name. Unmatched chains drop back to the bare ident
+			// so the surrounding caller can recover via the same E2003 path it
+			// would hit for a non-existent bare name.
+			if at(TokenKind.dot) 'maybeDotted'
+				var assembled = typeToken.value.clone()
+				var matchedName = typeToken.value.clone()
+				var matchedSegments = 0 as ParsedInt
+				var currentSegments = 0 as ParsedInt
+				var peekOffset = 0 as ParsedInt
+				while true 'walk'
+					let dotTok = try cursor.peek(peekOffset) otherwise break
+					if dotTok.kind != TokenKind.dot 'noMoreDots'
+						break
+					end 'noMoreDots'
+					let idTok = try cursor.peek(peekOffset + 1) otherwise break
+					if idTok.kind != TokenKind.identifier 'noIdAfterDot'
+						break
+					end 'noIdAfterDot'
+					assembled = "{assembled}.{idTok.value}"
+					currentSegments = currentSegments + 1
+					if project.unresolvedTypealiases.contains(assembled) or project.typealiases.contains(assembled) or project.unresolvedEnums.contains(assembled) or project.enumTypes.contains(assembled) 'isDottedType'
+						matchedName = assembled.clone()
+						matchedSegments = currentSegments
+					end 'isDottedType'
+					peekOffset = peekOffset + 2
+				end 'walk'
+				if matchedSegments > 0 'consumeMatched'
+					for _ in 0 upto matchedSegments 'eachSegment'
+						try eat(TokenKind.dot)
+						_ = try consume()
+					end 'eachSegment'
+					usedTypeAliases.insert(element: matchedName)
+					return internMaxonType(project, name: matchedName)
+				end 'consumeMatched'
+			end 'maybeDotted'
+			// E3063 ambiguity detection: bare-name typealias reference at the
+			// cast target with two or more reachable declarations. Mirrors the
+			// parseTypeRef branch — see that comment for the full rationale.
+			let reachable = reachableTypealiasDefinitions(project, name: typeToken.value, readerFilePath: filePath)
+			if reachable.count() > 1 'isAmbiguous'
+				let candidateList = renderTypealiasCandidateList(reachable, bare: typeToken.value)
+				reportCompileError(project, code: ErrorCode.semanticAmbiguousTypeAlias, message: "Ambiguous typealias '{typeToken.value}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidateList}", line: typeToken.line, column: typeToken.column, filePath: filePath)
+				return MaxonType.unresolved
+			end 'isAmbiguous'
 			// E3062: `expr as IntArray` is a use of `IntArray`.
 			usedTypeAliases.insert(element: typeToken.value)
 			return internMaxonType(project, name: typeToken.value)
@@ -9732,12 +9871,7 @@ export type Parser
 			let ok = match t 'check'
 				boolean to string gives true
 				named gives true
-				function gives false
-				unresolved gives false
-				typeParameter gives false
-				genericInstance gives false
-				interface gives false
-				constInt gives false
+				function to opaquePointer gives false
 			end 'check'
 			if not ok 'reject'
 				return false
@@ -9880,6 +10014,56 @@ export type Parser
 				return try parseFromLiteralCall(block, typeToken: token)
 			end 'isFromLiteral'
 		end 'maybeFromLiteral'
+
+		// Multi-segment qualified call: Ident.Ident.…Ident(args).
+		// Per the directory-as-module design (Phase 5 resolved decision #5),
+		// a callee like `stdlib.helpers.string.isExtendedPictographic(…)` is
+		// the fully qualified name of a function registered under nested
+		// namespaces. The 2-segment `Ident.Ident(…)` branch below cannot
+		// catch this because its lookahead stops after one `.`. Walk the
+		// chain greedily here: if it terminates in `(` and the assembled
+		// dotted name is a registered function (or overload bucket), treat
+		// it as a qualified call. Otherwise fall through so 2-segment static
+		// calls, qualified reads, and struct-backing access paths still see
+		// their tokens.
+		if at(TokenKind.dot) and not scope.contains(token.value) 'maybeMultiSegmentCall'
+			let firstMember = try cursor.peek(1) otherwise Token.eof()
+			let afterFirst = try cursor.peek(2) otherwise Token.eof()
+			if tokenIsIdentifierLike(firstMember) and afterFirst.kind == TokenKind.dot 'startsMultiSegment'
+				var assembled = "{token.value}.{firstMember.value}"
+				var segmentCount = 2
+				var probeOffset = 2  // cursor.peek index for the next `.`
+				while true 'walkChain'
+					let dotTok = try cursor.peek(probeOffset) otherwise Token.eof()
+					if dotTok.kind != TokenKind.dot 'noMoreDot'
+						break
+					end 'noMoreDot'
+					let segTok = try cursor.peek(probeOffset + 1) otherwise Token.eof()
+					if not tokenIsIdentifierLike(segTok) 'noSegIdent'
+						break
+					end 'noSegIdent'
+					assembled = "{assembled}.{segTok.value}"
+					segmentCount = segmentCount + 1
+					probeOffset = probeOffset + 2
+				end 'walkChain'
+				let trailingTok = try cursor.peek(probeOffset) otherwise Token.eof()
+				let isQualifiedCall = segmentCount >= 3 and trailingTok.kind == TokenKind.leftParen and (project.funcReturnTypes.contains(assembled) or project.overloadedNames.contains(assembled))
+				if isQualifiedCall 'isMultiSegmentCall'
+					// Consume the dot/ident pairs we peeked over, plus the
+					// trailing `(`. Each segment after the head consumed one
+					// `.` and one ident (2 tokens); we already consumed the
+					// head identifier upstream.
+					for _ in 0 upto segmentCount - 1 'consumeSegment'
+						try eat(TokenKind.dot)
+						_ = try consume()
+					end 'consumeSegment'
+					try eat(TokenKind.leftParen)
+					let (argNames, argLabels, argTypes, argRanges) = try parseCallArgsRaw(block, requireNamed: false)
+					let rparenToken = previousToken()
+					return emitCallAndResult(calleeName: assembled, args: argNames, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, callContext: CallContext.qualified, range: SourceRange.between(token, last: rparenToken))
+				end 'isMultiSegmentCall'
+			end 'startsMultiSegment'
+		end 'maybeMultiSegmentCall'
 
 		// Ident.Ident(args) — disambiguated using local-scope membership only:
 		//   - `c.method(...)` where `c` is a known local var: emit methodCall
@@ -10703,8 +10887,7 @@ export type Parser
 			function gives 0
 			unresolved gives 0
 			typeParameter gives 0
-			interface gives 0
-			constInt gives 0
+			interface to opaquePointer gives 0
 		end 'extract'
 		if nameId == 0 'noEnumName'
 			return MaxonType.unresolved
@@ -10728,7 +10911,7 @@ export type Parser
 			if unresolved.isFunctionBacked and unresolved.cases.count() > 0 'isFnBacked'
 				let firstCase = try unresolved.cases.get(0) otherwise return MaxonType.unresolved
 				if not firstCase.rawFunctionName.isEmpty() 'haveName'
-					let ns = deriveNamespace(unresolved.filePath)
+					let ns = deriveNamespace(unresolved.filePath, rootPath: self.project.rootPath)
 					let qualified = qualifyCalleeForContext(project, bare: firstCase.rawFunctionName, callContext: CallContext.free, currentNamespace: ns, readerFilePath: unresolved.filePath)
 					if project.funcSignatures.contains(qualified) and project.funcReturnTypes.contains(qualified) 'sigKnown'
 						let sig = try project.funcSignatures.get(qualified) otherwise return MaxonType.unresolved
@@ -10756,8 +10939,7 @@ export type Parser
 			function gives MaxonType.unresolved
 			unresolved gives MaxonType.unresolved
 			typeParameter gives MaxonType.unresolved
-			interface gives MaxonType.unresolved
-			constInt gives MaxonType.unresolved
+			interface to opaquePointer gives MaxonType.unresolved
 		end 'extract'
 	end 'extractGenericInstanceLastArg'
 
@@ -11849,9 +12031,7 @@ export type Parser
 			float gives InterpExprKind.f64
 			string gives InterpExprKind.string
 			named(id) gives interpKindForNamed(project.typeNames.get(id))
-			function to unresolved gives InterpExprKind.i64
-			typeParameter to interface gives InterpExprKind.i64
-			constInt gives InterpExprKind.i64
+			function to opaquePointer gives InterpExprKind.i64
 		end 'k'
 	end 'inferInterpKind'
 
@@ -12270,7 +12450,7 @@ export type Parser
 		// `[args, env]` and call_indirect traps with "indirect call type
 		// mismatch". For capturing closures, body lowering reads the env
 		// via `closureEnvLoad`; for non-capturing ones it stays unused.
-		liftedFunc.maxonParamTypes.push(MaxonType.integer)
+		liftedFunc.maxonParamTypes.push(MaxonType.opaquePointer)
 		liftedFunc.paramCount = liftedFunc.paramCount + 1
 
 		// Patch the lifted function's return type now that the body type
@@ -13340,9 +13520,7 @@ function maxonTypeIsFloat(t MaxonType) returns bool
 	return match t 'check'
 		float gives true
 		boolean to integer gives false
-		string to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		string to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsFloat'
 
@@ -13360,19 +13538,14 @@ function maxonTypeIsPrimitive(t MaxonType) returns bool
 	// at parse time.
 	return match t 'check'
 		boolean to float gives true
-		string gives false
-		named to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		string to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsPrimitive'
 
 function maxonTypeIsBool(t MaxonType) returns bool
 	return match t 'check'
 		boolean gives true
-		integer to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		integer to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsBool'
 
@@ -13380,9 +13553,7 @@ function maxonTypeIsInt(t MaxonType) returns bool
 	return match t 'check'
 		integer gives true
 		boolean gives false
-		float to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		float to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsInt'
 
@@ -13560,6 +13731,27 @@ export function qualifyName(ns String, name String) returns String
 	end 'noNs'
 	return "{ns}.{name}"
 end 'qualifyName'
+
+// Format the E3063 "Candidates: ..." trailer. Renders each reachable
+// declaration as `namespace.bare`, with root-level (empty-namespace)
+// declarations shown as `(root).bare` so a bare-name file isn't displayed as
+// just `.Score`. Mirrors `renderCrossFileCandidateList` in TypeResolution.
+export function renderTypealiasCandidateList(reachable ReachableTypealiasInfoArray, bare String) returns String
+	var out = ""
+	for i in 0 upto reachable.count() 'each'
+		let info = try reachable.get(i) otherwise continue
+		if i > 0 'separator'
+			out = "{out}, "
+		end 'separator'
+		let ns = info.namespace
+		if ns.isEmpty() 'rootNs'
+			out = "{out}(root).{bare}"
+		end 'rootNs' else 'qualified'
+			out = "{out}{ns}.{bare}"
+		end 'qualified'
+	end 'each'
+	return out
+end 'renderTypealiasCandidateList'
 
 // --- Pratt parser binding power ---
 

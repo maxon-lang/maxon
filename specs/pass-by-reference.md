@@ -235,7 +235,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
+error E3019: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
 ```
 
 <!-- test: pass-by-reference.nested-calls -->

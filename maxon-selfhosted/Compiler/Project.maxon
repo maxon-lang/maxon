@@ -79,6 +79,21 @@ export function isVisibleFrom(visibility Visibility, declFilePath FilePath, read
 	end 'tier'
 end 'isVisibleFrom'
 
+// True iff `namespace` belongs to the stdlib namespace family. Top-level
+// stdlib files (e.g. `stdlib/Array.maxon`) parse with namespace `stdlib`;
+// helper files under subdirectories (`stdlib/helpers/string/utf8.maxon`)
+// parse with `stdlib.helpers.string`. The shared shape under the
+// directory-as-module rule is "exactly `stdlib` or a string that starts
+// with `stdlib.`". Used by DFE seeding, the inliner skip-list, and the
+// backend stdlib/user partition to identify stdlib-owned functions
+// regardless of subdirectory depth.
+export function isStdlibNamespace(namespace String) returns bool
+	if namespace == "stdlib" 'flatStdlib'
+		return true
+	end 'flatStdlib'
+	return namespace.startsWith("stdlib.")
+end 'isStdlibNamespace'
+
 // True when `readerFilePath` lives in the same directory as `declFilePath`
 // or any descendant directory. The check compares stringified parent
 // paths: the reader's parent must start with the declarer's parent
@@ -542,6 +557,15 @@ export type Project
 	// RHS failed constraint validation (E3017) doesn't double-report.
 	export var pendingUnusedTypealiases PendingUnusedTypealiasArray
 
+	// Cross-file top-level-constant reads recorded by `rewriteUnresolvedRead`
+	// at the moment a constant reference is folded out of the IR. By the time
+	// `checkUnusedExports` runs, the `unresolvedRead` op has been rewritten to
+	// a bare `literal` / `stringConst` carrying no name, so the reference can't
+	// be recovered from the resolved IR. We capture (constantName,
+	// readerFilePath) pairs at the rewrite site so the pass can later count
+	// these reads when classifying an `export let`/`module let` as unused.
+	export var crossFileConstReads CrossFileConstReadArray
+
 	// Names of typealiases that failed constraint validation during
 	// `drainPendingConstraintChecks` (E3017 / E2003). Read by the deferred
 	// unused-typealias drain to suppress E3062 for the same alias, matching
@@ -664,6 +688,7 @@ export type Project
 			pendingConstraintChecks: PendingConstraintCheckArray.create(),
 			pendingUnusedChecks: PendingUnusedCheckArray.create(),
 			pendingUnusedTypealiases: PendingUnusedTypealiasArray.create(),
+			crossFileConstReads: CrossFileConstReadArray.create(),
 			constraintFailedTypealiases: ReferencedNameSet.create(),
 			stdlibBootstrapParsed: false,
 			charByteLiterals: CharByteLiteralSet.create(),
@@ -1639,6 +1664,106 @@ export function appendTypealiasVisibility(project Project, name String, info Typ
 	project.typealiasVisibilities.upsert(name, value: fresh)
 end 'appendTypealiasVisibility'
 
+// One reachable typealias declaration: where it was declared (file path and
+// derived namespace) and the visibility tier the declarer chose. Returned by
+// `reachableTypealiasDefinitions`; callers use the namespace+name pair to
+// render disambiguation candidates in E3063 diagnostics.
+export type ReachableTypealiasInfo
+	export var namespace String
+	export var sourceFilePath FilePath
+	export var visibility Visibility
+
+	export static function create(namespace String, sourceFilePath FilePath, visibility Visibility) returns ReachableTypealiasInfo
+		return Self{namespace: namespace, sourceFilePath: sourceFilePath, visibility: visibility}
+	end 'create'
+end 'ReachableTypealiasInfo'
+
+export typealias ReachableTypealiasInfoArray = Array with ReachableTypealiasInfo
+
+// Enumerate every reachable declaration of the bare typealias `name` from the
+// reader at `readerFilePath`. Walks both the resolved-visibility sidecar
+// (`typealiasVisibilities`) and the still-unresolved registry
+// (`unresolvedTypealiases`) so the lookup is correct mid-parse, before the
+// drain pass runs. Each declaration is included at most once (deduped by
+// source file path) and only when `isVisibleFrom` accepts the (visibility,
+// declFilePath, readerFilePath) triple. Mirrors `visibleCrossFileCandidates`
+// for functions — same data shape, different registry.
+export function reachableTypealiasDefinitions(project Project, name String, readerFilePath FilePath) returns ReachableTypealiasInfoArray
+	var results = ReachableTypealiasInfoArray.create()
+	var seenPaths = StringArray.create()
+	let readerPathStr = readerFilePath.toString()
+
+	// Shadow rule: a file-private declaration in the reader file shadows every
+	// other reachable declaration of the same bare name. Mirrors the C#
+	// bootstrap's per-file `_localTypeAliases` precedence — code that writes
+	// `typealias Integer = ...` in its own file is deliberately overriding the
+	// stdlib's `Integer` for that file, not creating an ambiguity.
+	var hasLocalShadow = false
+	if let infos = try project.typealiasVisibilities.get(name) 'checkResolvedShadow'
+		for info in infos 'each'
+			if info.visibility == Visibility.file and info.sourceFilePath.toString() == readerPathStr 'shadow'
+				hasLocalShadow = true
+				break
+			end 'shadow'
+		end 'each'
+	end 'checkResolvedShadow'
+	if not hasLocalShadow 'checkPendingShadow'
+		if let pending = try project.unresolvedTypealiases.get(name) 'havePending'
+			if pending.visibility == Visibility.file and pending.filePath.toString() == readerPathStr 'shadow'
+				hasLocalShadow = true
+			end 'shadow'
+		end 'havePending'
+	end 'checkPendingShadow'
+
+	if let infos = try project.typealiasVisibilities.get(name) 'haveResolved'
+		for info in infos 'eachInfo'
+			if not isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'invisible'
+				continue
+			end 'invisible'
+			// When a local file-private shadow exists, skip every other entry.
+			if hasLocalShadow and not (info.visibility == Visibility.file and info.sourceFilePath.toString() == readerPathStr) 'shadowed'
+				continue
+			end 'shadowed'
+			let pathStr = info.sourceFilePath.toString()
+			var dup = false
+			for prev in seenPaths 'dedupe'
+				if prev == pathStr 'hit'
+					dup = true
+					break
+				end 'hit'
+			end 'dedupe'
+			if dup 'alreadySeen'
+				continue
+			end 'alreadySeen'
+			seenPaths.push(pathStr)
+			let ns = deriveNamespace(info.sourceFilePath, rootPath: project.rootPath)
+			results.push(ReachableTypealiasInfo.create(ns, sourceFilePath: info.sourceFilePath, visibility: info.visibility))
+		end 'eachInfo'
+	end 'haveResolved'
+	if let pending = try project.unresolvedTypealiases.get(name) 'havePending'
+		if isVisibleFrom(pending.visibility, declFilePath: pending.filePath, readerFilePath: readerFilePath) 'visible'
+			let pathStr = pending.filePath.toString()
+			let isLocalPending = pending.visibility == Visibility.file and pathStr == readerPathStr
+			if hasLocalShadow and not isLocalPending 'shadowed'
+				return results
+			end 'shadowed'
+			var dup = false
+			for prev in seenPaths 'dedupe'
+				if prev == pathStr 'hit'
+					dup = true
+					break
+				end 'hit'
+			end 'dedupe'
+			if not dup 'addPending'
+				seenPaths.push(pathStr)
+				let ns = deriveNamespace(pending.filePath, rootPath: project.rootPath)
+				results.push(ReachableTypealiasInfo.create(ns, sourceFilePath: pending.filePath, visibility: pending.visibility))
+			end 'addPending'
+		end 'visible'
+	end 'havePending'
+	return results
+end 'reachableTypealiasDefinitions'
+
 // Sidecar visibility info for a function. Mirrors the data on
 // `IrFunction.visibility` / `IrFunction.sourceFilePath` but is keyed by
 // the function's qualified name so cross-file callee resolution can hit
@@ -2022,6 +2147,24 @@ end 'TopLevelConstant'
 
 export typealias ConstantMap = Map with (String, TopLevelConstant)
 
+// One reader-site observation captured at the moment a top-level constant
+// reference is folded out of the IR by `rewriteUnresolvedRead`. Used only by
+// the `checkUnusedExports` pass to classify exported / module constants —
+// every other declaration kind (functions, types, fields, vars) survives
+// resolution with its name intact, but a constant fold replaces the named
+// `unresolvedRead` op with a bare `literal` / `stringConst`, so the
+// reference would otherwise be lost.
+export type CrossFileConstRead
+	export var constantName String
+	export var readerFilePath FilePath
+
+	export static function create(constantName String, readerFilePath FilePath) returns CrossFileConstRead
+		return Self{constantName: constantName, readerFilePath: readerFilePath}
+	end 'create'
+end 'CrossFileConstRead'
+
+export typealias CrossFileConstReadArray = Array with CrossFileConstRead
+
 // --- Cache codec ---
 // Reader resolves stringValue payloads through the destination project's
 // string interner; writer dereferences through the source project's
@@ -2352,6 +2495,9 @@ export function resolveMaxonTypeToStd(project Project, ref MaxonType) returns St
 		genericInstance then return StdType.i64
 		interface then return StdType.i64
 		constInt then return StdType.i64
+		// Synthetic ABI-bookkeeping slot — closure env / interface witness
+		// pointer. Always an i64 at the Std layer.
+		opaquePointer then return StdType.i64
 	end 'stringGuard'
 end 'resolveMaxonTypeToStd'
 

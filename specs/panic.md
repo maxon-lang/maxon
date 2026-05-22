@@ -79,7 +79,7 @@ end 'main'
 ```stderr
 panic at panic.in-function.test:3: failure in helper
 Stack trace:
-  in panic.fail
+  in fail
   in main
   in mrt_start
 ```
@@ -105,7 +105,7 @@ end 'main'
 ```stderr
 panic at panic.after-condition.test:6: negative value
 Stack trace:
-  in panic.check
+  in check
   in main
   in mrt_start
 ```
@@ -147,7 +147,7 @@ end 'main'
 ```stderr
 panic at panic.two-distinct-messages.test:13: message B
 Stack trace:
-  in panic.runB
+  in runB
   in main
   in mrt_start
 ```

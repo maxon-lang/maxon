@@ -1,0 +1,32 @@
+// Test: error.unused-exported-type
+// --- file: api/shapes.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export type LocalPoint
+	export var x Integer
+	export var y Integer
+
+	export static function origin() returns LocalPoint
+		return LocalPoint{x: 0, y: 0}
+	end 'origin'
+
+	export function sum() returns Integer
+		return x + y
+	end 'sum'
+end 'LocalPoint'
+
+export function entry() returns Integer
+	let p = LocalPoint.origin()
+	return p.sum()
+end 'entry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+MaxoncStderr: ```
+error E3092: specs/fragments/unused-export/error.unused-exported-type.test/api/shapes.maxon:5:13: exported type 'LocalPoint' is never referenced outside its declaring file
+```
+---
+---

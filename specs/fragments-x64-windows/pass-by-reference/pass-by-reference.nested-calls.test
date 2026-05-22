@@ -24,7 +24,7 @@ Stdout: ```
 ---
 // CompiledIR
 module {
-  func @pass-by-reference.inner(x: i64) {
+  func @inner(x: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -36,17 +36,17 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @pass-by-reference.outer(x: i64) {
+  func @outer(x: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call pass-by-reference.inner
+    x64.call inner
     x64.epilogue
     x64.ret
   }
-  func @pass-by-reference.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=80
     x64.xor eax, eax
@@ -54,7 +54,7 @@ module {
     x64.lea rcx, [rbp-8]
     x64.mov rdx, rcx
     x64.mov rcx, rdx
-    x64.call pass-by-reference.outer
+    x64.call outer
     x64.mov rbx, [rbp-8]
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -136,7 +136,7 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-24]
     x64.test rax, rax
     x64.jz __nonnull_skip_0

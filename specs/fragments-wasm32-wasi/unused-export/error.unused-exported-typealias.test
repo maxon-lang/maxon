@@ -1,0 +1,24 @@
+// Test: error.unused-exported-typealias
+// --- file: api/lib.maxon
+export typealias UnusedAlias = int(0 to 100)
+
+typealias Integer = int(i64.min to i64.max)
+
+function consumeAlias(value UnusedAlias) returns Integer
+	return value
+end 'consumeAlias'
+
+export function entry() returns Integer
+	return consumeAlias(42)
+end 'entry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return entry()
+end 'main'
+---
+MaxoncStderr: ```
+error E3092: specs/fragments/unused-export/error.unused-exported-typealias.test/api/lib.maxon:0:0: exported typealias 'UnusedAlias' is never referenced outside its declaring file
+```
+---
+---

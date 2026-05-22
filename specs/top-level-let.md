@@ -261,11 +261,11 @@ error E2012: specs/fragments/top-level-let/circular-dependency-error.test:3:5: C
 <!-- test: export-let-cross-file -->
 Exported constants are visible from other files.
 ```maxon
-// --- file: constants.maxon
+// --- file: api/constants.maxon
 export let MAGIC = 42
 export let OFFSET = -10
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return MAGIC + OFFSET
 end 'main'

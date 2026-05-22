@@ -1,15 +1,16 @@
 // Test: export-typealias-as-return-type
-
+// --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
-function makeArray() returns IntArray
+export function makeArray() returns IntArray
 	var arr = IntArray.create()
 	arr.push(42)
 	return arr
 end 'makeArray'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let arr = makeArray()
 	return try arr.get(0) otherwise 0
@@ -19,7 +20,7 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @makeArray() -> i64 {
+  func @api.makeArray() -> i64 {
   entry:
     %6 = mir.mov_imm 8 : i64
     %7 = mir.call @mrt_alloc(%6)
@@ -43,7 +44,7 @@ module {
   }
   func @main() -> u8 {
   entry:
-    %0 = mir.call @makeArray()
+    %0 = mir.call @api.makeArray()
     %2 = mir.mov_imm 0 : i64
     mir.br inlined_Array.get_0()
   inlined_Array.get_0:

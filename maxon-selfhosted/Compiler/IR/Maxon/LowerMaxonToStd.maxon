@@ -252,7 +252,7 @@ function extendSlotsForInterfaceWitnesses(func IrFunction)
 			continue
 		end 'isParam'
 		logTrace(LogCategory.ir, message: function() gives "extendSlotsForInterfaceWitnesses: local slot_{slotId} interface — appending witness companion at slot_{func.scope.nextSlot}")
-		func.slotMaxonTypes.push(MaxonType.integer)
+		func.slotMaxonTypes.push(MaxonType.opaquePointer)
 		func.scope.nextSlot = func.scope.nextSlot + 1
 	end 'eachSlot'
 end 'extendSlotsForInterfaceWitnesses'
@@ -430,7 +430,7 @@ export function returnTypeInterfaceName(project Project, ref MaxonReturnType) re
 		unresolved gives ""
 		typeParameter gives ""
 		genericInstance gives ""
-		constInt gives ""
+		constInt to opaquePointer gives ""
 	end 'iface'
 end 'returnTypeInterfaceName'
 
@@ -450,7 +450,7 @@ export function resolveWitnessLabel(project Project, concreteType MaxonType, int
 		interface(id) gives project.interfaceRegistry.getName(id)
 		function gives ""
 		unresolved gives ""
-		constInt gives ""
+		constInt to opaquePointer gives ""
 	end 'pickName'
 	if typeName.isEmpty() 'noName'
 		throw WitnessLabelError.notResolved
@@ -1128,7 +1128,7 @@ function maxonTypeIsManagedRef(project Project, t MaxonType) returns bool
 		// (e.g. `Array<Element>`).
 		named(id) gives namedTypeIsManagedRef(project, id: id)
 		genericInstance gives true
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'classify'
 end 'maxonTypeIsManagedRef'
 
@@ -2354,12 +2354,7 @@ type MaxonToStdLowering
 		let concreteTypeName = match concreteType 'name'
 			named(id) gives self.project.typeNames.get(id)
 			boolean to string gives ""
-			function gives ""
-			unresolved gives ""
-			typeParameter gives ""
-			genericInstance gives ""
-			interface gives ""
-			constInt gives ""
+			function to opaquePointer gives ""
 		end 'name'
 		if concreteTypeName.isEmpty() or not self.project.conformances.contains(concreteTypeName, interfaceName: "FormattedStringable") 'noFmtIface'
 			return self.materializeStringableInterp(structValueId, dstBlock: dstBlock)
@@ -2434,12 +2429,7 @@ type MaxonToStdLowering
 		let enumTypeName = match enumType 'name'
 			named(id) gives self.project.typeNames.get(id)
 			boolean to string gives ""
-			function gives ""
-			unresolved gives ""
-			typeParameter gives ""
-			genericInstance gives ""
-			interface gives ""
-			constInt gives ""
+			function to opaquePointer gives ""
 		end 'name'
 		if not enumTypeName.isEmpty() and self.project.enumTypes.contains(enumTypeName) 'hasEnumDef'
 			let enumDef = try self.project.enumTypes.get(enumTypeName) otherwise panic("materializeEnumNameInterpMaybeFmt: enum '{enumTypeName}' missing from project.enumTypes")
@@ -2477,12 +2467,7 @@ type MaxonToStdLowering
 		let enumTypeName = match enumType 'name'
 			named(id) gives self.project.typeNames.get(id)
 			boolean to string gives ""
-			function gives ""
-			unresolved gives ""
-			typeParameter gives ""
-			genericInstance gives ""
-			interface gives ""
-			constInt gives ""
+			function to opaquePointer gives ""
 		end 'name'
 		if enumTypeName.isEmpty() 'noName'
 			panic("materializeEnumNameInterp: value id={enumValueId} has no named MaxonType — type-resolution should have classified it as plain integer")
@@ -2853,7 +2838,7 @@ type MaxonToStdLowering
 		let resultId = allocValueId(self.funcIdRef)
 		if let label = try resolveWitnessLabel(self.project, concreteType: concreteType, interfaceName: interfaceName) 'haveLabel'
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadWitnessTable(resultId, label: label)))
-			self.setValueType(resultId, t: MaxonType.integer)
+			self.setValueType(resultId, t: MaxonType.opaquePointer)
 			return resultId
 		end 'haveLabel'
 		// C1.d soft-fail: no witness table for this (concrete, interface)
@@ -2865,7 +2850,7 @@ type MaxonToStdLowering
 		// correctly — this soft-fail keeps interface-arm propagation
 		// non-fatal.
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: resultId, value: 0))))
-		self.setValueType(resultId, t: MaxonType.integer)
+		self.setValueType(resultId, t: MaxonType.opaquePointer)
 		return resultId
 	end 'materializeInterfaceWitness'
 
@@ -2890,7 +2875,7 @@ type MaxonToStdLowering
 			let witnessSlot = try self.interfaceWitnessSlots.get(slotId) otherwise panic("lowerVarLoad: slot {slotId} interface-typed but no witness companion in interfaceWitnessSlots — extendSlotsForInterfaceWitnesses did not run, or buildInterfaceWitnessSlotMap is out of sync")
 			let witnessLoadId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.loadSlot(witnessLoadId, slotId: witnessSlot)))
-			self.setValueType(witnessLoadId, t: MaxonType.integer)
+			self.setValueType(witnessLoadId, t: MaxonType.opaquePointer)
 			self.interfaceWitnessValueIds.upsert(resultId, value: witnessLoadId)
 		end 'pairWitness'
 		// Stage E (closures): if this load reads a function-typed param,
@@ -3005,8 +2990,7 @@ type MaxonToStdLowering
 				boolean gives true
 				integer to function gives false
 				unresolved gives true
-				typeParameter to interface gives false
-				constInt gives false
+				typeParameter to opaquePointer gives false
 			end 'isBool'
 			let maskVal = (1 if operandIsBool else (0 - 1)) as ParsedInt
 			let maskId = allocValueId(self.funcIdRef)
@@ -3328,8 +3312,7 @@ type MaxonToStdLowering
 		let gid = match receiverContext 'pickGid'
 			genericInstance(g) gives g
 			boolean to typeParameter gives 0 as GenericInstanceId
-			interface gives 0
-			constInt gives 0
+			interface to opaquePointer gives 0
 		end 'pickGid'
 		if not maxonTypeIsGenericInstance(receiverContext) 'notGid'
 			return
@@ -3342,6 +3325,7 @@ type MaxonToStdLowering
 		let n = match firstArg 'pickConst'
 			constInt(value) gives value
 			boolean to interface gives 0 as IntConstant
+			opaquePointer gives 0
 		end 'pickConst'
 		if n <= 0 'notConst'
 			return
@@ -3440,7 +3424,7 @@ type MaxonToStdLowering
 				unresolved gives false
 				typeParameter gives false
 				genericInstance gives false
-				constInt gives false
+				constInt to opaquePointer gives false
 			end 'isIface'
 			if isInterface 'ifaceDispatch'
 				// Iterator-shape passthrough: `for x in self` inside
@@ -3464,7 +3448,7 @@ type MaxonToStdLowering
 						unresolved gives ""
 						typeParameter gives ""
 						genericInstance gives ""
-						constInt gives ""
+						constInt to opaquePointer gives ""
 					end 'name'
 					let declaresCreateIterator = interfaceDeclaresMethodTransitive(self.project, interfaceName: ifaceName, methodName: "createIterator")
 					let declaresCurrent = interfaceDeclaresMethodTransitive(self.project, interfaceName: ifaceName, methodName: "current")
@@ -3782,6 +3766,7 @@ type MaxonToStdLowering
 			boolean to string then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a primitive type ({receiverContext.toString(self.project)}); generic methods cannot be called on primitives")
 			function then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a function type ({receiverContext.toString(self.project)}); function values cannot satisfy a generic-method receiver")
 			constInt then panic("materializeLayoutArg: callee '{qualifiedCallee}' was called with a constInt receiverContext — constInt is a generic-arg marker, never a value type")
+			opaquePointer then panic("materializeLayoutArg: callee '{qualifiedCallee}' was called with an opaquePointer receiverContext — opaquePointer is an ABI-bookkeeping slot type, never a value type")
 		end 'pick'
 	end 'materializeLayoutArg'
 
@@ -4172,6 +4157,7 @@ type MaxonToStdLowering
 			string then return ResolvedCalleeParam.concrete("String")
 			function then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is a function type")
 			constInt then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is a constInt — constInt is a generic-arg marker, not a value type")
+			opaquePointer then panic("resolveCalleeParamToConcreteType: callee '{qualifiedCallee}' references type-param '{paramName}' but the call site's receiverContext is an opaquePointer — opaquePointer is an ABI-bookkeeping slot type, not a value type")
 		end 'pick'
 		// genericInstance case: pair the declaring type's usesParams with
 		// gidArgs and pluck out the entry whose paramName matches.
@@ -5706,9 +5692,7 @@ type MaxonToStdLowering
 		let isInteger = match resultType 'isInt'
 			integer gives true
 			boolean gives false
-			float to unresolved gives false
-			typeParameter to interface gives false
-			constInt gives false
+			float to opaquePointer gives false
 		end 'isInt'
 		if isInteger 'skipReStamp'
 			return
@@ -8405,10 +8389,7 @@ function isCharByteToCharacterCoercion(project Project, argType MaxonType, param
 	let argIsInteger = match argType 'check'
 		integer gives true
 		boolean gives false
-		float gives false
-		string gives false
-		named to interface gives false
-		constInt gives false
+		float to opaquePointer gives false
 	end 'check'
 	if not argIsInteger 'noInt'
 		return false
@@ -8416,9 +8397,7 @@ function isCharByteToCharacterCoercion(project Project, argType MaxonType, param
 	let paramName = match paramType 'name'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function to unresolved gives ""
-		typeParameter to interface gives ""
-		constInt gives ""
+		function to opaquePointer gives ""
 	end 'name'
 	return paramName == "Character"
 end 'isCharByteToCharacterCoercion'
@@ -8499,9 +8478,7 @@ function maxonTypeMentionsTypeParam(t MaxonType) returns bool
 		typeParameter gives true
 		boolean to function gives false
 		unresolved gives false
-		genericInstance gives false
-		interface gives false
-		constInt gives false
+		genericInstance to opaquePointer gives false
 	end 'check'
 end 'maxonTypeMentionsTypeParam'
 
@@ -8565,7 +8542,7 @@ function resolvedCalleeParamFromMaxonType(project Project, t MaxonType) returns 
 		interface gives ResolvedCalleeParam.forwardFromCaller("")
 		unresolved gives ResolvedCalleeParam.forwardFromCaller("")
 		function gives ResolvedCalleeParam.forwardFromCaller("")
-		constInt gives ResolvedCalleeParam.forwardFromCaller("")
+		constInt to opaquePointer gives ResolvedCalleeParam.forwardFromCaller("")
 	end 'pick'
 end 'resolvedCalleeParamFromMaxonType'
 
@@ -8632,6 +8609,7 @@ function thunkWitnessLabelForBound(project Project, bound MaxonType, mangledIfac
 		unresolved gives thunkBoundFatal("unresolved", interfaceName: interfaceName)
 		function gives thunkBoundFatal("function", interfaceName: interfaceName)
 		constInt gives thunkBoundFatal("constInt", interfaceName: interfaceName)
+		opaquePointer gives thunkBoundFatal("opaquePointer", interfaceName: interfaceName)
 	end 'pick'
 end 'thunkWitnessLabelForBound'
 
@@ -8807,12 +8785,7 @@ function returnTypeNamedName(project Project, ref MaxonReturnType) returns Strin
 	match inner 'pick'
 		named(id) then return project.typeNames.get(id)
 		boolean to string then throw NamedReturnError.notNamed
-		function then throw NamedReturnError.notNamed
-		unresolved then throw NamedReturnError.notNamed
-		typeParameter then throw NamedReturnError.notNamed
-		genericInstance then throw NamedReturnError.notNamed
-		interface then throw NamedReturnError.notNamed
-		constInt then throw NamedReturnError.notNamed
+		function to opaquePointer then throw NamedReturnError.notNamed
 	end 'pick'
 end 'returnTypeNamedName'
 
@@ -9138,8 +9111,7 @@ function signExtendElementType(project Project, receiverType MaxonType) returns 
 		boolean to function gives MaxonType.unresolved
 		unresolved gives MaxonType.unresolved
 		typeParameter gives MaxonType.unresolved
-		interface gives MaxonType.unresolved
-		constInt gives MaxonType.unresolved
+		interface to opaquePointer gives MaxonType.unresolved
 	end 'pick'
 end 'signExtendElementType'
 
@@ -9163,8 +9135,7 @@ function receiverIsTupleGenericInstance(project Project, t MaxonType) returns bo
 		function gives ""
 		unresolved gives ""
 		typeParameter gives ""
-		interface gives ""
-		constInt gives ""
+		interface to opaquePointer gives ""
 	end 'pick'
 	if baseName.isEmpty() 'notGeneric'
 		return false
@@ -9235,8 +9206,7 @@ function maxonTypeIsConcreteGenericInstance(project Project, t MaxonType) return
 		function gives false
 		unresolved gives false
 		typeParameter gives false
-		interface gives false
-		constInt gives false
+		interface to opaquePointer gives false
 	end 'isGen'
 	if not isGeneric 'notGeneric'
 		return false
@@ -9251,8 +9221,7 @@ function maxonTypeIsConcreteGenericInstance(project Project, t MaxonType) return
 		function gives 0
 		unresolved gives 0
 		typeParameter gives 0
-		interface gives 0
-		constInt gives 0
+		interface to opaquePointer gives 0
 	end 'extractGid'
 	let (_, args) = project.genericInstances.get(gid)
 	for i in 0 upto args.count() 'eachArg'
@@ -9268,10 +9237,7 @@ function maxonTypeIsUnresolved(t MaxonType) returns bool
 	return match t 'extract'
 		unresolved gives true
 		boolean to function gives false
-		typeParameter gives false
-		genericInstance gives false
-		interface gives false
-		constInt gives false
+		typeParameter to opaquePointer gives false
 	end 'extract'
 end 'maxonTypeIsUnresolved'
 
@@ -9373,12 +9339,7 @@ function signExtendApplies(project Project, elementType MaxonType) returns bool
 		boolean gives false
 		float gives false
 		string gives false
-		function gives false
-		unresolved gives false
-		typeParameter gives false
-		genericInstance gives false
-		interface gives false
-		constInt gives false
+		function to opaquePointer gives false
 	end 'arm'
 	if not signedNamed 'notSigned'
 		return false

@@ -17,7 +17,7 @@ ExitCode: 120
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
@@ -31,7 +31,7 @@ module {
     %4 = maxon.literal {value = 1 : i64}
     %5 = maxon.var_ref {var = n} {type = i64}
     %6 = maxon.binop %5, %4 {op = sub}
-    %7 = maxon.call @register-allocator.factorial %6
+    %7 = maxon.call @factorial %6
     %8 = maxon.var_ref {var = n} {type = i64}
     %9 = maxon.binop %8, %7 {op = mul}
     maxon.scope_end [n]
@@ -40,7 +40,7 @@ module {
   func @main() -> i64 {
   entry:
     %10 = maxon.literal {value = 5 : i64}
-    %11 = maxon.call @register-allocator.factorial %10
+    %11 = maxon.call @factorial %10
     %12 = maxon.literal {value = 256 : i64}
     %13 = maxon.binop %11, %12 {op = mod}
     %14 = maxon.literal {value = 0 : i64}
@@ -58,7 +58,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
     memref.store %0, n
@@ -72,7 +72,7 @@ module {
     %4 = arith.constant {value = 1 : i64}
     %5 = memref.load n : i64
     %6 = arith.subi %5, %4
-    %7 = func.call @register-allocator.factorial %6
+    %7 = func.call @factorial %6
     %8 = memref.load n : i64
     %9 = arith.muli %8, %7
     func.return %9
@@ -80,7 +80,7 @@ module {
   func @main() -> u32 {
   entry:
     %10 = arith.constant {value = 5 : i64}
-    %11 = func.call @register-allocator.factorial %10
+    %11 = func.call @factorial %10
     %12 = arith.constant {value = 256 : i64}
     %13 = arith.remsi %11, %12
     %14 = arith.constant {value = 0 : i64}
@@ -99,13 +99,13 @@ module {
 }
 === x86
 module {
-  func @register-allocator.factorial(n: i64) -> i64 {
+  func @factorial(n: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, 1
     x64.cmp rcx, rax
-    x64.jg register-allocator.factorial.base_0.after
+    x64.jg factorial.base_0.after
   base_0:
     x64.mov rax, 1
     x64.epilogue
@@ -114,7 +114,7 @@ module {
     x64.mov rax, 1
     x64.mov rcx, [rbp-8]
     x64.sub rcx, rax
-    x64.call register-allocator.factorial
+    x64.call factorial
     x64.mov rdx, [rbp-8]
     x64.imul rdx, rax
     x64.mov rax, rdx
@@ -125,7 +125,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 5
-    x64.call register-allocator.factorial
+    x64.call factorial
     x64.mov rcx, 256
     x64.mov [rbp-8], rax
     x64.cqo

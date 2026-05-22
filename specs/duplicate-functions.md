@@ -51,7 +51,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate.test:9:10: Duplicate function 'duplicate-functions.helper'
+error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate.test:9:10: Duplicate function 'helper'
 ```
 
 <!-- test: error.same-file-duplicate-main -->

@@ -70,18 +70,33 @@ export function queryTokens(project Project, path FilePath) returns TokenArray t
 	return tokens
 end 'queryTokens'
 
-// Derive a namespace from the file path.
-// For .test files, uses the parent directory name (the spec folder, e.g. "error-handling").
-// For .maxon files, uses the filename stem.
-export function deriveNamespace(filePath FilePath) returns String
-	let ext = filePath.fileExtension()
-	if ext == ".test" 'isTest'
-		// The fragment lives at <fragmentDir>/<specName>/<testName>.test,
-		// so the parent directory name is always the spec name.
-		let parentDir = try filePath.parent() otherwise return filePath.stem()
-		return parentDir.filename()
-	end 'isTest'
-	return filePath.stem()
+// Derive a namespace from the file path relative to its compile root.
+//
+// Phase 4 of the directory-as-module redesign: a file's namespace is the
+// directory portion of its path relative to `rootPath`, with separators
+// converted to dots. Stdlib uses `<install>` as the root, user code uses
+// the project root, single-file spec fragments use the fragment directory
+// itself.
+//
+// Examples (with rootPath = the per-file compile anchor):
+//   - root=<install>,  path=<install>/stdlib/Math.maxon            -> "stdlib"
+//   - root=<install>,  path=<install>/stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string"
+//   - root=<tempDir>,  path=<tempDir>/api/types.maxon              -> "api"
+//   - root=<fragDir>,  path=<fragDir>/basic.test                   -> ""
+export function deriveNamespace(filePath FilePath, rootPath FilePath) returns String
+	let rel = try filePath.relativeTo(rootPath) otherwise 'notUnderRoot'
+		// Misconfigured caller: file lives outside its declared rootPath.
+		// Fall back to the immediate parent directory name so we never
+		// produce ".." segments in qualified names.
+		let parent = try filePath.parent() otherwise return ""
+		return parent.filename()
+	end 'notUnderRoot'
+	let parent = try rel.parent() otherwise return ""
+	let dirStr = parent.toString()
+	if dirStr.isEmpty() 'noDir'
+		return ""
+	end 'noDir'
+	return dirStr.replace("\\", with: ".").replace("/", with: ".")
 end 'deriveNamespace'
 
 // --- Per-file derived query: parse ---
@@ -124,7 +139,7 @@ export function queryParseOps(project Project, path FilePath) returns MaxonModul
 	// Parser.create attempt fails. That isn't an error — an empty file is
 	// just a module with no functions. Return an empty module and let the
 	// "no main" semantic check fire if appropriate.
-	var parser = try Parser.create(project, tokens: tokens, filePath: path, namespace: deriveNamespace(path)) otherwise 'parserCreateFail'
+	var parser = try Parser.create(project, tokens: tokens, filePath: path, rootPath: project.rootPath, namespace: deriveNamespace(path, rootPath: project.rootPath)) otherwise 'parserCreateFail'
 		popQuery(project)
 		return MaxonModule.create()
 	end 'parserCreateFail'

@@ -239,8 +239,21 @@ public static class MonomorphizationPass {
             if (call.Args.Count == 0 || call.Args[0] is not MaxonStruct selfArg) continue;
             if (selfArg.TypeName == typePart) continue;
             var methodPart = callee[(dotIdx + 1)..];
+            // Under directory-as-module, the concrete implementor may live in
+            // a different namespace than the interface (e.g. interface
+            // Compiler.Targets.Shared.TargetBackend implemented by
+            // Compiler.Targets.X64.X64Backend). Try the bare form first for
+            // compatibility, then fall through to the qualified-suffix index
+            // when the bare key misses.
             var concreteCallee = $"{selfArg.TypeName}.{methodPart}";
-            if (!funcNames.Contains(concreteCallee)) continue;
+            if (!funcNames.Contains(concreteCallee)) {
+              var suffixHits = module.FindFunctionsByQualifiedSuffix(concreteCallee);
+              if (suffixHits.Count == 1) {
+                concreteCallee = suffixHits[0].Name;
+              } else {
+                continue;
+              }
+            }
             var newOp = new MaxonCallOp(concreteCallee, call.Args, call.Result, call.ResultKind, call.ResultStructTypeName);
             CopyCallMetadata(call, newOp);
             block.Operations[i] = newOp;
@@ -1296,11 +1309,21 @@ public static class MonomorphizationPass {
           // already-specialized names (containing `$` after the last dot)
           // — these belong to a previous round of this pass and the spec
           // body already retypes the relevant field accesses.
+          //
+          // Under directory-as-module, the callee's owner prefix may be
+          // namespace-qualified (e.g. `Compiler.Targets.Shared.FunctionRegAllocator`)
+          // while TypeDefs uses bare keys. Probe the bare last segment when
+          // the qualified key misses so Stage 2b still recognizes the type.
           var dotIdx = callee.LastIndexOf('.');
           if (dotIdx <= 0) continue;
           if (callee.IndexOf('$', dotIdx) >= 0) continue;
           var ownerName = callee[..dotIdx];
-          if (!typeDefs.TryGetValue(ownerName, out var ownerType)) continue;
+          if (!typeDefs.TryGetValue(ownerName, out var ownerType)) {
+            var ownerDot = ownerName.LastIndexOf('.');
+            if (ownerDot < 0) continue;
+            var bareOwner = ownerName[(ownerDot + 1)..];
+            if (!typeDefs.TryGetValue(bareOwner, out ownerType)) continue;
+          }
           if (ownerType is not IrStructType ownerStruct) continue;
 
           var subMap = new Dictionary<string, IrType>();
@@ -1342,7 +1365,7 @@ public static class MonomorphizationPass {
 
     var cloneSw = StageTimer.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
     foreach (var (specName, (source, subMap)) in newSpecs) {
-      var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+      var typeSub = new InterfaceAliasTypeSubstitution(subMap, module);
       var cloned = CloneWithInterfaceAliasSubstitution(source, specName, typeSub);
       module.AddFunction(cloned);
       anyChange = true;
@@ -1652,7 +1675,7 @@ public static class MonomorphizationPass {
             subMap.TryAdd("Self", ownerType);
           subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new IrStructType(ownerTypeName, []));
         }
-        var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+        var typeSub = new InterfaceAliasTypeSubstitution(subMap, module);
 
         // Check if source has any direct IrInterfaceType params (not just aliases).
         // If so, always clone — the source may be needed for transitive specialization.
@@ -1829,7 +1852,7 @@ public static class MonomorphizationPass {
             subMap.TryAdd("Self", ownerType);
           subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new IrStructType(ownerTypeName, []));
         }
-        var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+        var typeSub = new InterfaceAliasTypeSubstitution(subMap, module);
         var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
         module.AddFunction(clonedFunc);
         funcLookup[clonedFunc.Name] = clonedFunc; // keep hoisted lookup in sync
@@ -1923,7 +1946,7 @@ public static class MonomorphizationPass {
 
   /// Minimal type substitution for interface alias specialization.
   /// Maps interface alias type names to concrete types for callee rewriting.
-  private class InterfaceAliasTypeSubstitution(Dictionary<string, IrType> map) {
+  private class InterfaceAliasTypeSubstitution(Dictionary<string, IrType> map, IrModule<MaxonOp>? module = null) {
     public IrType SubstituteType(IrType type) {
       if (type is IrStructType st && map.TryGetValue(st.Name, out var newType))
         return newType;
@@ -1936,8 +1959,22 @@ public static class MonomorphizationPass {
       var dotIdx = callee.LastIndexOf('.');
       if (dotIdx > 0) {
         var typePart = callee[..dotIdx];
-        if (map.TryGetValue(typePart, out var newType))
-          return $"{newType.Name}.{callee[(dotIdx + 1)..]}";
+        if (map.TryGetValue(typePart, out var newType)) {
+          var methodPart = callee[(dotIdx + 1)..];
+          var bareCallee = $"{newType.Name}.{methodPart}";
+          // Under directory-as-module, the substituted type lives in a
+          // different namespace than the interface (e.g. X64Backend under
+          // Compiler.Targets.X64 implements TargetBackend under
+          // Compiler.Targets.Shared). Probe the function index to find the
+          // canonical qualified name; fall through to the bare form if
+          // disambiguation isn't possible so an overload resolver downstream
+          // can still pick.
+          if (module != null && module.FindFunctionByExactName(bareCallee) == null) {
+            var suffixHits = module.FindFunctionsByQualifiedSuffix(bareCallee);
+            if (suffixHits.Count == 1) return suffixHits[0].Name;
+          }
+          return bareCallee;
+        }
       }
       return callee;
     }

@@ -25,6 +25,10 @@ public static class SourceCollector {
     string directory,
     IReadOnlyDictionary<string, string>? editorOverrides = null
   ) {
+    // The walked directory IS the project compile root: every file's namespace
+    // is derived as rel(file, directory).parent under the directory-as-module
+    // design (Phase 1 plumbing).
+    var rootPath = directory;
     var files = new List<SourceFile>();
     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
@@ -37,14 +41,14 @@ public static class SourceCollector {
       var content = editorOverrides != null && editorOverrides.TryGetValue(normalized, out var buf)
         ? ReadUpToSeparator(buf)
         : ReadUpToSeparator(File.ReadAllText(file));
-      files.Add(new SourceFile(normalized, content));
+      files.Add(new SourceFile(normalized, content, rootPath));
     }
     // Editor-only files (newly created, not yet on disk) still need to be
     // compiled so the LSP can show diagnostics for them.
     if (editorOverrides != null) {
       foreach (var (path, content) in editorOverrides) {
         if (seen.Add(path))
-          files.Add(new SourceFile(path, ReadUpToSeparator(content)));
+          files.Add(new SourceFile(path, ReadUpToSeparator(content), rootPath));
       }
     }
     return [.. files];

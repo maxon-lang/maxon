@@ -372,10 +372,10 @@ mm_incref ArrayIterator #23 rc=1 [stdlib.ArrayIterator.create]
 mm_transfer ArrayIterator #23 rc=1 [stdlib.ArrayIterator.create]
 mm_transfer ArrayIterator #23 rc=1 [Matrix.createIterator]
 mm_incref IntArray #17 rc=3 [__ArrayIterator_IntArray.current]
-mm_decref IntArray #17 rc=2 [optimizer-refcount.matrix_total]
+mm_decref IntArray #17 rc=2 [matrix_total]
 mm_incref IntArray #19 rc=3 [__ArrayIterator_IntArray.current]
-mm_decref IntArray #19 rc=2 [optimizer-refcount.matrix_total]
-mm_decref ArrayIterator #23 rc=0 [optimizer-refcount.matrix_total]
+mm_decref IntArray #19 rc=2 [matrix_total]
+mm_decref ArrayIterator #23 rc=0 [matrix_total]
   mm_decref Cursor #22 rc=0 [~ArrayIterator]
     mm_decref __ManagedMemory_IntArray #20 rc=1 [~__ManagedMemoryCursor]
     mm_free Cursor #22
@@ -390,7 +390,7 @@ mm_alloc Point #25 size=16 [Point.create]
   sl_alloc Point #25 size=48 class=4
 mm_incref Point #25 rc=1 [Point.create]
 mm_transfer Point #25 rc=1 [Point.create]
-mm_transfer Point #25 rc=1 [optimizer-refcount.make_point]
+mm_transfer Point #25 rc=1 [make_point]
 mm_alloc String #26 size=16 [main]
   sl_alloc String #26 size=48 class=4
 mm_alloc __ManagedMemory #27 size=40 [main]
@@ -530,12 +530,12 @@ mm_incref ArrayIterator #53 rc=1 [stdlib.ArrayIterator.create]
 mm_transfer ArrayIterator #53 rc=1 [stdlib.ArrayIterator.create]
 mm_transfer ArrayIterator #53 rc=1 [PointArray.createIterator]
 mm_incref Point #49 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #49 rc=2 [optimizer-refcount.points_x_sum]
+mm_decref Point #49 rc=2 [points_x_sum]
 mm_incref Point #50 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #50 rc=2 [optimizer-refcount.points_x_sum]
+mm_decref Point #50 rc=2 [points_x_sum]
 mm_incref Point #51 rc=3 [__ArrayIterator_Point.current]
-mm_decref Point #51 rc=2 [optimizer-refcount.points_x_sum]
-mm_decref ArrayIterator #53 rc=0 [optimizer-refcount.points_x_sum]
+mm_decref Point #51 rc=2 [points_x_sum]
+mm_decref ArrayIterator #53 rc=0 [points_x_sum]
   mm_decref Cursor #52 rc=0 [~ArrayIterator]
     mm_decref __ManagedMemory_Point #47 rc=1 [~__ManagedMemoryCursor]
     mm_free Cursor #52
@@ -786,7 +786,7 @@ module {
     maxon.scope_end [name, age]
     maxon.return %20
   }
-  func @optimizer-refcount.sum_point(p: Point) -> i64 {
+  func @sum_point(p: Point) -> i64 {
   entry:
     %36 = maxon.struct_param @Point
     %37 = maxon.struct_var_ref p
@@ -797,7 +797,7 @@ module {
     maxon.scope_end [p]
     maxon.return %41
   }
-  func @optimizer-refcount.make_point(x: i64, y: i64) -> Point {
+  func @make_point(x: i64, y: i64) -> Point {
   entry:
     %42 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %43 = maxon.param {index = 1 : i32} {name = y} {type = i64}
@@ -806,7 +806,7 @@ module {
     maxon.scope_end [x, y, __call_tmp_0]
     maxon.return %44
   }
-  func @optimizer-refcount.describe(s: Shape) -> i64 {
+  func @describe(s: Shape) -> i64 {
   entry:
     %45 = maxon.enum_param @Shape
     %46 = maxon.enum_var_ref s
@@ -858,7 +858,7 @@ module {
     maxon.scope_end [s, __matchexpr_describe_0, __match_enum_describe_0, __match_describe_0]
     maxon.return %67
   }
-  func @optimizer-refcount.apply(f: fn(Integer) returns Integer, x: i64) -> i64 {
+  func @apply(f: fn(Integer) returns Integer, x: i64) -> i64 {
   entry:
     %68 = maxon.function_param
     %69 = maxon.param {index = 1 : i32} {name = x} {type = i64}
@@ -866,7 +866,7 @@ module {
     maxon.scope_end [f, x]
     maxon.return %70
   }
-  func @optimizer-refcount.names_total(arr: StringArray) -> i64 {
+  func @names_total(arr: StringArray) -> i64 {
   entry:
     %71 = maxon.struct_param @StringArray
     %72 = maxon.struct_var_ref arr
@@ -874,7 +874,7 @@ module {
     maxon.scope_end [arr]
     maxon.return %73
   }
-  func @optimizer-refcount.row_total(arr: IntArray) -> i64 {
+  func @row_total(arr: IntArray) -> i64 {
   entry:
     %74 = maxon.struct_param @IntArray
     %75 = maxon.literal {value = 0 : i64}
@@ -914,7 +914,7 @@ module {
     maxon.scope_end [arr, sum, __try_error_0, __for_mm_0]
     maxon.return %90
   }
-  func @optimizer-refcount.matrix_total(m: Matrix) -> i64 {
+  func @matrix_total(m: Matrix) -> i64 {
   entry:
     %91 = maxon.struct_param @Matrix
     %92 = maxon.literal {value = 0 : i64}
@@ -941,7 +941,7 @@ module {
     %104 = maxon.struct_var_ref __forin_result_0
     maxon.assign %104 {var = row} {decl = 1 : i1}
     %105 = maxon.struct_var_ref row
-    %106 = maxon.call @optimizer-refcount.row_total %105
+    %106 = maxon.call @row_total %105
     %107 = maxon.var_ref {var = sum} {type = i64}
     %108 = maxon.binop %107, %106 {op = add}
     maxon.assign %108 {var = sum} {kind = i64} {mut = 1 : i1}
@@ -952,7 +952,7 @@ module {
     maxon.scope_end [m, sum, __try_error_0, __for_iter_0]
     maxon.return %109
   }
-  func @optimizer-refcount.points_x_sum(pts: PointArray) -> i64 {
+  func @points_x_sum(pts: PointArray) -> i64 {
   entry:
     %110 = maxon.struct_param @PointArray
     %111 = maxon.literal {value = 0 : i64}
@@ -1014,14 +1014,14 @@ module {
     %141 = maxon.literal {value = 4 : i64}
     %142 = maxon.call @Point.create %140, %141
     maxon.assign %142 {var = __call_tmp_1} {decl = 1 : i1}
-    %143 = maxon.call @optimizer-refcount.sum_point %142
+    %143 = maxon.call @sum_point %142
     %144 = maxon.binop %139, %143 {op = add}
     maxon.assign %144 {var = total} {kind = i64} {mut = 1 : i1}
     %145 = maxon.literal {value = 5 : i64}
     %146 = maxon.literal {value = 6 : i64}
     %147 = maxon.call @Point.create %145, %146
     maxon.assign %147 {var = __call_tmp_2} {decl = 1 : i1}
-    %148 = maxon.call @optimizer-refcount.sum_point %147
+    %148 = maxon.call @sum_point %147
     %149 = maxon.binop %144, %148 {op = add}
     maxon.assign %149 {var = total} {kind = i64} {mut = 1 : i1}
     %150 = maxon.call @StringArray.create
@@ -1053,7 +1053,7 @@ module {
     maxon.br names_loop_0.header
   names_loop_0.exit:
     %161 = maxon.struct_var_ref names
-    %162 = maxon.call @optimizer-refcount.names_total %161
+    %162 = maxon.call @names_total %161
     %163 = maxon.var_ref {var = total} {type = i64}
     %164 = maxon.binop %163, %162 {op = add}
     maxon.assign %164 {var = total} {kind = i64} {mut = 1 : i1}
@@ -1079,7 +1079,7 @@ module {
     %173 = maxon.struct_var_ref row2
     maxon.call @Matrix.push %171, %173
     %174 = maxon.struct_var_ref matrix
-    %175 = maxon.call @optimizer-refcount.matrix_total %174
+    %175 = maxon.call @matrix_total %174
     %176 = maxon.binop %164, %175 {op = add}
     maxon.assign %176 {var = total} {kind = i64} {mut = 1 : i1}
     %177 = maxon.literal {value = 0 : i64}
@@ -1088,16 +1088,16 @@ module {
     maxon.assign %179 {var = __call_tmp_7} {decl = 1 : i1}
     maxon.assign %179 {var = origin} {decl = 1 : i1} {mut = 1 : i1}
     %180 = maxon.struct_var_ref origin
-    %181 = maxon.call @optimizer-refcount.sum_point %180
+    %181 = maxon.call @sum_point %180
     %182 = maxon.binop %176, %181 {op = add}
     maxon.assign %182 {var = total} {kind = i64} {mut = 1 : i1}
     %183 = maxon.struct_var_ref origin
-    %184 = maxon.call @optimizer-refcount.sum_point %183
+    %184 = maxon.call @sum_point %183
     %185 = maxon.binop %182, %184 {op = add}
     maxon.assign %185 {var = total} {kind = i64} {mut = 1 : i1}
     %186 = maxon.literal {value = 10 : i64}
     %187 = maxon.literal {value = 20 : i64}
-    %188 = maxon.call @optimizer-refcount.make_point %186, %187
+    %188 = maxon.call @make_point %186, %187
     maxon.assign %188 {var = __call_tmp_8} {decl = 1 : i1}
     maxon.assign %188 {var = made} {decl = 1 : i1}
     %189 = maxon.struct_var_ref made
@@ -1133,15 +1133,15 @@ module {
     %206 = maxon.enum_construct @Shape.blank
     maxon.assign %206 {var = shape3} {decl = 1 : i1}
     %207 = maxon.enum_var_ref shape1
-    %208 = maxon.call @optimizer-refcount.describe %207
+    %208 = maxon.call @describe %207
     %209 = maxon.binop %201, %208 {op = add}
     maxon.assign %209 {var = total} {kind = i64} {mut = 1 : i1}
     %210 = maxon.enum_var_ref shape2
-    %211 = maxon.call @optimizer-refcount.describe %210
+    %211 = maxon.call @describe %210
     %212 = maxon.binop %209, %211 {op = add}
     maxon.assign %212 {var = total} {kind = i64} {mut = 1 : i1}
     %213 = maxon.enum_var_ref shape3
-    %214 = maxon.call @optimizer-refcount.describe %213
+    %214 = maxon.call @describe %213
     %215 = maxon.binop %212, %214 {op = add}
     maxon.assign %215 {var = total} {kind = i64} {mut = 1 : i1}
     %216 = maxon.string_literal "pfx_"
@@ -1150,11 +1150,11 @@ module {
     %222 = maxon.closure_create @_$closure_0 %216
     maxon.assign %222 {var = builder} {decl = 1 : i1}
     %223 = maxon.literal {value = 7 : i64}
-    %224 = maxon.call @optimizer-refcount.apply %222, %223
+    %224 = maxon.call @apply %222, %223
     %225 = maxon.binop %215, %224 {op = add}
     maxon.assign %225 {var = total} {kind = i64} {mut = 1 : i1}
     %226 = maxon.literal {value = 8 : i64}
-    %227 = maxon.call @optimizer-refcount.apply %222, %226
+    %227 = maxon.call @apply %222, %226
     %228 = maxon.binop %225, %227 {op = add}
     maxon.assign %228 {var = total} {kind = i64} {mut = 1 : i1}
     %229 = maxon.call @PointArray.create
@@ -1176,7 +1176,7 @@ module {
     maxon.assign %238 {var = __call_tmp_13} {decl = 1 : i1}
     maxon.call @PointArray.push %229, %238
     %239 = maxon.struct_var_ref points
-    %240 = maxon.call @optimizer-refcount.points_x_sum %239
+    %240 = maxon.call @points_x_sum %239
     %241 = maxon.binop %228, %240 {op = add}
     maxon.assign %241 {var = total} {kind = i64} {mut = 1 : i1}
     %242 = maxon.call @PointArray.create
@@ -1225,7 +1225,7 @@ module {
     %266 = maxon.struct_var_ref __try_result_0
     maxon.assign %266 {var = p} {decl = 1 : i1}
     %267 = maxon.struct_var_ref p
-    %268 = maxon.call @optimizer-refcount.sum_point %267
+    %268 = maxon.call @sum_point %267
     %269 = maxon.var_ref {var = total} {type = i64}
     %270 = maxon.binop %269, %268 {op = add}
     maxon.assign %270 {var = total} {kind = i64} {mut = 1 : i1}
@@ -1305,7 +1305,7 @@ module {
     %21 = memref.load __struct_0 : i64
     func.return %21
   }
-  func @optimizer-refcount.sum_point(p: i64) -> i64 {
+  func @sum_point(p: i64) -> i64 {
   entry:
     %22 = func.param p : StdHeapPtr
     memref.store %22, p
@@ -1316,7 +1316,7 @@ module {
     %27 = arith.addi %24, %26
     func.return %27
   }
-  func @optimizer-refcount.make_point(x: i64, y: i64) -> i64 {
+  func @make_point(x: i64, y: i64) -> i64 {
   entry:
     %28 = func.param x : StdI64
     %29 = func.param y : StdI64
@@ -1325,7 +1325,7 @@ module {
     %32 = memref.load __call_tmp_0 : i64
     func.return %32
   }
-  func @optimizer-refcount.describe(s: i64) -> i64 {
+  func @describe(s: i64) -> i64 {
   entry:
     %70 = arith.constant {value = 0 : i64}
     memref.store %70, label
@@ -1379,7 +1379,7 @@ module {
     %67 = memref.load __matchexpr_describe_0 : i64
     func.return %67
   }
-  func @optimizer-refcount.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
   entry:
     %72 = func.param f : StdPtr
     %73 = func.param __env_f : StdI64
@@ -1387,7 +1387,7 @@ module {
     %75 = func.indirect_call %72, %74, %73
     func.return %75
   }
-  func @optimizer-refcount.names_total(arr: i64) -> i64 {
+  func @names_total(arr: i64) -> i64 {
   entry:
     %76 = func.param arr : StdHeapPtr
     memref.store %76, arr
@@ -1395,7 +1395,7 @@ module {
     %78 = func.call @StringArray.count %77
     func.return %78
   }
-  func @optimizer-refcount.row_total(arr: i64) -> i64 {
+  func @row_total(arr: i64) -> i64 {
   entry:
     %79 = func.param arr : StdHeapPtr
     memref.store %79, arr
@@ -1438,7 +1438,7 @@ module {
     %105 = memref.load sum : i64
     func.return %105
   }
-  func @optimizer-refcount.matrix_total(m: i64) -> i64 {
+  func @matrix_total(m: i64) -> i64 {
   entry:
     %109 = func.param m : StdHeapPtr
     memref.store %109, m
@@ -1464,7 +1464,7 @@ module {
     memref.store %122, __forin_result_0
     memref.store %122, row
     %126 = memref.load row : i64
-    %127 = func.call @optimizer-refcount.row_total %126
+    %127 = func.call @row_total %126
     %128 = memref.load sum : i64
     %129 = arith.addi %128, %127
     memref.store %129, sum
@@ -1477,7 +1477,7 @@ module {
     std.call_runtime_if_nonnull @mm_decref %135
     func.return %134
   }
-  func @optimizer-refcount.points_x_sum(pts: i64) -> i64 {
+  func @points_x_sum(pts: i64) -> i64 {
   entry:
     %140 = func.param pts : StdHeapPtr
     memref.store %140, pts
@@ -1542,14 +1542,14 @@ module {
     %188 = func.call @Point.create %186, %187
     memref.store %188, __call_tmp_0
     %190 = memref.load __call_tmp_0 : i64
-    %191 = func.call @optimizer-refcount.sum_point %190
+    %191 = func.call @sum_point %190
     %192 = arith.addi %185, %191
     %193 = arith.constant {value = 5 : i64}
     %194 = arith.constant {value = 6 : i64}
     %195 = func.call @Point.create %193, %194
     memref.store %195, __call_tmp_1
     %197 = memref.load __call_tmp_1 : i64
-    %198 = func.call @optimizer-refcount.sum_point %197
+    %198 = func.call @sum_point %197
     %199 = arith.addi %192, %198
     memref.store %199, total
     %200 = func.call @StringArray.create
@@ -1659,7 +1659,7 @@ module {
     cf.br names_loop_0.header
   names_loop_0.exit:
     %274 = memref.load names : i64
-    %275 = func.call @optimizer-refcount.names_total %274
+    %275 = func.call @names_total %274
     %276 = memref.load total : i64
     %277 = arith.addi %276, %275
     %278 = func.call @IntArray.create
@@ -1687,21 +1687,21 @@ module {
     %298 = memref.load row2 : i64
     func.call @Matrix.push %297, %298
     %299 = memref.load matrix : i64
-    %300 = func.call @optimizer-refcount.matrix_total %299
+    %300 = func.call @matrix_total %299
     %301 = arith.addi %277, %300
     %302 = arith.constant {value = 0 : i64}
     %303 = arith.constant {value = 0 : i64}
     %304 = func.call @Point.create %302, %303
     memref.store %304, origin
     %307 = memref.load origin : i64
-    %308 = func.call @optimizer-refcount.sum_point %307
+    %308 = func.call @sum_point %307
     %309 = arith.addi %301, %308
     %310 = memref.load origin : i64
-    %311 = func.call @optimizer-refcount.sum_point %310
+    %311 = func.call @sum_point %310
     %312 = arith.addi %309, %311
     %313 = arith.constant {value = 10 : i64}
     %314 = arith.constant {value = 20 : i64}
-    %315 = func.call @optimizer-refcount.make_point %313, %314
+    %315 = func.call @make_point %313, %314
     memref.store %315, made
     %318 = memref.load made : i64
     %319 = memref.load_indirect %318+0
@@ -1956,13 +1956,13 @@ module {
     %495 = memref.load shape3 : i64
     std.call_runtime @mm_incref %495
     %496 = memref.load shape1 : i64
-    %497 = func.call @optimizer-refcount.describe %496
+    %497 = func.call @describe %496
     %498 = arith.addi %417, %497
     %499 = memref.load shape2 : i64
-    %500 = func.call @optimizer-refcount.describe %499
+    %500 = func.call @describe %499
     %501 = arith.addi %498, %500
     %502 = memref.load shape3 : i64
-    %503 = func.call @optimizer-refcount.describe %502
+    %503 = func.call @describe %502
     %504 = arith.addi %501, %503
     %505 = memref.lea_rdata __str_6
     %506 = std.ptr_to_i64 %505
@@ -2017,11 +2017,11 @@ module {
     std.call_runtime @mm_incref %538
     %541 = arith.constant {value = 7 : i64}
     %542 = memref.load __env_0 : i64
-    %543 = func.call @optimizer-refcount.apply %534, %542, %541
+    %543 = func.call @apply %534, %542, %541
     %544 = arith.addi %504, %543
     %545 = arith.constant {value = 8 : i64}
     %546 = memref.load __env_0 : i64
-    %547 = func.call @optimizer-refcount.apply %534, %546, %545
+    %547 = func.call @apply %534, %546, %545
     %548 = arith.addi %544, %547
     %549 = func.call @PointArray.create
     memref.store %549, points
@@ -2047,7 +2047,7 @@ module {
     %569 = memref.load __call_tmp_4 : i64
     func.call @PointArray.push %568, %569
     %570 = memref.load points : i64
-    %571 = func.call @optimizer-refcount.points_x_sum %570
+    %571 = func.call @points_x_sum %570
     %572 = arith.addi %548, %571
     memref.store %572, total
     %573 = func.call @PointArray.create
@@ -2197,7 +2197,7 @@ module {
     %680 = memref.load __try_result_0 : i64
     memref.store %680, p
     %682 = memref.load p : i64
-    %683 = func.call @optimizer-refcount.sum_point %682
+    %683 = func.call @sum_point %682
     %684 = memref.load total : i64
     %685 = arith.addi %684, %683
     memref.store %685, total
@@ -2788,7 +2788,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.sum_point(p: i64) -> i64 {
+  func @sum_point(p: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -2800,7 +2800,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.make_point(x: i64, y: i64) -> i64 {
+  func @make_point(x: i64, y: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.call Point.create
@@ -2809,7 +2809,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.describe(s: i64) -> i64 {
+  func @describe(s: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-16], rcx
@@ -2821,12 +2821,12 @@ module {
     x64.xor ecx, ecx
     x64.mov [rbp-32], rcx
     x64.mov [rbp-40], rdx
-    x64.jmp optimizer-refcount.describe.describe_0.cmp0
+    x64.jmp describe.describe_0.cmp0
   describe_0.cmp0:
     x64.mov rax, [rbp-40]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne optimizer-refcount.describe.describe_0.cmp1
+    x64.jne describe.describe_0.cmp1
   describe_0.case0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
@@ -2835,12 +2835,12 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call stdlib.String.count
     x64.mov [rbp-32], rax
-    x64.jmp optimizer-refcount.describe.describe_0.merge
+    x64.jmp describe.describe_0.merge
   describe_0.cmp1:
     x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne optimizer-refcount.describe.describe_0.cmp2
+    x64.jne describe.describe_0.cmp2
   describe_0.case1:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
@@ -2857,22 +2857,22 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call stdlib.String.count
     x64.mov [rbp-32], rax
-    x64.jmp optimizer-refcount.describe.describe_0.merge
+    x64.jmp describe.describe_0.merge
   describe_0.cmp2:
     x64.mov rax, [rbp-40]
     x64.mov rcx, 2
     x64.cmp rax, rcx
-    x64.jne optimizer-refcount.describe.describe_0.merge
+    x64.jne describe.describe_0.merge
   describe_0.case2:
     x64.xor eax, eax
     x64.mov [rbp-32], rax
-    x64.jmp optimizer-refcount.describe.describe_0.merge
+    x64.jmp describe.describe_0.merge
   describe_0.merge:
     x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -2882,7 +2882,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.names_total(arr: i64) -> i64 {
+  func @names_total(arr: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -2890,7 +2890,7 @@ module {
     x64.epilogue
     x64.jmp StringArray.count
   }
-  func @optimizer-refcount.row_total(arr: i64) -> i64 {
+  func @row_total(arr: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
@@ -2904,12 +2904,12 @@ module {
     x64.mov [rbp-32], rdx
     x64.xor eax, eax
     x64.mov [rbp-40], rax
-    x64.jmp optimizer-refcount.row_total.iter_0.header
+    x64.jmp row_total.iter_0.header
   iter_0.header:
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-32]
     x64.cmp rax, rcx
-    x64.jge optimizer-refcount.row_total.iter_0.exit
+    x64.jge row_total.iter_0.exit
   iter_0:
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-24]
@@ -2928,13 +2928,13 @@ module {
     x64.mov rcx, 1
     x64.add rax, rcx
     x64.mov [rbp-40], rax
-    x64.jmp optimizer-refcount.row_total.iter_0.header
+    x64.jmp row_total.iter_0.header
   iter_0.exit:
     x64.mov rax, [rbp-16]
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.matrix_total(m: i64) -> i64 {
+  func @matrix_total(m: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
@@ -2946,16 +2946,16 @@ module {
     x64.mov [rbp-24], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne optimizer-refcount.matrix_total.iter_0.exit
+    x64.jne matrix_total.iter_0.exit
   iter_0.preamble:
-    x64.jmp optimizer-refcount.matrix_total.iter_0
+    x64.jmp matrix_total.iter_0
   iter_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call __ArrayIterator_IntArray.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne optimizer-refcount.matrix_total.iter_0.exit
+    x64.jne matrix_total.iter_0.exit
   iter_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
@@ -2963,7 +2963,7 @@ module {
     x64.mov [rbp-32], rax
     x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-40]
-    x64.call optimizer-refcount.row_total
+    x64.call row_total
     x64.mov rdx, [rbp-16]
     x64.add rdx, rax
     x64.mov [rbp-16], rdx
@@ -2973,7 +2973,7 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp optimizer-refcount.matrix_total.iter_0.header
+    x64.jmp matrix_total.iter_0.header
   iter_0.exit:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-24]
@@ -2985,7 +2985,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @optimizer-refcount.points_x_sum(pts: i64) -> i64 {
+  func @points_x_sum(pts: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
@@ -2997,16 +2997,16 @@ module {
     x64.mov [rbp-24], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne optimizer-refcount.points_x_sum.iter_0.exit
+    x64.jne points_x_sum.iter_0.exit
   iter_0.preamble:
-    x64.jmp optimizer-refcount.points_x_sum.iter_0
+    x64.jmp points_x_sum.iter_0
   iter_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call __ArrayIterator_Point.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne optimizer-refcount.points_x_sum.iter_0.exit
+    x64.jne points_x_sum.iter_0.exit
   iter_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
@@ -3024,7 +3024,7 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp optimizer-refcount.points_x_sum.iter_0.header
+    x64.jmp points_x_sum.iter_0.header
   iter_0.exit:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-24]
@@ -3071,7 +3071,7 @@ module {
     x64.mov [rbp-32], rax
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call optimizer-refcount.sum_point
+    x64.call sum_point
     x64.mov rcx, [rbp-544]
     x64.add rcx, rax
     x64.mov [rbp-552], rcx
@@ -3081,7 +3081,7 @@ module {
     x64.mov [rbp-40], rax
     x64.mov rax, [rbp-40]
     x64.mov rcx, [rbp-40]
-    x64.call optimizer-refcount.sum_point
+    x64.call sum_point
     x64.mov rcx, [rbp-552]
     x64.add rcx, rax
     x64.mov [rbp-48], rcx
@@ -3223,7 +3223,7 @@ module {
   names_loop_0.exit:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rbp-56]
-    x64.call optimizer-refcount.names_total
+    x64.call names_total
     x64.mov rcx, [rbp-48]
     x64.add rcx, rax
     x64.mov [rbp-544], rcx
@@ -3261,7 +3261,7 @@ module {
     x64.call Matrix.push
     x64.mov rax, [rbp-176]
     x64.mov rcx, [rbp-176]
-    x64.call optimizer-refcount.matrix_total
+    x64.call matrix_total
     x64.mov rcx, [rbp-544]
     x64.add rcx, rax
     x64.mov [rbp-552], rcx
@@ -3271,19 +3271,19 @@ module {
     x64.mov [rbp-184], rax
     x64.mov rax, [rbp-184]
     x64.mov rcx, [rbp-184]
-    x64.call optimizer-refcount.sum_point
+    x64.call sum_point
     x64.mov rcx, [rbp-552]
     x64.add rcx, rax
     x64.mov rax, [rbp-184]
     x64.mov [rbp-560], rcx
     x64.mov rcx, [rbp-184]
-    x64.call optimizer-refcount.sum_point
+    x64.call sum_point
     x64.mov rcx, [rbp-560]
     x64.add rcx, rax
     x64.mov [rbp-568], rcx
     x64.mov rcx, 10
     x64.mov rdx, 20
-    x64.call optimizer-refcount.make_point
+    x64.call make_point
     x64.mov [rbp-192], rax
     x64.mov rax, [rbp-192]
     x64.mov rcx, [rax+0]
@@ -3597,19 +3597,19 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-272]
     x64.mov rcx, [rbp-272]
-    x64.call optimizer-refcount.describe
+    x64.call describe
     x64.mov rcx, [rbp-624]
     x64.add rcx, rax
     x64.mov rax, [rbp-296]
     x64.mov [rbp-648], rcx
     x64.mov rcx, [rbp-296]
-    x64.call optimizer-refcount.describe
+    x64.call describe
     x64.mov rcx, [rbp-648]
     x64.add rcx, rax
     x64.mov rax, [rbp-304]
     x64.mov [rbp-656], rcx
     x64.mov rcx, [rbp-304]
-    x64.call optimizer-refcount.describe
+    x64.call describe
     x64.mov rcx, [rbp-656]
     x64.add rcx, rax
     x64.lea_rdata rax, [__str_5]
@@ -3678,7 +3678,7 @@ module {
     x64.mov rcx, [rbp-680]
     x64.mov rdx, [rbp-328]
     x64.mov r8, 7
-    x64.call optimizer-refcount.apply
+    x64.call apply
     x64.mov rcx, [rbp-664]
     x64.add rcx, rax
     x64.mov rax, [rbp-328]
@@ -3686,7 +3686,7 @@ module {
     x64.mov rcx, [rbp-680]
     x64.mov rdx, [rbp-328]
     x64.mov r8, 8
-    x64.call optimizer-refcount.apply
+    x64.call apply
     x64.mov rcx, [rbp-688]
     x64.add rcx, rax
     x64.mov [rbp-696], rcx
@@ -3721,7 +3721,7 @@ module {
     x64.call PointArray.push
     x64.mov rax, [rbp-336]
     x64.mov rcx, [rbp-336]
-    x64.call optimizer-refcount.points_x_sum
+    x64.call points_x_sum
     x64.mov rcx, [rbp-696]
     x64.add rcx, rax
     x64.mov [rbp-48], rcx
@@ -3908,7 +3908,7 @@ module {
     x64.mov rax, [rbp-424]
     x64.mov [rbp-536], rax
     x64.mov rcx, [rbp-536]
-    x64.call optimizer-refcount.sum_point
+    x64.call sum_point
     x64.mov rdx, [rbp-48]
     x64.add rdx, rax
     x64.mov [rbp-48], rdx
@@ -5195,7 +5195,7 @@ mm_alloc Box #1 size=8 [Box.create]
   sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [Box.create]
 mm_transfer Box #1 rc=1 [Box.create]
-mm_transfer Box #1 rc=1 [optimizer-refcount.pair]
+mm_transfer Box #1 rc=1 [pair]
 mm_decref Box #1 rc=0 [main]
   mm_free Box #1
     sl_free Box #1 size=48 class=4

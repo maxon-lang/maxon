@@ -39,10 +39,10 @@ mm_alloc Shape #2 size=16 [main]
   sl_alloc Shape #2 size=48 class=4
 mm_incref Body #1 rc=2 [main]
 mm_incref Shape #2 rc=1 [main]
-mm_incref Shape #2 rc=2 [ownership-edge-cases.massOf]
-mm_incref Body #1 rc=3 [ownership-edge-cases.massOf]
-mm_decref Shape #2 rc=1 [ownership-edge-cases.massOf]
-mm_decref Body #1 rc=2 [ownership-edge-cases.massOf]
+mm_incref Shape #2 rc=2 [massOf]
+mm_incref Body #1 rc=3 [massOf]
+mm_decref Shape #2 rc=1 [massOf]
+mm_decref Body #1 rc=2 [massOf]
 mm_decref Body #1 rc=1 [main]
 mm_decref Shape #2 rc=0 [main]
   mm_decref Body #1 rc=0 [~Shape]
@@ -77,7 +77,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @ownership-edge-cases.massOf(s: i64) -> i64 {
+  func @massOf(s: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
@@ -89,12 +89,12 @@ module {
     x64.call mm_incref
     x64.mov rdx, [rbp-40]
     x64.mov [rbp-24], rdx
-    x64.jmp ownership-edge-cases.massOf.check_0.cmp0
+    x64.jmp massOf.check_0.cmp0
   check_0.cmp0:
     x64.mov rax, [rbp-24]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne ownership-edge-cases.massOf.check_0.cmp1
+    x64.jne massOf.check_0.cmp1
   check_0.case0:
     x64.mov rax, [rbp-16]
     x64.test rax, rax
@@ -109,7 +109,7 @@ module {
     x64.mov rax, [rbp-24]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne ownership-edge-cases.massOf.check_0.merge
+    x64.jne massOf.check_0.merge
   check_0.case1:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+8]
@@ -161,7 +161,7 @@ module {
     x64.call mm_incref
     x64.mov rdi, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call ownership-edge-cases.massOf
+    x64.call massOf
     x64.xor r8d, r8d
     x64.mov r9, 4294967295
     x64.cmp rax, r9

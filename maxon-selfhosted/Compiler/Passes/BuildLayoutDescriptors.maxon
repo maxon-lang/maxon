@@ -191,12 +191,7 @@ export function primitiveWidth(project Project, t MaxonType) returns MachineWord
 		float gives 8
 		string gives 8
 		named gives storeWidthBytes(storeWidthOfStdType(resolveMaxonTypeToStd(project, ref: t)))
-		function gives 8
-		unresolved gives 8
-		typeParameter gives 8
-		genericInstance gives 8
-		interface gives 8
-		constInt gives 8
+		function to opaquePointer gives 8
 	end 'w'
 end 'primitiveWidth'
 
@@ -225,7 +220,7 @@ function maxonTypeIsHeapManaged(t MaxonType) returns bool
 		function gives false
 		unresolved gives false
 		typeParameter gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'h'
 end 'maxonTypeIsHeapManaged'
 
@@ -256,9 +251,7 @@ export function maxonTypeIsConditional(t MaxonType) returns bool
 		// must skip it so witness-thunk synthesis never receives the
 		// `unresolved` arm at `emitThunkWitnessLoadForBoundType`.
 		unresolved gives true
-		genericInstance gives false
-		interface gives false
-		constInt gives false
+		genericInstance to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsConditional'
 
@@ -296,8 +289,7 @@ function namedArgIsParametric(project Project, t MaxonType) returns bool
 		function gives false
 		unresolved gives true
 		typeParameter gives true
-		interface gives false
-		constInt gives false
+		interface to opaquePointer gives false
 	end 'pick'
 end 'namedArgIsParametric'
 
@@ -361,6 +353,7 @@ function mangleType(project Project, t MaxonType) returns String
 		genericInstance(gid) gives mangleInstance(project, gid: gid)
 		interface(id) gives sanitizeIdentifier(project.interfaceRegistry.getName(id))
 		constInt(value) gives "N{value}"
+		opaquePointer gives "OpaquePtr"
 	end 'm'
 end 'mangleType'
 

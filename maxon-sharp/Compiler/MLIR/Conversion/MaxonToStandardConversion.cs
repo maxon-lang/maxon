@@ -80,7 +80,12 @@ public static partial class MaxonToStandardConversion {
       if (HasUnresolvedTypeParameters(func, module)) {
         continue;
       }
-
+      // Wrap each function's lowering in try/catch so an unexpected exception
+      // (typically an InvalidCastException from a mistyped StdValue) traces
+      // back to a specific function instead of surfacing as a bare runtime
+      // cast at the top of `Run`. The body keeps its existing indent — the
+      // try is a thin wrapper around the entire loop body.
+      try {
       // Bias newly-minted ids during stdlib function lowering with the stdlib bit so
       // they stay disjoint from user-side ids in any per-function valueMap. The cached
       // stdlib's parser-emitted MaxonValues already carry the bit (stdlib parsed inside
@@ -601,10 +606,25 @@ public static partial class MaxonToStandardConversion {
               // Check if this is an associated-value enum (stored as flat vars)
               if (module.TypeDefs.TryGetValue(enumVarRef.EnumTypeName, out var evType)
                   && evType is IrEnumType evEnumType && evEnumType.HasAssociatedValues) {
-                // Resolve the struct prefix: either from varNameToStructPrefix or direct varName
+                // Resolve the struct prefix: either from varNameToStructPrefix
+                // (set by a prior field-access on self), the var as a local, or
+                // load it from self's heap pointer when it names a union-typed
+                // self field that hasn't been hoisted into a local yet. Without
+                // this last branch a `return status.code()` body in an
+                // instance method on `CollectedOutput` produces a StdLoadI64Op
+                // against a variable name that was never stored to, and the
+                // register allocator chokes on the dangling value.
                 string resolvedPrefix;
                 if (varNameToStructPrefix.TryGetValue(enumVarRef.VarName, out var existingPrefix)) {
                   resolvedPrefix = existingPrefix;
+                } else if (!varTypes.ContainsKey(enumVarRef.VarName)
+                    && IsSelfField(isStructInstanceMethod, selfStructType, enumVarRef.VarName)) {
+                  var field = selfStructType!.GetField(enumVarRef.VarName)!;
+                  var tempVarName = temps.CreateTemp("selfunion", enumVarRef.Result.Id, enumVarRef.EnumTypeName, OwnershipFlags.Borrowed);
+                  var enumPtr = EmitStructFieldLoad(newBlock, "self", field.Offset, IrType.I64, varTypes);
+                  EmitStore(newBlock, enumPtr, tempVarName, varTypes);
+                  resolvedPrefix = tempVarName;
+                  varNameToStructPrefix[enumVarRef.VarName] = tempVarName;
                 } else {
                   resolvedPrefix = enumVarRef.VarName;
                 }
@@ -2241,6 +2261,14 @@ public static partial class MaxonToStandardConversion {
       }
 
       result.AddFunction(newFunc);
+      } catch (CompileError) {
+        // CompileError carries a typed code and source position; never wrap
+        // it — propagate so the top-level handler reports the user-facing
+        // diagnostic instead of an InvalidOperationException stack dump.
+        throw;
+      } catch (Exception ex) {
+        throw new InvalidOperationException($"Lowering function '{func.Name}' failed: {ex.Message}", ex);
+      }
     }
 
     // Reset the per-function lowering mode so the post-loop helpers and any subsequent

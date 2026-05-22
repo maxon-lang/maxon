@@ -30,6 +30,12 @@ public static partial class MaxonToStandardConversion {
   private static IrFunction<MaxonOp> ResolveCallee(string calleeName, Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
     if (funcLookup.TryGetValue(calleeName, out var calleeFunc))
       return calleeFunc;
+    // Under directory-as-module, a call to `String.clone` from any namespace
+    // should resolve to `stdlib.String.clone`. Walk the function list for a
+    // suffix match — `.{calleeName}` covers cross-namespace calls without
+    // accidentally matching a same-namespace function whose name HAPPENS to
+    // end with `calleeName` (the leading dot anchors the prefix at a segment
+    // boundary).
     var suffixPattern = $".{calleeName}";
     var found = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
     if (found != null) return found;

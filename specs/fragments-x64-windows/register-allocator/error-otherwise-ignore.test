@@ -19,7 +19,7 @@ ExitCode: 42
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
@@ -27,7 +27,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %11, %10 = maxon.try_call @register-allocator.mayFail
+    %11, %10 = maxon.try_call @mayFail
     %12 = maxon.literal {value = 42 : i64}
     maxon.scope_end []
     maxon.return %12
@@ -35,7 +35,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
@@ -44,14 +44,14 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %3, %4 = func.try_call @register-allocator.mayFail
+    %3, %4 = func.try_call @mayFail
     %5 = arith.constant {value = 42 : i64}
     func.return %5
   }
 }
 === x86
 module {
-  func @register-allocator.mayFail() -> i64 {
+  func @mayFail() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -63,7 +63,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.mayFail
+    x64.call mayFail
     x64.mov rcx, 42
     x64.mov rax, rcx
     x64.epilogue

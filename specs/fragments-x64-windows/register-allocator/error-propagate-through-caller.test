@@ -24,15 +24,15 @@ ExitCode: 99
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     %8 = maxon.enum_literal @MyError.failed
     maxon.scope_end []
     maxon.throw @MyError %8
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
-    %11, %10 = maxon.try_call @register-allocator.inner
+    %11, %10 = maxon.try_call @inner
     maxon.assign %10 {var = __try_error_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %11 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
@@ -50,7 +50,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %18, %17 = maxon.try_call @register-allocator.middle
+    %18, %17 = maxon.try_call @middle
     %19 = maxon.literal {value = 99 : i64}
     maxon.assign %19 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -79,16 +79,16 @@ module {
 }
 === standard
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 1 : i64}
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
-    %3, %4 = func.try_call @register-allocator.inner
+    %3, %4 = func.try_call @inner
     memref.store %4, __try_error_0
     memref.store %3, __try_result_0
     %5 = arith.constant {value = 0 : i64}
@@ -103,7 +103,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    %9, %10 = func.try_call @register-allocator.middle
+    %9, %10 = func.try_call @middle
     %11 = arith.constant {value = 99 : i64}
     memref.store %11, __try_default_0
     memref.store %9, __try_result_0
@@ -132,7 +132,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.inner() -> i64 {
+  func @inner() -> i64 {
   entry:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -141,15 +141,15 @@ module {
     x64.xor eax, eax
     x64.ret
   }
-  func @register-allocator.middle() -> i64 {
+  func @middle() -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.inner
+    x64.call inner
     x64.mov [rbp-8], rdx
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je register-allocator.middle.try_continue_0
+    x64.je middle.try_continue_0
   propagate_error_0:
     x64.mov rdx, [rbp-8]
     x64.xor eax, eax
@@ -164,7 +164,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.middle
+    x64.call middle
     x64.mov rcx, 99
     x64.mov [rbp-8], rcx
     x64.mov [rbp-16], rax

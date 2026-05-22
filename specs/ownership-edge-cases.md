@@ -220,7 +220,7 @@ mm_alloc Token #1 size=8 [Token.create]
   sl_alloc Token #1 size=40 class=4
 mm_incref Token #1 rc=1 [Token.create]
 mm_transfer Token #1 rc=1 [Token.create]
-mm_transfer Token #1 rc=1 [ownership-edge-cases.makeToken]
+mm_transfer Token #1 rc=1 [makeToken]
 mm_decref Token #1 rc=0 [main]
   mm_free Token #1
     sl_free Token #1 size=48 class=4
@@ -1140,10 +1140,10 @@ mm_alloc Item #5 size=8 [Item.create]
 mm_incref Item #5 rc=1 [Item.create]
 mm_transfer Item #5 rc=1 [Item.create]
 mm_incref Item #5 rc=2 [ItemArray.push]
-mm_decref Item #5 rc=1 [ownership-edge-cases.fill]
-mm_decref Item #4 rc=1 [ownership-edge-cases.fill]
-mm_decref Item #3 rc=1 [ownership-edge-cases.fill]
-mm_decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
+mm_decref Item #5 rc=1 [fill]
+mm_decref Item #4 rc=1 [fill]
+mm_decref Item #3 rc=1 [fill]
+mm_decref ItemArray #2 rc=0 [fill]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_decref Item #3 rc=0 [~ManagedElements]
       mm_free Item #3
@@ -1620,10 +1620,10 @@ mm_alloc Step #2 size=8 [Step.create]
   sl_alloc Step #2 size=40 class=4
 mm_incref Step #2 rc=1 [Step.create]
 mm_transfer Step #2 rc=1 [Step.create]
-mm_decref Step #2 rc=0 [ownership-edge-cases.compute]
+mm_decref Step #2 rc=0 [compute]
   mm_free Step #2
     sl_free Step #2 size=48 class=4
-mm_decref Step #1 rc=0 [ownership-edge-cases.compute]
+mm_decref Step #1 rc=0 [compute]
   mm_free Step #1
     sl_free Step #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -1683,9 +1683,9 @@ mm_realloc __ManagedMemory_Item #1 size=32
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
 mm_transfer Item #3 rc=3 [ItemArray.get]
-mm_incref Item #3 rc=4 [ownership-edge-cases.getFirst]
-mm_decref Item #3 rc=3 [ownership-edge-cases.getFirst]
-mm_transfer Item #3 rc=3 [ownership-edge-cases.getFirst]
+mm_incref Item #3 rc=4 [getFirst]
+mm_decref Item #3 rc=3 [getFirst]
+mm_transfer Item #3 rc=3 [getFirst]
 mm_decref Item #3 rc=2 [main]
 mm_decref Item #3 rc=1 [main]
 mm_decref ItemArray #2 rc=0 [main]
@@ -1746,11 +1746,11 @@ mm_alloc Cfg #2 size=8 [Cfg.create]
   sl_alloc Cfg #2 size=40 class=4
 mm_incref Cfg #2 rc=1 [Cfg.create]
 mm_transfer Cfg #2 rc=1 [Cfg.create]
-mm_decref Cfg #1 rc=0 [ownership-edge-cases.setup]
+mm_decref Cfg #1 rc=0 [setup]
   mm_free Cfg #1
     sl_free Cfg #1 size=48 class=4
-mm_incref Cfg #2 rc=2 [ownership-edge-cases.setup]
-mm_decref Cfg #2 rc=1 [ownership-edge-cases.setup]
+mm_incref Cfg #2 rc=2 [setup]
+mm_decref Cfg #2 rc=1 [setup]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -1803,29 +1803,29 @@ mm_alloc State #2 size=8 [State.create]
   sl_alloc State #2 size=40 class=4
 mm_incref State #2 rc=1 [State.create]
 mm_transfer State #2 rc=1 [State.create]
-mm_decref State #1 rc=0 [ownership-edge-cases.step]
+mm_decref State #1 rc=0 [step]
   mm_free State #1
     sl_free State #1 size=48 class=4
-mm_incref State #2 rc=2 [ownership-edge-cases.step]
-mm_decref State #2 rc=1 [ownership-edge-cases.step]
+mm_incref State #2 rc=2 [step]
+mm_decref State #2 rc=1 [step]
 mm_alloc State #3 size=8 [State.create]
   sl_alloc State #3 size=40 class=4
 mm_incref State #3 rc=1 [State.create]
 mm_transfer State #3 rc=1 [State.create]
-mm_decref State #2 rc=0 [ownership-edge-cases.step]
+mm_decref State #2 rc=0 [step]
   mm_free State #2
     sl_free State #2 size=48 class=4
-mm_incref State #3 rc=2 [ownership-edge-cases.step]
-mm_decref State #3 rc=1 [ownership-edge-cases.step]
+mm_incref State #3 rc=2 [step]
+mm_decref State #3 rc=1 [step]
 mm_alloc State #4 size=8 [State.create]
   sl_alloc State #4 size=40 class=4
 mm_incref State #4 rc=1 [State.create]
 mm_transfer State #4 rc=1 [State.create]
-mm_decref State #3 rc=0 [ownership-edge-cases.step]
+mm_decref State #3 rc=0 [step]
   mm_free State #3
     sl_free State #3 size=48 class=4
-mm_incref State #4 rc=2 [ownership-edge-cases.step]
-mm_decref State #4 rc=1 [ownership-edge-cases.step]
+mm_incref State #4 rc=2 [step]
+mm_decref State #4 rc=1 [step]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -1918,10 +1918,10 @@ mm_alloc Shape #2 size=16 [main]
   sl_alloc Shape #2 size=48 class=4
 mm_incref Body #1 rc=2 [main]
 mm_incref Shape #2 rc=1 [main]
-mm_incref Shape #2 rc=2 [ownership-edge-cases.massOf]
-mm_incref Body #1 rc=3 [ownership-edge-cases.massOf]
-mm_decref Shape #2 rc=1 [ownership-edge-cases.massOf]
-mm_decref Body #1 rc=2 [ownership-edge-cases.massOf]
+mm_incref Shape #2 rc=2 [massOf]
+mm_incref Body #1 rc=3 [massOf]
+mm_decref Shape #2 rc=1 [massOf]
+mm_decref Body #1 rc=2 [massOf]
 mm_decref Body #1 rc=1 [main]
 mm_decref Shape #2 rc=0 [main]
   mm_decref Body #1 rc=0 [~Shape]
@@ -2692,10 +2692,10 @@ mm_alloc Entry #5 size=8 [Entry.create]
 mm_incref Entry #5 rc=1 [Entry.create]
 mm_transfer Entry #5 rc=1 [Entry.create]
 mm_incref Entry #5 rc=2 [EntryArray.push]
-mm_decref Entry #5 rc=1 [ownership-edge-cases.fill]
-mm_decref Entry #4 rc=1 [ownership-edge-cases.fill]
-mm_decref EntryArray #2 rc=1 [ownership-edge-cases.fill]
-mm_decref Bucket #3 rc=0 [ownership-edge-cases.fill]
+mm_decref Entry #5 rc=1 [fill]
+mm_decref Entry #4 rc=1 [fill]
+mm_decref EntryArray #2 rc=1 [fill]
+mm_decref Bucket #3 rc=0 [fill]
   mm_decref EntryArray #2 rc=0 [~Bucket]
     mm_decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
       mm_decref Entry #4 rc=0 [~ManagedElements]
@@ -2754,7 +2754,7 @@ mm_alloc Pair #1 size=16 [Pair.create]
   sl_alloc Pair #1 size=48 class=4
 mm_incref Pair #1 rc=1 [Pair.create]
 mm_transfer Pair #1 rc=1 [Pair.create]
-mm_transfer Pair #1 rc=1 [ownership-edge-cases.makePair]
+mm_transfer Pair #1 rc=1 [makePair]
 mm_decref Pair #1 rc=0 [main]
   mm_free Pair #1
     sl_free Pair #1 size=48 class=4
@@ -2813,7 +2813,7 @@ mm_alloc Wrapper #2 size=8 [Wrapper.create]
 mm_incref Inner #1 rc=2 [Wrapper.create]
 mm_incref Wrapper #2 rc=1 [Wrapper.create]
 mm_transfer Wrapper #2 rc=1 [Wrapper.create]
-mm_transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
+mm_transfer Wrapper #2 rc=1 [wrap]
 mm_decref Wrapper #2 rc=0 [main]
   mm_decref Inner #1 rc=1 [~Wrapper]
   mm_free Wrapper #2
@@ -3067,13 +3067,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc Character #1 size=8 [ownership-edge-cases.makeChar]
+mm_alloc Character #1 size=8 [makeChar]
   sl_alloc Character #1 size=40 class=4
-mm_alloc __ManagedMemory #2 size=40 [ownership-edge-cases.makeChar]
+mm_alloc __ManagedMemory #2 size=40 [makeChar]
   sl_alloc __ManagedMemory #2 size=72 class=6
-mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
-mm_incref Character #1 rc=1 [ownership-edge-cases.makeChar]
-mm_transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
+mm_incref __ManagedMemory #2 rc=1 [makeChar]
+mm_incref Character #1 rc=1 [makeChar]
+mm_transfer Character #1 rc=1 [makeChar]
 mm_decref Character #1 rc=0 [main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
@@ -3274,10 +3274,10 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.makePair]
+mm_alloc __Tuple_i64_i64 #1 size=16 [makePair]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
-mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
-mm_transfer __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
+mm_incref __Tuple_i64_i64 #1 rc=1 [makePair]
+mm_transfer __Tuple_i64_i64 #1 rc=1 [makePair]
 mm_decref __Tuple_i64_i64 #1 rc=0 [main]
   mm_free __Tuple_i64_i64 #1
     sl_free __Tuple_i64_i64 #1 size=48 class=4

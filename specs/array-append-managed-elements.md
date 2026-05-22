@@ -24,7 +24,7 @@ elements in dest are now dangling pointers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export type Item
+type Item
 		export var name String
 		export var value Integer
 
@@ -67,7 +67,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Op
+union Op
 		add(value Integer)
 		sub(value Integer)
 		nop
@@ -112,7 +112,7 @@ into an accumulator. The parsed module is freed when the helper returns.
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-export type Func
+type Func
 		export var name String
 		export var body IntArray
 
@@ -123,7 +123,7 @@ end 'Func'
 
 typealias FuncArray = Array with Func
 
-export type Module
+type Module
 		export var functions FuncArray
 
 		static function create(functions FuncArray) returns Self

@@ -123,7 +123,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @advent.add(x: i64, y: i64) -> i64 {
+  func @add(x: i64, y: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
@@ -135,7 +135,7 @@ module {
   entry:
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
-    %5 = maxon.call @advent.add %3, %4
+    %5 = maxon.call @add %3, %4
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
     %8 = maxon.literal {value = 4294967295 : i64}
@@ -151,7 +151,7 @@ module {
 }
 === standard
 module {
-  func @advent.add(x: i64, y: i64) -> i64 {
+  func @add(x: i64, y: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     %1 = func.param y : StdI64
@@ -162,7 +162,7 @@ module {
   entry:
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
-    %5 = func.call @advent.add %3, %4
+    %5 = func.call @add %3, %4
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi lt %5, %6
     %8 = arith.constant {value = 4294967295 : i64}
@@ -179,7 +179,7 @@ module {
 }
 === x86
 module {
-  func @advent.add(x: i64, y: i64) -> i64 {
+  func @add(x: i64, y: i64) -> i64 {
   entry:
     x64.lea rax, [rcx + rdx]
     x64.ret
@@ -189,7 +189,7 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 3
     x64.mov rdx, 4
-    x64.call advent.add
+    x64.call add
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -412,7 +412,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
@@ -441,7 +441,7 @@ module {
     maxon.br otherwise_default_continue_0
   otherwise_default_continue_0:
     %12 = maxon.struct_var_ref __try_result_0
-    %15, %14 = maxon.try_call @stdlib.Builtins.__int_fromString %12
+    %15, %14 = maxon.try_call @stdlib.__int_fromString %12
     %16 = maxon.literal {value = 0 : i64}
     maxon.assign %16 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %15 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -464,7 +464,7 @@ module {
     maxon.return %23
   guard_0.after:
     %24 = maxon.literal {value = 3 : i64}
-    %25 = maxon.call @advent.multiply %24
+    %25 = maxon.call @multiply %24
     %26 = maxon.literal {value = 0 : i64}
     %27 = maxon.binop %25, %26 {op = lt}
     %28 = maxon.literal {value = 4294967295 : i64}
@@ -480,7 +480,7 @@ module {
 }
 === standard
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     func.return %0
@@ -551,7 +551,7 @@ module {
     cf.br otherwise_default_continue_0
   otherwise_default_continue_0:
     %42 = memref.load __try_result_0 : i64
-    %43, %44 = func.try_call @stdlib.Builtins.__int_fromString %42
+    %43, %44 = func.try_call @stdlib.__int_fromString %42
     %45 = arith.constant {value = 0 : i64}
     memref.store %45, __try_default_0
     memref.store %43, __try_result_1
@@ -578,7 +578,7 @@ module {
     func.return %52
   guard_0.after:
     %59 = arith.constant {value = 3 : i64}
-    %60 = func.call @advent.multiply %59
+    %60 = func.call @multiply %59
     %61 = arith.constant {value = 0 : i64}
     %62 = arith.cmpi lt %60, %61
     %63 = arith.constant {value = 4294967295 : i64}
@@ -707,7 +707,7 @@ module {
 }
 === x86
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     x64.mov rax, rcx
     x64.ret
@@ -794,7 +794,7 @@ module {
   otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call stdlib.Builtins.__int_fromString
+    x64.call stdlib.__int_fromString
     x64.xor ecx, ecx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
@@ -833,7 +833,7 @@ module {
     x64.ret
   guard_0.after:
     x64.mov rcx, 3
-    x64.call advent.multiply
+    x64.call multiply
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
@@ -2257,7 +2257,7 @@ end 'main'
 ```RequiredIR:x64-windows
 === maxon
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -2286,7 +2286,7 @@ module {
     maxon.br otherwise_default_continue_0
   otherwise_default_continue_0:
     %12 = maxon.struct_var_ref __try_result_0
-    %15, %14 = maxon.try_call @stdlib.Builtins.__int_fromString %12
+    %15, %14 = maxon.try_call @stdlib.__int_fromString %12
     %16 = maxon.literal {value = 0 : i64}
     maxon.assign %16 {var = __try_default_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %15 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2309,7 +2309,7 @@ module {
     maxon.return %23
   guard_0.after:
     %24 = maxon.literal {value = 3 : i64}
-    %25 = maxon.call @advent.multiply %24
+    %25 = maxon.call @multiply %24
     %26 = maxon.literal {value = 0 : i64}
     %27 = maxon.binop %25, %26 {op = lt}
     %28 = maxon.literal {value = 4294967295 : i64}
@@ -2325,7 +2325,7 @@ module {
 }
 === standard
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     %1 = arith.constant {value = 2 : i64}
@@ -2398,7 +2398,7 @@ module {
     cf.br otherwise_default_continue_0
   otherwise_default_continue_0:
     %43 = memref.load __try_result_0 : i64
-    %44, %45 = func.try_call @stdlib.Builtins.__int_fromString %43
+    %44, %45 = func.try_call @stdlib.__int_fromString %43
     %46 = arith.constant {value = 0 : i64}
     memref.store %46, __try_default_0
     memref.store %44, __try_result_1
@@ -2425,7 +2425,7 @@ module {
     func.return %53
   guard_0.after:
     %60 = arith.constant {value = 3 : i64}
-    %61 = func.call @advent.multiply %60
+    %61 = func.call @multiply %60
     %62 = arith.constant {value = 0 : i64}
     %63 = arith.cmpi lt %61, %62
     %64 = arith.constant {value = 4294967295 : i64}
@@ -2554,7 +2554,7 @@ module {
 }
 === x86
 module {
-  func @advent.multiply(x: i64) -> i64 {
+  func @multiply(x: i64) -> i64 {
   entry:
     x64.mov rax, 2
     x64.imul rcx, rax
@@ -2643,7 +2643,7 @@ module {
   otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call stdlib.Builtins.__int_fromString
+    x64.call stdlib.__int_fromString
     x64.xor ecx, ecx
     x64.mov [rbp-48], rcx
     x64.mov [rbp-56], rax
@@ -2682,7 +2682,7 @@ module {
     x64.ret
   guard_0.after:
     x64.mov rcx, 3
-    x64.call advent.multiply
+    x64.call multiply
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx

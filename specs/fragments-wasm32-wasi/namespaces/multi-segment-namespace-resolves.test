@@ -1,0 +1,24 @@
+// Test: multi-segment-namespace-resolves
+// --- file: lib/inner/leaf.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function deepHelper() returns Integer
+	return 42
+end 'deepHelper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return lib.inner.deepHelper()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %1 = mir.mov_imm 42 : i64
+    mir.ret %1
+  }
+}
+---

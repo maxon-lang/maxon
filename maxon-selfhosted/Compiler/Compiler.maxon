@@ -178,7 +178,12 @@ end 'writeCovMapTo'
 // the path is ignored — no file is written.
 export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	let setupStart = passTimerStart()
-	var project = createProject(outputPath, target: target)
+	// Single-file fragment: rootPath = the file's parent directory (decision #3
+	// in the directory-as-module redesign — single-file compiles have no module
+	// prefix). Falls back to outputPath only when the virtual file has no
+	// parent (defensive — runner always hands us an absolute path).
+	let rootPath = try virtualPath.parent() otherwise outputPath
+	var project = createProject(rootPath, target: target)
 	project.coverageEnabled = coverage
 	fileChanged(project, path: virtualPath, content: source)
 	recordPassSince("__compile-setup", startMs: setupStart)
@@ -208,12 +213,20 @@ export typealias VirtualSourceFileArray = Array with VirtualSourceFile
 // resolve the same way they would in a real on-disk project. The caller is
 // responsible for choosing virtual paths whose layout matches the test's
 // intent (e.g. siblings under one dir vs. nested subdirectories).
-export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
+export function compileMultiFileSourceWithIr(files VirtualSourceFileArray, projectRoot FilePath, target Target, outputPath FilePath, coverage bool, covMapPath FilePath, includeStdlibIr bool = false) returns CompileWithIrResult throws CompileError
 	if files.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(outputPath)
 	end 'noFiles'
 
-	var project = createProject(outputPath, target: target)
+	// Multi-file fragment: callers anchor the root explicitly (the spec
+	// runner uses the fragment directory; on-disk builds use the project's
+	// top-level). Using a fixed anchor matches the C# bootstrap's
+	// `multiFileRoot = tempDir` behavior so `feature/helper.maxon` and
+	// `feature/sub/deep.maxon` both derive their namespaces relative to the
+	// same root (yielding `feature` and `feature.sub` respectively) — a
+	// "deepest common ancestor" heuristic instead would collapse two
+	// siblings under their nearest shared parent and lose those segments.
+	var project = createProject(projectRoot, target: target)
 	project.coverageEnabled = coverage
 	for file in files 'eachFile'
 		fileChanged(project, path: file.path, content: file.source)

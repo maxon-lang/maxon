@@ -18,15 +18,15 @@ ExitCode: 1
 Stderr: ```
 panic at range-check-panic.nested-call.test:5: Range check failed: value outside typealias 'Score'
 Stack trace:
-  in range-check-panic.validate
-  in range-check-panic.process
+  in validate
+  in process
   in main
   in mrt_start
 ```
 ---
 // CompiledIR
 module {
-  func @range-check-panic.validate(rcx: u8) -> u8 {
+  func @validate(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.mov r8, rcx
@@ -40,10 +40,10 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @range-check-panic.process(rcx: u8) -> u8 {
+  func @process(rcx: u8) -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.call range-check-panic.validate
+    x64.call validate
     x64.cmp r8, 100
     x64.jbe __range_ok_0
   __range_panic_0:
@@ -58,7 +58,7 @@ module {
   entry:
     x64.prologue stack_size=16
     x64.mov ecx, 200
-    x64.call range-check-panic.process
+    x64.call process
     x64.mov r9d, 4294967295
     x64.cmp r8, r9
     x64.jbe __range_ok_0

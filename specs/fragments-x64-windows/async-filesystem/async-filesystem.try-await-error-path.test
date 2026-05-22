@@ -23,7 +23,7 @@ ExitCode: 99
 ---
 // CompiledIR
 module {
-  func @async-filesystem.safeDivide(a: i64, b: i64) -> i64 {
+  func @safeDivide(a: i64, b: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
@@ -82,7 +82,7 @@ module {
     x64.xor ecx, ecx
     x64.mov rdx, [rbp-16]
     x64.cmp rdx, rcx
-    x64.jne async-filesystem.safeDivide.check_0.after
+    x64.jne safeDivide.check_0.after
   check_0:
     x64.xor eax, eax
     x64.mov rcx, [rbp-24]
@@ -125,7 +125,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @async-filesystem.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.mov rax, 100
@@ -140,7 +140,7 @@ module {
     x64.mov [rax+16], rsi
     x64.xor edi, edi
     x64.mov [rax+24], rdi
-    x64.lea_func r8, [async-filesystem.safeDivide]
+    x64.lea_func r8, [safeDivide]
     x64.mov rcx, r8
     x64.mov r8, rax
     x64.call __gt_spawn
@@ -151,20 +151,20 @@ module {
     x64.mov [rbp-16], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je async-filesystem.main.otherwise_default_continue_0
+    x64.je main.otherwise_default_continue_0
   otherwise_default_error_0:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-16], rax
-    x64.jmp async-filesystem.main.otherwise_default_continue_0
+    x64.jmp main.otherwise_default_continue_0
   otherwise_default_continue_0:
     x64.mov rax, [rbp-16]
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg async-filesystem.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl async-filesystem.main.__range_panic_0
-    x64.jmp async-filesystem.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax

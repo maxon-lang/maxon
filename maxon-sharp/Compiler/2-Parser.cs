@@ -4,13 +4,16 @@ using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false) {
+public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
   private readonly string _targetOs = targetOs;
   private readonly string _targetArch = targetArch;
   private readonly bool _testing = testing;
+  // Per-file compile root used to derive the file's module namespace via
+  // rel(Path, RootPath).parent. Plumbed in by Phase 1; not yet consumed.
+  private readonly string? _rootPath = rootPath;
   private int _pos;
 
   private IrModule<MaxonOp>? _currentModule;
@@ -34,7 +37,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // Temporarily set before calling TryEmitBuiltinManagedMemoryStaticMethod so it can resolve element kind
   private string? _managedMemStaticTypeName;
   // Temporarily set before calling TryEmitBuiltinTypeMethod so the synthetic builtin call ops
-  // can record the receiver variable name in ArgVarNames[0]. The mutation analysis (E3063)
+  // can record the receiver variable name in ArgVarNames[0]. The mutation analysis (E3019)
   // reads this to decide whether the call mutates a self-derived/self-field receiver.
   private string? _builtinReceiverVarName;
 
@@ -553,6 +556,46 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     return ResolveMethodName(qualifiedName + "~static") ?? ResolveMethodName(qualifiedName);
   }
 
+  /// Pick the registered name for a method on <paramref name="typeName"/> when
+  /// synthesizing a derived method body (auto-clone / auto-equals). The nested
+  /// type may live in a different namespace than the enclosing type (e.g. a
+  /// Testing/ struct with a String field — String.clone is stdlib.String.clone,
+  /// not Testing.String.clone). Probe order: enclosing namespace, exact name,
+  /// qualified-suffix index, short-name index, alias chase. Falls back to
+  /// `{currentNamespace}.{typeName}.{methodName}` when nothing matches so the
+  /// resulting MaxonCallOp surfaces the synthesizer's intent in the diagnostic
+  /// rather than a stripped name.
+  private string ResolveSynthesizedMethodName(IrModule<MaxonOp> module, string typeName, string methodName, string currentNamespace) {
+    // Try the enclosing namespace first — most common case for a type that
+    // declares both itself and the nested field-type in the same module.
+    if (!string.IsNullOrEmpty(currentNamespace)) {
+      var localCandidate = $"{currentNamespace}.{typeName}.{methodName}";
+      if (module.FindFunctionByExactName(localCandidate) != null) return localCandidate;
+    }
+    var bareCandidate = $"{typeName}.{methodName}";
+    if (module.FindFunctionByExactName(bareCandidate) != null) return bareCandidate;
+    // Suffix index covers cross-namespace cases: `stdlib.String.clone` ends
+    // with `.String.clone`, so a `String.clone` probe lands on the stdlib
+    // function automatically. Single match wins; ambiguity falls back to the
+    // enclosing-namespace guess below.
+    var suffixMatches = module.FindFunctionsByQualifiedSuffix(bareCandidate);
+    if (suffixMatches.Count == 1) return suffixMatches[0].Name;
+    if (suffixMatches.Count > 1) {
+      var baseNames = suffixMatches.Select(f => UnmangleName(f.Name)).Distinct().ToList();
+      if (baseNames.Count == 1) return baseNames[0];
+    }
+    // Type-alias fallback: BoxedString.clone -> stdlib.String.clone.
+    if (_typeAliasSources.TryGetValue(typeName, out var aliasSource)) {
+      var aliasedBare = $"{aliasSource}.{methodName}";
+      if (module.FindFunctionByExactName(aliasedBare) != null) return aliasedBare;
+      var aliasSuffix = module.FindFunctionsByQualifiedSuffix(aliasedBare);
+      if (aliasSuffix.Count == 1) return aliasSuffix[0].Name;
+    }
+    // Nothing matched. Return the enclosing-namespace guess so downstream
+    // error messages name the intended callee instead of a stripped variant.
+    return string.IsNullOrEmpty(currentNamespace) ? bareCandidate : $"{currentNamespace}.{typeName}.{methodName}";
+  }
+
   /// True if `structType` is the `Promise` type from stdlib/Builtins.maxon
   /// or any concrete alias of `Promise with T`.
   /// Both the generic source (`Promise`) and concrete instantiations
@@ -735,66 +778,67 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private readonly HashSet<string> _mutableVarNames = [];
 
   /// <summary>
-  /// Derives the namespace from the source file path.
-  /// For stdlib files, prefixes with "stdlib." and uses path after "stdlib/".
-  /// For user files, uses just the filename (since they're all in the same directory for build).
-  /// Examples (includeFilename=true):
-  ///   - stdlib/Math.maxon -> "stdlib.Math"
-  ///   - stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string.utf8"
-  ///   - /path/to/project/main.maxon -> "main"
-  ///   - /path/to/project/utils.maxon -> "utils"
-  ///   - specs/fragments/register-allocator/int-nine-params-function.test -> "register-allocator"
-  /// Examples (includeFilename=false):
-  ///   - stdlib/Math.maxon -> "stdlib"
-  ///   - stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string"
-  ///   - /path/to/project/main.maxon -> ""
-  ///   - /path/to/project/utils.maxon -> ""
+  /// Returns the namespace used to qualify a top-level declaration (function,
+  /// top-level constant, etc.).
+  ///
+  /// Phase 4 of the directory-as-module redesign: namespace is derived from
+  /// the file's path relative to its compile root. The directory portion of
+  /// that relative path, with separators converted to dots, IS the namespace.
+  ///
+  /// Examples (with _rootPath = the per-file compile anchor set in Phase 1):
+  ///   - rootPath=&lt;install&gt;,  path=&lt;install&gt;/stdlib/Math.maxon            -> "stdlib"
+  ///   - rootPath=&lt;install&gt;,  path=&lt;install&gt;/stdlib/helpers/string/utf8.maxon -> "stdlib.helpers.string"
+  ///   - rootPath=&lt;tempDir&gt;,  path=&lt;tempDir&gt;/api/types.maxon              -> "api"
+  ///   - rootPath=&lt;fragDir&gt;,  path=&lt;fragDir&gt;/basic.test                   -> ""
+  ///   - rootPath=null (single-file no-root)                                  -> ""
   /// </summary>
-  private string DeriveNamespace(bool includeFilename = true) {
+  private string NamespaceOf() {
     if (_sourceFilePath == null) return "";
+    if (_rootPath == null) return "";
 
-    var fileName = Path.GetFileNameWithoutExtension(_sourceFilePath);
-
-    if (!_isStdlib) {
-      // For spec test fragments, use the parent directory name as the namespace
-      // but ONLY when includeFilename is true (for top-level functions)
-      if (includeFilename) {
-        var normalizedPath = _sourceFilePath.Replace('\\', '/');
-        if (SpecFragmentsRegex().IsMatch(normalizedPath)) {
-          var parentDirName = Path.GetFileName(Path.GetDirectoryName(_sourceFilePath));
-          return parentDirName ?? fileName;
-        }
-      }
-
-      // For user code, just use the filename as the namespace (if includeFilename is true)
-      return includeFilename ? fileName : "";
+    string rel;
+    try {
+      rel = Path.GetRelativePath(_rootPath, _sourceFilePath);
+    } catch {
+      // Misconfigured caller: fall back to the immediate parent dir name so
+      // we never produce ".." segments in qualified names.
+      return Path.GetFileName(Path.GetDirectoryName(_sourceFilePath)) ?? "";
     }
 
-    // For stdlib, derive from path after "stdlib/" and prefix with "stdlib."
-    var dirName = Path.GetDirectoryName(_sourceFilePath) ?? "";
-    dirName = dirName.Replace('\\', '/');
-
-    var parts = new List<string> { "stdlib" };
-    var pathSegments = dirName.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-    // Collect path segments after "stdlib"
-    bool foundStdlib = false;
-    for (int i = 0; i < pathSegments.Length; i++) {
-      if (pathSegments[i] == "stdlib") {
-        foundStdlib = true;
-        continue;
-      }
-      if (foundStdlib) {
-        parts.Add(pathSegments[i]);
-      }
+    // If `_sourceFilePath` lies OUTSIDE `_rootPath`, `Path.GetRelativePath`
+    // returns a path starting with `..` (or, on Windows when the drives
+    // differ, an absolute path). Either way, that's a misconfigured caller —
+    // fall back to the immediate parent dir name.
+    if (rel.StartsWith("..") || Path.IsPathRooted(rel)) {
+      return Path.GetFileName(Path.GetDirectoryName(_sourceFilePath)) ?? "";
     }
 
-    // Add the filename if requested
-    if (includeFilename) {
-      parts.Add(fileName);
-    }
+    var dir = Path.GetDirectoryName(rel) ?? "";
+    if (string.IsNullOrEmpty(dir)) return "";
 
-    return string.Join(".", parts);
+    return dir.Replace('\\', '.').Replace('/', '.');
+  }
+
+  /// <summary>
+  /// Derive the directory-namespace of an arbitrary file path (not necessarily
+  /// the current parse file). Mirrors <c>namespaceOf()</c> but takes the path
+  /// as an argument. Used by the E3063 candidate-list builder to render
+  /// `api.Score, legacy.Score` for cross-file typealias collisions.
+  /// </summary>
+  private string TypeAliasNamespaceForCandidate(string sourceFilePath) {
+    if (_rootPath == null) return "";
+    string rel;
+    try {
+      rel = Path.GetRelativePath(_rootPath, sourceFilePath);
+    } catch {
+      return Path.GetFileName(Path.GetDirectoryName(sourceFilePath)) ?? "";
+    }
+    if (rel.StartsWith("..") || Path.IsPathRooted(rel)) {
+      return Path.GetFileName(Path.GetDirectoryName(sourceFilePath)) ?? "";
+    }
+    var dir = Path.GetDirectoryName(rel) ?? "";
+    if (string.IsNullOrEmpty(dir)) return "";
+    return dir.Replace('\\', '.').Replace('/', '.');
   }
 
   public IrModule<MaxonOp> Parse() {
@@ -2102,12 +2146,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     if (owningType != null) {
       // Static/instance method: prepend namespace to type name
       // Don't include filename in namespace since owningType is already the type name
-      var namespace_ = DeriveNamespace(includeFilename: false);
+      var namespace_ = NamespaceOf();
       var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? owningType : $"{namespace_}.{owningType}";
       funcName = $"{qualifiedTypeName}.{baseName}";
     } else {
       // Top-level function: prepend file-based namespace (except main)
-      var namespace_ = DeriveNamespace();
+      var namespace_ = NamespaceOf();
       funcName = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
     }
 
@@ -2644,7 +2688,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Pre-register a stub clone() method for auto-Cloneable struct types.
   /// </summary>
   private void PreRegisterSyntheticStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var cloneName = $"{qualifiedTypeName}.clone";
@@ -2661,7 +2705,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Pre-register a stub equals() method for auto-Equatable struct types.
   /// </summary>
   private void PreRegisterSyntheticStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var equalsName = $"{qualifiedTypeName}.equals";
@@ -2719,7 +2763,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   private void ValidateInterfaceConformance(
       IrModule<MaxonOp> module, string typeName, List<string> conformingInterfaces,
       Dictionary<string, IrType> typeParams, Token nameToken) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     foreach (var ifaceName in conformingInterfaces) {
@@ -3529,7 +3573,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// These are registered during pre-scan so monomorphization can find them.
   /// </summary>
   private void PreRegisterSyntheticEnumMethods(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
 
     // hash() -> int
@@ -3934,7 +3978,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       List<int> functionPositions, string typeName,
       Dictionary<string, List<string>> whereConstraints, IrModule<MaxonOp> module) {
     if (whereConstraints.Count == 0) return functionPositions;
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     return [.. functionPositions.Where(pos => {
       if (pos + 1 >= _tokens.Count) return true;
@@ -4582,7 +4626,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     CheckReservedDeclName(nameToken);
 
     // Construct qualified method name with namespace
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
 
@@ -5282,7 +5326,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     }
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
-    var methodName = $"{enumName}.{nameToken.Value}";
+    // Use the same namespace prefix the pre-scan applied (see PreScanInstanceMethod)
+    // — otherwise the parsed body would land under the bare `EnumName.method` key,
+    // leaving the pre-scan's namespace-qualified stub empty.
+    var enumNs = NamespaceOf();
+    var qualifiedEnumName = string.IsNullOrEmpty(enumNs) ? enumName : $"{enumNs}.{enumName}";
+    var methodName = $"{qualifiedEnumName}.{nameToken.Value}";
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -5337,7 +5386,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Creates a new struct literal with each field cloned from self.
   /// </summary>
   private void SynthesizeStructClone(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var cloneName = $"{qualifiedTypeName}.clone";
@@ -5371,9 +5420,12 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       MaxonValue fieldValue = accessOp.Result;
       if (field.Type is IrStructType nestedStruct) {
-        // Recursively clone nested struct fields using qualified name
-        var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
-        var nestedCloneName = $"{nestedQualified}.clone";
+        // Recursively clone nested struct fields. The nested type may live in
+        // a different namespace than the synthesizing type (e.g., a Testing/
+        // struct with a `String` field — String.clone is `stdlib.String.clone`,
+        // not `Testing.String.clone`). Resolve through the module's qualified-
+        // suffix index so the actual registered name is used.
+        var nestedCloneName = ResolveSynthesizedMethodName(module, nestedStruct.Name, "clone", namespace_);
         var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
         block.AddOp(nestedCloneCall);
         fieldValue = nestedCloneCall.Result!;
@@ -5401,7 +5453,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// Compares each field using == (for primitives) or .equals() (for structs).
   /// </summary>
   private void SynthesizeStructEquals(IrModule<MaxonOp> module, string typeName, IrStructType structType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
     var equalsName = $"{qualifiedTypeName}.equals";
@@ -5438,9 +5490,10 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
       MaxonValue fieldEqual;
       if (field.Type is IrStructType nestedStruct) {
-        // Nested struct: call .equals()
-        var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
-        var nestedEqualsName = $"{nestedQualified}.equals";
+        // Nested struct: call .equals(). Same cross-namespace concern as
+        // SynthesizeStructClone — use the module's name indices instead of
+        // assuming the nested type's namespace matches the enclosing type's.
+        var nestedEqualsName = ResolveSynthesizedMethodName(module, nestedStruct.Name, "equals", namespace_);
         var nestedEqualsCall = new MaxonCallOp(nestedEqualsName, [selfAccess.Result, otherAccess.Result], MaxonValueKind.Bool);
         block.AddOp(nestedEqualsCall);
         fieldEqual = nestedEqualsCall.Result!;
@@ -5476,7 +5529,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// hash() delegates to self.rawValue.hash(); equals() delegates to rawValue comparison.
   /// </summary>
   private void SynthesizeEnumHashAndEquals(IrModule<MaxonOp> module, string enumName, IrEnumType enumType) {
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
     var backingKind = GetEnumBackingKind(enumType);
 
@@ -5957,7 +6010,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Construct qualified method name: namespace.TypeName.methodName
     // Don't include filename in namespace since typeName is already the type
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
 
@@ -6006,7 +6059,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     // Construct qualified method name: namespace.TypeName.methodName
     // Don't include filename in namespace since typeName is already the type
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
     var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
 
@@ -6524,7 +6577,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     var baseName = nameToken.Value;
 
     // Top-level functions get qualified with file-based namespace (except main)
-    var namespace_ = DeriveNamespace();
+    var namespace_ = NamespaceOf();
     var name = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
 
     Expect(TokenType.LeftParen);
@@ -6710,10 +6763,28 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       throw new CompileError(ErrorCode.ParserCircularDependency,
         $"Circular typealias dependency: {typeName}",
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
-    if (seedModule?.AmbiguousTypeNames.Contains(typeName) == true)
-      throw new CompileError(ErrorCode.SemanticAmbiguousTypeReference,
-        $"Ambiguous type '{typeName}': multiple definitions exist across files",
+    if (seedModule?.AmbiguousTypeNames.Contains(typeName) == true) {
+      // E3063 ambiguous typealias: bare-name type reference with two or more
+      // reachable typealias declarations under directory-as-module rules.
+      // Mirrors the self-hosted compiler's E3063. The user must write
+      // `dir.Name` to disambiguate. Build the candidate list from
+      // TypeAliasSources entries that declared this name as exported/stdlib.
+      var candidates = new List<string>();
+      var seenPaths = new HashSet<string>();
+      foreach (var (aliasName, info) in seedModule.TypeAliasSources) {
+        if (aliasName != typeName) continue;
+        if (!(info.IsExported || info.IsStdlib)) continue;
+        if (info.SourceFilePath == null) continue;
+        if (!seenPaths.Add(info.SourceFilePath)) continue;
+        var ns = TypeAliasNamespaceForCandidate(info.SourceFilePath);
+        candidates.Add(ns.Length == 0 ? $"(root).{typeName}" : $"{ns}.{typeName}");
+      }
+      candidates.Sort(StringComparer.Ordinal);
+      var candidateList = string.Join(", ", candidates);
+      throw new CompileError(ErrorCode.SemanticAmbiguousTypeAlias,
+        $"Ambiguous typealias '{typeName}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidateList}",
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
+    }
     if (IsNonExportedCrossFileType(typeName))
       throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
         _tokens[typeNamePos].Line, _tokens[typeNamePos].Column);
@@ -9711,7 +9782,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
     };
 
   // Track that a variable is mutated via builtin method call (suppresses "var should be let" warning).
-  // Immutability enforcement is handled later by E3063 in MaxonToStandardConversion.
+  // Immutability enforcement is handled later by E3019 in MaxonToStandardConversion.
   private void TrackBuiltinMutation(string? varName, string baseTypeName, string methodName) {
     if (!IsMutatingBuiltinMethod(baseTypeName, methodName)) return;
     if (varName != null) _reassignedVars.Add(varName);
@@ -9720,7 +9791,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   // Stamp ArgVarNames[0] = receiver var name on a synthetic builtin MaxonCallOp.
   // The mutation-analysis pass (ParameterMutationAnalysisPass) inspects ArgVarNames[0]
   // to decide whether a call mutates a self-derived/self-field receiver, which feeds
-  // the E3063 immutable-receiver check at user call sites. Without this, calling a
+  // the E3019 immutable-receiver check at user call sites. Without this, calling a
   // mutating builtin (e.g. `managed.set(...)` synthetic-callee `__managed_mem_set`)
   // inside a user method like Array.set wouldn't propagate the mutation up.
   private void SetBuiltinCallReceiver(MaxonCallOp callOp) {
@@ -10306,7 +10377,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       return null;
 
     // Construct namespace-qualified type name for sibling method lookup
-    var namespace_ = DeriveNamespace(includeFilename: false);
+    var namespace_ = NamespaceOf();
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? _currentTypeName : $"{namespace_}.{_currentTypeName}";
     var siblingMethodName = $"{qualifiedTypeName}.{token.Value}";
 
@@ -14390,6 +14461,49 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
         }
       }
 
+      // Multi-segment qualified call: Ident.Ident.…Ident(args).
+      // Per the directory-as-module design, a callee like `foo.bar.baz.fn(…)`
+      // names a function registered under nested namespaces (`foo/bar/baz/`
+      // → `foo.bar.baz`). The 2-segment qualified branch below only peeks
+      // one `.` ahead so it cannot catch chains of three or more segments;
+      // probe here first. We walk greedily, assemble the dotted name, and
+      // emit a qualified call when the assembled name resolves against the
+      // registered function index. On miss (struct chain, namespaced read
+      // followed by member access, etc.) we fall through so the existing
+      // branches still see their tokens.
+      if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())
+          && !_variables.ContainsKey(token.Value) && !_globalVars.ContainsKey(token.Value)) {
+        int probe = 1; // _tokens[_pos + 0] is '.', _pos + 1 is first member
+        var assembled = token.Value;
+        int segments = 1;
+        while (probe + 1 < _tokens.Count
+               && _tokens[_pos + probe - 1].Type == TokenType.Dot
+               && IsIdentifierLikeToken(_tokens[_pos + probe])) {
+          assembled = $"{assembled}.{_tokens[_pos + probe].Value}";
+          segments++;
+          // Next iteration looks at the token after this member.
+          probe += 2;
+        }
+        if (segments >= 3 && _pos + probe - 1 < _tokens.Count
+            && _tokens[_pos + probe - 1].Type == TokenType.LeftParen
+            && _currentModule!.FindFunctionByExactName(assembled) != null) {
+          // Consume the `.member` pairs we peeked over (segments - 1 of them).
+          for (int s = 1; s < segments; s++) {
+            Advance(); // '.'
+            Advance(); // member
+          }
+          Advance(); // '('
+          var qualifiedFuncToken = new Token(TokenType.Identifier, assembled, token.Line, token.Column);
+          var (args, callee) = ParseCallArgs(qualifiedFuncToken, isStaticCall: true);
+          var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
+          if (callOp.Result != null)
+            return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token);
+          if (_inTryContext)
+            return new ExprResult.Direct(new MaxonInteger(IrContext.Current.NextId()));
+          throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{assembled}' does not return a value", token.Line, token.Column);
+        }
+      }
+
       // Check for qualified name: TypeName.member
       if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
@@ -14714,7 +14828,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       // Function reference (bare function name without parentheses = function pointer)
       // Try to resolve as a function using the same logic as function calls
       // First check local namespace, then exact match, then suffix match
-      var currentNamespace = DeriveNamespace();
+      var currentNamespace = NamespaceOf();
       var qualifiedFuncName = string.IsNullOrEmpty(currentNamespace) ? token.Value : $"{currentNamespace}.{token.Value}";
 
       var referencedFunc = _currentModule!.FindFunctionByExactName(qualifiedFuncName);
@@ -14912,15 +15026,18 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
           continue;
         }
 
-        // Method call on enum
+        // Method call on enum. ResolveMethodName walks the qualified-suffix
+        // index too, so a method declared in another namespace (e.g.
+        // `Compiler.IR.Maxon.MaxonType.toString` when the call site writes
+        // `t.toString()` from `Compiler.Passes.*`) still resolves under the
+        // directory-as-module rule.
         if (Check(TokenType.LeftParen)) {
           var qualifiedMethodName = $"{userTypeName}.{fieldName}";
-          var hasMethod = _currentModule!.FindFunctionByExactName(qualifiedMethodName) != null
-            || _currentModule!.FindFunctionsByBaseName(qualifiedMethodName).Count > 0;
-          if (hasMethod) {
+          var resolvedEnumMethodName = ResolveMethodName(qualifiedMethodName);
+          if (resolvedEnumMethodName != null) {
             Advance(); // consume '('
             var enumVal = ResolveExprValue(result);
-            var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedMethodName, fieldToken.Line, fieldToken.Column);
+            var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedEnumMethodName, fieldToken.Line, fieldToken.Column);
             var (allArgs, enumCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, enumVal);
             var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, enumCallee);
             result = new ExprResult.Direct(callOp.Result ?? enumVal);
@@ -16961,13 +17078,23 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
   private IrFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
     // First, try to find a function in the current file's namespace
-    var currentNamespace = DeriveNamespace();
+    var currentNamespace = NamespaceOf();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
-    // Check for exact match with current namespace (local function)
+    // Check for exact match with current namespace. Under directory-as-module
+    // multiple sibling files share `currentNamespace`, so a bare-name lookup
+    // (`helper()` resolves to `<ns>.helper`) might land on a non-exported decl
+    // in a sibling file — filter via `IsFunctionVisible` for bare names. For
+    // user-written qualified calls (`Foo.bar` or `utils.helper`) we let the
+    // exact match through; the downstream type-visibility check (E4006) or
+    // the cross-file hidden-list path (E3008) surfaces the diagnostic at the
+    // correct severity for the user's intent.
     var localMatch = _currentModule!.FindFunctionByExactName(qualifiedName);
     if (localMatch != null) {
-      return localMatch;
+      bool isBareCall = functionName.IndexOf('.') < 0;
+      if (!isBareCall || IsFunctionVisible(localMatch)) {
+        return localMatch;
+      }
     }
 
     // Find all other matches: exact match OR suffix match, filtered by visibility.
@@ -17067,14 +17194,22 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
   /// mangled overload variants (names containing '$').
   /// </summary>
   private List<IrFunction<MaxonOp>> ResolveFunctionOverloads(string functionName) {
-    var currentNamespace = DeriveNamespace();
+    var currentNamespace = NamespaceOf();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
-    // Check local namespace (always visible — same file). The base-name index
-    // buckets "name", "name$i64", "name$String" all under "name" — exactly the
-    // candidates the old `f.Name == qualifiedName || StartsWith(qualifiedName + "$")`
-    // filter matched.
-    var localMatches = new List<IrFunction<MaxonOp>>(_currentModule!.FindFunctionsByBaseName(qualifiedName));
+    // Check the current namespace. Under directory-as-module multiple sibling
+    // files share `currentNamespace`, so a bare-name lookup might land on a
+    // non-exported decl in a sibling file — filter via `IsFunctionVisible`
+    // for bare names. For user-written qualified calls (containing `.`),
+    // mirror `ResolveFunctionName` and let exact matches through unfiltered;
+    // downstream type-visibility / hidden-list paths surface the diagnostic.
+    // The base-name index buckets "name", "name$i64", "name$String" all under
+    // "name" — exactly the candidates the old
+    // `f.Name == qualifiedName || StartsWith(qualifiedName + "$")` filter matched.
+    bool isBareCall = functionName.IndexOf('.') < 0;
+    var localMatches = isBareCall
+      ? [.. _currentModule!.FindFunctionsByBaseName(qualifiedName).Where(IsFunctionVisible)]
+      : new List<IrFunction<MaxonOp>>(_currentModule!.FindFunctionsByBaseName(qualifiedName));
     if (localMatches.Count > 0) return localMatches;
 
     // Exact matches (including overload variants), filtered by visibility
@@ -17415,8 +17550,7 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       else if (t == TokenType.RightParen) {
         parenDepth--;
         if (parenDepth == 0) break;
-      }
-      else if (t == TokenType.LeftBracket) bracketDepth++;
+      } else if (t == TokenType.LeftBracket) bracketDepth++;
       else if (t == TokenType.RightBracket) bracketDepth--;
       else if (t == TokenType.LeftBrace) braceDepth++;
       else if (t == TokenType.RightBrace) braceDepth--;
@@ -17932,6 +18066,19 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
 
     var candidates = ResolveFunctionOverloads(methodNameToken.Value);
     var callee = SelectOverloadByNamedArgs(candidates, methodNameToken);
+
+    // Instance-method visibility: we already know the receiver type is visible
+    // (we hold a value of it), so the function-not-exported diagnostic is the
+    // right one when the method itself was reached cross-file without being
+    // exported. `ResolveFunctionOverloads` lets type-qualified names through
+    // its base-name visibility filter so the static-call path can surface the
+    // type-not-visible diagnostic (E4006) first; once we have a value, that
+    // gate is moot and the method's own visibility applies.
+    if (!IsFunctionVisible(callee)) {
+      throw new CompileError(ErrorCode.SemanticSymbolNotExported,
+        $"function '{callee.Name}' is not exported",
+        methodNameToken.Line, methodNameToken.Column);
+    }
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
     args[0] = selfValue;
@@ -19982,7 +20129,4 @@ public partial class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = 
       or TokenType.Extension or TokenType.Export or TokenType.Let
       or TokenType.Var or TokenType.TypeAlias or TokenType.Interface
       or TokenType.HashIf;
-
-  [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|/)specs/fragments[^/]*/")]
-  private static partial System.Text.RegularExpressions.Regex SpecFragmentsRegex();
 }

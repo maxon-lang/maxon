@@ -62,7 +62,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @refcount.findItem(a: i64, b: i64, target: i64) -> i64 {
+  func @findItem(a: i64, b: i64, target: i64) -> i64 {
   entry:
     x64.prologue stack_size=112
     x64.mov [rbp-16], rcx
@@ -71,7 +71,7 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.cmp rcx, r8
-    x64.jne refcount.findItem.check_a_0.after
+    x64.jne findItem.check_a_0.after
   check_a_0:
     x64.lea_rdata rax, [__str_0]
     x64.mov rcx, rax
@@ -136,11 +136,11 @@ module {
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-32]
     x64.cmp rax, rcx
-    x64.jne refcount.findItem.check_b_0.merge
+    x64.jne findItem.check_b_0.merge
   check_b_0:
     x64.mov rax, 1
     x64.test rax, rax
-    x64.je refcount.findItem.inner_0.after
+    x64.je findItem.inner_0.after
   inner_0:
     x64.lea_rdata rax, [__str_1]
     x64.mov rcx, rax
@@ -209,7 +209,7 @@ module {
     x64.epilogue
     x64.ret
   inner_0.after:
-    x64.jmp refcount.findItem.check_b_0.merge
+    x64.jmp findItem.check_b_0.merge
   check_b_0.merge:
     x64.lea_rdata rax, [__str_2]
     x64.mov rcx, rax
@@ -271,13 +271,13 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @refcount.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=144
     x64.mov rcx, 10
     x64.mov rdx, 20
     x64.mov r8, 20
-    x64.call refcount.findItem
+    x64.call findItem
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
@@ -384,16 +384,16 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+8]
     x64.xor eax, eax
     x64.mov edx, 4294967295
     x64.cmp rcx, rdx
-    x64.jg refcount.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rcx, rax
-    x64.jl refcount.main.__range_panic_0
-    x64.jmp refcount.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax

@@ -33,7 +33,7 @@ end
 ```stderr
 panic at simple-panic.test:6: Range check failed: value outside typealias 'Byte'
 Stack trace:
-  in panic-stack-trace.dangerous
+  in dangerous
   in main
   in mrt_start
 ```
@@ -67,9 +67,9 @@ end
 ```stderr
 panic at nested-calls.test:6: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
-  in panic-stack-trace.validate
-  in panic-stack-trace.process
-  in panic-stack-trace.caller
+  in validate
+  in process
+  in caller
   in main
   in mrt_start
 ```

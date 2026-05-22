@@ -315,11 +315,13 @@ public static partial class FragmentGenerator {
         var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-frag-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         try {
+          // Spec-fragment multi-file: RootPath = tempDir (decision #2).
+          var multiFileRoot = tempDir;
           sources = [.. test.SourceFiles.Select(f => {
             var path = Path.Combine(tempDir, f.FileName);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, f.Source);
-            return new Compiler.SourceFile(path, f.Source);
+            return new Compiler.SourceFile(path, f.Source, multiFileRoot);
           })];
           var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
           if (result.Success) {
@@ -339,7 +341,8 @@ public static partial class FragmentGenerator {
           try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
       } else {
-        sources = [new Compiler.SourceFile(fragmentPath, sourceWithComment)];
+        // Spec-fragment single-file: RootPath = the fragment directory (decision #2).
+        sources = [new Compiler.SourceFile(fragmentPath, sourceWithComment, Path.GetDirectoryName(fragmentPath))];
         var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
         if (result.Success) {
           if (result.ArchIr != null) {

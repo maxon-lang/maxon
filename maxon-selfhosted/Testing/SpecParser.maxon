@@ -492,6 +492,16 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 					continue
 				end 'isIncludeStdlibIr'
 
+				// Recognize SelfhostedOnly directive — the C# runner uses this
+				// to skip tests that exercise self-hosted-only diagnostics
+				// (e.g. E3095). Self-hosted runs the test normally; here we
+				// just consume the directive line so it isn't treated as
+				// stray content.
+				if blockLine.contains("<!-- SelfhostedOnly") 'isSelfhostedOnly'
+					i = i + 1
+					continue
+				end 'isSelfhostedOnly'
+
 				// Check maxoncstderr before maxon since "```maxoncstderr" also startsWith "```maxon"
 				if blockLine.startsWith("```maxoncstderr") 'isCompilerStderr'
 					i = i + 1

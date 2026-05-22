@@ -157,8 +157,9 @@ class Program {
       var content = ReadFileContentUntilSeparator(path);
       var ext = GetOutputExtension(target);
       var outputPath = ResolveOutputPath(path, ext);
-      var fileSources = new SourceFile[] { new(path, content) };
       var projectDir = Path.GetDirectoryName(Path.GetFullPath(path))!;
+      // Single-file build: anchor at the file's parent dir (decision #3).
+      var fileSources = new SourceFile[] { new(path, content, projectDir) };
 
       if (useCache && BuildCache.IsCacheValid(projectDir, fileSources, outputPath, target)) {
         Console.WriteLine($"Compiled -> {outputPath}");
@@ -194,8 +195,9 @@ class Program {
           return 1;
         }
 
-        // Check project cache (includes build.maxon to detect config changes)
-        var allSources = new SourceFile[] { new(buildFile, buildContent) }.Concat(projectSources).ToArray();
+        // Check project cache (includes build.maxon to detect config changes).
+        // The buildFile sits at the project root, so its RootPath is `path`.
+        var allSources = new SourceFile[] { new(buildFile, buildContent, path) }.Concat(projectSources).ToArray();
         if (useCache && BuildCache.IsCacheValid(path, allSources, null, target)) {
           var cachedOutput = BuildCache.GetCachedOutputPath(path);
           if (cachedOutput != null) {
@@ -204,8 +206,9 @@ class Program {
           }
         }
 
-        // Cache build.maxon → .maxon-run.exe separately (only depends on build.maxon + compiler)
-        var buildSources = new SourceFile[] { new(buildFile, buildContent) };
+        // Cache build.maxon → .maxon-run.exe separately (only depends on build.maxon + compiler).
+        // build.maxon is at the project root; pass `path` as its RootPath.
+        var buildSources = new SourceFile[] { new(buildFile, buildContent, path) };
         BuildCache.EnsureCacheDir(path);
         var runPath = Path.Combine(BuildCache.GetCacheDir(path), $".maxon-run{ext}");
 
@@ -389,7 +392,8 @@ class Program {
       return 1;
     }
 
-    var sources = new SourceFile[] { new(buildFile, content) };
+    // build.maxon is at the project root; pass `directory` as its RootPath.
+    var sources = new SourceFile[] { new(buildFile, content, directory) };
 
     var ext = GetOutputExtension(target);
     var useCache = !emitIr && !dumpStages;

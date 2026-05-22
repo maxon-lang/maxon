@@ -280,7 +280,7 @@ end 'main'
 ```stderr
 panic at runtime-check-fail.test:6: Range check failed: value outside typealias 'Age'
 Stack trace:
-  in ranged-typealias.makeAge
+  in makeAge
   in main
   in mrt_start
 ```
@@ -394,7 +394,7 @@ end 'main'
 ```stderr
 panic at return-runtime-check-fail.test:5: Range check failed: value outside typealias 'Score'
 Stack trace:
-  in ranged-typealias.doubleScore
+  in doubleScore
   in main
   in mrt_start
 ```

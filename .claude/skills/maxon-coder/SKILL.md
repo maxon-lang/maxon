@@ -416,7 +416,7 @@ Float→int requires `trunc()`, `round()`, `floor()`, or `ceil()`.
 - `@heap var p = Point{x: 0, y: 0}` forces heap allocation.
 - Borrow checker (NLL): CANNOT mutate a collection while a `.get()` borrow is live (E3070).
 - Pass-by-reference is automatic for parameters that are assigned to in the callee.
-- Passing a `let` var to a mutating parameter is E3063.
+- Passing a `let` var to a mutating parameter is E3019.
 
 ## Purity & discards
 

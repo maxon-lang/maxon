@@ -70,8 +70,8 @@ export function instrumentCoverage(module StdModule, project Project) returns St
 			// calling-convention registers they read from. Only the entry
 			// block has params; in other blocks leadingParams is 0 and the
 			// ops land at the front.
-			// countLeadingParamOps returns a valid position in [0, opRefs.count()], so insert cannot fail.
-			let leadingParams = countLeadingParamOps(module, opRefs: block.opRefs)
+			// countLeadingParamOpsForCoverage returns a valid position in [0, opRefs.count()], so insert cannot fail.
+			let leadingParams = countLeadingParamOpsForCoverage(module, opRefs: block.opRefs)
 			try block.opRefs.insert(at: leadingParams, value: constIdx) otherwise panic("invariant: leadingParams in [0, opRefs.count()] but insert failed")
 			try block.opRefs.insert(at: leadingParams + 1, value: callIdx) otherwise panic("invariant: leadingParams+1 in [0, opRefs.count()+1] but insert failed")
 		end 'eachBlock'
@@ -84,7 +84,7 @@ end 'instrumentCoverage'
 // live inside StdOp.call (the call-category sub-union) and must remain first
 // in the entry block because the x64/arm64 backends pre-seed CC registers
 // for them before any other instruction runs.
-function countLeadingParamOps(module StdModule, opRefs OpIndexList) returns OpCount
+function countLeadingParamOpsForCoverage(module StdModule, opRefs OpIndexList) returns OpCount
 	var count = 0
 	for opIdx in opRefs 'scan'
 		let op = try module.ops.get(opIdx) otherwise break
@@ -94,7 +94,7 @@ function countLeadingParamOps(module StdModule, opRefs OpIndexList) returns OpCo
 		count = count + 1
 	end 'scan'
 	return count
-end 'countLeadingParamOps'
+end 'countLeadingParamOpsForCoverage'
 
 function isParamOp(op StdOp) returns bool
 	return match op 'outer'

@@ -16,7 +16,7 @@ ExitCode: 200
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.scope_end []
@@ -24,9 +24,9 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %1 = maxon.call @register-allocator.compute
+    %1 = maxon.call @compute
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.call @register-allocator.compute
+    %2 = maxon.call @compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 256 : i64}
@@ -46,15 +46,15 @@ module {
 }
 === standard
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     func.return %0
   }
   func @main() -> u32 {
   entry:
-    %1 = func.call @register-allocator.compute
-    %2 = func.call @register-allocator.compute
+    %1 = func.call @compute
+    %2 = func.call @compute
     %3 = arith.addi %1, %2
     %4 = arith.constant {value = 256 : i64}
     %5 = arith.remsi %3, %4
@@ -74,7 +74,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.compute() -> i64 {
+  func @compute() -> i64 {
   entry:
     x64.mov rax, 100
     x64.ret
@@ -82,9 +82,9 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call register-allocator.compute
+    x64.call compute
     x64.mov [rbp-8], rax
-    x64.call register-allocator.compute
+    x64.call compute
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov rax, 256

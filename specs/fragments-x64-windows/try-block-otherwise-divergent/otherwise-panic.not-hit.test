@@ -27,10 +27,10 @@ ExitCode: 14
 ---
 // CompiledIR
 module {
-  func @try-block-otherwise-divergent.maybeFail(b: i1) -> i64 {
+  func @maybeFail(b: i1) -> i64 {
   entry:
     x64.test rcx, rcx
-    x64.je try-block-otherwise-divergent.maybeFail.c_0.after
+    x64.je maybeFail.c_0.after
   c_0:
     x64.xor eax, eax
     x64.mov rcx, 1
@@ -43,34 +43,34 @@ module {
     x64.xor edx, edx
     x64.ret
   }
-  func @try-block-otherwise-divergent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.xor ecx, ecx
-    x64.call try-block-otherwise-divergent.maybeFail
+    x64.call maybeFail
     x64.mov [rbp-16], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne try-block-otherwise-divergent.main.try_block_err_0
+    x64.jne main.try_block_err_0
   try_block_continue_0:
     x64.mov rax, [rbp-16]
     x64.mov [rbp-24], rax
     x64.xor ecx, ecx
-    x64.call try-block-otherwise-divergent.maybeFail
+    x64.call maybeFail
     x64.mov [rbp-32], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne try-block-otherwise-divergent.main.try_block_throw_0
+    x64.jne main.try_block_throw_0
   try_block_continue_1:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-24]
     x64.add rcx, rax
     x64.mov [rbp-8], rcx
-    x64.jmp try-block-otherwise-divergent.main.try_block_after_0
+    x64.jmp main.try_block_after_0
   try_block_throw_0:
-    x64.jmp try-block-otherwise-divergent.main.try_block_err_0
+    x64.jmp main.try_block_err_0
   try_block_err_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
@@ -80,10 +80,10 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg try-block-otherwise-divergent.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl try-block-otherwise-divergent.main.__range_panic_0
-    x64.jmp try-block-otherwise-divergent.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax

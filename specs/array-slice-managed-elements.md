@@ -21,7 +21,7 @@ slice still references.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export type Item
+type Item
 		export var name String
 		export var value Integer
 
@@ -61,7 +61,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Op
+union Op
 		add(value Integer)
 		sub(value Integer)
 		nop

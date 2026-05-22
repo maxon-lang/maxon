@@ -1,0 +1,31 @@
+// Test: same-directory-bare-name-sees-sibling
+// --- file: utils/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+module function siblingProducer() returns Integer
+	return 21
+end 'siblingProducer'
+
+// --- file: utils/b.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function siblingConsumer() returns Integer
+	return siblingProducer() + siblingProducer()
+end 'siblingConsumer'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return siblingConsumer()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  }
+}
+---

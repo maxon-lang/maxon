@@ -114,6 +114,17 @@ export union MaxonType
 	// the payload to size __ManagedMemory allocations and per-instance
 	// layout descriptors.
 	constInt(value IntConstant)
+	// An i64-sized synthetic ABI-bookkeeping slot — closure env pointers,
+	// interface witness pointers, and any future i64-sized opaque value
+	// the parser introduces alongside a user-visible param/local. NOT a
+	// user-writable type; it never appears in source syntax. Lowering
+	// collapses it to `StdType.i64` just like `integer`, but during
+	// Maxon-level passes it lets a slot say "I am ABI bookkeeping, do
+	// not iterate me as a user-visible scope entry" without overloading
+	// `MaxonType.integer`. Role (env vs witness) is recovered at lowering
+	// time from slot adjacency + the paired user-visible slot's type, not
+	// from this tag — see `interfaceWitnessSlots` / `fnEnvVarNames`.
+	opaquePointer
 
 	// Render the source-level spelling of this type, or its display name
 	// for primitives. Used by diagnostic messages and IR printers — the
@@ -131,6 +142,7 @@ export union MaxonType
 			genericInstance(id) gives genericInstanceIdToString(project, id: id)
 			interface(id) gives project.interfaceRegistry.getName(id)
 			constInt(value) gives "{value}"
+			opaquePointer gives "<opaquePtr>"
 		end 'str'
 	end 'toString'
 
@@ -139,7 +151,8 @@ export union MaxonType
 	// a string key — primitives encode their tag separately, so the empty
 	// string is fine for those cases. Function types have no source-level
 	// "name" — they're structurally typed — so they fall under the same
-	// empty-string convention as primitives.
+	// empty-string convention as primitives. opaquePointer has no
+	// source-level spelling either.
 	export function nameOrEmpty(project Project) returns String
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
@@ -148,7 +161,7 @@ export union MaxonType
 			typeParameter(id) gives project.typeParameters.getName(id)
 			genericInstance(id) gives genericInstanceIdBaseName(project, id: id)
 			interface(id) gives project.interfaceRegistry.getName(id)
-			constInt gives ""
+			constInt to opaquePointer gives ""
 		end 'name'
 	end 'nameOrEmpty'
 
@@ -161,12 +174,7 @@ export union MaxonType
 		return match self 'name'
 			named(id) gives project.typeNames.get(id)
 			boolean to string gives ""
-			function gives ""
-			unresolved gives ""
-			typeParameter gives ""
-			genericInstance gives ""
-			interface gives ""
-			constInt gives ""
+			function to opaquePointer gives ""
 		end 'name'
 	end 'namedAliasNameOrEmpty'
 end 'MaxonType'
@@ -179,9 +187,7 @@ export function isFunctionMaxonType(t MaxonType) returns bool
 	return match t 'check'
 		function gives true
 		boolean to named gives false
-		unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		unresolved to opaquePointer gives false
 	end 'check'
 end 'isFunctionMaxonType'
 
@@ -251,9 +257,20 @@ export function interfaceTypeIsFat(t MaxonType) returns bool
 		unresolved gives false
 		typeParameter gives false
 		genericInstance gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'check'
 end 'interfaceTypeIsFat'
+
+// True iff `t` is a `MaxonType.opaquePointer` — i.e. an ABI-bookkeeping
+// slot (closure env, interface witness companion). Used by the lowering
+// to recognize slots that should not be iterated as user-visible scope
+// entries.
+export function isOpaquePointerMaxonType(t MaxonType) returns bool
+	return match t 'check'
+		opaquePointer gives true
+		boolean to constInt gives false
+	end 'check'
+end 'isOpaquePointerMaxonType'
 
 // Phase 11.3: byte width of a MaxonType viewed as a single ABI value.
 // Primitives at their hardware width (Bool=1, Byte=1, Int=8, Float=8);
@@ -274,8 +291,7 @@ export function maxonTypeWidthBytes(project Project, t MaxonType) returns Machin
 		unresolved gives 8
 		typeParameter gives 8
 		genericInstance(gid) gives genericInstanceWidthBytes(project, gid: gid)
-		interface gives 8
-		constInt gives 8
+		interface to opaquePointer gives 8
 	end 'w'
 end 'maxonTypeWidthBytes'
 
@@ -427,8 +443,7 @@ export function walkInstantiations(project Project, t MaxonType, out GenericInst
 		boolean to function then return
 		unresolved then return
 		typeParameter then return
-		interface then return
-		constInt then return
+		interface to opaquePointer then return
 	end 'walk'
 end 'walkInstantiations'
 
@@ -499,15 +514,14 @@ export function maxonTypesStructurallyEqual(a MaxonType, b MaxonType) returns bo
 		genericInstance(idA) gives matchesGenericInstanceArm(b, idA: idA)
 		interface(idA) gives matchesInterfaceArm(b, idA: idA)
 		constInt(valueA) gives matchesConstIntArm(b, valueA: valueA)
+		opaquePointer gives isOpaquePointerMaxonType(b)
 	end 'lhs'
 end 'maxonTypesStructurallyEqual'
 
 function matchesBooleanArm(b MaxonType) returns bool
 	return match b 'm'
 		boolean gives true
-		integer to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		integer to opaquePointer gives false
 	end 'm'
 end 'matchesBooleanArm'
 
@@ -515,9 +529,7 @@ function matchesIntegerArm(b MaxonType) returns bool
 	return match b 'm'
 		integer gives true
 		boolean gives false
-		float to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		float to opaquePointer gives false
 	end 'm'
 end 'matchesIntegerArm'
 
@@ -525,9 +537,7 @@ function matchesFloatArm(b MaxonType) returns bool
 	return match b 'm'
 		float gives true
 		boolean to integer gives false
-		string to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		string to opaquePointer gives false
 	end 'm'
 end 'matchesFloatArm'
 
@@ -535,9 +545,7 @@ function matchesStringArm(b MaxonType) returns bool
 	return match b 'm'
 		string gives true
 		boolean to float gives false
-		named to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		named to opaquePointer gives false
 	end 'm'
 end 'matchesStringArm'
 
@@ -545,9 +553,7 @@ function matchesNamedArm(b MaxonType, idA TypeNameId) returns bool
 	return match b 'm'
 		named(idB) gives idA == idB
 		boolean to string gives false
-		function to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		function to opaquePointer gives false
 	end 'm'
 end 'matchesNamedArm'
 
@@ -555,9 +561,7 @@ function matchesFunctionArm(b MaxonType, idA FunctionTypeId) returns bool
 	return match b 'm'
 		function(idB) gives idA == idB
 		boolean to named gives false
-		unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		unresolved to opaquePointer gives false
 	end 'm'
 end 'matchesFunctionArm'
 
@@ -565,8 +569,7 @@ function matchesUnresolvedArm(b MaxonType) returns bool
 	return match b 'm'
 		unresolved gives true
 		boolean to function gives false
-		typeParameter to interface gives false
-		constInt gives false
+		typeParameter to opaquePointer gives false
 	end 'm'
 end 'matchesUnresolvedArm'
 
@@ -574,8 +577,7 @@ function matchesTypeParameterArm(b MaxonType, idA TypeParamId) returns bool
 	return match b 'm'
 		typeParameter(idB) gives idA == idB
 		boolean to unresolved gives false
-		genericInstance to interface gives false
-		constInt gives false
+		genericInstance to opaquePointer gives false
 	end 'm'
 end 'matchesTypeParameterArm'
 
@@ -584,8 +586,7 @@ function matchesGenericInstanceArm(b MaxonType, idA GenericInstanceId) returns b
 		genericInstance(idB) gives idA == idB
 		boolean to unresolved gives false
 		typeParameter gives false
-		interface gives false
-		constInt gives false
+		interface to opaquePointer gives false
 	end 'm'
 end 'matchesGenericInstanceArm'
 
@@ -594,7 +595,7 @@ function matchesInterfaceArm(b MaxonType, idA InterfaceTypeId) returns bool
 		interface(idB) gives idA == idB
 		boolean to unresolved gives false
 		typeParameter to genericInstance gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'm'
 end 'matchesInterfaceArm'
 
@@ -602,6 +603,7 @@ function matchesConstIntArm(b MaxonType, valueA IntConstant) returns bool
 	return match b 'm'
 		constInt(valueB) gives valueA == valueB
 		boolean to interface gives false
+		opaquePointer gives false
 	end 'm'
 end 'matchesConstIntArm'
 
@@ -754,6 +756,9 @@ export function writeMaxonType(project Project, buf ByteArray, t MaxonType) thro
 		// Phase 13 (sized typealiases): const-int args in generic instances.
 		// Persist the i64 payload verbatim; the reader rebuilds the same arm.
 		constInt(value) then writeQword(buf, value: value)
+		// Synthetic ABI-bookkeeping slot. No payload — the tag itself carries
+		// the entire signal. Reader rebuilds via `MaxonType.opaquePointer`.
+		opaquePointer then break
 	end 'payload'
 end 'writeMaxonType'
 
@@ -886,6 +891,8 @@ export function readMaxonType(project Project, buf ByteArray, offset ByteOffset)
 		interface then return try readMaxonInterface(project, buf: buf, offset: pos)
 		// Phase 13 (sized typealiases): mirror writer's constInt payload.
 		constInt then return (MaxonType.constInt(readQword(buf, offset: pos)), pos + 8)
+		// Synthetic ABI-bookkeeping slot. No payload; mirror writer.
+		opaquePointer then return (MaxonType.opaquePointer, pos)
 	end 'tag'
 end 'readMaxonType'
 
@@ -1631,6 +1638,20 @@ end 'qualifyCalleeForContext'
 // instead of re-chasing the resolved name.
 export function qualifyCalleeForContextWithType(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, enclosingType String = "") returns (String, MaxonType)
 	if isQualifiedCallContext(callContext) 'isQualified'
+		// Phase 5: directory-as-module qualified-call resolution. The head
+		// of `head.tail` may itself name a namespace, with `tail` a
+		// registered function under it. Probe the full callee first
+		// (covers both `dir.fn` and `stdlib.fmt.print` multi-segment
+		// forms — `funcReturnTypes` is keyed by the canonical qualified
+		// name so this directly catches every namespace-qualified call
+		// without per-level walking). Falls back to the struct/typealias
+		// chase on miss so qualified calls on user types still work.
+		if project.funcReturnTypes.contains(bare) 'isNsCall'
+			return (bare, MaxonType.unresolved)
+		end 'isNsCall'
+		if project.overloadedNames.contains(bare) 'isNsOverloadedCall'
+			return (bare, MaxonType.unresolved)
+		end 'isNsOverloadedCall'
 		// Forward enclosingType so an inner typealias declared on the
 		// enclosing struct (chased via `chaseTypealiasNameToType`'s
 		// `innerAliases` branch) wins over a global-scope miss.
@@ -1658,17 +1679,39 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 		return (bare, MaxonType.unresolved)
 	end 'isMain'
 	let localName = qualifyName(currentNamespace, name: bare)
+	// Under directory-as-module, multiple sibling files share
+	// `currentNamespace`, so the local probe may land on a non-exported
+	// decl in a sibling file. Filter via `isVisibleFrom` so the
+	// cross-file fallback's diagnostic (or the downstream "not exported"
+	// error) fires instead of silently picking the sibling decl. The
+	// filter only applies to actually-bare names — a user-written
+	// qualified call (`Type.method`) lets the lookup pass through; the
+	// type-visibility error or instance-call gate handles those.
+	let bareCall = not bare.contains(".")
 	if project.funcReturnTypes.contains(localName) 'isLocal'
-		return (localName, MaxonType.unresolved)
+		if not bareCall 'qualifiedLocal'
+			return (localName, MaxonType.unresolved)
+		end 'qualifiedLocal'
+		let info = funcVisibilityOrDefault(project, qualifiedName: localName)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'localVisible'
+			return (localName, MaxonType.unresolved)
+		end 'localVisible'
 	end 'isLocal'
 	// Overloaded local: the bare-name slot in `funcReturnTypes` was
 	// vacated by `rekeyExistingFunction` when the second overload was
 	// registered, so `contains(localName)` misses. The `overloadedNames`
 	// bucket is keyed by the bare qualified name — handing that back lets
 	// `resolveOverloadedCallee` pick the matching mangled variant via
-	// `argTypes`.
+	// `argTypes`. Same visibility gate as the resolved-name path so a
+	// sibling-file overload bucket doesn't silently win either.
 	if project.overloadedNames.contains(localName) 'isLocalOverloaded'
-		return (localName, MaxonType.unresolved)
+		if not bareCall 'qualifiedLocalOverloaded'
+			return (localName, MaxonType.unresolved)
+		end 'qualifiedLocalOverloaded'
+		let info = funcVisibilityOrDefault(project, qualifiedName: localName)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'localOverloadedVisible'
+			return (localName, MaxonType.unresolved)
+		end 'localOverloadedVisible'
 	end 'isLocalOverloaded'
 	let stdlibName = qualifyName("stdlib", name: bare)
 	if project.funcReturnTypes.contains(stdlibName) 'isStdlib'
@@ -1708,6 +1751,12 @@ export function qualifyCalleeForContextWithType(project Project, bare String, ca
 	if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternalsCrossFile'
 		return (localName, MaxonType.unresolved)
 	end 'rejectInternalsCrossFile'
+	// Decision #1 (E3095) probe: collect every visible candidate, de-duped
+	// by the candidate's canonical qualified name. Pick the first
+	// deterministically so the legacy probe shape (first visible wins)
+	// stays intact. A future TypeResolution pass that has a SourceRange in
+	// hand can re-walk this same set and surface E3095 when more than one
+	// distinct definition was reachable — see ErrorCode.maxon.
 	let candidates = project.methodNameIndex.get(bare)
 	for candidate in candidates 'each'
 		if not project.funcReturnTypes.contains(candidate) 'notFunc'
@@ -1728,6 +1777,32 @@ export function readerCanCallStdlibInternals(readerFilePath FilePath) returns bo
 	let name = readerFilePath.filename()
 	return name == "Internals.maxon" or name == "Builtins.maxon" or name == "stdlib-bootstrap.maxon"
 end 'readerCanCallStdlibInternals'
+
+// E3095 ambiguity detection: re-walks the same candidate set the cross-file
+// fallback in `qualifyCalleeForContextWithType` considers, but collects ALL
+// visible candidates (deduped by canonical name) instead of stopping at the
+// first match. Returns the list so callers with a SourceRange can emit
+// E3095 when more than one distinct definition was reachable. Callers must
+// pre-filter to bare-name (`free`-context) calls whose resolved name was
+// reached via the cross-file fallback — local-namespace, stdlib-namespace,
+// and sibling-typed probes are unambiguous by construction.
+export function visibleCrossFileCandidates(project Project, bare String, readerFilePath FilePath) returns QualifiedNameArray
+	var results = QualifiedNameArray.create()
+	if bare.startsWith("__") and not readerCanCallStdlibInternals(readerFilePath) 'rejectInternals'
+		return results
+	end 'rejectInternals'
+	let candidates = project.methodNameIndex.get(bare)
+	for candidate in candidates 'each'
+		if not project.funcReturnTypes.contains(candidate) 'notFunc'
+			continue
+		end 'notFunc'
+		let info = funcVisibilityOrDefault(project, qualifiedName: candidate)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+			results.push(candidate)
+		end 'visible'
+	end 'each'
+	return results
+end 'visibleCrossFileCandidates'
 
 // True iff `path` is the virtual `stdlib-bootstrap.maxon` synthesis anchor.
 // Functions attributed there are compiler-synthesized helpers (struct-literal
@@ -2122,6 +2197,7 @@ export function mangleSuffixForMaxonType(project Project, t MaxonType) returns S
 		interface(id) gives "${project.interfaceRegistry.getName(id)}"
 		unresolved gives "$_"
 		constInt(value) gives "${value}"
+		opaquePointer gives "$_"
 	end 'mangle'
 end 'mangleSuffixForMaxonType'
 
@@ -2231,6 +2307,7 @@ function mangleTokenForMaxonType(project Project, t MaxonType) returns String
 		interface(id) gives project.interfaceRegistry.getName(id)
 		unresolved gives "_"
 		constInt(value) gives "{value}"
+		opaquePointer gives "_"
 	end 'token'
 end 'mangleTokenForMaxonType'
 
@@ -2504,7 +2581,7 @@ function chaseParamTypeThroughInnerAlias(project Project, t MaxonType, enclosing
 		function gives t
 		interface gives t
 		unresolved gives t
-		constInt gives t
+		constInt to opaquePointer gives t
 	end 'check'
 end 'chaseParamTypeThroughInnerAlias'
 
@@ -2520,7 +2597,7 @@ function paramTypeMentionsTypeParam(project Project, t MaxonType) returns bool
 		function gives false
 		interface gives false
 		unresolved gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'check'
 end 'paramTypeMentionsTypeParam'
 
@@ -2556,5 +2633,6 @@ function paramTypeShape(t MaxonType) returns ParsedInt
 		genericInstance gives 9
 		unresolved gives 0
 		constInt gives 10
+		opaquePointer gives 11
 	end 'shape'
 end 'paramTypeShape'

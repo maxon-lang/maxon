@@ -1,0 +1,22 @@
+// Test: error.unused-exported-function
+// --- file: api/lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function unusedHelper() returns Integer
+	return 42
+end 'unusedHelper'
+
+export function publicEntry() returns Integer
+	return unusedHelper()
+end 'publicEntry'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return publicEntry()
+end 'main'
+---
+MaxoncStderr: ```
+error E3092: specs/fragments/unused-export/error.unused-exported-function.test/api/lib.maxon:0:0: exported function 'api.unusedHelper' is never referenced outside its declaring file
+```
+---
+---

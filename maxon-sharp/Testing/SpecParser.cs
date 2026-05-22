@@ -98,6 +98,14 @@ public static partial class SpecParser {
       bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection);
       bool asyncTrace = AsyncTraceDirectiveRegex().IsMatch(testSection);
 
+      // Tests that exercise a self-hosted-only diagnostic (e.g. E3095) can
+      // opt out of the C# runner by emitting a `<!-- SelfhostedOnly -->`
+      // directive between the test marker and its first fence.
+      if (SelfhostedOnlyDirectiveRegex().IsMatch(testSection)) {
+        Logger.Debug(LogCategory.Testing, $"Skipping selfhosted-only test: {testName}");
+        continue;
+      }
+
       int? timeoutMs = null;
       var timeoutMatch = TimeoutMsDirectiveRegex().Match(testSection);
       if (timeoutMatch.Success) {
@@ -304,6 +312,9 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*MmTrace\s*-->")]
   private static partial Regex MmTraceDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*SelfhostedOnly\s*-->")]
+  private static partial Regex SelfhostedOnlyDirectiveRegex();
 
   [GeneratedRegex(@"<!--\s*AsyncTrace\s*-->")]
   private static partial Regex AsyncTraceDirectiveRegex();

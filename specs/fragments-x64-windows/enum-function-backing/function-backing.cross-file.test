@@ -1,6 +1,6 @@
 // Test: function-backing.cross-file
-// --- file: ops.maxon
-export typealias Integer = int(i64.min to i64.max)
+// --- file: api/ops.maxon
+typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -10,13 +10,13 @@ export function tripleFn(x Integer) returns Integer
 	return x * 3
 end 'tripleFn'
 
-// --- file: dispatch.maxon
+// --- file: api/dispatch.maxon
 export enum Op
 	doubleOp = doubleFn
 	tripleOp = tripleFn
 end 'Op'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let f = Op.tripleOp.rawValue
 	return f(14)
@@ -26,14 +26,14 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @ops.doubleFn(rcx: i64) -> i64 {
+  func @api.doubleFn(rcx: i64) -> i64 {
   entry:
     x64.mov r9d, 2
     x64.mov r8, rcx
     x64.imul r8, r9
     x64.ret
   }
-  func @ops.tripleFn(rcx: i64) -> i64 {
+  func @api.tripleFn(rcx: i64) -> i64 {
   entry:
     x64.mov r9d, 3
     x64.mov r8, rcx
@@ -48,11 +48,11 @@ module {
     x64.test r8, r8
     x64.jne inlined___enum_Op_fnRaw_2
   inlined___enum_Op_fnRaw_1:
-    x64.lea r8, [rip+__fnref_ops.doubleFn]
+    x64.lea r8, [rip+__fnref_api.doubleFn]
     x64.mov r12, r8
     x64.jmp inline_cont_main_0
   inlined___enum_Op_fnRaw_2:
-    x64.lea r8, [rip+__fnref_ops.tripleFn]
+    x64.lea r8, [rip+__fnref_api.tripleFn]
     x64.mov r12, r8
   inline_cont_main_0:
     x64.xor edx, edx

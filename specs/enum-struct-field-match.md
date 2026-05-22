@@ -17,12 +17,12 @@ Match an enum with associated values from struct field via let binding.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
 
-export union Color
+union Color
 		red(intensity SmallInt)
 		blue
 end 'Color'
 
-export type Palette
+type Palette
 		export var primary Color
 		export var secondary Color
 
@@ -56,12 +56,12 @@ Match an enum with associated values from struct field directly.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
 
-export union Shape
+union Shape
 		circle(radius SmallInt)
 		square(side SmallInt)
 end 'Shape'
 
-export type Drawing
+type Drawing
 		export var shape Shape
 
 		static function create(shape Shape) returns Self
@@ -93,12 +93,12 @@ Extract associated value from an enum struct field.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
 
-export union Value
+union Value
 		number(n SmallInt)
 		empty
 end 'Value'
 
-export type Container
+type Container
 		export var item Value
 
 		static function create(item Value) returns Self

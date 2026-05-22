@@ -115,7 +115,7 @@ new
 <!-- test: multi-file-struct-param-after-global-branch -->
 Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries.
 ```maxon
-// --- file: 0-Types.maxon
+// --- file: api/0-Types.maxon
 typealias Byte = int(0 to u8.max)
 export typealias ByteArray = Array with Byte
 export typealias Count = int(0 to u64.max)
@@ -139,7 +139,7 @@ end 'Database'
 
 export var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
 
-// --- file: 1-Logic.maxon
+// --- file: app/1-Logic.maxon
 export function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
 		let existing = try db.sourceFiles.get(key) otherwise 'skip'
@@ -153,6 +153,7 @@ export function storeAndCheck(key String, data ByteArray)
 	print("{data.count()}\n")
 end 'storeAndCheck'
 
+// --- file: bin/main.maxon
 function main() returns ExitCode
 	var arr = ByteArray.create()
 	arr.push(1)

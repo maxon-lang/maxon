@@ -81,7 +81,15 @@ public enum ErrorCode {
   SemanticAmbiguousTypeReference = 3060,
   SemanticDuplicateTypeAlias = 3061,
   SemanticUnusedTypeAlias = 3062,
-  SemanticImmutableRefToMutatingParam = 3063,
+  // E3063: a bare-name type reference has more than one reachable
+  // typealias definition under directory-as-module rules. The user must
+  // write the directory-qualified form (`dir.Name`) to disambiguate.
+  // Mirrors E3095 (functions) but operates on the typealias registry.
+  SemanticAmbiguousTypeAlias = 3063,
+  // E3019: cannot pass an immutable 'let' variable to a function that mutates
+  // the corresponding parameter. Re-coded from 3063 when E3063 was reassigned
+  // to SemanticAmbiguousTypeAlias.
+  SemanticImmutableRefToMutatingParam = 3019,
   SemanticDiscardedPureResult = 3064,
   SemanticDiscardedImpureResult = 3065,
   SemanticEnumNotComparable = 3066,

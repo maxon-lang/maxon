@@ -1,0 +1,32 @@
+// Test: exported-typealias-file-private-doesnt-collide
+// --- file: api/types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: legacy/util.maxon
+typealias Score = int(0 to 999)
+
+function legacyCheck(x Score) returns Score
+	return x
+end 'legacyCheck'
+
+function helper() returns Score
+	return legacyCheck(10)
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let x = 42 as Score
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 42
+    x64.ret
+  }
+}
+---

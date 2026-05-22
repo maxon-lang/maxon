@@ -180,8 +180,8 @@ end 'main'
 Function-backed enums may reference functions defined in other files.
 
 ```maxon
-// --- file: ops.maxon
-export typealias Integer = int(i64.min to i64.max)
+// --- file: api/ops.maxon
+typealias Integer = int(i64.min to i64.max)
 
 export function doubleFn(x Integer) returns Integer
 	return x * 2
@@ -191,13 +191,13 @@ export function tripleFn(x Integer) returns Integer
 	return x * 3
 end 'tripleFn'
 
-// --- file: dispatch.maxon
+// --- file: api/dispatch.maxon
 export enum Op
 	doubleOp = doubleFn
 	tripleOp = tripleFn
 end 'Op'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let f = Op.tripleOp.rawValue
 	return f(14)

@@ -156,7 +156,10 @@ public class Project(
   /// </summary>
   private SourceFile[] CollectSources() {
     if (IsSingleFile) {
-      return [.. _fileContents.Select(kv => new SourceFile(kv.Key, kv.Value))];
+      // Single-file LSP project: anchor at the file's parent dir, matching
+      // `maxon build <file>` behavior (decision #3 in the directory-as-module
+      // redesign plan).
+      return [.. _fileContents.Select(kv => new SourceFile(kv.Key, kv.Value, Path.GetDirectoryName(kv.Key)))];
     }
     try {
       return SourceCollector.FromDirectory(RootPath, _fileContents);

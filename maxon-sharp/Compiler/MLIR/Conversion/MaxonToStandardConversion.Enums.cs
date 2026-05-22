@@ -384,8 +384,17 @@ public static partial class MaxonToStandardConversion {
         // value as-is; associated-value unions match the rule used for
         // assoc-value enum args below — load the heap pointer so the
         // callee receives an i64 pointer to the receiver block.
-        if (calleeFunc.ParamTypes[0] is IrEnumType selfEnumType && selfEnumType.HasAssociatedValues
-            && valueMap.TryGetValue(arg, out var epSelfSv) && epSelfSv is StdHeapPtr epSelfHp) {
+        //
+        // The decision hinges on whether the receiver flowed through a heap
+        // pointer (union with associated values) or a scalar (simple enum).
+        // We prefer the runtime shape (`epSelfSv is StdHeapPtr`) over
+        // `selfEnumType.HasAssociatedValues` because the stdlib cache can
+        // restore the param's IrEnumType as a bare stub (no Cases), making
+        // `HasAssociatedValues` falsely report `false` even when the caller
+        // really did stage a heap pointer for the receiver. Trusting the
+        // runtime shape keeps the load path active and avoids handing a raw
+        // MaxonValue-ID-shaped StdHeapPtr to the StdCallOp.
+        if (valueMap.TryGetValue(arg, out var epSelfSv) && epSelfSv is StdHeapPtr epSelfHp) {
           var selfHeapPtr = EmitLoad(block, epSelfHp.VarName!, varTypes);
           newArgs.Add(selfHeapPtr);
         } else {

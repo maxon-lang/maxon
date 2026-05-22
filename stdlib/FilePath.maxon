@@ -390,6 +390,59 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		end 'relative'
 	end 'resolve'
 
+	/// Compute this path relative to `base`. Returns the suffix of `self.path`
+	/// after stripping `base.path` and any trailing separator.
+	/// 
+	/// Throws `FilePathError.noParent` when `self` is not contained within
+	/// `base` (no shared prefix or only a partial component match). Callers
+	/// that want a fallback should use `try ... otherwise`.
+	/// 
+	/// Examples:
+	///   - base="/proj",   self="/proj/utils/helpers.maxon" -> "utils/helpers.maxon"
+	///   - base="/proj",   self="/proj/main.maxon"          -> "main.maxon"
+	///   - base="/proj",   self="/proj"                     -> ""
+	///   - base="/proj/",  self="/proj/main.maxon"          -> "main.maxon"
+	///   - base="/proj",   self="/other/x.maxon"            -> throws noParent
+	export function relativeTo(base FilePath) returns FilePath throws FilePathError
+		// Normalize away any trailing separator on `base` so callers that pass
+		// a directory with a trailing slash don't trip `startsWith`'s
+		// component-boundary check (which expects a separator AFTER the prefix
+		// in `self`, not as the last byte of `prefix`).
+		let basePath = base.path
+		let baseLen = basePath.byteLength()
+		var trimmedBase = base
+		if baseLen > 0 'maybeTrim'
+			let lastByte = fpByteAt(basePath.managed, index: baseLen - 1)
+			if lastByte == pathSeparatorByte or lastByte == otherSeparatorByte 'trailingSep'
+				let trimmedManaged = try basePath.managed.slice(0, baseLen - 1) otherwise 'trimErr'
+					panic("FilePath.relativeTo: trim slice — baseLen > 0 guaranteed")
+				end 'trimErr'
+				trimmedBase = FilePath{path: String.init(trimmedManaged)}
+			end 'trailingSep'
+		end 'maybeTrim'
+		if not startsWith(trimmedBase) 'notUnder'
+			throw FilePathError.noParent
+		end 'notUnder'
+		let trimmedLen = trimmedBase.path.byteLength()
+		let selfLen = path.byteLength()
+		if trimmedLen == selfLen 'exact'
+			return FilePath{path: ""}
+		end 'exact'
+		// startsWith guarantees the byte at trimmedLen is a separator. Skip it.
+		var start = trimmedLen
+		let firstByte = fpByteAt(path.managed, index: start)
+		if firstByte == pathSeparatorByte or firstByte == otherSeparatorByte 'hasSep'
+			start = start + 1
+		end 'hasSep'
+		if start >= selfLen 'allConsumed'
+			return FilePath{path: ""}
+		end 'allConsumed'
+		let relManaged = try path.managed.slice(start, selfLen) otherwise 'sliceErr'
+			panic("FilePath.relativeTo: slice — start < selfLen guaranteed")
+		end 'sliceErr'
+		return FilePath{path: String.init(relManaged)}
+	end 'relativeTo'
+
 	/// Check whether this path starts with the given directory prefix.
 	/// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
 	export function startsWith(prefix FilePath) returns bool

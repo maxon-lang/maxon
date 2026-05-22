@@ -49,13 +49,13 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @ownership.testNestedBlock(cond: i1) {
+  func @testNestedBlock(cond: i1) {
   entry:
     x64.prologue stack_size=128
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.test rcx, rcx
-    x64.je ownership.testNestedBlock.check_0.merge
+    x64.je testNestedBlock.check_0.merge
   check_0:
     x64.mov rcx, 42
     x64.call Widget.create
@@ -69,7 +69,7 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp ownership.testNestedBlock.check_0.merge
+    x64.jmp testNestedBlock.check_0.merge
   check_0.merge:
     x64.mov rax, [rbp-8]
     x64.mov rcx, 21
@@ -176,7 +176,7 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-32]
     x64.test rax, rax
     x64.jz __nonnull_skip_1
@@ -186,11 +186,11 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @ownership.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 1
-    x64.call ownership.testNestedBlock
+    x64.call testNestedBlock
     x64.xor eax, eax
     x64.epilogue
     x64.ret

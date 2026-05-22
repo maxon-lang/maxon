@@ -18,7 +18,7 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @short-circuit-evaluation.trackAndReturn(result: i1) -> i1 {
+  func @trackAndReturn(result: i1) -> i1 {
   entry:
     x64.mov rax, qword [rip+sideEffectCount]
     x64.mov rdx, 1
@@ -27,28 +27,28 @@ module {
     x64.mov rax, rcx
     x64.ret
   }
-  func @short-circuit-evaluation.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.xor ecx, ecx
-    x64.call short-circuit-evaluation.trackAndReturn
+    x64.call trackAndReturn
     x64.mov rcx, 1
     x64.mov [rbp-1], rcx
     x64.mov rcx, 1
     x64.xor rax, rcx
     x64.test rax, rax
-    x64.je short-circuit-evaluation.main.shortOr_0.merge
+    x64.je main.shortOr_0.merge
   shortOr_0.rhs:
     x64.mov rcx, 1
-    x64.call short-circuit-evaluation.trackAndReturn
+    x64.call trackAndReturn
     x64.mov [rbp-1], rax
-    x64.jmp short-circuit-evaluation.main.shortOr_0.merge
+    x64.jmp main.shortOr_0.merge
   shortOr_0.merge:
     x64.mov rax, [rbp-1]
     x64.mov rcx, 1
     x64.xor rax, rcx
     x64.test rax, rax
-    x64.je short-circuit-evaluation.main.r_0.after
+    x64.je main.r_0.after
   r_0:
     x64.mov rax, 99
     x64.epilogue
@@ -58,10 +58,10 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg short-circuit-evaluation.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl short-circuit-evaluation.main.__range_panic_0
-    x64.jmp short-circuit-evaluation.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax

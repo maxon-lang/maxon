@@ -21,7 +21,7 @@ ExitCode: 40
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -44,7 +44,7 @@ module {
     maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = maxon.literal {value = 10 : i64}
-    %9 = maxon.call @register-allocator.double %8
+    %9 = maxon.call @double %8
     maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br process_0.merge
@@ -55,7 +55,7 @@ module {
     maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = maxon.literal {value = 20 : i64}
-    %14 = maxon.call @register-allocator.double %13
+    %14 = maxon.call @double %13
     maxon.assign %14 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end []
     maxon.br process_0.merge
@@ -81,7 +81,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
     %1 = arith.constant {value = 2 : i64}
@@ -100,7 +100,7 @@ module {
     cf.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = arith.constant {value = 10 : i64}
-    %9 = func.call @register-allocator.double %8
+    %9 = func.call @double %8
     memref.store %9, result
     cf.br process_0.merge
   process_0.cmp1:
@@ -110,7 +110,7 @@ module {
     cf.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = arith.constant {value = 20 : i64}
-    %14 = func.call @register-allocator.double %13
+    %14 = func.call @double %13
     memref.store %14, result
     cf.br process_0.merge
   process_0.case2:
@@ -135,7 +135,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.double(n: i64) -> i64 {
+  func @double(n: i64) -> i64 {
   entry:
     x64.mov rax, 2
     x64.imul rcx, rax
@@ -155,7 +155,7 @@ module {
     x64.jne main.process_0.cmp1
   process_0.case0:
     x64.mov rcx, 10
-    x64.call register-allocator.double
+    x64.call double
     x64.mov [rbp-16], rax
     x64.jmp main.process_0.merge
   process_0.cmp1:
@@ -165,7 +165,7 @@ module {
     x64.jne main.process_0.case2
   process_0.case1:
     x64.mov rcx, 20
-    x64.call register-allocator.double
+    x64.call double
     x64.mov [rbp-16], rax
     x64.jmp main.process_0.merge
   process_0.case2:

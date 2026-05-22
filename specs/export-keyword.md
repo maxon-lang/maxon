@@ -80,32 +80,38 @@ end 'Calculator'
 
 ### Namespace Disambiguation
 
-When multiple modules export symbols with the same name, you must use qualified names to disambiguate:
+A file's namespace is the directory it lives in (see `specs/namespaces.md`). When two files in different directories both export a function with the same bare name, an unqualified call from a third file is ambiguous and must be rewritten with the directory-qualified form:
 
 ```text
-// If both math.maxon and string.maxon export 'add':
-var result1 = math.add(1, 2)        // Calls math.maxon's add
-var result2 = string.add("a", "b")  // Calls string.maxon's add
+// math/ops.maxon and text/ops.maxon both export 'add'.
+// In app/main.maxon:
+var result1 = math.add(1, 2)         // calls math/ops.maxon's add
+var result2 = text.add("hi", "lo")   // calls text/ops.maxon's add
 ```
 
-If you use an unqualified name that is ambiguous, the compiler will report an error:
+A bare `add(...)` from `app/main.maxon` is rejected by the self-hosted compiler with E3095:
+
 ```text
-error E061: ambiguous symbol reference: 'add' - defined in 'math' and 'string', use 'math.add' or 'string.add'
+error E3095: Ambiguous bare-name call to 'add': multiple visible definitions found.
+  Qualify with a directory name. Candidates: math.add, text.add
 ```
 
-Note: When there's no collision, unqualified names continue to work normally.
+When there is no collision, unqualified cross-file calls continue to work via the cross-file fallback. See `specs/namespaces.md` for the canonical resolution rules and the `error.cross-file-bare-name-ambiguous` test that pins this diagnostic.
+
+The same model applies to **typealiases**: two exported typealiases with the same bare name in different directories are accepted at decl time, and a bare reference from a third file is rejected with **E3063** (`Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: api.Score, legacy.Score`). The user writes `api.Score` or `legacy.Score` to disambiguate. Same-file duplicate typealiases remain E3061 — qualification cannot resolve two declarations in the same file. See `specs/typealias-collision.md` for the canonical tests.
 
 ## Tests
 
 <!-- test: export-function-basic -->
 ```maxon
-
+// --- file: api/lib.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
 	return 21
 end 'helper'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return helper() + helper()
 end 'main'
@@ -116,7 +122,7 @@ end 'main'
 
 <!-- test: export-type-basic -->
 ```maxon
-
+// --- file: api/shapes.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
@@ -127,11 +133,12 @@ export type Point
 		return x + y
 	end 'sum'
 
-	static function create(x Integer, y Integer) returns Self
+	export static function create(x Integer, y Integer) returns Self
 		return Self{x: x, y: y}
 	end 'create'
 end 'Point'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let p = Point.create(x: 20, y: 22)
 	return p.sum()
@@ -160,7 +167,7 @@ end 'main'
 
 <!-- test: mixed-export-and-non-export -->
 ```maxon
-
+// --- file: api/lib.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export function publicFunc() returns Integer
@@ -171,6 +178,7 @@ function privateFunc() returns Integer
 	return 22
 end 'privateFunc'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return publicFunc()
 end 'main'
@@ -181,11 +189,12 @@ end 'main'
 
 <!-- test: export-typealias-basic -->
 ```maxon
-
+// --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(42)
@@ -198,23 +207,23 @@ end 'main'
 
 <!-- test: export-typealias-in-type-field -->
 ```maxon
-
+// --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
-type Container
+export type Container
 	export var items IntArray
 
-	static function create() returns Self
+	export static function create() returns Self
 		return Container{items: IntArray.create()}
 	end 'create'
 
-	function add(n Integer)
+	export function add(n Integer)
 		items.push(n)
 	end 'add'
 
-	function sum() returns Integer
+	export function sum() returns Integer
 		var total = 0
 		for item in items 'loop'
 			total = total + item
@@ -223,6 +232,7 @@ type Container
 	end 'sum'
 end 'Container'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	var c = Container.create()
 	c.add(20)
@@ -236,17 +246,18 @@ end 'main'
 
 <!-- test: export-typealias-as-return-type -->
 ```maxon
-
+// --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
-function makeArray() returns IntArray
+export function makeArray() returns IntArray
 	var arr = IntArray.create()
 	arr.push(42)
 	return arr
 end 'makeArray'
 
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let arr = makeArray()
 	return try arr.get(0) otherwise 0
@@ -273,14 +284,14 @@ end 'main'
 
 <!-- test: exported-function-cross-file -->
 ```maxon
-// --- file: helper.maxon
+// --- file: api/helper.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
 	return 42
 end 'helper'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	return helper()
 end 'main'
@@ -342,7 +353,7 @@ error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element
 
 <!-- test: exported-type-cross-file -->
 ```maxon
-// --- file: point.maxon
+// --- file: api/point.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
@@ -354,7 +365,7 @@ export type Point
 	end 'create'
 end 'Point'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let p = Point.create(x: 20, y: 22)
 	return p.x + p.y
@@ -384,19 +395,19 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:15:24: function 'InternalPoint.create' is not exported
+error E4006: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:16:11: Unknown type 'InternalPoint' in field access chain
 ```
 
 <!-- test: exported-enum-cross-file -->
 ```maxon
-// --- file: color.maxon
+// --- file: api/color.maxon
 export enum Color
 	red
 	green
 	blue
 end 'Color'
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let c = Color.blue
 	match c 'check'
@@ -430,10 +441,10 @@ error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.t
 
 <!-- test: exported-typealias-cross-file -->
 ```maxon
-// --- file: types.maxon
+// --- file: api/types.maxon
 export typealias Score = int(0 to 100)
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 	let s = 42 as Score
 	return s
@@ -498,10 +509,10 @@ end 'main'
 <!-- test: exported-var-cross-file -->
 Cross-file access to an exported module-level var with a simple constant value.
 ```maxon
-// --- file: counter.maxon
+// --- file: api/counter.maxon
 export var counter = 10
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
 		return counter
 end 'main'
@@ -513,7 +524,7 @@ end 'main'
 <!-- test: exported-struct-var-cross-file -->
 Cross-file access to an exported module-level struct var.
 ```maxon
-// --- file: state.maxon
+// --- file: api/state.maxon
 typealias SmallInt = int(0 to u8.max)
 
 export type Counter
@@ -526,9 +537,10 @@ end 'Counter'
 
 export var shared = Counter.create(value: 0)
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
-		shared.value = 42
+		let c = Counter.create(value: 1)
+		shared.value = 42 - c.value + c.value
 		return shared.value
 end 'main'
 ```

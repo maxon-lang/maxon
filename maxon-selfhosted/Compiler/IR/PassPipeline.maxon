@@ -24,6 +24,12 @@ export union PassKind
 	// Phase 2: Memory Safety (operates on MaxonModule)
 	resolveTypes
 	semanticCheck
+	// Cross-file unused-export check. Runs after semanticCheck so it sees
+	// every declared symbol and every resolved reference; emits E3092
+	// (`export` decl with no out-of-file readers), E3093 (`export` decl
+	// referenced only inside its declaring module subtree), or E3094
+	// (`module` decl with no out-of-file readers).
+	checkUnusedExports
 	deadFunctionElimination
 	// Phase 11.2: emit per-instantiation layout descriptors + thunks
 	// (Maxon-level; runs after DFE has narrowed the live function set
@@ -225,6 +231,12 @@ export type PassPipeline
 			// Phase 2: Maxon-level passes
 			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath)
 			semanticCheck then runSemanticChecks(project, module: maxonModule)
+			// Stdlib pipeline skips the cross-file unused-export audit. Every
+			// stdlib API is reachable from user code only via `import`/visibility
+			// (which we don't model in the sandbox compile), so the pass has no
+			// signal there and would emit a flood of E3092s against legitimately
+			// public typealiases.
+			checkUnusedExports then runCheckUnusedExportsIfNotStdlib(project, module: maxonModule, isStdlib: isStdlib)
 			deadFunctionElimination then maxonModule = eliminateDeadFunctions(project, module: maxonModule)
 			buildLayoutDescriptors then buildLayoutDescriptors(project, maxonModule: maxonModule, globalData: globalData)
 			buildWitnessTables then buildWitnessTables(project, maxonModule: maxonModule, globalData: globalData)
@@ -370,7 +382,7 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 		seenSkipNames.insert(element: n)
 	end 'seedSeen'
 	for f in module.functions 'collectInModule'
-		if f.namespace == "stdlib" and not seenSkipNames.contains(f.name) 'fresh'
+		if isStdlibNamespace(f.namespace) and not seenSkipNames.contains(f.name) 'fresh'
 			seenSkipNames.insert(element: f.name)
 			stdlibFuncNames.push(f.name)
 		end 'fresh'
@@ -554,6 +566,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 	return match pass 'classify'
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
+		checkUnusedExports gives PassClassification.wholeModule
 		deadFunctionElimination gives PassClassification.wholeModule
 		buildLayoutDescriptors gives PassClassification.wholeModule
 		buildWitnessTables gives PassClassification.wholeModule
@@ -600,6 +613,11 @@ export function buildMidPipeline(project Project) returns PassKindArray
 	// downstream passes can then rely on lookups succeeding.
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
+	// Runs after semanticCheck so cross-file resolution has stabilized:
+	// every reference site has been rewritten to a resolved op carrying the
+	// callee/global/field name we need. Runs before DFE so an unused-export
+	// diagnostic isn't suppressed by the elimination of its own decl.
+	passes.push(PassKind.checkUnusedExports)
 	// Phase 11.2: emit layout-descriptor blobs + stub thunks for every
 	// concrete generic instantiation. Must run BEFORE DFE so the synthesized
 	// thunks and the witness-method-impl names get pushed onto
@@ -724,6 +742,7 @@ function classifyPhase(pass PassKind) returns PipelinePhase
 	return match pass 'phase'
 		resolveTypes gives PipelinePhase.maxon
 		semanticCheck gives PipelinePhase.maxon
+		checkUnusedExports gives PipelinePhase.maxon
 		deadFunctionElimination gives PipelinePhase.maxon
 		buildLayoutDescriptors gives PipelinePhase.maxon
 		buildWitnessTables gives PipelinePhase.maxon
@@ -848,6 +867,7 @@ export function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		resolveTypes gives "resolve-types"
 		semanticCheck gives "semantic-check"
+		checkUnusedExports gives "check-unused-exports"
 		deadFunctionElimination gives "dead-function-elimination"
 		buildLayoutDescriptors gives "build-layout-descriptors"
 		buildWitnessTables gives "build-witness-tables"

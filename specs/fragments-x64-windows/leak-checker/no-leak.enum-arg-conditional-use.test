@@ -33,13 +33,13 @@ Stdout: ```
 ---
 // CompiledIR
 module {
-  func @leak-checker.applyOp(useAdd: i1, addArg: i64, mulArg: i64) -> i64 {
+  func @applyOp(useAdd: i1, addArg: i64, mulArg: i64) -> i64 {
   entry:
     x64.prologue stack_size=64
     x64.mov [rbp-8], rdx
     x64.mov [rbp-16], r8
     x64.test rcx, rcx
-    x64.je leak-checker.applyOp.other_0
+    x64.je applyOp.other_0
   branch_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
@@ -48,12 +48,12 @@ module {
     x64.xor ebx, ebx
     x64.mov [rbp-32], rbx
     x64.mov [rbp-40], rcx
-    x64.jmp leak-checker.applyOp.matchAdd_0.cmp0
+    x64.jmp applyOp.matchAdd_0.cmp0
   matchAdd_0.cmp0:
     x64.mov rax, [rbp-40]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne leak-checker.applyOp.matchAdd_0.cmp1
+    x64.jne applyOp.matchAdd_0.cmp1
   matchAdd_0.case0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
@@ -61,12 +61,12 @@ module {
     x64.mov rbx, [rdx+16]
     x64.add rcx, rbx
     x64.mov [rbp-32], rcx
-    x64.jmp leak-checker.applyOp.matchAdd_0.merge
+    x64.jmp applyOp.matchAdd_0.merge
   matchAdd_0.cmp1:
     x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne leak-checker.applyOp.matchAdd_0.merge
+    x64.jne applyOp.matchAdd_0.merge
   matchAdd_0.case1:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
@@ -74,7 +74,7 @@ module {
     x64.mov rbx, [rdx+16]
     x64.imul rcx, rbx
     x64.mov [rbp-32], rcx
-    x64.jmp leak-checker.applyOp.matchAdd_0.merge
+    x64.jmp applyOp.matchAdd_0.merge
   matchAdd_0.merge:
     x64.mov rax, [rbp-32]
     x64.epilogue
@@ -87,12 +87,12 @@ module {
     x64.xor ebx, ebx
     x64.mov [rbp-56], rbx
     x64.mov [rbp-64], rcx
-    x64.jmp leak-checker.applyOp.matchMul_0.cmp0
+    x64.jmp applyOp.matchMul_0.cmp0
   matchMul_0.cmp0:
     x64.mov rax, [rbp-64]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne leak-checker.applyOp.matchMul_0.cmp1
+    x64.jne applyOp.matchMul_0.cmp1
   matchMul_0.case0:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rax+8]
@@ -100,12 +100,12 @@ module {
     x64.mov rbx, [rdx+16]
     x64.add rcx, rbx
     x64.mov [rbp-56], rcx
-    x64.jmp leak-checker.applyOp.matchMul_0.merge
+    x64.jmp applyOp.matchMul_0.merge
   matchMul_0.cmp1:
     x64.mov rax, [rbp-64]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne leak-checker.applyOp.matchMul_0.merge
+    x64.jne applyOp.matchMul_0.merge
   matchMul_0.case1:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rax+8]
@@ -113,13 +113,13 @@ module {
     x64.mov rbx, [rdx+16]
     x64.imul rcx, rbx
     x64.mov [rbp-56], rcx
-    x64.jmp leak-checker.applyOp.matchMul_0.merge
+    x64.jmp applyOp.matchMul_0.merge
   matchMul_0.merge:
     x64.mov rax, [rbp-56]
     x64.epilogue
     x64.ret
   }
-  func @leak-checker.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=128
     x64.mov rax, 3
@@ -157,7 +157,7 @@ module {
     x64.mov rdx, [rbp-8]
     x64.mov r8, [rbp-16]
     x64.mov rcx, 1
-    x64.call leak-checker.applyOp
+    x64.call applyOp
     x64.mov [rbp-104], rax
     x64.mov rcx, 21
     x64.call mm_raw_alloc
@@ -263,7 +263,7 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-32]
     x64.test rax, rax
     x64.jz __nonnull_skip_0

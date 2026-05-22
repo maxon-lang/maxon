@@ -511,7 +511,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:12: try requires a throwing function: 'error-handling.noFail' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:12: try requires a throwing function: 'noFail' does not throw'
 ```
 
 <!-- test: error.try-on-non-throwing-method -->
@@ -529,7 +529,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:10:12: try requires a throwing function: 'error-handling.foo' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:10:12: try requires a throwing function: 'foo' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
@@ -595,7 +595,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12:12: type mismatch: ''error-handling.mayFail' does not return a value'
+error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12:12: type mismatch: ''mayFail' does not return a value'
 ```
 
 <!-- test: error.binding-match-single-case -->

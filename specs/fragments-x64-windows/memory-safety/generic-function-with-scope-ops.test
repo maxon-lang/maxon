@@ -48,7 +48,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @memory-safety.firstOrDefault(arr: i64) -> i64 {
+  func @firstOrDefault(arr: i64) -> i64 {
   entry:
     x64.prologue stack_size=48
     x64.mov [rbp-16], rcx
@@ -63,13 +63,13 @@ module {
     x64.mov [rbp-32], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je memory-safety.firstOrDefault.otherwise_default_success_0
+    x64.je firstOrDefault.otherwise_default_success_0
   otherwise_default_error_0:
     x64.mov rax, [rbp-24]
     x64.mov [rbp-8], rax
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
-    x64.jmp memory-safety.firstOrDefault.otherwise_default_continue_0
+    x64.jmp firstOrDefault.otherwise_default_continue_0
   otherwise_default_success_0:
     x64.mov rax, [rbp-8]
     x64.test rax, rax
@@ -79,7 +79,7 @@ module {
     x64.label __nonnull_skip_0
     x64.mov rcx, [rbp-32]
     x64.mov [rbp-8], rcx
-    x64.jmp memory-safety.firstOrDefault.otherwise_default_continue_0
+    x64.jmp firstOrDefault.otherwise_default_continue_0
   otherwise_default_continue_0:
     x64.mov rax, [rbp-8]
     x64.mov [rbp-40], rax
@@ -101,7 +101,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=32
     x64.call WrapperArray.create
@@ -116,17 +116,17 @@ module {
     x64.call WrapperArray.push
     x64.mov rdx, [rbp-8]
     x64.mov rcx, [rbp-8]
-    x64.call memory-safety.firstOrDefault
+    x64.call firstOrDefault
     x64.mov [rbp-24], rax
     x64.mov rbx, [rbp-24]
     x64.mov rsi, [rbx+0]
     x64.xor edi, edi
     x64.mov r8, 4294967295
     x64.cmp rsi, r8
-    x64.jg memory-safety.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rsi, rdi
-    x64.jl memory-safety.main.__range_panic_0
-    x64.jmp memory-safety.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax

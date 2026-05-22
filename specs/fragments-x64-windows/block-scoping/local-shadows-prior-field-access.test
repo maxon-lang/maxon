@@ -83,7 +83,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @block-scoping.useTwo(s: i64, k: i64) {
+  func @useTwo(s: i64, k: i64) {
   entry:
     x64.prologue stack_size=208
     x64.mov [rbp-8], rcx
@@ -265,7 +265,7 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-32]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
@@ -275,7 +275,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @block-scoping.useOne(s: i64) {
+  func @useOne(s: i64) {
   entry:
     x64.prologue stack_size=144
     x64.mov [rbp-8], rcx
@@ -402,7 +402,7 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
-    x64.call stdlib.Print.print
+    x64.call stdlib.print
     x64.mov rax, [rbp-24]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
@@ -412,7 +412,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @block-scoping.repro(foos: i64, names: i64) {
+  func @repro(foos: i64, names: i64) {
   entry:
     x64.prologue stack_size=352
     x64.mov [rbp-8], rcx
@@ -423,16 +423,16 @@ module {
     x64.mov [rbp-24], rax
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne block-scoping.repro.fooLoop_0.exit
+    x64.jne repro.fooLoop_0.exit
   fooLoop_0.preamble:
-    x64.jmp block-scoping.repro.fooLoop_0
+    x64.jmp repro.fooLoop_0
   fooLoop_0.header:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
     x64.call __ArrayIterator_Foo.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne block-scoping.repro.fooLoop_0.exit
+    x64.jne repro.fooLoop_0.exit
   fooLoop_0:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rbp-24]
@@ -447,14 +447,14 @@ module {
     x64.mov rdi, [rbp-48]
     x64.mov rcx, [rbp-48]
     x64.mov rdx, rsi
-    x64.call block-scoping.useTwo
+    x64.call useTwo
     x64.mov r8, [rbp-32]
     x64.test r8, r8
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp block-scoping.repro.fooLoop_0.header
+    x64.jmp repro.fooLoop_0.header
   fooLoop_0.exit:
     x64.xor eax, eax
     x64.mov rcx, [rbp-16]
@@ -462,12 +462,12 @@ module {
     x64.mov [rbp-56], rax
     x64.xor edx, edx
     x64.mov [rbp-64], rdx
-    x64.jmp block-scoping.repro.nameLoop_0.header
+    x64.jmp repro.nameLoop_0.header
   nameLoop_0.header:
     x64.mov rax, [rbp-64]
     x64.mov rcx, [rbp-56]
     x64.cmp rax, rcx
-    x64.jge block-scoping.repro.nameLoop_0.exit
+    x64.jge repro.nameLoop_0.exit
   nameLoop_0:
     x64.mov rax, [rbp-64]
     x64.mov [rbp-72], rax
@@ -477,7 +477,7 @@ module {
     x64.mov [rbp-80], rax
     x64.xor eax, eax
     x64.cmp rdx, rax
-    x64.je block-scoping.repro.otherwise_continue_0
+    x64.je repro.otherwise_continue_0
   otherwise_panic_0:
     x64.mov rax, [rbp-72]
     x64.lea_rdata rcx, [__interp_lit_5]
@@ -619,7 +619,7 @@ module {
     x64.mov [rbp-200], rax
     x64.xor ebx, ebx
     x64.cmp rdx, rbx
-    x64.je block-scoping.repro.otherwise_continue_1
+    x64.je repro.otherwise_continue_1
   otherwise_panic_1:
     x64.mov rax, [rbp-72]
     x64.lea_rdata rcx, [__interp_lit_6]
@@ -754,10 +754,10 @@ module {
     x64.mov rax, [rbp-200]
     x64.mov [rbp-312], rax
     x64.mov rcx, [rbp-192]
-    x64.call block-scoping.useOne
+    x64.call useOne
     x64.mov rdx, [rbp-312]
     x64.mov rcx, [rbp-312]
-    x64.call block-scoping.useOne
+    x64.call useOne
     x64.mov rbx, [rbp-200]
     x64.test rbx, rbx
     x64.jz __nonnull_skip_1
@@ -770,13 +770,13 @@ module {
     x64.mov rcx, [rbp-80]
     x64.call mm_decref
     x64.label __nonnull_skip_2
-    x64.jmp block-scoping.repro.nameLoop_0.incr
+    x64.jmp repro.nameLoop_0.incr
   nameLoop_0.incr:
     x64.mov rax, 1
     x64.mov rcx, [rbp-64]
     x64.add rcx, rax
     x64.mov [rbp-64], rcx
-    x64.jmp block-scoping.repro.nameLoop_0.header
+    x64.jmp repro.nameLoop_0.header
   nameLoop_0.exit:
     x64.mov rax, [rbp-24]
     x64.test rax, rax
@@ -787,7 +787,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @block-scoping.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=128
     x64.call FooArray.create
@@ -1008,7 +1008,7 @@ module {
     x64.mov rcx, [rbp-64]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rbp-64]
-    x64.call block-scoping.repro
+    x64.call repro
     x64.mov rax, [rbp-88]
     x64.test rax, rax
     x64.jz __nonnull_skip_0

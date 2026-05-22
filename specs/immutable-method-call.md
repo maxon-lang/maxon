@@ -27,7 +27,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/immutable-method-call/push-on-let-array-error.test:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3019: specs/fragments/immutable-method-call/push-on-let-array-error.test:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: append-on-let-string-error -->
@@ -42,7 +42,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+error E3019: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: set-on-let-array-error -->
@@ -60,7 +60,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3019: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: read-on-let-array-ok -->

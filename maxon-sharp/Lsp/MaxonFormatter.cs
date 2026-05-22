@@ -34,28 +34,108 @@ public static class MaxonFormatter {
 
 private record SourceComment(string Text, bool WholeLine);
 
+  // Extract `//` line comments AND `/* ... */` block comments from `source`,
+  // keyed by 1-based line number. Block comments that span multiple lines
+  // produce one entry per source line they cover (so the per-line emission
+  // logic in `FormatCore` reproduces them on the same lines they occupied).
+  //
+  // `WholeLine` semantics per line:
+  //   - `true`  → the comment occupies the entire line (only whitespace
+  //               before its start and only whitespace after its end on
+  //               that line). The whole-line emit path renders it on its
+  //               own line at the current indent.
+  //   - `false` → there is code on the same line; the trailing-comment
+  //               emit path appends it after the line's last token with
+  //               two leading spaces.
+  //
+  // A block comment that has code BOTH before AND after it on the same
+  // line (e.g. `var y = /* note */ 5`) cannot be cleanly relocated by the
+  // formatter — it ends up emitted as a trailing comment on that line,
+  // which is acceptable: the comment is preserved; only its precise
+  // position within the line is lost.
   private static Dictionary<int, SourceComment> ExtractLineComments(string source) {
     var comments = new Dictionary<int, SourceComment>();
     var lines = source.Split('\n');
+    bool inString = false;
+    char stringChar = '"';
     for (int i = 0; i < lines.Length; i++) {
       var line = lines[i];
-      bool inString = false;
-      char stringChar = '"';
-      for (int j = 0; j < line.Length - 1; j++) {
+      int j = 0;
+      while (j < line.Length) {
         char c = line[j];
         if (inString) {
-          if (c == '\\') { j++; continue; }
+          if (c == '\\' && j + 1 < line.Length) { j += 2; continue; }
           if (c == stringChar) inString = false;
-        } else {
-          if (c == '"' || c == '\'') { inString = true; stringChar = c; }
-          else if (c == '/' && line[j + 1] == '/') {
-            if (j + 2 < line.Length && line[j + 2] == '/') break; // skip ///
-            var commentText = line[j..].TrimEnd();
-            var wholeLine = line[..j].Trim().Length == 0;
-            comments[i + 1] = new SourceComment(commentText, wholeLine);
-            break;
-          }
+          j++;
+          continue;
         }
+        if (c == '"' || c == '\'') {
+          inString = true;
+          stringChar = c;
+          j++;
+          continue;
+        }
+        if (c == '/' && j + 1 < line.Length && line[j + 1] == '/') {
+          // `///` doc comments are tokenized as DocComment by the lexer and
+          // round-tripped through the token stream — don't capture them here.
+          if (j + 2 < line.Length && line[j + 2] == '/') break;
+          var commentText = line[j..].TrimEnd();
+          var wholeLine = line[..j].Trim().Length == 0;
+          comments[i + 1] = new SourceComment(commentText, wholeLine);
+          break;
+        }
+        if (c == '/' && j + 1 < line.Length && line[j + 1] == '*') {
+          // Scan forward to find the matching `*/`, possibly spanning lines.
+          int startLine = i;
+          string startLinePrefix = line[..j];
+          var bodyBuf = new StringBuilder();
+          bodyBuf.Append("/*");
+          int sj = j + 2;
+          int si = i;
+          string curLine = line;
+          // Walk forward until `*/` is found OR we run out of source lines.
+          // Unterminated block comments are not the formatter's problem —
+          // `Format()` catches the lexer's UnterminatedBlockComment error
+          // and returns the source unchanged before reaching token emission.
+          while (si < lines.Length) {
+            if (sj >= curLine.Length) {
+              // End of this line — store the segment we have for `si` and
+              // continue on the next line. The text preserves the source's
+              // leading whitespace on the continuation line; the gap-emit
+              // path strips it before applying the formatter's indent so
+              // in-code block comments don't double-indent.
+              bool segmentWholeLine = si != startLine || startLinePrefix.Trim().Length == 0;
+              comments[si + 1] = new SourceComment(bodyBuf.ToString(), segmentWholeLine);
+              si++;
+              if (si >= lines.Length) break;
+              curLine = lines[si];
+              sj = 0;
+              bodyBuf.Clear();
+              continue;
+            }
+            char sc = curLine[sj];
+            if (sc == '*' && sj + 1 < curLine.Length && curLine[sj + 1] == '/') {
+              bodyBuf.Append("*/");
+              int afterEnd = sj + 2;
+              string trailing = afterEnd < curLine.Length ? curLine[afterEnd..] : "";
+              bool segmentWholeLine = trailing.Trim().Length == 0
+                && (si != startLine || startLinePrefix.Trim().Length == 0);
+              comments[si + 1] = new SourceComment(bodyBuf.ToString(), segmentWholeLine);
+              sj = afterEnd;
+              break;
+            }
+            bodyBuf.Append(sc);
+            sj++;
+          }
+          // Resume on the line where the block comment ended.
+          if (si != i) {
+            i = si;
+            line = si < lines.Length ? lines[si] : "";
+          }
+          j = sj;
+          continue;
+        }
+        j++;
       }
     }
     return comments;
@@ -229,11 +309,26 @@ private record SourceComment(string Text, bool WholeLine);
           sb.Append(trailingComment.Text);
         }
 
-        // Whole-line comment on this newline's line
-        if (lastEmittedSourceLine >= 0
-            && lineComments.TryGetValue(tok.Line, out var inlineComment)
-            && inlineComment.WholeLine
-            && !consumedCommentLines.Contains(tok.Line)) {
+        // Whole-line comment(s) on this newline's line OR on any source
+        // line skipped by a block comment between the last emitted line and
+        // this newline. Block comments (`/* ... */`) don't emit Newline
+        // tokens for their internal lines, so the only place to flush a
+        // multi-line block comment's interior segments is here, when the
+        // FIRST Newline after the block comment fires. We walk the inclusive
+        // range (lastEmittedSourceLine, tok.Line] and emit each whole-line
+        // entry exactly once.
+        bool anyWholeLineCommentInRange = false;
+        if (lastEmittedSourceLine >= 0) {
+          for (int probeLine = lastEmittedSourceLine + 1; probeLine <= tok.Line; probeLine++) {
+            if (lineComments.TryGetValue(probeLine, out var probeComment)
+                && probeComment.WholeLine
+                && !consumedCommentLines.Contains(probeLine)) {
+              anyWholeLineCommentInRange = true;
+              break;
+            }
+          }
+        }
+        if (anyWholeLineCommentInRange) {
           // The previous real line just ended — close it out.
           if (consecutiveNewlines == 1) {
             CloseCurrentLine();
@@ -241,22 +336,43 @@ private record SourceComment(string Text, bool WholeLine);
             // Emit the line-terminator for the previous content line.
             sb.Append('\n');
           }
-          // Decide forced blank(s) before the comment (top-level only).
           bool topLevel = indentLevel == 0 && blockStack.Count == 0 && !pendingIndentIncrease;
-          bool userHadBlank = lastEmittedSourceLine >= 0 && tok.Line - lastEmittedSourceLine >= 2;
-          if (blankDecisionPending) {
-            if (topLevel) {
-              int blanks = ForcedBlanksBefore("comment", userHadBlank);
-              for (int b = 0; b < blanks; b++) sb.Append('\n');
-            } else if (userHadBlank) {
-              // Preserve one user blank in nested contexts.
+          int firstCommentLine = -1;
+          int lastCommentLineEmitted = lastEmittedSourceLine;
+          for (int probeLine = lastEmittedSourceLine + 1; probeLine <= tok.Line; probeLine++) {
+            if (!lineComments.TryGetValue(probeLine, out var probeComment)) continue;
+            if (!probeComment.WholeLine) continue;
+            if (!consumedCommentLines.Add(probeLine)) continue;
+            // Forced-blank decision: only against the FIRST comment in the
+            // gap. Subsequent comments in the same gap are part of the same
+            // logical comment block and only preserve user blanks between
+            // themselves.
+            if (firstCommentLine < 0) {
+              bool userHadBlank = probeLine - lastEmittedSourceLine >= 2;
+              if (blankDecisionPending) {
+                if (topLevel) {
+                  int blanks = ForcedBlanksBefore("comment", userHadBlank);
+                  for (int b = 0; b < blanks; b++) sb.Append('\n');
+                } else if (userHadBlank) {
+                  sb.Append('\n');
+                }
+                blankDecisionPending = false;
+              }
+              firstCommentLine = probeLine;
+            } else if (probeLine - lastCommentLineEmitted >= 2) {
+              // Preserve one user blank between two whole-line comments in
+              // the same gap when the user had one.
               sb.Append('\n');
             }
-            blankDecisionPending = false;
+            for (int k = 0; k < indentLevel; k++) sb.Append(indentStr);
+            // Continuation lines of a multi-line block comment retain their
+            // source indentation in the captured text. Strip it before
+            // applying the formatter's indent so the comment lines up with
+            // surrounding code instead of double-indenting.
+            sb.Append(probeComment.Text.TrimStart(' ', '\t'));
+            sb.Append('\n');
+            lastCommentLineEmitted = probeLine;
           }
-          for (int k = 0; k < indentLevel; k++) sb.Append(indentStr);
-          sb.Append(inlineComment.Text);
-          sb.Append('\n');
           if (topLevel) prevGroupKey = "comment";
           pendingGroupKey = null;
           currentLineOpenedBlock = false;
@@ -265,7 +381,7 @@ private record SourceComment(string Text, bool WholeLine);
           // which is the line-terminator for the comment line itself.
           consecutiveNewlines = 1;
           atLineStart = true;
-          lastEmittedSourceLine = tok.Line;
+          lastEmittedSourceLine = lastCommentLineEmitted;
           continue;
         }
 

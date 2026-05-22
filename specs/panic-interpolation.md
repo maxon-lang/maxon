@@ -138,7 +138,7 @@ end 'main'
 ```stderr
 panic at panic-interpolation.in-function.test:6: check failed: -5 is negative
 Stack trace:
-  in panic-interpolation.check
+  in check
   in main
   in mrt_start
 ```

@@ -28,6 +28,28 @@
 // keeps the per-step `contains` check at O(1) rather than O(visited).
 typealias StringSet = Set with String
 
+// Extract the bare typealias name from a registry key. The key is either
+// bare (`Score`) or namespace-qualified (`api.Score`, `stdlib.fmt.Score`)
+// — qualified keys are staged by `parseTopLevelTypealias` when a cross-file
+// collision needs disambiguation. The bare form is what callers compare to
+// `usedTypeAliases` and to error-message names; the qualified form is for
+// the `parseTypeRef` dotted-lookup path. Strips a leading `{ns}.` if and
+// only if it matches the entry's declaring namespace; otherwise returns the
+// key unchanged (defensive against names containing dots for other reasons).
+function bareNameFromKey(key String, filePath FilePath, rootPath FilePath) returns String
+	let ns = deriveNamespace(filePath, rootPath: rootPath)
+	if ns.isEmpty() 'noNs'
+		return key
+	end 'noNs'
+	let prefix = "{ns}."
+	if not key.startsWith(prefix) 'noMatch'
+		return key
+	end 'noMatch'
+	let bytes = key.toByteArray()
+	let prefixLen = prefix.toByteArray().count()
+	return byteSliceToString(bytes, startIndex: prefixLen, endIndex: bytes.count())
+end 'bareNameFromKey'
+
 // --- Typealias resolution (fixed-point) ---
 
 // Try to translate a single UnresolvedTypeExpr into a (StdType, optional
@@ -523,8 +545,12 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		// Mirror the visibility tier into the sidecar map so cross-file
 		// uses of the alias as a parameter / return type can be filtered.
 		// Sidecar holds an array per name to support file-private aliases
-		// declared in multiple files.
-		appendTypealiasVisibility(project, name: name, info: TypealiasVisibilityInfo.create(entry.visibility, sourceFilePath: entry.filePath))
+		// declared in multiple files. The bare-name sidecar entry was already
+		// added at parse time by `appendTypealiasVisibility` in
+		// `parseTopLevelTypealias`; this drain-time append is idempotent
+		// (duplicates coalesce by (visibility, sourceFilePath)).
+		let sidecarName = bareNameFromKey(name, filePath: entry.filePath, rootPath: project.rootPath)
+		appendTypealiasVisibility(project, name: sidecarName, info: TypealiasVisibilityInfo.create(entry.visibility, sourceFilePath: entry.filePath))
 		if result.hasRange 'recordRange'
 			try project.typealiasRanges.insert(name, value: result.range) otherwise ignore
 		end 'recordRange'
@@ -535,6 +561,41 @@ function drainResolvableTypealiases(project Project) returns ParsedInt
 		if declared.present 'recordCategory'
 			try project.typealiasCastCategories.insert(name, value: declared.category) otherwise ignore
 		end 'recordCategory'
+		// E3063 support: also register under the qualified key
+		// `{ns}.{bareName}` so a use-site `api.Score` resolves alongside the
+		// bare `Score`. For entries that were already staged under the
+		// qualified key (legacy.Score on the second-parsed cross-file
+		// declaration), this also writes a bare-key entry — but the bare key
+		// was already claimed by the first parsed declaration via the
+		// `insert ... otherwise ignore` path above, so the bare lookup keeps
+		// pointing at whichever was parsed first.
+		let ns = deriveNamespace(entry.filePath, rootPath: project.rootPath)
+		if not ns.isEmpty() 'haveNs'
+			let qualifiedKey = qualifyName(ns, name: sidecarName)
+			if qualifiedKey != name 'differsFromEntry'
+				try project.typealiases.insert(qualifiedKey, value: result.stdType) otherwise ignore
+				if result.hasRange 'recordRangeQualified'
+					try project.typealiasRanges.insert(qualifiedKey, value: result.range) otherwise ignore
+				end 'recordRangeQualified'
+				if declared.present 'recordCategoryQualified'
+					try project.typealiasCastCategories.insert(qualifiedKey, value: declared.category) otherwise ignore
+				end 'recordCategoryQualified'
+			end 'differsFromEntry'
+			// Mirror the bare key as well when the entry was staged qualified
+			// — so `Score` lookups have a value even if the bare slot wasn't
+			// otherwise populated (rare edge case where only qualified entries
+			// exist). The bare slot uses `otherwise ignore` so whichever
+			// declaration wrote first stays the canonical bare entry.
+			if sidecarName != name 'differsFromBare'
+				try project.typealiases.insert(sidecarName, value: result.stdType) otherwise ignore
+				if result.hasRange 'recordRangeBare'
+					try project.typealiasRanges.insert(sidecarName, value: result.range) otherwise ignore
+				end 'recordRangeBare'
+				if declared.present 'recordCategoryBare'
+					try project.typealiasCastCategories.insert(sidecarName, value: declared.category) otherwise ignore
+				end 'recordCategoryBare'
+			end 'differsFromBare'
+		end 'haveNs'
 		resolvedNames.push(name)
 	end 'sweep'
 
@@ -949,10 +1010,7 @@ function substituteMaxonType(project Project, t MaxonType, bindings TypeBindingM
 		// typeParameter against the binding tables — until then, every
 		// caller of substituteMaxonType only sees parser-AST inputs that
 		// don't yet carry these arms in conformance-derived signatures.
-		typeParameter then return t
-		genericInstance then return t
-		interface then return t
-		constInt then return t
+		typeParameter to opaquePointer then return t
 	end 'kind'
 end 'substituteMaxonType'
 
@@ -1107,7 +1165,7 @@ export function resolveFunctionBackedEnumRefs(project Project)
 				newCases.push(c)
 				continue
 			end 'noFn'
-			let ns = deriveNamespace(enumDef.sourceFilePath)
+			let ns = deriveNamespace(enumDef.sourceFilePath, rootPath: project.rootPath)
 			let qualified = qualifyCalleeForContext(project, bare: c.rawFunctionName, callContext: CallContext.free, currentNamespace: ns, readerFilePath: enumDef.sourceFilePath)
 			if not project.funcSignatures.contains(qualified) or not project.funcReturnTypes.contains(qualified) 'noFunc'
 				reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "function '{c.rawFunctionName}' (referenced by enum case '{enumName}.{c.name}') is not declared", line: c.line, column: c.column, filePath: enumDef.sourceFilePath)
@@ -1457,6 +1515,8 @@ export function convertCastCategory(project Project, t MaxonType) returns CastCa
 		genericInstance then return CastCategory.int
 		interface then return CastCategory.int
 		constInt then return CastCategory.int
+		// `opaquePointer` is i64-shaped at the ABI layer; treat like int.
+		opaquePointer then return CastCategory.int
 	end 'unresolvedGuard'
 end 'convertCastCategory'
 
@@ -1526,10 +1586,7 @@ export function maxonTypeIsKnown(project Project, t MaxonType) returns bool
 		// and `interface` are similarly stamped at parse time — Phase 11
 		// step 5+ adds the deeper validation pass. Treat as known for now so
 		// the post-resolution validator doesn't trip on Array.maxon's headers.
-		typeParameter then return true
-		genericInstance then return true
-		interface then return true
-		constInt then return true
+		typeParameter to opaquePointer then return true
 	end 'check'
 end 'maxonTypeIsKnown'
 
@@ -1553,6 +1610,13 @@ function reportIfUnknownType(project Project, t MaxonType, filePath FilePath) re
 	if maxonTypeIsKnown(project, t: t) 'known'
 		return false
 	end 'known'
+	// Suppress the diagnostic for `MaxonType.unresolved` operands — these are
+	// the explicit recovery sentinel a prior error already reported (E3063
+	// for ambiguous typealias, E2003 for unknown type name, etc.). Surfacing
+	// E3011 on top of those would only add noise.
+	if isUnresolvedType(t) 'silentUnresolved'
+		return true
+	end 'silentUnresolved'
 	reportCompileError(project, code: ErrorCode.semanticUnknownType, message: "unknown type '{t.toString(project)}'", line: 0, column: 0, filePath: filePath)
 	return true
 end 'reportIfUnknownType'
@@ -1748,12 +1812,7 @@ function numericKindOf(project Project, t MaxonType) returns NumericKind
 		named(id) gives namedIdNumericKind(project, id: id)
 		boolean gives NumericKind.notNumeric
 		string gives NumericKind.notNumeric
-		function gives NumericKind.notNumeric
-		unresolved gives NumericKind.notNumeric
-		typeParameter gives NumericKind.notNumeric
-		genericInstance gives NumericKind.notNumeric
-		interface gives NumericKind.notNumeric
-		constInt gives NumericKind.notNumeric
+		function to opaquePointer gives NumericKind.notNumeric
 	end 'check'
 end 'numericKindOf'
 
@@ -2006,9 +2065,7 @@ function checkTypeParamComparison(project Project, predicate CmpPredicate, opera
 		named gives ""
 		function gives ""
 		unresolved gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
+		genericInstance to opaquePointer gives ""
 	end 'extract'
 	if paramName.isEmpty() 'notTypeParam'
 		return
@@ -2144,6 +2201,14 @@ function rewriteUnresolvedRead(project Project, module MaxonModule, opIdx OpInde
 	end 'wasInstanceField'
 	if let entry = try project.topLevelConstants.get(name) 'isConst'
 		if isVisibleFrom(entry.visibility, declFilePath: entry.sourceFilePath, readerFilePath: filePath) 'visible'
+			// Record this read for the `checkUnusedExports` pass. The pass runs
+			// after all rewrites finish, by which point this op will be a bare
+			// `literal` / `stringConst` carrying no reference to the constant's
+			// name — so we capture the (constantName, readerFilePath) pair here,
+			// at the only moment both are still in scope. Stdlib constants
+			// (sourceFilePath = stdlib bootstrap path) get the same treatment;
+			// the pass skips stdlib decls regardless.
+			project.crossFileConstReads.push(CrossFileConstRead.create(name, readerFilePath: filePath))
 			// Enum cases get tagged with the enclosing enum's named MaxonType so
 			// downstream consumers (varDecl slotType inference, match scrutinee
 			// type recovery) can recover the case set rather than seeing a bare
@@ -2713,12 +2778,7 @@ function maxonTypeIsBareTupleNamed(project Project, t MaxonType) returns bool
 	let name = match t 'getName'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function gives ""
-		unresolved gives ""
-		typeParameter gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
+		function to opaquePointer gives ""
 	end 'getName'
 	return isTupleStructName(name)
 end 'maxonTypeIsBareTupleNamed'
@@ -2731,8 +2791,7 @@ function maxonTypeIsTupleGenericInstance(project Project, t MaxonType) returns b
 		named gives ""
 		unresolved gives ""
 		typeParameter gives ""
-		interface gives ""
-		constInt gives ""
+		interface to opaquePointer gives ""
 	end 'getName'
 	return isTupleStructName(name)
 end 'maxonTypeIsTupleGenericInstance'
@@ -2853,9 +2912,7 @@ export function maxonTypeIsNamed(t MaxonType) returns bool
 	return match t 'check'
 		named gives true
 		boolean to string gives false
-		function to unresolved gives false
-		typeParameter to interface gives false
-		constInt gives false
+		function to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsNamed'
 
@@ -2866,8 +2923,7 @@ export function maxonTypeIsGenericInstance(t MaxonType) returns bool
 		named gives false
 		function to unresolved gives false
 		typeParameter gives false
-		interface gives false
-		constInt gives false
+		interface to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsGenericInstance'
 
@@ -2883,9 +2939,7 @@ export function maxonTypeIsTypeParameter(t MaxonType) returns bool
 		boolean to string gives false
 		named gives false
 		function to unresolved gives false
-		genericInstance gives false
-		interface gives false
-		constInt gives false
+		genericInstance to opaquePointer gives false
 	end 'check'
 end 'maxonTypeIsTypeParameter'
 
@@ -3061,8 +3115,7 @@ function resolveInterfaceTypeParamsViaConformance(project Project, t MaxonType, 
 		unresolved gives t
 		typeParameter(id) gives resolveSingleInterfaceTypeParam(project, paramId: id, receiverType: receiverType, fallback: t)
 		genericInstance(gid) gives resolveInterfaceTypeParamsInGenericInstance(project, gid: gid, receiverType: receiverType)
-		interface gives t
-		constInt gives t
+		interface to opaquePointer gives t
 	end 'walk'
 end 'resolveInterfaceTypeParamsViaConformance'
 
@@ -3214,7 +3267,7 @@ function interfaceReceiverIsIteratorShape(project Project, t MaxonType) returns 
 		typeParameter gives ""
 		named gives ""
 		genericInstance gives ""
-		constInt gives ""
+		constInt to opaquePointer gives ""
 	end 'pick'
 	if interfaceName.isEmpty() 'notIface'
 		return false
@@ -3299,12 +3352,7 @@ function promoteInterfaceUsesParamRef(project Project, t MaxonType, interfaceNam
 	let name = match t 'pick'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function gives ""
-		unresolved gives ""
-		typeParameter gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
+		function to opaquePointer gives ""
 	end 'pick'
 	if name.isEmpty() 'notNamed'
 		return t
@@ -3400,8 +3448,7 @@ export function normalizeReceiverInContext(project Project, t MaxonType, enclosi
 	return match t 'norm'
 		named(id) gives normalizeNamedReceiver(project, id: id, enclosingType: enclosingType)
 		boolean to string gives t
-		function to interface gives t
-		constInt gives t
+		function to opaquePointer gives t
 	end 'norm'
 end 'normalizeReceiverInContext'
 
@@ -3631,8 +3678,7 @@ function elementTypeForIterable(project Project, t MaxonType) returns MaxonType
 		boolean to function gives MaxonType.unresolved
 		unresolved gives MaxonType.unresolved
 		typeParameter gives MaxonType.unresolved
-		interface gives MaxonType.unresolved
-		constInt gives MaxonType.unresolved
+		interface to opaquePointer gives MaxonType.unresolved
 	end 'pick'
 end 'elementTypeForIterable'
 
@@ -3694,8 +3740,7 @@ export function applyInnerAliasIfNamed(project Project, t MaxonType, innerAliase
 		unresolved gives t
 		typeParameter gives t
 		genericInstance(gid) gives applyInnerAliasInGenericInstance(project, gid: gid, innerAliases: innerAliases)
-		interface gives t
-		constInt gives t
+		interface to opaquePointer gives t
 	end 'check'
 end 'applyInnerAliasIfNamed'
 
@@ -4057,8 +4102,7 @@ function unifyParamWithArg(project Project, declaringTypeName String, paramType 
 		named then return
 		function then return
 		unresolved then return
-		interface then return
-		constInt then return
+		interface to opaquePointer then return
 	end 'paramShape'
 end 'unifyParamWithArg'
 
@@ -4088,8 +4132,7 @@ function unifyGenericInstance(project Project, declaringTypeName String, paramGi
 		function then return
 		unresolved then return
 		typeParameter then return
-		interface then return
-		constInt then return
+		interface to opaquePointer then return
 	end 'argShape'
 end 'unifyGenericInstance'
 
@@ -4419,19 +4462,14 @@ function refineTupleStructAlloc(project Project, producerTypes ProducerTypeMap, 
 	// it can't — the cache hit short-circuits that work), captured
 	// layoutDescriptor / witnessTable gids would dangle. Keep refinement
 	// scoped to non-stdlib code so the stdlib cache stays deterministic.
-	if currentNamespace == "stdlib" 'isStdlib'
+	if isStdlibNamespace(currentNamespace) 'isStdlib'
 		return
 	end 'isStdlib'
 	let receiverType = lookupProducerType(producerTypes, name: receiver)
 	let receiverName = match receiverType 'extractBase'
 		named(id) gives project.typeNames.get(id)
 		boolean to string gives ""
-		function gives ""
-		unresolved gives ""
-		typeParameter gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
+		function to opaquePointer gives ""
 	end 'extractBase'
 	if not isTupleStructName(receiverName) 'notTuple'
 		return
@@ -4490,7 +4528,7 @@ function isConcreteTupleArgType(t MaxonType) returns bool
 		interface gives true
 		unresolved gives false
 		typeParameter gives false
-		constInt gives true
+		constInt to opaquePointer gives true
 	end 'check'
 end 'isConcreteTupleArgType'
 
@@ -5206,9 +5244,7 @@ function interpKindForType(project Project, t MaxonType, fallback InterpExprKind
 		float gives InterpExprKind.f64
 		string gives InterpExprKind.string
 		named(id) gives interpKindForNamedTypeName(project, name: project.typeNames.get(id), fallback: fallback)
-		function to unresolved gives fallback
-		typeParameter to interface gives fallback
-		constInt gives fallback
+		function to opaquePointer gives fallback
 	end 'k'
 end 'interpKindForType'
 
@@ -5458,8 +5494,7 @@ export function isUnresolvedType(t MaxonType) returns bool
 	return match t 'check'
 		unresolved gives true
 		boolean to function gives false
-		typeParameter to interface gives false
-		constInt gives false
+		typeParameter to opaquePointer gives false
 	end 'check'
 end 'isUnresolvedType'
 
@@ -5824,12 +5859,7 @@ function blameStructTypeName(project Project, t MaxonType) returns String
 		boolean gives ""
 		integer gives ""
 		float gives ""
-		function gives ""
-		unresolved gives ""
-		typeParameter gives ""
-		genericInstance gives ""
-		interface gives ""
-		constInt gives ""
+		function to opaquePointer gives ""
 	end 'check'
 end 'blameStructTypeName'
 
@@ -5976,6 +6006,17 @@ function validateFieldVisibilityOp(project Project, receiver ByteArray, fieldNam
 		return
 	end 'sameType'
 	let structType = try project.structTypes.get(structName) otherwise return
+	// Type-visibility gate: even before checking the field itself, the
+	// reader must be able to see the receiver type. A cross-file static
+	// factory (`InternalPoint.create(...)`) can return a value typed as
+	// `InternalPoint` even when `InternalPoint` is file-scoped to its
+	// declaring file — the C# bootstrap surfaces this at field-access time
+	// as E4006 "Unknown type 'X' in field access chain". Mirror that here
+	// so the cross-implementation diagnostic stays uniform.
+	if not isVisibleFrom(structType.visibility, declFilePath: structType.sourceFilePath, readerFilePath: filePath) 'typeHidden'
+		reportCompileError(project, code: ErrorCode.irInvalidFieldAccess, message: "Unknown type '{structName}' in field access chain", line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'typeHidden'
 	let fieldIdx = try structType.fieldByName.get(fieldName) otherwise return
 	let field = try structType.fields.get(fieldIdx) otherwise return
 	if field.isExported 'exported'
@@ -6565,12 +6606,10 @@ function maxonTypeIsRefinementOf(project Project, existing MaxonType, refined Ma
 			named gives false
 			function to unresolved gives false
 			typeParameter gives false
-			interface gives false
-			constInt gives false
+			interface to opaquePointer gives false
 		end 'pickRefined'
 		boolean to string gives false
-		function to interface gives false
-		constInt gives false
+		function to opaquePointer gives false
 	end 'pickExisting'
 end 'maxonTypeIsRefinementOf'
 
@@ -7109,7 +7148,7 @@ function maxonTypeIsDynamicDispatch(project Project, t MaxonType) returns bool
 		boolean to string gives false
 		function gives false
 		named gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'pick'
 end 'maxonTypeIsDynamicDispatch'
 
@@ -7141,7 +7180,7 @@ function maxonTypeContainsTypeParameter(project Project, t MaxonType) returns bo
 		named gives false
 		interface gives false
 		unresolved gives false
-		constInt gives false
+		constInt to opaquePointer gives false
 	end 'pick'
 end 'maxonTypeContainsTypeParameter'
 
@@ -7218,10 +7257,53 @@ function validateCallVisibility(project Project, module MaxonModule, fallbackFil
 						default panic("unreachable: already checked name == call")
 					end 'extractCall'
 				end 'isCall'
+				// Instance method dispatch: the receiver type is already
+				// visible (we hold a value of it), so the function's own
+				// visibility tier applies. The resolved callee is in
+				// `resolvedCallees`; missing entries mean type-resolution
+				// gave up earlier and downstream diagnostics will surface
+				// the underlying type error — nothing to validate here.
+				if op.name == "methodCall" or op.name == "tryMethodCall" 'isMethodCall'
+					match op 'extractMethod'
+						methodCall(_, _, _, _, _, _, _, range) then checkMethodCallVisibility(project, opIdx: opIdx, readerFilePath: readerPath, range: range)
+						tryMethodCall(_, _, _, _, _, _, _, _, range) then checkMethodCallVisibility(project, opIdx: opIdx, readerFilePath: readerPath, range: range)
+						default panic("unreachable: already checked name is methodCall/tryMethodCall")
+					end 'extractMethod'
+				end 'isMethodCall'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'validateCallVisibility'
+
+// Instance-method visibility: the resolved callee is keyed in
+// `resolvedCallees`. If hidden from `readerFilePath`, emit E3008/E3088
+// using the resolved qualified name (matching the C# bootstrap's
+// "function 'Type.method' is not exported" diagnostic shape).
+function checkMethodCallVisibility(project Project, opIdx OpIndex, readerFilePath FilePath, range SourceRange)
+	let resolved = try project.resolvedCallees.get(opIdx) otherwise return
+	if not project.funcReturnTypes.contains(resolved) 'unresolvedCallee'
+		return
+	end 'unresolvedCallee'
+	let info = funcVisibilityOrDefault(project, qualifiedName: resolved)
+	if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
+		return
+	end 'visible'
+	reportHiddenCalleeError(project, displayName: resolved, tier: info.visibility, range: range, filePath: readerFilePath)
+end 'checkMethodCallVisibility'
+
+// True when `callee` is a `Type.method` form whose head segment names a
+// struct that isn't visible to `readerFilePath`. Used by the qualified-
+// call visibility gate to defer to the downstream type-visibility check
+// at the field-access site so the diagnostic blames the inaccessible
+// type rather than its (incidentally non-exported) method.
+function calleeHeadTypeHiddenFromReader(project Project, callee String, readerFilePath FilePath) returns bool
+	let dotPos = try callee.findFirst(".") otherwise return false
+	let headName = callee.slice(StringIndex.create(0, bytePos: 0), endIndex: dotPos)
+	if let structType = try project.structTypes.get(headName) 'haveStruct'
+		return not isVisibleFrom(structType.visibility, declFilePath: structType.sourceFilePath, readerFilePath: readerFilePath)
+	end 'haveStruct'
+	return false
+end 'calleeHeadTypeHiddenFromReader'
 
 // Check a single `call` op for a visibility violation. Two paths:
 //
@@ -7257,11 +7339,33 @@ function checkCallVisibility(project Project, callee ByteArray, callContext Call
 		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'visible'
 			return
 		end 'visible'
+		// Defer to the field-access type-visibility gate when the head
+		// segment is a struct that isn't visible to the reader: emitting
+		// E3008 here would mask the more useful "Unknown type" diagnostic
+		// the call-site would raise downstream when the caller tries to
+		// use the returned value (field load, method call, etc). The
+		// receiver type itself is the actual access barrier; the method's
+		// own visibility is only meaningful once the type IS reachable.
+		if calleeHeadTypeHiddenFromReader(project, callee: bareCallee, readerFilePath: readerFilePath) 'typeHidden'
+			return
+		end 'typeHidden'
 		reportHiddenCalleeError(project, displayName: bareCallee, tier: info.visibility, range: range, filePath: readerFilePath)
 		return
 	end 'isQualified'
 	let qualified = qualifyCalleeForContext(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath)
 	if project.funcReturnTypes.contains(qualified) 'visible'
+		// Existence isn't enough — the bare-call probe's cross-file
+		// fallback in `qualifyCalleeForContextWithType` returns the
+		// local-namespace fallback name when no visible candidate was
+		// found, and that fallback IS registered in `funcReturnTypes`
+		// when a sibling file in the same directory declares it. Run the
+		// visibility check explicitly so the hidden sibling's E3008 fires
+		// instead of being silently accepted.
+		let info = funcVisibilityOrDefault(project, qualifiedName: qualified)
+		if isVisibleFrom(info.visibility, declFilePath: info.sourceFilePath, readerFilePath: readerFilePath) 'qualifiedVisible'
+			return
+		end 'qualifiedVisible'
+		reportHiddenCalleeError(project, displayName: bareCallee, tier: info.visibility, range: range, filePath: readerFilePath)
 		return
 	end 'visible'
 	// `__`-prefixed references from outside the internals files always trip
@@ -7536,6 +7640,12 @@ function resolveCallSite(project Project, opIdx OpIndex, callee ByteArray, callC
 		return
 	end 'skip'
 	let (initialQualified, qualifyReceiverType) = qualifyCalleeForContextWithType(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, enclosingType: enclosingTypeName)
+	// E3095 ambiguity: when a bare callee was resolved via the cross-file
+	// fallback in `qualifyCalleeForContextWithType` and multiple definitions
+	// are visible from this file, surface the ambiguity here — the immediate
+	// callee site has both the SourceRange and the reader file path the
+	// fallback itself lacks. See the staged probe in MaxonDialect.maxon.
+	maybeEmitAmbiguousCrossFileCall(project, bare: bareCallee, callContext: callContext, currentNamespace: currentNamespace, readerFilePath: readerFilePath, range: range)
 	let (chased, chaseReceiverType) = chaseTypealiasInQualifiedCalleeWithType(project, callee: initialQualified, enclosingType: enclosingTypeName)
 	// `qualifyCalleeForContextWithType`'s chase fires against the
 	// user-written head (e.g. `ByteArray`) and recovers the full
@@ -7613,9 +7723,7 @@ function retypeCharByteReceiver(project Project, receiver ByteArray, receiverTyp
 	let isCharByte = match receiverType 'check'
 		boolean gives false
 		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: receiver))
-		float to string gives false
-		named to interface gives false
-		constInt gives false
+		float to opaquePointer gives false
 	end 'check'
 	if not isCharByte 'pass'
 		return receiverType
@@ -7645,9 +7753,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 		let isCharByte = match t 'check'
 			boolean gives false
 			integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: argName))
-			float to string gives false
-			named to interface gives false
-			constInt gives false
+			float to opaquePointer gives false
 		end 'check'
 		if isCharByte 'retype'
 			newTypes.push(characterType)
@@ -7668,6 +7774,71 @@ function reportAmbiguousOverload(project Project, bareQualifiedName String, rang
 	let candidates = renderOverloadCandidates(project, bareQualifiedName: bareQualifiedName)
 	reportCompileError(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareName}': multiple overloads match. Candidates: {candidates}", line: range.line, column: range.column, filePath: filePath)
 end 'reportAmbiguousOverload'
+
+// E3095: emit when a bare-name call resolved via the cross-file fallback
+// and more than one visible definition exists. Skipped when an earlier
+// probe (sibling type, local namespace, stdlib namespace, or overload
+// bucket) would have caught the call — those resolutions are unambiguous
+// by construction. The user must qualify with the directory name
+// (`dir.name()`) to disambiguate.
+function maybeEmitAmbiguousCrossFileCall(project Project, bare String, callContext CallContext, currentNamespace String, readerFilePath FilePath, range SourceRange)
+	if isQualifiedCallContext(callContext) 'qualified'
+		return
+	end 'qualified'
+	let siblingTypeName = siblingTypeNameOfContext(callContext)
+	if not siblingTypeName.isEmpty() 'sibling'
+		return
+	end 'sibling'
+	if bare == "main" 'isMain'
+		return
+	end 'isMain'
+	let localName = qualifyName(currentNamespace, name: bare)
+	if project.funcReturnTypes.contains(localName) or project.overloadedNames.contains(localName) 'localHit'
+		return
+	end 'localHit'
+	let stdlibName = qualifyName("stdlib", name: bare)
+	if project.funcReturnTypes.contains(stdlibName) or project.overloadedNames.contains(stdlibName) 'stdlibHit'
+		return
+	end 'stdlibHit'
+	let candidates = visibleCrossFileCandidates(project, bare: bare, readerFilePath: readerFilePath)
+	// Deduplicate by canonical qualified name to avoid spurious ambiguity
+	// when the same function appears under both a mangled-overload and a
+	// bare entry in `methodNameIndex` (`reduceLeft`/`reduceLeft$Int`).
+	var distinct = StringArray.create()
+	for c in candidates 'eachCandidate'
+		let canonical = stripFunctionOverloadSuffix(c)
+		if not stringArrayContains(distinct, value: canonical) 'addOne'
+			distinct.push(canonical)
+		end 'addOne'
+	end 'eachCandidate'
+	if distinct.count() <= 1 'noAmbiguity'
+		return
+	end 'noAmbiguity'
+	let candidateList = renderCrossFileCandidateList(distinct)
+	reportCompileError(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: "Ambiguous bare-name call to '{bare}': multiple visible definitions found. Qualify with a directory name. Candidates: {candidateList}", line: range.line, column: range.column, filePath: readerFilePath)
+end 'maybeEmitAmbiguousCrossFileCall'
+
+function stringArrayContains(arr StringArray, value String) returns bool
+	for i in 0 upto arr.count() 'each'
+		let v = try arr.get(i) otherwise continue
+		if v == value 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'stringArrayContains'
+
+function renderCrossFileCandidateList(names StringArray) returns String
+	var out = ""
+	for i in 0 upto names.count() 'each'
+		let n = try names.get(i) otherwise continue
+		if i > 0 'separator'
+			out = "{out}, "
+		end 'separator'
+		out = "{out}{n}"
+	end 'each'
+	return out
+end 'renderCrossFileCandidateList'
 
 // Strip the namespace prefix from a qualified name so diagnostics show
 // the user-facing bare identifier (`create`) instead of the internal

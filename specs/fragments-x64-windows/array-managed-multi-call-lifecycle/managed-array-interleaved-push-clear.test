@@ -106,7 +106,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @array-managed-multi-call-lifecycle.record(state: i64, dep: i64) {
+  func @record(state: i64, dep: i64) {
   entry:
     x64.prologue stack_size=32
     x64.mov [rbp-8], rcx
@@ -122,7 +122,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @array-managed-multi-call-lifecycle.clearFor(state: i64) {
+  func @clearFor(state: i64) {
   entry:
     x64.prologue stack_size=80
     x64.mov [rbp-8], rcx
@@ -137,16 +137,16 @@ module {
     x64.mov [rbp-32], rax
     x64.xor ebx, ebx
     x64.cmp rdx, rbx
-    x64.jne array-managed-multi-call-lifecycle.clearFor.scan_0.exit
+    x64.jne clearFor.scan_0.exit
   scan_0.preamble:
-    x64.jmp array-managed-multi-call-lifecycle.clearFor.scan_0
+    x64.jmp clearFor.scan_0
   scan_0.header:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
     x64.call __ArrayIterator_Dep.advance
     x64.xor ecx, ecx
     x64.cmp rdx, rcx
-    x64.jne array-managed-multi-call-lifecycle.clearFor.scan_0.exit
+    x64.jne clearFor.scan_0.exit
   scan_0:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rbp-32]
@@ -159,12 +159,12 @@ module {
     x64.mov rbx, [rbp-56]
     x64.mov rsi, [rbx+0]
     x64.mov [rbp-64], rsi
-    x64.jmp array-managed-multi-call-lifecycle.clearFor.check_0.cmp0
+    x64.jmp clearFor.check_0.cmp0
   check_0.cmp0:
     x64.mov rax, [rbp-64]
     x64.mov rcx, 1
     x64.cmp rax, rcx
-    x64.jne array-managed-multi-call-lifecycle.clearFor.check_0.cmp1
+    x64.jne clearFor.check_0.cmp1
   check_0.case0:
     x64.mov rax, [rbp-40]
     x64.test rax, rax
@@ -172,19 +172,19 @@ module {
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp array-managed-multi-call-lifecycle.clearFor.scan_0.header
+    x64.jmp clearFor.scan_0.header
   check_0.cmp1:
     x64.mov rax, [rbp-64]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne array-managed-multi-call-lifecycle.clearFor.check_0.merge
+    x64.jne clearFor.check_0.merge
   check_0.case1:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-48]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, [rbp-48]
     x64.call DepArray.push
-    x64.jmp array-managed-multi-call-lifecycle.clearFor.check_0.merge
+    x64.jmp clearFor.check_0.merge
   check_0.merge:
     x64.mov rax, [rbp-40]
     x64.test rax, rax
@@ -192,7 +192,7 @@ module {
     x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_1
-    x64.jmp array-managed-multi-call-lifecycle.clearFor.scan_0.header
+    x64.jmp clearFor.scan_0.header
   scan_0.exit:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-8]
@@ -223,7 +223,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @array-managed-multi-call-lifecycle.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x64.prologue stack_size=176
     x64.call DepArray.create
@@ -314,10 +314,10 @@ module {
     x64.mov rcx, [rbp-56]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, [rbp-56]
-    x64.call array-managed-multi-call-lifecycle.record
+    x64.call record
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call array-managed-multi-call-lifecycle.clearFor
+    x64.call clearFor
     x64.lea_func rax, [__destruct_Key]
     x64.mov rcx, rax
     x64.mov rdx, rcx
@@ -400,10 +400,10 @@ module {
     x64.mov rcx, [rbp-96]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, [rbp-96]
-    x64.call array-managed-multi-call-lifecycle.record
+    x64.call record
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call array-managed-multi-call-lifecycle.clearFor
+    x64.call clearFor
     x64.lea_func rax, [__destruct_Key]
     x64.mov rcx, rax
     x64.mov rdx, rcx
@@ -486,10 +486,10 @@ module {
     x64.mov rcx, [rbp-136]
     x64.mov rcx, [rbp-16]
     x64.mov rdx, [rbp-136]
-    x64.call array-managed-multi-call-lifecycle.record
+    x64.call record
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call array-managed-multi-call-lifecycle.clearFor
+    x64.call clearFor
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+0]
     x64.mov [rbp-144], rcx
@@ -499,10 +499,10 @@ module {
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
-    x64.jg array-managed-multi-call-lifecycle.main.__range_panic_0
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jl array-managed-multi-call-lifecycle.main.__range_panic_0
-    x64.jmp array-managed-multi-call-lifecycle.main.__range_ok_0
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
     x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax

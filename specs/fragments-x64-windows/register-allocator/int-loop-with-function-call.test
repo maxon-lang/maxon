@@ -20,7 +20,7 @@ ExitCode: 20
 RequiredIR: ```
 === maxon
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -42,7 +42,7 @@ module {
     maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.call @register-allocator.double %8
+    %9 = maxon.call @double %8
     %10 = maxon.var_ref {var = sum} {type = i64}
     %11 = maxon.binop %10, %9 {op = add}
     maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
@@ -69,7 +69,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     %1 = arith.constant {value = 2 : i64}
@@ -90,7 +90,7 @@ module {
     cf.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = memref.load i : i64
-    %9 = func.call @register-allocator.double %8
+    %9 = func.call @double %8
     %10 = memref.load sum : i64
     %11 = arith.addi %10, %9
     memref.store %11, sum
@@ -117,7 +117,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.double(x: i64) -> i64 {
+  func @double(x: i64) -> i64 {
   entry:
     x64.mov rax, 2
     x64.imul rcx, rax
@@ -140,7 +140,7 @@ module {
   loop_0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rbp-16]
-    x64.call register-allocator.double
+    x64.call double
     x64.mov rcx, [rbp-8]
     x64.add rcx, rax
     x64.mov [rbp-8], rcx

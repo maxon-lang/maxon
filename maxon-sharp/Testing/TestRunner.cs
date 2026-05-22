@@ -332,7 +332,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // up with `<spec>_batch.<name>` qualifiers that leak the batching
       // implementation detail.
       var virtualPath = Path.Combine(_fragmentDir, item.SpecName, $"{item.SpecName}.maxon");
-      var compilerSources = new[] { new Compiler.SourceFile(virtualPath, source) };
+      // Spec-fragment single-file: RootPath = the fragment directory itself
+      // (decision #2 in the directory-as-module redesign plan).
+      var virtualRoot = Path.GetDirectoryName(virtualPath);
+      var compilerSources = new[] { new Compiler.SourceFile(virtualPath, source, virtualRoot) };
       var result = new Compiler.Compiler().Compile(compilerSources, item.BatchExePath, returnIr: true, target: _target);
       compileSw.Stop();
       Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
@@ -728,14 +731,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (fragment.SourceFiles != null) {
           irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
           Directory.CreateDirectory(irTempDir);
+          // Spec-fragment multi-file: RootPath = the tempDir holding the split
+          // files (decision #2 in the directory-as-module redesign plan).
+          var multiFileRoot = irTempDir;
           irSources = [.. fragment.SourceFiles.Select(f => {
             var path = Path.Combine(irTempDir, f.FileName);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, f.Source);
-            return new Compiler.SourceFile(path, f.Source);
+            return new Compiler.SourceFile(path, f.Source, multiFileRoot);
           })];
         } else {
-          irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
+          // Spec-fragment single-file: RootPath = the fragment directory.
+          irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source, Path.GetDirectoryName(fragment.FilePath))];
         }
         var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
         Compiler.Compiler.MmTrace = false;
@@ -888,14 +895,17 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         splitFileMap = ComputeSplitFileMap(fragment, tempDir);
+        // Spec-fragment multi-file: RootPath = tempDir (decision #2).
+        var multiFileRoot = tempDir;
         sources = [.. fragment.SourceFiles.Select(f => {
           var path = Path.Combine(tempDir, f.FileName);
           Directory.CreateDirectory(Path.GetDirectoryName(path)!);
           File.WriteAllText(path, f.Source);
-          return new Compiler.SourceFile(path, f.Source);
+          return new Compiler.SourceFile(path, f.Source, multiFileRoot);
         })];
       } else {
-        sources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
+        // Spec-fragment single-file: RootPath = the fragment directory.
+        sources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source, Path.GetDirectoryName(fragment.FilePath))];
       }
 
       try {
@@ -1479,7 +1489,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
         var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
-        var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
+        // Spec-fragment single-file: RootPath = the fragment directory (decision #2).
+        var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment, Path.GetDirectoryName(fragmentPath)) };
 
         // Find the test marker once (shared by both RequiredIR and stderr updates)
         var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";

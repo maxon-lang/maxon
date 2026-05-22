@@ -1,5 +1,5 @@
 // Test: exported-struct-var-cross-file
-// --- file: state.maxon
+// --- file: api/state.maxon
 typealias SmallInt = int(0 to u8.max)
 
 export type Counter
@@ -12,9 +12,10 @@ end 'Counter'
 
 export var shared = Counter.create(value: 0)
 
-// --- file: main.maxon
+// --- file: app/main.maxon
 function main() returns ExitCode
-		shared.value = 42
+		let c = Counter.create(value: 1)
+		shared.value = 42 - c.value + c.value
 		return shared.value
 end 'main'
 ---
@@ -25,10 +26,18 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
+    x64.mov ecx, 8
+    x64.call mrt_alloc
+    x64.mov r9d, 1
+    x64.mov [r8+0], r9 (1b)
+    x64.movzx r9, [r8+0] (1b)
+    x64.movzx rsi, [r8+0] (1b)
     x64.lea r8, [rip+__data_shared]
-    x64.mov r9, [r8+0] (8b)
+    x64.mov rdi, [r8+0] (8b)
     x64.mov r8d, 42
-    x64.mov [r9+0], r8 (1b)
+    x64.sub r8, r9
+    x64.add r8, rsi
+    x64.mov [rdi+0], r8 (1b)
     x64.lea r8, [rip+__data_shared]
     x64.mov r9, [r8+0] (8b)
     x64.movzx r8, [r9+0] (1b)

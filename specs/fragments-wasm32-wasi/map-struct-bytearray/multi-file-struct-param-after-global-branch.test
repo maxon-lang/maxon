@@ -1,5 +1,5 @@
 // Test: multi-file-struct-param-after-global-branch
-// --- file: 0-Types.maxon
+// --- file: api/0-Types.maxon
 typealias Byte = int(0 to u8.max)
 export typealias ByteArray = Array with Byte
 export typealias Count = int(0 to u64.max)
@@ -23,7 +23,7 @@ end 'Database'
 
 export var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
 
-// --- file: 1-Logic.maxon
+// --- file: app/1-Logic.maxon
 export function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
 		let existing = try db.sourceFiles.get(key) otherwise 'skip'
@@ -37,6 +37,7 @@ export function storeAndCheck(key String, data ByteArray)
 	print("{data.count()}\n")
 end 'storeAndCheck'
 
+// --- file: bin/main.maxon
 function main() returns ExitCode
 	var arr = ByteArray.create()
 	arr.push(1)
@@ -54,7 +55,7 @@ new
 ---
 // CompiledIR
 module {
-  func @1-Logic.storeAndCheck(local0: i64, local1: i64) {
+  func @app.storeAndCheck(local0: i64, local1: i64) {
   entry:
     %94 = mir.param local0 : i64
     %95 = mir.param local1 : i64
@@ -95,22 +96,22 @@ module {
   inlined_Array.get_1:
     %131 = mir.mov_imm 0 : i64
     %132 = mir.mov_imm 1 : i64
-    mir.br inline_cont_1-Logic.storeAndCheck_0(%131, %132)
+    mir.br inline_cont_app.storeAndCheck_0(%131, %132)
   inlined_Array.get_2:
     %133 = mir.mov_imm 0 : i64
-    mir.br inline_cont_1-Logic.storeAndCheck_0(%127, %133)
-  inline_cont_1-Logic.storeAndCheck_0:
+    mir.br inline_cont_app.storeAndCheck_0(%127, %133)
+  inline_cont_app.storeAndCheck_0:
     %107 = mir.mov_imm 0 : i64
     %108 = mir.cmp eq, %135, %107
     mir.cond_br %108 [then: inlined_Map.get_2(), else: inlined_Map.get_3()]
   inlined_Map.get_2:
     %109 = mir.mov_imm 0 : i64
-    mir.br inline_cont_1-Logic.storeAndCheck_1(%134, %109)
+    mir.br inline_cont_app.storeAndCheck_1(%134, %109)
   inlined_Map.get_3:
     %110 = mir.mov_imm 0 : i64
     %111 = mir.mov_imm 1 : i64
-    mir.br inline_cont_1-Logic.storeAndCheck_1(%110, %111)
-  inline_cont_1-Logic.storeAndCheck_1:
+    mir.br inline_cont_app.storeAndCheck_1(%110, %111)
+  inline_cont_app.storeAndCheck_1:
     %20 = mir.cmp ne, %113, %97
     mir.cond_br %20 [then: try_0.otherwise(), else: try_0.merge()]
   try_0.otherwise:
@@ -248,7 +249,7 @@ module {
     mir.store %16, %22, 0 width: qword
     %23 = mir.mov_imm 1 : i64
     mir.store %23, %22, 8 width: qword
-    %25 = mir.call @1-Logic.storeAndCheck(%22, %28)
+    %25 = mir.call @app.storeAndCheck(%22, %28)
     %26 = mir.mov_imm 0 : i64
     mir.ret %26
   }

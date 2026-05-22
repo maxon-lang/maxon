@@ -201,7 +201,7 @@ end 'process'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3063). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3019). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -275,6 +275,8 @@ module typealias FeatureScore = int(0 to 100)   // visible to this directory sub
 export var sharedCounter = 0                    // visible everywhere
 module var featureState = 0                     // visible to this directory subtree
 ```
+
+When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for typealiases. Qualify with the directory namespace (`api.format(...)`, `lib.fmt.Score`) to disambiguate. Same-file duplicate typealiases remain **E3061**.
 
 ## Conditional Compilation
 ```maxon
