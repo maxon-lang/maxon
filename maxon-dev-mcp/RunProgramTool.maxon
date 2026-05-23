@@ -30,7 +30,7 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "run_program: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
@@ -39,38 +39,38 @@ export function runProgramHandler(argsDoc JsonDoc, argsId JsonNodeId) returns To
 	var buildArgv = StringArray.create()
 	buildArgv.push("build")
 	buildArgv.push(mainFile.projectDir.path)
-	let buildResult = runBuild(csharpBinary: csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
+	let buildResult = runBuild(csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: buildTimeoutMs)
 	if not buildResult.succeeded() 'buildFailed'
-		let outcome = buildOutcomeBuildOnly(buildResult: buildResult)
+		let outcome = buildOutcomeBuildOnly(buildResult)
 		cleanupResolvedSource(mainFile)
 		return outcome
 	end 'buildFailed'
 
-	let producedExe = expectedExePath(mainFile: mainFile.mainFile)
+	let producedExe = expectedExePath(mainFile.mainFile)
 	if not File.exists(producedExe) 'noExe'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "run_program: build reported success but expected binary `{producedExe.path}` does not exist")
 	end 'noExe'
 
-	let runArgv = parseRunArgv(argsDoc: argsDoc, argsId: argsId)
-	let stdinPayload = parseStdin(argsDoc: argsDoc, argsId: argsId)
-	let runTimeoutMs = parseTimeoutMs(argsDoc: argsDoc, argsId: argsId, defaultMs: runProgramDefaultTimeoutMs)
+	let runArgv = parseRunArgv(argsDoc, argsId: argsId)
+	let stdinPayload = parseStdin(argsDoc, argsId: argsId)
+	let runTimeoutMs = parseTimeoutMs(argsDoc, argsId: argsId, defaultMs: runProgramDefaultTimeoutMs)
 
 	let runTiming = Clock.nowMs()
 	var runConfig = Configuration.create(Executable.path(producedExe))
 	runConfig.arguments = runArgv
 	runConfig.standardInput = stdinPayload
-	runConfig.standardOutput = OutputDestination.collect(limitBytes: outputMaxBytes)
-	runConfig.standardError = OutputDestination.collect(limitBytes: outputMaxBytes)
+	runConfig.standardOutput = OutputDestination.collect(outputMaxBytes)
+	runConfig.standardError = OutputDestination.collect(outputMaxBytes)
 	runConfig.timeoutMs = runTimeoutMs
 	let runResult = try runConfig.run() otherwise (err) 'runErr'
-		let outcome = buildOutcomeBuildOnlyWithRunError(buildResult: buildResult, runErrorReason: err.displayReason(), runDurationMs: Clock.elapsedMs(since: runTiming))
+		let outcome = buildOutcomeBuildOnlyWithRunError(buildResult, runErrorReason: err.displayReason(), runDurationMs: Clock.elapsedMs(runTiming))
 		cleanupResolvedSource(mainFile)
 		return outcome
 	end 'runErr'
-	let runElapsed = Clock.elapsedMs(since: runTiming)
+	let runElapsed = Clock.elapsedMs(runTiming)
 
-	let outcome = buildOutcomeFull(buildResult: buildResult, runResult: runResult, runDurationMs: runElapsed)
+	let outcome = buildOutcomeFull(buildResult, runResult: runResult, runDurationMs: runElapsed)
 	cleanupResolvedSource(mainFile)
 	return outcome
 end 'runProgramHandler'
@@ -131,7 +131,7 @@ function buildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
 	let exitId = doc.add(JsonNode.numberNode(build.exitCode()))
 	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
 	let durId = doc.add(JsonNode.numberNode(build.durationMs as JsonFloat))
-	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
+	let combined = combineStreams(build.stdout(), stderr: build.stderr())
 	let tail = lastBytes(combined, max: rawTailMaxBytes)
 	let tailId = doc.add(JsonNode.stringNode(tail))
 	var keys = StringArray.create()

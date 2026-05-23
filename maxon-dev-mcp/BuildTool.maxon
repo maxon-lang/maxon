@@ -26,19 +26,19 @@ export function buildToolHandler(argsDoc JsonDoc, argsId JsonNodeId) returns Too
 
 	let repoRoot = repoRootPath()
 	if target.equals("csharp") 'cs'
-		return runCsharpBuild(repoRoot: repoRoot)
+		return runCsharpBuild(repoRoot)
 	end 'cs'
 	if target.equals("selfhosted") 'sh'
-		return runSelfhostedBuild(repoRoot: repoRoot)
+		return runSelfhostedBuild(repoRoot)
 	end 'sh'
 	if target.equals("both") 'both'
-		let csOutcome = runCsharpBuild(repoRoot: repoRoot)
+		let csOutcome = runCsharpBuild(repoRoot)
 		// Abort the chain on csharp failure; otherwise continue with the
 		// selfhosted build. We can't hold the second step as a function
 		// reference (Maxon's compiler currently has trouble with function-
 		// type values), so we just inline the conditional here.
 		match csOutcome 'cs'
-			success then return runSelfhostedBuild(repoRoot: repoRoot)
+			success then return runSelfhostedBuild(repoRoot)
 			error then return csOutcome
 		end 'cs'
 	end 'both'
@@ -51,17 +51,17 @@ end 'buildToolHandler'
 // =============================================================================
 
 function runCsharpBuild(repoRoot FilePath) returns ToolOutcome
-	let cwd = childPath(parent: repoRoot, segment: "maxon-sharp")
+	let cwd = childPath(repoRoot, segment: "maxon-sharp")
 	let timing = Clock.nowMs()
 	var argv = StringArray.create()
 	argv.push("build")
 	let result = try Subprocess.run(Executable.name("dotnet"), arguments: argv, workingDirectory: cwd, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return subprocessErrorOutcome(target: "csharp", err: err, durationMs: Clock.elapsedMs(since: timing))
+		return subprocessErrorOutcome("csharp", err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
-	let elapsed = Clock.elapsedMs(since: timing)
+	let elapsed = Clock.elapsedMs(timing)
 
-	let binaryPath = childPath(parent: repoRoot, segment: "bin/maxon.exe")
-	return buildOutcome(target: "csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+	let binaryPath = childPath(repoRoot, segment: "bin/maxon.exe")
+	return buildOutcome("csharp", result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runCsharpBuild'
 
 // =============================================================================
@@ -69,7 +69,7 @@ end 'runCsharpBuild'
 // =============================================================================
 
 function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
-	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "build selfhosted: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via target=csharp.")
 	end 'noCsharp'
@@ -79,12 +79,12 @@ function runSelfhostedBuild(repoRoot FilePath) returns ToolOutcome
 	argv.push("build")
 	argv.push("maxon-selfhosted")
 	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultBuildTimeoutMs) otherwise (err) 'spawn'
-		return subprocessErrorOutcome(target: "selfhosted", err: err, durationMs: Clock.elapsedMs(since: timing))
+		return subprocessErrorOutcome("selfhosted", err: err, durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
-	let elapsed = Clock.elapsedMs(since: timing)
+	let elapsed = Clock.elapsedMs(timing)
 
-	let binaryPath = childPath(parent: repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
-	return buildOutcome(target: "selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath)
+	let binaryPath = childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+	return buildOutcome("selfhosted", result: result, durationMs: elapsed, expectedBinary: binaryPath)
 end 'runSelfhostedBuild'
 
 // =============================================================================
@@ -100,7 +100,7 @@ function buildOutcome(target String, result CollectedOutput, durationMs Duration
 	let durationId = doc.add(JsonNode.numberNode(durationMs))
 	let successId = doc.add(JsonNode.boolNode(result.succeeded()))
 
-	let combinedOutput = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let combinedOutput = combineStreams(result.stdout, stderr: result.stderr)
 	let errors = parseBuildErrors(combinedOutput)
 	let errorsArr = buildErrorsArray(doc, errors: errors)
 	let rawTail = lastBytes(combinedOutput, max: rawTailMaxBytes)

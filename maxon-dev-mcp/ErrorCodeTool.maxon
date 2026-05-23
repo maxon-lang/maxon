@@ -15,12 +15,12 @@ export function lookupErrorCodeHandler(argsDoc JsonDoc, argsId JsonNodeId) retur
 	end 'bad'
 
 	let repoRoot = repoRootPath()
-	let entry = try lookupInErrorCodeFile(repoRoot: repoRoot, code: code) otherwise 'notInSrc'
+	let entry = try lookupInErrorCodeFile(repoRoot, code: code) otherwise 'notInSrc'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "lookup_error_code: code E{code} not found in maxon-selfhosted/Compiler/ErrorCode.maxon")
 	end 'notInSrc'
 
-	let specFiles = collectSpecFilesReferencing(repoRoot: repoRoot, code: code)
-	return buildOutcome(code: code, entry: entry, specFiles: specFiles)
+	let specFiles = collectSpecFilesReferencing(repoRoot, code: code)
+	return buildOutcome(code, entry: entry, specFiles: specFiles)
 end 'lookupErrorCodeHandler'
 
 // =============================================================================
@@ -107,7 +107,7 @@ type ErrorEntry
 end 'ErrorEntry'
 
 function lookupInErrorCodeFile(repoRoot FilePath, code CodeNumber) returns ErrorEntry throws NotFound
-	let path = childPath(parent: repoRoot, segment: "maxon-selfhosted/Compiler/ErrorCode.maxon")
+	let path = childPath(repoRoot, segment: "maxon-selfhosted/Compiler/ErrorCode.maxon")
 	let content = try File.readText(path) otherwise 'readErr'
 		panic("lookupInErrorCodeFile: cannot read {path.path}; the file should always be present in a Maxon checkout")
 	end 'readErr'
@@ -241,10 +241,6 @@ function isAsciiLetter(b Byte) returns bool
 	return (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A) or b == 0x5F
 end 'isAsciiLetter'
 
-function isAsciiDigit(b Byte) returns bool
-	return b >= 0x30 and b <= 0x39
-end 'isAsciiDigit'
-
 // Walk backwards from `before` collecting contiguous `//` comment lines.
 // Stops at the first non-comment line. Returns the comments joined with `\n`
 // (or an empty string when no doc precedes the variant).
@@ -307,7 +303,7 @@ end 'stageFor'
 // =============================================================================
 
 function collectSpecFilesReferencing(repoRoot FilePath, code CodeNumber) returns StringArray
-	let specsDir = childPath(parent: repoRoot, segment: "specs")
+	let specsDir = childPath(repoRoot, segment: "specs")
 	var matches = StringArray.create()
 	let files = try Directory.list(specsDir) otherwise 'listErr'
 		return matches

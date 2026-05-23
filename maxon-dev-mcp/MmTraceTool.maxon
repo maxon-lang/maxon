@@ -30,13 +30,13 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "mm_trace_analyze: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
 	end 'noCsharp'
 
-	let analyzerScript = childPath(parent: repoRoot, segment: "scripts/analyze_mm_trace.py")
+	let analyzerScript = childPath(repoRoot, segment: "scripts/analyze_mm_trace.py")
 	if not File.exists(analyzerScript) 'noScript'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer script `{analyzerScript.path}` not found")
@@ -46,35 +46,35 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	buildArgv.push("build")
 	buildArgv.push(mainFile.projectDir.path)
 	buildArgv.push("--mm-trace")
-	let buildPhase = runBuild(csharpBinary: csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: mmBuildTimeoutMs)
+	let buildPhase = runBuild(csharpBinary, argv: buildArgv, workingDirectory: repoRoot, timeoutMs: mmBuildTimeoutMs)
 	if not buildPhase.succeeded() 'buildFailed'
 		let outcome = buildFailureOutcome(buildPhase)
 		cleanupResolvedSource(mainFile)
 		return outcome
 	end 'buildFailed'
 
-	let producedExe = expectedExePath(mainFile: mainFile.mainFile)
+	let producedExe = expectedExePath(mainFile.mainFile)
 	if not File.exists(producedExe) 'noExe'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: build reported success but expected binary `{producedExe.path}` does not exist")
 	end 'noExe'
 
-	let runArgv = parseRunArgv(argsDoc: argsDoc, argsId: argsId)
-	let stdinPayload = parseStdin(argsDoc: argsDoc, argsId: argsId)
-	let runTimeoutMs = parseTimeoutMs(argsDoc: argsDoc, argsId: argsId, defaultMs: mmTraceDefaultTimeoutMs)
+	let runArgv = parseRunArgv(argsDoc, argsId: argsId)
+	let stdinPayload = parseStdin(argsDoc, argsId: argsId)
+	let runTimeoutMs = parseTimeoutMs(argsDoc, argsId: argsId, defaultMs: mmTraceDefaultTimeoutMs)
 
 	let runTiming = Clock.nowMs()
 	var runConfig = Configuration.create(Executable.path(producedExe))
 	runConfig.arguments = runArgv
 	runConfig.standardInput = stdinPayload
-	runConfig.standardOutput = OutputDestination.collect(limitBytes: mmOutputMaxBytes)
-	runConfig.standardError = OutputDestination.collect(limitBytes: traceMaxBytes)
+	runConfig.standardOutput = OutputDestination.collect(mmOutputMaxBytes)
+	runConfig.standardError = OutputDestination.collect(traceMaxBytes)
 	runConfig.timeoutMs = runTimeoutMs
 	let runResult = try runConfig.run() otherwise (err) 'runErr'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: run failed: {err.displayReason()}")
 	end 'runErr'
-	let runElapsed = Clock.elapsedMs(since: runTiming)
+	let runElapsed = Clock.elapsedMs(runTiming)
 
 	// `--mm-trace` writes to stderr. Pipe that into the analyzer's stdin.
 	let analyzeTiming = Clock.nowMs()
@@ -83,15 +83,15 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 	analyzeArgv.push("--json")
 	var analyzeConfig = Configuration.create(Executable.name("python"))
 	analyzeConfig.arguments = analyzeArgv
-	analyzeConfig.standardInput = InputSource.bytes(data: runResult.stderr)
-	analyzeConfig.standardOutput = OutputDestination.collect(limitBytes: mmOutputMaxBytes)
-	analyzeConfig.standardError = OutputDestination.collect(limitBytes: 32 * 1024)
+	analyzeConfig.standardInput = InputSource.bytes(runResult.stderr)
+	analyzeConfig.standardOutput = OutputDestination.collect(mmOutputMaxBytes)
+	analyzeConfig.standardError = OutputDestination.collect(32 * 1024)
 	analyzeConfig.timeoutMs = analyzeTimeoutMs
 	let analyzeResult = try analyzeConfig.run() otherwise (err) 'analyzeErr'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer spawn failed: {err.displayReason()} (is python on PATH?)")
 	end 'analyzeErr'
-	let analyzeElapsed = Clock.elapsedMs(since: analyzeTiming)
+	let analyzeElapsed = Clock.elapsedMs(analyzeTiming)
 
 	if not analyzeResult.succeeded() 'analyzeFail'
 		cleanupResolvedSource(mainFile)
@@ -103,7 +103,7 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId) return
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "mm_trace_analyze: analyzer JSON parse failed: {err.name}")
 	end 'parseErr'
 
-	let outcome = buildFullOutcome(buildPhase: buildPhase, run: runResult, runDurationMs: runElapsed, analyze: analyzeResult, analyzeDurationMs: analyzeElapsed, report: report)
+	let outcome = buildFullOutcome(buildPhase, run: runResult, runDurationMs: runElapsed, analyze: analyzeResult, analyzeDurationMs: analyzeElapsed, report: report)
 	cleanupResolvedSource(mainFile)
 	return outcome
 end 'mmTraceAnalyzeHandler'
@@ -145,7 +145,7 @@ function mmBuildPhaseToJson(doc JsonDoc, build BuildPhase) returns JsonNodeId
 	let exitId = doc.add(JsonNode.numberNode(build.exitCode()))
 	let successId = doc.add(JsonNode.boolNode(build.succeeded()))
 	let durId = doc.add(JsonNode.numberNode(build.durationMs as JsonFloat))
-	let combined = combineStreams(stdout: build.stdout(), stderr: build.stderr())
+	let combined = combineStreams(build.stdout(), stderr: build.stderr())
 	let tailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: mmRawTailMaxBytes)))
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
@@ -182,7 +182,7 @@ function mmAnalyzePhaseToJson(doc JsonDoc, analyze CollectedOutput, durationMs D
 	let exitId = doc.add(JsonNode.numberNode(analyze.exitCode()))
 	let successId = doc.add(JsonNode.boolNode(analyze.succeeded()))
 	let durId = doc.add(JsonNode.numberNode(durationMs))
-	let reportId = copyJsonNode(src: report, srcId: report.root, dst: doc)
+	let reportId = copyJsonNode(report, srcId: report.root, dst: doc)
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 	keys.push("exitCode")

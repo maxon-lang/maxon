@@ -27,7 +27,7 @@ export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOu
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(mainFile)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "dump_ir: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
@@ -47,7 +47,7 @@ export function dumpIrHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOu
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "dump_ir: {err.displayReason()}")
 	end 'spawn'
 
-	let outcome = buildOutcome(mainFile: mainFile, result: result, dumpStages: dumpStages)
+	let outcome = buildOutcome(mainFile, result: result, dumpStages: dumpStages)
 	cleanupResolvedSource(mainFile)
 	return outcome
 end 'dumpIrHandler'
@@ -71,8 +71,8 @@ typealias IrArtifactArray = Array with IrArtifact
 function collectArtifacts(mainFile FilePath, dumpStages bool) returns IrArtifactArray
 	var out = IrArtifactArray.create()
 	let baseName = stripExtension(mainFile)
-	let mainIr = changeExtension(base: baseName, ext: "ir")
-	addArtifactIfPresent(out: out, label: "ir", path: mainIr)
+	let mainIr = changeExtension(baseName, ext: "ir")
+	addArtifactIfPresent(out, label: "ir", path: mainIr)
 	if not dumpStages 'stagesOff'
 		return out
 	end 'stagesOff'
@@ -101,7 +101,7 @@ function collectArtifacts(mainFile FilePath, dumpStages bool) returns IrArtifact
 		if entryName.equals("{baseNameOnly}.ir") 'isMain'
 			continue
 		end 'isMain'
-		addArtifactIfPresent(out: out, label: entryName, path: entry)
+		addArtifactIfPresent(out, label: entryName, path: entry)
 	end 'each'
 	return out
 end 'collectArtifacts'
@@ -128,8 +128,8 @@ end 'addArtifactIfPresent'
 // =============================================================================
 
 function buildOutcome(mainFile ResolvedSource, result CollectedOutput, dumpStages bool) returns ToolOutcome
-	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
-	let artifacts = collectArtifacts(mainFile: mainFile.mainFile, dumpStages: dumpStages)
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
+	let artifacts = collectArtifacts(mainFile.mainFile, dumpStages: dumpStages)
 
 	var doc = JsonDoc.create()
 	let exitCodeId = doc.add(JsonNode.numberNode(result.exitCode()))

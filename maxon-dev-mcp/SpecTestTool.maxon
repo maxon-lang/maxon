@@ -35,31 +35,31 @@ let memoryLeakExitCode = 101
 /// Entry point called by Server.maxon's dispatch table.
 export function specTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
 	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
-	return specTestWith(compiler: compiler, argsDoc: argsDoc, argsId: argsId)
+	return specTestWith(compiler, argsDoc: argsDoc, argsId: argsId)
 end 'specTestHandler'
 
 /// Self-hosted variant exposed as its own MCP tool so clients can discover
 /// it without knowing about the `compiler` argument. Delegates to the same
 /// machinery as `specTestHandler` with `compiler` pinned to "selfhosted".
 export function selfHostedSpecTestHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
-	return specTestWith(compiler: "selfhosted", argsDoc: argsDoc, argsId: argsId)
+	return specTestWith("selfhosted", argsDoc: argsDoc, argsId: argsId)
 end 'selfHostedSpecTestHandler'
 
 function specTestWith(compiler String, argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutcome
 	let repoRoot = repoRootPath()
-	let binary = try compilerBinary(repoRoot: repoRoot, compiler: compiler) otherwise (err) 'noBin'
+	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise (err) 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec-test {compiler}: required binary missing. Build it first via the `build` tool.")
 	end 'noBin'
 
-	let argv = buildSpecTestArgv(argsDoc: argsDoc, argsId: argsId)
-	let displayCommand = displayCommandFor(binary: binary, argv: argv)
+	let argv = buildSpecTestArgv(argsDoc, argsId: argsId)
+	let displayCommand = displayCommandFor(binary, argv: argv)
 	let timing = Clock.nowMs()
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: defaultSpecTestTimeoutMs) otherwise (err) 'spawn'
-		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test {compiler}: {err.displayReason()} (after {Clock.elapsedMs(since: timing)}ms)")
+		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec-test {compiler}: {err.displayReason()} (after {Clock.elapsedMs(timing)}ms)")
 	end 'spawn'
-	let elapsed = Clock.elapsedMs(since: timing)
+	let elapsed = Clock.elapsedMs(timing)
 
-	return buildOutcome(compiler: compiler, command: displayCommand, result: result, durationMs: elapsed)
+	return buildOutcome(compiler, command: displayCommand, result: result, durationMs: elapsed)
 end 'specTestWith'
 
 // =============================================================================
@@ -83,8 +83,8 @@ end 'compilerFromArgs'
 /// `invalidRequest` error pointing the user at the `build` tool.
 export function compilerBinary(repoRoot FilePath, compiler String) returns FilePath throws NotFound
 	let path = match compiler 'pick'
-		"csharp" gives childPath(parent: repoRoot, segment: "bin/maxon.exe")
-		"selfhosted" gives childPath(parent: repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
+		"csharp" gives childPath(repoRoot, segment: "bin/maxon.exe")
+		"selfhosted" gives childPath(repoRoot, segment: "maxon-selfhosted/.maxon/maxon-selfhosted.exe")
 		default panic("compilerBinary: unknown compiler `{compiler}` — compilerFromArgs should have normalized")
 	end 'pick'
 	if not File.exists(path) 'missing'
@@ -251,7 +251,7 @@ end 'sliceAfter'
 // =============================================================================
 
 function buildOutcome(compiler String, command String, result CollectedOutput, durationMs DurationMs) returns ToolOutcome
-	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
 	let summary = parseSummary(combined)
 	let memoryLeak = result.exitCode() == memoryLeakExitCode
 

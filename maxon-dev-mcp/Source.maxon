@@ -71,7 +71,7 @@ export function resolveProjectSource(argsDoc JsonDoc, argsId JsonNodeId, snippet
 		let parent = try parentDirOrThrow(file) otherwise 'noParent'
 			throw SourceArgError.missingPath
 		end 'noParent'
-		return ResolvedSource.file(projectDir: parent, mainFile: file)
+		return ResolvedSource.file(parent, mainFile: file)
 	end 'fileKind'
 
 	if kind.equals("snippet") 'snippetKind'
@@ -104,7 +104,7 @@ export function resolveFileSource(argsDoc JsonDoc, argsId JsonNodeId, snippetPre
 		// projectDir is the parent if there is one; otherwise we fall back
 		// to "." since file-mode callers only consume `mainFile` anyway.
 		let parent = try parentDirOrThrow(file) otherwise try FilePath.from(".") otherwise panic("resolveFileSource: '.' must be a valid path")
-		return ResolvedSource.file(projectDir: parent, mainFile: file)
+		return ResolvedSource.file(parent, mainFile: file)
 	end 'fileKind'
 
 	if kind.equals("snippet") 'snippetKind'
@@ -129,11 +129,11 @@ function materializeSnippetProject(code String, prefix String) returns ResolvedS
 	if not created 'mkErr'
 		panic("materializeSnippetProject: Directory.create returned false for {projectDir.path}")
 	end 'mkErr'
-	let mainFile = childPath(parent: projectDir, segment: "main.maxon")
+	let mainFile = childPath(projectDir, segment: "main.maxon")
 	try File.writeText(mainFile, content: code) otherwise 'writeErr'
 		panic("materializeSnippetProject: cannot write snippet to {mainFile.path}")
 	end 'writeErr'
-	return ResolvedSource.snippet(projectDir: projectDir, mainFile: mainFile)
+	return ResolvedSource.snippet(projectDir, mainFile: mainFile)
 end 'materializeSnippetProject'
 
 // Materialize a snippet as a single file under `<repo>/temp/`. Used by
@@ -143,13 +143,13 @@ function materializeSnippetFile(code String, prefix String) returns ResolvedSour
 	let repoRoot = repoRootPath()
 	let stamp = Clock.nowMs()
 	let filename = "temp/{prefix}-{stamp}.maxon"
-	let target = childPath(parent: repoRoot, segment: filename)
+	let target = childPath(repoRoot, segment: filename)
 	try File.writeText(target, content: code) otherwise 'writeErr'
 		panic("materializeSnippetFile: cannot write snippet to {target.path}")
 	end 'writeErr'
 	// projectDir is unused in file mode; carry the temp dir for symmetry.
-	let tempDir = childPath(parent: repoRoot, segment: "temp")
-	return ResolvedSource.snippet(projectDir: tempDir, mainFile: target)
+	let tempDir = childPath(repoRoot, segment: "temp")
+	return ResolvedSource.snippet(tempDir, mainFile: target)
 end 'materializeSnippetFile'
 
 /// Clean up after a snippet-mode source. For `file`-mode sources this is
@@ -168,7 +168,7 @@ export function cleanupResolvedSource(resolved ResolvedSource)
 	// Heuristic: if the project dir is exactly `<repo>/temp` we're in
 	// file-mode (materializeSnippetFile); only the main file is ours.
 	let repoRoot = repoRootPath()
-	let tempDir = childPath(parent: repoRoot, segment: "temp")
+	let tempDir = childPath(repoRoot, segment: "temp")
 	if projectDir.path.equals(tempDir.path) 'fileMode'
 		try File.delete(mainFile) otherwise ignore
 		return

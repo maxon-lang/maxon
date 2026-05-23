@@ -30,7 +30,7 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 
 	let compiler = compilerFromArgs(argsDoc, argsId: argsId)
 	let repoRoot = repoRootPath()
-	let binary = try compilerBinary(repoRoot: repoRoot, compiler: compiler) otherwise 'noBin'
+	let binary = try compilerBinary(repoRoot, compiler: compiler) otherwise 'noBin'
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "spec_test_outcome {compiler}: required binary missing. Build it first via the `build` tool.")
 	end 'noBin'
 
@@ -43,14 +43,14 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId) returns T
 	let result = try Subprocess.run(Executable.path(binary), arguments: argv, workingDirectory: repoRoot, timeoutMs: specOutcomeTimeoutMs) otherwise (err) 'spawn'
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "spec_test_outcome: subprocess: {err.displayReason()}")
 	end 'spawn'
-	let elapsed = Clock.elapsedMs(since: timing)
+	let elapsed = Clock.elapsedMs(timing)
 
-	let combined = combineStreams(stdout: result.stdout, stderr: result.stderr)
+	let combined = combineStreams(result.stdout, stderr: result.stderr)
 	let memoryLeak = result.exitCode() == memoryLeakExitCode
 	let parsed = parseTests(combined)
 	let failureSummaries = parseFailureBlocks(combined)
 
-	return buildOutcome(compiler: compiler, filter: filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: parsed, failures: failureSummaries, combined: combined)
+	return buildOutcome(compiler, filter: filter, exitCode: result.exitCode(), durationMs: elapsed, memoryLeak: memoryLeak, tests: parsed, failures: failureSummaries, combined: combined)
 end 'specOutcomeHandler'
 
 // =============================================================================
@@ -167,10 +167,6 @@ function parseTestLine(line String) returns SpecTestEntry throws NotFound
 
 	return SpecTestEntry.create(spec, name: name, passed: passed, durationMs: dur as TestDurationMs)
 end 'parseTestLine'
-
-function isAsciiDigit(b Byte) returns bool
-	return b >= 0x30 and b <= 0x39
-end 'isAsciiDigit'
 
 // Sentinel typealias for "no match" — kept in this file so the parser
 // helpers stay self-contained.

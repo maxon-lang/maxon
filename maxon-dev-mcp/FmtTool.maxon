@@ -19,7 +19,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutco
 	end 'badSrc'
 
 	let repoRoot = repoRootPath()
-	let csharpBinary = childPath(parent: repoRoot, segment: "bin/maxon.exe")
+	let csharpBinary = childPath(repoRoot, segment: "bin/maxon.exe")
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(resolved)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")
@@ -38,7 +38,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutco
 		cleanupResolvedSource(resolved)
 		return ToolOutcome.error(RpcStandardErrorCode.internalError.rawValue, message: "fmt: spawn failed: {err.displayReason()}")
 	end 'spawn'
-	let elapsed = Clock.elapsedMs(since: timing)
+	let elapsed = Clock.elapsedMs(timing)
 
 	let formatted = try File.readText(resolved.mainFile) otherwise 'readBackErr'
 		cleanupResolvedSource(resolved)
@@ -46,7 +46,7 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId) returns ToolOutco
 	end 'readBackErr'
 
 	let changed = not originalBytes.equals(formatted)
-	let outcome = buildFmtOutcome(formatted: formatted, changed: changed, durationMs: elapsed, exitCode: result.exitCode(), output: result)
+	let outcome = buildFmtOutcome(formatted, changed: changed, durationMs: elapsed, exitCode: result.exitCode(), output: result)
 	cleanupResolvedSource(resolved)
 	return outcome
 end 'fmtHandler'
@@ -62,7 +62,7 @@ function buildFmtOutcome(formatted String, changed bool, durationMs DurationMs, 
 	let durId = doc.add(JsonNode.numberNode(durationMs))
 	let formattedId = doc.add(JsonNode.stringNode(formatted))
 	let changedId = doc.add(JsonNode.boolNode(changed))
-	let combined = combineStreams(stdout: output.stdout, stderr: output.stderr)
+	let combined = combineStreams(output.stdout, stderr: output.stderr)
 	let rawTailId = doc.add(JsonNode.stringNode(lastBytes(combined, max: fmtRawTailMaxBytes)))
 
 	var keys = StringArray.create()

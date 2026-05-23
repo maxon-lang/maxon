@@ -55,9 +55,9 @@ end 'emptyCollectedOutput'
 export function runBuild(csharpBinary FilePath, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs) returns BuildPhase
 	let timing = Clock.nowMs()
 	let result = try Subprocess.run(Executable.path(csharpBinary), arguments: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs) otherwise (err) 'spawn'
-		return BuildPhase.failedToSpawn("build spawn failed: {err.displayReason()}", durationMs: Clock.elapsedMs(since: timing))
+		return BuildPhase.failedToSpawn("build spawn failed: {err.displayReason()}", durationMs: Clock.elapsedMs(timing))
 	end 'spawn'
-	return BuildPhase.spawned(result, durationMs: Clock.elapsedMs(since: timing))
+	return BuildPhase.spawned(result, durationMs: Clock.elapsedMs(timing))
 end 'runBuild'
 
 // =============================================================================
@@ -72,7 +72,7 @@ end 'runBuild'
 /// error.
 export function expectedExePath(mainFile FilePath) returns FilePath
 	let base = stripExtension(mainFile)
-	let direct = changeExtension(base: base, ext: "exe")
+	let direct = changeExtension(base, ext: "exe")
 	if File.exists(direct) 'direct'
 		return direct
 	end 'direct'
@@ -80,7 +80,7 @@ export function expectedExePath(mainFile FilePath) returns FilePath
 		return direct
 	end 'noParent'
 	let basename = lastSegment(base)
-	let inMaxonDir = childPath(parent: parent, segment: ".maxon/{basename}.exe")
+	let inMaxonDir = childPath(parent, segment: ".maxon/{basename}.exe")
 	if File.exists(inMaxonDir) 'inMaxon'
 		return inMaxonDir
 	end 'inMaxon'

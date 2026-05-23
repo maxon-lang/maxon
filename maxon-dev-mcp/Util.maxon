@@ -13,6 +13,10 @@ export enum NotFound implements Error
 	notFound
 end 'NotFound'
 
+export function isAsciiDigit(b Byte) returns bool
+	return b >= 0x30 and b <= 0x39
+end 'isAsciiDigit'
+
 /// Search for `needle` as a byte subsequence of `haystack`. Returns the
 /// starting byte index. Throws `NotFound.notFound` if no match.
 export function findByteSequence(haystack ByteArray, needle String) returns BytePos throws NotFound
@@ -111,7 +115,7 @@ export function repoRootPath() returns FilePath
 	var dir = parentDir(exe)
 	let maxDepth = 16
 	for _ in 0 upto maxDepth 'walk'
-		let candidate = childPath(parent: dir, segment: "bin/maxon.exe")
+		let candidate = childPath(dir, segment: "bin/maxon.exe")
 		if File.exists(candidate) 'found'
 			return dir
 		end 'found'

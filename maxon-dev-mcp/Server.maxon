@@ -495,7 +495,7 @@ end 'emitToolSuccess'
 // `doc.root`, not the subtree the tool meant to return).
 function rootedSubDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
 	var out = JsonDoc.create()
-	out.root = copyJsonNode(src: src, srcId: root, dst: out)
+	out.root = copyJsonNode(src, srcId: root, dst: out)
 	return out
 end 'rootedSubDoc'
 
@@ -509,8 +509,8 @@ export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns
 		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
 		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
 		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
-		jsonArray then return copyJsonArray(src: src, node: node, dst: dst)
-		jsonObject then return copyJsonObject(src: src, node: node, dst: dst)
+		jsonArray then return copyJsonArray(src, node: node, dst: dst)
+		jsonObject then return copyJsonObject(src, node: node, dst: dst)
 	end 'k'
 end 'copyJsonNode'
 
@@ -521,7 +521,7 @@ function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNode
 		let childId = try node.children.get(i) otherwise 'gErr'
 			panic("copyJsonArray: children.get OOB — i bounded by n")
 		end 'gErr'
-		ids.push(copyJsonNode(src: src, srcId: childId, dst: dst))
+		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
 	end 'each'
 	return dst.add(JsonNode.arrayNode(ids))
 end 'copyJsonArray'
@@ -538,7 +538,7 @@ function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNod
 			panic("copyJsonObject: children.get OOB — parallel arrays out of sync")
 		end 'cErr'
 		keys.push(k)
-		children.push(copyJsonNode(src: src, srcId: childId, dst: dst))
+		children.push(copyJsonNode(src, srcId: childId, dst: dst))
 	end 'each'
 	return dst.add(JsonNode.objectNode(keys, children: children))
 end 'copyJsonObject'
