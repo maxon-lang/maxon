@@ -68,11 +68,11 @@ end 'clearDepsFor'
 
 function main() returns ExitCode
 		var deps = DependencyArray.create()
-		deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
-		deps.push(Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
-		deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
-		deps.push(Dependency.create(dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")))
-		let db = Database.create(dependencies: deps)
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
+		deps.push(Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
+		deps.push(Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
+		deps.push(Dependency.create(QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")))
+		let db = Database.create(deps)
 		clearDepsFor(db)
 		return db.dependencies.count()
 end 'main'
@@ -118,12 +118,12 @@ end 'keepBigValues'
 
 function main() returns ExitCode
 		var items = ItemArray.create()
-		items.push(Item.create(name: "alpha string long enough for heap allocation", value: 1))
-		items.push(Item.create(name: "beta string long enough for heap allocation", value: 2))
-		items.push(Item.create(name: "gamma string long enough for heap allocation", value: 3))
-		items.push(Item.create(name: "delta string long enough for heap allocation", value: 4))
-		items.push(Item.create(name: "epsilon string long enough for heap allocation", value: 5))
-		let c = Container.create(items: items)
+		items.push(Item.create("alpha string long enough for heap allocation", value: 1))
+		items.push(Item.create("beta string long enough for heap allocation", value: 2))
+		items.push(Item.create("gamma string long enough for heap allocation", value: 3))
+		items.push(Item.create("delta string long enough for heap allocation", value: 4))
+		items.push(Item.create("epsilon string long enough for heap allocation", value: 5))
+		let c = Container.create(items)
 		keepBigValues(c)
 		return c.items.count()
 end 'main'
@@ -176,13 +176,13 @@ end 'removeNone'
 
 function main() returns ExitCode
 		var entries = EntryArray.create()
-		entries.push(Entry.create(tag: Tag.name("first long string for heap allocation purposes")))
-		entries.push(Entry.create(tag: Tag.none))
-		entries.push(Entry.create(tag: Tag.id(42)))
-		entries.push(Entry.create(tag: Tag.none))
-		entries.push(Entry.create(tag: Tag.name("second long string for heap allocation purposes")))
-		entries.push(Entry.create(tag: Tag.none))
-		let store = Store.create(entries: entries)
+		entries.push(Entry.create(Tag.name("first long string for heap allocation purposes")))
+		entries.push(Entry.create(Tag.none))
+		entries.push(Entry.create(Tag.id(42)))
+		entries.push(Entry.create(Tag.none))
+		entries.push(Entry.create(Tag.name("second long string for heap allocation purposes")))
+		entries.push(Entry.create(Tag.none))
+		let store = Store.create(entries)
 		removeNone(store)
 		removeNone(store)
 		removeNone(store)
@@ -227,10 +227,10 @@ end 'clearAll'
 
 function main() returns ExitCode
 		var deps = DepArray.create()
-		deps.push(Dep.create(source: Key.module, target: Key.file("a.maxon long enough for heap")))
-		deps.push(Dep.create(source: Key.module, target: Key.file("b.maxon long enough for heap")))
-		deps.push(Dep.create(source: Key.file("c.maxon long enough for heap"), target: Key.module))
-		let state = State.create(deps: deps)
+		deps.push(Dep.create(Key.module, target: Key.file("a.maxon long enough for heap")))
+		deps.push(Dep.create(Key.module, target: Key.file("b.maxon long enough for heap")))
+		deps.push(Dep.create(Key.file("c.maxon long enough for heap"), target: Key.module))
+		let state = State.create(deps)
 		clearAll(state)
 		return state.deps.count()
 end 'main'

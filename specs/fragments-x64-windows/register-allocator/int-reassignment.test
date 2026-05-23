@@ -7,82 +7,13 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 80 : i64}
-    %2 = maxon.binop %0, %1 {op = sub}
-    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1}
-    %3 = maxon.literal {value = 22 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
-    %4 = maxon.binop %3, %2 {op = add}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-reassignment.test:6: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [x, y]
-    maxon.return %4
-  }
-}
-=== standard
+---
+// CompiledIR
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 100 : i64}
-    %1 = arith.constant {value = 80 : i64}
-    %2 = arith.subi %0, %1
-    %3 = arith.constant {value = 22 : i64}
-    %4 = arith.addi %3, %2
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_0
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @mrt_panic %11
-  __range_ok_0:
-    func.return %4
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 100
-    x64.mov rcx, 80
-    x64.sub rax, rcx
-    x64.mov rdx, 22
-    x64.add rdx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rdx, rsi
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rbx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.mov rax, rdx
-    x64.epilogue
+    x64.mov r8d, 42
     x64.ret
   }
 }
-```
----
 ---

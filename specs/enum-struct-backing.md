@@ -44,8 +44,8 @@ type Meta
 end 'Meta'
 
 enum TestOp
-	add = Meta.create(value: 1)
-	mul = Meta.create(value: 3)
+	add = Meta.create(1)
+	mul = Meta.create(3)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -74,9 +74,9 @@ type OpInfo
 end 'OpInfo'
 
 enum Instruction
-	add = OpInfo.create(latency: 1, throughput: 1)
-	mul = OpInfo.create(latency: 3, throughput: 2)
-	div = OpInfo.create(latency: 40, throughput: 1)
+	add = OpInfo.create(1, throughput: 1)
+	mul = OpInfo.create(3, throughput: 2)
+	div = OpInfo.create(40, throughput: 1)
 end 'Instruction'
 
 function main() returns ExitCode
@@ -103,9 +103,9 @@ type Info
 end 'Info'
 
 enum Priority
-	low = Info.create(weight: 1)
-	medium = Info.create(weight: 5)
-	high = Info.create(weight: 10)
+	low = Info.create(1)
+	medium = Info.create(5)
+	high = Info.create(10)
 end 'Priority'
 
 function main() returns ExitCode
@@ -132,8 +132,8 @@ type Metadata
 end 'Metadata'
 
 enum Op
-	read = Metadata.create(cost: 1)
-	write = Metadata.create(cost: 5)
+	read = Metadata.create(1)
+	write = Metadata.create(5)
 end 'Op'
 
 function main() returns ExitCode
@@ -163,9 +163,9 @@ type Meta
 end 'Meta'
 
 enum TestOp
-	add = Meta.create(latency: 1)
-	sub = Meta.create(latency: 1)
-	mul = Meta.create(latency: 3)
+	add = Meta.create(1)
+	sub = Meta.create(1)
+	mul = Meta.create(3)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -198,8 +198,8 @@ type OpInfo
 end 'OpInfo'
 
 enum Instruction
-	add = OpInfo.create(latency: 1, throughput: 2)
-	mul = OpInfo.create(latency: 3, throughput: 1)
+	add = OpInfo.create(1, throughput: 2)
+	mul = OpInfo.create(3, throughput: 1)
 end 'Instruction'
 
 function main() returns ExitCode
@@ -264,8 +264,8 @@ type Config
 end 'Config'
 
 enum Setting
-	turbo = Config.create(mode: Mode.fast, level: 10)
-	eco = Config.create(mode: Mode.slow, level: 3)
+	turbo = Config.create(Mode.fast, level: 10)
+	eco = Config.create(Mode.slow, level: 3)
 end 'Setting'
 
 function main() returns ExitCode
@@ -292,7 +292,7 @@ type Meta
 end 'Meta'
 
 enum Mixed
-	a = Meta.create(value: 1)
+	a = Meta.create(1)
 	b = 42
 end 'Mixed'
 
@@ -319,7 +319,7 @@ type Meta
 end 'Meta'
 
 enum TestOp
-	add = Meta.create(value: 1)
+	add = Meta.create(1)
 end 'TestOp'
 
 function main() returns ExitCode

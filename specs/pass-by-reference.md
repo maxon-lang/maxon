@@ -21,7 +21,7 @@ function double(x Integer) returns Integer
 end 'double'
 
 var n = 21
-var result = double(x: n)  // result is 42
+var result = double(n)  // result is 42
 ```
 
 ### Mutating Referenced Values
@@ -34,7 +34,7 @@ function increment(x Integer)
 end 'increment'
 
 var n = 10
-increment(x: n)
+increment(n)
 // n is now 11
 ```
 
@@ -47,8 +47,8 @@ If a `let` variable is passed to a function that assigns to that parameter, the 
 When a literal or expression result is passed to a function, a temporary is created. The function can read it normally:
 
 ```text
-var result = double(x: 42)       // literal creates a temporary
-var result2 = double(x: a + b)   // expression result creates a temporary
+var result = double(42)       // literal creates a temporary
+var result2 = double(a + b)   // expression result creates a temporary
 ```
 
 ### Closure Capture
@@ -68,7 +68,7 @@ end 'readVal'
 
 function main() returns ExitCode
 	let n = 42
-	return readVal(x: n)
+	return readVal(n)
 end 'main'
 ```
 ```exitcode
@@ -86,7 +86,7 @@ end 'setTo99'
 
 function main() returns ExitCode
 	var n = 0
-	setTo99(x: n)
+	setTo99(n)
 	print("{n}")
 	return 0
 end 'main'
@@ -109,7 +109,7 @@ end 'readVal'
 
 function main() returns ExitCode
 	let n = 37
-	return readVal(x: n)
+	return readVal(n)
 end 'main'
 ```
 ```exitcode
@@ -126,7 +126,7 @@ function readVal(x Integer) returns Integer
 end 'readVal'
 
 function main() returns ExitCode
-	return readVal(x: 42)
+	return readVal(42)
 end 'main'
 ```
 ```exitcode
@@ -145,7 +145,7 @@ end 'readVal'
 function main() returns ExitCode
 	let a = 20
 	let b = 22
-	return readVal(x: a + b)
+	return readVal(a + b)
 end 'main'
 ```
 ```exitcode
@@ -171,8 +171,8 @@ function setX(p Point)
 end 'setX'
 
 function main() returns ExitCode
-	let p = Point.create(x: 1, y: 2)
-	setX(p: p)
+	let p = Point.create(1, y: 2)
+	setX(p)
 	print("{p.x}")
 	return 0
 end 'main'
@@ -199,12 +199,12 @@ type Point
 end 'Point'
 
 function replacePoint(p Point)
-	p = Point.create(x: 99, y: 99)
+	p = Point.create(99, y: 99)
 end 'replacePoint'
 
 function main() returns ExitCode
-	var p = Point.create(x: 1, y: 2)
-	replacePoint(p: p)
+	var p = Point.create(1, y: 2)
+	replacePoint(p)
 	print("{p.x}\n")
 	print("{p.y}\n")
 	return 0
@@ -230,7 +230,7 @@ end 'setTo99'
 
 function main() returns ExitCode
 	let n = 5
-	setTo99(x: n)
+	setTo99(n)
 	return 0
 end 'main'
 ```
@@ -248,12 +248,12 @@ function inner(x Integer)
 end 'inner'
 
 function outer(x Integer)
-	inner(x: x)
+	inner(x)
 end 'outer'
 
 function main() returns ExitCode
 	var n = 0
-	outer(x: n)
+	outer(n)
 	print("{n}")
 	return 0
 end 'main'
@@ -278,7 +278,7 @@ function main() returns ExitCode
 	let x = 1
 	var y = 2
 	let z = 3
-	process(a: x, b: y, c: z)
+	process(x, b: y, c: z)
 	print("{x}\n")
 	print("{y}\n")
 	print("{z}\n")
@@ -310,7 +310,7 @@ end 'switchColor'
 
 function main() returns ExitCode
 	var c = Color.red
-	switchColor(c: c)
+	switchColor(c)
 	return c.rawValue
 end 'main'
 ```
@@ -328,7 +328,7 @@ function addOffset(x Integer, offset Integer = 10) returns Integer
 end 'addOffset'
 
 function main() returns ExitCode
-	let result = addOffset(x: 32)
+	let result = addOffset(32)
 	return result
 end 'main'
 ```
@@ -348,7 +348,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let x = 42
-	let result = apply(f: function() gives x)
+	let result = apply(function() gives x)
 	return result
 end 'main'
 ```
@@ -370,7 +370,7 @@ function main() returns ExitCode
 	var x = 10
 	let f = function() gives x
 	x = 99
-	let result = apply(f: f)
+	let result = apply(f)
 	return result
 end 'main'
 ```

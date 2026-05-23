@@ -84,12 +84,8 @@ type FileWriter
 	/// Open a file for writing with the given permission mode, throwing on failure
 	static function open(path __ManagedMemory, mode FilePermission) returns FileWriter throws FileWriteError
 		let fileHandle = match mode 'perm'
-			executable gives try __ManagedFile.openWriteExecutable(path) otherwise 'ex'
-				throw FileWriteError.failed
-			end 'ex'
-			normal gives try __ManagedFile.openWrite(path) otherwise 'nm'
-				throw FileWriteError.failed
-			end 'nm'
+			executable gives try __ManagedFile.openWriteExecutable(path) otherwise throw FileWriteError.failed
+			normal gives try __ManagedFile.openWrite(path) otherwise throw FileWriteError.failed
 		end 'perm'
 		return FileWriter{file: fileHandle}
 	end 'open'

@@ -8,85 +8,29 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 20
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 7 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.literal {value = 10 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1}
-    %3 = maxon.binop %0, %1 {op = mod}
-    maxon.assign %3 {var = rem} {kind = i64} {decl = 1 : i1}
-    %4 = maxon.binop %3, %2 {op = mul}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-remainder-in-arithmetic.test:7: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b, c, rem]
-    maxon.return %4
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 100 : i64}
-    %1 = arith.constant {value = 7 : i64}
-    %2 = arith.constant {value = 10 : i64}
-    %3 = arith.remsi %0, %1
-    %4 = arith.muli %3, %2
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_0
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @mrt_panic %11
-  __range_ok_0:
-    func.return %4
-  }
-}
-=== x86
+---
+// CompiledIR
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 100
-    x64.mov rcx, 7
-    x64.mov rdx, 10
-    x64.cqo
-    x64.idiv rcx
-    x64.mov rbx, 10
-    x64.imul rdx, rbx
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rdx, rdi
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8d, 7
+    x64.mov eax, 100
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r9d, 10
+    x64.mov r8, rdx
+    x64.imul r8, r9
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

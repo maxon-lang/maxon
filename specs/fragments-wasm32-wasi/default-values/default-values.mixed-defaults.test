@@ -1,0 +1,84 @@
+// Test: default-values.mixed-defaults
+typealias Integer = int(i64.min to i64.max)
+
+function process(label String = "result", value Integer = 42) returns ExitCode
+	print("{label}: {value}")
+	return 0
+end 'process'
+
+function main() returns ExitCode
+	return process()
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+result: 42
+```
+---
+// CompiledIR
+module {
+  func @process(local0: i64, local1: i64) -> u8 {
+  entry:
+    %39 = mir.param local0 : i64
+    %40 = mir.param local1 : i64
+    %4 = mir.global_addr @__istr_0
+    %5 = mir.mov_imm 0 : i64
+    %6 = mir.load %39, 0 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %6, 8 width: qword
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 2 : i64
+    %11 = mir.mov_imm 21 : i64
+    %12 = mir.call @mrt_alloc(%11)
+    %13 = mir.call @mrt_i64_to_string(%40, %12)
+    %14 = mir.global_addr @__istr_0
+    %18 = mir.add.i64 %5, %8
+    %19 = mir.add.i64 %18, %10
+    %20 = mir.add.i64 %19, %13
+    %21 = mir.add.i64 %20, %5
+    %22 = mir.mov_imm 1 : i64
+    %23 = mir.add.i64 %21, %22
+    %24 = mir.call @mrt_alloc(%23)
+    mir.memcpy %24, %4, %5
+    %25 = mir.add.i64 %24, %5
+    mir.memcpy %25, %7, %8
+    %26 = mir.add.i64 %25, %8
+    mir.memcpy %26, %9, %10
+    %27 = mir.add.i64 %26, %10
+    mir.memcpy %27, %12, %13
+    %28 = mir.add.i64 %27, %13
+    mir.memcpy %28, %14, %5
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %24, %31, 0 width: qword
+    mir.store %21, %31, 8 width: qword
+    mir.store %21, %31, 16 width: qword
+    %32 = mir.mov_imm 1 : i64
+    mir.store %32, %31, 24 width: qword
+    mir.store %5, %31, 32 width: qword
+    %34 = mir.mov_imm 16 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    mir.store %31, %35, 0 width: qword
+    mir.store %5, %35, 8 width: qword
+    %41 = mir.load %35, 0 width: qword
+    %42 = mir.load %41, 0 width: qword
+    %43 = mir.load %41, 8 width: qword
+    %44 = mir.call @mrt_write_stdout(%42, %43)
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @__main.__paramDefault_0()
+    %1 = mir.mov_imm 42 : i64
+    %2 = mir.call @process(%0, %1)
+    %3 = mir.mov_imm 255 : i64
+    %4 = mir.cmp ugt, %2, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %5 = mir.global_addr @__panic_msg_0
+    %6 = mir.call @mrt_panic(%5)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

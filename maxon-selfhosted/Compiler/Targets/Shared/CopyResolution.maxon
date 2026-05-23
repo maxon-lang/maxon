@@ -51,6 +51,7 @@ end 'getAssignedReg'
 // no block-argument list. Instead, lowerMirToTarget stashes per-successor
 // branch arg lists on the predecessor's IrBlock.branchEdges. This
 // function reads those edges and builds a parallel copy per block arg.
+//
 export function buildBlockArgCopies(module TargetModule, func IrFunction, coloring ColoringResult, cfg CfgInfo) returns EdgeCopyMap
 	let numBlocks = cfg.numBlocks
 	var edgeCopies = EdgeCopyMap.create()
@@ -84,9 +85,14 @@ export function buildBlockArgCopies(module TargetModule, func IrFunction, colori
 				end 'noSrcArg'
 				let srcReg = getAssignedReg(coloring, valueId: srcValueId)
 
-				// Skip identity copies
+				let isFloat = stdTypeIsFloat(blockArg.argType)
+
+				// Original single-move path: skip identity copies. The splitter
+				// creates sub-ranges to make the per-edge interference graph
+				// tractable; the parallel copy itself still flows src → merge
+				// directly. The sub-range's color is the chordal allocator's
+				// hint waypoint, not a physical move waypoint.
 				if srcReg != dstReg and srcReg != RM_NONE and dstReg != RM_NONE 'needsCopy'
-					let isFloat = stdTypeIsFloat(blockArg.argType)
 					moves.push(CopyMove.create(srcReg, dstOrd: dstReg, isFloat: isFloat))
 				end 'needsCopy'
 

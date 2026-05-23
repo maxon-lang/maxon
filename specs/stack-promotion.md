@@ -29,7 +29,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 20)
+	let p = Point.create(10, y: 20)
 	return p.x + p.y
 end 'main'
 ```
@@ -68,7 +68,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 1, y: 2)
+	var p = Point.create(1, y: 2)
 	p.x = 100
 	return p.x
 end 'main'
@@ -108,7 +108,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	let a = Point.create(1, y: 2)
 	let b = a
 	return b.x
 end 'main'
@@ -152,7 +152,7 @@ function readX(p Point) returns Integer
 end 'readX'
 
 function main() returns ExitCode
-	let p = Point.create(x: 42, y: 0)
+	let p = Point.create(42, y: 0)
 	return readX(p)
 end 'main'
 ```
@@ -193,9 +193,9 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	let item = Item.create(value: 7)
+	let item = Item.create(7)
 	arr.push(item)
-	let got = try arr.get(0) otherwise Item.create(value: 0)
+	let got = try arr.get(0) otherwise Item.create(0)
 	return got.value
 end 'main'
 ```
@@ -259,11 +259,11 @@ type Point
 end 'Point'
 
 function makePoint(x Integer, y Integer) returns Point
-	return Point.create(x: x, y: y)
+	return Point.create(x, y: y)
 end 'makePoint'
 
 function main() returns ExitCode
-	let p = makePoint(x: 5, y: 10)
+	let p = makePoint(5, y: 10)
 	return p.x
 end 'main'
 ```

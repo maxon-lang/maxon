@@ -55,6 +55,38 @@ export type CopyEdge
 	end 'create'
 end 'CopyEdge'
 
+// Records a single (predecessor, sub-range) anchor produced by phi-merge
+// splitting. When a multi-anchor phi-merge is split, each predecessor copy
+// slot becomes its own LiveRange with a fresh valueId; that fresh id is
+// stored here paired with the predecessor block id. Consumed by
+// buildBlockArgCopies to dual-emit edge moves (src → sub → merge) instead
+// of the original single src → merge move.
+export type SplitPredAnchor
+	export var predBlockId BlockId
+	export var subRangeValueId ValueId
+
+	export static function create(predBlockId BlockId, subRangeValueId ValueId) returns SplitPredAnchor
+		return Self{predBlockId: predBlockId, subRangeValueId: subRangeValueId}
+	end 'create'
+end 'SplitPredAnchor'
+
+export typealias SplitPredAnchorArray = Array with SplitPredAnchor
+
+// One per phi-merge that the splitter rewrote into per-anchor sub-ranges.
+// `mergeValueId` is the merge's original valueId (R_main) — block-args still
+// reference it, so MIR ops are unchanged. `anchors` lists the sub-ranges
+// minted for each predecessor copy slot.
+export type SplitMergeInfo
+	export var mergeValueId ValueId
+	export var anchors SplitPredAnchorArray
+
+	export static function create(mergeValueId ValueId) returns SplitMergeInfo
+		return Self{mergeValueId: mergeValueId, anchors: SplitPredAnchorArray.create()}
+	end 'create'
+end 'SplitMergeInfo'
+
+export typealias SplitMergeInfoArray = Array with SplitMergeInfo
+
 export type LiveRange
 	export var valueId ValueId
 	export var defBlock BlockId
@@ -303,10 +335,9 @@ function addBlockArgEdgeIntervals(module TargetModule, func IrFunction, cfg CfgI
 end 'addBlockArgEdgeIntervals'
 
 // Linear scan over `func.blockRefs` to map a raw BlockId back to its IrBlock.
-// Block lists are small (typically <100 even in large functions) and this
-// helper is only used by addBlockArgEdgeIntervals, so we avoid carrying an
-// extra sidetable up the call chain.
-function findBlockById(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
+// Block lists are small (typically <100 even in large functions) so we avoid
+// carrying an extra sidetable up the call chain.
+export function findBlockById(module TargetModule, func IrFunction, blockId BlockId) returns IrBlock
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
 		if block.id == blockId 'match'

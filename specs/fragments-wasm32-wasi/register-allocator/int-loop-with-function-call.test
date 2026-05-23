@@ -1,0 +1,50 @@
+// Test: int-loop-with-function-call
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		sum = sum + double(i)
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1)
+  loop_0.header:
+    %3 = mir.mov_imm 5 : i64
+    %4 = mir.cmp lt, %14, %3
+    mir.cond_br %4 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %15 = mir.mov_imm 2 : i64
+    %16 = mir.mul.i64 %14, %15
+    %8 = mir.add.i64 %13, %16
+    %10 = mir.mov_imm 1 : i64
+    %11 = mir.add.i64 %14, %10
+    mir.br loop_0.header(%8, %11)
+  loop_0.exit:
+    %17 = mir.mov_imm 255 : i64
+    %18 = mir.cmp ugt, %13, %17
+    mir.cond_br %18 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %19 = mir.global_addr @__panic_msg_0
+    %20 = mir.call @mrt_panic(%19)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

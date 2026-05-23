@@ -55,12 +55,12 @@ type Lex
 	var hasPending bool
 
 	static function create() returns Lex
-		return Self{pendingError: OuterErr.unexpectedEof(line: 0, column: 0), hasPending: false}
+		return Self{pendingError: OuterErr.unexpectedEof(0, column: 0), hasPending: false}
 	end 'create'
 
 	function bump() throws InnerErr
 		hasPending = true
-		pendingError = OuterErr.unterminatedString(line: 7, column: 13)
+		pendingError = OuterErr.unterminatedString(7, column: 13)
 		throw InnerErr.gone
 	end 'bump'
 
@@ -69,7 +69,7 @@ type Lex
 			if hasPending 'hp'
 				throw pendingError
 			end 'hp'
-			throw OuterErr.unexpectedEof(line: 0, column: 0)
+			throw OuterErr.unexpectedEof(0, column: 0)
 		end 'inner'
 		return 0
 	end 'run'
@@ -110,7 +110,7 @@ union LexErr implements Error
 end 'LexErr'
 
 function tokenize() returns N throws LexErr
-	throw LexErr.unterminatedString(line: 7, column: 13)
+	throw LexErr.unterminatedString(7, column: 13)
 end 'tokenize'
 
 function main() returns ExitCode

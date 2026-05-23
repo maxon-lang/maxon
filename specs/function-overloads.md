@@ -41,8 +41,8 @@ function create(label String) returns String
   return label
 end 'create'
 
-create(name: "foo")    // calls first overload
-create(label: "bar")   // calls second overload
+create("foo")    // calls first overload
+create("bar")   // calls second overload
 ```
 
 #### Ambiguous calls
@@ -129,26 +129,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
-```
-
-<!-- test: ambiguous-same-signature-with-named-args -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function create(name String) returns Integer
-	return name.count()
-end 'create'
-
-function create(label String) returns Integer
-	return label.count() + 1
-end 'create'
-
-function main() returns ExitCode
-	return create(label: "hello world hello world hello world hello worl!")
-end 'main'
-```
-```exitcode
-48
 ```
 
 <!-- test: method-type-disambiguation -->

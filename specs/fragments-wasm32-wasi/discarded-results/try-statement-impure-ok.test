@@ -1,0 +1,42 @@
+// Test: try-statement-impure-ok
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0 as Integer
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function doWork() returns Integer throws MyError
+	counter = counter + 1
+	throw MyError.failed
+end 'doWork'
+
+function main() returns ExitCode
+	try doWork() otherwise ignore
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %9 = mir.global_addr @__data_counter
+    %10 = mir.load %9, 0 width: qword
+    %11 = mir.mov_imm 1 : i64
+    %12 = mir.add.i64 %10, %11
+    %13 = mir.global_addr @__data_counter
+    mir.store %12, %13, 0 width: qword
+    mir.br try_0.otherwise()
+  try_0.otherwise:
+    %5 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%5)
+  try_0.merge:
+    %7 = mir.mov_imm 0 : i64
+    mir.ret %7
+  }
+}
+---

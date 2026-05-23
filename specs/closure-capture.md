@@ -44,7 +44,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let offset = 7
-	let result = apply(f: function(n Integer) gives n + offset, x: 10)
+	let result = apply(function(n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -64,7 +64,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let value = 42
-	let result = apply(f: function(_ Integer) gives value, x: 99)
+	let result = apply(function(_ Integer) gives value, x: 99)
 	return result
 end 'main'
 ```
@@ -91,8 +91,8 @@ type Level
 end 'Level'
 
 function main() returns ExitCode
-	let level = Level.create(rawValue: 5)
-	let result = apply(f: function(_ Integer) gives level.rawValue, x: 0)
+	let level = Level.create(5)
+	let result = apply(function(_ Integer) gives level.rawValue, x: 0)
 	return result
 end 'main'
 ```
@@ -114,7 +114,7 @@ type Level
 end 'Level'
 
 function main() returns ExitCode
-	let level = Level.create(rawValue: 5)
+	let level = Level.create(5)
 	let arr = [1, 2, 3]
 	let result = arr.map(function(_ Integer) gives level.rawValue)
 	return result.count()
@@ -137,7 +137,7 @@ end 'apply'
 function main() returns ExitCode
 	let a = 10
 	let b = 20
-	let result = apply(f: function(x Integer) gives x + a + b, x: 5)
+	let result = apply(function(x Integer) gives x + a + b, x: 5)
 	return result
 end 'main'
 ```
@@ -156,7 +156,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let result = apply(f: function(n Integer) gives n * 3, x: 10)
+	let result = apply(function(n Integer) gives n * 3, x: 10)
 	return result
 end 'main'
 ```
@@ -176,7 +176,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let prefix = "hello"
-	let result = apply(f: function(_ Integer) gives prefix, x: 0)
+	let result = apply(function(_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'

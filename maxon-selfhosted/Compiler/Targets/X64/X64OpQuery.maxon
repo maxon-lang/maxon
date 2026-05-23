@@ -104,7 +104,7 @@ export type X64OpQuery implements TargetOpQuery
 		let x64Op = try module.x64Ops.get(packed) otherwise panic("invariant: packed opIdx not in module.x64Ops")
 		var probe = ReturnMovProbe.notFound()
 		match x64Op 'extractMov'
-			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(destOrd: x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
+			movRegReg(destReg, srcReg) then probe = ReturnMovProbe.ok(x64VRegOrdinal(destReg), srcId: extractX64VRegId(srcReg))
 			movXmmXmm then break 'extractMov'
 			prologue to memcpyOp then break 'extractMov'
 			cmpRegReg to xchgRegReg then break 'extractMov'
@@ -179,7 +179,7 @@ function extractX64MovRegRegHint(destReg X64VReg, srcReg X64VReg, blockId BlockI
 	let srcId = extractX64VRegId(srcReg)
 
 	if destId >= 0 and srcId >= 0 'bothVirtual'
-		setGprCopyHintEdge(destReg: destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setGprCopyHintEdge(destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
 		let srcOrd = x64VRegOrdinal(srcReg)
 		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
@@ -197,7 +197,7 @@ function extractX64MovXmmXmmHint(destFp X64FpVReg, srcFp X64FpVReg, blockId Bloc
 	let srcId = extractX64FpVRegId(srcFp)
 
 	if destId >= 0 and srcId >= 0 'bothVirtual'
-		setFpCopyHintEdge(destReg: destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setFpCopyHintEdge(destId, srcReg: srcId, blockId: blockId, copyPos: opPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 	end 'bothVirtual' else if destId >= 0 and srcId < 0 'physSrc'
 		let srcOrd = x64FpVRegOrdinal(srcFp)
 		setPhysHint(srcOrd, virtualId: destId, ranges: ranges, vidToRangeIdx: vidToRangeIdx)

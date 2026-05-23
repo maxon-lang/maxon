@@ -34,7 +34,7 @@ export function eliminateDeadStdFunctions(module StdModule, project Project) ret
 	var worklist = ["main"]
 	for root in project.livenessRoots 'seedRoots'
 		if not seen.contains(root) 'fresh'
-			seen.insert(element: root)
+			seen.insert(root)
 			worklist.push(root)
 		end 'fresh'
 	end 'seedRoots'
@@ -105,10 +105,10 @@ function pruneDeadGlobalData(globalData GlobalDataTable, liveLabels StdDfeString
 	// the loader (.data / .covdata) and have no code-side globalAddr op
 	// until the user actually references them.
 	for entry in globalData.dataSectionEntries 'eachData'
-		liveLabels.insert(element: entry.name)
+		liveLabels.insert(entry.name)
 	end 'eachData'
 	for entry in globalData.covDataEntries 'eachCov'
-		liveLabels.insert(element: entry.name)
+		liveLabels.insert(entry.name)
 	end 'eachCov'
 
 	// Filter pendingRdataRelocs: every funcAbs64InRdata reloc names a
@@ -226,7 +226,7 @@ function promoteLabelsFromSystemOp(project Project, op StdSystemOp, worklist Str
 		// only key off witness/layout labels — but recording the name
 		// into `liveLabels` lets `pruneDeadGlobalData` keep the blob
 		// alive via `shouldKeepGlobal`.
-		globalAddr(_, name) then liveLabels.insert(element: name)
+		globalAddr(_, name) then liveLabels.insert(name)
 		// `loadLayoutDescriptor` / `loadWitnessTable` pin both the blob
 		// AND its conditional-root impls. First-touch on a label
 		// promotes every `witnessConditionalRoots[label]` entry onto
@@ -250,7 +250,7 @@ function promoteConditionalRoots(project Project, label String, worklist StringA
 	if liveLabels.contains(label) 'already'
 		return
 	end 'already'
-	liveLabels.insert(element: label)
+	liveLabels.insert(label)
 	if let bucket = try project.witnessConditionalRoots.get(label) 'haveBucket'
 		for i in 0 upto bucket.count() 'eachImpl'
 			let implName = try bucket.get(i) otherwise panic("promoteConditionalRoots: bucket.get OOB at {i}")
@@ -287,6 +287,6 @@ function markStdCallee(name String, worklist StringArray, seen StdDfeStringSet)
 	if seen.contains(name) 'already'
 		return
 	end 'already'
-	seen.insert(element: name)
+	seen.insert(name)
 	worklist.push(name)
 end 'markStdCallee'

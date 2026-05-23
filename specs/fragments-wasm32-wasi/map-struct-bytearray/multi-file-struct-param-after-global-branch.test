@@ -1,30 +1,30 @@
 // Test: multi-file-struct-param-after-global-branch
 // --- file: api/0-Types.maxon
 typealias Byte = int(0 to u8.max)
-export typealias ByteArray = Array with Byte
-export typealias Count = int(0 to u64.max)
+export typealias EntryBytes = Array with Byte
+export typealias EntryCount = int(0 to u64.max)
 
 export type Entry
-	export var data ByteArray
-	export var tag Count
+	export var data EntryBytes
+	export var tag EntryCount
 end 'Entry'
 
 export typealias EntryMap = Map with (String, Entry)
-export typealias StringArray = Array with String
+export typealias EntryPaths = Array with String
 
 export type Database
 	export var sourceFiles EntryMap
-	export var sourcePaths StringArray
+	export var sourcePaths EntryPaths
 
-	export static function create(sourceFiles EntryMap, sourcePaths StringArray) returns Self
+	export static function create(sourceFiles EntryMap, sourcePaths EntryPaths) returns Self
 		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}
 	end 'create'
 end 'Database'
 
-export var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
+export var db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create())
 
 // --- file: app/1-Logic.maxon
-export function storeAndCheck(key String, data ByteArray)
+export function storeAndCheck(key String, data EntryBytes)
 	if db.sourceFiles.contains(key) 'exists'
 		let existing = try db.sourceFiles.get(key) otherwise 'skip'
 			return
@@ -39,7 +39,7 @@ end 'storeAndCheck'
 
 // --- file: bin/main.maxon
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = EntryBytes.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

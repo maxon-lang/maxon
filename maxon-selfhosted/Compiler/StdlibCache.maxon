@@ -141,7 +141,9 @@ let CACHE_MAGIC_3 = 0x00  // '\0'
 // v51: Stage J.4f.3 — added StdArithUnaryOpcode.bitcastI64ToF64 (the codec
 // must learn its lifted/encoded raw value) so float-typed reads from
 // type-erased managed memory can recover the float bits.
-let CACHE_FORMAT_VERSION = 52
+// v53: Phase 15c — whitelisted real FilePath/File/Directory stdlib;
+// registered __ManagedFile/__ManagedDirectory types.
+let CACHE_FORMAT_VERSION = 54
 
 // ============================================================
 // Types
@@ -757,7 +759,7 @@ function encodeStdlibCacheBody(project Project, buf ByteArray, data StdlibCacheD
 			try writeMaxonType(project, buf: buf, t: paramType)
 		end 'eachParamType'
 		for paramDefault in signature.paramDefaults 'eachParamDefault'
-			writeParamDefault(buf, pd: paramDefault)
+			try writeParamDefault(buf, pd: paramDefault)
 		end 'eachParamDefault'
 	end 'eachSig'
 
@@ -1262,7 +1264,7 @@ function decodeStdlibCache(project Project, buf ByteArray, target Target, expect
 		end 'eachParamType'
 		var paramDefaults = ParamDefaultArray.create()
 		for _ in 0 upto paramCount 'eachParamDefault'
-			let (pd, pSig3) = readParamDefault(buf, offset: pos)
+			let (pd, pSig3) = try readParamDefault(buf, offset: pos)
 			pos = pSig3
 			paramDefaults.push(pd)
 		end 'eachParamDefault'
@@ -1601,7 +1603,7 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 	// Seed from caller-provided names
 	for name in seeds 'seed'
 		if funcNameToIndex.contains(name) and not needed.contains(name) 'isStdlib'
-			needed.insert(element: name)
+			needed.insert(name)
 			worklist.push(name)
 		end 'isStdlib'
 	end 'seed'
@@ -1625,14 +1627,14 @@ export function computeNeededStdlibFunctions(seeds StringArray, stdlibCache Stdl
 
 		for fixup in func.callFixups 'eachDep'
 			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newDep'
-				needed.insert(element: fixup.targetName)
+				needed.insert(fixup.targetName)
 				newDeps.push(fixup.targetName)
 			end 'newDep'
 		end 'eachDep'
 
 		for fixup in func.adrFixups 'eachAdrDep'
 			if funcNameToIndex.contains(fixup.targetName) and not needed.contains(fixup.targetName) 'newAdrDep'
-				needed.insert(element: fixup.targetName)
+				needed.insert(fixup.targetName)
 				newDeps.push(fixup.targetName)
 			end 'newAdrDep'
 		end 'eachAdrDep'
@@ -1650,7 +1652,7 @@ export function mergeStdlibGlobalData(globalData GlobalDataTable, rdataRelocs Rd
 	var neededGlobals = StdlibFuncNameSet.create()
 
 	for fixup in rdataRelocs 'findGlobals'
-		neededGlobals.insert(element: fixup.rdataLabel)
+		neededGlobals.insert(fixup.rdataLabel)
 	end 'findGlobals'
 
 	for i in 0 upto stdlibCache.globalData.names.count() 'mergeGlobals'
@@ -3097,7 +3099,7 @@ function readStdArithConst(buf ByteArray, offset ByteOffset) returns (StdArithCo
 	let opcode = try liftStdArithConstOpcode(opRaw)
 	let resultId = readQword(buf, offset: offset + 4)
 	let value = readQword(buf, offset: offset + 12)
-	return (StdArithConst.create(opcode: opcode, resultId: resultId, value: value), offset + 20)
+	return (StdArithConst.create(opcode, resultId: resultId, value: value), offset + 20)
 end 'readStdArithConst'
 
 function liftStdArithConstOpcode(raw MachineWord) returns StdArithConstOpcode throws CacheCorruption
@@ -3119,7 +3121,7 @@ function readStdArithUnaryOp(buf ByteArray, offset ByteOffset) returns (StdArith
 	let opcode = try liftStdArithUnaryOpcode(opRaw)
 	let resultId = readQword(buf, offset: offset + 4)
 	let operandId = readQword(buf, offset: offset + 12)
-	return (StdArithUnaryOp.create(opcode: opcode, resultId: resultId, operandId: operandId), offset + 20)
+	return (StdArithUnaryOp.create(opcode, resultId: resultId, operandId: operandId), offset + 20)
 end 'readStdArithUnaryOp'
 
 function liftStdArithUnaryOpcode(raw MachineWord) returns StdArithUnaryOpcode throws CacheCorruption
@@ -3152,7 +3154,7 @@ function readStdArithBinaryOp(buf ByteArray, offset ByteOffset) returns (StdArit
 	let resultId = readQword(buf, offset: offset + 4)
 	let leftId = readQword(buf, offset: offset + 12)
 	let rightId = readQword(buf, offset: offset + 20)
-	return (StdArithBinaryOp.create(opcode: opcode, resultId: resultId, leftId: leftId, rightId: rightId), offset + 28)
+	return (StdArithBinaryOp.create(opcode, resultId: resultId, leftId: leftId, rightId: rightId), offset + 28)
 end 'readStdArithBinaryOp'
 
 function liftStdArithBinaryOpcode(raw MachineWord) returns StdArithBinaryOpcode throws CacheCorruption
@@ -3493,6 +3495,17 @@ function writeStdSystemOp(buf ByteArray, op StdSystemOp) throws CacheCorruption
 		osAllocPages(resultId, sizeId) then writeStdSysOsAllocPages(buf, resultId: resultId, sizeId: sizeId)
 		osAllocPagesLarge(resultId, sizeId) then writeStdSysOsAllocPagesLarge(buf, resultId: resultId, sizeId: sizeId)
 		osFreePages(ptrId, sizeId) then writeStdSysOsFreePages(buf, ptrId: ptrId, sizeId: sizeId)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then writeStdSysOsFileOpen(buf, resultId: resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId)
+		osFileRead(resultId, fdId, bufPtrId, countId) then writeStdSysOsFileRead(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)
+		osFileWrite(resultId, fdId, bufPtrId, countId) then writeStdSysOsFileWrite(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)
+		osFileClose(resultId, fdId) then writeStdSysOsFileClose(buf, resultId: resultId, fdId: fdId)
+		osFileLseek(resultId, fdId, offsetId, whenceId) then writeStdSysOsFileLseek(buf, resultId: resultId, fdId: fdId, offsetId: offsetId, whenceId: whenceId)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) then writeStdSysOsFileStat(buf, resultId: resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId)
+		osFileAccess(resultId, cStringPtrId, modeId) then writeStdSysOsFileAccess(buf, resultId: resultId, cStringPtrId: cStringPtrId, modeId: modeId)
+		osFileUnlink(resultId, cStringPtrId) then writeStdSysOsFileUnlink(buf, resultId: resultId, cStringPtrId: cStringPtrId)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then writeStdSysOsDirGetdents64(buf, resultId: resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) then writeStdSysOsDirGetcwd(buf, resultId: resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)
+		osDirMkdir(resultId, cStringPtrId, modeId) then writeStdSysOsDirMkdir(buf, resultId: resultId, cStringPtrId: cStringPtrId, modeId: modeId)
 		atomicInc(addrId) then writeQword(buf, value: addrId)
 		atomicDec(addrId) then writeQword(buf, value: addrId)
 		atomicXadd(resultId, addrId, valId) then writeStdSysAtomicXadd(buf, resultId: resultId, addrId: addrId, valId: valId)
@@ -3622,6 +3635,76 @@ function writeStdSysOsFreePages(buf ByteArray, ptrId ValueId, sizeId ValueId)
 	writeQword(buf, value: sizeId)
 end 'writeStdSysOsFreePages'
 
+// Phase 15c Stream 4.1 file-I/O ops.
+function writeStdSysOsFileOpen(buf ByteArray, resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: cStringPtrId)
+	writeQword(buf, value: flagsId)
+	writeQword(buf, value: fileModeId)
+end 'writeStdSysOsFileOpen'
+
+function writeStdSysOsFileRead(buf ByteArray, resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: fdId)
+	writeQword(buf, value: bufPtrId)
+	writeQword(buf, value: countId)
+end 'writeStdSysOsFileRead'
+
+function writeStdSysOsFileWrite(buf ByteArray, resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: fdId)
+	writeQword(buf, value: bufPtrId)
+	writeQword(buf, value: countId)
+end 'writeStdSysOsFileWrite'
+
+function writeStdSysOsFileClose(buf ByteArray, resultId ValueId, fdId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: fdId)
+end 'writeStdSysOsFileClose'
+
+function writeStdSysOsFileLseek(buf ByteArray, resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: fdId)
+	writeQword(buf, value: offsetId)
+	writeQword(buf, value: whenceId)
+end 'writeStdSysOsFileLseek'
+
+function writeStdSysOsFileStat(buf ByteArray, resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: cStringPtrId)
+	writeQword(buf, value: statBufPtrId)
+end 'writeStdSysOsFileStat'
+
+function writeStdSysOsFileAccess(buf ByteArray, resultId ValueId, cStringPtrId ValueId, modeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: cStringPtrId)
+	writeQword(buf, value: modeId)
+end 'writeStdSysOsFileAccess'
+
+function writeStdSysOsFileUnlink(buf ByteArray, resultId ValueId, cStringPtrId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: cStringPtrId)
+end 'writeStdSysOsFileUnlink'
+
+function writeStdSysOsDirGetdents64(buf ByteArray, resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: fdId)
+	writeQword(buf, value: bufPtrId)
+	writeQword(buf, value: bufSizeId)
+end 'writeStdSysOsDirGetdents64'
+
+function writeStdSysOsDirGetcwd(buf ByteArray, resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: bufPtrId)
+	writeQword(buf, value: bufSizeId)
+end 'writeStdSysOsDirGetcwd'
+
+function writeStdSysOsDirMkdir(buf ByteArray, resultId ValueId, cStringPtrId ValueId, modeId ValueId)
+	writeQword(buf, value: resultId)
+	writeQword(buf, value: cStringPtrId)
+	writeQword(buf, value: modeId)
+end 'writeStdSysOsDirMkdir'
+
 function writeStdSysAtomicXadd(buf ByteArray, resultId ValueId, addrId ValueId, valId ValueId)
 	writeQword(buf, value: resultId)
 	writeQword(buf, value: addrId)
@@ -3696,6 +3779,17 @@ function readStdSystemOp(buf ByteArray, offset ByteOffset) returns (StdSystemOp,
 		osAllocPages gives readStdSysOsAllocPages(buf, offset: pos)
 		osAllocPagesLarge gives readStdSysOsAllocPagesLarge(buf, offset: pos)
 		osFreePages gives readStdSysOsFreePages(buf, offset: pos)
+		osFileOpen gives readStdSysOsFileOpen(buf, offset: pos)
+		osFileRead gives readStdSysOsFileRead(buf, offset: pos)
+		osFileWrite gives readStdSysOsFileWrite(buf, offset: pos)
+		osFileClose gives readStdSysOsFileClose(buf, offset: pos)
+		osFileLseek gives readStdSysOsFileLseek(buf, offset: pos)
+		osFileStat gives readStdSysOsFileStat(buf, offset: pos)
+		osFileAccess gives readStdSysOsFileAccess(buf, offset: pos)
+		osFileUnlink gives readStdSysOsFileUnlink(buf, offset: pos)
+		osDirGetdents64 gives readStdSysOsDirGetdents64(buf, offset: pos)
+		osDirGetcwd gives readStdSysOsDirGetcwd(buf, offset: pos)
+		osDirMkdir gives readStdSysOsDirMkdir(buf, offset: pos)
 		atomicInc gives readStdSysAtomicInc(buf, offset: pos)
 		atomicDec gives readStdSysAtomicDec(buf, offset: pos)
 		atomicXadd gives readStdSysAtomicXadd(buf, offset: pos)
@@ -3868,6 +3962,86 @@ function readStdSysOsFreePages(buf ByteArray, offset ByteOffset) returns (StdSys
 	let sizeId = readQword(buf, offset: offset + 8)
 	return (StdSystemOp.osFreePages(ptrId, sizeId: sizeId), offset + 16)
 end 'readStdSysOsFreePages'
+
+function readStdSysOsFileOpen(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let cStringPtrId = readQword(buf, offset: offset + 8)
+	let flagsId = readQword(buf, offset: offset + 16)
+	let fileModeId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.osFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId), offset + 32)
+end 'readStdSysOsFileOpen'
+
+function readStdSysOsFileRead(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let fdId = readQword(buf, offset: offset + 8)
+	let bufPtrId = readQword(buf, offset: offset + 16)
+	let countId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.osFileRead(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId), offset + 32)
+end 'readStdSysOsFileRead'
+
+function readStdSysOsFileWrite(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let fdId = readQword(buf, offset: offset + 8)
+	let bufPtrId = readQword(buf, offset: offset + 16)
+	let countId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.osFileWrite(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId), offset + 32)
+end 'readStdSysOsFileWrite'
+
+function readStdSysOsFileClose(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let fdId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osFileClose(resultId, fdId: fdId), offset + 16)
+end 'readStdSysOsFileClose'
+
+function readStdSysOsFileLseek(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let fdId = readQword(buf, offset: offset + 8)
+	let offsetArg = readQword(buf, offset: offset + 16)
+	let whenceId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.osFileLseek(resultId, fdId: fdId, offsetId: offsetArg, whenceId: whenceId), offset + 32)
+end 'readStdSysOsFileLseek'
+
+function readStdSysOsFileStat(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let cStringPtrId = readQword(buf, offset: offset + 8)
+	let statBufPtrId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osFileStat(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId), offset + 24)
+end 'readStdSysOsFileStat'
+
+function readStdSysOsFileAccess(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let cStringPtrId = readQword(buf, offset: offset + 8)
+	let modeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osFileAccess(resultId, cStringPtrId: cStringPtrId, modeId: modeId), offset + 24)
+end 'readStdSysOsFileAccess'
+
+function readStdSysOsFileUnlink(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let cStringPtrId = readQword(buf, offset: offset + 8)
+	return (StdSystemOp.osFileUnlink(resultId, cStringPtrId: cStringPtrId), offset + 16)
+end 'readStdSysOsFileUnlink'
+
+function readStdSysOsDirGetdents64(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let fdId = readQword(buf, offset: offset + 8)
+	let bufPtrId = readQword(buf, offset: offset + 16)
+	let bufSizeId = readQword(buf, offset: offset + 24)
+	return (StdSystemOp.osDirGetdents64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 32)
+end 'readStdSysOsDirGetdents64'
+
+function readStdSysOsDirGetcwd(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let bufPtrId = readQword(buf, offset: offset + 8)
+	let bufSizeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osDirGetcwd(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId), offset + 24)
+end 'readStdSysOsDirGetcwd'
+
+function readStdSysOsDirMkdir(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
+	let resultId = readQword(buf, offset: offset)
+	let cStringPtrId = readQword(buf, offset: offset + 8)
+	let modeId = readQword(buf, offset: offset + 16)
+	return (StdSystemOp.osDirMkdir(resultId, cStringPtrId: cStringPtrId, modeId: modeId), offset + 24)
+end 'readStdSysOsDirMkdir'
 
 function readStdSysAtomicInc(buf ByteArray, offset ByteOffset) returns (StdSystemOp, ByteOffset)
 	let addrId = readQword(buf, offset: offset)

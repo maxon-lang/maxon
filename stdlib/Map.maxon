@@ -61,7 +61,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			let v = try initValues.get(i) otherwise 'vErr'
 				panic("Map.init: initValues.get OOB — i < numElements guaranteed")
 			end 'vErr'
-			result.upsert(key: k, value: v)
+			result.upsert(k, value: v)
 		end 'insert_loop'
 
 		return result
@@ -99,7 +99,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function insert(key Key, value Value) throws MapError
 		ensureCapacity()
 
-		let slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key)
 		if slotIndex >= 0 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
@@ -114,7 +114,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	export function upsert(key Key, value Value)
 		ensureCapacity()
 
-		let slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key)
 		if slotIndex >= 0 'found'
 			try values.set(slotIndex, value: value) otherwise panic("Map.upsert: values.set OOB — slot from findSlot is always in-bounds")
 			return
@@ -126,7 +126,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	/// Get the value for a key, throws if not found
 	export function get(key Key) returns Value throws MapError
-		let slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key)
 		if slotIndex >= 0 'found'
 			if let v = try values.get(slotIndex) 'get_value'
 				return v
@@ -137,12 +137,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 	/// Check if key exists in the map
 	export function contains(key Key) returns bool
-		return findSlot(key: key) >= 0
+		return findSlot(key) >= 0
 	end 'contains'
 
 	/// Remove key from map, returns true if key was present
 	export function remove(key Key) returns bool
-		let slotIndex = findSlot(key: key)
+		let slotIndex = findSlot(key)
 		if slotIndex >= 0 'found'
 			try states.set(slotIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
 			count = count - 1
@@ -159,7 +159,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// Create a fresh iterator positioned at the first occupied entry.
 	/// Throws IterationError.exhausted if the map is empty.
 	export function createIterator() returns MapIterator throws IterationError
-		return try MapIterator.create(keys: keys, values: values, states: states, capacity: capacity)
+		return try MapIterator.create(keys, values: values, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
@@ -278,7 +278,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				let value = try oldValues.get(i) otherwise 'skip_val'
 					continue
 				end 'skip_val'
-				upsert(key: key, value: value)
+				upsert(key, value: value)
 			end 'occupied'
 		end 'rehash'
 	end 'grow'
@@ -300,7 +300,7 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	var iterIndex SlotIndex
 
 	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity BucketCapacity) returns Self throws IterationError
-		let first = try findNextOccupied(states: states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
@@ -311,7 +311,7 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	end 'current'
 
 	export function advance() throws IterationError
-		iterIndex = try findNextOccupied(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'MapIterator'
 

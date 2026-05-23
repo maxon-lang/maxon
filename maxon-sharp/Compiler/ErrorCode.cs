@@ -48,6 +48,7 @@ public enum ErrorCode {
   ParserMatchBlockStatement = 2049,
   ParserOtherwiseBlockMissingBinding = 2050,
   ParserReservedIdentifier = 2051,
+  ParserFirstArgCannotBeNamed = 2052,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

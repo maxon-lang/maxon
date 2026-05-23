@@ -1,0 +1,37 @@
+// Test: int-if-else-value-survives-branch
+function main() returns ExitCode
+	let base = 40
+	let cond = 1
+	var extra = 0
+	if cond == 1 'check'
+		extra = 2
+	end 'check' else 'other'
+		extra = 100
+	end 'other'
+	return base + extra
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 40 : i64
+    mir.br check_0()
+  check_0:
+    %6 = mir.mov_imm 2 : i64
+    mir.br check_0.merge(%6)
+  check_0.merge:
+    %10 = mir.add.i64 %0, %11
+    %12 = mir.mov_imm 255 : i64
+    %13 = mir.cmp ugt, %10, %12
+    mir.cond_br %13 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %14 = mir.global_addr @__panic_msg_0
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

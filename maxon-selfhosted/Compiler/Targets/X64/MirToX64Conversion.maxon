@@ -173,6 +173,17 @@ function countMirNonAbsorbUses(op MirOp, uc UseCountMap, constMap ConstMap)
 		osAllocPages(_, sizeId) then ucIncrement(uc, valueId: sizeId)
 		osAllocPagesLarge(_, sizeId) then ucIncrement(uc, valueId: sizeId)
 		osFreePages(ptrId, sizeId) then ucIncrementTwo(uc, a: ptrId, b: sizeId)
+		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then ucIncrementThree(uc, a: cStringPtrId, b: flagsId, c: fileModeId)
+		osFileRead(_, fdId, bufPtrId, countId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: countId)
+		osFileWrite(_, fdId, bufPtrId, countId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: countId)
+		osFileClose(_, fdId) then ucIncrement(uc, valueId: fdId)
+		osFileLseek(_, fdId, offsetId, whenceId) then ucIncrementThree(uc, a: fdId, b: offsetId, c: whenceId)
+		osFileStat(_, cStringPtrId, statBufPtrId) then ucIncrementTwo(uc, a: cStringPtrId, b: statBufPtrId)
+		osFileAccess(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
+		osFileUnlink(_, cStringPtrId) then ucIncrement(uc, valueId: cStringPtrId)
+		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: bufSizeId)
+		osDirGetcwd(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
+		osDirMkdir(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
 		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
@@ -329,6 +340,17 @@ function countMirOpUses(op MirOp, uc UseCountMap)
 		osAllocPages(_, sizeId) then ucIncrement(uc, valueId: sizeId)
 		osAllocPagesLarge(_, sizeId) then ucIncrement(uc, valueId: sizeId)
 		osFreePages(ptrId, sizeId) then ucIncrementTwo(uc, a: ptrId, b: sizeId)
+		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then ucIncrementThree(uc, a: cStringPtrId, b: flagsId, c: fileModeId)
+		osFileRead(_, fdId, bufPtrId, countId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: countId)
+		osFileWrite(_, fdId, bufPtrId, countId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: countId)
+		osFileClose(_, fdId) then ucIncrement(uc, valueId: fdId)
+		osFileLseek(_, fdId, offsetId, whenceId) then ucIncrementThree(uc, a: fdId, b: offsetId, c: whenceId)
+		osFileStat(_, cStringPtrId, statBufPtrId) then ucIncrementTwo(uc, a: cStringPtrId, b: statBufPtrId)
+		osFileAccess(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
+		osFileUnlink(_, cStringPtrId) then ucIncrement(uc, valueId: cStringPtrId)
+		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then ucIncrementThree(uc, a: fdId, b: bufPtrId, c: bufSizeId)
+		osDirGetcwd(_, bufPtrId, bufSizeId) then ucIncrementTwo(uc, a: bufPtrId, b: bufSizeId)
+		osDirMkdir(_, cStringPtrId, modeId) then ucIncrementTwo(uc, a: cStringPtrId, b: modeId)
 		atomicInc(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicDec(addrId) then ucIncrement(uc, valueId: addrId)
 		atomicXadd(_, addrId, valId) then ucIncrementTwo(uc, a: addrId, b: valId)
@@ -404,6 +426,21 @@ function mirSysTempCount(op MirOp) returns SlotIndex
 		osAllocPagesLarge gives 8
 		// osFreePages: VirtualFree(ptr, 0, 0x8000) on Windows; munmap(ptr, len) on Linux.
 		osFreePages gives 4
+		// Phase 15c Stream 4.1 file-I/O syscalls. Worst-case shape per op: up to
+		// 4 input arg slots + a couple of materialized constants (open's flags +
+		// mode, getdents fixed-size args) + 1 result slot. 8 covers every case
+		// with headroom, matching the osAllocPages budget.
+		osFileOpen gives 8
+		osFileRead gives 8
+		osFileWrite gives 8
+		osFileClose gives 8
+		osFileLseek gives 8
+		osFileStat gives 8
+		osFileAccess gives 8
+		osFileUnlink gives 8
+		osDirGetdents64 gives 8
+		osDirGetcwd gives 8
+		osDirMkdir gives 8
 		// Atomic ops: single LOCK-prefixed instruction on x64, no extra slots needed.
 		atomicInc gives 0
 		atomicDec gives 0
@@ -432,7 +469,7 @@ end 'mirCmpGuard'
 
 function tryMirCmpJumpKind(mirOp MirOp, condId ValueId) returns JumpKind
 	match mirOp 'check'
-		cmp(resultId, _, _, predicate) then return mirCmpGuard(condId: condId, resultId: resultId, predicate: predicate)
+		cmp(resultId, _, _, predicate) then return mirCmpGuard(condId, resultId: resultId, predicate: predicate)
 		movImm to unaryOp then break 'check'
 		condBranch to loadByte then break 'check'
 		osAllocPages to osLockRelease then break 'check'
@@ -708,18 +745,18 @@ type X64FunctionLowering
 			// Stash outgoing branch args on the target block's edges so the
 			// regalloc CopyResolution can find them after the MIR is gone.
 			if srcBlock.hasTerminatorOp() 'stashEdges'
-				stashBranchEdges(srcTerminator: srcBlock.terminatorIndex(), dstBlock: dstBlock)
+				stashBranchEdges(srcBlock.terminatorIndex(), dstBlock: dstBlock)
 			end 'stashEdges'
 
 			// Lower each op in the source block
 			for packed in srcBlock.opRefs 'eachOp'
-				lowerPackedOp(opIdx: packed, dstBlock: dstBlock)
+				lowerPackedOp(packed, dstBlock: dstBlock)
 			end 'eachOp'
 
 			// Lower terminator. Both branch and non-branch terminators emit their
 			// ops into dstBlock.opRefs; setLastOpAsTerminator promotes the last one.
 			if srcBlock.hasTerminatorOp() 'hasTerm'
-				lowerTerminator(srcTerminator: srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
+				lowerTerminator(srcBlock.terminatorIndex(), dstBlock: dstBlock, returnType: srcFunc.returnType, jumpKind: condBrJumpKind)
 				setLastOpAsTerminator(dstBlock)
 			end 'hasTerm'
 			blockIdx = blockIdx + 1
@@ -831,7 +868,7 @@ type X64FunctionLowering
 			end 'noTerm'
 			let nextBlockRef = try func.blockRefs.get(i + 1) otherwise panic("invariant: i+1 < blockCount but func.blockRefs.get failed")
 			let nextBlock = try target.blocks.get(nextBlockRef) otherwise panic("invariant: nextBlockRef from func.blockRefs not in target.blocks")
-			let targetId = getX64JumpTarget(packed: block.terminatorIndex())
+			let targetId = getX64JumpTarget(block.terminatorIndex())
 			if targetId != NOT_A_JUMP_X64 and targetId == nextBlock.id 'isFallthrough'
 				block.terminator = Terminator.fallthrough
 				// Only promote a trailing conditional jump back into the terminator
@@ -857,36 +894,36 @@ type X64FunctionLowering
 
 	function lowerPackedOp(opIdx OpIndex, dstBlock IrBlock)
 		let mirOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
-		lowerMirOp(op: mirOp, dstBlock: dstBlock)
+		lowerMirOp(mirOp, dstBlock: dstBlock)
 	end 'lowerPackedOp'
 
 	function lowerMirOp(op MirOp, dstBlock IrBlock)
 		match op 'dispatch'
-			movImm(resultId, value, isFloat) then lowerMovImm(resultId: resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
+			movImm(resultId, value, isFloat) then lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
 			movReg(resultId, srcId) then appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.virtual(srcId)))
-			binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
-			unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-			cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+			binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
+			unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 			condBranch then break 'dispatch'
 			branch then break 'dispatch'
-			call(resultId, callee, argIds) then lowerCall(resultId: resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
-			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId: resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
-			witnessCall(resultId, witnessAddrId, methodIndex, _, argIds) then lowerWitnessCall(resultId: resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
+			call(resultId, callee, argIds) then lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock)
+			indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddrId, methodIndex, _, argIds) then lowerWitnessCall(resultId, witnessAddrId: witnessAddrId, methodIndex: methodIndex, argIds: argIds, dstBlock: dstBlock)
 			ret then break 'dispatch'
-			param(resultId, paramIndex, paramType) then lowerParam(resultId: resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
-			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirect(resultId: resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
-			store(valueId, baseId, offset, width, isFloat) then lowerStoreIndirect(valueId: valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat, dstBlock: dstBlock)
+			param(resultId, paramIndex, paramType) then lowerParam(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
+			load(resultId, baseId, offset, width, signed, isFloat) then lowerLoadIndirect(resultId, baseId: baseId, offset: offset, width: width, signed: signed, isFloat: isFloat, dstBlock: dstBlock)
+			store(valueId, baseId, offset, width, isFloat) then lowerStoreIndirect(valueId, baseId: baseId, offset: offset, width: width, isFloat: isFloat, dstBlock: dstBlock)
 			loadSlot(resultId, slotId) then appendX64Op(target, block: dstBlock, op: X64Op.loadSlot(X64VReg.virtual(resultId), slotIndex: slotId))
 			storeSlot(slotId, valueId) then appendX64Op(target, block: dstBlock, op: X64Op.movSlot(slotId, srcReg: X64VReg.virtual(valueId)))
-			stackSlotAddr to loadByte then lowerMirSysOp(op: op, dstBlock: dstBlock)
-			osAllocPages to osLockRelease then lowerMirSysOp(op: op, dstBlock: dstBlock)
+			stackSlotAddr to loadByte then lowerMirSysOp(op, dstBlock: dstBlock)
+			osAllocPages to osLockRelease then lowerMirSysOp(op, dstBlock: dstBlock)
 			// Multi-value-return error ABI (Phase 2 codegen). `tryCall` mirrors
 			// `call` but ALSO captures RDX into virtual(errorFlagId) — even when
 			// the callee returns void, since throwing functions always write the
 			// error flag. `errorReturn` is a terminator and is dispatched in
 			// lowerMirTerminator; reaching it here would mean the .Std layer
 			// emitted it as a non-terminator op (a phase-ordering bug).
-			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
+			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
 			errorReturn then panic("MirOp.errorReturn must be lowered as a terminator, not a body op")
 		end 'dispatch'
 	end 'lowerMirOp'
@@ -901,7 +938,7 @@ type X64FunctionLowering
 			return
 		end 'skip'
 		if isFloat 'floatImm'
-			lowerFloatConst(resultId: resultId, rawBits: value, dstBlock: dstBlock)
+			lowerFloatConst(resultId, rawBits: value, dstBlock: dstBlock)
 			return
 		end 'floatImm'
 		appendIntImmToReg(target, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
@@ -942,22 +979,22 @@ type X64FunctionLowering
 
 	function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock IrBlock)
 		match opcode 'lower'
-			addI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock)
-			subI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock)
-			mulI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock)
-			divI64 then lowerDivRem(resultId: resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock)
-			remI64 then lowerDivRem(resultId: resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock)
-			andI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock)
-			orI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock)
-			xorI64 then lowerIntBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock)
-			shlI64 then lowerShift(resultId: resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock)
-			shrI64 then lowerShift(resultId: resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock)
-			addF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.add, dstBlock: dstBlock)
-			subF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.sub, dstBlock: dstBlock)
-			mulF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.mul, dstBlock: dstBlock)
-			divF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.div, dstBlock: dstBlock)
-			minF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.min, dstBlock: dstBlock)
-			maxF64 then lowerFloatBinOp(resultId: resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.max, dstBlock: dstBlock)
+			addI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock)
+			subI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock)
+			mulI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock)
+			divI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock)
+			remI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock)
+			andI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock)
+			orI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock)
+			xorI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock)
+			shlI64 then lowerShift(resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock)
+			shrI64 then lowerShift(resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock)
+			addF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.add, dstBlock: dstBlock)
+			subF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.sub, dstBlock: dstBlock)
+			mulF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.mul, dstBlock: dstBlock)
+			divF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.div, dstBlock: dstBlock)
+			minF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.min, dstBlock: dstBlock)
+			maxF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.max, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBinOp'
 
@@ -987,8 +1024,8 @@ type X64FunctionLowering
 		let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(dest, srcReg: X64VReg.virtual(leftId)))
 		match kind 'emit'
-			add then emitAddOp(dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
-			sub then emitSubOp(dstBlock: dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+			add then emitAddOp(dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
+			sub then emitSubOp(dstBlock, dest: dest, rightId: rightId, useImm: useImm, constVal: constVal)
 			mul then appendX64Op(target, block: dstBlock, op: X64Op.imulRegReg(dest, srcReg: X64VReg.virtual(rightId)))
 			bitAnd then appendX64Op(target, block: dstBlock, op: X64Op.andRegReg(dest, srcReg: X64VReg.virtual(rightId)))
 			bitOr then appendX64Op(target, block: dstBlock, op: X64Op.orRegReg(dest, srcReg: X64VReg.virtual(rightId)))
@@ -1066,8 +1103,8 @@ type X64FunctionLowering
 
 	function lowerUnaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode, dstBlock IrBlock)
 		match opcode 'lower'
-			negI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-			bitNotI64 then lowerIntUnary(resultId: resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			negI64 then lowerIntUnary(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
+			bitNotI64 then lowerIntUnary(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
 			fpToSiI64 then appendX64Op(target, block: dstBlock, op: X64Op.cvttFloat2Si(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId), precision: FloatPrecision.f64))
 			bitcastF64ToI64 then appendX64Op(target, block: dstBlock, op: X64Op.movqXmmToGpr(X64VReg.virtual(resultId), src: X64FpVReg.virtual(operandId)))
 			bitcastI64ToF64 then appendX64Op(target, block: dstBlock, op: X64Op.movqGprToXmm(X64FpVReg.virtual(resultId), src: X64VReg.virtual(operandId)))
@@ -1078,7 +1115,7 @@ type X64FunctionLowering
 			floorF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x09, precision: FloatPrecision.f64))
 			ceilF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x0A, precision: FloatPrecision.f64))
 			roundF64 then appendX64Op(target, block: dstBlock, op: X64Op.roundXmm(X64FpVReg.virtual(resultId), src: X64FpVReg.virtual(operandId), mode: 0x08, precision: FloatPrecision.f64))
-			absF64 then lowerFloatAbs(resultId: resultId, operandId: operandId, dstBlock: dstBlock)
+			absF64 then lowerFloatAbs(resultId, operandId: operandId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerUnaryOp'
 
@@ -1110,8 +1147,8 @@ type X64FunctionLowering
 
 	function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
 		match predicate 'kind'
-			eq to ugt then lowerIntCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
-			feq to fge then lowerFloatCmp(resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+			eq to ugt then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+			feq to fge then lowerFloatCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 		end 'kind'
 	end 'lowerCmp'
 
@@ -1137,7 +1174,7 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.ucomisXmm(X64FpVReg.virtual(leftId), src2: X64FpVReg.virtual(rightId), precision: FloatPrecision.f64))
 		// Skip setcc when the sole consumer is a condBr (which reads flags directly).
 		if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
-			emitFloatCmpSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
+			emitFloatCmpSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
 		end 'needsSetcc'
 	end 'lowerFloatCmp'
 
@@ -1150,10 +1187,10 @@ type X64FunctionLowering
 	// second setcc reads the same flags set by the ucomisd above.
 	function emitFloatCmpSetcc(resultId ValueId, predicate MirCmpPredicate, dstBlock IrBlock)
 		match predicate 'pick'
-			feq then emitFeqSetcc(resultId: resultId, dstBlock: dstBlock)
-			fne then emitFneSetcc(resultId: resultId, dstBlock: dstBlock)
-			eq to ugt then emitSingleSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
-			flt to fge then emitSingleSetcc(resultId: resultId, predicate: predicate, dstBlock: dstBlock)
+			feq then emitFeqSetcc(resultId, dstBlock: dstBlock)
+			fne then emitFneSetcc(resultId, dstBlock: dstBlock)
+			eq to ugt then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
+			flt to fge then emitSingleSetcc(resultId, predicate: predicate, dstBlock: dstBlock)
 		end 'pick'
 	end 'emitFloatCmpSetcc'
 
@@ -1192,7 +1229,7 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock IrBlock)
-		emitDirectCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
+		emitDirectCall(resultId, callee: callee, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
 	end 'lowerCall'
 
 	function emitCallResultCapture(resultId ValueId, dstBlock IrBlock, resultType StdType)
@@ -1211,7 +1248,7 @@ type X64FunctionLowering
 	// existing R8 capture and lets the regalloc's return-reg hint logic pre-color
 	// the destination if it ever learns about the second register (Phase 3).
 	function lowerTryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId, dstBlock IrBlock)
-		emitDirectCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, captureErrorFlag: true, dstBlock: dstBlock)
+		emitDirectCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, captureErrorFlag: true, dstBlock: dstBlock)
 	end 'lowerTryCall'
 
 	// Shared body for `lowerCall` and `lowerTryCall`. Routes args to ABI
@@ -1272,8 +1309,8 @@ type X64FunctionLowering
 
 		let calleeReturnType = lookupFuncReturnStdType(callee, allFunctions: allFunctions, stdlibFunctions: stdlibFunctions)
 		match calleeReturnType 'capture'
-			void then emitVoidResultAliasIfNeeded(resultId: resultId, argIds: argIds, dstBlock: dstBlock)
-			value(inner) then emitCallResultCapture(resultId: resultId, dstBlock: dstBlock, resultType: inner)
+			void then emitVoidResultAliasIfNeeded(resultId, argIds: argIds, dstBlock: dstBlock)
+			value(inner) then emitCallResultCapture(resultId, dstBlock: dstBlock, resultType: inner)
 		end 'capture'
 
 		if captureErrorFlag 'errFlag'
@@ -1396,14 +1433,14 @@ type X64FunctionLowering
 
 	function lowerTerminator(srcTerminator OpIndex, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
 		let mirOp = try module.ops.get(srcTerminator) otherwise panic("invariant: srcTerminator opIdx not in module.ops")
-		lowerMirTerminator(op: mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
+		lowerMirTerminator(mirOp, dstBlock: dstBlock, returnType: returnType, jumpKind: jumpKind)
 	end 'lowerTerminator'
 
 	function lowerMirTerminator(op MirOp, dstBlock IrBlock, returnType StdReturnType, jumpKind JumpKind)
 		match op 'lower'
-			condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(condId: condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
-			branch(branchTarget, _) then lowerBrWithArgs(targetBlockId: branchTarget, dstBlock: dstBlock)
-			ret(retValId) then lowerReturn(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+			condBranch(condId, thenTarget, _, elseTarget, _) then lowerCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock, jumpKind: jumpKind)
+			branch(branchTarget, _) then lowerBrWithArgs(branchTarget, dstBlock: dstBlock)
+			ret(retValId) then lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType)
 			movImm to cmp then break 'lower'
 			call to witnessCall then break 'lower'
 			param to loadByte then break 'lower'
@@ -1412,8 +1449,8 @@ type X64FunctionLowering
 			// is the last op in a block followed only by a fallthrough). Lower
 			// the same way as in the body — the terminator slot just means the
 			// regalloc treats it as the block's exit op.
-			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
-			errorReturn(retValId, errorFlagId) then lowerErrorReturn(retValId: retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType)
+			tryCall(resultId, callee, argIds, errorFlagId) then lowerTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId, dstBlock: dstBlock)
+			errorReturn(retValId, errorFlagId) then lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType)
 		end 'lower'
 	end 'lowerMirTerminator'
 
@@ -1423,7 +1460,7 @@ type X64FunctionLowering
 	// callers never read the return register, so materializing the implicit
 	// zero just bloats every void function with a dead `xor r8d, r8d`.
 	function lowerReturn(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
-		emitPrimaryReturnMove(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+		emitPrimaryReturnMove(retValId, dstBlock: dstBlock, returnType: returnType)
 		appendX64Op(target, block: dstBlock, op: X64Op.epilogue)
 		appendX64Op(target, block: dstBlock, op: X64Op.ret)
 	end 'lowerReturn'
@@ -1433,7 +1470,7 @@ type X64FunctionLowering
 	// gated on a non-void return type — same as lowerReturn — because void
 	// throwing functions have no real retValId to materialize.
 	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, returnType StdReturnType)
-		emitPrimaryReturnMove(retValId: retValId, dstBlock: dstBlock, returnType: returnType)
+		emitPrimaryReturnMove(retValId, dstBlock: dstBlock, returnType: returnType)
 		// Error flag goes to RDX unconditionally — even void throwing functions
 		// must write it (matches the C# bootstrap compiler's behavior).
 		appendX64Op(target, block: dstBlock, op: X64Op.movRegReg(physReg(X64Register.rdx), srcReg: X64VReg.virtual(errorFlagId)))
@@ -1481,13 +1518,13 @@ type X64FunctionLowering
 			gt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.le, targetBlock: elseTarget))
 			ge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.l, targetBlock: elseTarget))
 			ugt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
-			feq then emitFeqCondBr(dstBlock: dstBlock, elseTarget: elseTarget)
-			fne then emitFneCondBr(dstBlock: dstBlock, thenTarget: thenTarget, elseTarget: elseTarget)
+			feq then emitFeqCondBr(dstBlock, elseTarget: elseTarget)
+			fne then emitFneCondBr(dstBlock, thenTarget: thenTarget, elseTarget: elseTarget)
 			flt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.ae, targetBlock: elseTarget))
 			fle then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.a, targetBlock: elseTarget))
 			fgt then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.be, targetBlock: elseTarget))
 			fge then appendX64Op(target, block: dstBlock, op: X64Op.condJump(X64JumpCondition.b, targetBlock: elseTarget))
-			boolTest then lowerBoolTestCondBr(condId: condId, elseTarget: elseTarget, dstBlock: dstBlock)
+			boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock)
 		end 'emitJump'
 		// Unconditional jump to then block
 		appendX64Op(target, block: dstBlock, op: X64Op.jmp(thenTarget))
@@ -1515,7 +1552,7 @@ type X64FunctionLowering
 	function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock IrBlock)
 		// If the previous op is an or/and/xor that defines condId, its flags are still
 		// live — skip the redundant test instruction.
-		if not lastOpSetsFlagsFor(block: dstBlock, condId: condId) 'needsTest'
+		if not lastOpSetsFlagsFor(dstBlock, condId: condId) 'needsTest'
 			let vr = X64VReg.virtual(condId)
 			appendX64Op(target, block: dstBlock, op: X64Op.testRegReg(vr, reg2: vr))
 		end 'needsTest'
@@ -1541,32 +1578,43 @@ type X64FunctionLowering
 	// MIR system-like ops (stackSlotAddr, globalAddr, syscall, etc.)
 	function lowerMirSysOp(op MirOp, dstBlock IrBlock)
 		match op 'lower'
-			stackSlotAddr(resultId, slotId) then lowerStackAddr(resultId: resultId, slotId: slotId, dstBlock: dstBlock)
-			globalAddr(resultId, name) then lowerGlobalAddr(resultId: resultId, name: name, dstBlock: dstBlock)
-			funcAddr(resultId, name) then lowerFuncAddr(resultId: resultId, name: name, dstBlock: dstBlock)
-			loadFramePtr(resultId) then lowerLoadFramePtr(resultId: resultId, dstBlock: dstBlock)
-			syscall(resultId, number, argIds) then lowerSyscall(resultId: resultId, number: number, argIds: argIds, dstBlock: dstBlock)
-			iatCall(resultId, slotIndex, argIds) then lowerIatCall(resultId: resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock)
-			osExit(codeId) then lowerOsExit(codeId: codeId, dstBlock: dstBlock)
-			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
-			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId: ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
-			osRead(resultId, ptrId, lenId) then lowerOsReadWithStrategy(resultId: resultId, ptrId: ptrId, lenId: lenId, strategy: osDesc.read, dstBlock: dstBlock)
-			osOpenWrite(resultId, pathPtrId, pathLenId) then lowerOsOpenWrite(resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
-			osWriteFd(fdId, ptrId, lenId) then lowerOsWriteFd(fdId: fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
-			osClose(fdId) then lowerOsClose(fdId: fdId, dstBlock: dstBlock)
-			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
-			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId: dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
-			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId: baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
-			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId: resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
-			osAllocPages(resultId, sizeId) then lowerOsAllocPages(resultId: resultId, sizeId: sizeId, large: false, dstBlock: dstBlock)
-			osAllocPagesLarge(resultId, sizeId) then lowerOsAllocPages(resultId: resultId, sizeId: sizeId, large: true, dstBlock: dstBlock)
-			osFreePages(ptrId, sizeId) then lowerOsFreePages(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
-			atomicInc(addrId) then lowerAtomicInc(addrId: addrId, dstBlock: dstBlock)
-			atomicDec(addrId) then lowerAtomicDec(addrId: addrId, dstBlock: dstBlock)
-			atomicXadd(resultId, addrId, valId) then lowerAtomicXadd(resultId: resultId, addrId: addrId, valId: valId, dstBlock: dstBlock)
-			osLockInit(addrId) then lowerOsLockInit(addrId: addrId, dstBlock: dstBlock)
-			osLockAcquire(addrId) then lowerOsLockAcquire(addrId: addrId, dstBlock: dstBlock)
-			osLockRelease(addrId) then lowerOsLockRelease(addrId: addrId, dstBlock: dstBlock)
+			stackSlotAddr(resultId, slotId) then lowerStackAddr(resultId, slotId: slotId, dstBlock: dstBlock)
+			globalAddr(resultId, name) then lowerGlobalAddr(resultId, name: name, dstBlock: dstBlock)
+			funcAddr(resultId, name) then lowerFuncAddr(resultId, name: name, dstBlock: dstBlock)
+			loadFramePtr(resultId) then lowerLoadFramePtr(resultId, dstBlock: dstBlock)
+			syscall(resultId, number, argIds) then lowerSyscall(resultId, number: number, argIds: argIds, dstBlock: dstBlock)
+			iatCall(resultId, slotIndex, argIds) then lowerIatCall(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock)
+			osExit(codeId) then lowerOsExit(codeId, dstBlock: dstBlock)
+			osWrite(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock)
+			osWriteErr(ptrId, lenId) then lowerOsWriteWithStrategy(ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock)
+			osRead(resultId, ptrId, lenId) then lowerOsReadWithStrategy(resultId, ptrId: ptrId, lenId: lenId, strategy: osDesc.read, dstBlock: dstBlock)
+			osOpenWrite(resultId, pathPtrId, pathLenId) then lowerOsOpenWrite(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
+			osWriteFd(fdId, ptrId, lenId) then lowerOsWriteFd(fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			osClose(fdId) then lowerOsClose(fdId, dstBlock: dstBlock)
+			osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) then lowerOsGetEnv(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
+			memcpy(dstId, srcId, lenId) then lowerMemcpy(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock)
+			storeByte(baseId, offsetId, byteId) then lowerStoreByte(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock)
+			loadByte(resultId, baseId, offsetId) then lowerLoadByte(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock)
+			osAllocPages(resultId, sizeId) then lowerOsAllocPages(resultId, sizeId: sizeId, large: false, dstBlock: dstBlock)
+			osAllocPagesLarge(resultId, sizeId) then lowerOsAllocPages(resultId, sizeId: sizeId, large: true, dstBlock: dstBlock)
+			osFreePages(ptrId, sizeId) then lowerOsFreePages(ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then lowerOsFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId, dstBlock: dstBlock)
+			osFileRead(resultId, fdId, bufPtrId, countId) then lowerOsFileReadOp(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock)
+			osFileWrite(resultId, fdId, bufPtrId, countId) then lowerOsFileWriteOp(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId, dstBlock: dstBlock)
+			osFileClose(resultId, fdId) then lowerOsFileCloseOp(resultId, fdId: fdId, dstBlock: dstBlock)
+			osFileLseek(resultId, fdId, offsetId, whenceId) then lowerOsFileLseekOp(resultId, fdId: fdId, offsetId: offsetId, whenceId: whenceId, dstBlock: dstBlock)
+			osFileStat(resultId, cStringPtrId, statBufPtrId) then lowerOsFileStatOp(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId, dstBlock: dstBlock)
+			osFileAccess(resultId, cStringPtrId, modeId) then lowerOsFileAccessOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)
+			osFileUnlink(resultId, cStringPtrId) then lowerOsFileUnlinkOp(resultId, cStringPtrId: cStringPtrId, dstBlock: dstBlock)
+			osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then lowerOsDirGetdents64Op(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
+			osDirGetcwd(resultId, bufPtrId, bufSizeId) then lowerOsDirGetcwdOp(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId, dstBlock: dstBlock)
+			osDirMkdir(resultId, cStringPtrId, modeId) then lowerOsDirMkdirOp(resultId, cStringPtrId: cStringPtrId, modeId: modeId, dstBlock: dstBlock)
+			atomicInc(addrId) then lowerAtomicInc(addrId, dstBlock: dstBlock)
+			atomicDec(addrId) then lowerAtomicDec(addrId, dstBlock: dstBlock)
+			atomicXadd(resultId, addrId, valId) then lowerAtomicXadd(resultId, addrId: addrId, valId: valId, dstBlock: dstBlock)
+			osLockInit(addrId) then lowerOsLockInit(addrId, dstBlock: dstBlock)
+			osLockAcquire(addrId) then lowerOsLockAcquire(addrId, dstBlock: dstBlock)
+			osLockRelease(addrId) then lowerOsLockRelease(addrId, dstBlock: dstBlock)
 			movImm to storeSlot then break 'lower'
 			tryCall to errorReturn then break 'lower'
 		end 'lower'
@@ -1594,7 +1642,7 @@ type X64FunctionLowering
 	function lowerSyscall(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		for argId in argIds 'mapArgs'
-			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
+			let slot = ensureValueInSlot(argId, dstBlock: dstBlock)
 			argSlots.push(slot)
 		end 'mapArgs'
 		let resultSlot = nextTempSlot
@@ -1607,7 +1655,7 @@ type X64FunctionLowering
 	function lowerIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock IrBlock)
 		var argSlots = VarSlotArray.create()
 		for argId in argIds 'mapArgs'
-			let slot = ensureValueInSlot(valueId: argId, dstBlock: dstBlock)
+			let slot = ensureValueInSlot(argId, dstBlock: dstBlock)
 			argSlots.push(slot)
 		end 'mapArgs'
 		let resultSlot = nextTempSlot
@@ -1643,15 +1691,15 @@ type X64FunctionLowering
 	end 'lowerStackAddr'
 
 	function lowerStoreByte(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock IrBlock)
-		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
-		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
-		let byteSlot = ensureValueInSlot(valueId: byteId, dstBlock: dstBlock)
+		let baseSlot = ensureValueInSlot(baseId, dstBlock: dstBlock)
+		let offsetSlot = ensureValueInSlot(offsetId, dstBlock: dstBlock)
+		let byteSlot = ensureValueInSlot(byteId, dstBlock: dstBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot))
 	end 'lowerStoreByte'
 
 	function lowerLoadByte(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock IrBlock)
-		let baseSlot = ensureValueInSlot(valueId: baseId, dstBlock: dstBlock)
-		let offsetSlot = ensureValueInSlot(valueId: offsetId, dstBlock: dstBlock)
+		let baseSlot = ensureValueInSlot(baseId, dstBlock: dstBlock)
+		let offsetSlot = ensureValueInSlot(offsetId, dstBlock: dstBlock)
 		let resultSlot = nextTempSlot
 		appendX64Op(target, block: dstBlock, op: X64Op.loadByteOp(resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot))
 		valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
@@ -1661,9 +1709,9 @@ type X64FunctionLowering
 	end 'lowerLoadByte'
 
 	function lowerMemcpy(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock IrBlock)
-		let dstSlot = ensureValueInSlot(valueId: dstId, dstBlock: dstBlock)
-		let srcSlot = ensureValueInSlot(valueId: srcId, dstBlock: dstBlock)
-		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		let dstSlot = ensureValueInSlot(dstId, dstBlock: dstBlock)
+		let srcSlot = ensureValueInSlot(srcId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(dstSlot, srcSlot: srcSlot, lenSlot: lenSlot))
 	end 'lowerMemcpy'
 
@@ -1672,10 +1720,10 @@ type X64FunctionLowering
 	// ============================================================
 
 	function lowerOsExit(codeId ValueId, dstBlock IrBlock)
-		let codeSlot = ensureValueInSlot(valueId: codeId, dstBlock: dstBlock)
+		let codeSlot = ensureValueInSlot(codeId, dstBlock: dstBlock)
 		match osDesc.exit 'strategy'
-			syscall(num) then lowerOsExitSyscall(codeSlot: codeSlot, num: num, dstBlock: dstBlock)
-			iatCall(slotIdx) then lowerOsExitIat(codeSlot: codeSlot, slotIdx: slotIdx, dstBlock: dstBlock)
+			syscall(num) then lowerOsExitSyscall(codeSlot, num: num, dstBlock: dstBlock)
+			iatCall(slotIdx) then lowerOsExitIat(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock)
 		end 'strategy'
 	end 'lowerOsExit'
 
@@ -1752,11 +1800,11 @@ type X64FunctionLowering
 	end 'lowerOsWriteWinApi'
 
 	function lowerOsWriteWithStrategy(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock IrBlock)
-		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
-		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
 		match strategy 'dispatch'
-			syscall(writeNum, fd) then lowerOsWriteSyscall(ptrSlot: ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock)
-			winApi(getHandleSlot, handleConstant, writeFileSlot) then lowerOsWriteWinApi(ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock)
+			syscall(writeNum, fd) then lowerOsWriteSyscall(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock)
+			winApi(getHandleSlot, handleConstant, writeFileSlot) then lowerOsWriteWinApi(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock)
 			libcall then panic("x64 does not support libcall write strategy")
 		end 'dispatch'
 	end 'lowerOsWriteWithStrategy'
@@ -1831,11 +1879,11 @@ type X64FunctionLowering
 	end 'lowerOsReadWinApi'
 
 	function lowerOsReadWithStrategy(resultId ValueId, ptrId ValueId, lenId ValueId, strategy ReadStrategy, dstBlock IrBlock)
-		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
-		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
 		match strategy 'dispatch'
-			syscall(readNum, fd) then lowerOsReadSyscall(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, readNum: readNum, fd: fd, dstBlock: dstBlock)
-			winApi(getHandleSlot, handleConstant, readFileSlot) then lowerOsReadWinApi(resultId: resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot, dstBlock: dstBlock)
+			syscall(readNum, fd) then lowerOsReadSyscall(resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, readNum: readNum, fd: fd, dstBlock: dstBlock)
+			winApi(getHandleSlot, handleConstant, readFileSlot) then lowerOsReadWinApi(resultId, ptrSlot: ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, readFileSlot: readFileSlot, dstBlock: dstBlock)
 			libcall then panic("x64 does not support libcall read strategy")
 		end 'dispatch'
 	end 'lowerOsReadWithStrategy'
@@ -1905,7 +1953,7 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.memcpyOp(bufferAddrSlot, srcSlot: srcPtrSlot, lenSlot: srcLenSlot))
 
 		// bufferAddr[len] = 0
-		let zeroByteSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let zeroByteSlot = materializeConstSlot(0, dstBlock: dstBlock)
 		appendX64Op(target, block: dstBlock, op: X64Op.storeByteOp(bufferAddrSlot, offsetSlot: srcLenSlot, byteSlot: zeroByteSlot))
 
 		return bufferAddrSlot
@@ -1913,7 +1961,7 @@ type X64FunctionLowering
 
 	function lowerOsOpenWrite(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsOpenWriteWindows(resultId: resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
+			windows then lowerOsOpenWriteWindows(resultId, pathPtrId: pathPtrId, pathLenId: pathLenId, dstBlock: dstBlock)
 			linux then panic("osOpenWrite not yet implemented for linux in Phase 1")
 			macos then panic("osOpenWrite not yet implemented for macos in Phase 1")
 			wasi then panic("osOpenWrite not supported on x64 wasi target")
@@ -1923,16 +1971,16 @@ type X64FunctionLowering
 	// Windows: CreateFileA(lpFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
 	// Returns the HANDLE in the result virtual register.
 	function lowerOsOpenWriteWindows(resultId ValueId, pathPtrId ValueId, pathLenId ValueId, dstBlock IrBlock)
-		let pathPtrSlot = ensureValueInSlot(valueId: pathPtrId, dstBlock: dstBlock)
-		let pathLenSlot = ensureValueInSlot(valueId: pathLenId, dstBlock: dstBlock)
-		let cStrAddrSlot = copyWithNullTerminator(srcPtrSlot: pathPtrSlot, srcLenSlot: pathLenSlot, dstBlock: dstBlock)
+		let pathPtrSlot = ensureValueInSlot(pathPtrId, dstBlock: dstBlock)
+		let pathLenSlot = ensureValueInSlot(pathLenId, dstBlock: dstBlock)
+		let cStrAddrSlot = copyWithNullTerminator(pathPtrSlot, srcLenSlot: pathLenSlot, dstBlock: dstBlock)
 
-		let accessSlot = materializeConstSlot(value: 0x40000000, dstBlock: dstBlock)
-		let shareSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let securitySlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let creationSlot = materializeConstSlot(value: 2, dstBlock: dstBlock)
-		let attrSlot = materializeConstSlot(value: 0x80, dstBlock: dstBlock)
-		let templateSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let accessSlot = materializeConstSlot(0x40000000, dstBlock: dstBlock)
+		let shareSlot = materializeConstSlot(0, dstBlock: dstBlock)
+		let securitySlot = materializeConstSlot(0, dstBlock: dstBlock)
+		let creationSlot = materializeConstSlot(2, dstBlock: dstBlock)
+		let attrSlot = materializeConstSlot(0x80, dstBlock: dstBlock)
+		let templateSlot = materializeConstSlot(0, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
 		args.push(cStrAddrSlot)
@@ -1952,7 +2000,7 @@ type X64FunctionLowering
 
 	function lowerOsWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsWriteFdWindows(fdId: fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
+			windows then lowerOsWriteFdWindows(fdId, ptrId: ptrId, lenId: lenId, dstBlock: dstBlock)
 			linux then panic("osWriteFd not yet implemented for linux in Phase 1")
 			macos then panic("osWriteFd not yet implemented for macos in Phase 1")
 			wasi then panic("osWriteFd not supported on x64 wasi target")
@@ -1961,13 +2009,13 @@ type X64FunctionLowering
 
 	// Windows: WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite, &bytesWritten, NULL)
 	function lowerOsWriteFdWindows(fdId ValueId, ptrId ValueId, lenId ValueId, dstBlock IrBlock)
-		let fdSlot = ensureValueInSlot(valueId: fdId, dstBlock: dstBlock)
-		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
-		let lenSlot = ensureValueInSlot(valueId: lenId, dstBlock: dstBlock)
+		let fdSlot = ensureValueInSlot(fdId, dstBlock: dstBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let lenSlot = ensureValueInSlot(lenId, dstBlock: dstBlock)
 
-		let writtenSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let writtenAddrSlot = materializeStackAddrSlot(targetSlot: writtenSlot, dstBlock: dstBlock)
-		let nullSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let writtenSlot = materializeConstSlot(0, dstBlock: dstBlock)
+		let writtenAddrSlot = materializeStackAddrSlot(writtenSlot, dstBlock: dstBlock)
+		let nullSlot = materializeConstSlot(0, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
 		args.push(fdSlot)
@@ -1983,7 +2031,7 @@ type X64FunctionLowering
 
 	function lowerOsClose(fdId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsCloseWindows(fdId: fdId, dstBlock: dstBlock)
+			windows then lowerOsCloseWindows(fdId, dstBlock: dstBlock)
 			linux then panic("osClose not yet implemented for linux in Phase 1")
 			macos then panic("osClose not yet implemented for macos in Phase 1")
 			wasi then panic("osClose not supported on x64 wasi target")
@@ -1992,7 +2040,7 @@ type X64FunctionLowering
 
 	// Windows: CloseHandle(hObject)
 	function lowerOsCloseWindows(fdId ValueId, dstBlock IrBlock)
-		let fdSlot = ensureValueInSlot(valueId: fdId, dstBlock: dstBlock)
+		let fdSlot = ensureValueInSlot(fdId, dstBlock: dstBlock)
 		var args = VarSlotArray.create()
 		args.push(fdSlot)
 		let resultSlot = nextTempSlot
@@ -2002,7 +2050,7 @@ type X64FunctionLowering
 
 	function lowerOsGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsGetEnvWindows(resultId: resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
+			windows then lowerOsGetEnvWindows(resultId, namePtrId: namePtrId, nameLenId: nameLenId, outBufPtrId: outBufPtrId, outBufLenId: outBufLenId, dstBlock: dstBlock)
 			linux then panic("osGetEnv not yet implemented for linux in Phase 1")
 			macos then panic("osGetEnv not yet implemented for macos in Phase 1")
 			wasi then panic("osGetEnv not supported on x64 wasi target")
@@ -2013,11 +2061,11 @@ type X64FunctionLowering
 	// The caller-provided outBuf/outBufLen are passed directly; only the lookup
 	// name needs to be null-terminated because Std IR carries (ptr, len) pairs.
 	function lowerOsGetEnvWindows(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, dstBlock IrBlock)
-		let namePtrSlot = ensureValueInSlot(valueId: namePtrId, dstBlock: dstBlock)
-		let nameLenSlot = ensureValueInSlot(valueId: nameLenId, dstBlock: dstBlock)
-		let outBufPtrSlot = ensureValueInSlot(valueId: outBufPtrId, dstBlock: dstBlock)
-		let outBufLenSlot = ensureValueInSlot(valueId: outBufLenId, dstBlock: dstBlock)
-		let cStrAddrSlot = copyWithNullTerminator(srcPtrSlot: namePtrSlot, srcLenSlot: nameLenSlot, dstBlock: dstBlock)
+		let namePtrSlot = ensureValueInSlot(namePtrId, dstBlock: dstBlock)
+		let nameLenSlot = ensureValueInSlot(nameLenId, dstBlock: dstBlock)
+		let outBufPtrSlot = ensureValueInSlot(outBufPtrId, dstBlock: dstBlock)
+		let outBufLenSlot = ensureValueInSlot(outBufLenId, dstBlock: dstBlock)
+		let cStrAddrSlot = copyWithNullTerminator(namePtrSlot, srcLenSlot: nameLenSlot, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
 		args.push(cStrAddrSlot)
@@ -2045,8 +2093,8 @@ type X64FunctionLowering
 	// MacOS / wasi panic — those targets aren't supported by this allocator path.
 	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, large bool, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsAllocPagesWindows(resultId: resultId, sizeId: sizeId, large: large, dstBlock: dstBlock)
-			linux then lowerOsAllocPagesLinux(resultId: resultId, sizeId: sizeId, dstBlock: dstBlock)
+			windows then lowerOsAllocPagesWindows(resultId, sizeId: sizeId, large: large, dstBlock: dstBlock)
+			linux then lowerOsAllocPagesLinux(resultId, sizeId: sizeId, dstBlock: dstBlock)
 			macos then panic("osAllocPages not supported on x64 macos target")
 			wasi then panic("osAllocPages not supported on x64 wasi target")
 		end 'pickOs'
@@ -2054,15 +2102,15 @@ type X64FunctionLowering
 
 	// Windows: VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE [|MEM_LARGE_PAGES], PAGE_READWRITE)
 	function lowerOsAllocPagesWindows(resultId ValueId, sizeId ValueId, large bool, dstBlock IrBlock)
-		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
 
-		let nullSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let nullSlot = materializeConstSlot(0, dstBlock: dstBlock)
 		var allocFlags = 0x3000  // MEM_COMMIT | MEM_RESERVE
 		if large 'usingLargePages'
 			allocFlags = 0x20003000  // | MEM_LARGE_PAGES
 		end 'usingLargePages'
-		let flagsSlot = materializeConstSlot(value: allocFlags, dstBlock: dstBlock)
-		let protectSlot = materializeConstSlot(value: 0x04, dstBlock: dstBlock)  // PAGE_READWRITE
+		let flagsSlot = materializeConstSlot(allocFlags, dstBlock: dstBlock)
+		let protectSlot = materializeConstSlot(0x04, dstBlock: dstBlock)  // PAGE_READWRITE
 
 		var args = VarSlotArray.create()
 		args.push(nullSlot)
@@ -2081,13 +2129,13 @@ type X64FunctionLowering
 	// The `large` flag is ignored on Linux for now; MAP_HUGETLB needs a
 	// pre-allocated huge-page pool which the bootstrap also doesn't bother with.
 	function lowerOsAllocPagesLinux(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
-		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
 
-		let addrSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let protSlot = materializeConstSlot(value: 0x03, dstBlock: dstBlock)  // PROT_READ | PROT_WRITE
-		let flagsSlot = materializeConstSlot(value: 0x22, dstBlock: dstBlock)  // MAP_ANON | MAP_PRIVATE
-		let fdSlot = materializeConstSlot(value: u64.max, dstBlock: dstBlock)  // -1 sign-extended
-		let offsetSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
+		let addrSlot = materializeConstSlot(0, dstBlock: dstBlock)
+		let protSlot = materializeConstSlot(0x03, dstBlock: dstBlock)  // PROT_READ | PROT_WRITE
+		let flagsSlot = materializeConstSlot(0x22, dstBlock: dstBlock)  // MAP_ANON | MAP_PRIVATE
+		let fdSlot = materializeConstSlot(u64.max, dstBlock: dstBlock)  // -1 sign-extended
+		let offsetSlot = materializeConstSlot(0, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
 		args.push(addrSlot)
@@ -2108,8 +2156,8 @@ type X64FunctionLowering
 	// MEM_RELEASE is used; Linux munmap requires it.
 	function lowerOsFreePages(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsFreePagesWindows(ptrId: ptrId, dstBlock: dstBlock)
-			linux then lowerOsFreePagesLinux(ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			windows then lowerOsFreePagesWindows(ptrId, dstBlock: dstBlock)
+			linux then lowerOsFreePagesLinux(ptrId, sizeId: sizeId, dstBlock: dstBlock)
 			macos then panic("osFreePages not supported on x64 macos target")
 			wasi then panic("osFreePages not supported on x64 wasi target")
 		end 'pickOs'
@@ -2117,9 +2165,9 @@ type X64FunctionLowering
 
 	// Windows: VirtualFree(ptr, 0, MEM_RELEASE)
 	function lowerOsFreePagesWindows(ptrId ValueId, dstBlock IrBlock)
-		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
-		let zeroSlot = materializeConstSlot(value: 0, dstBlock: dstBlock)
-		let releaseSlot = materializeConstSlot(value: 0x8000, dstBlock: dstBlock)  // MEM_RELEASE
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let zeroSlot = materializeConstSlot(0, dstBlock: dstBlock)
+		let releaseSlot = materializeConstSlot(0x8000, dstBlock: dstBlock)  // MEM_RELEASE
 
 		var args = VarSlotArray.create()
 		args.push(ptrSlot)
@@ -2133,8 +2181,8 @@ type X64FunctionLowering
 
 	// Linux: munmap(ptr, size)
 	function lowerOsFreePagesLinux(ptrId ValueId, sizeId ValueId, dstBlock IrBlock)
-		let ptrSlot = ensureValueInSlot(valueId: ptrId, dstBlock: dstBlock)
-		let sizeSlot = ensureValueInSlot(valueId: sizeId, dstBlock: dstBlock)
+		let ptrSlot = ensureValueInSlot(ptrId, dstBlock: dstBlock)
+		let sizeSlot = ensureValueInSlot(sizeId, dstBlock: dstBlock)
 
 		var args = VarSlotArray.create()
 		args.push(ptrSlot)
@@ -2144,6 +2192,125 @@ type X64FunctionLowering
 		appendX64Op(target, block: dstBlock, op: X64Op.syscall(resultSlot, number: 11, argSlots: args))  // SYS_munmap
 		nextTempSlot = nextTempSlot + 1
 	end 'lowerOsFreePagesLinux'
+
+	// ============================================================
+	// Phase 15c Stream 4.1: file/directory I/O op lowerings.
+	//
+	// Each `osFile*` / `osDir*` op dispatches per-OS through the shared
+	// `lowerFileIoOp` helper:
+	//   * Linux  → raw syscall via the existing `lowerSyscall` helper
+	//               (which collects slots from the arg ValueIds and emits
+	//               X64Op.syscall + result capture).
+	//   * Windows → direct call into a `mrt_win32_*` helper (Phase 15c
+	//               Stream 4.1b — see runtime.std). Each helper wraps one
+	//               Win32 IAT call and translates Win32 results to the
+	//               POSIX `-errno` shape the platform-agnostic
+	//               `mrt_file_*` / `mrt_directory_*` bodies expect.
+	//   * macOS  → panic (no macos backend yet).
+	//   * wasi   → panic (MirToWasm intercepts the platform-agnostic
+	//              bodies' calls before they ever reach this layer).
+	//
+	// Each `lowerOsFile*Op` / `lowerOsDir*Op` just assembles its arg
+	// `ValueIdArray` in syscall order and delegates the dispatch +
+	// emission to `lowerFileIoOp`. Op-specific knobs are the syscall
+	// number (Linux) and the runtime helper name (Windows).
+	// ============================================================
+
+	// Shared per-op dispatch helper. The Linux path reuses `lowerSyscall`
+	// to convert arg ValueIds into slot-based syscall args; the Windows
+	// path reuses `emitDirectCall` to invoke the wrapper helper via the
+	// X64 internal calling convention.
+	function lowerFileIoOp(resultId ValueId, opName String, argIds ValueIdArray, linuxSyscallNum MachineWord, winCallee String, dstBlock IrBlock)
+		match osDesc.os 'os'
+			linux then lowerSyscall(resultId, number: linuxSyscallNum, argIds: argIds, dstBlock: dstBlock)
+			windows then emitDirectCall(resultId, callee: winCallee, argIds: argIds, errorFlagId: 0, captureErrorFlag: false, dstBlock: dstBlock)
+			macos then panic("{opName} not supported on x64 macos target")
+			wasi then panic("{opName} op should not reach the X64 backend on wasi — MirToWasm intercepts")
+		end 'os'
+	end 'lowerFileIoOp'
+
+	function lowerOsFileOpen(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cStringPtrId)
+		argIds.push(flagsId)
+		argIds.push(fileModeId)
+		lowerFileIoOp(resultId, opName: "osFileOpen", argIds: argIds, linuxSyscallNum: 2, winCallee: "mrt_win32_open", dstBlock: dstBlock)
+	end 'lowerOsFileOpen'
+
+	function lowerOsFileReadOp(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		argIds.push(bufPtrId)
+		argIds.push(countId)
+		lowerFileIoOp(resultId, opName: "osFileRead", argIds: argIds, linuxSyscallNum: 0, winCallee: "mrt_win32_read", dstBlock: dstBlock)
+	end 'lowerOsFileReadOp'
+
+	function lowerOsFileWriteOp(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		argIds.push(bufPtrId)
+		argIds.push(countId)
+		lowerFileIoOp(resultId, opName: "osFileWrite", argIds: argIds, linuxSyscallNum: 1, winCallee: "mrt_win32_write", dstBlock: dstBlock)
+	end 'lowerOsFileWriteOp'
+
+	function lowerOsFileCloseOp(resultId ValueId, fdId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		lowerFileIoOp(resultId, opName: "osFileClose", argIds: argIds, linuxSyscallNum: 3, winCallee: "mrt_win32_close", dstBlock: dstBlock)
+	end 'lowerOsFileCloseOp'
+
+	function lowerOsFileLseekOp(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		argIds.push(offsetId)
+		argIds.push(whenceId)
+		lowerFileIoOp(resultId, opName: "osFileLseek", argIds: argIds, linuxSyscallNum: 8, winCallee: "mrt_win32_lseek", dstBlock: dstBlock)
+	end 'lowerOsFileLseekOp'
+
+	function lowerOsFileStatOp(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cStringPtrId)
+		argIds.push(statBufPtrId)
+		lowerFileIoOp(resultId, opName: "osFileStat", argIds: argIds, linuxSyscallNum: 4, winCallee: "mrt_win32_stat", dstBlock: dstBlock)
+	end 'lowerOsFileStatOp'
+
+	function lowerOsFileAccessOp(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cStringPtrId)
+		argIds.push(modeId)
+		lowerFileIoOp(resultId, opName: "osFileAccess", argIds: argIds, linuxSyscallNum: 21, winCallee: "mrt_win32_access", dstBlock: dstBlock)
+	end 'lowerOsFileAccessOp'
+
+	function lowerOsFileUnlinkOp(resultId ValueId, cStringPtrId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cStringPtrId)
+		lowerFileIoOp(resultId, opName: "osFileUnlink", argIds: argIds, linuxSyscallNum: 87, winCallee: "mrt_win32_unlink", dstBlock: dstBlock)
+	end 'lowerOsFileUnlinkOp'
+
+	// `mrt_win32_getdents64` — the helper drives FindFirstFileW/FindNextFileW
+	// state through the wrapper block returned by `mrt_win32_open` with
+	// the O_DIRECTORY flag (see runtime.std for the wrapper layout).
+	function lowerOsDirGetdents64Op(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(fdId)
+		argIds.push(bufPtrId)
+		argIds.push(bufSizeId)
+		lowerFileIoOp(resultId, opName: "osDirGetdents64", argIds: argIds, linuxSyscallNum: 217, winCallee: "mrt_win32_getdents64", dstBlock: dstBlock)
+	end 'lowerOsDirGetdents64Op'
+
+	function lowerOsDirGetcwdOp(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(bufPtrId)
+		argIds.push(bufSizeId)
+		lowerFileIoOp(resultId, opName: "osDirGetcwd", argIds: argIds, linuxSyscallNum: 79, winCallee: "mrt_win32_getcwd", dstBlock: dstBlock)
+	end 'lowerOsDirGetcwdOp'
+
+	function lowerOsDirMkdirOp(resultId ValueId, cStringPtrId ValueId, modeId ValueId, dstBlock IrBlock)
+		var argIds = ValueIdArray.create()
+		argIds.push(cStringPtrId)
+		argIds.push(modeId)
+		lowerFileIoOp(resultId, opName: "osDirMkdir", argIds: argIds, linuxSyscallNum: 83, winCallee: "mrt_win32_mkdir", dstBlock: dstBlock)
+	end 'lowerOsDirMkdirOp'
 
 	// Atomic increment: `LOCK INC qword [addr]`. The address operand is consumed
 	// directly as a virtual register; the regalloc allocates a physical GPR for
@@ -2188,7 +2355,7 @@ type X64FunctionLowering
 	// 6a.20 spec tests run on x64-windows where the IAT path is exercised.
 	function lowerOsLockInit(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_INITIALIZE_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_INITIALIZE_CRITICAL_SECTION, dstBlock: dstBlock)
 			linux then break 'pickOs'  // mmap zero-init memory is already a valid uninit lock
 			macos then panic("osLockInit not supported on x64 macos target")
 			wasi then panic("osLockInit not supported on x64 wasi target")
@@ -2197,7 +2364,7 @@ type X64FunctionLowering
 
 	function lowerOsLockAcquire(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_ENTER_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_ENTER_CRITICAL_SECTION, dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockAcquire not supported on x64 macos target")
 			wasi then panic("osLockAcquire not supported on x64 wasi target")
@@ -2206,7 +2373,7 @@ type X64FunctionLowering
 
 	function lowerOsLockRelease(addrId ValueId, dstBlock IrBlock)
 		match osDesc.os 'pickOs'
-			windows then lowerOsLockCallWindows(addrId: addrId, slotIndex: IAT_SLOT_LEAVE_CRITICAL_SECTION, dstBlock: dstBlock)
+			windows then lowerOsLockCallWindows(addrId, slotIndex: IAT_SLOT_LEAVE_CRITICAL_SECTION, dstBlock: dstBlock)
 			linux then break 'pickOs'  // real spinlock lowering deferred to step 6a.23
 			macos then panic("osLockRelease not supported on x64 macos target")
 			wasi then panic("osLockRelease not supported on x64 wasi target")
@@ -2217,7 +2384,7 @@ type X64FunctionLowering
 	// CRITICAL_SECTION routine. Used for InitializeCriticalSection /
 	// EnterCriticalSection / LeaveCriticalSection.
 	function lowerOsLockCallWindows(addrId ValueId, slotIndex MachineWord, dstBlock IrBlock)
-		let addrSlot = ensureValueInSlot(valueId: addrId, dstBlock: dstBlock)
+		let addrSlot = ensureValueInSlot(addrId, dstBlock: dstBlock)
 		var args = VarSlotArray.create()
 		args.push(addrSlot)
 		let resultSlot = nextTempSlot

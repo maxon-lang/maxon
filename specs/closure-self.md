@@ -44,12 +44,12 @@ type Holder
 	end 'create'
 
 	export function readViaClosure() returns Integer
-		return apply(f: function(_ Integer) gives self.value, x: 0)
+		return apply(function(_ Integer) gives self.value, x: 0)
 	end 'readViaClosure'
 end 'Holder'
 
 function main() returns ExitCode
-	let h = Holder.create(value: 7)
+	let h = Holder.create(7)
 	return h.readViaClosure()
 end 'main'
 ```
@@ -81,12 +81,12 @@ type Doubler
 	end 'doubled'
 
 	export function run() returns Integer
-		return apply(f: function(_ Integer) gives self.doubled(), x: 0)
+		return apply(function(_ Integer) gives self.doubled(), x: 0)
 	end 'run'
 end 'Doubler'
 
 function main() returns ExitCode
-	let d = Doubler.create(base: 5)
+	let d = Doubler.create(5)
 	return d.run()
 end 'main'
 ```

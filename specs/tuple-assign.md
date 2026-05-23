@@ -80,7 +80,7 @@ function main() returns ExitCode
 	var b = 0
 	var i = 0
 	while i < 3 'loop'
-		(a, b) = step(n: a)
+		(a, b) = step(a)
 		i = i + 1
 	end 'loop'
 	return b

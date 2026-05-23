@@ -14,176 +14,43 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 20
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br outer_0.header
-  outer_0.header:
-    %2 = maxon.literal {value = 5 : i64}
-    %3 = maxon.var_ref {var = i} {type = i64}
-    %4 = maxon.binop %3, %2 {op = lt}
-    maxon.cond_br %4 [then: outer_0, else: outer_0.exit]
-  outer_0:
-    %5 = maxon.literal {value = 0 : i64}
-    maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br inner_0.header
-  inner_0.header:
-    %6 = maxon.literal {value = 4 : i64}
-    %7 = maxon.var_ref {var = j} {type = i64}
-    %8 = maxon.binop %7, %6 {op = lt}
-    maxon.cond_br %8 [then: inner_0, else: inner_0.exit]
-  inner_0:
-    %9 = maxon.literal {value = 1 : i64}
-    %10 = maxon.var_ref {var = total} {type = i64}
-    %11 = maxon.binop %10, %9 {op = add}
-    maxon.assign %11 {var = total} {kind = i64} {mut = 1 : i1}
-    %12 = maxon.literal {value = 1 : i64}
-    %13 = maxon.var_ref {var = j} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add}
-    maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br inner_0.header
-  inner_0.exit:
-    %15 = maxon.literal {value = 1 : i64}
-    %16 = maxon.var_ref {var = i} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add}
-    maxon.assign %17 {var = i} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end [j]
-    maxon.br outer_0.header
-  outer_0.exit:
-    %18 = maxon.var_ref {var = total} {type = i64}
-    %19 = maxon.literal {value = 0 : i64}
-    %20 = maxon.binop %18, %19 {op = lt}
-    %21 = maxon.literal {value = 4294967295 : i64}
-    %22 = maxon.binop %18, %21 {op = gt}
-    %23 = maxon.binop %20, %22 {op = or}
-    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-nested-loops.test:13: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [total, i]
-    maxon.return %18
-  }
-}
-=== standard
+---
+// CompiledIR
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, total
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, i
-    cf.br outer_0.header
+    x64.prologue stack_size=16
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
+    x64.xchg r8, r9
   outer_0.header:
-    %2 = arith.constant {value = 5 : i64}
-    %3 = memref.load i : i64
-    %4 = arith.cmpi lt %3, %2
-    cf.cond_br %4 [then: outer_0, else: outer_0.exit]
+    x64.cmp r9, 5
+    x64.jge outer_0.exit
   outer_0:
-    %5 = arith.constant {value = 0 : i64}
-    memref.store %5, j
-    cf.br inner_0.header
-  inner_0.header:
-    %6 = arith.constant {value = 4 : i64}
-    %7 = memref.load j : i64
-    %8 = arith.cmpi lt %7, %6
-    cf.cond_br %8 [then: inner_0, else: inner_0.exit]
-  inner_0:
-    %9 = arith.constant {value = 1 : i64}
-    %10 = memref.load total : i64
-    %11 = arith.addi %10, %9
-    memref.store %11, total
-    %12 = arith.constant {value = 1 : i64}
-    %13 = memref.load j : i64
-    %14 = arith.addi %13, %12
-    memref.store %14, j
-    cf.br inner_0.header
-  inner_0.exit:
-    %15 = arith.constant {value = 1 : i64}
-    %16 = memref.load i : i64
-    %17 = arith.addi %16, %15
-    memref.store %17, i
-    cf.br outer_0.header
+    x64.xor esi, esi
+    x64.jmp inner_0.header
   outer_0.exit:
-    %18 = memref.load total : i64
-    %19 = arith.constant {value = 0 : i64}
-    %20 = arith.cmpi lt %18, %19
-    %21 = arith.constant {value = 4294967295 : i64}
-    %22 = arith.cmpi gt %18, %21
-    %23 = arith.ori1 %20, %22
-    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %24 = memref.lea_symdata __panic_msg_0
-    %25 = std.ptr_to_i64 %24
-    std.call_runtime @mrt_panic %25
-  __range_ok_0:
-    func.return %18
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=32
-    x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.jmp main.outer_0.header
-  outer_0.header:
-    x64.mov rax, 5
-    x64.mov rcx, [rbp-16]
-    x64.cmp rcx, rax
-    x64.jge main.outer_0.exit
-  outer_0:
-    x64.xor eax, eax
-    x64.mov [rbp-24], rax
-    x64.jmp main.inner_0.header
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
   inner_0.header:
-    x64.mov rax, 4
-    x64.mov rcx, [rbp-24]
-    x64.cmp rcx, rax
-    x64.jge main.inner_0.exit
+    x64.cmp rsi, 4
+    x64.jge inner_0.exit
   inner_0:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.mov rdx, 1
-    x64.mov rbx, [rbp-24]
-    x64.add rbx, rdx
-    x64.mov [rbp-24], rbx
-    x64.jmp main.inner_0.header
+    x64.add rsi, 1
+    x64.add r8, 1
+    x64.jmp inner_0.header
   inner_0.exit:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-16]
-    x64.add rcx, rax
-    x64.mov [rbp-16], rcx
-    x64.jmp main.outer_0.header
-  outer_0.exit:
-    x64.mov rax, [rbp-8]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.add r9, 1
+    x64.jmp outer_0.header
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

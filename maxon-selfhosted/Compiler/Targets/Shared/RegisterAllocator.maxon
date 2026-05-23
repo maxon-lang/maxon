@@ -622,7 +622,7 @@ end 'ssaGetEntryBlockId'
 // ============================================================
 
 function allocateRegistersForFunc(srcFunc IrFunction, module TargetModule, regTarget RegAllocTarget, desc TargetRegAlloc, opQuery TargetOpQuery)
-	var allocator = FunctionRegAllocator.create(func: srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery)
+	var allocator = FunctionRegAllocator.create(srcFunc, module: module, desc: desc, regTarget: regTarget, opQuery: opQuery)
 	allocator.run()
 end 'allocateRegistersForFunc'
 
@@ -663,6 +663,12 @@ type FunctionRegAllocator
 	// the spill loop terminates: an uncolorable reload triggers a hard
 	// panic instead of being chain-respilled forever.
 	export var reloadIds BoolArray
+	// Phi-merge splitting sidetable produced by splitMultiAnchorMerges.
+	// Empty when no phi-merge needed splitting. destroySSA consults this
+	// to dual-emit (src → sub-range → merge) parallel-copy moves at the
+	// edges that were rewritten; without an entry buildBlockArgCopies
+	// falls back to its original single-move path.
+	export var splitInfo SplitMergeInfoArray
 
 	export static function create(func IrFunction, module TargetModule, desc TargetRegAlloc, regTarget RegAllocTarget, opQuery TargetOpQuery) returns FunctionRegAllocator
 		// Placeholder fields for CFG/dom/coloring are immediately overwritten
@@ -682,7 +688,8 @@ type FunctionRegAllocator
 			state: createRegState(desc),
 			ranges: LiveRangeArray.create(),
 			coloring: ColoringResult.create(0),
-			reloadIds: BoolArray.create()
+			reloadIds: BoolArray.create(),
+			splitInfo: SplitMergeInfoArray.create()
 		}
 	end 'create'
 
@@ -696,13 +703,18 @@ type FunctionRegAllocator
 		state.funcName = func.name
 	end 'runCfgAnalysis'
 
-	// Phases 1-3: liveness → live ranges + physical constraints → coalescing.
-	// Run once initially and again after every spill iteration.
+	// Phases 1-3: liveness → live ranges + physical constraints → coalescing,
+	// then phi-merge splitting. Run once initially and again after every spill
+	// iteration. Splitting must follow coalescing (which populates copyEdges
+	// via hintBranchArgs) so the splitter can find and redirect the source
+	// vreg's copy edges. Splitting must precede coloring so the per-anchor
+	// sub-ranges enter the interference graph independently.
 	function runLivenessAndRanges()
 		let liveness = computeLiveness(module, func: func, cfg: cfg, rpo: rpo, regTarget: regTarget)
 		ranges = buildLiveRanges(module, func: func, cfg: cfg, liveness: liveness, loopDepth: loopDepth, regTarget: regTarget, opQuery: opQuery, reloadIds: reloadIds)
 		insertPhysicalConstraints(module, ranges: ranges, func: func, regTarget: regTarget, opQuery: opQuery)
 		coalesceRanges(module, ranges: ranges, func: func, returnGprOrd: state.desc.returnGprOrd, errorFlagOrd: state.desc.errorFlagOrd, opQuery: opQuery)
+		splitInfo = splitMultiAnchorMerges(ranges, func: func, module: module)
 	end 'runLivenessAndRanges'
 
 	function runColoring()
@@ -730,8 +742,41 @@ type FunctionRegAllocator
 			logTrace(LogCategory.ir, message: function() gives "regalloc: func={state.funcName} iteration={iteration} uncolored={uncoloredSpills.count()}")
 
 			var spillDec = SpillDecision.create()
+			// Track which parent merges we've already added so we don't push
+			// duplicate spilledRanges entries when multiple sub-ranges of the
+			// same merge are uncolored in the same iteration. RegIntArray
+			// stores 0 (not added) or 1 (added) per valueId, sentinel 0.
+			var addedMerges = RegIntArray.create()
 			for ur in uncoloredSpills 'addSpills'
 				if ur.spillWeight == SPILL_WEIGHT_INFINITE 'cannotRespill'
+					// Sub-ranges minted by the LiveRangeSplitter carry
+					// SPILL_WEIGHT_INFINITE because their def and only use
+					// coincide at a single copy slot — spilling the sub-range
+					// alone would yield no pressure relief (the parallel-copy
+					// at that slot still needs a register). The fix is LLVM
+					// Greedy's "memory-only phi": demote the PARENT MERGE to
+					// a stack slot. SpillCodeInsertion's existing block-arg
+					// path handles this: it emits a spill store at the top
+					// of the merge block (so the brief register-live moment
+					// at parallel-copy lands the value into memory) and
+					// reloads at every use. With multiple merges sharing the
+					// same predecessor slot, each iteration spills one merge
+					// and the next iteration finds the remaining ones
+					// colorable.
+					let parentMergeVid = lookupSubRangeParent(splitInfo, subRangeValueId: ur.valueId)
+					if parentMergeVid >= 0 'isSubRange'
+						let alreadyVal = getOr(addedMerges, index: parentMergeVid, fallback: 0)
+						if alreadyVal == 0 'firstSeen'
+							let parentRange = findRangeByVid(ranges, valueId: parentMergeVid)
+							if parentRange.valueId == parentMergeVid 'foundParent'
+								logTrace(LogCategory.ir, message: function() gives "regalloc: sub-range v{ur.valueId} uncolored → spilling parent merge v{parentMergeVid} in {state.funcName}")
+								spillDec.spilledRanges.push(parentRange)
+								set(addedMerges, index: parentMergeVid, value: 1, sentinel: 0)
+							end 'foundParent'
+						end 'firstSeen'
+						continue
+					end 'isSubRange'
+
 					panic("regalloc: reload vreg %{ur.valueId} cannot be respilled in {state.funcName} — register pressure unresolvable, need live-range splitting or IR-level pressure reduction (class={ur.regClass.name}, iteration={iteration})")
 				end 'cannotRespill'
 				logTrace(LogCategory.ir, message: function() gives "regalloc: spill %{ur.valueId} class={ur.regClass.name} weight={ur.spillWeight} crossesCall={ur.crossesCall}")
@@ -772,6 +817,36 @@ type FunctionRegAllocator
 		destroySSA(module, func: func, coloring: coloring, cfg: cfg, state: state, regTarget: regTarget, opQuery: opQuery)
 	end 'run'
 end 'FunctionRegAllocator'
+
+// If `subRangeValueId` matches one of the anchor sub-ranges minted by the
+// LiveRangeSplitter, return the parent merge's valueId. Otherwise -1.
+// Used by the spill loop to translate "spill a sub-range" into "spill the
+// parent merge" — the sub-range itself has no MIR presence (its def and
+// only use coincide at the predecessor's parallel-copy slot), so spilling
+// it alone would yield no pressure relief. Spilling the merge does (it
+// makes the value live in memory at the merge block).
+function lookupSubRangeParent(splitInfo SplitMergeInfoArray, subRangeValueId ValueId) returns ValueId
+	for info in splitInfo 'eachMerge'
+		for anchor in info.anchors 'eachAnchor'
+			if anchor.subRangeValueId == subRangeValueId 'match'
+				return info.mergeValueId
+			end 'match'
+		end 'eachAnchor'
+	end 'eachMerge'
+	return -1
+end 'lookupSubRangeParent'
+
+// Linear scan over `ranges` for the LiveRange with the given valueId.
+// Returns a LiveRange whose valueId equals -1 (the sentinel "not found") if
+// no match. Callers check `result.valueId == soughtValueId` before using.
+function findRangeByVid(ranges LiveRangeArray, valueId ValueId) returns LiveRange
+	for range in ranges 'each'
+		if range.valueId == valueId 'match'
+			return range
+		end 'match'
+	end 'each'
+	return LiveRange.create(-1)
+end 'findRangeByVid'
 
 // Find live ranges that have no coloring assignment (RM_NONE).
 // These need to be spilled because the coloring couldn't assign them a register.
@@ -948,8 +1023,8 @@ function emitElseEdgeCopies(module TargetModule, edgeCopies EdgeCopyMap, block I
 		// condBrIdx came from detectCondBrPattern (lastIdx of a non-empty opRefs), so it's a valid index.
 		let condPacked = try block.opRefs.get(condBrIdx) otherwise panic("invariant: condBrIdx is the lastIdx of a non-empty opRefs but get failed")
 		let rewritten = regTarget.rewriteCondBrTarget(module, packed: condPacked, newTarget: trampolineId)
-		try block.opRefs.remove(at: condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
-		try block.opRefs.insert(at: condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
+		try block.opRefs.remove(condBrIdx) otherwise panic("invariant: condBrIdx is valid but remove failed")
+		try block.opRefs.insert(condBrIdx, value: rewritten) otherwise panic("invariant: insert at condBrIdx (== new count after remove) must succeed")
 	end 'patchOpRefs'
 	return trampolineId + 1
 end 'emitElseEdgeCopies'
@@ -1007,7 +1082,7 @@ function destroySSA(module TargetModule, func IrFunction, coloring ColoringResul
 			// between the cmp and the condJump in the printed sequence, so
 			// they'd execute unconditionally instead of only on the
 			// not-taken / fallthrough path — corrupting the back-edge state.
-			if inTerminator and edgeHasCopies(edgeCopies: edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks) 'restoreLayout'
+			if inTerminator and edgeHasCopies(edgeCopies, fromId: block.id, toId: thenTarget, numBlocks: numBlocks) 'restoreLayout'
 				let condPacked = block.terminatorIndex()
 				block.opRefs.append(condPacked)
 				condBrIdx = block.opRefs.count() - 1

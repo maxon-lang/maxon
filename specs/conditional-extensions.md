@@ -97,7 +97,7 @@ type IntList implements HasItems with Integer
 end 'IntList'
 
 function main() returns ExitCode
-	let list = try IntList.create(data: [10, 20, 30]) otherwise return 2
+	let list = try IntList.create([10, 20, 30]) otherwise return 2
 	if list.has(20) 'yes'
 		return 1
 	end 'yes'
@@ -148,9 +148,9 @@ type MyHolder implements Holder with NotComparable
 end 'MyHolder'
 
 function main() returns ExitCode
-	let h = MyHolder.create(item: NotComparable.create(x: 5))
+	let h = MyHolder.create(NotComparable.create(5))
 	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
-	let r = h.isGreater(NotComparable.create(x: 3))
+	let r = h.isGreater(NotComparable.create(3))
 	return 0
 end 'main'
 ```
@@ -182,7 +182,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-	let b = IntBox.create(item: 42)
+	let b = IntBox.create(42)
 	if b.matches(42) 'yes'
 		return 1
 	end 'yes'
@@ -276,8 +276,8 @@ type HashBucket implements Bucket with HashItem
 end 'HashBucket'
 
 function main() returns ExitCode
-	let b = try HashBucket.create(items: [HashItem.create(v: 1), HashItem.create(v: 2), HashItem.create(v: 3)]) otherwise return 2
-	if b.lookup(HashItem.create(v: 2)) 'found'
+	let b = try HashBucket.create([HashItem.create(1), HashItem.create(2), HashItem.create(3)]) otherwise return 2
+	if b.lookup(HashItem.create(2)) 'found'
 		return 1
 	end 'found'
 	return 0
@@ -354,7 +354,7 @@ type NotEqSeq implements Seq with NotEq
 end 'NotEqSeq'
 
 function main() returns ExitCode
-	let s = try NotEqSeq.create(items: [NotEq.create(n: 1), NotEq.create(n: 2)]) otherwise return 9
+	let s = try NotEqSeq.create([NotEq.create(1), NotEq.create(2)]) otherwise return 9
 	return s.countItems()
 end 'main'
 ```

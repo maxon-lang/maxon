@@ -140,7 +140,7 @@ end 'Point'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let p = Point.create(x: 20, y: 22)
+	let p = Point.create(20, y: 22)
 	return p.sum()
 end 'main'
 ```
@@ -367,7 +367,7 @@ end 'Point'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let p = Point.create(x: 20, y: 22)
+	let p = Point.create(20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -390,7 +390,7 @@ end 'InternalPoint'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let p = InternalPoint.create(x: 42)
+	let p = InternalPoint.create(42)
 	return p.x
 end 'main'
 ```
@@ -498,7 +498,7 @@ type InternalPoint
 end 'InternalPoint'
 
 function main() returns ExitCode
-	let p = InternalPoint.create(x: 20, y: 22)
+	let p = InternalPoint.create(20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -535,11 +535,11 @@ export type Counter
 		end 'create'
 end 'Counter'
 
-export var shared = Counter.create(value: 0)
+export var shared = Counter.create(0)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-		let c = Counter.create(value: 1)
+		let c = Counter.create(1)
 		shared.value = 42 - c.value + c.value
 		return shared.value
 end 'main'

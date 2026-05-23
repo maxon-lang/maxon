@@ -285,6 +285,17 @@ export type StdToMirLowering
 			osAllocPages(resultId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osAllocPages(resultId, sizeId: sizeId))
 			osAllocPagesLarge(resultId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osAllocPagesLarge(resultId, sizeId: sizeId))
 			osFreePages(ptrId, sizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFreePages(ptrId, sizeId: sizeId))
+			osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId))
+			osFileRead(resultId, fdId, bufPtrId, countId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileRead(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId))
+			osFileWrite(resultId, fdId, bufPtrId, countId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileWrite(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId))
+			osFileClose(resultId, fdId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileClose(resultId, fdId: fdId))
+			osFileLseek(resultId, fdId, offsetId, whenceId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileLseek(resultId, fdId: fdId, offsetId: offsetId, whenceId: whenceId))
+			osFileStat(resultId, cStringPtrId, statBufPtrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileStat(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId))
+			osFileAccess(resultId, cStringPtrId, modeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileAccess(resultId, cStringPtrId: cStringPtrId, modeId: modeId))
+			osFileUnlink(resultId, cStringPtrId) then self.mirModule.appendOp(dstBlock, op: MirOp.osFileUnlink(resultId, cStringPtrId: cStringPtrId))
+			osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osDirGetdents64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId))
+			osDirGetcwd(resultId, bufPtrId, bufSizeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osDirGetcwd(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId))
+			osDirMkdir(resultId, cStringPtrId, modeId) then self.mirModule.appendOp(dstBlock, op: MirOp.osDirMkdir(resultId, cStringPtrId: cStringPtrId, modeId: modeId))
 			atomicInc(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicInc(addrId))
 			atomicDec(addrId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicDec(addrId))
 			atomicXadd(resultId, addrId, valId) then self.mirModule.appendOp(dstBlock, op: MirOp.atomicXadd(resultId, addrId: addrId, valId: valId))
@@ -302,7 +313,7 @@ export type StdToMirLowering
 			// payloads, so we panic at lowering time until that wiring
 			// lands rather than emit a quietly-broken sequence.
 			boxValue then panic("lowerStdToMir: heap-boxed interface payloads not yet wired to mm_alloc + destructor; see runtime.std mm_alloc")
-			unboxValue(resultId, ptrId, sizeId) then self.lowerUnboxValue(resultId: resultId, ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
+			unboxValue(resultId, ptrId, sizeId) then self.lowerUnboxValue(resultId, ptrId: ptrId, sizeId: sizeId, dstBlock: dstBlock)
 			// Phase 11.4 sugar — lower to globalAddr / load with constant offsets.
 			loadLayoutDescriptor(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
 			loadWitnessTable(resultId, label) then self.mirModule.appendOp(dstBlock, op: MirOp.globalAddr(resultId, name: label))
@@ -312,7 +323,7 @@ export type StdToMirLowering
 			// load followed by an indirect call with the slot value as the
 			// sole argument. The destroyFunc was installed into the
 			// LayoutDescriptor by C1.a's per-shape thunk synthesis.
-			dropTypeParam(slotValueId, layoutValueId) then self.lowerDropTypeParam(slotValueId: slotValueId, layoutValueId: layoutValueId, dstBlock: dstBlock)
+			dropTypeParam(slotValueId, layoutValueId) then self.lowerDropTypeParam(slotValueId, layoutValueId: layoutValueId, dstBlock: dstBlock)
 		end 'dispatch'
 	end 'convertStdSystemOp'
 

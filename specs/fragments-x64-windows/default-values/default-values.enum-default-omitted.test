@@ -17,21 +17,16 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @paint(color: i64) -> u32 {
+  func @paint(rcx: u8) -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.xor edx, edx
-    x64.mov ebx, 4294967295
-    x64.cmp rax, rbx
-    x64.jg paint.__range_panic_0
-    x64.cmp rax, rdx
-    x64.jl paint.__range_panic_0
-    x64.jmp paint.__range_ok_0
+    x64.mov r8, rcx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
@@ -40,22 +35,16 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 2
+    x64.mov ecx, 2
     x64.call paint
-    x64.mov ecx, rax
-    x64.xor eax, eax
-    x64.mov edx, 4294967295
-    x64.cmp rcx, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rcx, rax
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_1]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rcx
     x64.epilogue
     x64.ret
   }

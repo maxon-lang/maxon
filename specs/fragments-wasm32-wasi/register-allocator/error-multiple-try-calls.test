@@ -1,0 +1,65 @@
+// Test: error-multiple-try-calls
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function getA() returns Integer throws MyError
+	return 10
+end 'getA'
+
+function getB() returns Integer throws MyError
+	return 20
+end 'getB'
+
+function getC() returns Integer throws MyError
+	throw MyError.failed
+end 'getC'
+
+function main() returns ExitCode
+	let a = try getA() otherwise 0
+	let b = try getB() otherwise 0
+	let c = try getC() otherwise 12
+	return a + b + c
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %29 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%29)
+  try_0.merge:
+    %31 = mir.mov_imm 20 : i64
+    %32 = mir.mov_imm 0 : i64
+    %10 = mir.cmp ne, %32, %2
+    mir.cond_br %10 [then: try_1.merge(%2), else: try_1.ok()]
+  try_1.ok:
+    mir.br try_1.merge(%31)
+  try_1.merge:
+    %33 = mir.mov_imm 0 : i64
+    %34 = mir.mov_imm 1 : i64
+    %17 = mir.cmp ne, %34, %2
+    mir.cond_br %17 [then: try_2.otherwise(), else: try_2.merge(%33)]
+  try_2.otherwise:
+    %19 = mir.mov_imm 12 : i64
+    mir.br try_2.merge(%19)
+  try_2.merge:
+    %23 = mir.add.i64 %26, %27
+    %25 = mir.add.i64 %23, %28
+    %35 = mir.mov_imm 255 : i64
+    %36 = mir.cmp ugt, %25, %35
+    mir.cond_br %36 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %37 = mir.global_addr @__panic_msg_0
+    %38 = mir.call @mrt_panic(%37)
+  __range_ok_0:
+    mir.ret %25
+  }
+}
+---

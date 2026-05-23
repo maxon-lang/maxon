@@ -11,92 +11,13 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
-RequiredIR: ```
-=== maxon
-module {
-  func @add(a: i64, b: i64) -> i64 {
-  entry:
-    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
-    maxon.scope_end [a, b]
-    maxon.return %2
-  }
-  func @main() -> i64 {
-  entry:
-    %3 = maxon.literal {value = 30 : i64}
-    %4 = maxon.literal {value = 12 : i64}
-    %5 = maxon.call @add %3, %4
-    %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.binop %5, %6 {op = lt}
-    %8 = maxon.literal {value = 4294967295 : i64}
-    %9 = maxon.binop %5, %8 {op = gt}
-    %10 = maxon.binop %7, %9 {op = or}
-    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-function-with-params.test:10: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end []
-    maxon.return %5
-  }
-}
-=== standard
-module {
-  func @add(a: i64, b: i64) -> i64 {
-  entry:
-    %0 = func.param a : StdI64
-    %1 = func.param b : StdI64
-    %2 = arith.addi %0, %1
-    func.return %2
-  }
-  func @main() -> u32 {
-  entry:
-    %3 = arith.constant {value = 30 : i64}
-    %4 = arith.constant {value = 12 : i64}
-    %5 = func.call @add %3, %4
-    %6 = arith.constant {value = 0 : i64}
-    %7 = arith.cmpi lt %5, %6
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.cmpi gt %5, %8
-    %10 = arith.ori1 %7, %9
-    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_0
-    %12 = std.ptr_to_i64 %11
-    std.call_runtime @mrt_panic %12
-  __range_ok_0:
-    func.return %5
-  }
-}
-=== x86
-module {
-  func @add(a: i64, b: i64) -> i64 {
-  entry:
-    x64.lea rax, [rcx + rdx]
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov rcx, 30
-    x64.mov rdx, 12
-    x64.call add
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
-  __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
-    x64.epilogue
-    x64.ret
-  }
-}
-```
 ---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 42
+    x64.ret
+  }
+}
 ---

@@ -91,7 +91,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 1, y: 2)
+	var p = Point.create(1, y: 2)
 	p.x = p.x
 	return 0
 end 'main'

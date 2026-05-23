@@ -145,6 +145,17 @@ export type IrFunction
 	// stdlib functions (no IR body) and Std-phase synthesized helpers.
 	export var slotMaxonTypes MaxonTypeArray
 
+	// Phase 15a: function purity (no side effects, no global mutation, no
+	// param mutation, transitively pure call graph). Computed by
+	// `computePurity` in SemanticCheck.maxon; read by `checkDiscardedResults`
+	// to decide E3064 (must-use pure result) vs E3065 (may-`_=`-discard impure
+	// result). Defaults to `true`; the analysis pass walks each function's IR
+	// and sets it to `false` on impure constructs, then propagates backward
+	// through the call graph. Not serialized — stdlib functions get their
+	// purity computed at every fresh build, but skipped on the cache-restore
+	// path since `discarded-results` is a user-code lint.
+	export var isPure bool
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields are left at defaults. Visibility defaults
 	// to `file` so the parser must positively widen it to `module` /
@@ -178,7 +189,8 @@ export type IrFunction
 			hasImplicitLayoutParam: false,
 			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
-			slotMaxonTypes: MaxonTypeArray.create()
+			slotMaxonTypes: MaxonTypeArray.create(),
+			isPure: true
 		}
 	end 'create'
 
@@ -214,7 +226,8 @@ export type IrFunction
 			hasImplicitLayoutParam: false,
 			implicitWitnessConstraints: WhereClauseArray.create(),
 			contentHash: 0,
-			slotMaxonTypes: MaxonTypeArray.create()
+			slotMaxonTypes: MaxonTypeArray.create(),
+			isPure: true
 		}
 	end 'createFromStd'
 
@@ -252,7 +265,8 @@ export type IrFunction
 			hasImplicitLayoutParam: src.hasImplicitLayoutParam,
 			implicitWitnessConstraints: src.implicitWitnessConstraints,
 			contentHash: src.contentHash,
-			slotMaxonTypes: src.slotMaxonTypes
+			slotMaxonTypes: src.slotMaxonTypes,
+			isPure: src.isPure
 		}
 	end 'clone'
 

@@ -296,7 +296,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [20, 30]
-	try list.insert(at: 0, value: 10) otherwise 'err'
+	try list.insert(0, value: 10) otherwise 'err'
 		return 1
 	end 'err'
 	let v0 = try list.get(0) otherwise 0
@@ -321,7 +321,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 30]
-	try list.insert(at: 1, value: 20) otherwise 'err'
+	try list.insert(1, value: 20) otherwise 'err'
 		return 1
 	end 'err'
 	let v0 = try list.get(0) otherwise 0
@@ -346,7 +346,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 20]
-	try list.insert(at: 2, value: 30) otherwise 'err'
+	try list.insert(2, value: 30) otherwise 'err'
 		return 1
 	end 'err'
 	let v0 = try list.get(0) otherwise 0
@@ -413,7 +413,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 20, 30, 40]
-	let removed = try list.remove(at: 1) otherwise 0
+	let removed = try list.remove(1) otherwise 0
 	print("{removed}\n")
 	print("{list.count()}\n")
 	let v0 = try list.get(0) otherwise 0

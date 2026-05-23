@@ -13,7 +13,7 @@ typealias StringSet = Set with String
 // in InstructionScheduler and CommuteForCoalescing.
 typealias OpIndexOrMissing = int(i64.min to i64.max)
 
-export function runSemanticChecks(project Project, module MaxonModule)
+export function runSemanticChecks(project Project, module MaxonModule, isStdlib bool = false)
 	logDebug(LogCategory.semantic, message: function() gives "semcheck: functions={module.functions.count()}")
 
 	// Phase 3b: enforce E3016 — every type with a non-empty
@@ -31,6 +31,22 @@ export function runSemanticChecks(project Project, module MaxonModule)
 	// Mirrors the C# bootstrap's CheckRedundantContainsGet — see the
 	// per-function helper below for the full algorithm.
 	checkRedundantContainsGet(project, module: module)
+
+	// Phase 15a: compute per-function purity, then walk every call/tryCall op
+	// tagged by the parser (via `project.discardedBareCallResults` /
+	// `discardedLetCallResults`) and emit E3064 (pure result must be used) or
+	// E3065 (impure result needs `_=`). Purity is required by the check, so
+	// it runs first.
+	//
+	// Skip both passes for stdlib modules: the spec applies to user code only
+	// (stdlib internals reuse `_ =` patterns that the cache-off path would
+	// otherwise re-tag, breaking cache-parity). User code's check still sees
+	// stdlib callees via `project.funcReturnTypes` so E3065/E3064 still fire
+	// correctly when a user discards a stdlib call result.
+	if not isStdlib 'userOnly'
+		computePurity(project, module: module)
+		checkDiscardedResults(project, module: module)
+	end 'userOnly'
 
 	for func in module.functions 'scan'
 		if func.name == "main" 'isMain'
@@ -617,7 +633,7 @@ function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func
 	// results are block-local synthesized names.
 	let containsIdx = try findMethodCallProducingName(module, block: block, name: condName) otherwise return
 	let containsOp = try module.ops.get(containsIdx) otherwise panic("maybeEmitRedundantContainsGet: containsOpIdx OOB")
-	let info = extractMethodCallInfo(op: containsOp)
+	let info = extractMethodCallInfo(containsOp)
 	if String.from(info.methodNameBytes) != "contains" 'notContains'
 		return
 	end 'notContains'
@@ -625,7 +641,7 @@ function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func
 		return
 	end 'noKey'
 
-	let slotNames = buildSlotNameTable(func: func)
+	let slotNames = buildSlotNameTable(func)
 	let containsLimit = containsIdx
 	let receiverPath = buildAccessPath(module, block: block, limitOpIdx: containsLimit, name: info.receiver, slotNames: slotNames)
 	if receiverPath.isEmpty() 'unresolvableReceiver'
@@ -644,21 +660,21 @@ function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func
 	// names in either path; `guardedFields` collects every dotted segment.
 	var guardedSlotNames = StringSet.create()
 	var guardedFields = StringSet.create()
-	splitPathIntoGuards(path: receiverPath, slotNames: guardedSlotNames, fields: guardedFields)
-	splitPathIntoGuards(path: keyPath, slotNames: guardedSlotNames, fields: guardedFields)
+	splitPathIntoGuards(receiverPath, slotNames: guardedSlotNames, fields: guardedFields)
+	splitPathIntoGuards(keyPath, slotNames: guardedSlotNames, fields: guardedFields)
 
-	let containsCalleeFmt = stripCalleeMangling(callee: try project.resolvedCallees.get(containsIdx) otherwise "contains")
+	let containsCalleeFmt = stripCalleeMangling(try project.resolvedCallees.get(containsIdx) otherwise "contains")
 
 	for opIdx in thenBlock.opRefs 'eachThenOp'
 		let op = try module.ops.get(opIdx) otherwise panic("maybeEmitRedundantContainsGet: thenBlock op OOB")
-		if storeInvalidatesGuards(op: op, slotNames: slotNames, guardedSlotNames: guardedSlotNames, guardedFields: guardedFields) 'invalidatesGuards'
+		if storeInvalidatesGuards(op, slotNames: slotNames, guardedSlotNames: guardedSlotNames, guardedFields: guardedFields) 'invalidatesGuards'
 			break
 		end 'invalidatesGuards'
-		if not isMethodCallVariant(op: op) 'notMethodCall'
+		if not isMethodCallVariant(op) 'notMethodCall'
 			continue
 		end 'notMethodCall'
 
-		let inner = extractMethodCallInfo(op: op)
+		let inner = extractMethodCallInfo(op)
 		let innerLimit = opIdx as OpIndexOrMissing
 		let innerReceiverPath = buildAccessPath(module, block: thenBlock, limitOpIdx: innerLimit, name: inner.receiver, slotNames: slotNames)
 		if innerReceiverPath.isEmpty() 'unresolvableInnerReceiver'
@@ -675,7 +691,7 @@ function maybeEmitRedundantContainsGet(project Project, module MaxonModule, func
 			let innerKeyName = try inner.args.get(0) otherwise panic("maybeEmitRedundantContainsGet: inner.args.get(0) failed despite count>=1")
 			let innerKeyPath = buildAccessPath(module, block: thenBlock, limitOpIdx: innerLimit, name: innerKeyName, slotNames: slotNames)
 			if innerKeyPath == keyPath 'matched'
-				let getCalleeFmt = stripCalleeMangling(callee: try project.resolvedCallees.get(opIdx) otherwise "get")
+				let getCalleeFmt = stripCalleeMangling(try project.resolvedCallees.get(opIdx) otherwise "get")
 				let msg = "redundant '{containsCalleeFmt}' followed by '{getCalleeFmt}' on '{receiverPath}': use 'if let v = try {receiverPath}.get({keyPath})' (or 'if var') instead — performs one lookup instead of two"
 				reportCompileError(project, code: ErrorCode.semanticRedundantContainsGet, message: msg, line: info.range.line, column: info.range.column, filePath: func.sourceFilePath)
 				return
@@ -711,8 +727,8 @@ end 'MethodCallInfo'
 
 function extractMethodCallInfo(op MaxonOp) returns MethodCallInfo
 	return match op 'kind'
-		methodCall(_, r, mn, a, _, _, _, rg) gives MethodCallInfo.create(receiver: r, methodNameBytes: mn, args: a, isTry: false, range: rg)
-		tryMethodCall(_, r, mn, a, _, _, _, _, rg) gives MethodCallInfo.create(receiver: r, methodNameBytes: mn, args: a, isTry: true, range: rg)
+		methodCall(_, r, mn, a, _, _, _, rg) gives MethodCallInfo.create(r, methodNameBytes: mn, args: a, isTry: false, range: rg)
+		tryMethodCall(_, r, mn, a, _, _, _, _, rg) gives MethodCallInfo.create(r, methodNameBytes: mn, args: a, isTry: true, range: rg)
 		default panic("extractMethodCallInfo: caller filters non-methodCall ops via isMethodCallVariant")
 	end 'kind'
 end 'extractMethodCallInfo'
@@ -732,7 +748,7 @@ function storeInvalidatesGuards(op MaxonOp, slotNames SlotNameArray, guardedSlot
 	// other op shape is harmless and returns false unconditionally.
 	if op.name == "varStore" 'isVarStore'
 		return match op 'extract'
-			varStore(slotId, _, _) gives slotIsGuarded(slotId: slotId, slotNames: slotNames, guards: guardedSlotNames)
+			varStore(slotId, _, _) gives slotIsGuarded(slotId, slotNames: slotNames, guards: guardedSlotNames)
 			default panic("storeInvalidatesGuards: name==varStore but match arm missed it")
 		end 'extract'
 	end 'isVarStore'
@@ -836,7 +852,7 @@ function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limi
 			break
 		end 'reachedLimit'
 		let op = try module.ops.get(opIdx) otherwise panic("buildAccessPath: opRef OOB")
-		if opProducesName(op: op, name: name) 'isProducer'
+		if opProducesName(op, name: name) 'isProducer'
 			producerIdx = opIdx
 			found = true
 		end 'isProducer'
@@ -850,7 +866,7 @@ function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limi
 	// access path; anything else returns "" so the lint stays conservative.
 	if producer.name == "varLoad" 'isVarLoad'
 		return match producer 'extract'
-			varLoad(_, slotId, _, _) gives slotPathFromTable(slotNames: slotNames, slotId: slotId)
+			varLoad(_, slotId, _, _) gives slotPathFromTable(slotNames, slotId: slotId)
 			default panic("buildAccessPath: name==varLoad but match arm missed it")
 		end 'extract'
 	end 'isVarLoad'
@@ -862,7 +878,7 @@ function buildAccessPath(module MaxonModule, block IrBlock, name ByteArray, limi
 	end 'isSelfFieldLoad'
 	if producer.name == "fieldLoad" 'isFieldLoad'
 		return match producer 'extract'
-			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module: module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: producerIdx, slotNames: slotNames)
+			fieldLoad(_, recv, fieldName, _) gives fieldChainPath(module, block: block, recv: recv, fieldName: fieldName, limitOpIdx: producerIdx, slotNames: slotNames)
 			default panic("buildAccessPath: name==fieldLoad but match arm missed it")
 		end 'extract'
 	end 'isFieldLoad'
@@ -967,3 +983,587 @@ function stripCalleeMangling(callee String) returns String
 	let dollarIdx = try callee.findFirst("$") otherwise return callee
 	return callee.slice(callee.startIndex(), endIndex: dollarIdx)
 end 'stripCalleeMangling'
+
+// --------------------------------------------------------------------------
+// Phase 15a: purity analysis (mirrors C# PurityAnalysisPass).
+//
+// `func.isPure` is true iff the function has no side effects, no global or
+// parameter mutation, and only calls pure functions. The analysis runs in
+// three steps:
+//
+//   1. Direct-impurity classification: walk each function body once.
+//      Functions with no return type or empty body are impure by default
+//      (a void function exists only for its effects). Functions whose body
+//      contains an op known to mutate state (globalStore, selfFieldStore,
+//      callRuntime via callees prefixed `mrt_`, the impure managed-mem
+//      builtins, or a call into a known I/O intrinsic) are impure.
+//
+//   2. Transitive propagation: any pure function that calls a function the
+//      direct step marked impure becomes impure itself. Fixed-point reached
+//      via a worklist of newly-impure functions; the reverse-edge walk uses
+//      a callers map built from the call graph.
+//
+// Functions not appearing in `module.functions` (stdlib intrinsics whose
+// IR was restored from the cache) are conservatively treated as impure
+// when called — they were written outside the spec's purity contract.
+// The C# bootstrap takes the same stance.
+// --------------------------------------------------------------------------
+
+// Callees that make any caller impure. This is the union of:
+//   - I/O intrinsics surfaced via __Builtins.* (writeStdout, writeStderr,
+//     readStdin) — touch the OS directly.
+//   - The "impure managed-mem builtins" list from PurityAnalysisPass.cs:77.
+//     These names appear as the `callee` of a `call`/`tryCall` op before
+//     lowering rewrites them into runtime helpers.
+//   - Any `mrt_*` runtime call — runtime helpers are the OS-call boundary
+//     and always count as side-effects.
+// The `mrt_*` prefix is checked separately because there are dozens of
+// runtime names and listing each one would rot.
+typealias ImpureCalleeSet = Set with String
+
+function buildImpureCalleeSet() returns ImpureCalleeSet
+	var s = ImpureCalleeSet.create()
+	// I/O intrinsics. `print(s)` lowers to `Print.print` which calls
+	// `__Builtins.writeStdout` — so the transitive walk picks it up.
+	s.insert("__Builtins.writeStdout")
+	s.insert("__Builtins.writeStderr")
+	s.insert("__Builtins.readStdin")
+	// Throwing managed-mem builtins that mutate state. Read-only builtins
+	// (get, byteAt, slice, create, length, capacity, etc.) are excluded.
+	s.insert("__managed_mem_set")
+	s.insert("__managed_mem_remove")
+	s.insert("__managed_mem_set_byte")
+	s.insert("__managed_mem_grow")
+	s.insert("__managed_mem_set_length")
+	s.insert("__managed_mem_shift_right")
+	s.insert("__managed_mem_shift_left")
+	s.insert("__managed_mem_append")
+	s.insert("__managed_mem_clear")
+	// Managed-list mutations.
+	s.insert("__managed_list_reinsert_first")
+	s.insert("__managed_list_reinsert_last")
+	s.insert("__managed_list_reinsert_after")
+	s.insert("__managed_list_reinsert_before")
+	return s
+end 'buildImpureCalleeSet'
+
+// Did `func`'s body contain any op that makes it directly impure?
+// Inspects each op for the impurity shapes called out in C# PurityAnalysisPass:
+//   - globalStore: mutates a top-level `var`.
+//   - selfFieldStore: writes `self.x = ...` inside an instance method.
+//     The C# bootstrap detects this via a separate ParameterMutationAnalysis
+//     pass; self-hosted infers it from the op directly because every
+//     self-field write lowers to this dedicated op.
+//   - rangeCheckPanic: routes to a runtime call that aborts.
+//   - call/tryCall whose callee is in the impure-callee set OR has the
+//     `mrt_` runtime prefix.
+function isFunctionDirectlyImpure(module MaxonModule, func IrFunction, impureCallees ImpureCalleeSet) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("isFunctionDirectlyImpure: blockRef {blockRef} OOB")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("isFunctionDirectlyImpure: opIdx OOB")
+			if isOpDirectlyImpure(op, impureCallees: impureCallees) 'impure'
+				return true
+			end 'impure'
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("isFunctionDirectlyImpure: termIdx OOB")
+			if isOpDirectlyImpure(termOp, impureCallees: impureCallees) 'termImpure'
+				return true
+			end 'termImpure'
+		end 'hasTerm'
+	end 'eachBlock'
+	return false
+end 'isFunctionDirectlyImpure'
+
+function isOpDirectlyImpure(op MaxonOp, impureCallees ImpureCalleeSet) returns bool
+	// globalStore — every `topLevelVar = expr` reassignment.
+	if op.name == "globalStore" 'isGlobalStore'
+		return true
+	end 'isGlobalStore'
+	// selfFieldStore — `self.x = expr` inside a method. Treated as
+	// param-mutation (the receiver is the implicit `self` param).
+	if op.name == "selfFieldStore" 'isSelfStore'
+		return true
+	end 'isSelfStore'
+	// Any call/tryCall to a known impure callee. Extract the callee bytes
+	// first; the call/tryCall match expressions can't carry side-effecting
+	// `return`s in `gives`-arms, so the helper makes the shape destructure
+	// non-conditional.
+	let calleeName = calleeNameFromOp(op)
+	if calleeName == "" 'noCallee'
+		return false
+	end 'noCallee'
+	return calleeIsImpure(calleeName, impureCallees: impureCallees)
+end 'isOpDirectlyImpure'
+
+// Return the callee name from a call/tryCall op, or "" for any other op.
+// Used by both the direct-impurity and the call-edge collection passes.
+function calleeNameFromOp(op MaxonOp) returns String
+	if op.name == "call" 'isCall'
+		return match op 'callShape'
+			call(_, callee, _, _, _, _, _, _) gives String.from(callee)
+			default panic("calleeNameFromOp: op.name == call but match failed")
+		end 'callShape'
+	end 'isCall'
+	if op.name == "tryCall" 'isTryCall'
+		return match op 'tryCallShape'
+			tryCall(_, callee, _, _, _, _, _, _, _) gives String.from(callee)
+			default panic("calleeNameFromOp: op.name == tryCall but match failed")
+		end 'tryCallShape'
+	end 'isTryCall'
+	return ""
+end 'calleeNameFromOp'
+
+// True when the unqualified callee name is in the static impure list OR
+// has the `mrt_` runtime prefix (every runtime helper is a side-effect).
+function calleeIsImpure(callee String, impureCallees ImpureCalleeSet) returns bool
+	if impureCallees.contains(callee) 'inSet'
+		return true
+	end 'inSet'
+	// `mrt_*` callees are runtime helpers — all considered impure.
+	if callee.startsWith("mrt_") 'isRuntime'
+		return true
+	end 'isRuntime'
+	return false
+end 'calleeIsImpure'
+
+// Caller→callees index for the transitive propagation. Keyed on the
+// qualified caller name; the value is the list of bare or qualified callee
+// names found in that caller's body. Edges are collected from every
+// call/tryCall op (statically-resolvable or not — the callee string at
+// this stage may be unqualified, but two calls to the same unqualified
+// name compose the same edge, which is harmless for purity propagation).
+typealias FuncNameArray = Array with String
+typealias CallerEdgeMap = Map with (String, FuncNameArray)
+
+function buildCalleeEdges(module MaxonModule) returns CallerEdgeMap
+	var edges = CallerEdgeMap.create()
+	for func in module.functions 'eachFunc'
+		var callees = FuncNameArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("buildCalleeEdges: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("buildCalleeEdges: opIdx OOB")
+				collectCalleeName(op, calleesOut: callees)
+			end 'eachOp'
+			if block.hasTerminatorOp() 'hasTerm'
+				let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("buildCalleeEdges: termIdx OOB")
+				collectCalleeName(termOp, calleesOut: callees)
+			end 'hasTerm'
+		end 'eachBlock'
+		edges.upsert(func.name, value: callees)
+	end 'eachFunc'
+	return edges
+end 'buildCalleeEdges'
+
+function collectCalleeName(op MaxonOp, calleesOut FuncNameArray)
+	let name = calleeNameFromOp(op)
+	if name != "" 'hasName'
+		calleesOut.push(name)
+	end 'hasName'
+end 'collectCalleeName'
+
+export function computePurity(project Project, module MaxonModule)
+	let impureCallees = buildImpureCalleeSet()
+
+	// Step 1: direct-impurity classification. Default `isPure: true` (from
+	// IrFunction.create); flip to false on any disqualifying condition.
+	// Iteration is by-index so we can mutate the entry in place.
+	let funcCount = module.functions.count()
+	var i = 0
+	while i < funcCount 'directScan'
+		var func = try module.functions.get(i) otherwise panic("computePurity: functions.get OOB at {i}")
+		// Void return: function exists only for its effects → impure.
+		let isVoid = match func.maxonReturnType 'rt'
+			void gives true
+			value gives false
+		end 'rt'
+		if isVoid 'isVoid'
+			func.isPure = false
+			try module.functions.set(i, value: func) otherwise panic("computePurity: functions.set OOB at {i}")
+			i = i + 1
+			continue
+		end 'isVoid'
+		// Empty body — restored stdlib intrinsics with no IR, declarations
+		// only. Treat as impure conservatively.
+		if func.blockRefs.count() == 0 'emptyBody'
+			func.isPure = false
+			try module.functions.set(i, value: func) otherwise panic("computePurity: functions.set OOB at {i}")
+			i = i + 1
+			continue
+		end 'emptyBody'
+		// Parser-tagged parameter mutation (direct reassignment of a param,
+		// or self-field-store inside an instance method). The C# bootstrap
+		// computes this in a separate ParameterMutationAnalysis pass; self-
+		// hosted records it at the assignment site in the parser.
+		if project.paramMutatingFunctions.contains(func.name) 'mutatesParam'
+			func.isPure = false
+			try module.functions.set(i, value: func) otherwise panic("computePurity: functions.set OOB at {i}")
+			i = i + 1
+			continue
+		end 'mutatesParam'
+		if isFunctionDirectlyImpure(module, func: func, impureCallees: impureCallees) 'directlyImpure'
+			func.isPure = false
+			try module.functions.set(i, value: func) otherwise panic("computePurity: functions.set OOB at {i}")
+		end 'directlyImpure'
+		i = i + 1
+	end 'directScan'
+
+	// Step 2: transitive propagation. Build callee edges per function, then
+	// walk: any function calling an impure function becomes impure. Iterate
+	// to fixed point.
+	let edges = buildCalleeEdges(module)
+	var changed = true
+	while changed 'propagate'
+		changed = false
+		var j = 0
+		while j < funcCount 'eachCaller'
+			var caller = try module.functions.get(j) otherwise panic("computePurity: caller.get OOB at {j}")
+			if not caller.isPure 'alreadyImpure'
+				j = j + 1
+				continue
+			end 'alreadyImpure'
+			let callees = try edges.get(caller.name) otherwise FuncNameArray.create()
+			var becameImpure = false
+			for callee in callees 'eachCallee'
+				if callee == caller.name 'selfCall'
+					continue
+				end 'selfCall'
+				if calleeIsImpure(callee, impureCallees: impureCallees) 'directImp'
+					becameImpure = true
+					break
+				end 'directImp'
+				// Resolve the callee name against module functions. The
+				// callee field may be bare or qualified — try direct match
+				// first, then qualified-with-caller-namespace.
+				let calleePure = lookupCalleePurity(module, calleeName: callee, callerNamespace: caller.namespace, impureCallees: impureCallees)
+				if not calleePure 'isImpure'
+					becameImpure = true
+					break
+				end 'isImpure'
+			end 'eachCallee'
+			if becameImpure 'flip'
+				caller.isPure = false
+				try module.functions.set(j, value: caller) otherwise panic("computePurity: caller.set OOB at {j}")
+				changed = true
+			end 'flip'
+			j = j + 1
+		end 'eachCaller'
+	end 'propagate'
+end 'computePurity'
+
+// Look up a callee's purity by name. Resolves bare names against the
+// caller's namespace and falls back to a direct match. The stdlib I/O
+// family (`print` / `printError` / `readLine`) and direct-impure callees
+// are flagged regardless of whether the callee is in `module.functions`.
+// `unresolvedDefault` controls what to return when the callee isn't found
+// in `module.functions`: the propagation pass (`computePurity`) defaults
+// to `true` because the body might be a pure stdlib helper; the report
+// pass (`checkDiscardedResults`) defaults to `false` so unresolved callees
+// don't fire false-positive E3064s and instead route to the E3065 path
+// when bare-discarded.
+function lookupCalleePurity(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet) returns bool
+	return lookupCalleePurityImpl(module, calleeName: calleeName, callerNamespace: callerNamespace, impureCallees: impureCallees, unresolvedDefault: true)
+end 'lookupCalleePurity'
+
+function lookupCalleePurityImpl(module MaxonModule, calleeName String, callerNamespace String, impureCallees ImpureCalleeSet, unresolvedDefault bool) returns bool
+	// Stdlib I/O entrypoint or runtime helper — always impure even when
+	// the body isn't in this MaxonModule.
+	if calleeIsImpure(calleeName, impureCallees: impureCallees) 'isStdlibImpure'
+		return false
+	end 'isStdlibImpure'
+	if calleeName == "print" or calleeName == "printError" or calleeName == "readLine" 'isPrintFamily'
+		return false
+	end 'isPrintFamily'
+	for func in module.functions 'each'
+		if func.name == calleeName 'directHit'
+			return func.isPure
+		end 'directHit'
+		// Namespace-qualified: `{namespace}.{bare}` for free functions in
+		// the same module.
+		if callerNamespace != "" 'hasNs'
+			let qualified = "{callerNamespace}.{calleeName}"
+			if func.name == qualified 'qualifiedHit'
+				return func.isPure
+			end 'qualifiedHit'
+		end 'hasNs'
+	end 'each'
+	return unresolvedDefault
+end 'lookupCalleePurityImpl'
+
+// --------------------------------------------------------------------------
+// Phase 15a: discarded-results check (E3064 / E3065). Mirrors
+// SemanticCheckPass.CheckDiscardedResults in the C# bootstrap.
+//
+// Walks every call/tryCall op in every function. If the op's result name is
+// in `project.discardedBareCallResults` or `discardedLetCallResults`, the
+// callee was discarded at parse time. The fired diagnostic depends on the
+// callee's purity (computed above) and the discard form:
+//
+//   - Pure callee + any discard form → E3064 "result of pure function 'X' must be used"
+//   - Impure callee + bare discard → E3065 "result of 'X' is not used (use '_ = expr' to discard)"
+//   - Impure callee + `_=` discard → silent (the discard is the user's opt-in)
+//
+// Chainable methods (1st param `self`, return type matches receiver) are
+// exempt from both diagnostics — builder-pattern discards are valid.
+// --------------------------------------------------------------------------
+
+export function checkDiscardedResults(project Project, module MaxonModule)
+	// Short-circuit if the parser never tagged any discards. Avoids the
+	// per-function walk on the common all-results-used case.
+	if project.discardedBareCallResults.count() == 0 and project.discardedLetCallResults.count() == 0 'noTags'
+		return
+	end 'noTags'
+	let impureCallees = buildImpureCalleeSet()
+	for func in module.functions 'eachFunc'
+		// Skip stdlib functions: the discarded-results lint is for user code
+		// only. Stdlib internals reuse `_ =` patterns and bare statement-
+		// position calls in ways that don't fit the user-facing spec; cache-
+		// parity tests would otherwise diverge between the cache-off path
+		// (which re-parses stdlib and re-runs this check) and the cache-on
+		// path (which restores stdlib without re-running the check).
+		if isStdlibFunctionPath(func.sourceFilePath) 'isStdlib'
+			continue
+		end 'isStdlib'
+		let readerFilePath = func.sourceFilePath
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkDiscardedResults: blockRef OOB")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("checkDiscardedResults: opIdx OOB")
+				checkOneCallForDiscard(project, module: module, op: op, callerName: func.name, callerNamespace: func.namespace, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkDiscardedResults'
+
+// True when `path` points at a stdlib source file (bootstrap or any of the
+// whitelisted `stdlib/*.maxon` files). Used to keep the discarded-results
+// check (and other user-only diagnostics) from firing on stdlib internals.
+function isStdlibFunctionPath(path FilePath) returns bool
+	let s = path.toString()
+	if s == "stdlib-bootstrap.maxon" 'isBootstrap'
+		return true
+	end 'isBootstrap'
+	// Any path containing `stdlib/` (or `stdlib\` on Windows) is stdlib.
+	return s.contains("stdlib/") or s.contains("stdlib\\")
+end 'isStdlibFunctionPath'
+
+function checkOneCallForDiscard(project Project, module MaxonModule, op MaxonOp, callerName String, callerNamespace String, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+	if op.name == "call" 'isCall'
+		match op 'callShape'
+			call(result, callee, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			default panic("checkOneCallForDiscard: op.name == call but match failed")
+		end 'callShape'
+	end 'isCall'
+	if op.name == "tryCall" 'isTryCall'
+		match op 'tryCallShape'
+			tryCall(result, callee, _, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: callee, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			default panic("checkOneCallForDiscard: op.name == tryCall but match failed")
+		end 'tryCallShape'
+	end 'isTryCall'
+	if op.name == "methodCall" 'isMethodCall'
+		match op 'methodCallShape'
+			methodCall(result, _, methodName, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			default panic("checkOneCallForDiscard: op.name == methodCall but match failed")
+		end 'methodCallShape'
+	end 'isMethodCall'
+	if op.name == "tryMethodCall" 'isTryMethodCall'
+		match op 'tryMethodCallShape'
+			tryMethodCall(result, _, methodName, _, _, _, _, _, range) then maybeReportDiscarded(project, module: module, result: result, callee: methodName, callerName: callerName, callerNamespace: callerNamespace, range: range, readerFilePath: readerFilePath, impureCallees: impureCallees)
+			default panic("checkOneCallForDiscard: op.name == tryMethodCall but match failed")
+		end 'tryMethodCallShape'
+	end 'isTryMethodCall'
+end 'checkOneCallForDiscard'
+
+function maybeReportDiscarded(project Project, module MaxonModule, result ByteArray, callee ByteArray, callerName String, callerNamespace String, range SourceRange, readerFilePath FilePath, impureCallees ImpureCalleeSet)
+	if result.count() == 0 'noResult'
+		return
+	end 'noResult'
+	let resultStr = String.from(result)
+	let key = "{callerName}::{resultStr}"
+	let isBare = project.discardedBareCallResults.contains(key)
+	let isLet = project.discardedLetCallResults.contains(key)
+	if not (isBare or isLet) 'notDiscarded'
+		return
+	end 'notDiscarded'
+	let bareCallee = stripCalleeMangling(String.from(callee))
+	// Void-returning callees have no result to "discard" — skip silently.
+	// `doNothing()` as a bare statement is the canonical example: the
+	// function exists for its side effects, the discard is implicit.
+	if calleeIsVoid(project, bareCallee: bareCallee, callerNamespace: callerNamespace) 'voidCallee'
+		return
+	end 'voidCallee'
+	// Chainable carve-out: methods returning their own receiver type can be
+	// freely discarded (builder pattern). The check is conservative — if
+	// the callee can't be resolved, we don't fire either diagnostic to
+	// avoid noisy false-positives on unresolved-call paths.
+	if isChainableCallee(project, module: module, calleeName: bareCallee) 'chainable'
+		return
+	end 'chainable'
+	// Look up callee purity. Same lookup strategy as the transitive pass.
+	let calleePure = lookupCalleePurityForReport(module, bareCallee: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees)
+	let displayName = formatCalleeNameForDiscard(bareCallee)
+	if calleePure 'pure'
+		// E3064 fires for both bare and let-discards — pure results MUST be used.
+		reportCompileError(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{displayName}' must be used", line: range.line, column: range.column, filePath: readerFilePath)
+		return
+	end 'pure'
+	// Impure callee: bare discard fires E3065; `_=` discard is the documented
+	// way to silence the warning, so it stays silent.
+	if isBare 'bareImpure'
+		reportCompileError(project, code: ErrorCode.semanticDiscardedImpureResult, message: "result of '{displayName}' is not used (use '_ = expr' to discard)", line: range.line, column: range.column, filePath: readerFilePath)
+	end 'bareImpure'
+end 'maybeReportDiscarded'
+
+// True when the callee's declared return type is `void`. Looks up the
+// callee in `project.funcReturnTypes`, which is the project-wide registry
+// populated by both the parser (user functions) and the stdlib cache
+// restore path. Methods are keyed by their qualified `{TypeName}.method`
+// name; bare callees from methodCall ops need their receiver type appended
+// before lookup — but since methodCall already encodes only the method
+// name on the op, the qualified key has to be probed across every
+// `*.{methodName}` entry. This is O(N) per check; for the typical project
+// (a few thousand functions) it stays fast enough.
+function calleeIsVoid(project Project, bareCallee String, callerNamespace String) returns bool
+	// Direct probe by bare name (works for `foo()` calls on free functions).
+	if returnTypeIsVoid(project, qualifiedName: bareCallee) 'bareHit'
+		return true
+	end 'bareHit'
+	// Namespace-qualified probe (`callerNamespace.bareCallee`).
+	if callerNamespace != "" 'hasNs'
+		if returnTypeIsVoid(project, qualifiedName: "{callerNamespace}.{bareCallee}") 'nsHit'
+			return true
+		end 'nsHit'
+	end 'hasNs'
+	// Method-call shape: the callee is just the method name; scan every
+	// registered function whose name ends in `.{bareCallee}` and report
+	// void if any matches. Multiple matches are uncommon (each receiver
+	// type defines at most one method by the same name), but if they
+	// disagree on return type the conservative answer is "void" — falsely
+	// suppressing a diagnostic is better than firing one spuriously on
+	// idiomatic mutator calls like `arr.push("x")`.
+	let methodSuffix = ".{bareCallee}"
+	for (key, rt) in project.funcReturnTypes 'each'
+		if not key.endsWith(methodSuffix) 'notMethod'
+			continue
+		end 'notMethod'
+		let isVoid = match rt 'rtkind'
+			void gives true
+			value gives false
+		end 'rtkind'
+		if isVoid 'foundVoid'
+			return true
+		end 'foundVoid'
+	end 'each'
+	return false
+end 'calleeIsVoid'
+
+function returnTypeIsVoid(project Project, qualifiedName String) returns bool
+	let rt = try project.funcReturnTypes.get(qualifiedName) otherwise return false
+	return match rt 'rtkind'
+		void gives true
+		value gives false
+	end 'rtkind'
+end 'returnTypeIsVoid'
+
+// Strip the leading namespace segment from a qualified callee name, matching
+// the C# FormatCalleeName helper: `"ns.Type.method"` → `"Type.method"`,
+// `"ns.func"` → `"func"`, `"func"` → `"func"`.
+function formatCalleeNameForDiscard(callee String) returns String
+	let dotIdx = try callee.findFirst(".") otherwise return callee
+	let afterDot = try callee.indexAfter(dotIdx) otherwise return callee
+	return callee.slice(afterDot, endIndex: callee.endIndex())
+end 'formatCalleeNameForDiscard'
+
+// Does the callee match the "chainable" pattern: first param is `self`, and
+// the return type's name equals the receiver's type name? The method-table
+// keys methods by `{TypeName}.{method}`; if we can recover `TypeName` from
+// the callee and the matching IrFunction's return type, we can apply the
+// carve-out. When the callee isn't matched (free function, stdlib helper),
+// returns false so the discard check still fires.
+function isChainableCallee(project Project, module MaxonModule, calleeName String) returns bool
+	// Two shapes the parser passes through:
+	//   - Qualified `"Counter.increment"` (from call ops on a static method).
+	//   - Bare method name `"increment"` (from methodCall ops — the receiver
+	//     isn't part of the callee bytes; type resolution stores the
+	//     receiver elsewhere). We probe both.
+	if calleeName.contains(".") 'qualified'
+		return isChainableQualified(project, module: module, qualified: calleeName)
+	end 'qualified'
+	// Bare method name: walk the module for any function `"T.calleeName"`
+	// whose return type equals T. If multiple candidates match, the discard
+	// site is chainable as long as one does — the user's source-level
+	// method-resolution can only have picked one, so we err on the
+	// permissive side (false positive on the carve-out is preferred to a
+	// noisy E3064 false-positive).
+	for func in module.functions 'each'
+		let dotIdx = try func.name.findFirst(".") otherwise continue
+		let methodPart = try func.name.indexAfter(dotIdx) otherwise continue
+		let methodSuffix = func.name.slice(methodPart, endIndex: func.name.endIndex())
+		if methodSuffix != calleeName 'notThisMethod'
+			continue
+		end 'notThisMethod'
+		if isChainableQualified(project, module: module, qualified: func.name) 'yes'
+			return true
+		end 'yes'
+	end 'each'
+	return false
+end 'isChainableCallee'
+
+function isChainableQualified(project Project, module MaxonModule, qualified String) returns bool
+	for func in module.functions 'each'
+		if func.name != qualified 'noMatch'
+			continue
+		end 'noMatch'
+		if func.paramCount < 1 'noParams'
+			return false
+		end 'noParams'
+		let receiverType = receiverTypeNameFromCallee(qualified)
+		if receiverType == "" 'noReceiver'
+			return false
+		end 'noReceiver'
+		let returnTypeName = maxonReturnTypeName(project, rt: func.maxonReturnType)
+		return returnTypeName == receiverType
+	end 'each'
+	return false
+end 'isChainableQualified'
+
+// Receiver type name from a qualified callee name like `"Counter.increment"`
+// → `"Counter"`. Returns "" if no dot exists.
+function receiverTypeNameFromCallee(callee String) returns String
+	let dotIdx = try callee.findFirst(".") otherwise return ""
+	return callee.slice(callee.startIndex(), endIndex: dotIdx)
+end 'receiverTypeNameFromCallee'
+
+// Stringify a MaxonReturnType for the chainable check. `void` returns ""
+// so the equality with a receiver type can never succeed. `value(t)`
+// extracts the bare name from `named(id)` via the project's type-name
+// interner; non-named types return "".
+function maxonReturnTypeName(project Project, rt MaxonReturnType) returns String
+	return match rt 'rt'
+		void gives ""
+		value(t) gives maxonTypeBareName(project, t: t)
+	end 'rt'
+end 'maxonReturnTypeName'
+
+function maxonTypeBareName(project Project, t MaxonType) returns String
+	if t.name != "named" 'notNamed'
+		return ""
+	end 'notNamed'
+	match t 'pickName'
+		named(id) then return project.typeNames.get(id)
+		default panic("maxonTypeBareName: name guard but match failed")
+	end 'pickName'
+end 'maxonTypeBareName'
+
+// Discard-check purity lookup — same strategy as the propagation pass
+// (`lookupCalleePurity`), but defaults unresolved callees to *impure*
+// rather than pure. Unresolved callees in the report path are stdlib
+// helpers or methods whose bodies weren't analyzed; firing E3064 on
+// them would be a false positive. Defaulting to impure routes bare
+// discards through the documented E3065 "use `_ =` to discard" path
+// and silences `_=` discards on the same callees.
+function lookupCalleePurityForReport(module MaxonModule, bareCallee String, callerNamespace String, impureCallees ImpureCalleeSet) returns bool
+	return lookupCalleePurityImpl(module, calleeName: bareCallee, callerNamespace: callerNamespace, impureCallees: impureCallees, unresolvedDefault: false)
+end 'lookupCalleePurityForReport'

@@ -1,0 +1,53 @@
+// Test: docs-example-3
+function main() returns ExitCode
+	let cwd = Directory.currentPath()
+	print("{cwd}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @Directory.currentPath()
+    %2 = mir.global_addr @__istr_0
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.global_addr @__witness_FilePath_Stringable
+    %5 = mir.witness_call %4, [0](%0)
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %6, 0 width: qword
+    %8 = mir.load %6, 8 width: qword
+    %9 = mir.global_addr @__istr_1
+    %10 = mir.mov_imm 1 : i64
+    %13 = mir.add.i64 %3, %8
+    %14 = mir.add.i64 %13, %10
+    %15 = mir.mov_imm 1 : i64
+    %16 = mir.add.i64 %14, %15
+    %17 = mir.call @mrt_alloc(%16)
+    mir.memcpy %17, %2, %3
+    %18 = mir.add.i64 %17, %3
+    mir.memcpy %18, %7, %8
+    %19 = mir.add.i64 %18, %8
+    mir.memcpy %19, %9, %10
+    %21 = mir.mov_imm 40 : i64
+    %22 = mir.call @mrt_alloc(%21)
+    mir.store %17, %22, 0 width: qword
+    mir.store %14, %22, 8 width: qword
+    mir.store %14, %22, 16 width: qword
+    %23 = mir.mov_imm 1 : i64
+    mir.store %23, %22, 24 width: qword
+    mir.store %3, %22, 32 width: qword
+    %25 = mir.mov_imm 16 : i64
+    %26 = mir.call @mrt_alloc(%25)
+    mir.store %22, %26, 0 width: qword
+    mir.store %3, %26, 8 width: qword
+    %29 = mir.load %26, 0 width: qword
+    %30 = mir.load %29, 0 width: qword
+    %31 = mir.load %29, 8 width: qword
+    %32 = mir.call @mrt_write_stdout(%30, %31)
+    mir.ret %3
+  }
+}
+---

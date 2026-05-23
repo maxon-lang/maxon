@@ -37,16 +37,16 @@ typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
 		var src = ItemArray.create()
-		src.push(Item.create(name: "hello from source that is long enough", value: 10))
-		src.push(Item.create(name: "second item from source long enough", value: 20))
-		src.push(Item.create(name: "third item from source long enough", value: 30))
+		src.push(Item.create("hello from source that is long enough", value: 10))
+		src.push(Item.create("second item from source long enough", value: 20))
+		src.push(Item.create("third item from source long enough", value: 30))
 		dest.append(src)
 		// src is freed when this function returns
 end 'appendFromHelper'
 
 function main() returns ExitCode
 		var dest = ItemArray.create()
-		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
+		dest.push(Item.create("dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
 		// Source array is freed. dest should still have valid elements.
@@ -54,7 +54,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let item = try dest.get(1) otherwise Item.create(name: "", value: 0)
+		let item = try dest.get(1) otherwise Item.create("", value: 0)
 		return item.value
 end 'main'
 ```
@@ -132,12 +132,12 @@ type Module
 end 'Module'
 
 function createModule() returns Module
-		return Module.create(functions: FuncArray.create())
+		return Module.create(FuncArray.create())
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
 		var source = createModule()
-		source.functions.push(Func.create(name: name, body: IntArray.create()))
+		source.functions.push(Func.create(name, body: IntArray.create()))
 		dest.functions.append(source.functions)
 		// source is freed when this function returns
 end 'parseAndMerge'
@@ -151,7 +151,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.create())
+		let first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
 				return 0
 		end 'correct'

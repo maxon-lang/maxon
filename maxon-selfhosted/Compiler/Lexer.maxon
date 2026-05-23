@@ -423,7 +423,7 @@ type Lexer
 	var emittedAtEof bool
 
 	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(line: 0, column: 0), hasPendingError: false, emittedAtEof: false}
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -558,7 +558,7 @@ type Lexer
 
 	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
 		try advance()
-		try scanBlockComment(startLine: startLine, startCol: startCol)
+		try scanBlockComment(startLine, startCol: startCol)
 	end 'handleEnterBlockComment'
 
 	// Walk one DFA step starting from the current cursor byte: read the byte's
@@ -573,7 +573,7 @@ type Lexer
 		// run of letters following the `#`, and we want to emit a dedicated
 		// TokenKind based on the name rather than two separate tokens.
 		if ch == Ascii.hash 'isDirective'
-			return try scanDirective(startLine: startLine, startCol: startCol)
+			return try scanDirective(startLine, startCol: startCol)
 		end 'isDirective'
 		let charClass = try charClassTable.get(ch) otherwise panic("Lexer: charClassTable lookup failed for byte {ch}")
 		var atEnd = false
@@ -601,29 +601,29 @@ type Lexer
 		end 'isSkip' else if a == Action.skipCr.rawValue 'isSkipCr'
 			column = column - 1
 		end 'isSkipCr' else if a == Action.newline.rawValue 'isNewline'
-			newline(startLine: startLine, startCol: startCol)
+			newline(startLine, startCol: startCol)
 		end 'isNewline' else if a == Action.emit.rawValue 'isEmit'
 			emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
 		end 'isEmit' else if a == Action.emit2.rawValue 'isEmit2'
-			try handleEmit2(dfaState: dfaState, startLine: startLine, startCol: startCol)
+			try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
 		end 'isEmit2' else if a == Action.enterStrSq.rawValue 'isStrSq'
-			try scanSingleQuoteString(startLine: startLine, startCol: startCol)
+			try scanSingleQuoteString(startLine, startCol: startCol)
 		end 'isStrSq' else if a == Action.enterStrDq.rawValue 'isStrDq'
-			try scanDoubleQuoteString(startLine: startLine, startCol: startCol)
+			try scanDoubleQuoteString(startLine, startCol: startCol)
 		end 'isStrDq' else if a == Action.enterNumber.rawValue 'isNumber'
 			if not lastChar 'numRetreat'
 				try retreat()
 			end 'numRetreat'
-			try scanNumber(startLine: startLine, startCol: startCol)
+			try scanNumber(startLine, startCol: startCol)
 		end 'isNumber' else if a == Action.enterIdent.rawValue 'isIdent'
 			if not lastChar 'identRetreat'
 				try retreat()
 			end 'identRetreat'
-			try scanIdentifier(startLine: startLine, startCol: startCol)
+			try scanIdentifier(startLine, startCol: startCol)
 		end 'isIdent' else if a == Action.enterComment.rawValue 'isComment'
 			try handleEnterComment()
 		end 'isComment' else if a == Action.enterBlockComment.rawValue 'isBlockComment'
-			try handleEnterBlockComment(startLine: startLine, startCol: startCol)
+			try handleEnterBlockComment(startLine, startCol: startCol)
 		end 'isBlockComment' else 'unknown'
 			panic("Lexer: unhandled action {action}")
 		end 'unknown'
@@ -664,7 +664,7 @@ type Lexer
 		// LexerError and surfaces it to the caller.
 		emitStringLit(TokenKind.charLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
 		hasPendingError = true
-		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
 		throw CursorError.exhausted
 	end 'scanSingleQuoteString'
 
@@ -694,7 +694,7 @@ type Lexer
 				// accepting a string that never had a closing quote.
 				emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index(), startLine: fragLine, startCol: fragCol)
 				hasPendingError = true
-				pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+				pendingError = LexerError.unterminatedString(startLine, column: startCol)
 				throw CursorError.exhausted
 			end 'newlineInDstr'
 			if dc == Ascii.backslash 'esc'
@@ -719,7 +719,7 @@ type Lexer
 				if not tryAdvance() 'lBraceEof'
 					throw CursorError.exhausted
 				end 'lBraceEof'
-				try scanInterp(openLine: interpLine, openCol: interpCol)
+				try scanInterp(interpLine, openCol: interpCol)
 				// scanInterp returns with cursor AT `}`; advance past it to start
 				// the next fragment.
 				let closeLine = line
@@ -744,7 +744,7 @@ type Lexer
 		// it through the project's diagnostic sink.
 		emitStringLit(TokenKind.stringLiteral, strStart: fragStart, endByte: cursor.index() + 1, startLine: fragLine, startCol: fragCol)
 		hasPendingError = true
-		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
 		throw CursorError.exhausted
 	end 'scanDoubleQuoteString'
 
@@ -766,7 +766,7 @@ type Lexer
 			if bc == Ascii.lf 'newlineInBstr'
 				emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index(), startLine: startLine, startCol: startCol)
 				hasPendingError = true
-				pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+				pendingError = LexerError.unterminatedString(startLine, column: startCol)
 				throw CursorError.exhausted
 			end 'newlineInBstr'
 			if bc == Ascii.backslash 'esc'
@@ -784,7 +784,7 @@ type Lexer
 		end 'bstrBody'
 		emitStringLit(TokenKind.byteStringLiteral, strStart: strStart, endByte: cursor.index() + 1, startLine: startLine, startCol: startCol)
 		hasPendingError = true
-		pendingError = LexerError.unterminatedString(line: startLine, column: startCol)
+		pendingError = LexerError.unterminatedString(startLine, column: startCol)
 		throw CursorError.exhausted
 	end 'scanByteStringLiteralBody'
 
@@ -837,15 +837,15 @@ type Lexer
 				continue
 			end 'openBrace'
 
-			let atEnd = try stepDfa(startLine: line, startCol: column) otherwise 'subEof'
-				try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
+			let atEnd = try stepDfa(line, startCol: column) otherwise 'subEof'
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'subEof'
 			if atEnd 'interpEof'
-				try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
+				try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 			end 'interpEof'
 		end 'interp'
 		// Loop guard `cursor.index() < len` failed without a matching `}`.
-		try failInterp(openLine: openLine, openCol: openCol, bodyStart: bodyStart)
+		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 	end 'scanInterp'
 
 	// Stash the right LexerError for a scanInterp that ran out of input
@@ -856,9 +856,9 @@ type Lexer
 	function failInterp(openLine LineNumber, openCol ColumnNumber, bodyStart CharOffset) throws CursorError
 		hasPendingError = true
 		if interpBodyContainsDquote(bodyStart) 'sawDquote'
-			pendingError = LexerError.unescapedBrace(line: openLine, column: openCol)
+			pendingError = LexerError.unescapedBrace(openLine, column: openCol)
 		end 'sawDquote' else 'genuineEof'
-			pendingError = LexerError.unterminatedString(line: openLine, column: openCol)
+			pendingError = LexerError.unterminatedString(openLine, column: openCol)
 		end 'genuineEof'
 		throw CursorError.exhausted
 	end 'failInterp'
@@ -1057,7 +1057,7 @@ type Lexer
 				if not tryAdvance() 'qEof'
 					try finishAtEof()
 				end 'qEof'
-				try scanByteStringLiteralBody(startLine: startLine, startCol: startCol)
+				try scanByteStringLiteralBody(startLine, startCol: startCol)
 				return
 			end 'isByteStr'
 		end 'maybeByteStr'
@@ -1100,7 +1100,7 @@ type Lexer
 		try advance() otherwise 'eofAtHash'
 			// `#` at EOF with no name following — treat as malformed directive.
 			hasPendingError = true
-			pendingError = LexerError.unexpectedEof(line: startLine, column: startCol)
+			pendingError = LexerError.unexpectedEof(startLine, column: startCol)
 			throw CursorError.exhausted
 		end 'eofAtHash'
 		let nameStart = cursor.index()
@@ -1127,7 +1127,7 @@ type Lexer
 			// diagnostic can quote the offending name; run()'s caller maps
 			// this to ErrorCode.lexerUnexpectedCharacter.
 			hasPendingError = true
-			pendingError = LexerError.unknownDirective(name: name, line: startLine, column: startCol)
+			pendingError = LexerError.unknownDirective(name, line: startLine, column: startCol)
 			throw CursorError.exhausted
 		end 'unknown'
 		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
@@ -1179,20 +1179,20 @@ type Lexer
 				column = 1
 				if not tryAdvanceRaw() 'blockEof1'
 					hasPendingError = true
-					pendingError = LexerError.unterminatedBlockComment(line: startLine, column: startCol)
+					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
 					throw CursorError.exhausted
 				end 'blockEof1'
 			end 'newlineInBlock' else 'advanceInBlock'
 				if not tryAdvance() 'blockEof2'
 					hasPendingError = true
-					pendingError = LexerError.unterminatedBlockComment(line: startLine, column: startCol)
+					pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
 					throw CursorError.exhausted
 				end 'blockEof2'
 			end 'advanceInBlock'
 		end 'skipBlockComment'
 		// Loop exit without finding `*/` — unterminated.
 		hasPendingError = true
-		pendingError = LexerError.unterminatedBlockComment(line: startLine, column: startCol)
+		pendingError = LexerError.unterminatedBlockComment(startLine, column: startCol)
 		throw CursorError.exhausted
 	end 'scanBlockComment'
 
@@ -1225,7 +1225,7 @@ type Lexer
 	// final token and signalled `emittedAtEof`. Throws LexerError on a stashed
 	// scanner error or a truly-truncated token.
 	function stepOnce(startLine LineNumber, startCol ColumnNumber) returns bool throws LexerError
-		return try stepDfa(startLine: startLine, startCol: startCol) otherwise 'cursorErr'
+		return try stepDfa(startLine, startCol: startCol) otherwise 'cursorErr'
 			if hasPendingError 'hasErr'
 				throw pendingError
 			end 'hasErr'
@@ -1341,7 +1341,7 @@ var keywordMap = [
 ]
 
 function classifyIdentifier(name String) returns TokenKind
-	let info = try keywordMap.get(key: name) otherwise return TokenKind.identifier
+	let info = try keywordMap.get(name) otherwise return TokenKind.identifier
 	return info.kind
 end 'classifyIdentifier'
 

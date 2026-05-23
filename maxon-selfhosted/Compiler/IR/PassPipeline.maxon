@@ -230,7 +230,7 @@ export type PassPipeline
 		match pass 'dispatch'
 			// Phase 2: Maxon-level passes
 			resolveTypes then runResolveTypesAndStamp(project, module: maxonModule, filePath: sourcePath)
-			semanticCheck then runSemanticChecks(project, module: maxonModule)
+			semanticCheck then runSemanticChecks(project, module: maxonModule, isStdlib: isStdlib)
 			// Stdlib pipeline skips the cross-file unused-export audit. Every
 			// stdlib API is reachable from user code only via `import`/visibility
 			// (which we don't model in the sandbox compile), so the pass has no
@@ -379,11 +379,11 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 	// stdlib body so the inliner skips them as callers.
 	var seenSkipNames = StringSet.create()
 	for n in stdlibFuncNames 'seedSeen'
-		seenSkipNames.insert(element: n)
+		seenSkipNames.insert(n)
 	end 'seedSeen'
 	for f in module.functions 'collectInModule'
 		if isStdlibNamespace(f.namespace) and not seenSkipNames.contains(f.name) 'fresh'
-			seenSkipNames.insert(element: f.name)
+			seenSkipNames.insert(f.name)
 			stdlibFuncNames.push(f.name)
 		end 'fresh'
 	end 'collectInModule'
@@ -397,7 +397,7 @@ function runInlinerWithStdlibSnapshot(module StdModule, project Project) returns
 		for f in stdlibSnapshot.functions 'collectSnap'
 			snapshotNames.push(f.name)
 		end 'collectSnap'
-		inlined.dropFunctionsByName(names: snapshotNames)
+		inlined.dropFunctionsByName(snapshotNames)
 	end 'dropMerged'
 	return inlined
 end 'runInlinerWithStdlibSnapshot'

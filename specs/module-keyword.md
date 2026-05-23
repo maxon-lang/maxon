@@ -180,7 +180,7 @@ end 'Point'
 
 // --- file: feature/main.maxon
 function main() returns ExitCode
-	let p = Point.create(x: 20, y: 22)
+	let p = Point.create(20, y: 22)
 	return p.x + p.y
 end 'main'
 ```

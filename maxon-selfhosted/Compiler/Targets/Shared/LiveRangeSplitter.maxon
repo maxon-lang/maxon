@@ -1,0 +1,414 @@
+// Phi-merge live-range splitting.
+//
+// A multi-predecessor block argument's LiveRange fuses N+1 disjoint intervals
+// into one (its own def-block interval plus one 1-position copy-slot interval
+// per predecessor at `predBlockLen - 1`). The chordal SSA allocator then has
+// to find a single physical register that fits at every anchor. When N+1
+// such merges exist at the same merge block — which happens whenever several
+// locals are modified across nested if/else branches — they pairwise interfere
+// and exhaust the pool, panicking at colorLookupGpr because spilling a
+// phi-merge produces reloads at the same copy slots (marked
+// SPILL_WEIGHT_INFINITE → unspillable) and the pressure never relieves.
+//
+// Splitting rewrites each multi-anchor merge into:
+//   • R_main: the original valueId, keeping ONLY the def-block interval.
+//   • R_predi (i = 1..K): one per predecessor copy slot. Fresh valueId,
+//     1-position interval at (predId, predBlockLen-1). Marked
+//     SPILL_WEIGHT_INFINITE (def coincides with only use — spilling yields
+//     no relief). Hint-linked to R_main so the chordal greedy prefers the
+//     same color, collapsing parallel-copy moves to identities in the common
+//     no-pressure case.
+//
+// The source vreg's pre-existing CopyEdge that targeted R_main at the
+// predecessor copy slot is redirected to the new sub-range valueId. This
+// keeps `isCopyBoundaryOverlap` correctly suppressing the source ↔ sub-range
+// 1-position touch at the copy slot. R_main no longer has any interval at
+// the predecessor, so no source ↔ R_main interference can arise there.
+//
+// MIR ops are unchanged. Block-args still reference R_main's valueId.
+// Sub-range valueIds exist only in the `ranges` array and the returned
+// SplitMergeInfoArray sidetable, consumed by buildBlockArgCopies at the
+// destroySSA phase to dual-emit (src → sub → merge) moves on each edge.
+
+// Threshold for splitting: a phi-merge is split iff its `intervals` array
+// has at least this many entries. Two-pred merges (3 intervals: 1 def-block
+// + 2 pred copy slots) and beyond are eligible. A merge with 2 intervals
+// (degenerate: only one predecessor recorded — happens for unreachable or
+// linearized successors) is left alone; no pressure benefit and the
+// single-edge case already colors cleanly.
+let SPLIT_MIN_INTERVALS = 3
+
+// Walk every LiveRange and split any multi-anchor phi-merge. Mutates
+// `ranges` in place (strips per-pred intervals off the merge, appends new
+// sub-ranges) and returns the sidetable that destroySSA reads to dual-emit
+// edge moves. Safe to call repeatedly across spill iterations — each call
+// starts from the current `ranges` state and re-splits any merges that
+// liveness rebuild re-fused.
+export function splitMultiAnchorMerges(ranges LiveRangeArray, func IrFunction, module TargetModule) returns SplitMergeInfoArray
+	var result = SplitMergeInfoArray.create()
+
+	// Collect (valueId, defBlockId, predIds, copyPosPerPred) for every
+	// block-arg in the function. Building a tight per-merge predecessor
+	// table here lets us identify which of the merge's intervals are real
+	// predecessor copy slots (anchored at predBlockLen-1) versus
+	// live-through/used-elsewhere intervals that must stay on R_main.
+	// Mem2Reg places block-args at the start of each merge block; their
+	// valueId is what the merge's LiveRange will carry.
+	var blockArgVids = ValueIdArray.create()
+	// Parallel to blockArgVids: index into the flat pred slice where this
+	// merge's predecessor list begins; count is at predListCounts[i].
+	var predListStarts = RegIntArray.create()
+	var predListCounts = RegIntArray.create()
+	// Flat (predBlockId, copyPos) pairs. Each merge's slice lives in
+	// [predListStarts[i], predListStarts[i] + predListCounts[i]).
+	var predBlockIds = BlockIdArray.create()
+	var predCopyPositions = RegIntArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("invariant: blockRef from func.blockRefs not in module.blocks")
+		if block.blockArgs.count() == 0 'noArgs'
+			continue
+		end 'noArgs'
+
+		// Compute predBlockLen-1 for each predecessor of `block` once per
+		// merge block; every block-arg in this block shares the same pred
+		// list. The block-arg copy slot anchors at predBlockLen-1 in each
+		// predecessor (matching addBlockArgEdgeIntervals in LiveRangeBuilder).
+		var localPredBlockIds = BlockIdArray.create()
+		var localPredCopyPositions = RegIntArray.create()
+		for predRef in func.blockRefs 'findPreds'
+			let predBlock = try module.blocks.get(predRef) otherwise panic("invariant: predRef from func.blockRefs not in module.blocks")
+			var isPred = false
+			for edge in predBlock.branchEdges 'eachEdge'
+				if edge.targetBlockId == block.id 'matchTarget'
+					isPred = true
+					break
+				end 'matchTarget'
+			end 'eachEdge'
+			if isPred 'recordPred'
+				let predBlockLen = predBlock.opRefs.count() + 1
+				localPredBlockIds.push(predBlock.id)
+				localPredCopyPositions.push(predBlockLen - 1)
+			end 'recordPred'
+		end 'findPreds'
+
+		let listStart = predBlockIds.count()
+		let listLen = localPredBlockIds.count()
+		for pbid in localPredBlockIds 'flatPred'
+			predBlockIds.push(pbid)
+		end 'flatPred'
+		for pcp in localPredCopyPositions 'flatPos'
+			predCopyPositions.push(pcp)
+		end 'flatPos'
+
+		for blockArg in block.blockArgs 'eachArg'
+			blockArgVids.push(blockArg.valueId)
+			predListStarts.push(listStart)
+			predListCounts.push(listLen)
+		end 'eachArg'
+	end 'eachBlock'
+
+	if blockArgVids.count() == 0 'noBlockArgs'
+		return result
+	end 'noBlockArgs'
+
+	// Build a valueId -> ranges-index map. New sub-ranges are appended
+	// during the walk; we resize the map as we mint fresh ids so source
+	// CopyEdge redirection (which looks the source up by valueId) keeps
+	// working when iteration order interleaves splits.
+	var maxValueId = 0
+	for range in ranges 'findMax'
+		if range.valueId >= maxValueId 'higher'
+			maxValueId = range.valueId + 1
+		end 'higher'
+	end 'findMax'
+
+	var vidToRangeIdx = RegIntArray.create()
+	var initIdx = 0
+	while initIdx < maxValueId 'init'
+		vidToRangeIdx.push(-1)
+		initIdx = initIdx + 1
+	end 'init'
+
+	var ri = 0
+	let initialRangeCount = ranges.count()
+	while ri < initialRangeCount 'index'
+		let r = try ranges.get(ri) otherwise panic("splitter.index: ri < initialRangeCount but get({ri}) failed")
+		if r.valueId < maxValueId 'inBounds'
+			try vidToRangeIdx.set(r.valueId, value: ri) otherwise panic("invariant: vidToRangeIdx.set OOB")
+		end 'inBounds'
+		ri = ri + 1
+	end 'index'
+
+	// Next free valueId for minting sub-ranges. Sub-range ids must not
+	// collide with any vreg already present in `ranges`. We pick beyond
+	// maxValueId and grow vidToRangeIdx alongside ranges.
+	var nextSubId = maxValueId
+
+	// Iterate the merges via the block-arg list rather than the ranges
+	// array to avoid worrying about index shifts when we push sub-ranges.
+	let mergeCount = blockArgVids.count()
+	var mi = 0
+	while mi < mergeCount 'eachMerge'
+		let mergeVid = try blockArgVids.get(mi) otherwise panic("splitter.eachMerge: mi < mergeCount but blockArgVids.get({mi}) failed")
+		let predListStart = try predListStarts.get(mi) otherwise panic("splitter.eachMerge: predListStarts.get({mi}) failed")
+		let predListCount = try predListCounts.get(mi) otherwise panic("splitter.eachMerge: predListCounts.get({mi}) failed")
+
+		mi = mi + 1
+
+		if mergeVid < 0 or mergeVid >= maxValueId 'invalidVid'
+			continue
+		end 'invalidVid'
+
+		let mergeRangeIdx = try vidToRangeIdx.get(mergeVid) otherwise -1
+		if mergeRangeIdx < 0 'noRange'
+			continue
+		end 'noRange'
+
+		// Snapshot the merge's static properties and intervals up front so
+		// the rest of the loop can mutate `ranges` (pushing sub-ranges)
+		// without holding a live borrow on the merge. After all pushes are
+		// done we re-fetch the merge by index and apply the rewrites.
+		let snap = snapshotMergeRange(ranges, mergeRangeIdx: mergeRangeIdx)
+		let mergeRegClass = snap.regClass
+		let snapshotIntervals = snap.intervals
+		let intervalCount = snapshotIntervals.count()
+
+		// Only split phi-merges with ≥3 intervals. Two-interval merges
+		// (single-predecessor or already-split) are left alone.
+		if intervalCount < SPLIT_MIN_INTERVALS 'tooFew'
+			continue
+		end 'tooFew'
+
+		// Partition intervals into three buckets:
+		//   • keepIntervals: stay on R_main. Includes the merge's def-block
+		//     interval AND any "live-through / live-in / used elsewhere"
+		//     interval that does NOT match a recorded (predBlockId, copyPos)
+		//     anchor. A phi-merge value can legitimately be live through
+		//     later blocks (loop bodies, successor merges); those intervals
+		//     are real uses and must remain attached to R_main.
+		//   • predIntervals: per-predecessor copy slots, anchored at
+		//     (predBlockId, predBlockLen-1). These are what we split out
+		//     into independent sub-ranges. Identified by exact match
+		//     against the pred-slot table built above.
+		var keepIntervals = IntervalArray.create()
+		var predIntervals = IntervalArray.create()
+		for iv in snapshotIntervals 'partition'
+			let isCopySlot = isPredCopySlotAnchor(iv.blockId, startPos: iv.startPos, predListStart: predListStart, predListCount: predListCount, predBlockIds: predBlockIds, predCopyPositions: predCopyPositions)
+			if isCopySlot 'isCopy'
+				predIntervals.push(iv)
+			end 'isCopy' else 'keep'
+				keepIntervals.push(iv)
+			end 'keep'
+		end 'partition'
+
+		if predIntervals.count() < 2 'tooFewPreds'
+			// Splitting only pays off when ≥2 distinct predecessor copy
+			// slots exist. A single-pred merge already colors cleanly via
+			// the existing source ↔ merge CopyEdge.
+			continue
+		end 'tooFewPreds'
+
+		// Build the splitInfo entry up front so we can drop in anchors as
+		// each sub-range is minted.
+		var info = SplitMergeInfo.create(mergeVid)
+
+		for predIv in predIntervals 'eachPredInterval'
+			let predBlockId = predIv.blockId
+			let copyPos = predIv.startPos
+
+			let subId = nextSubId
+			nextSubId = nextSubId + 1
+
+			var subRange = LiveRange.create(subId)
+			subRange.defBlock = predBlockId
+			subRange.defPosition = copyPos
+			subRange.intervals.push(Interval.create(predBlockId, startPos: copyPos, endPos: predIv.endPos))
+			subRange.regClass = mergeRegClass
+			// Sub-ranges are unspillable: their def and only use coincide at
+			// a single program point (the predecessor's parallel-copy slot),
+			// so a naive spill of the sub-range alone would yield no
+			// pressure relief. If a sub-range fails to color, the runSpill
+			// ColorLoop interprets that as a signal to demote the PARENT
+			// MERGE to a memory-only stack slot (looked up via the
+			// SplitMergeInfo sidetable). The merge's predecessors then
+			// store directly to the merge's slot; uses of the merge become
+			// reloads. This is LLVM Greedy's memory-only phi spilling.
+			subRange.spillWeight = SPILL_WEIGHT_INFINITE
+			subRange.copyHintValueId = mergeVid
+			// Hint-link the sub-range to the merge so coloring prefers the
+			// same color (collapses the merge-side parallel-copy move to an
+			// identity in the no-pressure case).
+			addCopyEdge(subRange, partner: mergeVid, blockId: predBlockId, copyPos: copyPos)
+
+			ranges.push(subRange)
+			let subRangeIdx = ranges.count() - 1
+
+			// Grow vidToRangeIdx to cover the new id.
+			while vidToRangeIdx.count() <= subId 'growMap'
+				vidToRangeIdx.push(-1)
+			end 'growMap'
+			try vidToRangeIdx.set(subId, value: subRangeIdx) otherwise panic("invariant: vidToRangeIdx.set OOB (sub)")
+
+			info.anchors.push(SplitPredAnchor.create(predBlockId, subRangeValueId: subId))
+
+			redirectSourceCopyEdges(ranges, vidToRangeIdx: vidToRangeIdx, mergeVid: mergeVid, predBlockId: predBlockId, copyPos: copyPos, newPartnerVid: subId, module: module, func: func)
+		end 'eachPredInterval'
+
+		// Re-fetch the merge range now that all sub-range pushes are done.
+		// Replace mergeRange.intervals with just the def-block intervals
+		// (build a fresh IntervalArray; there's no truncate primitive at
+		// this layer) and prune CopyEdges anchored at predecessor copy slots
+		// (no longer suppressing any real interference now that the merge
+		// has no interval at those slots).
+		var freshIntervals = IntervalArray.create()
+		for iv in keepIntervals 'rebuild'
+			freshIntervals.push(iv)
+		end 'rebuild'
+		applyMergeRewrites(ranges, mergeRangeIdx: mergeRangeIdx, freshIntervals: freshIntervals, info: info)
+
+		// maxValueId grew while iterating; refresh the upper bound used by
+		// the next iteration's predecessor scan so blockArgVids entries
+		// that reference ids minted earlier in this loop are still in range.
+		if nextSubId > maxValueId 'grow'
+			maxValueId = nextSubId
+		end 'grow'
+
+		result.push(info)
+	end 'eachMerge'
+
+	return result
+end 'splitMultiAnchorMerges'
+
+// Find any CopyEdge in any LiveRange that anchors at (mergeVid, predBlockId,
+// copyPos) — these were placed by hintBranchArgs to link source vregs to the
+// merge at each predecessor copy slot. Redirect partnerValueId from mergeVid
+// to newPartnerVid so isCopyBoundaryOverlap correctly suppresses the
+// source ↔ sub-range 1-position overlap instead of the (now-impossible)
+// source ↔ merge one.
+function redirectSourceCopyEdges(ranges LiveRangeArray, vidToRangeIdx RegIntArray, mergeVid ValueId, predBlockId BlockId, copyPos RegInt, newPartnerVid ValueId, module TargetModule, func IrFunction)
+	// The source vregs for this edge are the branch-arg ids the
+	// predecessor sends to the merge block. Look them up from the
+	// predecessor's branchEdges; for each, find its LiveRange and rewrite
+	// the CopyEdge that targets mergeVid at (predBlockId, copyPos).
+	let predBlock = findBlockById(module, func: func, blockId: predBlockId)
+
+	for edge in predBlock.branchEdges 'eachEdge'
+		// Find the arg index whose dest valueId equals mergeVid in the
+		// successor's blockArgs list. Then the source on this edge is
+		// edge.argIds[argIdx].
+		let succBlock = findBlockById(module, func: func, blockId: edge.targetBlockId)
+
+		var argIdx = 0
+		for blockArg in succBlock.blockArgs 'eachArg'
+			if blockArg.valueId == mergeVid 'isOurMerge'
+				let srcVid = try edge.argIds.get(argIdx) otherwise 'noSrc'
+					argIdx = argIdx + 1
+					continue
+				end 'noSrc'
+				if srcVid < 0 or srcVid >= vidToRangeIdx.count() 'srcOutOfRange'
+					argIdx = argIdx + 1
+					continue
+				end 'srcOutOfRange'
+				let srcRangeIdx = try vidToRangeIdx.get(srcVid) otherwise -1
+				if srcRangeIdx >= 0 'haveSrcRange'
+					var srcRange = try ranges.get(srcRangeIdx) otherwise panic("splitter.redirect: srcRangeIdx populated but ranges.get failed")
+					rewriteCopyEdgePartner(srcRange, oldPartner: mergeVid, blockId: predBlockId, copyPos: copyPos, newPartner: newPartnerVid)
+				end 'haveSrcRange'
+			end 'isOurMerge'
+			argIdx = argIdx + 1
+		end 'eachArg'
+	end 'eachEdge'
+end 'redirectSourceCopyEdges'
+
+// In-place rewrite: any CopyEdge in `range.copyEdges` that matches
+// (oldPartner, blockId, copyPos) has its partnerValueId replaced with
+// newPartner. Linear scan — copyEdges lists are small (typically 1-3 entries).
+function rewriteCopyEdgePartner(range LiveRange, oldPartner ValueId, blockId BlockId, copyPos RegInt, newPartner ValueId)
+	var i = 0
+	let n = range.copyEdges.count()
+	while i < n 'each'
+		let edge = try range.copyEdges.get(i) otherwise panic("splitter.rewrite: i < n but copyEdges.get({i}) failed")
+		if edge.partnerValueId == oldPartner and edge.blockId == blockId and edge.copyPos == copyPos 'match'
+			try range.copyEdges.set(i, value: CopyEdge.create(newPartner, blockId: blockId, copyPos: copyPos)) otherwise panic("invariant: copyEdges.set OOB at {i}")
+		end 'match'
+		i = i + 1
+	end 'each'
+end 'rewriteCopyEdgePartner'
+
+// Remove every CopyEdge on the merge that was anchored at one of the
+// predecessor copy slots covered by `info.anchors`. After splitting the
+// merge has no interval at any pred copy slot, so these edges no longer
+// help suppress any real interference. Keeping them would not be incorrect
+// (they'd never match against an existing interval pair) but they add
+// noise to the diagnostic dumps and might falsely suggest the merge still
+// participates in pred-side parallel copies.
+function removeMergeCopyEdgesAtPreds(mergeRange LiveRange, info SplitMergeInfo)
+	var kept = CopyEdgeArray.create()
+	for edge in mergeRange.copyEdges 'each'
+		var drop = false
+		for anchor in info.anchors 'matchAnchor'
+			if edge.blockId == anchor.predBlockId 'sameBlock'
+				drop = true
+				break
+			end 'sameBlock'
+		end 'matchAnchor'
+		if not drop 'keep'
+			kept.push(edge)
+		end 'keep'
+	end 'each'
+	mergeRange.copyEdges = kept
+end 'removeMergeCopyEdgesAtPreds'
+
+// True iff (blockId, startPos) matches a recorded (predBlockId, copyPos)
+// entry for the current merge's predecessor slice. Used to distinguish
+// genuine pred-copy-slot intervals (which we extract into sub-ranges) from
+// live-through / live-in / used-elsewhere intervals (which must stay on
+// R_main). Linear scan over the slice — predecessor count per merge is
+// small (typically 2-4).
+function isPredCopySlotAnchor(blockId BlockId, startPos RegInt, predListStart RegInt, predListCount RegInt, predBlockIds BlockIdArray, predCopyPositions RegIntArray) returns bool
+	var i = 0
+	while i < predListCount 'each'
+		let pbid = try predBlockIds.get(predListStart + i) otherwise panic("splitter.isPredCopySlotAnchor: predBlockIds.get OOB")
+		let pcp = try predCopyPositions.get(predListStart + i) otherwise panic("splitter.isPredCopySlotAnchor: predCopyPositions.get OOB")
+		if pbid == blockId and pcp == startPos 'match'
+			return true
+		end 'match'
+		i = i + 1
+	end 'each'
+	return false
+end 'isPredCopySlotAnchor'
+
+// A snapshot of the static properties and intervals of a merge LiveRange.
+// Used to break the borrow on `ranges` so the outer loop can push sub-ranges
+// freely. Maxon's borrow checker forbids holding a `ranges.get(i)` borrow
+// across a `ranges.push(...)`; threading the read through a helper function
+// confines the borrow to that function's frame.
+type MergeRangeSnapshot
+	export var regClass RegClass
+	export var intervals IntervalArray
+
+	export static function create(regClass RegClass) returns MergeRangeSnapshot
+		return Self{regClass: regClass, intervals: IntervalArray.create()}
+	end 'create'
+end 'MergeRangeSnapshot'
+
+function snapshotMergeRange(ranges LiveRangeArray, mergeRangeIdx RegInt) returns MergeRangeSnapshot
+	let mergeRange = try ranges.get(mergeRangeIdx) otherwise panic("splitter.snapshotMergeRange: mergeRangeIdx populated but ranges.get failed")
+	var snap = MergeRangeSnapshot.create(mergeRange.regClass)
+	for iv in mergeRange.intervals 'each'
+		snap.intervals.push(iv)
+	end 'each'
+	return snap
+end 'snapshotMergeRange'
+
+// Apply the post-split rewrites to the merge range: replace its interval
+// list with `freshIntervals` (just the def-block intervals) and prune
+// CopyEdges whose anchor block matches any of the predecessors in `info`.
+// Confined to a helper so the merge's borrow doesn't leak into the caller's
+// frame where additional `ranges.push` calls may still happen.
+function applyMergeRewrites(ranges LiveRangeArray, mergeRangeIdx RegInt, freshIntervals IntervalArray, info SplitMergeInfo)
+	var mergeRange = try ranges.get(mergeRangeIdx) otherwise panic("splitter.applyMergeRewrites: mergeRangeIdx populated but ranges.get failed")
+	mergeRange.intervals = freshIntervals
+	removeMergeCopyEdgesAtPreds(mergeRange, info: info)
+end 'applyMergeRewrites'

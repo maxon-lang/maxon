@@ -1,0 +1,31 @@
+// Test: int-remainder-in-arithmetic
+function main() returns ExitCode
+	let a = 100
+	let b = 7
+	let c = 10
+	let rem = a mod b
+	return rem * c
+end 'main'
+---
+ExitCode: 20
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 100 : i64
+    %1 = mir.mov_imm 7 : i64
+    %2 = mir.mov_imm 10 : i64
+    %5 = mir.rem.i64 %0, %1
+    %8 = mir.mul.i64 %5, %2
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

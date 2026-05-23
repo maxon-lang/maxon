@@ -40,7 +40,7 @@ function checkPrimary(p Palette) returns bool
 end 'checkPrimary'
 
 function main() returns ExitCode
-		let p = Palette.create(primary: Color.red(255), secondary: Color.blue)
+		let p = Palette.create(Color.red(255), secondary: Color.blue)
 		if checkPrimary(p) 'ok'
 				return 1
 		end 'ok'
@@ -77,7 +77,7 @@ function isCircle(d Drawing) returns bool
 end 'isCircle'
 
 function main() returns ExitCode
-		let d = Drawing.create(shape: Shape.circle(10))
+		let d = Drawing.create(Shape.circle(10))
 		if isCircle(d) 'ok'
 				return 1
 		end 'ok'
@@ -115,7 +115,7 @@ function getNumber(c Container) returns SmallInt
 end 'getNumber'
 
 function main() returns ExitCode
-		let c = Container.create(item: Value.number(42))
+		let c = Container.create(Value.number(42))
 		return getNumber(c)
 end 'main'
 ```

@@ -1,0 +1,34 @@
+// Test: float-and-int-mixed-pressure
+function main() returns ExitCode
+	let x = 3.14
+	let y = 2.86
+	let sum_f = x + y
+	let a = 10
+	let b = 20
+	let sum_i = a + b
+	return trunc(sum_f) + sum_i
+end 'main'
+---
+ExitCode: 36
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989087 : f64
+    %1 = mir.mov_imm 4613622566267157217 : f64
+    %4 = mir.add.f64 %0, %1
+    %9 = mir.mov_imm 30 : i64
+    %11 = mir.fptosi.i64 %4
+    %13 = mir.add.i64 %11, %9
+    %14 = mir.mov_imm 255 : i64
+    %15 = mir.cmp ugt, %13, %14
+    mir.cond_br %15 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %16 = mir.global_addr @__panic_msg_0
+    %17 = mir.call @mrt_panic(%16)
+  __range_ok_0:
+    mir.ret %13
+  }
+}
+---

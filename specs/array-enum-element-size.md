@@ -198,7 +198,7 @@ type Block
 end 'Block'
 
 function makeBlock() returns Block
-		var b = Block.create(id: 1, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)))
+		var b = Block.create(1, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)))
 		b.ops.push(IrOp.arith(10))
 		b.ops.push(IrOp.arith(20))
 		b.ops.push(IrOp.arith(30))

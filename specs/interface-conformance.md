@@ -82,7 +82,7 @@ type SimpleCounter implements Counter
 end 'SimpleCounter'
 
 function main() returns ExitCode
-	var c = SimpleCounter.create(value: 40)
+	var c = SimpleCounter.create(40)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -122,7 +122,7 @@ type Buffer implements Readable, Writable
 end 'Buffer'
 
 function main() returns ExitCode
-	var buf = Buffer.create(data: 0)
+	var buf = Buffer.create(0)
 	buf.write(42)
 	return buf.read()
 end 'main'
@@ -234,7 +234,7 @@ type Extended implements Simple
 end 'Extended'
 
 function main() returns ExitCode
-	let e = Extended.create(value: 42)
+	let e = Extended.create(42)
 	return e.getValue()
 end 'main'
 ```
@@ -260,7 +260,7 @@ type Standalone
 end 'Standalone'
 
 function main() returns ExitCode
-	let s = Standalone.create(value: 42)
+	let s = Standalone.create(42)
 	return s.get()
 end 'main'
 ```
@@ -308,11 +308,11 @@ type Silent implements Greeter
 end 'Silent'
 
 function callGreet(g Greeter) returns Integer
-	return g.greet(volume: 99)
+	return g.greet(99)
 end 'callGreet'
 
 function main() returns ExitCode
-	let s = Silent.create(value: 42)
+	let s = Silent.create(42)
 	return callGreet(s)
 end 'main'
 ```
@@ -351,11 +351,11 @@ type Impl implements Extended
 end 'Impl'
 
 function callPing(b Base) returns Integer
-	return b.ping(payload: 7)
+	return b.ping(7)
 end 'callPing'
 
 function main() returns ExitCode
-	let i = Impl.create(n: 5)
+	let i = Impl.create(5)
 	return callPing(i)
 end 'main'
 ```
@@ -390,8 +390,8 @@ type Hello implements Greeter
 end 'Hello'
 
 function main() returns ExitCode
-	let h = Hello.create(value: 1)
-	return h.helper(unused: 5)
+	let h = Hello.create(1)
+	return h.helper(5)
 end 'main'
 ```
 ```maxoncstderr
@@ -422,8 +422,8 @@ type Silent implements Greeter
 end 'Silent'
 
 function main() returns ExitCode
-	let s = Silent.create(value: 1)
-	return s.greet(volume: 0)
+	let s = Silent.create(1)
+	return s.greet(0)
 end 'main'
 ```
 ```maxoncstderr

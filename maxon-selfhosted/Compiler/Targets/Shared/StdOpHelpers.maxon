@@ -400,49 +400,60 @@ end 'scanMaxMirValueIdForOp'
 export function mirOpMaxValueId(op MirOp) returns ValueId
 	return match op 'pick'
 		movImm(resultId, _, _) gives resultId
-		movReg(resultId, srcId) gives maxOfTwoValueIds(a: resultId, b: srcId)
-		binOp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(a: resultId, b: leftId, c: rightId)
-		unaryOp(resultId, operandId, _) gives maxOfTwoValueIds(a: resultId, b: operandId)
-		cmp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(a: resultId, b: leftId, c: rightId)
-		condBranch(condId, _, thenArgs, _, elseArgs) gives maxOfThreeValueIds(a: condId, b: maxValueIdInArray(thenArgs), c: maxValueIdInArray(elseArgs))
+		movReg(resultId, srcId) gives maxOfTwoValueIds(resultId, b: srcId)
+		binOp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(resultId, b: leftId, c: rightId)
+		unaryOp(resultId, operandId, _) gives maxOfTwoValueIds(resultId, b: operandId)
+		cmp(resultId, leftId, rightId, _) gives maxOfThreeValueIds(resultId, b: leftId, c: rightId)
+		condBranch(condId, _, thenArgs, _, elseArgs) gives maxOfThreeValueIds(condId, b: maxValueIdInArray(thenArgs), c: maxValueIdInArray(elseArgs))
 		branch(_, args) gives maxValueIdInArray(args)
-		call(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
-		indirectCall(resultId, calleeId, argIds) gives maxOfThreeValueIds(a: resultId, b: calleeId, c: maxValueIdInArray(argIds))
-		witnessCall(resultId, witnessAddrId, _, _, argIds) gives maxOfThreeValueIds(a: resultId, b: witnessAddrId, c: maxValueIdInArray(argIds))
+		call(resultId, _, argIds) gives maxOfTwoValueIds(resultId, b: maxValueIdInArray(argIds))
+		indirectCall(resultId, calleeId, argIds) gives maxOfThreeValueIds(resultId, b: calleeId, c: maxValueIdInArray(argIds))
+		witnessCall(resultId, witnessAddrId, _, _, argIds) gives maxOfThreeValueIds(resultId, b: witnessAddrId, c: maxValueIdInArray(argIds))
 		ret(retValId) gives retValId
 		param(resultId, _, _) gives resultId
-		load(resultId, baseId, _, _, _, _) gives maxOfTwoValueIds(a: resultId, b: baseId)
-		store(valueId, baseId, _, _, _) gives maxOfTwoValueIds(a: valueId, b: baseId)
+		load(resultId, baseId, _, _, _, _) gives maxOfTwoValueIds(resultId, b: baseId)
+		store(valueId, baseId, _, _, _) gives maxOfTwoValueIds(valueId, b: baseId)
 		loadSlot(resultId, _) gives resultId
 		storeSlot(_, valueId) gives valueId
 		stackSlotAddr(resultId, _) gives resultId
 		globalAddr(resultId, _) gives resultId
 		funcAddr(resultId, _) gives resultId
 		loadFramePtr(resultId) gives resultId
-		syscall(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
-		iatCall(resultId, _, argIds) gives maxOfTwoValueIds(a: resultId, b: maxValueIdInArray(argIds))
+		syscall(resultId, _, argIds) gives maxOfTwoValueIds(resultId, b: maxValueIdInArray(argIds))
+		iatCall(resultId, _, argIds) gives maxOfTwoValueIds(resultId, b: maxValueIdInArray(argIds))
 		osExit(codeId) gives codeId
-		osWrite(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
-		osWriteErr(ptrId, lenId) gives maxOfTwoValueIds(a: ptrId, b: lenId)
-		osRead(resultId, ptrId, lenId) gives maxOfThreeValueIds(a: resultId, b: ptrId, c: lenId)
-		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThreeValueIds(a: resultId, b: pathPtrId, c: pathLenId)
-		osWriteFd(fdId, ptrId, lenId) gives maxOfThreeValueIds(a: fdId, b: ptrId, c: lenId)
+		osWrite(ptrId, lenId) gives maxOfTwoValueIds(ptrId, b: lenId)
+		osWriteErr(ptrId, lenId) gives maxOfTwoValueIds(ptrId, b: lenId)
+		osRead(resultId, ptrId, lenId) gives maxOfThreeValueIds(resultId, b: ptrId, c: lenId)
+		osOpenWrite(resultId, pathPtrId, pathLenId) gives maxOfThreeValueIds(resultId, b: pathPtrId, c: pathLenId)
+		osWriteFd(fdId, ptrId, lenId) gives maxOfThreeValueIds(fdId, b: ptrId, c: lenId)
 		osClose(fdId) gives fdId
-		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwoValueIds(a: maxOfThreeValueIds(a: resultId, b: namePtrId, c: nameLenId), b: maxOfTwoValueIds(a: outBufPtrId, b: outBufLenId))
-		memcpy(dstId, srcId, lenId) gives maxOfThreeValueIds(a: dstId, b: srcId, c: lenId)
-		storeByte(baseId, offsetId, byteId) gives maxOfThreeValueIds(a: baseId, b: offsetId, c: byteId)
-		loadByte(resultId, baseId, offsetId) gives maxOfThreeValueIds(a: resultId, b: baseId, c: offsetId)
-		osAllocPages(resultId, sizeId) gives maxOfTwoValueIds(a: resultId, b: sizeId)
-		osAllocPagesLarge(resultId, sizeId) gives maxOfTwoValueIds(a: resultId, b: sizeId)
-		osFreePages(ptrId, sizeId) gives maxOfTwoValueIds(a: ptrId, b: sizeId)
+		osGetEnv(resultId, namePtrId, nameLenId, outBufPtrId, outBufLenId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: namePtrId, c: nameLenId), b: maxOfTwoValueIds(outBufPtrId, b: outBufLenId))
+		memcpy(dstId, srcId, lenId) gives maxOfThreeValueIds(dstId, b: srcId, c: lenId)
+		storeByte(baseId, offsetId, byteId) gives maxOfThreeValueIds(baseId, b: offsetId, c: byteId)
+		loadByte(resultId, baseId, offsetId) gives maxOfThreeValueIds(resultId, b: baseId, c: offsetId)
+		osAllocPages(resultId, sizeId) gives maxOfTwoValueIds(resultId, b: sizeId)
+		osAllocPagesLarge(resultId, sizeId) gives maxOfTwoValueIds(resultId, b: sizeId)
+		osFreePages(ptrId, sizeId) gives maxOfTwoValueIds(ptrId, b: sizeId)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: cStringPtrId, c: flagsId), b: fileModeId)
+		osFileRead(resultId, fdId, bufPtrId, countId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: fdId, c: bufPtrId), b: countId)
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: fdId, c: bufPtrId), b: countId)
+		osFileClose(resultId, fdId) gives maxOfTwoValueIds(resultId, b: fdId)
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: fdId, c: offsetId), b: whenceId)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives maxOfThreeValueIds(resultId, b: cStringPtrId, c: statBufPtrId)
+		osFileAccess(resultId, cStringPtrId, modeId) gives maxOfThreeValueIds(resultId, b: cStringPtrId, c: modeId)
+		osFileUnlink(resultId, cStringPtrId) gives maxOfTwoValueIds(resultId, b: cStringPtrId)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives maxOfTwoValueIds(maxOfThreeValueIds(resultId, b: fdId, c: bufPtrId), b: bufSizeId)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives maxOfThreeValueIds(resultId, b: bufPtrId, c: bufSizeId)
+		osDirMkdir(resultId, cStringPtrId, modeId) gives maxOfThreeValueIds(resultId, b: cStringPtrId, c: modeId)
 		atomicInc(addrId) gives addrId
 		atomicDec(addrId) gives addrId
-		atomicXadd(resultId, addrId, valId) gives maxOfThreeValueIds(a: resultId, b: addrId, c: valId)
+		atomicXadd(resultId, addrId, valId) gives maxOfThreeValueIds(resultId, b: addrId, c: valId)
 		osLockInit(addrId) gives addrId
 		osLockAcquire(addrId) gives addrId
 		osLockRelease(addrId) gives addrId
-		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThreeValueIds(a: resultId, b: maxValueIdInArray(argIds), c: errorFlagId)
-		errorReturn(retValId, errorFlagId) gives maxOfTwoValueIds(a: retValId, b: errorFlagId)
+		tryCall(resultId, _, argIds, errorFlagId) gives maxOfThreeValueIds(resultId, b: maxValueIdInArray(argIds), c: errorFlagId)
+		errorReturn(retValId, errorFlagId) gives maxOfTwoValueIds(retValId, b: errorFlagId)
 	end 'pick'
 end 'mirOpMaxValueId'
 
@@ -451,7 +462,7 @@ export function maxOfTwoValueIds(a ValueId, b ValueId) returns ValueId
 end 'maxOfTwoValueIds'
 
 export function maxOfThreeValueIds(a ValueId, b ValueId, c ValueId) returns ValueId
-	return maxOfTwoValueIds(a: maxOfTwoValueIds(a: a, b: b), b: c)
+	return maxOfTwoValueIds(maxOfTwoValueIds(a, b: b), b: c)
 end 'maxOfThreeValueIds'
 
 export function maxValueIdInArray(ids ValueIdArray) returns ValueId

@@ -64,7 +64,7 @@ end 'Counter'
 
 ```maxon
 Counter.count = Counter.count + 1   // Access static field
-var c = Counter.create(value: 10)          // Create instance
+var c = Counter.create(10)          // Create instance
 c.value = 20                        // Access instance field
 ```
 
@@ -626,10 +626,10 @@ type Point
 		end 'create'
 end 'Point'
 
-let origin = Point.create(x: 0, y: 0)
+let origin = Point.create(0, y: 0)
 
 function main() returns ExitCode
-		origin = Point.create(x: 1, y: 1)
+		origin = Point.create(1, y: 1)
 		return 0
 end 'main'
 ```

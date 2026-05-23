@@ -1,0 +1,29 @@
+// Test: current-directory-is-directory
+function main() returns ExitCode
+	let cwd = Directory.currentPath()
+	if Directory.exists(cwd) 'ok'
+		return 42
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @Directory.currentPath()
+    %5 = mir.load %0, 0 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.call @mrt_directory_exists(%6)
+    mir.cond_br %7 [then: ok_0(), else: ok_0.after()]
+  ok_0:
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  ok_0.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

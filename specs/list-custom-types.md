@@ -31,10 +31,10 @@ typealias PointList = List with Point
 
 function main() returns ExitCode
 	var list = PointList.create()
-	list.append(Point.create(x: 10, y: 20))
-	list.append(Point.create(x: 30, y: 40))
-	let first = try list.first() otherwise Point.create(x: 0, y: 0)
-	let second = try list.get(1) otherwise Point.create(x: 0, y: 0)
+	list.append(Point.create(10, y: 20))
+	list.append(Point.create(30, y: 40))
+	let first = try list.first() otherwise Point.create(0, y: 0)
+	let second = try list.get(1) otherwise Point.create(0, y: 0)
 	print("{first.x}\n")
 	print("{first.y}\n")
 	print("{second.x}\n")
@@ -70,9 +70,9 @@ typealias EntryList = List with Entry
 
 function main() returns ExitCode
 	var list = EntryList.create()
-	list.append(Entry.create(id: 1, value: 100))
-	list.append(Entry.create(id: 2, value: 200))
-	list.append(Entry.create(id: 3, value: 300))
+	list.append(Entry.create(1, value: 100))
+	list.append(Entry.create(2, value: 200))
+	list.append(Entry.create(3, value: 300))
 	var sum = 0
 	for item in list 'loop'
 		sum = sum + item.value
@@ -106,9 +106,9 @@ typealias PersonList = List with Person
 
 function main() returns ExitCode
 	var list = PersonList.create()
-	list.append(Person.create(name: "Alice has a long name for heap", age: 30))
-	list.append(Person.create(name: "Bob also has a long name for heap", age: 25))
-	let first = try list.first() otherwise Person.create(name: "", age: 0)
+	list.append(Person.create("Alice has a long name for heap", age: 30))
+	list.append(Person.create("Bob also has a long name for heap", age: 25))
+	let first = try list.first() otherwise Person.create("", age: 0)
 	print("{first.name}\n")
 	print("{first.age}\n")
 	return 0
@@ -140,10 +140,10 @@ typealias PairList = List with Pair
 
 function main() returns ExitCode
 	var list = PairList.create()
-	list.prepend(Pair.create(a: 3, b: 30))
-	list.prepend(Pair.create(a: 2, b: 20))
-	list.prepend(Pair.create(a: 1, b: 10))
-	let removed = try list.removeFirst() otherwise Pair.create(a: 0, b: 0)
+	list.prepend(Pair.create(3, b: 30))
+	list.prepend(Pair.create(2, b: 20))
+	list.prepend(Pair.create(1, b: 10))
+	let removed = try list.removeFirst() otherwise Pair.create(0, b: 0)
 	print("{removed.a}\n")
 	print("{removed.b}\n")
 	print("{list.count()}\n")
@@ -174,7 +174,7 @@ type Vec2
 end 'Vec2'
 
 function main() returns ExitCode
-	let list = List from [Vec2.create(x: 1, y: 2), Vec2.create(x: 3, y: 4), Vec2.create(x: 5, y: 6)]
+	let list = List from [Vec2.create(1, y: 2), Vec2.create(3, y: 4), Vec2.create(5, y: 6)]
 	for item in list 'loop'
 		print("{item.x},{item.y}\n")
 	end 'loop'

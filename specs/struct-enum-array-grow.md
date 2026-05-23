@@ -34,7 +34,7 @@ export type Block
 end 'Block'
 
 function main() returns ExitCode
-		var b = Block.create(id: 0, ops: IntArray.create(), terminator: Op.add(42))
+		var b = Block.create(0, ops: IntArray.create(), terminator: Op.add(42))
 		b.ops.push(1)
 		b.ops.push(2)
 		b.ops.push(3)
@@ -69,7 +69,7 @@ export type Function
 end 'Function'
 
 function main() returns ExitCode
-		var f = Function.create(name: 1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
+		var f = Function.create(1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
 		var i = 0
 		while i < 20 'fill'
 				f.body.push(i)
@@ -107,11 +107,11 @@ function main() returns ExitCode
 		var entries = EntryArray.create()
 		var i = 0
 		while i < 10 'fill'
-				let e = Entry.create(id: i, tag: Tag.number(i * 10))
+				let e = Entry.create(i, tag: Tag.number(i * 10))
 				entries.push(e)
 				i = i + 1
 		end 'fill'
-		let last = try entries.get(9) otherwise Entry.create(id: 0, tag: Tag.number(0))
+		let last = try entries.get(9) otherwise Entry.create(0, tag: Tag.number(0))
 		match last.tag 'check'
 				number(n) then return n
 				text then return 0
@@ -162,8 +162,8 @@ export type Database
 end 'Database'
 
 function main() returns ExitCode
-		let block = IrBlock.create(id: 0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
-		var db = Database.create(block: block, deps: DepArray.create())
+		let block = IrBlock.create(0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		var db = Database.create(block, deps: DepArray.create())
 		db.deps.push(1)
 		db.deps.push(2)
 		db.deps.push(3)
@@ -210,8 +210,8 @@ export type Outer
 end 'Outer'
 
 function main() returns ExitCode
-		let inner = Inner.create(revision: 0, items: IntArray.create(), names: StringArray.create(), extra: IntArray.create())
-		var outer = Outer.create(inner: inner, tag: Op.add(1), data: IntArray.create())
+		let inner = Inner.create(0, items: IntArray.create(), names: StringArray.create(), extra: IntArray.create())
+		var outer = Outer.create(inner, tag: Op.add(1), data: IntArray.create())
 		outer.inner.items.push(10)
 		outer.inner.items.push(20)
 		outer.inner.items.push(30)
@@ -249,8 +249,8 @@ export type Outer
 end 'Outer'
 
 function makeOuter() returns Outer
-		let shared = Inner.create(data: IntArray.create(), value: 42)
-		return Outer.create(first: shared, second: shared, deps: IntArray.create())
+		let shared = Inner.create(IntArray.create(), value: 42)
+		return Outer.create(shared, second: shared, deps: IntArray.create())
 end 'makeOuter'
 
 function main() returns ExitCode
@@ -389,13 +389,13 @@ export type Project
 end 'Project'
 
 function createProject(rootPath String) returns Project
-		let emptyModuleMemo = ModuleMemo.create(value: Module.create(functions: FuncArray.create()), computedAt: 0, verifiedAt: 0)
-		let emptyCodeMemo = CodeMemo.create(value: CodeResult.create(code: IntArray.create(), offset: 0), computedAt: 0, verifiedAt: 0)
-		let db = QueryDatabase.create(currentRevision: 0, sourcePaths: StringArray.create(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.create(), activeQueryStack: IntArray.create(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
-		let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
-		let emptyFunc = Func.create(name: "", returnType: "", region: Region.create(blocks: IntArray.create(), nextBlockId: 0))
-		let emptyModule = Module.create(functions: FuncArray.create())
-		return Project.create(db: db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.create(), parserVarSlots: IntArray.create(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
+		let emptyModuleMemo = ModuleMemo.create(Module.create(FuncArray.create()), computedAt: 0, verifiedAt: 0)
+		let emptyCodeMemo = CodeMemo.create(CodeResult.create(IntArray.create(), offset: 0), computedAt: 0, verifiedAt: 0)
+		let db = QueryDatabase.create(0, sourcePaths: StringArray.create(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.create(), activeQueryStack: IntArray.create(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
+		let emptyBlock = Block.create(0, label: "", ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		let emptyFunc = Func.create("", returnType: "", region: Region.create(IntArray.create(), nextBlockId: 0))
+		let emptyModule = Module.create(FuncArray.create())
+		return Project.create(db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.create(), parserVarSlots: IntArray.create(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
 end 'createProject'
 
 function main() returns ExitCode
@@ -436,11 +436,11 @@ typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
 		var deps = DependencyArray.create()
-		let d1 = Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
+		let d1 = Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
 		deps.push(d1)
-		let d2 = Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))
+		let d2 = Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))
 		deps.push(d2)
-		let d3 = Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon"))
+		let d3 = Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon"))
 		deps.push(d3)
 		return deps.count()
 end 'main'
@@ -475,13 +475,13 @@ end 'Outer'
 
 function initOuter(o Outer)
 		if not o.initialized 'init'
-				o.inner = Inner.create(items: IntArray.create(), value: 42)
+				o.inner = Inner.create(IntArray.create(), value: 42)
 				o.initialized = true
 		end 'init'
 end 'initOuter'
 
 function main() returns ExitCode
-		var o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
+		var o = Outer.create(Inner.create(IntArray.create(), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -535,12 +535,12 @@ export type Project
 end 'Project'
 
 function createModule() returns Module
-		return Module.create(items: IntArray.create())
+		return Module.create(IntArray.create())
 end 'createModule'
 
 function initProject(p Project)
 		if not p.ready 'init'
-				p.db = Database.create(memo: Memo.create(value: createModule(), rev: 0), deps: IntArray.create())
+				p.db = Database.create(Memo.create(createModule(), rev: 0), deps: IntArray.create())
 				p.ready = true
 		end 'init'
 end 'initProject'
@@ -553,7 +553,7 @@ function useProject(p Project) returns Integer
 end 'useProject'
 
 function main() returns ExitCode
-		var p = Project.create(db: Database.create(memo: Memo.create(value: Module.create(items: IntArray.create()), rev: 0), deps: IntArray.create()), ready: false)
+		var p = Project.create(Database.create(Memo.create(Module.create(IntArray.create()), rev: 0), deps: IntArray.create()), ready: false)
 		initProject(p)
 		return useProject(p)
 end 'main'
@@ -610,9 +610,9 @@ export type Project
 end 'Project'
 
 function createProject() returns Project
-		let block = Block.create(id: 0, ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
-		let db = QueryDatabase.create(revision: 0, deps: DepArray.create(), extra: DepArray.create())
-		return Project.create(db: db, block: block)
+		let block = Block.create(0, ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		let db = QueryDatabase.create(0, deps: DepArray.create(), extra: DepArray.create())
+		return Project.create(db, block: block)
 end 'createProject'
 
 function main() returns ExitCode

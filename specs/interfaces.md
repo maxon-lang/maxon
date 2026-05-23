@@ -90,7 +90,7 @@ end 'Point'
 Methods are called using the method call syntax - `instance.method()`:
 
 ```maxon
-var p = Point.create(x: 10, y: 20)
+var p = Point.create(10, y: 20)
 var h = p.hash()
 ```
 
@@ -197,7 +197,7 @@ type Point implements Hashable
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 20)
+	let p = Point.create(10, y: 20)
 	let h = p.hash()
 	print("{h}\n")
 	return 0
@@ -232,7 +232,7 @@ type Point implements Hashable
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 20)
+	let p = Point.create(10, y: 20)
 	print("{p.hash()}\n")
 	return 0
 end 'main'
@@ -272,7 +272,7 @@ type Counter implements Describable
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 12)
+	let c = Counter.create(12)
 	return c.describe() + c.value()
 end 'main'
 ```
@@ -303,7 +303,7 @@ type Accumulator implements Calculator
 end 'Accumulator'
 
 function main() returns ExitCode
-	let acc = Accumulator.create(total: 10)
+	let acc = Accumulator.create(10)
 	return acc.add(5)
 end 'main'
 ```
@@ -338,8 +338,8 @@ type Point implements Hashable, Equatable
 end 'Point'
 
 function main() returns ExitCode
-	let p1 = Point.create(x: 3, y: 4)
-	let p2 = Point.create(x: 3, y: 4)
+	let p1 = Point.create(3, y: 4)
+	let p2 = Point.create(3, y: 4)
 	print("{p1.hash()} {p1.equals(p2)}\n")
 	return 0
 end 'main'
@@ -374,7 +374,7 @@ type Point implements Movable
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 20)
+	let p = Point.create(10, y: 20)
 	let p2 = p.move(5, dy: 10)
 	return p2.x + p2.y
 end 'main'
@@ -406,7 +406,7 @@ type Value implements Incrementable
 end 'Value'
 
 function main() returns ExitCode
-	let v = Value.create(n: 41)
+	let v = Value.create(41)
 	return v.inc()
 end 'main'
 ```
@@ -467,7 +467,7 @@ type Calculator
 end 'Calculator'
 
 function main() returns ExitCode
-	let c = Calculator.create(value: 7)
+	let c = Calculator.create(7)
 	return c.double() + c.triple()
 end 'main'
 ```
@@ -539,7 +539,7 @@ type CompleteType implements DerivedInterface
 end 'CompleteType'
 
 function main() returns ExitCode
-	let t = CompleteType.create(value: 21)
+	let t = CompleteType.create(21)
 	return t.baseMethod() + t.derivedMethod()
 end 'main'
 ```

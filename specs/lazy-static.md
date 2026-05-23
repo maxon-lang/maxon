@@ -128,7 +128,7 @@ type Point
 end 'Point'
 
 type Defaults
-	static var origin = Point.create(x: 0, y: 0)
+	static var origin = Point.create(0, y: 0)
 
 	export static function getOrigin() returns Point
 		return Defaults.origin
@@ -178,7 +178,7 @@ end 'State'
 function main() returns ExitCode
 	let a = State.get()
 	print("{a.value} ")
-	State.set(State.create(value: 99))
+	State.set(State.create(99))
 	let b = State.get()
 	print("{b.value}")
 	return 0
@@ -335,7 +335,7 @@ type Registry
 end 'Registry'
 
 function buildPair() returns Pair
-	return Pair.create(x: 11, y: 22)
+	return Pair.create(11, y: 22)
 end 'buildPair'
 
 function main() returns ExitCode

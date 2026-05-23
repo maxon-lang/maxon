@@ -1,0 +1,49 @@
+// Test: chainable-method-discarded
+
+typealias Count = int(i64.min to i64.max)
+
+type Counter
+	export var value Count
+
+	function increment() returns Counter
+		value = value + 1
+		return self
+	end 'increment'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	c.increment()
+	return c.value
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %6 = mir.mov_imm 8 : i64
+    %7 = mir.call @mrt_alloc(%6)
+    mir.store %0, %7, 0 width: qword
+    %8 = mir.load %7, 0 width: qword
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.add.i64 %8, %9
+    mir.store %10, %7, 0 width: qword
+    %5 = mir.load %7, 0 width: qword
+    %11 = mir.mov_imm 255 : i64
+    %12 = mir.cmp ugt, %5, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %5
+  }
+}
+---

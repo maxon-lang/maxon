@@ -85,7 +85,7 @@ function tryResolveTypeExpr(project Project, expr UnresolvedTypeExpr) returns Re
 		// pack tighter; the user-declared cast category (`int`) is preserved
 		// separately in `project.typealiasCastCategories` so the storage
 		// choice can't reclassify the alias as `byte`.
-		rangedInt(lower, upper) gives ResolveResult.doneRanged(computeOptimalIntType(lower: lower, upper: upper), range: TypealiasRange.create(lower, upper: upper))
+		rangedInt(lower, upper) gives ResolveResult.doneRanged(computeOptimalIntType(lower, upper: upper), range: TypealiasRange.create(lower, upper: upper))
 		// `byte(...)` always lowers to u8 storage and `byte` cast category.
 		aliasName(name) gives tryResolveAliasName(project, name: name)
 		// Phase 11.0 step 2: generic typealiases never flow through this
@@ -273,7 +273,7 @@ export function drainPendingConstraintChecks(project Project)
 		validateGenericInstanceArgs(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 		validateGenericInstanceArity(project, expr: check.expr, declLine: check.declLine, declColumn: check.declColumn, declFilePath: check.declFilePath)
 		if project.diagnostics.count() > beforeCount 'aliasHadError'
-			project.constraintFailedTypealiases.insert(element: check.name)
+			project.constraintFailedTypealiases.insert(check.name)
 		end 'aliasHadError'
 	end 'eachCheck'
 	project.pendingConstraintChecks = PendingConstraintCheckArray.create()
@@ -793,12 +793,12 @@ function findInheritedBindings(project Project, iface IrInterface, siblings Conf
 	end 'seedQueue'
 
 	while queue.count() > 0 'walk'
-		let head = try queue.remove(at: 0) otherwise break
+		let head = try queue.remove(0) otherwise break
 
 		if visited.contains(head) 'skip'
 			continue
 		end 'skip'
-		visited.insert(element: head)
+		visited.insert(head)
 
 		// Look for a sibling conformance that names this ancestor.
 		for sib in siblings 'eachSib'
@@ -933,7 +933,7 @@ function collectInterfaceMethodsInto(project Project, iface IrInterface, declNam
 	if visited.contains(iface.name) 'hit'
 		return
 	end 'hit'
-	visited.insert(element: iface.name)
+	visited.insert(iface.name)
 
 	for sig in iface.methods 'eachMethod'
 		var substituted = substituteMethodSig(project, sig: sig, bindings: bindings)
@@ -1432,7 +1432,7 @@ function recordParentConformancesHelper(project Project, typeName String, interf
 	if visited.contains(interfaceName) 'seen'
 		return
 	end 'seen'
-	visited.insert(element: interfaceName)
+	visited.insert(interfaceName)
 
 	var parents = StringArray.create()
 	if let resolved = try project.interfaces.get(interfaceName) 'fromResolved'
@@ -1674,11 +1674,11 @@ function checkConvertLiteralRange(project Project, module MaxonModule, func IrFu
 		return
 	end 'noLit'
 	let isFloat = aliasIsFloat(project, name: aliasName)
-	let outOfRange = literalOutOfRangeFloat(value: lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(value: lit.value, range: typealiasRange)
+	let outOfRange = literalOutOfRangeFloat(lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(lit.value, range: typealiasRange)
 	if not outOfRange 'inRange'
 		return
 	end 'inRange'
-	let displayValue = formatLiteralValue(value: lit.value, isFloat: isFloat)
+	let displayValue = formatLiteralValue(lit.value, isFloat: isFloat)
 	let displayRange = formatTypealiasRange(project, aliasName: aliasName, range: typealiasRange)
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Value {displayValue} is outside the range of '{aliasName}' ({displayRange})", line: range.line, column: range.column, filePath: filePath)
 end 'checkConvertLiteralRange'
@@ -3295,7 +3295,7 @@ function interfaceDeclaresMethodInResolvedHelper(project Project, interfaceName 
 	if visited.contains(interfaceName) 'seen'
 		return false
 	end 'seen'
-	visited.insert(element: interfaceName)
+	visited.insert(interfaceName)
 	let iface = try project.interfaces.get(interfaceName) otherwise return false
 	for i in 0 upto iface.methods.count() 'scan'
 		let m = try iface.methods.get(i) otherwise panic("interfaceDeclaresMethodInResolvedHelper: methods.get OOB at {i}")
@@ -3565,10 +3565,10 @@ function callResultType(project Project, callee ByteArray, callContext CallConte
 	let bareCallee = String.from(callee)
 	// Math primitives are inlined to a Std unary/binary op by lowering — they
 	// have no entry in funcReturnTypes, so look up their result type directly.
-	if let hit = try mathIntrinsicTarget(bare: bareCallee) 'isMath'
+	if let hit = try mathIntrinsicTarget(bareCallee) 'isMath'
 		return hit.resultType
 	end 'isMath'
-	if let binaryHit = try mathBinaryIntrinsicTarget(bare: bareCallee) 'isMathBinary'
+	if let binaryHit = try mathBinaryIntrinsicTarget(bareCallee) 'isMathBinary'
 		return binaryHit.resultType
 	end 'isMathBinary'
 	// Forward enclosingType through `qualifyCalleeForContext` so a qualified
@@ -4164,13 +4164,13 @@ end 'unifyGenericInstanceArgs'
 //     `unresolved` at this walk)
 //   - elements disagreed on a concrete type (E3005 reported here)
 function arrayLiteralResultType(project Project, funcName String, name ByteArray, producerTypes ProducerTypeMap) returns MaxonType
-	let key = arrayLiteralProducerKey(funcName: funcName, valueName: name)
+	let key = arrayLiteralProducerKey(funcName, valueName: name)
 	let entry = try project.arrayLiteralProducers.get(key) otherwise return MaxonType.unresolved
 	let element = unifyArrayLiteralElementTypes(project, entry: entry, producerTypes: producerTypes)
 	if isUnresolvedType(element) 'noUnify'
 		return MaxonType.unresolved
 	end 'noUnify'
-	let baseTypeName = arrayLiteralBaseTypeName(entry: entry, name: name)
+	let baseTypeName = arrayLiteralBaseTypeName(entry, name: name)
 	return internSingleArgGenericInstance(project, baseTypeName: baseTypeName, elementType: element)
 end 'arrayLiteralResultType'
 
@@ -4259,7 +4259,7 @@ end 'internTwoArgGenericInstance'
 // `unresolved`, the caller falls through to `callResultType` and a
 // later resolution pass retries.
 function mapLiteralResultType(project Project, funcName String, name ByteArray, producerTypes ProducerTypeMap) returns MaxonType
-	let key = mapLiteralProducerKey(funcName: funcName, valueName: name)
+	let key = mapLiteralProducerKey(funcName, valueName: name)
 	let entry = try project.mapLiteralProducers.get(key) otherwise return MaxonType.unresolved
 	let keyType = unifyMapLiteralAxisFromProducer(project, funcName: funcName, mmResultName: entry.keyMmResultName, producerTypes: producerTypes)
 	if isUnresolvedType(keyType) 'noKey'
@@ -4277,7 +4277,7 @@ end 'mapLiteralResultType'
 // axis's `__mm` result name. Returns `unresolved` when the entry is
 // missing or its elements haven't unified yet.
 function unifyMapLiteralAxisFromProducer(project Project, funcName String, mmResultName ByteArray, producerTypes ProducerTypeMap) returns MaxonType
-	let key = arrayLiteralProducerKey(funcName: funcName, valueName: mmResultName)
+	let key = arrayLiteralProducerKey(funcName, valueName: mmResultName)
 	let entry = try project.arrayLiteralProducers.get(key) otherwise return MaxonType.unresolved
 	return unifyArrayLiteralElementTypes(project, entry: entry, producerTypes: producerTypes)
 end 'unifyMapLiteralAxisFromProducer'
@@ -4315,7 +4315,7 @@ end 'ArrayLiteralLookupError'
 // belong to a *different* literal entirely — for non-int element
 // types this then ripples into a wrong `genericInstance` slot type).
 function lookupArrayLiteralProducer(project Project, funcName String, name ByteArray) returns ArrayLiteralProducer throws ArrayLiteralLookupError
-	return try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
+	return try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
 end 'lookupArrayLiteralProducer'
 
 // Map-literal counterpart of `lookupArrayLiteralProducer`. Map literals are
@@ -4323,7 +4323,7 @@ end 'lookupArrayLiteralProducer'
 // allocations live in `arrayLiteralProducers`), so a single-name lookup
 // suffices.
 function lookupMapLiteralProducer(project Project, funcName String, name ByteArray) returns MapLiteralProducer throws ArrayLiteralLookupError
-	return try project.mapLiteralProducers.get(mapLiteralProducerKey(funcName: funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
+	return try project.mapLiteralProducers.get(mapLiteralProducerKey(funcName, valueName: name)) otherwise throw ArrayLiteralLookupError.notFound
 end 'lookupMapLiteralProducer'
 
 // Mirror of `unifyArrayLiteralElementsFromModule` for map literals: read
@@ -4331,8 +4331,8 @@ end 'lookupMapLiteralProducer'
 // registered as an ArrayLiteralProducer under its `__mm` name) and pin a
 // `genericInstance(<mapType>, [Key, Value])` shape when both axes resolve.
 function unifyMapLiteralFromModule(project Project, module MaxonModule, func IrFunction, entry MapLiteralProducer) returns MaxonType throws ArrayLiteralLookupError
-	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
-	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
 	let keyType = try unifyArrayLiteralElementsFromModule(project, module: module, func: func, entry: keyEntry)
 	let valueType = try unifyArrayLiteralElementsFromModule(project, module: module, func: func, entry: valueEntry)
 	return internTwoArgGenericInstance(project, baseTypeName: entry.mapTypeName, keyType: keyType, valueType: valueType)
@@ -4398,10 +4398,10 @@ end 'staticTypeOfValueInFunction'
 // post-fillUnresolvedTypes backfill.
 function staticTypeFromOpIfMatches(project Project, op MaxonOp, name ByteArray) returns MaxonType throws ArrayLiteralLookupError
 	match op 'pick'
-		literal(result, _, valueType, _) then return try staticTypedResult(name: name, result: result, t: valueType)
-		stringConst(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
-		charLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: byteStringLiteralResultType(project))
+		literal(result, _, valueType, _) then return try staticTypedResult(name, result: result, t: valueType)
+		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
+		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
 		stringInterp to forInIterable then throw ArrayLiteralLookupError.notFound
 	end 'pick'
 end 'staticTypeFromOpIfMatches'
@@ -4828,7 +4828,7 @@ function patchEnvLoadIfNeeded(module MaxonModule, opIdx OpIndex, result ByteArra
 		return false
 	end 'idxOOB'
 	let outerName = try capturedNames.get(captureIndex) otherwise panic("patchEnvLoadIfNeeded: capturedNames.get({captureIndex}) failed despite count guard")
-	let resolved = resolveOuterCaptureType(outerFunc: outerFunc, outerSlots: outerSlots, captureName: outerName)
+	let resolved = resolveOuterCaptureType(outerFunc, outerSlots: outerSlots, captureName: outerName)
 	if isUnresolvedType(resolved) 'noFix'
 		return false
 	end 'noFix'
@@ -6476,8 +6476,8 @@ end 'refineTopLevelArrayLiteralSlotType'
 // Reads each axis's already-registered ArrayLiteralProducer entry and
 // re-unifies its elements against the post-fillUnresolvedTypes op stamps.
 function unifyMapLiteralFromTypedOps(project Project, module MaxonModule, func IrFunction, entry MapLiteralProducer) returns MaxonType throws ArrayLiteralLookupError
-	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
-	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(funcName: func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let keyEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(func.name, valueName: entry.keyMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
+	let valueEntry = try project.arrayLiteralProducers.get(arrayLiteralProducerKey(func.name, valueName: entry.valueMmResultName)) otherwise throw ArrayLiteralLookupError.notFound
 	let keyType = try unifyArrayLiteralElementsFromTypedOps(project, module: module, func: func, entry: keyEntry)
 	let valueType = try unifyArrayLiteralElementsFromTypedOps(project, module: module, func: func, entry: valueEntry)
 	return internTwoArgGenericInstance(project, baseTypeName: entry.mapTypeName, keyType: keyType, valueType: valueType)
@@ -6533,13 +6533,13 @@ end 'typedResultOfValueInFunction'
 
 function typedResultFromOpIfMatches(project Project, op MaxonOp, name ByteArray) returns MaxonType throws ArrayLiteralLookupError
 	match op 'pick'
-		literal(result, _, valueType, _) then return try staticTypedResult(name: name, result: result, t: valueType)
-		stringConst(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
-		charLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
-		byteStringLiteral(result, _, _) then return try staticTypedResult(name: name, result: result, t: byteStringLiteralResultType(project))
-		varLoad(result, _, slotType, _) then return try staticTypedResult(name: name, result: result, t: slotType)
-		globalLoad(result, _, slotType, _) then return try staticTypedResult(name: name, result: result, t: slotType)
-		stringInterp(result, _, _) then return try staticTypedResult(name: name, result: result, t: stringConstResultType(project))
+		literal(result, _, valueType, _) then return try staticTypedResult(name, result: result, t: valueType)
+		stringConst(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
+		charLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: MaxonType.named(project.typeNames.intern("Character")))
+		byteStringLiteral(result, _, _) then return try staticTypedResult(name, result: result, t: byteStringLiteralResultType(project))
+		varLoad(result, _, slotType, _) then return try staticTypedResult(name, result: result, t: slotType)
+		globalLoad(result, _, slotType, _) then return try staticTypedResult(name, result: result, t: slotType)
+		stringInterp(result, _, _) then return try staticTypedResult(name, result: result, t: stringConstResultType(project))
 		default throws ArrayLiteralLookupError.cannotUnify
 	end 'pick'
 end 'typedResultFromOpIfMatches'
@@ -6990,11 +6990,11 @@ function checkReturnLiteralValue(project Project, module MaxonModule, func IrFun
 	if not lit.found 'noLit'
 		return
 	end 'noLit'
-	let outOfRange = literalOutOfRangeFloat(value: lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(value: lit.value, range: typealiasRange)
+	let outOfRange = literalOutOfRangeFloat(lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(lit.value, range: typealiasRange)
 	if not outOfRange 'inRange'
 		return
 	end 'inRange'
-	let displayValue = formatLiteralValue(value: lit.value, isFloat: isFloat)
+	let displayValue = formatLiteralValue(lit.value, isFloat: isFloat)
 	let displayRange = formatTypealiasRange(project, aliasName: aliasName, range: typealiasRange)
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "Value {displayValue} is outside the range of '{aliasName}' ({displayRange})", line: range.line, column: range.column, filePath: filePath)
 end 'checkReturnLiteralValue'
@@ -7246,7 +7246,7 @@ end 'readerPathOrFallback'
 function validateCallVisibility(project Project, module MaxonModule, fallbackFilePath FilePath)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateCallVisibility: funcIdx < count but get failed")
-		let readerPath = readerPathOrFallback(func: func, fallback: fallbackFilePath)
+		let readerPath = readerPathOrFallback(func, fallback: fallbackFilePath)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("validateCallVisibility: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
@@ -7425,7 +7425,7 @@ end 'reportHiddenCalleeError'
 function validateNamedTypeVisibility(project Project, module MaxonModule, fallbackFilePath FilePath)
 	for funcIdx in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIdx) otherwise panic("validateNamedTypeVisibility: funcIdx < count but get failed")
-		let readerPath = readerPathOrFallback(func: func, fallback: fallbackFilePath)
+		let readerPath = readerPathOrFallback(func, fallback: fallbackFilePath)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("validateNamedTypeVisibility: blockRef OOB")
 			for opIdx in block.opRefs 'eachOp'
@@ -7722,7 +7722,7 @@ end 'CharByteRetypedArgs'
 function retypeCharByteReceiver(project Project, receiver ByteArray, receiverType MaxonType, funcName String) returns MaxonType
 	let isCharByte = match receiverType 'check'
 		boolean gives false
-		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: receiver))
+		integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: receiver))
 		float to opaquePointer gives false
 	end 'check'
 	if not isCharByte 'pass'
@@ -7740,7 +7740,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 	var newTypes = MaxonTypeArray.create()
 	let characterType = MaxonType.named(project.typeNames.intern("Character"))
 	for i in 0 upto argTypes.count() 'eachArg'
-		let t = try argTypes.get(i) otherwise return CharByteRetypedArgs.create(types: argTypes, didSubstitute: false)
+		let t = try argTypes.get(i) otherwise return CharByteRetypedArgs.create(argTypes, didSubstitute: false)
 		if i < startIdx 'beforeUser'
 			newTypes.push(t)
 			continue
@@ -7752,7 +7752,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 		end 'noName'
 		let isCharByte = match t 'check'
 			boolean gives false
-			integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName: funcName, valueName: argName))
+			integer gives project.charByteLiterals.contains(charByteLiteralKey(funcName, valueName: argName))
 			float to opaquePointer gives false
 		end 'check'
 		if isCharByte 'retype'
@@ -7762,7 +7762,7 @@ function retypeCharByteArgsToCharacter(project Project, args ByteArrayArray, arg
 		end 'retype'
 		newTypes.push(t)
 	end 'eachArg'
-	return CharByteRetypedArgs.create(types: newTypes, didSubstitute: didSubstitute)
+	return CharByteRetypedArgs.create(newTypes, didSubstitute: didSubstitute)
 end 'retypeCharByteArgsToCharacter'
 
 // Emit E3007 with the bare overload name and a Candidates list rendered
@@ -8914,11 +8914,11 @@ function checkFallbackLiteralRange(project Project, module MaxonModule, func IrF
 		return
 	end 'noLit'
 	let isFloat = aliasIsFloat(project, name: aliasName)
-	let outOfRange = literalOutOfRangeFloat(value: lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(value: lit.value, range: typealiasRange)
+	let outOfRange = literalOutOfRangeFloat(lit.value, range: typealiasRange) if isFloat else literalOutOfRangeInt(lit.value, range: typealiasRange)
 	if not outOfRange 'inRange'
 		return
 	end 'inRange'
-	let displayValue = formatLiteralValue(value: lit.value, isFloat: isFloat)
+	let displayValue = formatLiteralValue(lit.value, isFloat: isFloat)
 	let displayRange = formatTypealiasRange(project, aliasName: aliasName, range: typealiasRange)
 	reportCompileError(project, code: ErrorCode.semanticTypeMismatch, message: "otherwise value {displayValue} is outside the range of '{aliasName}' ({displayRange})", line: expectedRange.line, column: expectedRange.column, filePath: filePath)
 end 'checkFallbackLiteralRange'
@@ -9022,7 +9022,7 @@ function checkCallArity(project Project, qualifiedCallee String, args ByteArrayA
 		end 'ok'
 		let paramIdx = slot + paramStartIndex
 		let pd = try signature.paramDefaults.get(paramIdx) otherwise ParamDefault.none
-		if paramDefaultAsIntLiteral(pd).hasValue 'hasDefault'
+		if paramDefaultHasValue(pd) 'hasDefault'
 			continue
 		end 'hasDefault'
 		let paramName = try signature.paramNames.get(paramIdx) otherwise ""

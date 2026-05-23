@@ -1,0 +1,46 @@
+// Test: default-values.struct-default-omitted
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function sum(p Point = Point.create(10, y: 32)) returns Integer
+	return p.x + p.y
+end 'sum'
+
+function main() returns ExitCode
+	return sum()
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 10 : i64
+    %3 = mir.mov_imm 32 : i64
+    %4 = mir.mov_imm 16 : i64
+    %5 = mir.call @mrt_alloc(%4)
+    mir.store %2, %5, 0 width: qword
+    mir.store %3, %5, 8 width: qword
+    %6 = mir.load %5, 0 width: qword
+    %7 = mir.load %5, 8 width: qword
+    %8 = mir.add.i64 %6, %7
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

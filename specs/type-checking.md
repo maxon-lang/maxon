@@ -178,7 +178,7 @@ end 'Foo'
 
 function main() returns ExitCode
 	var arr = FooArray.create()
-	arr.push(Foo.create(value: 42))
+	arr.push(Foo.create(42))
 	return arr.count() - 1
 end 'main'
 ```
@@ -211,8 +211,8 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var c = Container.create(items: ItemArray.create())
-	c.items.push(Item.create(value: 7))
+	var c = Container.create(ItemArray.create())
+	c.items.push(Item.create(7))
 	return c.items.count()
 end 'main'
 ```

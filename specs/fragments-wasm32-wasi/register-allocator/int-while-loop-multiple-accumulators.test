@@ -1,0 +1,67 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns ExitCode
+	var even_sum = 0
+	var odd_sum = 0
+	var count = 0
+	var i = 0
+	while i < 20 'loop'
+		if i mod 2 == 0 'even'
+			even_sum = even_sum + i
+			count = count + 1
+		end 'even' else 'odd'
+			odd_sum = odd_sum + i
+		end 'odd'
+		i = i + 1
+	end 'loop'
+	return (even_sum + odd_sum + count) mod 256
+end 'main'
+---
+ExitCode: 200
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.mov_imm 0 : i64
+    %3 = mir.mov_imm 0 : i64
+    mir.br loop_0.header(%0, %1, %2, %3)
+  loop_0.header:
+    %5 = mir.mov_imm 20 : i64
+    %6 = mir.cmp lt, %37, %5
+    mir.cond_br %6 [then: loop_0(), else: loop_0.exit()]
+  loop_0:
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.rem.i64 %37, %8
+    %10 = mir.mov_imm 0 : i64
+    %11 = mir.cmp eq, %9, %10
+    mir.cond_br %11 [then: even_0(), else: odd_0()]
+  loop_0.exit:
+    %14 = mir.add.i64 %32, %34
+    %16 = mir.add.i64 %14, %36
+    %17 = mir.mov_imm 256 : i64
+    %18 = mir.rem.i64 %16, %17
+    %38 = mir.mov_imm 255 : i64
+    %39 = mir.cmp ugt, %18, %38
+    mir.cond_br %39 [then: __range_panic_0(), else: __range_ok_0()]
+  even_0:
+    %21 = mir.add.i64 %32, %37
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.add.i64 %36, %23
+    mir.br even_0.merge(%21, %34, %24)
+  odd_0:
+    %27 = mir.add.i64 %34, %37
+    mir.br even_0.merge(%32, %27, %36)
+  even_0.merge:
+    %29 = mir.mov_imm 1 : i64
+    %30 = mir.add.i64 %37, %29
+    mir.br loop_0.header(%31, %33, %35, %30)
+  __range_panic_0:
+    %40 = mir.global_addr @__panic_msg_0
+    %41 = mir.call @mrt_panic(%40)
+  __range_ok_0:
+    mir.ret %18
+  }
+}
+---

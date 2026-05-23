@@ -68,7 +68,7 @@ type Point
 		end 'create'
 end 'Point'
 function main() returns ExitCode
-		let a = Point.create(x: 10, y: 20)
+		let a = Point.create(10, y: 20)
 		let b = a
 		return a.x + b.y
 end 'main'
@@ -88,9 +88,9 @@ type Box
 		end 'create'
 end 'Box'
 function main() returns ExitCode
-		var result = Box.create(value: 0)
+		var result = Box.create(0)
 		if true 'blk'
-				let inner = Box.create(value: 42)
+				let inner = Box.create(42)
 				result = inner
 		end 'blk'
 		return result.value
@@ -111,8 +111,8 @@ type Item
 		end 'create'
 end 'Item'
 function main() returns ExitCode
-		var a = Item.create(val: 10)
-		a = Item.create(val: 20)
+		var a = Item.create(10)
+		a = Item.create(20)
 		return a.val
 end 'main'
 ```
@@ -131,7 +131,7 @@ type Data
 		end 'create'
 end 'Data'
 function main() returns ExitCode
-		let a = Data.create(n: 7)
+		let a = Data.create(7)
 		let b = a
 		let c = a
 		return a.n + b.n + c.n
@@ -153,9 +153,9 @@ type Pair
 		end 'create'
 end 'Pair'
 function main() returns ExitCode
-		var x = Pair.create(a: 3, b: 4)
+		var x = Pair.create(3, b: 4)
 		let y = x.clone()
-		x = Pair.create(a: 0, b: 0)
+		x = Pair.create(0, b: 0)
 		return y.a + y.b
 end 'main'
 ```
@@ -184,8 +184,8 @@ type Outer
 		end 'create'
 end 'Outer'
 function main() returns ExitCode
-		var o = Outer.create(child: Inner.create(val: 0))
-		let i = Inner.create(val: 55)
+		var o = Outer.create(Inner.create(0))
+		let i = Inner.create(55)
 		o.setChild(i)
 		return o.child.val
 end 'main'
@@ -205,7 +205,7 @@ type Result
 		end 'create'
 end 'Result'
 function makeResult(n Integer) returns Result
-		let r = Result.create(code: n)
+		let r = Result.create(n)
 		return r
 end 'makeResult'
 function main() returns ExitCode
@@ -230,9 +230,9 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 function main() returns ExitCode
 		var arr = EntryArray.create()
-		let e = Entry.create(id: 15)
+		let e = Entry.create(15)
 		arr.push(e)
-		let got = try arr.get(0) otherwise Entry.create(id: 0)
+		let got = try arr.get(0) otherwise Entry.create(0)
 		return got.id
 end 'main'
 ```
@@ -254,7 +254,7 @@ function main() returns ExitCode
 		var total = 0
 		var i = 0
 		while i < 5 'loop'
-				let c = Counter.create(val: i)
+				let c = Counter.create(i)
 				if i == 3 'brk'
 						total = total + c.val
 						break
@@ -286,8 +286,8 @@ function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
 end 'getFirst'
 function main() returns ExitCode
 		var arr = WrapperArray.create()
-		arr.push(Wrapper.create(n: 99))
-		let w = try getFirst(arr) otherwise Wrapper.create(n: 0)
+		arr.push(Wrapper.create(99))
+		let w = try getFirst(arr) otherwise Wrapper.create(0)
 		return w.n
 end 'main'
 ```
@@ -306,9 +306,9 @@ type Val
 		end 'create'
 end 'Val'
 function main() returns ExitCode
-		var a = Val.create(n: 10)
+		var a = Val.create(10)
 		let b = a
-		a = Val.create(n: 20)
+		a = Val.create(20)
 		return a.n + b.n
 end 'main'
 ```
@@ -327,9 +327,9 @@ type Tag
 		end 'create'
 end 'Tag'
 function main() returns ExitCode
-		var a = Tag.create(id: 1)
-		a = Tag.create(id: 2)
-		a = Tag.create(id: 3)
+		var a = Tag.create(1)
+		a = Tag.create(2)
+		a = Tag.create(3)
 		return a.id
 end 'main'
 ```
@@ -348,11 +348,11 @@ type Cell
 		end 'create'
 end 'Cell'
 function main() returns ExitCode
-		var a = Cell.create(value: 10)
+		var a = Cell.create(10)
 		var result = 0
 		if true 'inner'
 				let b = a
-				a = Cell.create(value: 20)
+				a = Cell.create(20)
 				result = b.value
 		end 'inner'
 		return result + a.value
@@ -373,9 +373,9 @@ type Token
 		end 'create'
 end 'Token'
 function main() returns ExitCode
-		var t = Token.create(kind: 0)
+		var t = Token.create(0)
 		if true 'a'
-				let inner = Token.create(kind: 50)
+				let inner = Token.create(50)
 				t = inner
 		end 'a'
 		return t.kind
@@ -398,9 +398,9 @@ end 'Fallback'
 typealias FallbackArray = Array with Fallback
 function main() returns ExitCode
 		var arr = FallbackArray.create()
-		arr.push(Fallback.create(n: 10))
-		let a = try arr.get(0) otherwise Fallback.create(n: 99)
-		let b = try arr.get(5) otherwise Fallback.create(n: 42)
+		arr.push(Fallback.create(10))
+		let a = try arr.get(0) otherwise Fallback.create(99)
+		let b = try arr.get(5) otherwise Fallback.create(42)
 		return a.n + b.n
 end 'main'
 ```
@@ -421,9 +421,9 @@ end 'Score'
 typealias ScoreArray = Array with Score
 function main() returns ExitCode
 		var scores = ScoreArray.create()
-		scores.push(Score.create(points: 10))
-		scores.push(Score.create(points: 20))
-		scores.push(Score.create(points: 30))
+		scores.push(Score.create(10))
+		scores.push(Score.create(20))
+		scores.push(Score.create(30))
 		var total = 0
 		for s in scores 'loop'
 				total = total + s.points
@@ -446,10 +446,10 @@ type Num
 		end 'create'
 end 'Num'
 function makeNum(n Integer) returns Num
-		return Num.create(v: n)
+		return Num.create(n)
 end 'makeNum'
 function addOne(x Num) returns Num
-		return Num.create(v: x.v + 1)
+		return Num.create(x.v + 1)
 end 'addOne'
 function main() returns ExitCode
 		let result = addOne(makeNum(10))
@@ -474,7 +474,7 @@ function readLevel(c Config) returns Integer
 		return c.level
 end 'readLevel'
 function main() returns ExitCode
-		let cfg = Config.create(level: 77)
+		let cfg = Config.create(77)
 		let l = readLevel(cfg)
 		return l + cfg.level - 77
 end 'main'
@@ -497,16 +497,16 @@ end 'Item'
 
 function findItem(a Integer, b Integer, target Integer) returns Item
 		if a == target 'check_a'
-				let result = Item.create(name: "first", id: a)
+				let result = Item.create("first", id: a)
 				return result
 		end 'check_a'
 		if b == target 'check_b'
 				if true 'inner'
-						let result = Item.create(name: "second", id: b)
+						let result = Item.create("second", id: b)
 						return result
 				end 'inner'
 		end 'check_b'
-		return Item.create(name: "default", id: 0)
+		return Item.create("default", id: 0)
 end 'findItem'
 
 function main() returns ExitCode
@@ -544,7 +544,7 @@ function readChild(o Outer) returns Integer
 		return c.val
 end 'readChild'
 function main() returns ExitCode
-		let o = Outer.create(child: Inner.create(val: 88))
+		let o = Outer.create(Inner.create(88))
 		let result = readChild(o)
 		return result
 end 'main'

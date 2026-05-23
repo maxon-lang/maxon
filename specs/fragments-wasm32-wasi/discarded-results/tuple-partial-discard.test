@@ -1,0 +1,38 @@
+// Test: tuple-partial-discard
+
+typealias Small = int(0 to 100)
+
+function makePair() returns (Small, Small)
+	return (10, 20)
+end 'makePair'
+
+function main() returns ExitCode
+	let (a, _) = makePair()
+	return a
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %5 = mir.mov_imm 10 : i64
+    %6 = mir.mov_imm 20 : i64
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %5, %8, 0 width: qword
+    mir.store %6, %8, 8 width: qword
+    %2 = mir.load %8, 0 width: byte
+    %4 = mir.load %8, 8 width: byte
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %2, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %2
+  }
+}
+---

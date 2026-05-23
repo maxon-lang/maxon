@@ -234,15 +234,15 @@ function main() returns ExitCode
 	var result = 0
 
 	// First call succeeds - handler not executed
-	let v = try Value.fromString("hello") otherwise Value.create(n: 0)
+	let v = try Value.fromString("hello") otherwise Value.create(0)
 	result = result + v.n  // adds 5
 
 	// Second call fails - use default value
-	let v2 = try Value.fromString("xbad") otherwise Value.create(n: 0)
+	let v2 = try Value.fromString("xbad") otherwise Value.create(0)
 	result = result + v2.n  // adds 0
 
 	// Third call succeeds
-	let v3 = try Value.fromString("world") otherwise Value.create(n: 0)
+	let v3 = try Value.fromString("world") otherwise Value.create(0)
 	result = result + v3.n  // adds 5
 
 	return result

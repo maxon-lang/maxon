@@ -29,7 +29,7 @@ Insert at the front or back, receiving a handle to the new node:
 ```text
 var first = list.insertFirst(10)
 var last = list.insertLast(30)
-var middle = list.insertAfter(target: first, value: 20)
+var middle = list.insertAfter(first, value: 20)
 ```
 
 ### Traversal
@@ -241,7 +241,7 @@ function main() returns ExitCode
 	let n1 = list.insertFirst(10)
 	let n3 = list.insertLast(30)
 	// Insert 20 after n1
-	let n2 = list.insertAfter(target: n1, value: 20)
+	let n2 = list.insertAfter(n1, value: 20)
 	// Verify order via traversal
 	let cur = try list.head() otherwise 'err'
 		return 1
@@ -282,7 +282,7 @@ function main() returns ExitCode
 	let n1 = list.insertFirst(10)
 	let n3 = list.insertLast(30)
 	// Insert 20 before n3
-	let n2 = list.insertBefore(target: n3, value: 20)
+	let n2 = list.insertBefore(n3, value: 20)
 	// Verify order via traversal
 	let cur = try list.head() otherwise 'err'
 		return 1
@@ -324,7 +324,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Remove middle node
-	let removed = list.remove(node: n2)
+	let removed = list.remove(n2)
 	print("{removed}\n")
 	print("{list.count()}\n")
 	// Verify remaining via handles
@@ -354,7 +354,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Detach middle node
-	list.detach(node: n2)
+	list.detach(n2)
 	print("{list.count()}\n")
 	// Verify remaining via handles
 	print("{n1.value()}\n")
@@ -480,7 +480,7 @@ function main() returns ExitCode
 	var list = IntManagedList.create()
 	var node = list.insertFirst(10)
 	print("{node.value()}\n")
-	node.setValue(v: 99)
+	node.setValue(99)
 	print("{node.value()}\n")
 	// Verify through list head too
 	let h = try list.head() otherwise 'err'
@@ -507,7 +507,7 @@ function main() returns ExitCode
 	var list = StringManagedList.create()
 	var node = list.insertFirst("hello world!!!!!!!!!!!!!!")
 	let old = node.value()
-	node.setValue(v: "replacement!!!!!!!!!!!!!!")
+	node.setValue("replacement!!!!!!!!!!!!!!")
 	print("{old}\n")
 	print("{node.value()}\n")
 	return 0
@@ -668,7 +668,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Move n3 to front: 30, 10, 20
-	list.reinsertFirst(node: n3)
+	list.reinsertFirst(n3)
 	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
@@ -709,7 +709,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Move n1 to back: 20, 30, 10
-	list.reinsertLast(node: n1)
+	list.reinsertLast(n1)
 	let cur = try list.head() otherwise 'err'
 		return 1
 	end 'err'
@@ -750,7 +750,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Remove head node
-	let removed = list.remove(node: n1)
+	let removed = list.remove(n1)
 	print("{removed}\n")
 	print("{list.count()}\n")
 	let h = try list.head() otherwise 'err'
@@ -785,7 +785,7 @@ function main() returns ExitCode
 	let n2 = list.insertLast(20)
 	let n3 = list.insertLast(30)
 	// Remove tail node
-	let removed = list.remove(node: n3)
+	let removed = list.remove(n3)
 	print("{removed}\n")
 	print("{list.count()}\n")
 	let t = try list.tail() otherwise 'err'
@@ -818,8 +818,8 @@ function main() returns ExitCode
 	var list = IntManagedList.create()
 	let n1 = list.insertLast(10)
 	let n2 = list.insertLast(20)
-	let removed1 = list.remove(node: n1)
-	let removed2 = list.remove(node: n2)
+	let removed1 = list.remove(n1)
+	let removed2 = list.remove(n2)
 	print("{removed1}\n")
 	print("{removed2}\n")
 	print("{list.count()}\n")

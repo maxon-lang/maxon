@@ -116,7 +116,7 @@ function findNaturalLoops(cfg CfgInfo, domInfo DomInfo, rpo RpoInfo) returns Nat
 
 		for succ in succs 'eachSucc'
 			if dominates(succ, b: blockId, domInfo: domInfo) 'isBackEdge'
-				let loop = buildNaturalLoop(header: succ, latch: blockId, cfg: cfg)
+				let loop = buildNaturalLoop(succ, latch: blockId, cfg: cfg)
 
 				// Only process loops with a valid preheader
 				if loop.preheader != LICM_NO_BLOCK 'hasPreheader'
@@ -497,6 +497,8 @@ function licmGetSystemResultId(op StdSystemOp) returns ValueId
 		osAllocPages(resultId, _) gives resultId
 		osAllocPagesLarge(resultId, _) gives resultId
 		osFreePages gives LICM_NO_BLOCK
+		// Phase 15c file-I/O ops are all side-effecting syscalls — pin them in place.
+		osFileOpen to osDirMkdir gives LICM_NO_BLOCK
 		atomicInc gives LICM_NO_BLOCK
 		atomicDec gives LICM_NO_BLOCK
 		atomicXadd(resultId, _, _) gives resultId

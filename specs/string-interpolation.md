@@ -112,7 +112,7 @@ type Point implements Stringable
 	end 'create'
 end 'Point'
 
-var p = Point.create(x: 1, y: 2)
+var p = Point.create(1, y: 2)
 print("Location: {p}\n")  // "Location: (1, 2)"
 ```
 
@@ -716,7 +716,7 @@ type Pair implements Stringable
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Pair.create(first: 1, second: 2)
+	let p = Pair.create(1, second: 2)
 	print("{p}\n")
 	return 0
 end 'main'
@@ -755,7 +755,7 @@ type Counter implements Stringable, FormattedStringable
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(value: 42)
+	let c = Counter.create(42)
 	print("{c}\n")
 	print("{c:verbose}\n")
 	return 0
@@ -802,8 +802,8 @@ type Age implements Stringable
 end 'Age'
 
 function main() returns ExitCode
-	let name = Name.create(first: "John", last: "Doe")
-	let age = Age.create(years: 30)
+	let name = Name.create("John", last: "Doe")
+	let age = Age.create(30)
 	print("{name}, {age}\n")
 	return 0
 end 'main'

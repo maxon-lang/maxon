@@ -20,7 +20,7 @@ function repeat(value Count, times Count = 1) returns Count
   return value * times
 end 'repeat'
 
-var result = repeat(value: 7)  // times defaults to 1, result is 7
+var result = repeat(7)  // times defaults to 1, result is 7
 ```
 
 ### String Defaults
@@ -32,7 +32,7 @@ function greet(name String = "World") returns ExitCode
 end 'greet'
 
 greet()                    // prints "Hello, World!"
-greet(name: "Maxon")       // prints "Hello, Maxon!"
+greet("Maxon")       // prints "Hello, Maxon!"
 ```
 
 ### Array Defaults
@@ -96,7 +96,7 @@ function greet(name String = "World") returns ExitCode
 end 'greet'
 
 function main() returns ExitCode
-	return greet(name: "Maxon")
+	return greet("Maxon")
 end 'main'
 ```
 ```stdout
@@ -159,7 +159,7 @@ function sum(items IntArray = [10, 20, 12]) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	return sum(items: [1, 2, 3])
+	return sum([1, 2, 3])
 end 'main'
 ```
 ```exitcode
@@ -278,7 +278,7 @@ type Point
 	end 'create'
 end 'Point'
 
-function sum(p Point = Point.create(x: 10, y: 32)) returns Integer
+function sum(p Point = Point.create(10, y: 32)) returns Integer
 	return p.x + p.y
 end 'sum'
 
@@ -303,12 +303,12 @@ type Point
 	end 'create'
 end 'Point'
 
-function sum(p Point = Point.create(x: 10, y: 32)) returns Integer
+function sum(p Point = Point.create(10, y: 32)) returns Integer
 	return p.x + p.y
 end 'sum'
 
 function main() returns ExitCode
-	return sum(p: Point.create(x: 1, y: 2))
+	return sum(Point.create(1, y: 2))
 end 'main'
 ```
 ```exitcode
@@ -348,4 +348,3 @@ end 'main'
 ```exitcode
 5
 ```
-

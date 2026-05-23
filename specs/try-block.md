@@ -524,7 +524,7 @@ end 'ErrA'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -564,7 +564,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -612,7 +612,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -660,7 +660,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -710,7 +710,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -765,7 +765,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c'
     return 5
 end 'callA'
@@ -814,7 +814,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50, msg: 7)
+        throw ErrA.bad(50, msg: 7)
     end 'c'
     return 5
 end 'callA'
@@ -864,10 +864,10 @@ end 'ErrB'
 
 function callA(x Sel) returns Score throws ErrA
     if x == 1 'c1'
-        throw ErrA.bad(code: 50)
+        throw ErrA.bad(50)
     end 'c1'
     if x == 2 'c2'
-        throw ErrA.worse(level: 200)
+        throw ErrA.worse(200)
     end 'c2'
     return 5
 end 'callA'
@@ -916,7 +916,7 @@ end 'ErrB'
 
 function callA(x bool) returns Score throws ErrA
     if x 'c'
-        throw ErrA.bad(code: 50, msg: 1)
+        throw ErrA.bad(50, msg: 1)
     end 'c'
     return 5
 end 'callA'

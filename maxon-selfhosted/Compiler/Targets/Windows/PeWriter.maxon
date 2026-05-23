@@ -37,9 +37,27 @@ let IAT_SLOT_WIDE_CHAR_TO_MULTI_BYTE = 14
 // helper then re-encodes via WideCharToMultiByte (slot 13). Kernel32 slot.
 let IAT_SLOT_GET_MODULE_FILE_NAME_W = 15
 
+// Phase 15c Stream 3.1: Win32 file/directory I/O. All kernel32. Path-taking
+// APIs are the wide-char (W) variants; UTF-8 paths from Maxon strings get
+// converted via MultiByteToWideChar (slot 26).
+let IAT_SLOT_CREATE_FILE_W = 16
+let IAT_SLOT_DELETE_FILE_W = 17
+let IAT_SLOT_GET_FILE_SIZE_EX = 18
+let IAT_SLOT_GET_FILE_ATTRIBUTES_EX_W = 19
+let IAT_SLOT_SET_FILE_POINTER_EX = 20
+let IAT_SLOT_FIND_FIRST_FILE_W = 21
+let IAT_SLOT_FIND_NEXT_FILE_W = 22
+let IAT_SLOT_FIND_CLOSE = 23
+let IAT_SLOT_CREATE_DIRECTORY_W = 24
+let IAT_SLOT_GET_CURRENT_DIRECTORY_W = 25
+let IAT_SLOT_MULTI_BYTE_TO_WIDE_CHAR = 26
+let IAT_SLOT_GET_LAST_ERROR = 27
+
 // shell32.dll's CommandLineToArgvW. Lives in a second DLL import directory.
-let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 16
-let IAT_SLOT_COUNT = 17
+// Moved to the end of the IAT in Phase 15c so the new kernel32 entries can
+// stay in a single contiguous run.
+let IAT_SLOT_COMMAND_LINE_TO_ARGV_W = 28
+let IAT_SLOT_COUNT = 29
 
 type ImportSection
 	export var data ByteArray
@@ -59,8 +77,8 @@ end 'ImportSection'
 //   IAT  [k32 entries] 0  [s32 entries] 0
 //   ILT  [k32 entries] 0  [s32 entries] 0
 // followed by the Import Directory (3 entries: kernel32, shell32, null).
-let KERNEL32_IAT_END = 16  // exclusive; slots 0..15 are kernel32
-let SHELL32_IAT_START = 16  // slot 16 is shell32 (CommandLineToArgvW)
+let KERNEL32_IAT_END = 28  // exclusive; slots 0..27 are kernel32
+let SHELL32_IAT_START = 28  // slot 28 is shell32 (CommandLineToArgvW)
 let IMPORT_DIRECTORY_ENTRIES = 2
 
 function buildImportSection(idataRva Rva) returns ImportSection
@@ -99,8 +117,24 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	let hintWideCharToMultiByte = hintLocalFree + 12
 	// Phase 15f: "GetModuleFileNameW\0" = 19 → padded to 20 with the leading hint.
 	let hintGetModuleFileNameW = hintWideCharToMultiByte + 22
-	// shell32 entry. "CommandLineToArgvW\0" = 19 → padded to 20 with leading hint.
-	let hintCommandLineToArgvW = hintGetModuleFileNameW + 22
+	// Phase 15c Stream 3.1: new kernel32 entries for file/directory I/O.
+	// Each entry's slot size is 2 (hint) + name including NUL, padded to even.
+	let hintCreateFileW = hintGetModuleFileNameW + 22  // GetModuleFileNameW total 22
+	let hintDeleteFileW = hintCreateFileW + 14  // CreateFileW total 14
+	let hintGetFileSizeEx = hintDeleteFileW + 14  // DeleteFileW total 14
+	let hintGetFileAttributesExW = hintGetFileSizeEx + 16  // GetFileSizeEx total 16
+	let hintSetFilePointerEx = hintGetFileAttributesExW + 24  // GetFileAttributesExW total 24
+	let hintFindFirstFileW = hintSetFilePointerEx + 20  // SetFilePointerEx total 20
+	let hintFindNextFileW = hintFindFirstFileW + 18  // FindFirstFileW total 18
+	let hintFindClose = hintFindNextFileW + 16  // FindNextFileW total 16
+	let hintCreateDirectoryW = hintFindClose + 12  // FindClose total 12
+	let hintGetCurrentDirectoryW = hintCreateDirectoryW + 20  // CreateDirectoryW total 20
+	let hintMultiByteToWideChar = hintGetCurrentDirectoryW + 24  // GetCurrentDirectoryW total 24
+	let hintGetLastError = hintMultiByteToWideChar + 22  // MultiByteToWideChar total 22
+	// shell32 entry, moved to the END of the IAT/ILT in Phase 15c so the
+	// kernel32 run stays contiguous. "CommandLineToArgvW\0" = 19 → padded
+	// to 20 with leading hint, so total 22.
+	let hintCommandLineToArgvW = hintGetLastError + 16  // GetLastError total 16
 	let kernel32DllNameOffset = hintCommandLineToArgvW + 22
 	// "kernel32.dll\0" is 13 bytes — no pad needed; the next entry is the
 	// shell32 DLL name string at offset +13.
@@ -123,6 +157,18 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintLocalFree)
 	writeQword(data, value: idataRva + hintWideCharToMultiByte)
 	writeQword(data, value: idataRva + hintGetModuleFileNameW)
+	writeQword(data, value: idataRva + hintCreateFileW)
+	writeQword(data, value: idataRva + hintDeleteFileW)
+	writeQword(data, value: idataRva + hintGetFileSizeEx)
+	writeQword(data, value: idataRva + hintGetFileAttributesExW)
+	writeQword(data, value: idataRva + hintSetFilePointerEx)
+	writeQword(data, value: idataRva + hintFindFirstFileW)
+	writeQword(data, value: idataRva + hintFindNextFileW)
+	writeQword(data, value: idataRva + hintFindClose)
+	writeQword(data, value: idataRva + hintCreateDirectoryW)
+	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
+	writeQword(data, value: idataRva + hintMultiByteToWideChar)
+	writeQword(data, value: idataRva + hintGetLastError)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -144,6 +190,18 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	writeQword(data, value: idataRva + hintLocalFree)
 	writeQword(data, value: idataRva + hintWideCharToMultiByte)
 	writeQword(data, value: idataRva + hintGetModuleFileNameW)
+	writeQword(data, value: idataRva + hintCreateFileW)
+	writeQword(data, value: idataRva + hintDeleteFileW)
+	writeQword(data, value: idataRva + hintGetFileSizeEx)
+	writeQword(data, value: idataRva + hintGetFileAttributesExW)
+	writeQword(data, value: idataRva + hintSetFilePointerEx)
+	writeQword(data, value: idataRva + hintFindFirstFileW)
+	writeQword(data, value: idataRva + hintFindNextFileW)
+	writeQword(data, value: idataRva + hintFindClose)
+	writeQword(data, value: idataRva + hintCreateDirectoryW)
+	writeQword(data, value: idataRva + hintGetCurrentDirectoryW)
+	writeQword(data, value: idataRva + hintMultiByteToWideChar)
+	writeQword(data, value: idataRva + hintGetLastError)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 	writeQword(data, value: idataRva + hintCommandLineToArgvW)
 	data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
@@ -188,6 +246,19 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00LocalFree\x00")
 	data.append(b"\x00\x00WideCharToMultiByte\x00")
 	data.append(b"\x00\x00GetModuleFileNameW\x00\x00")
+	// Phase 15c Stream 3.1 entries.
+	data.append(b"\x00\x00CreateFileW\x00")
+	data.append(b"\x00\x00DeleteFileW\x00")
+	data.append(b"\x00\x00GetFileSizeEx\x00")
+	data.append(b"\x00\x00GetFileAttributesExW\x00\x00")
+	data.append(b"\x00\x00SetFilePointerEx\x00\x00")
+	data.append(b"\x00\x00FindFirstFileW\x00\x00")
+	data.append(b"\x00\x00FindNextFileW\x00")
+	data.append(b"\x00\x00FindClose\x00")
+	data.append(b"\x00\x00CreateDirectoryW\x00\x00")
+	data.append(b"\x00\x00GetCurrentDirectoryW\x00\x00")
+	data.append(b"\x00\x00MultiByteToWideChar\x00")
+	data.append(b"\x00\x00GetLastError\x00\x00")
 	data.append(b"\x00\x00CommandLineToArgvW\x00\x00")
 	data.append(b"kernel32.dll\x00")
 	data.append(b"shell32.dll\x00\x00")

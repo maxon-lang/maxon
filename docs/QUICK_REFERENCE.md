@@ -197,7 +197,9 @@ end 'process'
 // integers, floats, bools, strings, arrays, enum cases,
 // struct construction, character literals, byte string literals
 
-// Calling: first arg positional, rest named
+// Calling: first arg positional, rest named.
+// Labeling the first arg is rejected as E2052; omitting a
+// label on the second-or-later arg is rejected as E3005.
 greet("Smith", title: "Dr.")
 ```
 

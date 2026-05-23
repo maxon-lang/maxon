@@ -236,7 +236,7 @@ type ScheduleState
 			for useId in useIds 'eachUse'
 				let defIdx = schedLookup(defMap, index: useId)
 				if defIdx != SCHED_NONE 'hasDef'
-					self.addDepEdge(fromIdx: defIdx, toIdx: i)
+					self.addDepEdge(defIdx, toIdx: i)
 				end 'hasDef'
 			end 'eachUse'
 
@@ -253,10 +253,10 @@ type ScheduleState
 			// A load must come after the most recent store or call.
 			if isMem and not isStore and not isCall 'loadAfterStore'
 				if lastStoreIdx != SCHED_NONE 'hasStore'
-					self.addDepEdge(fromIdx: lastStoreIdx, toIdx: i)
+					self.addDepEdge(lastStoreIdx, toIdx: i)
 				end 'hasStore'
 				if lastCallIdx != SCHED_NONE 'hasCall'
-					self.addDepEdge(fromIdx: lastCallIdx, toIdx: i)
+					self.addDepEdge(lastCallIdx, toIdx: i)
 				end 'hasCall'
 				loadsSinceBarrier.push(i)
 			end 'loadAfterStore'
@@ -273,13 +273,13 @@ type ScheduleState
 			// A store must come after the previous store and previous call.
 			if isStore 'storeOrdering'
 				if prevStoreIdx != SCHED_NONE 'afterPrevStore'
-					self.addDepEdge(fromIdx: prevStoreIdx, toIdx: i)
+					self.addDepEdge(prevStoreIdx, toIdx: i)
 				end 'afterPrevStore'
 				if prevCallIdx != SCHED_NONE 'afterPrevCall'
-					self.addDepEdge(fromIdx: prevCallIdx, toIdx: i)
+					self.addDepEdge(prevCallIdx, toIdx: i)
 				end 'afterPrevCall'
 				for loadIdx in loadsSinceBarrier 'loadsBeforeStore'
-					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
+					self.addDepEdge(loadIdx, toIdx: i)
 				end 'loadsBeforeStore'
 				loadsSinceBarrier = SchedIntArray.create()
 				lastStoreIdx = i
@@ -288,13 +288,13 @@ type ScheduleState
 			// A call must come after the previous store and previous call.
 			if isCall 'callOrdering'
 				if prevStoreIdx != SCHED_NONE 'afterStore'
-					self.addDepEdge(fromIdx: prevStoreIdx, toIdx: i)
+					self.addDepEdge(prevStoreIdx, toIdx: i)
 				end 'afterStore'
 				if prevCallIdx != SCHED_NONE 'afterCall'
-					self.addDepEdge(fromIdx: prevCallIdx, toIdx: i)
+					self.addDepEdge(prevCallIdx, toIdx: i)
 				end 'afterCall'
 				for loadIdx in loadsSinceBarrier 'loadsBeforeCall'
-					self.addDepEdge(fromIdx: loadIdx, toIdx: i)
+					self.addDepEdge(loadIdx, toIdx: i)
 				end 'loadsBeforeCall'
 				loadsSinceBarrier = SchedIntArray.create()
 				lastCallIdx = i
@@ -326,7 +326,7 @@ type ScheduleState
 			var j = 0
 			for barrierPacked in opRefs 'barrierScan'
 				if j > lastParamIdx and not isMirParamOpPacked(module, packed: barrierPacked) 'addBarrier'
-					self.addDepEdge(fromIdx: lastParamIdx, toIdx: j)
+					self.addDepEdge(lastParamIdx, toIdx: j)
 				end 'addBarrier'
 				j = j + 1
 			end 'barrierScan'
@@ -357,7 +357,7 @@ type ScheduleState
 				var k = 0
 				for flagPacked in opRefs 'flagBarrier'
 					if k != cmpIdx and isFlagClobberingPacked(module, packed: flagPacked) 'addFlagDep'
-						self.addDepEdge(fromIdx: k, toIdx: cmpIdx)
+						self.addDepEdge(k, toIdx: cmpIdx)
 					end 'addFlagDep'
 					k = k + 1
 				end 'flagBarrier'
@@ -625,6 +625,17 @@ function extractMirDef(op MirOp) returns SchedInt
 		osAllocPages(resultId, _) gives resultId
 		osAllocPagesLarge(resultId, _) gives resultId
 		osFreePages gives SCHED_NONE
+		osFileOpen(resultId, _, _, _) gives resultId
+		osFileRead(resultId, _, _, _) gives resultId
+		osFileWrite(resultId, _, _, _) gives resultId
+		osFileClose(resultId, _) gives resultId
+		osFileLseek(resultId, _, _, _) gives resultId
+		osFileStat(resultId, _, _) gives resultId
+		osFileAccess(resultId, _, _) gives resultId
+		osFileUnlink(resultId, _) gives resultId
+		osDirGetdents64(resultId, _, _, _) gives resultId
+		osDirGetcwd(resultId, _, _) gives resultId
+		osDirMkdir(resultId, _, _) gives resultId
 		atomicInc gives SCHED_NONE
 		atomicDec gives SCHED_NONE
 		atomicXadd(resultId, _, _) gives resultId
@@ -685,6 +696,17 @@ function extractMirUses(op MirOp) returns ValueIdArray
 		osAllocPages(_, sizeId) then result.push(sizeId)
 		osAllocPagesLarge(_, sizeId) then result.push(sizeId)
 		osFreePages(ptrId, sizeId) then pushTwo(result, a: ptrId, b: sizeId)
+		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then pushThree(result, a: cStringPtrId, b: flagsId, c: fileModeId)
+		osFileRead(_, fdId, bufPtrId, countId) then pushThree(result, a: fdId, b: bufPtrId, c: countId)
+		osFileWrite(_, fdId, bufPtrId, countId) then pushThree(result, a: fdId, b: bufPtrId, c: countId)
+		osFileClose(_, fdId) then result.push(fdId)
+		osFileLseek(_, fdId, offsetId, whenceId) then pushThree(result, a: fdId, b: offsetId, c: whenceId)
+		osFileStat(_, cStringPtrId, statBufPtrId) then pushTwo(result, a: cStringPtrId, b: statBufPtrId)
+		osFileAccess(_, cStringPtrId, modeId) then pushTwo(result, a: cStringPtrId, b: modeId)
+		osFileUnlink(_, cStringPtrId) then result.push(cStringPtrId)
+		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then pushThree(result, a: fdId, b: bufPtrId, c: bufSizeId)
+		osDirGetcwd(_, bufPtrId, bufSizeId) then pushTwo(result, a: bufPtrId, b: bufSizeId)
+		osDirMkdir(_, cStringPtrId, modeId) then pushTwo(result, a: cStringPtrId, b: modeId)
 		atomicInc(addrId) then result.push(addrId)
 		atomicDec(addrId) then result.push(addrId)
 		atomicXadd(_, addrId, valId) then pushTwo(result, a: addrId, b: valId)
@@ -743,6 +765,7 @@ function isMirMemoryOp(op MirOp) returns bool
 		osAllocPages gives true
 		osAllocPagesLarge gives true
 		osFreePages gives true
+		osFileOpen to osDirMkdir gives true
 		atomicInc gives true
 		atomicDec gives true
 		atomicXadd gives true
@@ -779,6 +802,12 @@ function isMirStoreOp(op MirOp) returns bool
 		osLockAcquire gives true
 		osLockRelease gives true
 		osFreePages gives true
+		// Phase 15c file-I/O ops potentially write memory (osFileRead populates
+		// the user buffer, osFileStat fills statbuf, osDirGetdents64/Getcwd
+		// write the destination, mkdir/unlink/access read-only) — but every
+		// one of them has external syscall side effects observable from other
+		// threads/files, so the scheduler must treat them as stores.
+		osFileOpen to osDirMkdir gives true
 		movImm to cmp gives false
 		condBranch to ret gives false
 		param to load gives false
@@ -832,6 +861,7 @@ function isMirCallOp(op MirOp) returns bool
 		osAllocPages gives true
 		osAllocPagesLarge gives true
 		osFreePages gives true
+		osFileOpen to osDirMkdir gives true
 		osLockInit gives true
 		osLockAcquire gives true
 		osLockRelease gives true
@@ -910,6 +940,7 @@ function isFlagClobberingMirOp(op MirOp) returns bool
 		osAllocPages gives false
 		osAllocPagesLarge gives false
 		osFreePages gives false
+		osFileOpen to osDirMkdir gives false
 		atomicInc gives true
 		atomicDec gives true
 		atomicXadd gives true

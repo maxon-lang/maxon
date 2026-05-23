@@ -119,7 +119,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	let a = Point.create(1, y: 2)
 	var b = a
 	b.x = 99
 	return b.x
@@ -175,7 +175,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	let o = Outer.create(inner: Inner.create(value: 42))
+	let o = Outer.create(Inner.create(42))
 	var i = o.inner
 	i.value = 99
 	return i.value
@@ -200,7 +200,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 1, y: 2)
+	let p = Point.create(1, y: 2)
 	var x = p.x
 	x = 99
 	return x

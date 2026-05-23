@@ -1,0 +1,23 @@
+// Test: used-in-nested-scope
+
+function main() returns ExitCode
+	let x = 42
+	if x > 0 'check'
+		return x
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    mir.br check_0()
+  check_0:
+    mir.ret %0
+  }
+}
+---

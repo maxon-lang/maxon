@@ -101,8 +101,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 		let m = [b"hello": 1, b"world": 2]
-		let v1 = try m.get(key: b"hello") otherwise 0
-		let v2 = try m.get(key: b"world") otherwise 0
+		let v1 = try m.get(b"hello") otherwise 0
+		let v2 = try m.get(b"world") otherwise 0
 		print("{v1} {v2}")
 		return 0
 end 'main'
@@ -120,8 +120,8 @@ end 'main'
 var m = [b"hello": 1, b"world": 2]
 
 function main() returns ExitCode
-		let v1 = try m.get(key: b"hello") otherwise 0
-		let v2 = try m.get(key: b"world") otherwise 0
+		let v1 = try m.get(b"hello") otherwise 0
+		let v2 = try m.get(b"world") otherwise 0
 		print("{v1} {v2}")
 		return 0
 end 'main'
@@ -146,11 +146,11 @@ type Info
 		end 'create'
 end 'Info'
 
-var m = [b"hello": Info.create(value: 10), b"world": Info.create(value: 20)]
+var m = [b"hello": Info.create(10), b"world": Info.create(20)]
 
 function main() returns ExitCode
-		let v1 = try m.get(key: b"hello") otherwise Info.create(value: 0)
-		let v2 = try m.get(key: b"world") otherwise Info.create(value: 0)
+		let v1 = try m.get(b"hello") otherwise Info.create(0)
+		let v2 = try m.get(b"world") otherwise Info.create(0)
 		print("{v1.value} {v2.value}")
 		return 0
 end 'main'

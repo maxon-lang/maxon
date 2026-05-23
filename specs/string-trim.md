@@ -14,9 +14,9 @@ The `trim`, `trimStart`, and `trimEnd` methods remove characters from the edges 
 **Signatures:**
 
 ```text
-trim(in: CharacterSet) returns String       // both ends
-trimStart(in: CharacterSet) returns String   // start only
-trimEnd(in: CharacterSet) returns String     // end only
+trim(CharacterSet) returns String       // both ends
+trimStart(CharacterSet) returns String   // start only
+trimEnd(CharacterSet) returns String     // end only
 trim() returns String                        // whitespace, both ends
 trimStart() returns String                   // whitespace, start only
 trimEnd() returns String                     // whitespace, end only

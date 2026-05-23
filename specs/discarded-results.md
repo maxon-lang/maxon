@@ -211,7 +211,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(value: 0)
+	var c = Counter.create(0)
 	c.increment()
 	return c.value
 end 'main'

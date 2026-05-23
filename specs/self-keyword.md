@@ -74,7 +74,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 0)
+	var c = Counter.create(0)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -106,7 +106,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(count: 0)
+	var c = Counter.create(0)
 	c.increment()
 	c.increment()
 	c.increment()
@@ -139,7 +139,7 @@ type Accumulator
 end 'Accumulator'
 
 function main() returns ExitCode
-	let acc = Accumulator.create(total: 0)
+	let acc = Accumulator.create(0)
 	acc.add(10)
 	acc.add(20)
 	acc.add(12)
@@ -173,7 +173,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 32)
+	let p = Point.create(10, y: 32)
 	return p.sum()
 end 'main'
 ```
@@ -203,7 +203,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	let v = Value.create(n: 21)
+	let v = Value.create(21)
 	v.double()
 	return v.get()
 end 'main'
@@ -231,7 +231,7 @@ type Rectangle
 end 'Rectangle'
 
 function main() returns ExitCode
-	let r = Rectangle.create(width: 6, height: 7)
+	let r = Rectangle.create(6, height: 7)
 	return r.area()
 end 'main'
 ```

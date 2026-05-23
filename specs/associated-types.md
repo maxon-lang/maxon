@@ -147,7 +147,7 @@ type ScorePair implements Summable with Score
 end 'ScorePair'
 
 function main() returns ExitCode
-	let p = ScorePair.create(a: 10, b: 32)
+	let p = ScorePair.create(10, b: 32)
 	return p.sum()
 end 'main'
 ```
@@ -160,7 +160,7 @@ end 'main'
 Methods are called using the method call syntax:
 
 ```maxon
-var p = IntPair.create(a: 10, b: 32)
+var p = IntPair.create(10, b: 32)
 var result = p.sum()    // Call sum() method on instance p
 ```
 
@@ -274,7 +274,7 @@ type IntBox implements Wrapper with Integer
 end 'IntBox'
 
 function main() returns ExitCode
-	let box = IntBox.create(value: 42)
+	let box = IntBox.create(42)
 	return box.unwrap()
 end 'main'
 ```
@@ -310,7 +310,7 @@ type IntSum implements Accumulator with Integer
 end 'IntSum'
 
 function main() returns ExitCode
-	var acc = IntSum.create(sum: 0)
+	var acc = IntSum.create(0)
 	acc = acc.add(10)
 	acc = acc.add(32)
 	return acc.total()
@@ -350,7 +350,7 @@ type IntFloat implements Pair with Integer, Float
 end 'IntFloat'
 
 function main() returns ExitCode
-	let p = IntFloat.create(a: 40, b: 2.5)
+	let p = IntFloat.create(40, b: 2.5)
 	let x = p.getFirst()
 	let y = trunc(p.getSecond())
 	return x + y
@@ -381,7 +381,7 @@ type SingleChar implements CharSource with Character
 end 'SingleChar'
 
 function main() returns ExitCode
-	let s = SingleChar.create(ch: 'A')
+	let s = SingleChar.create('A')
 	let c = s.getChar()
 	for cp in c.codepoints() 'loop'
 		return cp
@@ -416,7 +416,7 @@ type SingleByte implements ByteSource with Byte
 end 'SingleByte'
 
 function main() returns ExitCode
-	let s = SingleByte.create(b: 42 as Byte)
+	let s = SingleByte.create(42 as Byte)
 	let b = s.getByte()
 	return b
 end 'main'
@@ -558,7 +558,7 @@ type Counter implements Countable
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(count: 42)
+	let c = Counter.create(42)
 	return c.getCount()
 end 'main'
 ```
@@ -589,7 +589,7 @@ type Number implements Addable
 end 'Number'
 
 function main() returns ExitCode
-	let n = Number.create(value: 41)
+	let n = Number.create(41)
 	return n.addOne()
 end 'main'
 ```

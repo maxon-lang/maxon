@@ -207,10 +207,13 @@ let whitelist = ["basics",
 	// "optimizations",
 	// "export-var-fields",
 	"parsable-interface",
+	"register-allocator",
 	"function-overloads",
 	"tuples",
 	"panic-stack-trace",
 	"command-line-args",
+	"file-io",
+	"directory",
 	"cache-parity",
 	"arithmetic-operators",
 	"keyword-parameter-names",
@@ -218,6 +221,10 @@ let whitelist = ["basics",
 	"empty-block",
 	"self-assignment",
 	"break",
+	"unused-variables",
+	"duplicate-functions",
+	"discarded-results",
+	"default-values",
 	// Tier-1 candidates that aren't on the whitelist but are worth a focused
 	// pass each — bootstrap-green specs whose self-hosted gaps surfaced in
 	// the 2026-05-19 Tier-1 sweep + the post-Stage-N missing-diagnostic
@@ -379,7 +386,7 @@ function buildRunCommand(outputPath FilePath, target Target, testArgs String) re
 
 	var argv = StringArray.create()
 	appendSplitArgs(argv, testArgs: testArgs)
-	return RunCommand.create(exe: Executable.path(outputPath), argv: argv)
+	return RunCommand.create(Executable.path(outputPath), argv: argv)
 end 'buildRunCommand'
 
 // Build the command to run a WASM binary via vendored wasmtime. wasmtime's
@@ -387,6 +394,18 @@ end 'buildRunCommand'
 // follows as wasi argv — there is no shell-style `--` separator (any literal
 // `--` in argv is forwarded verbatim and lands as argv[1] inside the module).
 // Spec tests that declare `Args: ...` therefore have to pass the args raw.
+//
+// `--dir=.` preopens the current working directory as fd 3 inside the wasm
+// sandbox. Phase 15c's file/directory I/O helpers (mrt_file_*, mrt_directory_*)
+// all hardcode `dirfd = 3` for path_open/path_filestat_get/etc, so without
+// the preopen every path-based WASI call would return EBADF.
+//
+// `--dir=..::../` additionally maps the parent directory at host-side `..`
+// to the guest-side path `../`. Several directory specs (list-directory,
+// directory-exists, directory-is-directory) reference `../bin` because the
+// test runner cwd is `projectRoot/temp` and the binaries the tests look
+// for live at `projectRoot/bin`. Without this second preopen those tests
+// would always fail with ENOENT.
 function buildWasmRunCommand(outputPath FilePath, testArgs String) returns RunCommand
 	let wasmtimePath = findWasmtimePath()
 	if wasmtimePath.isEmpty() 'noWasmtime'
@@ -395,9 +414,11 @@ function buildWasmRunCommand(outputPath FilePath, testArgs String) returns RunCo
 	let wasmtimeExe = try FilePath.from(wasmtimePath) otherwise panic("buildWasmRunCommand: findWasmtimePath returned an invalid path '{wasmtimePath}'")
 	var argv = StringArray.create()
 	argv.push("run")
+	argv.push("--dir=.")
+	argv.push("--dir=..::../")
 	argv.push(outputPath.toString())
 	appendSplitArgs(argv, testArgs: testArgs)
-	return RunCommand.create(exe: Executable.path(wasmtimeExe), argv: argv)
+	return RunCommand.create(Executable.path(wasmtimeExe), argv: argv)
 end 'buildWasmRunCommand'
 
 // Split a space-separated `Args:` string into individual argv entries. The
@@ -430,7 +451,7 @@ end 'appendSplitArgs'
 // String→FilePath conversion in one place.
 function workerRunCommand(exePath String, argv StringArray) returns RunCommand
 	let exeFile = try FilePath.from(exePath) otherwise panic("workerRunCommand: invalid worker exe path '{exePath}'")
-	return RunCommand.create(exe: Executable.path(exeFile), argv: argv)
+	return RunCommand.create(Executable.path(exeFile), argv: argv)
 end 'workerRunCommand'
 
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
@@ -822,8 +843,14 @@ function runSpecBatch(tests SpecTestArray, specName String, fragmentDir FilePath
 	// Run the batched binary ONCE. The dispatcher runs every included test
 	// in sequence and emits BEGIN/END markers around each so we can slice
 	// the binary's stdout into per-test stdout and per-test exit code.
+	// cwd = projectRoot/temp (matches the bootstrap test runner). The
+	// fragmentDir is `{projectRoot}/specs/fragments-{arch}-{os}` so its
+	// grandparent is the project root.
 	let runCommand = buildRunCommand(batchExePath, target: target, testArgs: "")
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: Directory.currentPath(), timeoutMs: testProcessTimeoutMs) otherwise (err) 'batchRun'
+	let projectRoot = try fragmentDir.parent() otherwise panic("runSpecBatch: fragmentDir has no parent")
+	let projectRootUp = try projectRoot.parent() otherwise panic("runSpecBatch: specs dir has no parent")
+	let batchTempDir = projectRootUp.join("temp")
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: batchTempDir, timeoutMs: testProcessTimeoutMs) otherwise (err) 'batchRun'
 		panic("Batch run failed for {batchExePath.toString()}: {err.displayReason()}")
 	end 'batchRun'
 
@@ -1253,9 +1280,12 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 		return TestResult.create(testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'unexpectedSuccess'
 
-	// Run the compiled executable.
+	// Run the compiled executable. Use projectRoot/temp as cwd so tests
+	// that resolve relative paths like `../bin` see the same layout the
+	// bootstrap test runner uses (see maxon-sharp/Testing/TestRunner.cs:
+	// _tempDir is project_root/temp).
 	let runCommand = buildRunCommand(outputPath, target: target, testArgs: fragment.args)
-	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: Directory.currentPath(), timeoutMs: testProcessTimeoutMs) otherwise (err) 'runFail'
+	let runResult = try Subprocess.run(runCommand.exe, arguments: runCommand.argv, workingDirectory: tempDir, timeoutMs: testProcessTimeoutMs) otherwise (err) 'runFail'
 		cleanup(outputExe)
 		return TestResult.create(testName, passed: false, errorMessage: "Run failed: {err.displayReason()}", filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
 	end 'runFail'

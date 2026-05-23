@@ -1,0 +1,41 @@
+// Test: int-multi-var-branch-merge
+function main() returns ExitCode
+	var x = 0
+	var y = 0
+	var z = 0
+	if 1 < 2 'branch'
+		x = 10
+		y = 20
+		z = 12
+	end 'branch' else 'other'
+		x = 1
+		y = 2
+		z = 3
+	end 'other'
+	return x + y + z
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %6 = mir.mov_imm 10 : i64
+    %7 = mir.mov_imm 20 : i64
+    %8 = mir.mov_imm 12 : i64
+    mir.br branch_0.merge(%6, %7, %8)
+  branch_0.merge:
+    %14 = mir.add.i64 %17, %18
+    %16 = mir.add.i64 %14, %19
+    %20 = mir.mov_imm 255 : i64
+    %21 = mir.cmp ugt, %16, %20
+    mir.cond_br %21 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %22 = mir.global_addr @__panic_msg_0
+    %23 = mir.call @mrt_panic(%22)
+  __range_ok_0:
+    mir.ret %16
+  }
+}
+---

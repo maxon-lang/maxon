@@ -1,0 +1,28 @@
+// Test: int-callee-saved-clobber
+
+typealias Integer = int(i64.min to i64.max)
+
+function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
+	let x = a + b
+	let y = c + d
+	let z = x + y
+	return z
+end 'useRegs'
+
+function main() returns ExitCode
+	let sentinel = 42
+	let result = useRegs(1, b: 2, c: 3, d: 4)
+	return sentinel + result
+end 'main'
+---
+ExitCode: 52
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %8 = mir.mov_imm 52 : i64
+    mir.ret %8
+  }
+}
+---

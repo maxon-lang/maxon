@@ -56,8 +56,8 @@ type Foo
 end 'Foo'
 
 function main() returns ExitCode
-	let f1 = Foo.create(x: 10)
-	let f2 = Foo.create(x: 42)
+	let f1 = Foo.create(10)
+	let f2 = Foo.create(42)
 	return f1.callBarOn(f2)
 end 'main'
 ```
@@ -91,9 +91,9 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	let a = Value.create(n: 5)
-	let b = Value.create(n: 3)
-	let c = Value.create(n: 2)
+	let a = Value.create(5)
+	let b = Value.create(3)
+	let c = Value.create(2)
 	// a.add(b) = 5 + 3 = 8
 	// a.multiply(c) = 5 * 2 = 10
 	// total = 8 + 10 = 18
@@ -127,7 +127,7 @@ type Calculator
 end 'Calculator'
 
 function main() returns ExitCode
-	let calc = Calculator.create(base: 5)
+	let calc = Calculator.create(5)
 	return calc.quadruple()
 end 'main'
 ```
@@ -157,8 +157,8 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	let a = Adder.create(value: 100)
-	let b = Adder.create(value: 50)
+	let a = Adder.create(100)
+	let b = Adder.create(50)
 	return a.delegateAdd(b, n: 7)
 end 'main'
 ```

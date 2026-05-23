@@ -136,9 +136,9 @@ type X64OpMeta
 end 'X64OpMeta'
 
 enum X64Op
-	load = X64OpMeta.create(meta: OpMeta.create(latency: 4, isMemory: true, isCall: false), setsFlags: false)
-	add = X64OpMeta.create(meta: OpMeta.create(latency: 1, isMemory: false, isCall: false), setsFlags: true)
-	call = X64OpMeta.create(meta: OpMeta.create(latency: 5, isMemory: true, isCall: true), setsFlags: false)
+	load = X64OpMeta.create(OpMeta.create(4, isMemory: true, isCall: false), setsFlags: false)
+	add = X64OpMeta.create(OpMeta.create(1, isMemory: false, isCall: false), setsFlags: true)
+	call = X64OpMeta.create(OpMeta.create(5, isMemory: true, isCall: true), setsFlags: false)
 end 'X64Op'
 
 function main() returns ExitCode
@@ -177,8 +177,8 @@ type Outer
 end 'Outer'
 
 enum Op
-	add = Outer.create(inner: Inner.create(latency: 1), fast: true)
-	div = Outer.create(inner: Inner.create(latency: 40), fast: false)
+	add = Outer.create(Inner.create(1), fast: true)
+	div = Outer.create(Inner.create(40), fast: false)
 end 'Op'
 
 function main() returns ExitCode

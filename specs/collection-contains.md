@@ -1,7 +1,7 @@
 ---
 feature: collection-contains
 status: stable
-keywords: [contains, collection, search, element, predicate, subsequence]
+keywords: [contains, collection, search, element, subsequence]
 category: stdlib
 ---
 
@@ -9,7 +9,7 @@ category: stdlib
 
 # Contains
 
-Three variants of `contains()` are available depending on the protocol and argument type.
+Two variants of `contains()` are available depending on the protocol and argument type.
 
 ### Single Element (Collection)
 
@@ -30,23 +30,11 @@ Checks if a collection contains another collection as a contiguous subsequence.
 
 ```text
 var arr = [1, 2, 3, 4, 5]
-arr.contains(sequence: [2, 3, 4])   // true
-arr.contains(sequence: [1, 3])      // false (not contiguous)
+arr.contains([2, 3, 4])   // true
+arr.contains([1, 3])      // false (not contiguous)
 
 var s = "hello world"
 s.contains("lo wo")                 // true (substring search)
-```
-
-### Predicate (Iterable)
-
-Checks if any element satisfies a predicate closure. Works on all iterable types including Map.
-
-```text
-var numbers = [1, 2, 3, 4, 5]
-numbers.contains(predicate: function(n int) gives n > 3)   // true
-
-var dict = ["a": 1, "b": 2]
-dict.contains(predicate: (e (String, int)) gives e.0 == "a")   // true
 ```
 
 ## Tests
@@ -208,7 +196,7 @@ found
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(sequence: [2, 3, 4]) 'check'
+	if arr.contains([2, 3, 4]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -222,7 +210,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(sequence: [1, 3]) 'check'
+	if arr.contains([1, 3]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -236,7 +224,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(sequence: [1, 2]) 'check'
+	if arr.contains([1, 2]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -250,24 +238,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(sequence: [4, 5]) 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: array-subsequence-empty -->
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
-
-function main() returns ExitCode
-	let arr = [1, 2, 3]
-	if arr.contains(sequence: IntArray.create()) 'check'
+	if arr.contains([4, 5]) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -305,89 +276,3 @@ end 'main'
 0
 ```
 
-### Predicate
-
-<!-- test: array-predicate-found -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function main() returns ExitCode
-	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(predicate: function(n Integer) gives n > 3) 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: array-predicate-not-found -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function main() returns ExitCode
-	let arr = [1, 2, 3, 4, 5]
-	if arr.contains(predicate: function(n Integer) gives n > 10) 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: map-predicate-key -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias MapEntry = (String, Integer)
-
-function main() returns ExitCode
-	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: function(e MapEntry) gives e.0 == "b") 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: map-predicate-value -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias MapEntry = (String, Integer)
-
-function main() returns ExitCode
-	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: function(e MapEntry) gives e.1 == 2) 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: map-predicate-not-found -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias MapEntry = (String, Integer)
-
-function main() returns ExitCode
-	let dict = ["a": 1, "b": 2, "c": 3]
-	if dict.contains(predicate: function(e MapEntry) gives e.1 > 10) 'check'
-		return 1
-	end 'check'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```

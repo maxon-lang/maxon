@@ -10,95 +10,27 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 36
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 2.86 : f64}
-    maxon.assign %1 {var = y} {kind = f64} {decl = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {kind = f64}
-    maxon.assign %2 {var = sum_f} {kind = f64} {decl = 1 : i1}
-    %3 = maxon.literal {value = 10 : i64}
-    maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1}
-    %4 = maxon.literal {value = 20 : i64}
-    maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1}
-    %5 = maxon.binop %3, %4 {op = add}
-    maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1}
-    %6 = maxon.trunc %2
-    %7 = maxon.binop %6, %5 {op = add}
-    %8 = maxon.literal {value = 0 : i64}
-    %9 = maxon.binop %7, %8 {op = lt}
-    %10 = maxon.literal {value = 4294967295 : i64}
-    %11 = maxon.binop %7, %10 {op = gt}
-    %12 = maxon.binop %9, %11 {op = or}
-    maxon.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at float-and-int-mixed-pressure.test:9: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [x, y, sum_f, a, b, sum_i]
-    maxon.return %7
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.float_constant {value = 3.14 : f64}
-    %1 = arith.float_constant {value = 2.86 : f64}
-    %2 = arith.addf %0, %1
-    %3 = arith.constant {value = 10 : i64}
-    %4 = arith.constant {value = 20 : i64}
-    %5 = arith.addi %3, %4
-    %6 = arith.fptosi %2
-    %7 = arith.addi %6, %5
-    %8 = arith.constant {value = 0 : i64}
-    %9 = arith.cmpi lt %7, %8
-    %10 = arith.constant {value = 4294967295 : i64}
-    %11 = arith.cmpi gt %7, %10
-    %12 = arith.ori1 %9, %11
-    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %13 = memref.lea_symdata __panic_msg_0
-    %14 = std.ptr_to_i64 %13
-    std.call_runtime @mrt_panic %14
-  __range_ok_0:
-    func.return %7
-  }
-}
-=== x86
+---
+// CompiledIR
 module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.movsd xmm0, [rip+__float_3.14]
-    x64.movsd xmm1, [rip+__float_2.86]
-    x64.movsd xmm2, xmm0
-    x64.addsd xmm2, xmm1
-    x64.mov rax, 10
-    x64.mov rcx, 20
-    x64.add rax, rcx
-    x64.cvttsd2si rdx, xmm2
-    x64.add rdx, rax
-    x64.xor ebx, ebx
-    x64.mov esi, 4294967295
-    x64.cmp rdx, rsi
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rbx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.movsd xmm0, [rip+__float_4613622566267157217]
+    x64.movsd xmm1, [rip+__float_4614253070214989087]
+    x64.addsd xmm1, xmm0
+    x64.cvttsd2si r8, xmm1
+    x64.mov r9d, 4294967295
+    x64.add r8, 30
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

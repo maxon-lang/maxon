@@ -1,0 +1,31 @@
+// Test: int-division-preserves-other-values
+function main() returns ExitCode
+	let x = 10
+	let a = 84
+	let b = 2
+	let quotient = a / b
+	return quotient - x
+end 'main'
+---
+ExitCode: 32
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 84 : i64
+    %2 = mir.mov_imm 2 : i64
+    %5 = mir.div.i64 %1, %2
+    %8 = mir.sub.i64 %5, %0
+    %9 = mir.mov_imm 255 : i64
+    %10 = mir.cmp ugt, %8, %9
+    mir.cond_br %10 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %11 = mir.global_addr @__panic_msg_0
+    %12 = mir.call @mrt_panic(%11)
+  __range_ok_0:
+    mir.ret %8
+  }
+}
+---

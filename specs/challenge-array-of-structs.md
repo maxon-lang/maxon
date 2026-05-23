@@ -29,11 +29,11 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p1 = Point.create(x: 1, y: 2)
-	let p2 = Point.create(x: 3, y: 4)
+	let p1 = Point.create(1, y: 2)
+	let p2 = Point.create(3, y: 4)
 	let points = [p1, p2]
-	let pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
-	let pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
+	let pt0 = try points.get(0) otherwise Point.create(0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(0, y: 0)
 	return pt0.x + pt1.y
 end 'main'
 ```
@@ -56,9 +56,9 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Pair.create(first: 10, second: 20)
+	let p = Pair.create(10, second: 20)
 	let arr = [p]
-	let elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
+	let elem = try arr.get(0) otherwise Pair.create(0, second: 0)
 	return elem.first + elem.second
 end 'main'
 ```
@@ -88,14 +88,14 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var items = ItemArray.create()
-	items.push(Item.create(color: Color.red))
-	items.push(Item.create(color: Color.green))
-	items.push(Item.create(color: Color.blue))
+	items.push(Item.create(Color.red))
+	items.push(Item.create(Color.green))
+	items.push(Item.create(Color.blue))
 
 	// Verify enum values are stored correctly (not pointers)
-	let item0 = try items.get(0) otherwise Item.create(color: Color.blue)
-	let item1 = try items.get(1) otherwise Item.create(color: Color.blue)
-	let item2 = try items.get(2) otherwise Item.create(color: Color.red)
+	let item0 = try items.get(0) otherwise Item.create(Color.blue)
+	let item1 = try items.get(1) otherwise Item.create(Color.blue)
+	let item2 = try items.get(2) otherwise Item.create(Color.red)
 
 	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
 	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25
@@ -126,9 +126,9 @@ typealias TaskArray = Array with Task
 
 function main() returns ExitCode
 	var tasks = TaskArray.create()
-	tasks.push(Task.create(status: Status.pending))
-	tasks.push(Task.create(status: Status.active))
-	tasks.push(Task.create(status: Status.done))
+	tasks.push(Task.create(Status.pending))
+	tasks.push(Task.create(Status.active))
+	tasks.push(Task.create(Status.done))
 
 	var activeCount = 0
 	for task in tasks 'loop'

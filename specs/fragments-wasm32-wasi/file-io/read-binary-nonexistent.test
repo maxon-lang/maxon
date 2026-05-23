@@ -1,0 +1,99 @@
+// Test: read-binary-nonexistent
+function main() returns ExitCode
+	let bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
+		print("File not found")
+		return 42
+	end 'err'
+	print("Unexpected read: {bytes.count()} bytes")
+	return 1
+end 'main'
+---
+ExitCode: 42
+Stdout: ```
+File not found
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 27 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %11, %12 = mir.try_call @File.readBinary(%10)
+    %14 = mir.cmp ne, %12, %6
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %16 = mir.global_addr @__istr_1
+    %17 = mir.mov_imm 40 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %16, %18, 0 width: qword
+    %19 = mir.mov_imm 14 : i64
+    mir.store %19, %18, 8 width: qword
+    %20 = mir.mov_imm -2 : i64
+    mir.store %20, %18, 16 width: qword
+    mir.store %5, %18, 24 width: qword
+    mir.store %6, %18, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %18, %24, 0 width: qword
+    mir.store %5, %24, 8 width: qword
+    %57 = mir.load %24, 0 width: qword
+    %58 = mir.load %57, 0 width: qword
+    %59 = mir.load %57, 8 width: qword
+    %60 = mir.call @mrt_write_stdout(%58, %59)
+    %27 = mir.mov_imm 42 : i64
+    mir.ret %27
+  try_0.merge:
+    %30 = mir.global_addr @__layout_Array_Byte
+    %31 = mir.call @Array.count(%11, %30)
+    %32 = mir.global_addr @__istr_2
+    %33 = mir.mov_imm 17 : i64
+    %34 = mir.mov_imm 21 : i64
+    %35 = mir.call @mrt_alloc(%34)
+    %36 = mir.call @mrt_i64_to_string(%31, %35)
+    %37 = mir.global_addr @__istr_3
+    %38 = mir.mov_imm 6 : i64
+    %40 = mir.mov_imm 17 : i64
+    %41 = mir.add.i64 %40, %36
+    %42 = mir.add.i64 %41, %38
+    %44 = mir.add.i64 %42, %5
+    %45 = mir.call @mrt_alloc(%44)
+    mir.memcpy %45, %32, %33
+    %46 = mir.add.i64 %45, %33
+    mir.memcpy %46, %35, %36
+    %47 = mir.add.i64 %46, %36
+    mir.memcpy %47, %37, %38
+    %49 = mir.mov_imm 40 : i64
+    %50 = mir.call @mrt_alloc(%49)
+    mir.store %45, %50, 0 width: qword
+    mir.store %42, %50, 8 width: qword
+    mir.store %42, %50, 16 width: qword
+    mir.store %5, %50, 24 width: qword
+    mir.store %6, %50, 32 width: qword
+    %53 = mir.mov_imm 16 : i64
+    %54 = mir.call @mrt_alloc(%53)
+    mir.store %50, %54, 0 width: qword
+    mir.store %6, %54, 8 width: qword
+    %61 = mir.load %54, 0 width: qword
+    %62 = mir.load %61, 0 width: qword
+    %63 = mir.load %61, 8 width: qword
+    %64 = mir.call @mrt_write_stdout(%62, %63)
+    mir.ret %5
+  }
+}
+---

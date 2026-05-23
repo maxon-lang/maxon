@@ -36,9 +36,9 @@ function main() returns ExitCode
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	let e = Entry.create(data: arr, tag: 42)
+	let e = Entry.create(arr, tag: 42)
 	try m.insert("hello", value: e) otherwise ignore
-	let got = try m.get("hello") otherwise Entry.create(data: ByteArray.create(), tag: 0)
+	let got = try m.get("hello") otherwise Entry.create(ByteArray.create(), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")
 	let b = try got.data.get(1) otherwise 0
@@ -80,7 +80,7 @@ type Database
 	end 'create'
 end 'Database'
 
-var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
+var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())
 
 function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
@@ -113,34 +113,34 @@ new
 ```
 
 <!-- test: multi-file-struct-param-after-global-branch -->
-Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries.
+Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries. The exported aliases use names that don't clash with stdlib (which itself exports `ByteArray` from `stdlib/File.maxon`) — bare cross-file references to a name with multiple visible declarations would otherwise raise E3063.
 ```maxon
 // --- file: api/0-Types.maxon
 typealias Byte = int(0 to u8.max)
-export typealias ByteArray = Array with Byte
-export typealias Count = int(0 to u64.max)
+export typealias EntryBytes = Array with Byte
+export typealias EntryCount = int(0 to u64.max)
 
 export type Entry
-	export var data ByteArray
-	export var tag Count
+	export var data EntryBytes
+	export var tag EntryCount
 end 'Entry'
 
 export typealias EntryMap = Map with (String, Entry)
-export typealias StringArray = Array with String
+export typealias EntryPaths = Array with String
 
 export type Database
 	export var sourceFiles EntryMap
-	export var sourcePaths StringArray
+	export var sourcePaths EntryPaths
 
-	export static function create(sourceFiles EntryMap, sourcePaths StringArray) returns Self
+	export static function create(sourceFiles EntryMap, sourcePaths EntryPaths) returns Self
 		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}
 	end 'create'
 end 'Database'
 
-export var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
+export var db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create())
 
 // --- file: app/1-Logic.maxon
-export function storeAndCheck(key String, data ByteArray)
+export function storeAndCheck(key String, data EntryBytes)
 	if db.sourceFiles.contains(key) 'exists'
 		let existing = try db.sourceFiles.get(key) otherwise 'skip'
 			return
@@ -155,7 +155,7 @@ end 'storeAndCheck'
 
 // --- file: bin/main.maxon
 function main() returns ExitCode
-	var arr = ByteArray.create()
+	var arr = EntryBytes.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

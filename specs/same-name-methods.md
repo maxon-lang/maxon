@@ -89,7 +89,7 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	let c = Calc.create(base: 30)
+	let c = Calc.create(30)
 	let instanceResult = c.add(10)
 	let staticResult = Calc.add(1, b: 1)
 	return instanceResult + staticResult
@@ -121,7 +121,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let c = Counter.reset()
-	var c2 = Counter.create(count: 42)
+	var c2 = Counter.create(42)
 	c2.reset()
 	return c.count + c2.count
 end 'main'
@@ -185,7 +185,7 @@ type Converter
 end 'Converter'
 
 function main() returns ExitCode
-	let c = Converter.create(factor: 7)
+	let c = Converter.create(7)
 	let instanceResult = c.convert(5)
 	let staticResult = Converter.convert(3)
 	return instanceResult + staticResult

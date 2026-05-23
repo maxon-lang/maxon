@@ -1,0 +1,45 @@
+// Test: int-twenty-vars-heavy-spill
+function main() returns ExitCode
+	let a = 1
+	let b = 2
+	let c = 3
+	let d = 4
+	let e = 5
+	let f = 6
+	let g = 7
+	let h = 8
+	let i = 9
+	let j = 10
+	let k = 11
+	let l = 12
+	let m = 13
+	let n = 14
+	let o = 15
+	let p = 16
+	let q = 17
+	let r = 18
+	let s = 19
+	let t = 20
+	return (a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t) mod 256
+end 'main'
+---
+ExitCode: 210
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %58 = mir.mov_imm 210 : i64
+    %59 = mir.mov_imm 256 : i64
+    %60 = mir.rem.i64 %58, %59
+    %61 = mir.mov_imm 255 : i64
+    %62 = mir.cmp ugt, %60, %61
+    mir.cond_br %62 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %63 = mir.global_addr @__panic_msg_0
+    %64 = mir.call @mrt_panic(%63)
+  __range_ok_0:
+    mir.ret %60
+  }
+}
+---

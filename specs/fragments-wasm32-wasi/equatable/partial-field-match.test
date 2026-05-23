@@ -16,8 +16,8 @@ type Point implements Equatable
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
-	let b = Point.create(x: 1, y: 99)
+	let a = Point.create(1, y: 2)
+	let b = Point.create(1, y: 99)
 	if a.equals(b) 'check'
 		return 1
 	end 'check'
@@ -28,6 +28,23 @@ ExitCode: 0
 ---
 // CompiledIR
 module {
+  func @Point.equals(local0: i64, local1: i64) -> i1 {
+  entry:
+    %15 = mir.param local0 : i64
+    %16 = mir.param local1 : i64
+    %2 = mir.load %15, 0 width: qword
+    %5 = mir.load %16, 0 width: qword
+    %6 = mir.cmp eq, %2, %5
+    %7 = mir.mov_imm 0 : i64
+    mir.cond_br %6 [then: shortAnd.rhs(), else: shortAnd.merge(%7)]
+  shortAnd.rhs:
+    %8 = mir.load %15, 8 width: qword
+    %11 = mir.load %16, 8 width: qword
+    %12 = mir.cmp eq, %8, %11
+    mir.br shortAnd.merge(%12)
+  shortAnd.merge:
+    mir.ret %14
+  }
   func @main() -> u8 {
   entry:
     %0 = mir.mov_imm 1 : i64
@@ -42,14 +59,8 @@ module {
     %14 = mir.call @mrt_alloc(%13)
     mir.store %3, %14, 0 width: qword
     mir.store %4, %14, 8 width: qword
-    %15 = mir.load %12, 0 width: qword
-    %16 = mir.load %14, 0 width: qword
-    %17 = mir.cmp eq, %15, %16
-    %18 = mir.load %12, 8 width: qword
-    %19 = mir.load %14, 8 width: qword
-    %20 = mir.cmp eq, %18, %19
-    %21 = mir.and.i64 %17, %20
-    mir.cond_br %21 [then: check_0(), else: check_0.after()]
+    %8 = mir.call @Point.equals(%12, %14)
+    mir.cond_br %8 [then: check_0(), else: check_0.after()]
   check_0:
     %9 = mir.mov_imm 1 : i64
     mir.ret %9

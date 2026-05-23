@@ -157,7 +157,7 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 		// Look up the array-literal producer entry for this MM result.
 		// Map-literal axes also key under their __mm name, so we end up
 		// processing them too — that's fine, they share the same shape.
-		let producerKey = arrayLiteralProducerKey(funcName: func.name, valueName: info.resultName)
+		let producerKey = arrayLiteralProducerKey(func.name, valueName: info.resultName)
 		let producer = try project.arrayLiteralProducers.get(producerKey) otherwise 'noProducer'
 			pos = pos + 1
 			continue
@@ -175,7 +175,7 @@ function processBlock(project Project, module MaxonModule, globalData GlobalData
 		let widthBytes = primitiveStorageWidthBytes(project, t: elementType)
 		let count = producer.elemNames.count()
 		let bytes = encodeConstantArrayBytes(litValues, producer: producer, widthBytes: widthBytes)
-		let label = mintConstantArrayLabel(funcName: func.name)
+		let label = mintConstantArrayLabel(func.name)
 		project.staticRdataValues.upsert(label, value: bytes)
 		addNamedGlobalData(globalData, name: label, data: bytes)
 		let elementSizeInt = widthBytes
@@ -199,8 +199,8 @@ function extractMmCreateInfo(project Project, op MaxonOp) returns MmCreateInfo
 	end 'notCall'
 	let createName = project.calleeNames.intern("__ManagedMemory.create")
 	match op 'shape'
-		tryCall(result, callee, _, _, _, _, _, _, _) then return matchMmCreateCallee(result: result, callee: callee, createName: createName)
-		call(result, callee, _, _, _, _, _, _) then return matchMmCreateCallee(result: result, callee: callee, createName: createName)
+		tryCall(result, callee, _, _, _, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, createName: createName)
+		call(result, callee, _, _, _, _, _, _) then return matchMmCreateCallee(result, callee: callee, createName: createName)
 		default panic("extractMmCreateInfo: op.name was call/tryCall but match did not extract")
 	end 'shape'
 end 'extractMmCreateInfo'
@@ -286,7 +286,7 @@ end 'LiteralValueTypeProbe'
 // to express an if-inside-match (which the parser rejects).
 function matchLiteralValueType(op MaxonOp, target ByteArray) returns LiteralValueTypeProbe
 	match op 'pickShape'
-		literal(result, _, valueType, _) then return literalValueTypeProbeFor(result: result, valueType: valueType, target: target)
+		literal(result, _, valueType, _) then return literalValueTypeProbeFor(result, valueType: valueType, target: target)
 		default panic("matchLiteralValueType: op.name == literal but match did not extract")
 	end 'pickShape'
 end 'matchLiteralValueType'
@@ -390,7 +390,7 @@ function eraseSetCallsForMm(module MaxonModule, block IrBlock, mmName ByteArray,
 		let opIdx = try block.opRefs.get(pos) otherwise panic("eraseSetCallsForMm: opRefs.get OOB at {pos}")
 		let op = try module.ops.get(opIdx) otherwise panic("eraseSetCallsForMm: ops.get OOB at {opIdx}")
 		if isSetOrSetLengthOnMm(op, mmName: mmName) 'isTarget'
-			_ = try block.opRefs.remove(at: pos) otherwise panic("eraseSetCallsForMm: opRefs.remove OOB at {pos}")
+			_ = try block.opRefs.remove(pos) otherwise panic("eraseSetCallsForMm: opRefs.remove OOB at {pos}")
 			continue
 		end 'isTarget'
 		// Index / count literals interleaved with the set calls — leave

@@ -177,7 +177,7 @@ function recordFuncLifetimes(op StdCallOp, blockId BlockId, opIndex OpIndex, sta
 		param(resultId, _, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
 		// errorReturn uses both retValId and errorFlagId — mirrors `ret`'s
 		// no-define / single-use pattern but with a second use.
-		errorReturn(retValId, errorFlagId) then recordErrorReturnLifetimes(retValId: retValId, errorFlagId: errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
+		errorReturn(retValId, errorFlagId) then recordErrorReturnLifetimes(retValId, errorFlagId: errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
 	end 'rec'
 end 'recordFuncLifetimes'
 
@@ -229,6 +229,17 @@ function recordSysLifetimes(op StdSystemOp, blockId BlockId, opIndex OpIndex, st
 		osAllocPages(resultId, sizeId) then recordDefAndUse(resultId, usedId: sizeId, blockId: blockId, opIndex: opIndex, state: state)
 		osAllocPagesLarge(resultId, sizeId) then recordDefAndUse(resultId, usedId: sizeId, blockId: blockId, opIndex: opIndex, state: state)
 		osFreePages(ptrId, sizeId) then recordTwoUses(ptrId, usedId2: sizeId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) then recordDefAndThreeUses(resultId, usedId1: cStringPtrId, usedId2: flagsId, usedId3: fileModeId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileRead(resultId, fdId, bufPtrId, countId) then recordDefAndThreeUses(resultId, usedId1: fdId, usedId2: bufPtrId, usedId3: countId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileWrite(resultId, fdId, bufPtrId, countId) then recordDefAndThreeUses(resultId, usedId1: fdId, usedId2: bufPtrId, usedId3: countId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileClose(resultId, fdId) then recordDefAndUse(resultId, usedId: fdId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileLseek(resultId, fdId, offsetId, whenceId) then recordDefAndThreeUses(resultId, usedId1: fdId, usedId2: offsetId, usedId3: whenceId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) then recordDefAndTwoUses(resultId, usedId1: cStringPtrId, usedId2: statBufPtrId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileAccess(resultId, cStringPtrId, modeId) then recordDefAndTwoUses(resultId, usedId1: cStringPtrId, usedId2: modeId, blockId: blockId, opIndex: opIndex, state: state)
+		osFileUnlink(resultId, cStringPtrId) then recordDefAndUse(resultId, usedId: cStringPtrId, blockId: blockId, opIndex: opIndex, state: state)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) then recordDefAndThreeUses(resultId, usedId1: fdId, usedId2: bufPtrId, usedId3: bufSizeId, blockId: blockId, opIndex: opIndex, state: state)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) then recordDefAndTwoUses(resultId, usedId1: bufPtrId, usedId2: bufSizeId, blockId: blockId, opIndex: opIndex, state: state)
+		osDirMkdir(resultId, cStringPtrId, modeId) then recordDefAndTwoUses(resultId, usedId1: cStringPtrId, usedId2: modeId, blockId: blockId, opIndex: opIndex, state: state)
 		atomicInc(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
 		atomicDec(addrId) then recordUse(addrId, blockId: blockId, opIndex: opIndex, state: state)
 		atomicXadd(resultId, addrId, valId) then recordDefAndTwoUses(resultId, usedId1: addrId, usedId2: valId, blockId: blockId, opIndex: opIndex, state: state)
@@ -308,6 +319,13 @@ function recordThreeUses(usedId1 ValueId, usedId2 ValueId, usedId3 ValueId, bloc
 	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
 	recordUse(usedId3, blockId: blockId, opIndex: opIndex, state: state)
 end 'recordThreeUses'
+
+function recordDefAndThreeUses(defId ValueId, usedId1 ValueId, usedId2 ValueId, usedId3 ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDef(defId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId1, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId3, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordDefAndThreeUses'
 
 // osGetEnv has one def and four uses; no existing helper fits, so inline here.
 function recordOsGetEnvLifetimes(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)

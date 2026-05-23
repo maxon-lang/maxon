@@ -442,32 +442,6 @@ end 'main'
 30
 ```
 
-<!-- test: associated-value-all-named-reordered -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-union TwoParts
-	none
-	values(a Integer, b Integer)
-end 'TwoParts'
-
-function sum(p TwoParts) returns Integer
-	match p 'handle'
-		none then return 0
-		values(a, b) then return a + b
-	end 'handle'
-end 'sum'
-
-function main() returns ExitCode
-	let p = TwoParts.values(b: 20, a: 10)
-	return sum(p)
-end 'main'
-```
-```exitcode
-30
-```
-
 <!-- test: error.associated-value-positional-second-arg -->
 ```maxon
 
@@ -1418,7 +1392,7 @@ union Shape
 end 'Shape'
 
 function main() returns ExitCode
-	let s = Shape.rect(EnumPoint.create(x: 10, y: 20))
+	let s = Shape.rect(EnumPoint.create(10, y: 20))
 	match s 'handle'
 		circle(r) then return r
 		rect(p) then return p.x + p.y

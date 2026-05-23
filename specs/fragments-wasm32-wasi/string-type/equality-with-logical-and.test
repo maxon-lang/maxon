@@ -30,6 +30,7 @@ module {
     %8 = mir.call @mrt_alloc(%7)
     mir.store %2, %8, 0 width: qword
     mir.store %5, %8, 8 width: qword
+    %10 = mir.mov_imm 65 : i64
     %12 = mir.global_addr @__istr_0
     %13 = mir.mov_imm 40 : i64
     %14 = mir.call @mrt_alloc(%13)
@@ -45,10 +46,18 @@ module {
     %20 = mir.call @mrt_alloc(%19)
     mir.store %14, %20, 0 width: qword
     mir.store %5, %20, 8 width: qword
-    mir.br check_0()
+    mir.br shortAnd.rhs()
+  shortAnd.rhs:
+    %25 = mir.mov_imm 65 : i64
+    %26 = mir.cmp eq, %10, %25
+    mir.br shortAnd.merge(%26)
+  shortAnd.merge:
+    mir.cond_br %30 [then: check_0(), else: check_0.after()]
   check_0:
-    %27 = mir.mov_imm 0 : i64
-    mir.ret %27
+    %28 = mir.mov_imm 0 : i64
+    mir.ret %28
+  check_0.after:
+    mir.ret %5
   }
 }
 ---

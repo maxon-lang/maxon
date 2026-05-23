@@ -246,9 +246,9 @@ union Shape
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.located(Point.create(x: 1, y: 2))
+	var s = Shape.located(Point.create(1, y: 2))
 	match s 'update'
-		located(pos) then pos = Point.create(x: 10, y: 32)
+		located(pos) then pos = Point.create(10, y: 32)
 		nothing then return 0
 	end 'update'
 	match s 'read'

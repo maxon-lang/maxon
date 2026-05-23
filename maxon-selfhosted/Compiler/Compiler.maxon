@@ -43,7 +43,7 @@ export function finalIrString(project Project, codeResult CodeResult, skipStdlib
 	if not skipStdlib 'appendStdlib'
 		let stdlibModule = getCachedStdlibStdModule()
 		if stdlibModule.functions.count() > 0 'haveStdlib'
-			let reachable = collectReachableStdlibFunctions(codeResult: codeResult, stdlibModule: stdlibModule)
+			let reachable = collectReachableStdlibFunctions(codeResult, stdlibModule: stdlibModule)
 			if reachable.count() > 0 'haveReachable'
 				ir = "{ir}\n// Stdlib StdModule (post-dce, post-inliner — pre-MIR-lowering, reachable from main only)\n{stdModuleToStringFiltered(stdlibModule, allowedNames: reachable)}"
 			end 'haveReachable'
@@ -61,7 +61,7 @@ end 'finalIrString'
 function collectReachableStdlibFunctions(codeResult CodeResult, stdlibModule StdModule) returns StdlibFuncNameSet
 	var stdlibNames = StdlibFuncNameSet.create()
 	for func in stdlibModule.functions 'index'
-		stdlibNames.insert(element: func.name)
+		stdlibNames.insert(func.name)
 	end 'index'
 
 	// MIR is populated for both wasm and native pipelines (the native flow
@@ -73,7 +73,7 @@ function collectReachableStdlibFunctions(codeResult CodeResult, stdlibModule Std
 	var worklist = StringArray.create()
 	for name in seeds 'seedWorklist'
 		if stdlibNames.contains(name) and not reachable.contains(name) 'isNew'
-			reachable.insert(element: name)
+			reachable.insert(name)
 			worklist.push(name)
 		end 'isNew'
 	end 'seedWorklist'
@@ -103,7 +103,7 @@ function collectReachableStdlibFunctions(codeResult CodeResult, stdlibModule Std
 					system gives ""
 				end 'extract'
 				if not calleeName.isEmpty() and stdlibNames.contains(calleeName) and not reachable.contains(calleeName) 'newCallee'
-					reachable.insert(element: calleeName)
+					reachable.insert(calleeName)
 					worklist.push(calleeName)
 				end 'newCallee'
 			end 'eachOp'

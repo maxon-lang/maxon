@@ -445,8 +445,8 @@ end 'propagateFloatForArithUnary'
 
 function propagateFloatForMemory(op StdMemoryOp, info SlotInfo) returns bool
 	return match op 'check'
-		loadSlot(resultId, slotId) gives propagateFloatForLoad(resultId: resultId, slotId: slotId, info: info)
-		storeSlot(slotId, valueId) gives propagateFloatForStore(slotId: slotId, valueId: valueId, info: info)
+		loadSlot(resultId, slotId) gives propagateFloatForLoad(resultId, slotId: slotId, info: info)
+		storeSlot(slotId, valueId) gives propagateFloatForStore(slotId, valueId: valueId, info: info)
 	end 'check'
 end 'propagateFloatForMemory'
 
@@ -495,8 +495,8 @@ end 'propagateFloatForStore'
 
 function propagateFloatForCall(op StdCallOp, module StdModule, info SlotInfo) returns bool
 	return match op 'check'
-		call(resultId, callee, _) gives propagateFloatForCallResult(resultId: resultId, callee: callee, module: module, info: info)
-		tryCall(resultId, callee, _, _) gives propagateFloatForCallResult(resultId: resultId, callee: callee, module: module, info: info)
+		call(resultId, callee, _) gives propagateFloatForCallResult(resultId, callee: callee, module: module, info: info)
+		tryCall(resultId, callee, _, _) gives propagateFloatForCallResult(resultId, callee: callee, module: module, info: info)
 		// Indirect, witness, and func-ref results carry no static type info
 		// from the call site alone (they'd need the function-type table),
 		// so we don't taint them as float here. Callees in `param`, `funcRef`,
@@ -508,7 +508,7 @@ function propagateFloatForCall(op StdCallOp, module StdModule, info SlotInfo) re
 		tailCall gives false
 		ret gives false
 		errorReturn gives false
-		param(resultId, _, paramType) gives propagateFloatForParam(resultId: resultId, paramType: paramType, info: info)
+		param(resultId, _, paramType) gives propagateFloatForParam(resultId, paramType: paramType, info: info)
 	end 'check'
 end 'propagateFloatForCall'
 
@@ -1880,6 +1880,17 @@ function maxValueIdInSys(op StdSystemOp) returns ValueId
 		osAllocPages(resultId, sizeId) gives maxOfTwo(resultId, b: sizeId)
 		osAllocPagesLarge(resultId, sizeId) gives maxOfTwo(resultId, b: sizeId)
 		osFreePages(ptrId, sizeId) gives maxOfTwo(ptrId, b: sizeId)
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives maxOfTwo(maxOfThree(resultId, b: cStringPtrId, c: flagsId), b: fileModeId)
+		osFileRead(resultId, fdId, bufPtrId, countId) gives maxOfTwo(maxOfThree(resultId, b: fdId, c: bufPtrId), b: countId)
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives maxOfTwo(maxOfThree(resultId, b: fdId, c: bufPtrId), b: countId)
+		osFileClose(resultId, fdId) gives maxOfTwo(resultId, b: fdId)
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives maxOfTwo(maxOfThree(resultId, b: fdId, c: offsetId), b: whenceId)
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives maxOfThree(resultId, b: cStringPtrId, c: statBufPtrId)
+		osFileAccess(resultId, cStringPtrId, modeId) gives maxOfThree(resultId, b: cStringPtrId, c: modeId)
+		osFileUnlink(resultId, cStringPtrId) gives maxOfTwo(resultId, b: cStringPtrId)
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives maxOfTwo(maxOfThree(resultId, b: fdId, c: bufPtrId), b: bufSizeId)
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives maxOfThree(resultId, b: bufPtrId, c: bufSizeId)
+		osDirMkdir(resultId, cStringPtrId, modeId) gives maxOfThree(resultId, b: cStringPtrId, c: modeId)
 		atomicInc(addrId) gives addrId
 		atomicDec(addrId) gives addrId
 		atomicXadd(resultId, addrId, valId) gives maxOfThree(resultId, b: addrId, c: valId)
@@ -2034,6 +2045,17 @@ function substituteSysOp(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(resultId, sizeId: remapValue(sizeId, remap: remap))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(resultId, sizeId: remapValue(sizeId, remap: remap))
 		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(remapValue(ptrId, remap: remap), sizeId: remapValue(sizeId, remap: remap))
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives StdSystemOp.osFileOpen(resultId, cStringPtrId: remapValue(cStringPtrId, remap: remap), flagsId: remapValue(flagsId, remap: remap), fileModeId: remapValue(fileModeId, remap: remap))
+		osFileRead(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileRead(resultId, fdId: remapValue(fdId, remap: remap), bufPtrId: remapValue(bufPtrId, remap: remap), countId: remapValue(countId, remap: remap))
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileWrite(resultId, fdId: remapValue(fdId, remap: remap), bufPtrId: remapValue(bufPtrId, remap: remap), countId: remapValue(countId, remap: remap))
+		osFileClose(resultId, fdId) gives StdSystemOp.osFileClose(resultId, fdId: remapValue(fdId, remap: remap))
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives StdSystemOp.osFileLseek(resultId, fdId: remapValue(fdId, remap: remap), offsetId: remapValue(offsetId, remap: remap), whenceId: remapValue(whenceId, remap: remap))
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives StdSystemOp.osFileStat(resultId, cStringPtrId: remapValue(cStringPtrId, remap: remap), statBufPtrId: remapValue(statBufPtrId, remap: remap))
+		osFileAccess(resultId, cStringPtrId, modeId) gives StdSystemOp.osFileAccess(resultId, cStringPtrId: remapValue(cStringPtrId, remap: remap), modeId: remapValue(modeId, remap: remap))
+		osFileUnlink(resultId, cStringPtrId) gives StdSystemOp.osFileUnlink(resultId, cStringPtrId: remapValue(cStringPtrId, remap: remap))
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetdents64(resultId, fdId: remapValue(fdId, remap: remap), bufPtrId: remapValue(bufPtrId, remap: remap), bufSizeId: remapValue(bufSizeId, remap: remap))
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetcwd(resultId, bufPtrId: remapValue(bufPtrId, remap: remap), bufSizeId: remapValue(bufSizeId, remap: remap))
+		osDirMkdir(resultId, cStringPtrId, modeId) gives StdSystemOp.osDirMkdir(resultId, cStringPtrId: remapValue(cStringPtrId, remap: remap), modeId: remapValue(modeId, remap: remap))
 		atomicInc(addrId) gives StdSystemOp.atomicInc(remapValue(addrId, remap: remap))
 		atomicDec(addrId) gives StdSystemOp.atomicDec(remapValue(addrId, remap: remap))
 		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(resultId, addrId: remapValue(addrId, remap: remap), valId: remapValue(valId, remap: remap))

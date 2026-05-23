@@ -71,7 +71,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	var a = Point.create(1, y: 2)
 	var b = a
 	b.x = 99
 	a = b
@@ -100,10 +100,10 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point.create(x: 1, y: 2)
+	var a = Point.create(1, y: 2)
 	a.x = 1
 	var b = a
-	b = Point.create(x: 99, y: 99)
+	b = Point.create(99, y: 99)
 	print("{a.x}")
 	return 0
 end 'main'
@@ -135,7 +135,7 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var a = Item.create(color: Color.red, value: 42)
+	var a = Item.create(Color.red, value: 42)
 	a.value = 42
 	var b = a
 	b.value = 99
@@ -160,7 +160,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 10, y: 20)
+	let a = Point.create(10, y: 20)
 	var b = a.clone()
 	b.x = 99
 	if a is not b 'diff'
@@ -225,7 +225,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	let x = Outer.create(a: Inner.create(value: 42), b: 10)
+	let x = Outer.create(Inner.create(42), b: 10)
 	var y = x.clone()
 	y.a.value = 99
 	y.b = 0
@@ -256,8 +256,8 @@ type Callback
 end 'Callback'
 
 function main() returns ExitCode
-	let a = Callback.create(fn: main)
-	let b = Callback.create(fn: main)
+	let a = Callback.create(main)
+	let b = Callback.create(main)
 	if a == b 'eq'
 		return 1
 	end 'eq'
@@ -282,9 +282,9 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
-	let b = Point.create(x: 1, y: 2)
-	let c = Point.create(x: 3, y: 4)
+	let a = Point.create(1, y: 2)
+	let b = Point.create(1, y: 2)
+	let c = Point.create(3, y: 4)
 	var result = 0
 	if a == b 'eq1'
 		result = result + 1
@@ -313,7 +313,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	let a = Point.create(1, y: 2)
 	let b = a
 	if a is b 'same'
 		return 1
@@ -339,7 +339,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let a = Point.create(x: 1, y: 2)
+	let a = Point.create(1, y: 2)
 	let b = a.clone()
 	if a is not b 'diff'
 		return 1
@@ -364,7 +364,7 @@ type Resource
 end 'Resource'
 
 function createAndDrop() returns Integer
-	@heap let r = Resource.create(id: 42)
+	@heap let r = Resource.create(42)
 	return r.id
 end 'createAndDrop'
 
@@ -390,7 +390,7 @@ type Point
 end 'Point'
 
 function makeRef() returns Point
-	let local = Point.create(x: 1, y: 2)
+	let local = Point.create(1, y: 2)
 	return local
 end 'makeRef'
 
@@ -423,7 +423,7 @@ end 'Point'
 function main() returns ExitCode
 	var result = 0
 	if true 'block'
-		@heap let p = Point.create(x: 10, y: 20)
+		@heap let p = Point.create(10, y: 20)
 		result = p.x
 	end 'block'
 	return result
@@ -777,9 +777,9 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	let item = Item.create(value: 7)
+	let item = Item.create(7)
 	arr.push(item)
-	let got = try arr.get(0) otherwise Item.create(value: 0)
+	let got = try arr.get(0) otherwise Item.create(0)
 	return got.value
 end 'main'
 ```
@@ -1624,7 +1624,7 @@ function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'loop'
-		let c = Counter.create(n: i)
+		let c = Counter.create(i)
 		if c.n == 1 'check'
 			result = c.n
 			break
@@ -2043,14 +2043,14 @@ end 'Wrapper'
 
 function compute(flag Integer) returns Integer
 	if flag > 0 'check'
-		@heap let w = Wrapper.create(val: flag)
+		@heap let w = Wrapper.create(flag)
 		return w.val + 1
 	end 'check'
 	return 0
 end 'compute'
 
 function main() returns ExitCode
-	return compute(flag: 5)
+	return compute(5)
 end 'main'
 ```
 ```exitcode
@@ -2446,7 +2446,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 5 'loop'
 		i = i + 1
-		let c = Counter.create(n: i)
+		let c = Counter.create(i)
 		if c.n == 3 'skip'
 			continue
 		end 'skip'
@@ -2481,10 +2481,10 @@ function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'outer'
-		let p = Pair.create(a: i, b: i * 10)
+		let p = Pair.create(i, b: i * 10)
 		var j = 0
 		while j < 3 'inner'
-			let q = Pair.create(a: j, b: j * 10)
+			let q = Pair.create(j, b: j * 10)
 			if p.a == 1 'check'
 				if q.a == 2 'found'
 					result = p.b + q.b
@@ -2523,7 +2523,7 @@ function main() returns ExitCode
 	let items = [10, 20, 30, 40, 50]
 	var result = 0
 	for item in items 'search'
-		let wrapped = Item.create(val: item)
+		let wrapped = Item.create(item)
 		if wrapped.val == 30 'found'
 			result = wrapped.val
 			break
@@ -2562,7 +2562,7 @@ function loadResource() returns Resource throws ResourceError
 end 'loadResource'
 
 function process() returns Integer throws ResourceError
-	@heap let marker = Resource.create(id: 42)
+	@heap let marker = Resource.create(42)
 	let res = try loadResource()
 	return res.id + marker.id
 end 'process'
@@ -2604,9 +2604,9 @@ function failingLookup() returns Integer throws LookupError
 end 'failingLookup'
 
 function compute(flag Integer) returns Integer throws LookupError
-	let w = Wrapper.create(val: flag)
+	let w = Wrapper.create(flag)
 	if w.val > 0 'positive'
-		let inner = Wrapper.create(val: w.val * 2)
+		let inner = Wrapper.create(w.val * 2)
 		let result = try failingLookup()
 		return result + inner.val
 	end 'positive'
@@ -2614,7 +2614,7 @@ function compute(flag Integer) returns Integer throws LookupError
 end 'compute'
 
 function main() returns ExitCode
-	let result = try compute(flag: 5) otherwise 'err'
+	let result = try compute(5) otherwise 'err'
 		return 77
 	end 'err'
 	return result
@@ -2645,16 +2645,16 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function firstOrDefault(arr WrapperArray) returns Wrapper
-	let fallback = Wrapper.create(value: 0)
+	let fallback = Wrapper.create(0)
 	let result = try arr.get(0) otherwise fallback
 	return result
 end 'firstOrDefault'
 
 function main() returns ExitCode
 	var arr = WrapperArray.create()
-	let w = Wrapper.create(value: 42)
+	let w = Wrapper.create(42)
 	arr.push(w)
-	let got = firstOrDefault(arr: arr)
+	let got = firstOrDefault(arr)
 	return got.value
 end 'main'
 ```
@@ -2687,11 +2687,11 @@ function isSame(a Box, b Box) returns Integer
 end 'isSame'
 
 function main() returns ExitCode
-	let x = Box.create(value: 10)
+	let x = Box.create(10)
 	let y = x
-	let z = Box.create(value: 10)
-	let same = isSame(a: x, b: y)
-	let diff = isSame(a: x, b: z)
+	let z = Box.create(10)
+	let same = isSame(x, b: y)
+	let diff = isSame(x, b: z)
 	return same + diff
 end 'main'
 ```

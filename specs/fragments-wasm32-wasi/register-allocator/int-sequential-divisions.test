@@ -1,0 +1,33 @@
+// Test: int-sequential-divisions
+function main() returns ExitCode
+	let a = 100
+	let b = 5
+	let c = 84
+	let d = 4
+	return a / b + c / d
+end 'main'
+---
+ExitCode: 41
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 100 : i64
+    %1 = mir.mov_imm 5 : i64
+    %2 = mir.mov_imm 84 : i64
+    %3 = mir.mov_imm 4 : i64
+    %6 = mir.div.i64 %0, %1
+    %9 = mir.div.i64 %2, %3
+    %10 = mir.add.i64 %6, %9
+    %11 = mir.mov_imm 255 : i64
+    %12 = mir.cmp ugt, %10, %11
+    mir.cond_br %12 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %13 = mir.global_addr @__panic_msg_0
+    %14 = mir.call @mrt_panic(%13)
+  __range_ok_0:
+    mir.ret %10
+  }
+}
+---

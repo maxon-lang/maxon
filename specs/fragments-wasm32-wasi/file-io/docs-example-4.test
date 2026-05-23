@@ -1,0 +1,79 @@
+// Test: docs-example-4
+function main() returns ExitCode
+	try File.delete(FilePath from "temp/old_file.txt") otherwise 'err'
+		print("Could not delete file")
+		return 1
+	end 'err'
+	print("File deleted")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 17 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %11, %12 = mir.try_call @File.delete(%10)
+    %14 = mir.cmp ne, %12, %6
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    %16 = mir.global_addr @__istr_1
+    %17 = mir.mov_imm 40 : i64
+    %18 = mir.call @mrt_alloc(%17)
+    mir.store %16, %18, 0 width: qword
+    %19 = mir.mov_imm 21 : i64
+    mir.store %19, %18, 8 width: qword
+    %20 = mir.mov_imm -2 : i64
+    mir.store %20, %18, 16 width: qword
+    mir.store %5, %18, 24 width: qword
+    mir.store %6, %18, 32 width: qword
+    %23 = mir.mov_imm 16 : i64
+    %24 = mir.call @mrt_alloc(%23)
+    mir.store %18, %24, 0 width: qword
+    mir.store %5, %24, 8 width: qword
+    %40 = mir.load %24, 0 width: qword
+    %41 = mir.load %40, 0 width: qword
+    %42 = mir.load %40, 8 width: qword
+    %43 = mir.call @mrt_write_stdout(%41, %42)
+    mir.ret %5
+  try_0.merge:
+    %29 = mir.global_addr @__istr_2
+    %30 = mir.mov_imm 40 : i64
+    %31 = mir.call @mrt_alloc(%30)
+    mir.store %29, %31, 0 width: qword
+    %32 = mir.mov_imm 12 : i64
+    mir.store %32, %31, 8 width: qword
+    %33 = mir.mov_imm -2 : i64
+    mir.store %33, %31, 16 width: qword
+    mir.store %5, %31, 24 width: qword
+    mir.store %6, %31, 32 width: qword
+    %36 = mir.mov_imm 16 : i64
+    %37 = mir.call @mrt_alloc(%36)
+    mir.store %31, %37, 0 width: qword
+    mir.store %5, %37, 8 width: qword
+    %44 = mir.load %37, 0 width: qword
+    %45 = mir.load %44, 0 width: qword
+    %46 = mir.load %44, 8 width: qword
+    %47 = mir.call @mrt_write_stdout(%45, %46)
+    mir.ret %6
+  }
+}
+---

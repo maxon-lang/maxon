@@ -13,102 +13,27 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 200
-RequiredIR: ```
-=== maxon
+---
+// CompiledIR
 module {
-  func @compute() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.scope_end []
-    maxon.return %0
-  }
-  func @main() -> i64 {
-  entry:
-    %1 = maxon.call @compute
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1}
-    %2 = maxon.call @compute
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
-    %4 = maxon.literal {value = 256 : i64}
-    %5 = maxon.binop %3, %4 {op = mod}
-    %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.binop %5, %6 {op = lt}
-    %8 = maxon.literal {value = 4294967295 : i64}
-    %9 = maxon.binop %5, %8 {op = gt}
-    %10 = maxon.binop %7, %9 {op = or}
-    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-call-result-used-later.test:12: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b]
-    maxon.return %5
-  }
-}
-=== standard
-module {
-  func @compute() -> i64 {
-  entry:
-    %0 = arith.constant {value = 100 : i64}
-    func.return %0
-  }
-  func @main() -> u32 {
-  entry:
-    %1 = func.call @compute
-    %2 = func.call @compute
-    %3 = arith.addi %1, %2
-    %4 = arith.constant {value = 256 : i64}
-    %5 = arith.remsi %3, %4
-    %6 = arith.constant {value = 0 : i64}
-    %7 = arith.cmpi lt %5, %6
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.cmpi gt %5, %8
-    %10 = arith.ori1 %7, %9
-    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_0
-    %12 = std.ptr_to_i64 %11
-    std.call_runtime @mrt_panic %12
-  __range_ok_0:
-    func.return %5
-  }
-}
-=== x86
-module {
-  func @compute() -> i64 {
-  entry:
-    x64.mov rax, 100
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.call compute
-    x64.mov [rbp-8], rax
-    x64.call compute
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov rax, 256
-    x64.mov rbx, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv rbx
-    x64.xor ecx, ecx
-    x64.mov eax, 4294967295
-    x64.cmp rdx, rax
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r8d, 256
+    x64.mov eax, 200
+    x64.xor edx, edx
+    x64.idiv r8
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

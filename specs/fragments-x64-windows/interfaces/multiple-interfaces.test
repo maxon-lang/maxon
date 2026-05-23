@@ -23,8 +23,8 @@ type Point implements Hashable, Equatable
 end 'Point'
 
 function main() returns ExitCode
-	let p1 = Point.create(x: 3, y: 4)
-	let p2 = Point.create(x: 3, y: 4)
+	let p1 = Point.create(3, y: 4)
+	let p2 = Point.create(3, y: 4)
 	print("{p1.hash()} {p1.equals(p2)}\n")
 	return 0
 end 'main'
@@ -55,15 +55,19 @@ module {
   }
   func @Point.equals(rcx: i64, rdx: i64) -> i1 {
   entry:
+    x64.mov r8, [rdx+0] (8b)
+    x64.mov r9, [rcx+0] (8b)
+    x64.xor esi, esi
+    x64.cmp r9, r8
+    x64.jne shortAnd.merge
+  shortAnd.rhs:
     x64.mov r8, [rdx+8] (8b)
     x64.mov r9, [rcx+8] (8b)
-    x64.mov rsi, [rdx+0] (8b)
-    x64.mov rdi, [rcx+0] (8b)
     x64.cmp r9, r8
     x64.sete r8
-    x64.cmp rdi, rsi
-    x64.sete r9
-    x64.and r9, r8
+    x64.mov rsi, r8
+  shortAnd.merge:
+    x64.test rsi, rsi
     x64.je c1_0.after
   c1_0:
     x64.mov r8d, 1

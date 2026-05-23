@@ -25,7 +25,7 @@ type Counter
 		end 'create'
 end 'Counter'
 
-var state = Counter.create(value: 0)
+var state = Counter.create(0)
 
 function main() returns ExitCode
 		state.value = 42
@@ -50,7 +50,7 @@ type State
 		end 'create'
 end 'State'
 
-var state = State.create(items: ByteArray.create())
+var state = State.create(ByteArray.create())
 
 function main() returns ExitCode
 		state.items.push(10)
@@ -83,7 +83,7 @@ type Outer
 		end 'create'
 end 'Outer'
 
-var state = Outer.create(inner: Inner.create(x: 0))
+var state = Outer.create(Inner.create(0))
 
 function main() returns ExitCode
 		state.inner.x = 99

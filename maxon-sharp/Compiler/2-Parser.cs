@@ -17893,10 +17893,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var argLocations = new (IrBlock<MaxonOp>? block, int opIndex)[args.Length];
 
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-      ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
-      for (int i = 0; i < args.Length; i++)
-        if (args[i] != null && argLocations[i].block == null)
-          argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
+      var firstLabelToken = Current();
+      throw new CompileError(ErrorCode.ParserFirstArgCannotBeNamed,
+        "first arg cannot be named",
+        firstLabelToken.Line, firstLabelToken.Column);
     } else {
       if (firstPositionalIndex >= callee.ParamTypes.Count) {
         throw new CompileError(ErrorCode.SemanticWrongArgCount,
@@ -17974,9 +17974,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var args = new MaxonValue?[enumCase.AssociatedValues!.Count];
     Expect(TokenType.LeftParen);
 
-    // First argument — positional or named
+    // First argument — must be positional
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-      ParseEnumNamedArg(enumCase, args);
+      var firstLabelToken = Current();
+      throw new CompileError(ErrorCode.ParserFirstArgCannotBeNamed,
+        "first arg cannot be named",
+        firstLabelToken.Line, firstLabelToken.Column);
     } else {
       var argExpr = ParseExpression();
       var argVal = ResolveExprValue(argExpr);

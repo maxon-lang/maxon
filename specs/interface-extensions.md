@@ -114,7 +114,7 @@ type IntList implements Countable
 end 'IntList'
 
 function main() returns ExitCode
-	let list = IntList.create(data: 5)
+	let list = IntList.create(5)
 	return list.count()
 end 'main'
 ```
@@ -151,7 +151,7 @@ type Number implements Summable
 end 'Number'
 
 function main() returns ExitCode
-	let num = Number.create(n: 21)
+	let num = Number.create(21)
 	return num.doubled()
 end 'main'
 ```
@@ -198,8 +198,8 @@ type TypeB implements Valued
 end 'TypeB'
 
 function main() returns ExitCode
-	let ta = TypeA.create(a: 5)
-	let tb = TypeB.create(b: 10)
+	let ta = TypeA.create(5)
+	let tb = TypeB.create(10)
 	return ta.valPlusTen() + tb.valPlusTen()
 end 'main'
 ```
@@ -236,7 +236,7 @@ type Amount implements Scalable
 end 'Amount'
 
 function main() returns ExitCode
-	let a = Amount.create(amount: 7)
+	let a = Amount.create(7)
 	return a.scale(6)
 end 'main'
 ```
@@ -266,7 +266,7 @@ end 'SimplePoint'
 
 extension Pointlike
 	function asSimple() returns SimplePoint
-		return SimplePoint.create(x: self.getX(), y: self.getY())
+		return SimplePoint.create(self.getX(), y: self.getY())
 	end 'asSimple'
 end 'Pointlike'
 
@@ -288,7 +288,7 @@ type Coord implements Pointlike
 end 'Coord'
 
 function main() returns ExitCode
-	let c = Coord.create(cx: 10, cy: 32)
+	let c = Coord.create(10, cy: 32)
 	let p = c.asSimple()
 	return p.x + p.y
 end 'main'

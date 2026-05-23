@@ -1,0 +1,27 @@
+// Test: int-division-fixed-regs
+function main() returns ExitCode
+	let a = 126
+	let b = 3
+	return a / b
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 126 : i64
+    %1 = mir.mov_imm 3 : i64
+    %4 = mir.div.i64 %0, %1
+    %5 = mir.mov_imm 255 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

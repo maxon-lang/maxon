@@ -9,58 +9,13 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 10 : i64}
-    %2 = maxon.binop %0, %1 {op = eq}
-    maxon.cond_br %2 [then: check_0, else: other_0]
-  check_0:
-    %3 = maxon.literal {value = 42 : i64}
-    maxon.scope_end [x]
-    maxon.return %3
-  other_0:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.scope_end [x]
-    maxon.return %4
-  }
-}
-=== standard
-module {
-  func @main() -> u32 {
-  entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 10 : i64}
-    %2 = arith.cmpi eq %0, %1
-    cf.cond_br %2 [then: check_0, else: other_0]
-  check_0:
-    %3 = arith.constant {value = 42 : i64}
-    func.return %3
-  other_0:
-    %4 = arith.constant {value = 0 : i64}
-    func.return %4
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.mov rax, 10
-    x64.mov rcx, 10
-    x64.cmp rax, rcx
-    x64.jne main.other_0
-  check_0:
-    x64.mov rax, 42
-    x64.ret
-  other_0:
-    x64.xor eax, eax
-    x64.ret
-  }
-}
-```
 ---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov r8d, 42
+    x64.ret
+  }
+}
 ---

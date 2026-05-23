@@ -907,7 +907,7 @@ function makeBox(flag bool) returns Box throws MyError
 	if flag 'check'
 		throw MyError.failed
 	end 'check'
-	return Box.create(value: 7)
+	return Box.create(7)
 end 'makeBox'
 
 function getBoxValue(flag bool) returns Integer

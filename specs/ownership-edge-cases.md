@@ -28,7 +28,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	@heap let p = Point.create(x: 1, y: 2)
+	@heap let p = Point.create(1, y: 2)
 	return p.x
 end 'main'
 ```
@@ -66,7 +66,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	@heap let a = Box.create(value: 42)
+	@heap let a = Box.create(42)
 	let b = a
 	return b.value
 end 'main'
@@ -105,9 +105,9 @@ type Tag
 end 'Tag'
 
 function main() returns ExitCode
-	var t = Tag.create(id: 1)
-	t = Tag.create(id: 2)
-	t = Tag.create(id: 3)
+	var t = Tag.create(1)
+	t = Tag.create(2)
+	t = Tag.create(3)
 	return t.id
 end 'main'
 ```
@@ -161,7 +161,7 @@ end 'Widget'
 function main() returns ExitCode
 	var result = 0
 	if true 'inner'
-		@heap let w = Widget.create(id: 7)
+		@heap let w = Widget.create(7)
 		result = w.id
 	end 'inner'
 	return result
@@ -201,7 +201,7 @@ type Token
 end 'Token'
 
 function makeToken(k Integer) returns Token
-	let t = Token.create(kind: k)
+	let t = Token.create(k)
 	return t
 end 'makeToken'
 
@@ -245,9 +245,9 @@ type Num
 end 'Num'
 
 function main() returns ExitCode
-	var a = Num.create(v: 10)
+	var a = Num.create(10)
 	let b = a
-	a = Num.create(v: 20)
+	a = Num.create(20)
 	return b.v + a.v
 end 'main'
 ```
@@ -297,7 +297,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 4 'loop'
-		@heap let c = Counter.create(n: i)
+		@heap let c = Counter.create(i)
 		total = total + c.n
 		i = i + 1
 	end 'loop'
@@ -361,7 +361,7 @@ end 'Step'
 function main() returns ExitCode
 	var i = 0
 	while i < 10 'loop'
-		@heap let s = Step.create(val: i)
+		@heap let s = Step.create(i)
 		if s.val == 3 'stop'
 			break
 		end 'stop'
@@ -428,7 +428,7 @@ function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		@heap let item = Item.create(v: i)
+		@heap let item = Item.create(i)
 		i = i + 1
 		if item.v == 2 'skip'
 			continue
@@ -508,8 +508,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	let inner = Inner.create(val: 55)
-	let outer = Outer.create(child: inner)
+	let inner = Inner.create(55)
+	let outer = Outer.create(inner)
 	return outer.child.val
 end 'main'
 ```
@@ -572,7 +572,7 @@ type C
 end 'C'
 
 function main() returns ExitCode
-	let c = C.create(b: B.create(a: A.create(n: 7)))
+	let c = C.create(B.create(A.create(7)))
 	return c.b.a.n
 end 'main'
 ```
@@ -640,9 +640,9 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	let old = Payload.create(data: 1)
-	var c = Container.create(payload: old)
-	c.setPayload(Payload.create(data: 2))
+	let old = Payload.create(1)
+	var c = Container.create(old)
+	c.setPayload(Payload.create(2))
 	return c.payload.data
 end 'main'
 ```
@@ -710,10 +710,10 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(v: Val.create(n: 0))
-	h.set(Val.create(n: 10))
-	h.set(Val.create(n: 20))
-	h.set(Val.create(n: 30))
+	var h = Holder.create(Val.create(0))
+	h.set(Val.create(10))
+	h.set(Val.create(20))
+	h.set(Val.create(30))
 	return h.v.n
 end 'main'
 ```
@@ -791,10 +791,10 @@ typealias NodeArray = Array with Node
 function main() returns ExitCode
 	var arr = NodeArray.create()
 	if true 'scope'
-		let n = Node.create(id: 10)
+		let n = Node.create(10)
 		arr.push(n)
 	end 'scope'
-	let got = try arr.get(0) otherwise Node.create(id: -1)
+	let got = try arr.get(0) otherwise Node.create(-1)
 	return got.id
 end 'main'
 ```
@@ -860,8 +860,8 @@ typealias NodeArray = Array with Node
 
 function main() returns ExitCode
 	var arr = NodeArray.create()
-	arr.push(Node.create(id: 1))
-	arr.push(Node.create(id: 2))
+	arr.push(Node.create(1))
+	arr.push(Node.create(2))
 	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
 		return 99
 	end 'err'
@@ -939,9 +939,9 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	arr.push(Item.create(value: 100))
-	try arr.set(0, value: Item.create(value: 200)) otherwise panic("test invariant: set OOB")
-	let got = try arr.get(0) otherwise Item.create(value: -1)
+	arr.push(Item.create(100))
+	try arr.set(0, value: Item.create(200)) otherwise panic("test invariant: set OOB")
+	let got = try arr.get(0) otherwise Item.create(-1)
 	return got.value
 end 'main'
 ```
@@ -1016,9 +1016,9 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	arr.push(Item.create(value: 1))
-	arr.push(Item.create(value: 2))
-	arr.push(Item.create(value: 3))
+	arr.push(Item.create(1))
+	arr.push(Item.create(2))
+	arr.push(Item.create(3))
 	arr.clear()
 	return arr.count()
 end 'main'
@@ -1098,9 +1098,9 @@ typealias ItemArray = Array with Item
 
 function fill() returns Integer
 	var arr = ItemArray.create()
-	arr.push(Item.create(value: 10))
-	arr.push(Item.create(value: 20))
-	arr.push(Item.create(value: 30))
+	arr.push(Item.create(10))
+	arr.push(Item.create(20))
+	arr.push(Item.create(30))
 	return arr.count()
 end 'fill'
 
@@ -1186,7 +1186,7 @@ function main() returns ExitCode
 	var arr = EntryArray.create()
 	var i = 0
 	while i < 5 'push'
-		arr.push(Entry.create(key: i))
+		arr.push(Entry.create(i))
 		i = i + 1
 	end 'push'
 	var total = 0
@@ -1312,12 +1312,12 @@ typealias ValArray = Array with Val
 
 function main() returns ExitCode
 	var arr = ValArray.create()
-	arr.push(Val.create(n: 10))
-	arr.push(Val.create(n: 30))
-	arr.insert(1, value: Val.create(n: 20))
-	let a = try arr.get(0) otherwise Val.create(n: -1)
-	let b = try arr.get(1) otherwise Val.create(n: -1)
-	let c = try arr.get(2) otherwise Val.create(n: -1)
+	arr.push(Val.create(10))
+	arr.push(Val.create(30))
+	arr.insert(1, value: Val.create(20))
+	let a = try arr.get(0) otherwise Val.create(-1)
+	let b = try arr.get(1) otherwise Val.create(-1)
+	let c = try arr.get(2) otherwise Val.create(-1)
 	return a.n + b.n + c.n
 end 'main'
 ```
@@ -1411,9 +1411,9 @@ typealias ValArray = Array with Val
 
 function main() returns ExitCode
 	var arr = ValArray.create()
-	arr.push(Val.create(n: 1))
-	arr.push(Val.create(n: 2))
-	arr.push(Val.create(n: 3))
+	arr.push(Val.create(1))
+	arr.push(Val.create(2))
+	arr.push(Val.create(3))
 	let removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
@@ -1508,8 +1508,8 @@ typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
 	var arr = WrapperArray.create()
-	arr.push(Wrapper.create(inner: Inner.create(v: 1)))
-	arr.push(Wrapper.create(inner: Inner.create(v: 2)))
+	arr.push(Wrapper.create(Inner.create(1)))
+	arr.push(Wrapper.create(Inner.create(2)))
 	return arr.count()
 end 'main'
 ```
@@ -1594,9 +1594,9 @@ type Step
 end 'Step'
 
 function compute(flag bool) returns Integer
-	@heap let outer = Step.create(n: 1)
+	@heap let outer = Step.create(1)
 	if flag 'inner'
-		@heap let inner = Step.create(n: 2)
+		@heap let inner = Step.create(2)
 		return outer.n + inner.n
 	end 'inner'
 	return outer.n
@@ -1649,13 +1649,13 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function getFirst(arr ItemArray) returns Item
-	let elem = try arr.get(0) otherwise Item.create(value: -1)
+	let elem = try arr.get(0) otherwise Item.create(-1)
 	return elem
 end 'getFirst'
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	arr.push(Item.create(value: 77))
+	arr.push(Item.create(77))
 	let result = getFirst(arr)
 	return result.value
 end 'main'
@@ -1719,10 +1719,10 @@ type Cfg
 	end 'create'
 end 'Cfg'
 
-var globalCfg = Cfg.create(level: 0)
+var globalCfg = Cfg.create(0)
 
 function setup()
-	globalCfg = Cfg.create(level: 42)
+	globalCfg = Cfg.create(42)
 end 'setup'
 
 function main() returns ExitCode
@@ -1774,10 +1774,10 @@ type State
 	end 'create'
 end 'State'
 
-var g = State.create(val: 0)
+var g = State.create(0)
 
 function step(n Integer)
-	g = State.create(val: n)
+	g = State.create(n)
 end 'step'
 
 function main() returns ExitCode
@@ -1900,7 +1900,7 @@ function massOf(s Shape) returns Integer
 end 'massOf'
 
 function main() returns ExitCode
-	let s = Shape.solid(Body.create(mass: 5))
+	let s = Shape.solid(Body.create(5))
 	return massOf(s)
 end 'main'
 ```
@@ -1948,7 +1948,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let offset = 5
-	let result = apply(f: function(n Integer) gives n + offset, x: 10)
+	let result = apply(function(n Integer) gives n + offset, x: 10)
 	return result
 end 'main'
 ```
@@ -1990,8 +1990,8 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let cfg = Config.create(level: 3)
-	let result = apply(f: function(_ Integer) gives cfg.level, x: 0)
+	let cfg = Config.create(3)
+	let result = apply(function(_ Integer) gives cfg.level, x: 0)
 	return result
 end 'main'
 ```
@@ -2038,7 +2038,7 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	let got = try arr.get(0) otherwise Item.create(value: 99)
+	let got = try arr.get(0) otherwise Item.create(99)
 	return got.value
 end 'main'
 ```
@@ -2096,7 +2096,7 @@ typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
-	let t = Token.create(id: 7)
+	let t = Token.create(7)
 	let node = managedList.insertFirst(t)
 	return node.value().id
 end 'main'
@@ -2154,7 +2154,7 @@ typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
-	let node = managedList.insertFirst(Token.create(id: 9))
+	let node = managedList.insertFirst(Token.create(9))
 	let removed = managedList.remove(node)
 	return removed.id + managedList.count()
 end 'main'
@@ -2212,9 +2212,9 @@ typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
-	managedList.insertLast(Token.create(id: 1))
-	managedList.insertLast(Token.create(id: 2))
-	managedList.insertLast(Token.create(id: 3))
+	managedList.insertLast(Token.create(1))
+	managedList.insertLast(Token.create(2))
+	managedList.insertLast(Token.create(3))
 	managedList.clear()
 	return managedList.count()
 end 'main'
@@ -2300,8 +2300,8 @@ typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
-	var node = managedList.insertFirst(Token.create(id: 1))
-	node.setValue(Token.create(id: 99))
+	var node = managedList.insertFirst(Token.create(1))
+	node.setValue(Token.create(99))
 	return node.value().id
 end 'main'
 ```
@@ -2367,9 +2367,9 @@ typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
 	var scores = ScoreArray.create()
-	scores.push(Score.create(pts: 10))
-	scores.push(Score.create(pts: 20))
-	scores.push(Score.create(pts: 30))
+	scores.push(Score.create(10))
+	scores.push(Score.create(20))
+	scores.push(Score.create(30))
 	var total = 0
 	for s in scores 'loop'
 		total = total + s.pts
@@ -2475,7 +2475,7 @@ type Data
 end 'Data'
 
 function main() returns ExitCode
-	@heap let a = Data.create(n: 7)
+	@heap let a = Data.create(7)
 	let b = a
 	let c = a
 	return a.n + b.n + c.n
@@ -2520,10 +2520,10 @@ typealias Grid = Array with CellArray
 function main() returns ExitCode
 	var grid = Grid.create()
 	var row1 = CellArray.create()
-	row1.push(Cell.create(val: 1))
-	row1.push(Cell.create(val: 2))
+	row1.push(Cell.create(1))
+	row1.push(Cell.create(2))
 	var row2 = CellArray.create()
-	row2.push(Cell.create(val: 3))
+	row2.push(Cell.create(3))
 	grid.push(row1)
 	grid.push(row2)
 	return grid.count()
@@ -2651,9 +2651,9 @@ type Bucket
 end 'Bucket'
 
 function fill() returns Integer
-	var b = Bucket.create(items: EntryArray.create())
-	b.items.push(Entry.create(val: 10))
-	b.items.push(Entry.create(val: 20))
+	var b = Bucket.create(EntryArray.create())
+	b.items.push(Entry.create(10))
+	b.items.push(Entry.create(20))
 	return b.items.count()
 end 'fill'
 
@@ -2736,11 +2736,11 @@ type Pair
 end 'Pair'
 
 function makePair(x Integer, y Integer) returns Pair
-	return Pair.create(a: x, b: y)
+	return Pair.create(x, b: y)
 end 'makePair'
 
 function main() returns ExitCode
-	let p = makePair(x: 3, y: 7)
+	let p = makePair(3, y: 7)
 	return p.a + p.b
 end 'main'
 ```
@@ -2789,12 +2789,12 @@ type Wrapper
 end 'Wrapper'
 
 function wrap(i Inner) returns Wrapper
-	return Wrapper.create(inner: i)
+	return Wrapper.create(i)
 end 'wrap'
 
 function main() returns ExitCode
-	let i = Inner.create(value: 5)
-	let w = wrap(i: i)
+	let i = Inner.create(5)
+	let w = wrap(i)
 	return w.inner.value
 end 'main'
 ```
@@ -3264,7 +3264,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	let t = makePair(a: 5, b: 3)
+	let t = makePair(5, b: 3)
 	return t.0 + t.1
 end 'main'
 ```
@@ -3331,7 +3331,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let t = (1, Point.create(x: 10, y: 20))
+	let t = (1, Point.create(10, y: 20))
 	return t.0
 end 'main'
 ```
@@ -3381,7 +3381,7 @@ function acceptPoint(p Point) returns Integer
 end 'acceptPoint'
 
 function main() returns ExitCode
-	return acceptPoint(Point.create(x: 3, y: 4))
+	return acceptPoint(Point.create(3, y: 4))
 end 'main'
 ```
 ```exitcode
@@ -3504,7 +3504,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(value: 0)
+	var c = Counter.create(0)
 	c.increment()
 	return c.value
 end 'main'
@@ -3539,8 +3539,8 @@ function extractData(w Wrapper) returns Data
 end 'extractData'
 
 function main() returns ExitCode
-	let d = Data.create(value: 42)
-	let w = Wrapper.create(data: d)
+	let d = Data.create(42)
+	let w = Wrapper.create(d)
 	let result = extractData(w)
 	return result.value
 end 'main'
@@ -3647,7 +3647,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	let x = Outer.create(a: Inner.create(value: 42), b: 10)
+	let x = Outer.create(Inner.create(42), b: 10)
 	var y = x.clone()
 	y.a.value = 99
 	return x.a.value
@@ -3803,9 +3803,9 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Pair.create(first: 10, second: 20)
+	let p = Pair.create(10, second: 20)
 	let arr = [p]
-	let elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
+	let elem = try arr.get(0) otherwise Pair.create(0, second: 0)
 	return elem.first + elem.second
 end 'main'
 ```
@@ -3828,11 +3828,11 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p1 = Point.create(x: 1, y: 2)
-	let p2 = Point.create(x: 3, y: 4)
+	let p1 = Point.create(1, y: 2)
+	let p2 = Point.create(3, y: 4)
 	let points = [p1, p2]
-	let pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
-	let pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
+	let pt0 = try points.get(0) otherwise Point.create(0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(0, y: 0)
 	return pt0.x + pt1.y
 end 'main'
 ```
@@ -3858,13 +3858,13 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray.create()
 
 function pushLocal()
-	let item = Item.create(value: 123)
+	let item = Item.create(123)
 	globalArr.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
 	pushLocal()
-	let elem = try globalArr.get(0) otherwise Item.create(value: -1)
+	let elem = try globalArr.get(0) otherwise Item.create(-1)
 	return elem.value
 end 'main'
 ```
@@ -3892,7 +3892,7 @@ var globalArr = ItemArray.create()
 function main() returns ExitCode
 	var i = 0
 	while i < 10 'push'
-		globalArr.push(Item.create(value: i))
+		globalArr.push(Item.create(i))
 		i = i + 1
 	end 'push'
 	var total = 0
@@ -3936,13 +3936,13 @@ end 'Outer'
 
 function initOuter(o Outer)
 		if not o.initialized 'init'
-				o.inner = Inner.create(items: IntArray.create(), value: 42)
+				o.inner = Inner.create(IntArray.create(), value: 42)
 				o.initialized = true
 		end 'init'
 end 'initOuter'
 
 function main() returns ExitCode
-		var o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
+		var o = Outer.create(Inner.create(IntArray.create(), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -3993,7 +3993,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let prefix = "hello"
-	let result = apply(f: function(_ Integer) gives prefix, x: 0)
+	let result = apply(function(_ Integer) gives prefix, x: 0)
 	print(result)
 	return 0
 end 'main'
@@ -4022,7 +4022,7 @@ typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
 	var managedList = ItemManagedList.create()
-	let node = managedList.insertFirst(Item.create(value: 50))
+	let node = managedList.insertFirst(Item.create(50))
 	managedList.remove(node)
 	return managedList.count()
 end 'main'
@@ -4052,7 +4052,7 @@ type Outer
 		end 'create'
 end 'Outer'
 
-var state = Outer.create(inner: Inner.create(x: 0))
+var state = Outer.create(Inner.create(0))
 
 function main() returns ExitCode
 		state.inner.x = 99
@@ -4119,9 +4119,9 @@ typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
 		var deps = DependencyArray.create()
-		deps.push(Dependency.create(key: QueryKey.sourceFile("test.maxon")))
-		deps.push(Dependency.create(key: QueryKey.allModule))
-		deps.push(Dependency.create(key: QueryKey.sourceFile("other.maxon")))
+		deps.push(Dependency.create(QueryKey.sourceFile("test.maxon")))
+		deps.push(Dependency.create(QueryKey.allModule))
+		deps.push(Dependency.create(QueryKey.sourceFile("other.maxon")))
 		return deps.count()
 end 'main'
 ```
@@ -4154,7 +4154,7 @@ typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
 		var m = MyKeyMap.create()
-		try m.insert(key: MyKey.create(value: 1), value: 42) otherwise ignore
+		try m.insert(MyKey.create(1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
 ```

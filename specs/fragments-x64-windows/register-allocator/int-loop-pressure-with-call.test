@@ -24,245 +24,45 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 55
-RequiredIR: ```
-=== maxon
+---
+// CompiledIR
 module {
-  func @identity(x: i64) -> i64 {
-  entry:
-    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
-    maxon.scope_end [x]
-    maxon.return %0
-  }
-  func @main() -> i64 {
-  entry:
-    %1 = maxon.literal {value = 1 : i64}
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1}
-    %3 = maxon.literal {value = 3 : i64}
-    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 4 : i64}
-    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1}
-    %5 = maxon.literal {value = 5 : i64}
-    maxon.assign %5 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.literal {value = 6 : i64}
-    maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1}
-    %7 = maxon.literal {value = 0 : i64}
-    maxon.assign %7 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br loop_0.header
-  loop_0.header:
-    %8 = maxon.literal {value = 3 : i64}
-    %9 = maxon.var_ref {var = i} {type = i64}
-    %10 = maxon.binop %9, %8 {op = lt}
-    maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
-  loop_0:
-    %11 = maxon.var_ref {var = b} {type = i64}
-    %12 = maxon.call @identity %11
-    %13 = maxon.var_ref {var = a} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add}
-    maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
-    %15 = maxon.var_ref {var = d} {type = i64}
-    %16 = maxon.call @identity %15
-    %17 = maxon.var_ref {var = c} {type = i64}
-    %18 = maxon.binop %17, %16 {op = add}
-    maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
-    %19 = maxon.var_ref {var = f} {type = i64}
-    %20 = maxon.call @identity %19
-    %21 = maxon.var_ref {var = e} {type = i64}
-    %22 = maxon.binop %21, %20 {op = add}
-    maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
-    %23 = maxon.literal {value = 1 : i64}
-    %24 = maxon.var_ref {var = i} {type = i64}
-    %25 = maxon.binop %24, %23 {op = add}
-    maxon.assign %25 {var = i} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br loop_0.header
-  loop_0.exit:
-    %26 = maxon.var_ref {var = a} {type = i64}
-    %27 = maxon.var_ref {var = c} {type = i64}
-    %28 = maxon.binop %26, %27 {op = add}
-    %29 = maxon.var_ref {var = d} {type = i64}
-    %30 = maxon.binop %28, %29 {op = add}
-    %31 = maxon.var_ref {var = e} {type = i64}
-    %32 = maxon.binop %30, %31 {op = add}
-    %33 = maxon.var_ref {var = f} {type = i64}
-    %34 = maxon.binop %32, %33 {op = add}
-    %35 = maxon.literal {value = 256 : i64}
-    %36 = maxon.binop %34, %35 {op = mod}
-    %37 = maxon.literal {value = 0 : i64}
-    %38 = maxon.binop %36, %37 {op = lt}
-    %39 = maxon.literal {value = 4294967295 : i64}
-    %40 = maxon.binop %36, %39 {op = gt}
-    %41 = maxon.binop %38, %40 {op = or}
-    maxon.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-loop-pressure-with-call.test:23: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [a, b, c, d, e, f, i]
-    maxon.return %36
-  }
-}
-=== standard
-module {
-  func @identity(x: i64) -> i64 {
-  entry:
-    %0 = func.param x : StdI64
-    func.return %0
-  }
   func @main() -> u32 {
   entry:
-    %1 = arith.constant {value = 1 : i64}
-    memref.store %1, a
-    %2 = arith.constant {value = 2 : i64}
-    memref.store %2, b
-    %3 = arith.constant {value = 3 : i64}
-    memref.store %3, c
-    %4 = arith.constant {value = 4 : i64}
-    memref.store %4, d
-    %5 = arith.constant {value = 5 : i64}
-    memref.store %5, e
-    %6 = arith.constant {value = 6 : i64}
-    memref.store %6, f
-    %7 = arith.constant {value = 0 : i64}
-    memref.store %7, i
-    cf.br loop_0.header
-  loop_0.header:
-    %8 = arith.constant {value = 3 : i64}
-    %9 = memref.load i : i64
-    %10 = arith.cmpi lt %9, %8
-    cf.cond_br %10 [then: loop_0, else: loop_0.exit]
-  loop_0:
-    %11 = memref.load b : i64
-    %12 = func.call @identity %11
-    %13 = memref.load a : i64
-    %14 = arith.addi %13, %12
-    memref.store %14, a
-    %15 = memref.load d : i64
-    %16 = func.call @identity %15
-    %17 = memref.load c : i64
-    %18 = arith.addi %17, %16
-    memref.store %18, c
-    %19 = memref.load f : i64
-    %20 = func.call @identity %19
-    %21 = memref.load e : i64
-    %22 = arith.addi %21, %20
-    memref.store %22, e
-    %23 = arith.constant {value = 1 : i64}
-    %24 = memref.load i : i64
-    %25 = arith.addi %24, %23
-    memref.store %25, i
-    cf.br loop_0.header
-  loop_0.exit:
-    %26 = memref.load a : i64
-    %27 = memref.load c : i64
-    %28 = arith.addi %26, %27
-    %29 = memref.load d : i64
-    %30 = arith.addi %28, %29
-    %31 = memref.load e : i64
-    %32 = arith.addi %30, %31
-    %33 = memref.load f : i64
-    %34 = arith.addi %32, %33
-    %35 = arith.constant {value = 256 : i64}
-    %36 = arith.remsi %34, %35
-    %37 = arith.constant {value = 0 : i64}
-    %38 = arith.cmpi lt %36, %37
-    %39 = arith.constant {value = 4294967295 : i64}
-    %40 = arith.cmpi gt %36, %39
-    %41 = arith.ori1 %38, %40
-    cf.cond_br %41 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %42 = memref.lea_symdata __panic_msg_0
-    %43 = std.ptr_to_i64 %42
-    std.call_runtime @mrt_panic %43
-  __range_ok_0:
-    func.return %36
-  }
-}
-=== x86
-module {
-  func @identity(x: i64) -> i64 {
-  entry:
-    x64.mov rax, rcx
-    x64.ret
-  }
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=64
-    x64.mov rax, 1
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 2
-    x64.mov [rbp-16], rcx
-    x64.mov rdx, 3
-    x64.mov [rbp-24], rdx
-    x64.mov rbx, 4
-    x64.mov [rbp-32], rbx
-    x64.mov rsi, 5
-    x64.mov [rbp-40], rsi
-    x64.mov rdi, 6
-    x64.mov [rbp-48], rdi
+    x64.prologue stack_size=16
     x64.xor r8d, r8d
-    x64.mov [rbp-56], r8
-    x64.jmp main.loop_0.header
+    x64.mov r9d, 5
+    x64.mov esi, 3
+    x64.mov edi, 1
   loop_0.header:
-    x64.mov rax, 3
-    x64.mov rcx, [rbp-56]
-    x64.cmp rcx, rax
-    x64.jge main.loop_0.exit
+    x64.cmp r8, 3
+    x64.jge loop_0.exit
   loop_0:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
-    x64.call identity
-    x64.mov rcx, [rbp-8]
-    x64.add rcx, rax
-    x64.mov [rbp-8], rcx
-    x64.mov rdx, [rbp-32]
-    x64.mov rcx, [rbp-32]
-    x64.call identity
-    x64.mov rbx, [rbp-24]
-    x64.add rbx, rax
-    x64.mov [rbp-24], rbx
-    x64.mov rsi, [rbp-48]
-    x64.mov rcx, [rbp-48]
-    x64.call identity
-    x64.mov rdi, [rbp-40]
-    x64.add rdi, rax
-    x64.mov [rbp-40], rdi
-    x64.mov r8, 1
-    x64.mov r9, [rbp-56]
-    x64.add r9, r8
-    x64.mov [rbp-56], r9
-    x64.jmp main.loop_0.header
+    x64.add r8, 1
+    x64.add r9, 6
+    x64.add rsi, 4
+    x64.add rdi, 2
+    x64.jmp loop_0.header
   loop_0.exit:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-24]
-    x64.add rax, rcx
-    x64.mov rdx, [rbp-32]
-    x64.add rax, rdx
-    x64.mov rbx, [rbp-40]
-    x64.add rax, rbx
-    x64.mov rsi, [rbp-48]
-    x64.add rax, rsi
-    x64.mov rdi, 256
-    x64.mov [rbp-64], rax
+    x64.add rdi, rsi
+    x64.add rdi, 4
+    x64.add rdi, r9
+    x64.mov r8d, 256
+    x64.mov rax, rdi
+    x64.add rax, 6
     x64.cqo
-    x64.idiv rdi
-    x64.xor r8d, r8d
-    x64.mov r9, 4294967295
-    x64.cmp rdx, r9
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, r8
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.idiv r8
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

@@ -1,0 +1,178 @@
+// Test: list-directory
+function main() returns ExitCode
+	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
+		return 0
+	end 'err'
+	// bin directory should contain the maxon executable
+	var foundMaxon = false
+	for f in files 'loop'
+		let name = f.filename()
+		if name == "maxon.exe" or name == "maxon" 'check'
+			foundMaxon = true
+		end 'check'
+	end 'loop'
+	if foundMaxon 'result'
+		return 42
+	end 'result'
+	return 1
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.global_addr @__istr_0
+    %1 = mir.mov_imm 40 : i64
+    %2 = mir.call @mrt_alloc(%1)
+    mir.store %0, %2, 0 width: qword
+    %3 = mir.mov_imm 6 : i64
+    mir.store %3, %2, 8 width: qword
+    %4 = mir.mov_imm -2 : i64
+    mir.store %4, %2, 16 width: qword
+    %5 = mir.mov_imm 1 : i64
+    mir.store %5, %2, 24 width: qword
+    %6 = mir.mov_imm 0 : i64
+    mir.store %6, %2, 32 width: qword
+    %7 = mir.mov_imm 16 : i64
+    %8 = mir.call @mrt_alloc(%7)
+    mir.store %2, %8, 0 width: qword
+    mir.store %5, %8, 8 width: qword
+    %10 = mir.call @FilePath.init(%8)
+    %11, %12 = mir.try_call @Directory.list(%10)
+    %14 = mir.cmp ne, %12, %6
+    mir.cond_br %14 [then: try_0.otherwise(), else: try_0.merge()]
+  try_0.otherwise:
+    mir.ret %6
+  try_0.merge:
+    %20 = mir.global_addr @__layout_Array_FilePath
+    mir.br inlined_Array.createIterator_0()
+  inlined_Array.createIterator_0:
+    %72 = mir.load %11, 0 width: qword
+    %73, %74 = mir.try_call @ArrayIterator.create(%72, %20)
+    %75 = mir.mov_imm 0 : i64
+    %76 = mir.cmp ne, %74, %75
+    mir.cond_br %76 [then: inlined_Array.createIterator_1(), else: inlined_Array.createIterator_2()]
+  inlined_Array.createIterator_1:
+    %77 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%77, %74)
+  inlined_Array.createIterator_2:
+    %78 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%73, %78)
+  inline_cont_main_0:
+    %24 = mir.cmp ne, %80, %6
+    mir.cond_br %24 [then: loop_0.exit(%6), else: loop_0(%6)]
+  inlined_ArrayIterator.advance_0:
+    %81 = mir.load %79, 0 width: qword
+    %82 = mir.load %81, 8 width: qword
+    %83 = mir.load %81, 16 width: qword
+    %84 = mir.mov_imm 1 : i64
+    %85 = mir.add.i64 %82, %84
+    %86 = mir.cmp lt, %85, %83
+    %87 = mir.sub.i64 %85, %82
+    %88 = mir.mul.i64 %86, %87
+    %89 = mir.add.i64 %82, %88
+    mir.store %89, %81, 8 width: qword
+    %90 = mir.mov_imm 1 : i64
+    %91 = mir.sub.i64 %90, %86
+    %92 = mir.mov_imm 1 : i64
+    %93 = mir.mul.i64 %91, %92
+    %94 = mir.mov_imm 0 : i64
+    %95 = mir.cmp ne, %93, %94
+    mir.cond_br %95 [then: inlined_ArrayIterator.advance_1(), else: inline_cont_main_1(%94, %94)]
+  inlined_ArrayIterator.advance_1:
+    %96 = mir.mov_imm 1 : i64
+    mir.br inline_cont_main_1(%94, %96)
+  inline_cont_main_1:
+    %30 = mir.cmp ne, %98, %6
+    mir.cond_br %30 [then: loop_0.exit(%68), else: loop_0(%68)]
+  loop_0:
+    %99 = mir.load %79, 0 width: qword
+    mir.br inlined_stdlib.__managed_mem_cursor_current_0()
+  inlined_stdlib.__managed_mem_cursor_current_0:
+    %101 = mir.load %99, 0 width: qword
+    %102 = mir.mov_imm 8 : i64
+    %103 = mir.add.i64 %99, %102
+    %104 = mir.load %103, 0 width: qword
+    %105 = mir.mov_imm 24 : i64
+    %106 = mir.add.i64 %99, %105
+    %107 = mir.load %106, 0 width: qword
+    %108 = mir.mul.i64 %104, %107
+    %109 = mir.add.i64 %101, %108
+    %110 = mir.mov_imm 1 : i64
+    %111 = mir.cmp eq, %107, %110
+    mir.cond_br %111 [then: inlined_stdlib.__managed_mem_cursor_current_1(), else: inlined_stdlib.__managed_mem_cursor_current_2()]
+  inlined_stdlib.__managed_mem_cursor_current_1:
+    %112 = mir.mov_imm 0 : i64
+    %113 = mir.load_byte %109, %112
+    mir.br inline_cont_main_2(%113)
+  inlined_stdlib.__managed_mem_cursor_current_2:
+    %114 = mir.mov_imm 2 : i64
+    %115 = mir.cmp eq, %107, %114
+    mir.cond_br %115 [then: inlined_stdlib.__managed_mem_cursor_current_3(), else: inlined_stdlib.__managed_mem_cursor_current_4()]
+  inlined_stdlib.__managed_mem_cursor_current_3:
+    %116 = mir.load %109, 0 width: halfword
+    mir.br inline_cont_main_2(%116)
+  inlined_stdlib.__managed_mem_cursor_current_4:
+    %117 = mir.mov_imm 4 : i64
+    %118 = mir.cmp eq, %107, %117
+    mir.cond_br %118 [then: inlined_stdlib.__managed_mem_cursor_current_5(), else: inlined_stdlib.__managed_mem_cursor_current_6()]
+  inlined_stdlib.__managed_mem_cursor_current_5:
+    %119 = mir.load %109, 0 width: word
+    mir.br inline_cont_main_2(%119)
+  inlined_stdlib.__managed_mem_cursor_current_6:
+    %120 = mir.load %109, 0 width: qword
+    mir.br inline_cont_main_2(%120)
+  inline_cont_main_2:
+    %35 = mir.call @FilePath.filename(%121)
+    %37 = mir.global_addr @__istr_1
+    %38 = mir.mov_imm 40 : i64
+    %39 = mir.call @mrt_alloc(%38)
+    mir.store %37, %39, 0 width: qword
+    %40 = mir.mov_imm 9 : i64
+    mir.store %40, %39, 8 width: qword
+    %41 = mir.mov_imm -2 : i64
+    mir.store %41, %39, 16 width: qword
+    mir.store %5, %39, 24 width: qword
+    mir.store %6, %39, 32 width: qword
+    %44 = mir.mov_imm 16 : i64
+    %45 = mir.call @mrt_alloc(%44)
+    mir.store %39, %45, 0 width: qword
+    mir.store %5, %45, 8 width: qword
+    %47 = mir.call @String.equals(%35, %45)
+    %50 = mir.xor.i64 %47, %5
+    mir.cond_br %50 [then: shortOr.rhs(), else: shortOr.merge(%5)]
+  loop_0.exit:
+    mir.cond_br %70 [then: result_0(), else: result_0.after()]
+  shortOr.rhs:
+    %53 = mir.global_addr @__istr_2
+    %54 = mir.mov_imm 40 : i64
+    %55 = mir.call @mrt_alloc(%54)
+    mir.store %53, %55, 0 width: qword
+    %56 = mir.mov_imm 5 : i64
+    mir.store %56, %55, 8 width: qword
+    %57 = mir.mov_imm -2 : i64
+    mir.store %57, %55, 16 width: qword
+    mir.store %5, %55, 24 width: qword
+    mir.store %6, %55, 32 width: qword
+    %60 = mir.mov_imm 16 : i64
+    %61 = mir.call @mrt_alloc(%60)
+    mir.store %55, %61, 0 width: qword
+    mir.store %5, %61, 8 width: qword
+    %63 = mir.call @String.equals(%35, %61)
+    mir.br shortOr.merge(%63)
+  shortOr.merge:
+    mir.cond_br %71 [then: check_0(), else: check_0.after(%69)]
+  check_0:
+    mir.br check_0.after(%5)
+  check_0.after:
+    mir.br inlined_ArrayIterator.advance_0()
+  result_0:
+    %66 = mir.mov_imm 42 : i64
+    mir.ret %66
+  result_0.after:
+    mir.ret %5
+  }
+}
+---

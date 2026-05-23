@@ -1030,7 +1030,7 @@ function applyReturnRegHintOverride(module TargetModule, ranges LiveRangeArray, 
 
 			let probe = opQuery.decodeReturnMovProbe(module, packed: packed)
 			if probe.found 'isMov'
-				tryApplyReturnHint(destOrd: probe.destOrd, srcId: probe.srcId, returnGprOrd: returnGprOrd, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+				tryApplyReturnHint(probe.destOrd, srcId: probe.srcId, returnGprOrd: returnGprOrd, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 				break
 			end 'isMov'
 			j = j - 1
@@ -1079,7 +1079,7 @@ function hintBranchArgs(argIds ValueIdArray, targetBlockId BlockId, predBlockId 
 			continue
 		end 'skipBlockArg'
 		let destId = blockArg.valueId
-		setGprCopyHintEdge(destReg: destId, srcReg: srcId, blockId: predBlockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+		setGprCopyHintEdge(destId, srcReg: srcId, blockId: predBlockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 		i = i + 1
 	end 'eachArg'
 end 'hintBranchArgs'
@@ -1201,7 +1201,7 @@ export function setGprCopyHintEdge(destReg RegInt, srcReg RegInt, blockId BlockI
 	// copyHintValueId remains useful for resolveCopyLinkHint's color-hint
 	// propagation, so we keep that pathway intact and only add the
 	// per-edge anchor on top.
-	setGprCopyHint(destReg: destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	setGprCopyHint(destReg, srcReg: srcReg, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 
 	let srcRangeIdx = getOr(vidToRangeIdx, index: srcReg, fallback: -1)
 	let destRangeIdx = getOr(vidToRangeIdx, index: destReg, fallback: -1)
@@ -1219,5 +1219,5 @@ end 'setGprCopyHintEdge'
 
 export function setFpCopyHintEdge(destReg RegInt, srcReg RegInt, blockId BlockId, copyPos RegInt, ranges LiveRangeArray, vidToRangeIdx RegIntArray)
 	// Same logic as GPR edge-aware copy hint
-	setGprCopyHintEdge(destReg: destReg, srcReg: srcReg, blockId: blockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
+	setGprCopyHintEdge(destReg, srcReg: srcReg, blockId: blockId, copyPos: copyPos, ranges: ranges, vidToRangeIdx: vidToRangeIdx)
 end 'setFpCopyHintEdge'

@@ -87,7 +87,7 @@ function stdParseReturnType(s String) returns StdReturnType throws StdParserErro
 	if s == "void" 'isVoid'
 		return StdReturnType.void
 	end 'isVoid'
-	return StdReturnType.value(inner: try stdParseStdType(s))
+	return StdReturnType.value(try stdParseStdType(s))
 end 'stdParseReturnType'
 
 // --- Main parse entry point ---
@@ -782,6 +782,86 @@ export type StdParser
 			module.appendOp(block, op: StdOp.system(StdSystemOp.osFreePages(ptrId, sizeId: sizeId)))
 			return
 		end 'ofp'
+
+		if opName == "osFileOpen" 'osfo'
+			let cStringPtrId = try consumeValueRef()
+			let flagsId = try consumeValueRef()
+			let fileModeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileOpen(resultId, cStringPtrId: cStringPtrId, flagsId: flagsId, fileModeId: fileModeId)))
+			return
+		end 'osfo'
+
+		if opName == "osFileRead" 'osfr'
+			let fdId = try consumeValueRef()
+			let bufPtrId = try consumeValueRef()
+			let countId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileRead(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)))
+			return
+		end 'osfr'
+
+		if opName == "osFileWrite" 'osfw'
+			let fdId = try consumeValueRef()
+			let bufPtrId = try consumeValueRef()
+			let countId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileWrite(resultId, fdId: fdId, bufPtrId: bufPtrId, countId: countId)))
+			return
+		end 'osfw'
+
+		if opName == "osFileClose" 'osfc'
+			let fdId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileClose(resultId, fdId: fdId)))
+			return
+		end 'osfc'
+
+		if opName == "osFileLseek" 'osfl'
+			let fdId = try consumeValueRef()
+			let offsetId = try consumeValueRef()
+			let whenceId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileLseek(resultId, fdId: fdId, offsetId: offsetId, whenceId: whenceId)))
+			return
+		end 'osfl'
+
+		if opName == "osFileStat" 'osfs'
+			let cStringPtrId = try consumeValueRef()
+			let statBufPtrId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileStat(resultId, cStringPtrId: cStringPtrId, statBufPtrId: statBufPtrId)))
+			return
+		end 'osfs'
+
+		if opName == "osFileAccess" 'osfa'
+			let cStringPtrId = try consumeValueRef()
+			let modeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileAccess(resultId, cStringPtrId: cStringPtrId, modeId: modeId)))
+			return
+		end 'osfa'
+
+		if opName == "osFileUnlink" 'osfu'
+			let cStringPtrId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osFileUnlink(resultId, cStringPtrId: cStringPtrId)))
+			return
+		end 'osfu'
+
+		if opName == "osDirGetdents64" 'osdg'
+			let fdId = try consumeValueRef()
+			let bufPtrId = try consumeValueRef()
+			let bufSizeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osDirGetdents64(resultId, fdId: fdId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)))
+			return
+		end 'osdg'
+
+		if opName == "osDirGetcwd" 'osdc'
+			let bufPtrId = try consumeValueRef()
+			let bufSizeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osDirGetcwd(resultId, bufPtrId: bufPtrId, bufSizeId: bufSizeId)))
+			return
+		end 'osdc'
+
+		if opName == "osDirMkdir" 'osdm'
+			let cStringPtrId = try consumeValueRef()
+			let modeId = try consumeValueRef()
+			module.appendOp(block, op: StdOp.system(StdSystemOp.osDirMkdir(resultId, cStringPtrId: cStringPtrId, modeId: modeId)))
+			return
+		end 'osdm'
 
 		if opName == "atomicInc" 'ai'
 			let addrId = try consumeValueRef()

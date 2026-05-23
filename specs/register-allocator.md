@@ -15433,3 +15433,53 @@ module {
   }
 }
 ```
+
+### Level 7: Phi-Merge Splitting and Memory-Only Phi Spilling
+
+These tests exercise the LiveRangeSplitter (which breaks each phi-merge's
+disjoint anchor intervals into independent sub-ranges so the chordal
+allocator doesn't over-coalesce interference) and its memory-only phi
+fallback (which spills the parent merge when a sub-range can't be colored,
+mirroring LLVM Greedy's stack-slot demotion). Without these techniques the
+chordal SSA coloring panics at `colorLookupGpr` on URL.resolve and on
+similar functions that mutate many locals across nested control flow.
+
+<!-- test: phi-merge-split-multi-anchor -->
+```maxon
+function main() returns ExitCode
+	var a = 0
+	var b = 0
+	var c = 0
+	var d = 0
+	if 1 < 2 'g1'
+		a = 1
+		b = 2
+		c = 3
+		d = 4
+	end 'g1' else 'g1e'
+		a = 10
+		b = 20
+		c = 30
+		d = 40
+	end 'g1e'
+	if a > 0 'g2'
+		a = a + 100
+		c = c + 100
+	end 'g2' else 'g2e'
+		b = b + 100
+		d = d + 100
+	end 'g2e'
+	if b > 0 'g3'
+		a = a + b
+		c = c + d
+	end 'g3' else 'g3e'
+		b = a - 1
+		d = c - 1
+	end 'g3e'
+	return (a + b + c + d) mod 256
+end 'main'
+```
+```exitcode
+216
+```
+

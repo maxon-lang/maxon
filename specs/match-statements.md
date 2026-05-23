@@ -826,7 +826,7 @@ function dispatch(kind Tally) throws Err
 end 'dispatch'
 
 function main() returns ExitCode
-	try dispatch(kind: 1) otherwise ignore
+	try dispatch(1) otherwise ignore
 	return 0
 end 'main'
 ```
@@ -854,7 +854,7 @@ end 'dispatch'
 typealias Tally = int(0 to 100)
 
 function main() returns ExitCode
-	dispatch(kind: 1)
+	dispatch(1)
 	return 0
 end 'main'
 ```
@@ -882,7 +882,7 @@ end 'dispatch'
 typealias Tally = int(0 to 100)
 
 function main() returns ExitCode
-	dispatch(kind: 1)
+	dispatch(1)
 	return 0
 end 'main'
 ```
@@ -912,7 +912,7 @@ typealias Tally = int(0 to 100)
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-	return dispatch(kind: 1)
+	return dispatch(1)
 end 'main'
 ```
 ```exitcode
@@ -940,7 +940,7 @@ function dispatch(kind Tally) returns Score
 end 'dispatch'
 
 function main() returns ExitCode
-	return dispatch(kind: 1)
+	return dispatch(1)
 end 'main'
 ```
 ```exitcode
@@ -973,7 +973,7 @@ end 'dispatch'
 typealias Tally = int(0 to 100)
 
 function main() returns ExitCode
-	dispatch(kind: 1)
+	dispatch(1)
 	return 0
 end 'main'
 ```
@@ -1005,7 +1005,7 @@ end 'dispatch'
 typealias Tally = int(0 to 100)
 
 function main() returns ExitCode
-	dispatch(kind: 1)
+	dispatch(1)
 	return 0
 end 'main'
 ```

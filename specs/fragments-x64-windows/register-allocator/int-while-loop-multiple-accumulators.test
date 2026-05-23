@@ -17,225 +17,58 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 200
-RequiredIR: ```
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.assign %0 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    maxon.assign %1 {var = odd_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 0 : i64}
-    maxon.assign %2 {var = count} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 0 : i64}
-    maxon.assign %3 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br loop_0.header
-  loop_0.header:
-    %4 = maxon.literal {value = 20 : i64}
-    %5 = maxon.var_ref {var = i} {type = i64}
-    %6 = maxon.binop %5, %4 {op = lt}
-    maxon.cond_br %6 [then: loop_0, else: loop_0.exit]
-  loop_0:
-    %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.binop %8, %7 {op = mod}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = eq}
-    maxon.cond_br %11 [then: even_0, else: odd_0]
-  even_0:
-    %12 = maxon.var_ref {var = even_sum} {type = i64}
-    %13 = maxon.var_ref {var = i} {type = i64}
-    %14 = maxon.binop %12, %13 {op = add}
-    maxon.assign %14 {var = even_sum} {kind = i64} {mut = 1 : i1}
-    %15 = maxon.literal {value = 1 : i64}
-    %16 = maxon.var_ref {var = count} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add}
-    maxon.assign %17 {var = count} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br even_0.merge
-  odd_0:
-    %18 = maxon.var_ref {var = odd_sum} {type = i64}
-    %19 = maxon.var_ref {var = i} {type = i64}
-    %20 = maxon.binop %18, %19 {op = add}
-    maxon.assign %20 {var = odd_sum} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br even_0.merge
-  even_0.merge:
-    %21 = maxon.literal {value = 1 : i64}
-    %22 = maxon.var_ref {var = i} {type = i64}
-    %23 = maxon.binop %22, %21 {op = add}
-    maxon.assign %23 {var = i} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br loop_0.header
-  loop_0.exit:
-    %24 = maxon.var_ref {var = even_sum} {type = i64}
-    %25 = maxon.var_ref {var = odd_sum} {type = i64}
-    %26 = maxon.binop %24, %25 {op = add}
-    %27 = maxon.var_ref {var = count} {type = i64}
-    %28 = maxon.binop %26, %27 {op = add}
-    %29 = maxon.literal {value = 256 : i64}
-    %30 = maxon.binop %28, %29 {op = mod}
-    %31 = maxon.literal {value = 0 : i64}
-    %32 = maxon.binop %30, %31 {op = lt}
-    %33 = maxon.literal {value = 4294967295 : i64}
-    %34 = maxon.binop %30, %33 {op = gt}
-    %35 = maxon.binop %32, %34 {op = or}
-    maxon.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-while-loop-multiple-accumulators.test:16: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [even_sum, odd_sum, count, i]
-    maxon.return %30
-  }
-}
-=== standard
+---
+// CompiledIR
 module {
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, even_sum
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, odd_sum
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, count
-    %3 = arith.constant {value = 0 : i64}
-    memref.store %3, i
-    cf.br loop_0.header
-  loop_0.header:
-    %4 = arith.constant {value = 20 : i64}
-    %5 = memref.load i : i64
-    %6 = arith.cmpi lt %5, %4
-    cf.cond_br %6 [then: loop_0, else: loop_0.exit]
-  loop_0:
-    %7 = arith.constant {value = 2 : i64}
-    %8 = memref.load i : i64
-    %9 = arith.remsi %8, %7
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.cmpi eq %9, %10
-    cf.cond_br %11 [then: even_0, else: odd_0]
-  even_0:
-    %12 = memref.load even_sum : i64
-    %13 = memref.load i : i64
-    %14 = arith.addi %12, %13
-    memref.store %14, even_sum
-    %15 = arith.constant {value = 1 : i64}
-    %16 = memref.load count : i64
-    %17 = arith.addi %16, %15
-    memref.store %17, count
-    cf.br even_0.merge
-  odd_0:
-    %18 = memref.load odd_sum : i64
-    %19 = memref.load i : i64
-    %20 = arith.addi %18, %19
-    memref.store %20, odd_sum
-    cf.br even_0.merge
-  even_0.merge:
-    %21 = arith.constant {value = 1 : i64}
-    %22 = memref.load i : i64
-    %23 = arith.addi %22, %21
-    memref.store %23, i
-    cf.br loop_0.header
-  loop_0.exit:
-    %24 = memref.load even_sum : i64
-    %25 = memref.load odd_sum : i64
-    %26 = arith.addi %24, %25
-    %27 = memref.load count : i64
-    %28 = arith.addi %26, %27
-    %29 = arith.constant {value = 256 : i64}
-    %30 = arith.remsi %28, %29
-    %31 = arith.constant {value = 0 : i64}
-    %32 = arith.cmpi lt %30, %31
-    %33 = arith.constant {value = 4294967295 : i64}
-    %34 = arith.cmpi gt %30, %33
-    %35 = arith.ori1 %32, %34
-    cf.cond_br %35 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %36 = memref.lea_symdata __panic_msg_0
-    %37 = std.ptr_to_i64 %36
-    std.call_runtime @mrt_panic %37
-  __range_ok_0:
-    func.return %30
-  }
-}
-=== x86
-module {
-  func @main() -> u32 {
-  entry:
-    x64.prologue stack_size=48
+    x64.prologue stack_size=16
     x64.xor eax, eax
-    x64.mov [rbp-8], rax
-    x64.xor ecx, ecx
-    x64.mov [rbp-16], rcx
-    x64.xor edx, edx
-    x64.mov [rbp-24], rdx
-    x64.xor ebx, ebx
-    x64.mov [rbp-32], rbx
-    x64.jmp main.loop_0.header
-  loop_0.header:
-    x64.mov rax, 20
-    x64.mov rcx, [rbp-32]
-    x64.cmp rcx, rax
-    x64.jge main.loop_0.exit
-  loop_0:
-    x64.mov rax, 2
-    x64.mov rcx, [rbp-32]
-    x64.mov rbx, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv rbx
-    x64.xor eax, eax
-    x64.cmp rdx, rax
-    x64.jne main.odd_0
-  even_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-32]
-    x64.add rax, rcx
-    x64.mov [rbp-8], rax
-    x64.mov rdx, 1
-    x64.mov rbx, [rbp-24]
-    x64.add rbx, rdx
-    x64.mov [rbp-24], rbx
-    x64.jmp main.even_0.merge
-  odd_0:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-32]
-    x64.add rax, rcx
-    x64.mov [rbp-16], rax
-    x64.jmp main.even_0.merge
-  even_0.merge:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-32]
-    x64.add rcx, rax
-    x64.mov [rbp-32], rcx
-    x64.jmp main.loop_0.header
-  loop_0.exit:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.add rax, rcx
-    x64.mov rdx, [rbp-24]
-    x64.add rax, rdx
-    x64.mov rbx, 256
-    x64.mov [rbp-40], rax
-    x64.cqo
-    x64.idiv rbx
+    x64.xor r8d, r8d
+    x64.xor r9d, r9d
     x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rdx, rdi
-    x64.jg main.__range_panic_0
-    x64.cmp rdx, rsi
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov rdi, rax
+  loop_0.header:
+    x64.cmp rdi, 20
+    x64.jge loop_0.exit
+  loop_0:
+    x64.mov ecx, 2
+    x64.mov rax, rdi
+    x64.cqo
+    x64.idiv rcx
+    x64.test rdx, rdx
+    x64.jne odd_0
+    x64.jmp even_0
+  loop_0.exit:
+    x64.add rsi, r9
+    x64.mov r9d, 256
+    x64.mov rax, rsi
+    x64.add rax, r8
+    x64.cqo
+    x64.idiv r9
+    x64.mov r8, rdx
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  even_0:
+    x64.add r8, 1
+    x64.add rsi, rdi
+    x64.jmp even_0.merge
+  odd_0:
+    x64.add r9, rdi
+  even_0.merge:
+    x64.mov rax, rdi
+    x64.add rax, 1
+    x64.mov rdi, rax
+    x64.jmp loop_0.header
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rax, rdx
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

@@ -1,6 +1,6 @@
 # Self-Hosted Compiler Roadmap
 
-The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **118 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1409 fragment tests passing** on both x64-windows and wasm32-wasi (full parity). C# bootstrap holds at 2767/2767 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation, a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
+The self-hosted Maxon compiler (`maxon-selfhosted/`) currently has **144 specs whitelisted** in [`Testing/SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon), with **1587 fragment tests passing** on both x64-windows and wasm32-wasi. C# bootstrap holds at 2770/2770 (modulo one pre-existing flaky network test, `http-client.response-headers`, that depends on `httpbin.org` reachability). The pipeline is fully built out: lexer → parser → Maxon dialect → Std dialect → MIR (SSA) → Target dialect → code emitter → PE/ELF/Mach-O/Wasm writers, with SSA register allocation (Stage Q: LLVM-Greedy-style phi-merge splitting + memory-only spill fallback), a real optimization pass suite, and (as of Phase 6) a Go-style three-tier slab allocator with refcount-aware managed memory. Since Stage P (2026-05-20) the chunk-driven per-function emit path is the default and a single-function edit triggers a true incremental rebuild via `db.codePerFunc`.
 
 Each phase brings X64 + ARM64 backends and PE + ELF output formats to parity together. WASM and Mach-O writers exist but are not the primary correctness target. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are kept in lockstep within each phase.
 
@@ -109,12 +109,24 @@ Phase 14:  Math Functions         [x] All 16 specs whitelisted: abs/sqrt/floor/c
                                       + 3-backend (x64/arm64/wasm) lowering. Trig/log/exp run as
                                       Taylor-series Maxon code in `stdlib/Math.maxon`. 24 rt-*
                                       fragments still wait on a nested-try parser bug.
-Phase 15:  Advanced Features      [~] Tuples (9/9 active, 1 tagged for Phase 13 MapIterator),
+Phase 15:  Advanced Features      [x] Tuples (9/9 active, 1 tagged for Phase 13 MapIterator),
                                       panic-stack-trace (3/3), function-overloads (10/11),
                                       command-line-args (9/10 x64; 1/10 wasm — needs WASI
-                                      args_sizes_get / args_get). Plus pre-existing namespaces,
-                                      stdlib-autodiscovery, semantic checks. File-io and
-                                      method-call-syntax still pending.
+                                      args_sizes_get / args_get), discarded-results (17/17),
+                                      duplicate-functions (3/3), unused-variables (20/20),
+                                      file-io (10/10) + directory (19/19) on x64-windows +
+                                      wasm32-wasi (runtime-tested) and on x64-linux +
+                                      arm64-windows + arm64-linux (compile-only — host
+                                      can't cross-execute). Unified under target-agnostic
+                                      Std-dialect ops: 11 new `osFile*` / `osDir*` ops in
+                                      StdDialect / MIR, lowered per-target (Linux syscalls
+                                      via `mov rax/x8, num + syscall/svc #0`; Windows via
+                                      `call mrt_win32_*` helpers wrapping Win32 IAT calls;
+                                      Wasm intercepted at MirToWasm and hand-emitted as
+                                      WASI imports). One `runtime.std` body per public
+                                      `mrt_file_*` / `mrt_directory_*` helper, no per-OS
+                                      Maxon-level fork. Plus pre-existing namespaces,
+                                      stdlib-autodiscovery, semantic checks.
 Phase 16:  Optimization Passes    [~] DCE, CSE, LICM, Mem2Reg, canonicalize, dead-function-elimination,
                                       store forwarding all implemented; tuning + coverage remain
 ```
@@ -1107,7 +1119,70 @@ gained two members.
 
 ### Sub-phases
 
-**15a: Semantic Checks** — `discarded-results`, `unused-variables`, `duplicate-functions` still pending. `function-overloads` and full `type-checking` parity landed via 15g.
+**15a: Semantic Checks** — **DONE 2026-05-21**. Three diagnostics landed:
+
+- **E3006 (duplicate function)** swapped in for the parser-stage E2001 at
+  `reportDuplicateFunction` in [`Parser.maxon`](Compiler/Parser.maxon); same-file
+  duplicate-name detection routed through the qualified name (so the
+  diagnostic reads `Duplicate function 'duplicate-functions.helper'` rather
+  than the bare `'helper'`). Cross-file duplicate `main` was already caught
+  by the project-level `funcReturnTypes` registry under the qualified
+  `"main"` key — only the error code needed to change. 3/3 spec fragments
+  green.
+- **E3012 (unused variable)** already existed via `checkPendingUnusedVars`
+  in [`SemanticCheck.maxon`](Compiler/SemanticCheck.maxon) — the spec went
+  from 16/20 to 20/20 by extending `localVarLocations` to also record:
+  (1) for-range / for-in loop variables (the iter-var was bound in a
+  fresh scope but skipped by the unused tracker — the C# bootstrap tracks
+  them per `for VAR in EXPR` shape); (2) match-arm payload bindings
+  (`value(n)` registers `n` for the arm body — bootstrap counts it as a
+  binding subject to E3012); (3) closure parameters (the lifted function's
+  fresh scope captured the params but never deferred the unused check;
+  `checkUnusedParameters` is now called before the parser context
+  restore in `parseClosure`).
+- **E3064 / E3065 (discarded results)** ported from the C# bootstrap's
+  `CheckDiscardedResults` + `PurityAnalysisPass`. The check has three
+  moving parts:
+    1. **Parser tags** (`project.discardedBareCallResults` /
+       `discardedLetCallResults`) record where a call's result is discarded.
+       Three positions tag: bare statement-position calls
+       (`foo(x)`), `_ = expr` discards, and the new `(_, _) = expr`
+       tuple-all-discard form (added to the statement dispatcher via
+       `isTupleDestructureDiscard()` peek).
+    2. **Purity analyzer** (`computePurity` in [`SemanticCheck.maxon`](Compiler/SemanticCheck.maxon))
+       walks each function once, marking impure on void return, empty body,
+       globalStore, selfFieldStore, or a call to a known-impure callee
+       (the 25-entry list from `PurityAnalysisPass.cs:77` — managed-mem
+       mutations, managed-list mutations, I/O builtins, anything prefixed
+       `mrt_`). A parser-side sidecar `project.paramMutatingFunctions`
+       captures parameter reassignment (the C# bootstrap computes this in
+       a separate `ParameterMutationAnalysisPass`; self-hosted records it
+       at the assignment site). Transitive propagation runs to fixed point
+       via a callee-edge map.
+    3. **Discarded-results check** (`checkDiscardedResults`) walks every
+       call/tryCall/methodCall/tryMethodCall, looks up the parser tag, and
+       emits E3064 (pure callee) or E3065 (impure callee, bare-discard only)
+       unless the callee is void or chainable (1st param `self`, return
+       type matches receiver type).
+
+  Two carve-outs keep cache-parity intact: (a) the check skips functions
+  whose `sourceFilePath` resolves under `stdlib/` so stdlib internals (which
+  reuse `_ =` patterns in ways the user-facing spec doesn't cover) don't
+  fire diagnostics on the cache-off path; (b) statement-form `try EXPR
+  otherwise FALLBACK` is **not** tagged — the `try` keyword itself is the
+  user's documented opt-in for ignoring fallible results, matching the
+  bootstrap. Expression-context `_ = try EXPR otherwise EXPR` still tags.
+
+  Unrelated bug surfaced and fixed during stream 3: closures captured
+  outer variables via `emitClosureCapture` but did not update the outer's
+  `referencedVars`, so an outer `let offset = 7` consumed only inside a
+  closure body would falsely trip the new E3012 wiring. A
+  `closureOuterReferencedVars` parser field plumbs the outer set into the
+  capture helper so the capture itself counts as a use.
+
+17/17 discarded-results, 3/3 duplicate-functions, 20/20 unused-variables.
+Bootstrap parity: 2769/2769 (up from 2767 as the three specs were added to
+the C# baseline at the same time the C# infrastructure landed).
 
 **15b: Command-line Args** — **DONE 2026-05-13 in Stage E.4** (9/10 on x64-windows).
 `CommandLine.args()` lowers to `__Builtins.commandLineCount` / `__Builtins.commandLineArg`
@@ -1128,7 +1203,143 @@ Secondary fix: `enclosingType` forwarded through `callResultType` /
 where `typealias MyArr = Array with String` is declared inside `type Foo`) resolve
 correctly. `CACHE_FORMAT_VERSION` bumped to 44.
 
-**15c: File I/O** — `File.readText`, `File.writeText`, etc. via OS imports. Still pending.
+**15c: File I/O** — **DONE 2026-05-22**. `file-io` (10/10) and
+`directory` (19/19) green on x64-windows + wasm32-wasi (runtime-tested);
+all targets including x64-linux + arm64-windows + arm64-linux compile
+cleanly (no cross-execution available on the x64-windows host).
+
+The Std dialect stays platform-independent: 11 new ops describe file/
+directory primitives by semantics, and each backend chooses how to
+satisfy them. The architecture stack from user code down to the OS:
+
+```
+user code (e.g. File.readText)
+  → stdlib lowering → __ManagedFile.openRead via lowerManagedFileBuiltin
+  → mrt_file_open_read (one target-agnostic body in runtime.std)
+  → std osFileOpen op
+  → backend lowering:
+      • Linux X64:   syscall rax=2 (open)
+      • Linux ARM64: svc #0 with x8=56 (openat AT_FDCWD)
+      • Windows:     call mrt_win32_open helper (wraps CreateFileW IAT call)
+      • Wasm:        intercepted at MirToWasm → path_open WASI import
+```
+
+Landed across six streams (2026-05-21 / 2026-05-22):
+
+- **Stream 1 — Stdlib whitelist.** The real `stdlib/FilePath.maxon`
+  (411 lines), `stdlib/File.maxon`, and `stdlib/Directory.maxon` joined
+  the whitelist in [`StdlibLoader.maxon`](Compiler/StdlibLoader.maxon).
+  Synthesized minimal-FilePath stub deleted. `CACHE_FORMAT_VERSION`
+  bumped (52 → 53 → 54). Surfaced and fixed a typealias-visibility
+  tracking bug in `parseTopLevelTypealias` where a file-private alias
+  in one file could prevent an exported one in another file from being
+  recorded.
+
+- **Stream 2 — Builtin types + lowering dispatch.**
+  [`LowerMaxonToStd.maxon`](Compiler/IR/Maxon/LowerMaxonToStd.maxon)
+  gained `registerManagedFileType` / `registerManagedDirectoryType`
+  (mirror of Phase 6b's `registerManagedMemoryType`),
+  `managedFileHelperFor` / `managedDirectoryHelperFor` name maps + their
+  `*HelperThrows` companions, and `lowerManagedFileBuiltin` /
+  `lowerManagedDirectoryBuiltin` dispatch functions that route
+  `__ManagedFile.method` / `__ManagedDirectory.method` calls to bare
+  `mrt_file_*` / `mrt_directory_*` runtime helpers via the multi-value-
+  return error ABI (ordinal+1 in RDX/X1 on failure).
+
+  Three throws-table corrections caught by reading actual stdlib `try`
+  patterns: `size`, `Directory.next`, and `Directory.currentPath` are
+  all throwing (plan's table had them as non-throwing).
+
+- **Stream 3.3 + 4.2 — Wasm32-wasi.**
+  [`MirToWasm.maxon`](Compiler/Targets/Wasm/MirToWasm.maxon) extended the
+  WASI preview1 import table from 5 to 13 entries: added `path_open`,
+  `fd_close`, `fd_seek`, `fd_filestat_get`, `path_filestat_get`,
+  `path_unlink_file` (NOT `path_remove_file` — wasmtime rejects the
+  latter), `path_create_directory`, `fd_readdir`, plus `fd_prestat_get`
+  and `fd_prestat_dir_name`. Each `mrt_file_*` / `mrt_directory_*`
+  helper is intercepted at MIR-lowering time and hand-emitted as a
+  custom Wasm body that calls the matching WASI import.
+
+  WASI gotchas surfaced and fixed:
+  - `fs_rights_base = 0x3FFFFFFF` (bits 0..29 = "all defined rights").
+    All-bits-set `0xFFFFFFFFFFFFFFFF` causes wasmtime to reject with
+    `TryFromIntError` because undefined bits trip its mask validator.
+  - Directory opens MUST exclude `FD_WRITE` from `fs_rights_base` —
+    newer wasmtime returns EISDIR when a directory is requested with
+    write rights. Limited to `0x246000`.
+  - Errno values: `ENOENT = 44`, `EACCES = 2` per WASI preview1's
+    sequential errno enum.
+
+  Spec runner integration: [`SpecTestRunner.maxon`](Testing/SpecTestRunner.maxon)
+  passes `--dir=.` and `--dir=..::../` to wasmtime so fd 3 = cwd and
+  fd 4 = parent-of-cwd. `mrt_directory_current_path` returns `"."`
+  (WASI has no `getcwd`; the preopen at fd 3 *is* the cwd by convention).
+
+- **Stream 4.1 + 3.2 — Linux Std ops + ARM64 lowering.**
+  Added 11 platform-independent ops to
+  [`StdDialect.maxon`](Compiler/IR/Std/StdDialect.maxon) and
+  [`MirDialect.maxon`](Compiler/IR/MIR/MirDialect.maxon): `osFileOpen`,
+  `osFileRead`, `osFileWrite`, `osFileClose`, `osFileLseek`,
+  `osFileStat`, `osFileAccess`, `osFileUnlink`, `osDirGetdents64`,
+  `osDirGetcwd`, `osDirMkdir`. All ops take `(cStringPtr, ...)` for
+  paths — the runtime helper owns NUL-termination via a new
+  `mrt_cstr_from_mm` helper.
+
+  Linux X64 lowering (`MirToX64Conversion.maxon::lowerOsFile*`) emits
+  `mov rax, <syscallNum>; syscall` with args in `rdi/rsi/rdx/r10/r8`.
+  Linux ARM64 lowering (`Arm64Backend.maxon::lowerOsFile*Arm64`) emits
+  `mov x8, <syscallNum>; svc #0` with args in `x0..x5`, using the
+  `*at` variants (`openat`, `newfstatat`, `faccessat`, `unlinkat`,
+  `mkdirat`) with `AT_FDCWD = -100` since ARM64 Linux drops the
+  non-`at` syscalls.
+
+  Pattern-match sites extended for the 11 new ops across 11 files:
+  DCE, CSE, Mem2Reg, LICM, InjectDrops, BorrowCheck, Inliner,
+  InstructionScheduler, StdOpHelpers, CommuteForCoalescing,
+  BackendDispatch (latency entries). The Std/MIR `to`-range patterns
+  in several passes naturally covered the new ops once they were
+  placed contiguously in the union.
+
+- **Stream 4.1b — Windows unified under the same ops.**
+  Replaced Stream 3.1's hand-emitted Win32 `runtime.std` bodies with
+  `call mrt_win32_*` dispatch. Each `osFile*` op now branches per
+  `osDesc.os` at the backend lowering: Linux → syscall, Windows →
+  emit `call mrt_win32_open` / `mrt_win32_read` / etc. The
+  `mrt_win32_*` helpers live in `runtime.std` and each wraps one
+  Win32 IAT call (CreateFileW, ReadFile, WriteFile, CloseHandle,
+  SetFilePointerEx, GetFileAttributesExW, DeleteFileW,
+  GetCurrentDirectoryW, CreateDirectoryW) plus errno translation via
+  the new `mrt_win32_translate_lasterror` that maps GetLastError ↔
+  POSIX `-errno`. UTF-8 → UTF-16 path conversion via
+  `MultiByteToWideChar` happens inside each `mrt_win32_*` helper that
+  takes a path. PE writer's IAT slot allocation (Stream 3.1's 12
+  slots) reused as-is.
+
+  Directory iteration on Windows: `mrt_win32_open` with a directory
+  path allocates a 616-byte heap block `[kind=1, HANDLE,
+  pending_flag, WIN32_FIND_DATAW]`, calling FindFirstFileW to
+  pre-position the iterator. `mrt_win32_close` dispatches CloseHandle
+  vs FindClose by inspecting `block[0]`. `mrt_win32_getdents64`
+  reads the cached WIN32_FIND_DATAW on first call, then drives
+  FindNextFileW for subsequent calls, packing each entry into the
+  Linux `dirent64` layout the platform-agnostic body expects.
+
+  ARM64-Windows path mirrors X64-Windows: each `lowerOsFile*Arm64`
+  also dispatches `if isWindowsTargetArm64(osDesc)` to the same
+  `mrt_win32_*` helpers via the ARM64 direct-call shape.
+
+  Per-OS body swap in
+  [`BackendDispatch.maxon::filterRuntimeForOs`](Compiler/Targets/BackendDispatch.maxon)
+  no longer needs the 19 file/directory entries — one body per
+  helper, target-agnostic, the lowering does the rest. The 3
+  command-line / executable-path entries from Phase 15b/15f remain
+  using the old stub-swap shape.
+
+Final tally: **1587/1587** on x64-windows + wasm32-wasi (up from 1566
+baseline). Bootstrap **2770/2770** holds. All other targets
+(x64-linux, arm64-windows, arm64-linux) compile cleanly through the
+same shared IR — runtime correctness is structurally identical to the
+runtime-tested targets via the unified op architecture.
 
 **15d: Panic & Stack Traces** — **DONE 2026-05-13 in Stage E.5** (3/3).
 Infrastructure was already in place: `mrt_panic` walks RBP/X29 frame chain
@@ -2112,6 +2323,134 @@ synthetic). Scaling characteristics quantified: 1.6x speedup vs off
 baseline on a 300-fn target. The remaining cost above the original
 200ms aspiration is bounded and attributable to a specific
 identifiable cause (`queryAllMid` whole-module recompute).
+
+## Stage Q landing (2026-05-22) — LLVM-Greedy phi-merge splitting + memory-only spill fallback
+
+`stdlib/URL.maxon`'s `resolve` function blocked stdlib cache compile
+with `colorLookupGpr: virtual GPR v232 has no coloring assignment` —
+13 promoted locals modified across nested if/else produced phi-merges
+whose disjoint live intervals (def block + multiple predecessor copy
+slots) were fused by the chordal SSA coloring into a single LiveRange
+that interfered transitively with everything live at any anchor,
+exhausting the 12-GPR pool. The greedy spill loop diverged because
+spilling a phi-merge is a no-op for pressure: the parallel copy at
+each predecessor still needs a register for the merge value, and the
+inserted reloads (marked `SPILL_WEIGHT_INFINITE`, unspillable) pinned
+registers at the same slots.
+
+**Q.1 — LiveRangeSplitter**
+([`Compiler/Targets/Shared/LiveRangeSplitter.maxon`](Compiler/Targets/Shared/LiveRangeSplitter.maxon)).
+For every multi-anchor phi-merge (defined as a block-arg whose range
+has ≥2 predecessor copy-slot intervals on top of its def-block
+interval), mint one sub-range per predecessor copy slot, each with a
+single 1-position interval at `(predBlockId, predBlockLen-1)`. The
+merge's main range keeps only its def-block + live-through intervals.
+Critical correctness detail: live-through intervals where the merge
+value propagates into a non-pred, non-def block must stay on R_main —
+they're real uses, not copy-slot artifacts — identified by exact
+match against a `(predBlockId, predBlockLen-1)` anchor table built
+once per merge block. Misclassifying a live-through as a copy slot
+mints a fat sub-range that the spill loop can't recover from.
+Sub-ranges hint-link to R_main via `copyHintValueId` so the chordal
+allocator gives them the merge's color in the no-pressure case
+(zero-move identity elision through the parallel copy).
+
+**Q.2 — Sub-range → parent-merge spill translation**
+([`RegisterAllocator.maxon:744-795`](Compiler/Targets/Shared/RegisterAllocator.maxon)).
+Sub-ranges carry `SPILL_WEIGHT_INFINITE` because spilling a 1-position
+range alone yields no relief. When the spill loop sees one uncolored,
+it looks up the parent merge via the `splitInfo` sidetable and
+substitutes the merge into `spillDecision.spilledRanges`. The existing
+`SpillCodeInsertion` block-arg path (`emitSpillStore` at top of merge
+block + reloads at use sites) handles the rest. Multiple iterations
+spill multiple merges until pressure relieves. Mirrors LLVM Greedy's
+"phi spilling demotes to a stack slot" — the merge briefly transits a
+register at parallel-copy materialization, gets stored, dies; uses
+reload from the slot.
+
+**Q.3 — Pipeline wiring**
+([`RegisterAllocator.maxon:711`](Compiler/Targets/Shared/RegisterAllocator.maxon),
+[`LiveRangeBuilder.maxon:58-96`](Compiler/Targets/Shared/LiveRangeBuilder.maxon)).
+New types `SplitPredAnchor`, `SplitMergeInfo`, `SplitMergeInfoArray`.
+`splitInfo` field added to `FunctionRegAllocator`. Splitter runs as
+the final step of `runLivenessAndRanges`, after `coalesceRanges`
+populates copy edges (so the splitter can find and redirect the
+source vreg's `copyEdges` from `R.valueId` to the new sub-range id,
+keeping `isCopyBoundaryOverlap` correctly suppressing the
+source↔sub-range overlap at the copy boundary). Re-runs on every
+spill iteration because each rebuild re-fuses anchors.
+
+**Q.4 — `throw` in match arm bodies**
+([`Parser.maxon:7099-7106`](Compiler/Parser.maxon)). Pre-existing
+parser gap surfaced when the Stage Q regalloc work unblocked the
+`register-allocator` spec on the self-hosted whitelist: the match-arm
+body parser handled `return`/`break`/`continue`/`try`/expression but
+rejected `throw Err.case` as a statement. Added a `TokenKind.throw`
+branch routing to the existing `parseThrowStatement`, matching the
+C# bootstrap's behavior. Unlocked `error-throw-in-match`.
+
+**Whitelist additions**: `register-allocator` (60 tests + the new
+`phi-merge-split-multi-anchor` regression test that locks in the
+URL.resolve fix).
+
+**Net Stage Q**: stdlib cache build no longer panics on URL.resolve;
+spec parity restored to 1566/1566 (up from 1505/1506 pre-Q via
++60 register-allocator tests + 1 new phi-merge split spec +
+1 throw-in-match fix). The fix is structural and applies to any
+future function with disjoint phi-merge anchors — not a URL.resolve-
+specific workaround.
+
+**Deferred from Stage Q** (future regalloc work):
+
+- **Direct-memory phi spilling.** The Q.2 fallback spills the parent
+  merge via the existing block-arg store-at-top-of-block path, which
+  still requires the merge value to briefly occupy a register at
+  parallel-copy materialization. URL.resolve survives because its
+  phi-merges are distributed across nested merge blocks with diverse
+  predecessor sets — at any single merge block, the simultaneously-
+  live block-arg count stays below 12. A function where all N>12
+  locals are mutated in a SINGLE if/else (every block-arg born at the
+  same merge block's op 0) still hits unrecoverable pressure even
+  with Q.1 + Q.2. The true LLVM-Greedy fix is to rewrite the
+  predecessor's parallel-copy to `store src_reg, [merge.spill_slot]`
+  directly — never landing the merge in a register. Requires:
+  (a) a target-specific `emitStoreToSlot` helper alongside
+  `emitMovReg` in [`RegAllocTarget`](Compiler/Targets/Shared/RegAllocTarget.maxon);
+  (b) `CopyMove` extended with a `slotOffset` variant for memory-only
+  destinations; (c) `buildBlockArgCopies`
+  ([`CopyResolution.maxon:54`](Compiler/Targets/Shared/CopyResolution.maxon))
+  consults a `memoryOnlyMerges` sidetable and emits stores instead of
+  movs for those destinations; (d) `SpillCodeInsertion`'s block-arg
+  store at top of merge block becomes a no-op for memory-only merges
+  (the value is already in memory by the time control reaches the
+  merge block). Regression test ready (the deferred
+  `phi-merge-memory-only-spill` synthetic 13-locals-in-one-block
+  fragment was drafted during Q's investigation; the test was held
+  back because it currently panics, demonstrating exactly the
+  pressure case this work resolves).
+
+- **Eviction with backtracking in chordal coloring.** Q.1 + Q.2 cover
+  phi-merge fusion and phi-merge pressure; they do not help non-phi
+  pressure spikes (a sequence of long-lived locals that all need
+  registers at one program point with no merging involved). LLVM
+  Greedy's coloring is iterative: when a virtual range can't get a
+  color, the allocator picks the lowest-weight COLORED neighbor,
+  un-colors it, evicts it back to the priority queue, and retries
+  the current range with the freed register. Implementation lives
+  entirely in [`SSAColoring.maxon`](Compiler/Targets/Shared/SSAColoring.maxon)
+  — extend `colorClass` to maintain a priority queue keyed by
+  `range.spillWeight`, change the greedy walk to "pop, try color,
+  evict if blocked, repeat until queue empty," and surface
+  evicted-and-still-uncolorable ranges through the existing
+  `findUncoloredRanges` path so the spill loop handles them. The
+  current synthetic
+  `int-twenty-vars-heavy-spill` test (already on the whitelist)
+  passes only because all 20 values are rematerializable constants;
+  a non-rematerializable version would currently fail and would
+  serve as the regression test for eviction. Weighing this against
+  Q's direct-memory phi work: eviction is target-agnostic and a
+  pure addition to one file, while direct-memory phis touch four;
+  eviction likely lands first.
 
 ## Verification
 

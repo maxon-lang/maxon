@@ -1,0 +1,93 @@
+// Test: phi-merge-split-multi-anchor
+function main() returns ExitCode
+	var a = 0
+	var b = 0
+	var c = 0
+	var d = 0
+	if 1 < 2 'g1'
+		a = 1
+		b = 2
+		c = 3
+		d = 4
+	end 'g1' else 'g1e'
+		a = 10
+		b = 20
+		c = 30
+		d = 40
+	end 'g1e'
+	if a > 0 'g2'
+		a = a + 100
+		c = c + 100
+	end 'g2' else 'g2e'
+		b = b + 100
+		d = d + 100
+	end 'g2e'
+	if b > 0 'g3'
+		a = a + b
+		c = c + d
+	end 'g3' else 'g3e'
+		b = a - 1
+		d = c - 1
+	end 'g3e'
+	return (a + b + c + d) mod 256
+end 'main'
+---
+ExitCode: 216
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 0 : i64
+    mir.br g1_0()
+  g1_0:
+    %7 = mir.mov_imm 1 : i64
+    %8 = mir.mov_imm 2 : i64
+    %9 = mir.mov_imm 3 : i64
+    %10 = mir.mov_imm 4 : i64
+    mir.br g1_0.merge(%7, %8, %9, %10)
+  g1_0.merge:
+    %17 = mir.cmp gt, %56, %0
+    mir.cond_br %17 [then: g2_0(), else: g2e_0()]
+  g2_0:
+    %19 = mir.mov_imm 100 : i64
+    %20 = mir.add.i64 %56, %19
+    %22 = mir.mov_imm 100 : i64
+    %23 = mir.add.i64 %62, %22
+    mir.br g2_0.merge(%20, %59, %23, %65)
+  g2e_0:
+    %25 = mir.mov_imm 100 : i64
+    %26 = mir.add.i64 %59, %25
+    %28 = mir.mov_imm 100 : i64
+    %29 = mir.add.i64 %65, %28
+    mir.br g2_0.merge(%56, %26, %62, %29)
+  g2_0.merge:
+    %32 = mir.cmp gt, %58, %0
+    mir.cond_br %32 [then: g3_0(), else: g3e_0()]
+  g3_0:
+    %35 = mir.add.i64 %55, %58
+    %38 = mir.add.i64 %61, %64
+    mir.br g3_0.merge(%35, %58, %38, %64)
+  g3e_0:
+    %40 = mir.mov_imm 1 : i64
+    %41 = mir.sub.i64 %55, %40
+    %43 = mir.mov_imm 1 : i64
+    %44 = mir.sub.i64 %61, %43
+    mir.br g3_0.merge(%55, %41, %61, %44)
+  g3_0.merge:
+    %47 = mir.add.i64 %54, %57
+    %49 = mir.add.i64 %47, %60
+    %51 = mir.add.i64 %49, %63
+    %52 = mir.mov_imm 256 : i64
+    %53 = mir.rem.i64 %51, %52
+    %66 = mir.mov_imm 255 : i64
+    %67 = mir.cmp ugt, %53, %66
+    mir.cond_br %67 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %68 = mir.global_addr @__panic_msg_0
+    %69 = mir.call @mrt_panic(%68)
+  __range_ok_0:
+    mir.ret %53
+  }
+}
+---

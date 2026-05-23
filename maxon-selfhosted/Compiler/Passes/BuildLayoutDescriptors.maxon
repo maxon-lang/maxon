@@ -203,7 +203,7 @@ end 'primitiveWidth'
 function instanceHasHeapRefs(args MaxonTypeArray) returns bool
 	for i in 0 upto args.count() 'each'
 		let a = try args.get(i) otherwise panic("instanceHasHeapRefs: args.get OOB at {i}")
-		if maxonTypeIsHeapManaged(t: a) 'hit'
+		if maxonTypeIsHeapManaged(a) 'hit'
 			return true
 		end 'hit'
 	end 'each'
@@ -455,7 +455,7 @@ function representativeHeapType(project Project, gid GenericInstanceId) returns 
 	let (_, args) = project.genericInstances.get(gid)
 	for i in 0 upto args.count() 'eachArg'
 		let a = try args.get(i) otherwise panic("representativeHeapType: args.get OOB at {i}")
-		if maxonTypeIsHeapManaged(t: a) 'hit'
+		if maxonTypeIsHeapManaged(a) 'hit'
 			return a
 		end 'hit'
 	end 'eachArg'
@@ -595,7 +595,7 @@ function synthesizeCopyThunk(project Project, maxonModule MaxonModule, gid Gener
 				panic("synthesizeCopyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			let isHeap = maxonTypeIsHeapManaged(t: concrete)
+			let isHeap = maxonTypeIsHeapManaged(concrete)
 			emitWordCopyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, srcName: srcLoad, dstName: dstLoad, offset: field.offset, fieldHasHeapRef: isHeap, tag: "f{i}")
 		end 'eachField'
 	end 'isStruct' else 'singleWord'
@@ -643,7 +643,7 @@ function synthesizeDestroyThunk(project Project, maxonModule MaxonModule, gid Ge
 				panic("synthesizeDestroyThunk: field '{field.name}' on struct '{baseName}' has unresolved offset — layoutAllStructs pass did not run")
 			end 'unresolved'
 			let concrete = substituteType(project, t: field.fieldType, subst: subst)
-			if maxonTypeIsHeapManaged(t: concrete) 'isHeap'
+			if maxonTypeIsHeapManaged(concrete) 'isHeap'
 				emitWordDestroyAtOffset(project, maxonModule: maxonModule, block: block, thunkName: name, valueName: valueLoad, offset: field.offset, slotMaxonType: concrete, slotId: nextSlot, tag: "f{i}")
 				nextSlot = nextSlot + 1
 			end 'isHeap'

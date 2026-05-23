@@ -153,7 +153,7 @@ function inlineOneRound(module StdModule, project Project, recursive CallGraphSt
 		splices = splices + counts.splices
 		loopBonus = loopBonus + counts.loopBonus
 	end 'eachCaller'
-	return RoundCounts.create(splices: splices, loopBonus: loopBonus)
+	return RoundCounts.create(splices, loopBonus: loopBonus)
 end 'inlineOneRound'
 
 typealias StdFuncByNameForInliner = Map with (String, IrFunction)
@@ -195,7 +195,7 @@ function processOneCaller(module StdModule, project Project, caller IrFunction, 
 			end 'wantInline'
 		end 'eachOp'
 	end 'eachBlock'
-	return RoundCounts.create(splices: splices, loopBonus: loopBonus)
+	return RoundCounts.create(splices, loopBonus: loopBonus)
 end 'processOneCaller'
 
 function lookupLoopDepth(loopDepth RegIntArray, blockId BlockId) returns ParsedInt
@@ -275,7 +275,7 @@ function decideInline(module StdModule, project Project, opIdx OpIndex, caller I
 	end 'overBudget'
 	let baseBudget = computeInliningBudget(module, project: project, callShape: callShape, caller: caller, funcMap: funcMap, loopDepth: 0)
 	let viaBonus = calleeOps > baseBudget
-	return InlineDecision.accept(loopBonus: viaBonus)
+	return InlineDecision.accept(viaBonus)
 end 'decideInline'
 
 // Loop-depth-and-arg-shape budget. C2.c wires in the loop multiplier
@@ -843,13 +843,13 @@ end 'extractCallShape'
 
 function extractFromCallOp(op StdCallOp) returns CallShape
 	return match op 'kind'
-		call(resultId, callee, argIds) gives CallShape.fromStaticCall(resultId: resultId, callee: callee, argIds: argIds)
+		call(resultId, callee, argIds) gives CallShape.fromStaticCall(resultId, callee: callee, argIds: argIds)
 		ret gives CallShape.notInlinable()
 		// tryCall sites are now inlinable: the splice rewrites the callee's
 		// `errorReturn` terminator into a binding that hands both retVal and
 		// errorFlag back to the caller (mirroring the multi-value-return ABI
 		// the lowerings just established).
-		tryCall(resultId, callee, argIds, errorFlagId) gives CallShape.fromTryCall(resultId: resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
+		tryCall(resultId, callee, argIds, errorFlagId) gives CallShape.fromTryCall(resultId, callee: callee, argIds: argIds, errorFlagId: errorFlagId)
 		indirectCall gives CallShape.notInlinable()
 		witnessCall gives CallShape.notInlinable()
 		funcRef gives CallShape.notInlinable()
@@ -890,7 +890,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		return false
 	end 'noBlocks'
 	if callee.blockRefs.count() > 1 'multi'
-		return performMultiBlockInline(module: module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape)
+		return performMultiBlockInline(module, project: project, caller: caller, block: block, opIdx: opIdx, callee: callee, callShape: callShape)
 	end 'multi'
 	let calleeBlockRef = try callee.blockRefs.get(0) otherwise panic("performInline: callee.blockRefs.get(0) failed after count==1")
 	let calleeBlock = try module.blocks.get(calleeBlockRef) otherwise panic("performInline: blockRef {calleeBlockRef} not in module")
@@ -916,18 +916,18 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
-	bindParamRemap(module: module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
-	nextId = bindBodyRemap(module: module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: nextId)
+	bindParamRemap(module, calleeBlock: calleeBlock, argIds: callShape.argIds, remap: remap)
+	nextId = bindBodyRemap(module, calleeBlock: calleeBlock, calleeTermIdx: calleeBlock.terminatorIndex(), remap: remap, nextId: nextId)
 
 	// Phase 2: replace the call op in caller's block.opRefs with the
 	// rewritten body. Find the call's position first; insert is at the
 	// same position so the splice is visually "in place".
-	let posInBlock = try findOpPosition(block: block, opIdx: opIdx) otherwise return false
+	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return false
 	let removedIdx = try block.opRefs.remove(posInBlock) otherwise panic("performInline: remove at {posInBlock} failed")
 	if removedIdx != opIdx 'mismatch'
 		panic("performInline: removed opIdx {removedIdx} != expected {opIdx}")
 	end 'mismatch'
-	emitInlinedBody(module: module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
+	emitInlinedBody(module, callerBlock: block, calleeBlock: calleeBlock, remap: remap, insertAt: posInBlock)
 
 	// Phase 3: rewrite the caller's existing ops so any reference to the
 	// call's old resultId now reads the inlined return value. Two cases:
@@ -942,7 +942,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		if inlinedRet == REMAP_INVALID 'unmapped'
 			panic("performInline: ret ValueId {retValId} not bound by callee body walk")
 		end 'unmapped'
-		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
+		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: inlinedRet)
 	end 'hasReturn'
 
 	// Phase 3b: when the call site was a tryCall, also rebind the caller's
@@ -966,7 +966,7 @@ function performInline(module StdModule, project Project, caller IrFunction, blo
 		if inlinedFlag == REMAP_INVALID 'unmappedFlag'
 			panic("performInline: errorFlagId {calleeErrorFlagId} not bound by callee body walk")
 		end 'unmappedFlag'
-		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.errorFlagId, newId: inlinedFlag)
+		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: inlinedFlag)
 	end 'tryCallSite'
 
 	invalidateCachedHash(project, callerName: caller.name)
@@ -988,7 +988,7 @@ end 'performInline'
 // from `caller.nextBlockId`; the caller's `nextBlockId` is bumped by
 // (calleeBlocks + 1) — one slot per cloned block plus the continuation.
 function performMultiBlockInline(module StdModule, project Project, caller IrFunction, block IrBlock, opIdx OpIndex, callee IrFunction, callShape CallShape) returns bool
-	let posInBlock = try findOpPosition(block: block, opIdx: opIdx) otherwise return false
+	let posInBlock = try findOpPosition(block, opIdx: opIdx) otherwise return false
 
 	// Phase 1: allocate fresh BlockIds for every callee block plus the
 	// continuation. Build callee-blockId → caller-blockId remap.
@@ -1018,8 +1018,8 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	while remap.count() <= calleeMaxId 'init'
 		remap.push(REMAP_INVALID)
 	end 'init'
-	bindParamRemapMulti(module: module, callee: callee, argIds: callShape.argIds, remap: remap)
-	nextId = bindMultiBlockBodyRemap(module: module, callee: callee, remap: remap, nextId: nextId)
+	bindParamRemapMulti(module, callee: callee, argIds: callShape.argIds, remap: remap)
+	nextId = bindMultiBlockBodyRemap(module, callee: callee, remap: remap, nextId: nextId)
 	let isTryCallSite = callShape.errorFlagId != 0
 	let returnsValue = not stdReturnTypeIsVoid(callee.returnType)
 	// Primary return phi: needed when callee returns a value OR the call
@@ -1047,7 +1047,7 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	let entryNewBlockId = try blockRemap.get(entryCalleeBlock.id) otherwise panic("performMultiBlockInline: blockRemap missing entry id {entryCalleeBlock.id}")
 
 	var continuationBlock = IrBlock.create(continuationBlockId, label: "inline_cont_{caller.name}_{block.id}")
-	splitCallerBlock(module: module, originalBlock: block, continuation: continuationBlock, callPosition: posInBlock, entryInlinedBlockId: entryNewBlockId)
+	splitCallerBlock(module, originalBlock: block, continuation: continuationBlock, callPosition: posInBlock, entryInlinedBlockId: entryNewBlockId)
 	if needsPrimaryPhi 'phiArg'
 		// For void throwing-callees (no inner type), pick i64 as the
 		// primary register's type — the throw-lowering writes a const i64
@@ -1067,7 +1067,7 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// Body ops are remapped through ValueId+BlockId; `ret` becomes a
 	// `br continuationBlock [retVal]`; `errorReturn` becomes a
 	// `br continuationBlock [retVal, errorFlag]`.
-	emitMultiBlockInlinedBlocks(module: module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: needsPrimaryPhi, isTryCallSite: isTryCallSite)
+	emitMultiBlockInlinedBlocks(module, callee: callee, valueRemap: remap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: needsPrimaryPhi, isTryCallSite: isTryCallSite)
 
 	// Phase 5: register the new blocks (inlined + continuation) on the
 	// caller. Insert the spliced sub-CFG immediately AFTER the call-site
@@ -1080,14 +1080,14 @@ function performMultiBlockInline(module StdModule, project Project, caller IrFun
 	// forward over the rest of the function to reach the inlined body and
 	// then jump back to the continuation — see the array-literal-constant
 	// CompiledIR before this change.
-	registerNewBlocksOnCaller(module: module, caller: caller, callee: callee, callSiteBlockId: block.id, continuationBlock: continuationBlock)
+	registerNewBlocksOnCaller(module, caller: caller, callee: callee, callSiteBlockId: block.id, continuationBlock: continuationBlock)
 
 	// Phase 6: substitute call result.
 	if needsPrimaryPhi 'subRet'
-		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
+		substituteCallResultInCaller(module, caller: caller, oldId: callShape.resultId, newId: phiValueId)
 	end 'subRet'
 	if isTryCallSite 'subErrFlag'
-		substituteCallResultInCaller(module: module, caller: caller, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
+		substituteCallResultInCaller(module, caller: caller, oldId: callShape.errorFlagId, newId: phiErrorFlagId)
 	end 'subErrFlag'
 
 	invalidateCachedHash(project, callerName: caller.name)
@@ -1156,12 +1156,12 @@ function bindMultiBlockBodyRemap(module StdModule, callee IrFunction, remap Valu
 			if isParamOpStd(op) 'skipParam'
 				continue
 			end 'skipParam'
-			n = bindOpDefinesIntoRemap(op: op, remap: remap, nextId: n)
+			n = bindOpDefinesIntoRemap(op, remap: remap, nextId: n)
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
 			let term = try module.ops.get(block.terminatorIndex()) otherwise panic("bindMultiBlockBodyRemap: terminator opIdx not in module.ops")
 			if not isRetOpStd(term) 'notRet'
-				n = bindOpDefinesIntoRemap(op: term, remap: remap, nextId: n)
+				n = bindOpDefinesIntoRemap(term, remap: remap, nextId: n)
 			end 'notRet'
 		end 'hasTerm'
 	end 'eachBlock'
@@ -1217,7 +1217,7 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 			if isParamOpStd(op) 'skipParam'
 				continue
 			end 'skipParam'
-			let rewritten = rewriteOpWithBlocks(op: op, valueRemap: valueRemap, blockRemap: blockRemap)
+			let rewritten = rewriteOpWithBlocks(op, valueRemap: valueRemap, blockRemap: blockRemap)
 			let newIdx = module.ops.count()
 			module.ops.push(rewritten)
 			newBlock.opRefs.append(newIdx)
@@ -1226,7 +1226,7 @@ function emitMultiBlockInlinedBlocks(module StdModule, callee IrFunction, valueR
 		// br to continuation [retVal, errorFlag]; br/condBr → block-remapped.
 		if cBlock.hasTerminatorOp() 'hasTerm'
 			let term = try module.ops.get(cBlock.terminatorIndex()) otherwise panic("emitMultiBlockInlinedBlocks: terminator opIdx not in module.ops")
-			let newTerm = rewriteTerminator(op: term, valueRemap: valueRemap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
+			let newTerm = rewriteTerminator(term, valueRemap: valueRemap, blockRemap: blockRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
 			let newTermIdx = module.ops.count()
 			module.ops.push(newTerm)
 			newBlock.terminator = Terminator.opIndex(newTermIdx)
@@ -1249,13 +1249,13 @@ function registerNewBlocksOnCaller(module StdModule, caller IrFunction, callee I
 	// Find the call-site block's position in caller.blockRefs. Insertion
 	// starts at the slot immediately after it, so the spliced sub-CFG is
 	// emitted contiguously with the caller's pre-call ops.
-	var insertAt = findBlockRefPosition(module: module, caller: caller, blockId: callSiteBlockId) + 1
+	var insertAt = findBlockRefPosition(module, caller: caller, blockId: callSiteBlockId) + 1
 
 	for i in 0 upto callee.blockRefs.count() 'eachInlined'
-		try caller.blockRefs.insert(at: insertAt, value: newBlocksStart + i) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert failed at {insertAt}")
+		try caller.blockRefs.insert(insertAt, value: newBlocksStart + i) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert failed at {insertAt}")
 		insertAt = insertAt + 1
 	end 'eachInlined'
-	try caller.blockRefs.insert(at: insertAt, value: contIdx) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert (continuation) failed at {insertAt}")
+	try caller.blockRefs.insert(insertAt, value: contIdx) otherwise panic("registerNewBlocksOnCaller: blockRefs.insert (continuation) failed at {insertAt}")
 end 'registerNewBlocksOnCaller'
 
 // Locate the position of `blockId` within `caller.blockRefs`. The
@@ -1281,11 +1281,11 @@ end 'findBlockRefPosition'
 // rewriter so we don't duplicate the per-op match table.
 function rewriteOpWithBlocks(op StdOp, valueRemap ValueIdArray, blockRemap BlockIdArray) returns StdOp
 	return match op 'outer'
-		arith gives rewriteOp(op: op, remap: valueRemap)
+		arith gives rewriteOp(op, remap: valueRemap)
 		control(c) gives StdOp.control(rewriteControlWithBlocks(c, valueRemap: valueRemap, blockRemap: blockRemap))
-		call gives rewriteOp(op: op, remap: valueRemap)
-		memory gives rewriteOp(op: op, remap: valueRemap)
-		system gives rewriteOp(op: op, remap: valueRemap)
+		call gives rewriteOp(op, remap: valueRemap)
+		memory gives rewriteOp(op, remap: valueRemap)
+		system gives rewriteOp(op, remap: valueRemap)
 	end 'outer'
 end 'rewriteOpWithBlocks'
 
@@ -1313,7 +1313,7 @@ end 'rewriteTerminator'
 
 function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuationBlockId BlockId, returnsValue bool, isTryCallSite bool) returns StdOp
 	match op 'c'
-		ret(retValId) then return buildRetBranch(retValId: retValId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
+		ret(retValId) then return buildRetBranch(retValId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue)
 		call then panic("rewriteCallTerminator: bare call op as terminator (multi-block gate should have rejected)")
 		tryCall then panic("rewriteCallTerminator: tryCall terminator (multi-block gate should have rejected)")
 		indirectCall then panic("rewriteCallTerminator: indirectCall terminator (multi-block gate should have rejected)")
@@ -1325,7 +1325,7 @@ function rewriteCallTerminator(op StdCallOp, valueRemap ValueIdArray, continuati
 		// continuation [retVal, errorFlag]`. Both args are remapped through
 		// the value remap; the continuation has matching blockArgs allocated
 		// in performMultiBlockInline.
-		errorReturn(retValId, errorFlagId) then return buildErrorReturnBranch(retValId: retValId, errorFlagId: errorFlagId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
+		errorReturn(retValId, errorFlagId) then return buildErrorReturnBranch(retValId, errorFlagId: errorFlagId, valueRemap: valueRemap, continuationBlockId: continuationBlockId, returnsValue: returnsValue, isTryCallSite: isTryCallSite)
 	end 'c'
 end 'rewriteCallTerminator'
 
@@ -1511,6 +1511,7 @@ function sysOpTouchesSlot(op StdSystemOp) returns bool
 		osAllocPages gives false
 		osAllocPagesLarge gives false
 		osFreePages gives false
+		osFileOpen to osDirMkdir gives false
 		atomicInc gives false
 		atomicDec gives false
 		atomicXadd gives false
@@ -1575,7 +1576,7 @@ end 'paramInfo'
 
 function paramInfoFromCall(op StdCallOp) returns ParamInfo
 	return match op 'inner'
-		param(resultId, paramIndex, _) gives ParamInfo.param(resultId: resultId, paramIndex: paramIndex as ParsedInt)
+		param(resultId, paramIndex, _) gives ParamInfo.param(resultId, paramIndex: paramIndex as ParsedInt)
 		ret gives ParamInfo.notParam()
 		call gives ParamInfo.notParam()
 		tryCall gives ParamInfo.notParam()
@@ -1598,12 +1599,12 @@ function bindBodyRemap(module StdModule, calleeBlock IrBlock, calleeTermIdx OpIn
 		if isParamOpStd(op) 'skipParam'
 			continue
 		end 'skipParam'
-		n = bindOpDefinesIntoRemap(op: op, remap: remap, nextId: n)
+		n = bindOpDefinesIntoRemap(op, remap: remap, nextId: n)
 	end 'eachOp'
 	let term = try module.ops.get(calleeTermIdx) otherwise panic("bindBodyRemap: terminator opIdx not in module.ops")
 	if not isRetOpStd(term) 'termIsRet'
 		// `isSpliceableShape` already enforces this — defensive only.
-		n = bindOpDefinesIntoRemap(op: term, remap: remap, nextId: n)
+		n = bindOpDefinesIntoRemap(term, remap: remap, nextId: n)
 	end 'termIsRet'
 	return n
 end 'bindBodyRemap'
@@ -1726,6 +1727,17 @@ function bindSystemDefine(op StdSystemOp, remap ValueIdArray, nextId ValueId) re
 		osAllocPages(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osAllocPagesLarge(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		osFreePages gives nextId
+		osFileOpen(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileRead(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileWrite(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileClose(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileLseek(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileStat(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileAccess(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osFileUnlink(resultId, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osDirGetdents64(resultId, _, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osDirGetcwd(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
+		osDirMkdir(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
 		atomicInc gives nextId
 		atomicDec gives nextId
 		atomicXadd(resultId, _, _) gives bindOneDefine(remap, key: resultId, nextId: nextId)
@@ -1809,10 +1821,10 @@ function emitInlinedBody(module StdModule, callerBlock IrBlock, calleeBlock IrBl
 		if isParamOpStd(op) 'skipParam'
 			continue
 		end 'skipParam'
-		let rewritten = rewriteOp(op: op, remap: remap)
+		let rewritten = rewriteOp(op, remap: remap)
 		let newIdx = module.ops.count()
 		module.ops.push(rewritten)
-		try callerBlock.opRefs.insert(at: pos, value: newIdx) otherwise panic("emitInlinedBody: opRefs.insert at {pos} failed")
+		try callerBlock.opRefs.insert(pos, value: newIdx) otherwise panic("emitInlinedBody: opRefs.insert at {pos} failed")
 		pos = pos + 1
 	end 'eachOp'
 end 'emitInlinedBody'
@@ -1892,6 +1904,17 @@ function rewriteSystem(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(lookupRemap(remap, key: resultId), sizeId: lookupRemap(remap, key: sizeId))
 		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(lookupRemap(remap, key: ptrId), sizeId: lookupRemap(remap, key: sizeId))
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives StdSystemOp.osFileOpen(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId), flagsId: lookupRemap(remap, key: flagsId), fileModeId: lookupRemap(remap, key: fileModeId))
+		osFileRead(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileRead(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), bufPtrId: lookupRemap(remap, key: bufPtrId), countId: lookupRemap(remap, key: countId))
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileWrite(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), bufPtrId: lookupRemap(remap, key: bufPtrId), countId: lookupRemap(remap, key: countId))
+		osFileClose(resultId, fdId) gives StdSystemOp.osFileClose(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId))
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives StdSystemOp.osFileLseek(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), offsetId: lookupRemap(remap, key: offsetId), whenceId: lookupRemap(remap, key: whenceId))
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives StdSystemOp.osFileStat(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId), statBufPtrId: lookupRemap(remap, key: statBufPtrId))
+		osFileAccess(resultId, cStringPtrId, modeId) gives StdSystemOp.osFileAccess(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId), modeId: lookupRemap(remap, key: modeId))
+		osFileUnlink(resultId, cStringPtrId) gives StdSystemOp.osFileUnlink(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId))
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetdents64(lookupRemap(remap, key: resultId), fdId: lookupRemap(remap, key: fdId), bufPtrId: lookupRemap(remap, key: bufPtrId), bufSizeId: lookupRemap(remap, key: bufSizeId))
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetcwd(lookupRemap(remap, key: resultId), bufPtrId: lookupRemap(remap, key: bufPtrId), bufSizeId: lookupRemap(remap, key: bufSizeId))
+		osDirMkdir(resultId, cStringPtrId, modeId) gives StdSystemOp.osDirMkdir(lookupRemap(remap, key: resultId), cStringPtrId: lookupRemap(remap, key: cStringPtrId), modeId: lookupRemap(remap, key: modeId))
 		atomicInc(addrId) gives StdSystemOp.atomicInc(lookupRemap(remap, key: addrId))
 		atomicDec(addrId) gives StdSystemOp.atomicDec(lookupRemap(remap, key: addrId))
 		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(lookupRemap(remap, key: resultId), addrId: lookupRemap(remap, key: addrId), valId: lookupRemap(remap, key: valId))
@@ -1941,7 +1964,7 @@ end 'substituteCallResultInCaller'
 
 function rewriteOpInPlace(module StdModule, opIdx OpIndex, remap ValueIdArray)
 	let op = try module.ops.get(opIdx) otherwise return
-	let rewritten = rewriteOp(op: op, remap: remap)
+	let rewritten = rewriteOp(op, remap: remap)
 	try module.ops.set(opIdx, value: rewritten) otherwise panic("rewriteOpInPlace: ops.set OOB at {opIdx}")
 end 'rewriteOpInPlace'
 

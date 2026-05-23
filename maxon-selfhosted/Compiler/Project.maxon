@@ -430,6 +430,29 @@ export type Project
 	// resolved arg type).
 	export var tupleAllocGids TupleAllocGidMap
 
+	// Phase 15a: per-call-op tags used by `checkDiscardedResults` (E3064/E3065).
+	// Populated by the parser at three positions where a call's result is
+	// discarded: bare statement (`foo(x)`), explicit `_ =` (`_ = foo(x)`), or
+	// inside a `try CALL otherwise EXPR` whose own result is discarded. The
+	// check walks every `call` / `tryCall` op post-parse and emits E3064 (pure
+	// callee) or E3065 (impure callee, bare-discard only) on a match.
+	//
+	// Key shape: `"{func.name}::{resultName}"` so two calls in different
+	// functions sharing a synth name (`$t0`) don't collide. Not serialized to
+	// the stdlib cache because stdlib code isn't checked (users can't fix it
+	// anyway, and the C# bootstrap exempts it).
+	export var discardedBareCallResults DiscardedCallResultSet
+	export var discardedLetCallResults DiscardedCallResultSet
+
+	// Phase 15a: function names whose body mutates one or more parameters
+	// (direct reassignment `param = ...`, or self-field-store inside an
+	// instance method). The parser tags these at the mutation site and
+	// `computePurity` consults the set so the function is classified as
+	// impure regardless of what op pattern it contains otherwise. Mirrors
+	// the C# bootstrap's `IrFunction.MutatedParams` set populated by
+	// ParameterMutationAnalysisPass.
+	export var paramMutatingFunctions DiscardedCallResultSet
+
 	// Project metadata
 	export var rootPath FilePath
 	// Compilation target
@@ -669,6 +692,9 @@ export type Project
 			closureCounter: 0,
 			castCheckCounter: 0,
 			tupleAllocGids: TupleAllocGidMap.create(),
+			discardedBareCallResults: DiscardedCallResultSet.create(),
+			discardedLetCallResults: DiscardedCallResultSet.create(),
+			paramMutatingFunctions: DiscardedCallResultSet.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -1789,12 +1815,31 @@ export typealias FuncReturnTypeMap = Map with (String, MaxonReturnType)
 
 export typealias FuncThrowsTypeMap = Map with (String, ThrowsClause)
 
-// Per-parameter default value. None = no default (argument is mandatory);
-// intLiteral(v) = literal integer default used when the call site omits the
-// parameter. Only integer literal defaults are supported today.
+// Per-parameter default value. `none` means the argument is mandatory; the
+// other arms each carry a compile-time constant the call-site default-fill
+// loop materializes when the user omits the parameter. The set of accepted
+// shapes is the set of "compile-time constants" — literals plus an
+// enum-case reference (`EnumName.caseName`) which resolves at lowering
+// time to the case's ordinal. Float/bool/string/byte literals are placed
+// for future-proofing; the parser currently emits `intLiteral` and
+// `enumCase` only.
 export union ParamDefault
 	none
 	intLiteral(value IntConstant)
+	// IEEE-754 bit representation of the literal value. Stored as raw bits
+	// (rather than a typed `float`) so the cache codec doesn't depend on a
+	// `bits-to-f64` builtin that the self-hosted runtime hasn't published.
+	// Lowering converts the bits back to f64 via the regular `constF64` op.
+	floatLiteralBits(bits IntConstant)
+	boolLiteral(value bool)
+	byteLiteral(value IntConstant)
+	enumCase(typeName String, caseName String)
+	// Complex expression (string, array, struct, byteString, etc.) — the
+	// parser synthesizes a zero-arg helper function whose body returns the
+	// default expression, then stores that helper's qualified name here. At
+	// each call site that omits the parameter, lowering emits a call to
+	// `helperFuncName` and uses its return value.
+	helper(helperFuncName String)
 end 'ParamDefault'
 
 export typealias ParamDefaultArray = Array with ParamDefault
@@ -1818,33 +1863,93 @@ end 'ParamDefaultValue'
 export function paramDefaultAsIntLiteral(paramDefault ParamDefault) returns ParamDefaultValue
 	return match paramDefault 'unwrap'
 		intLiteral(value) gives ParamDefaultValue.some(value)
+		byteLiteral(value) gives ParamDefaultValue.some(value)
+		boolLiteral(value) gives ParamDefaultValue.some(1 if value else 0)
 		none gives ParamDefaultValue.empty()
+		floatLiteralBits gives ParamDefaultValue.empty()
+		enumCase gives ParamDefaultValue.empty()
+		helper gives ParamDefaultValue.empty()
 	end 'unwrap'
 end 'paramDefaultAsIntLiteral'
 
-// Stdlib-cache codec for ParamDefault. Writes the union tag (none vs
-// intLiteral) followed by the int payload when present, mirroring the
-// rawValue/unionCases pattern used by the other cache codecs.
-export function writeParamDefault(buf ByteArray, pd ParamDefault)
+// True iff this param has any default at all (used by call-site arity
+// checks that only need a yes/no signal, not the actual value).
+export function paramDefaultHasValue(paramDefault ParamDefault) returns bool
+	return match paramDefault 'has'
+		none gives false
+		intLiteral gives true
+		floatLiteralBits gives true
+		boolLiteral gives true
+		byteLiteral gives true
+		enumCase gives true
+		helper gives true
+	end 'has'
+end 'paramDefaultHasValue'
+
+// Stdlib-cache codec for ParamDefault. Writes the union tag followed by
+// the payload bytes when present, mirroring the rawValue/unionCases
+// pattern used by the other cache codecs.
+export function writeParamDefault(buf ByteArray, pd ParamDefault) throws CacheCorruption
 	writeDword(buf, value: pd.ordinal)
 	match pd 'payload'
 		none then break 'payload'
 		intLiteral(value) then writeQword(buf, value: value)
+		floatLiteralBits(bits) then writeQword(buf, value: bits)
+		boolLiteral(value) then writeDword(buf, value: 1 if value else 0)
+		byteLiteral(value) then writeQword(buf, value: value)
+		enumCase(typeName, caseName) then try writeParamDefaultEnumPayload(buf, typeName: typeName, caseName: caseName)
+		helper(helperFuncName) then try writeString(buf, s: helperFuncName)
 	end 'payload'
 end 'writeParamDefault'
+
+function writeParamDefaultEnumPayload(buf ByteArray, typeName String, caseName String) throws CacheCorruption
+	try writeString(buf, s: typeName)
+	try writeString(buf, s: caseName)
+end 'writeParamDefaultEnumPayload'
 
 function readParamDefaultIntLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
 	let value = readQword(buf, offset: offset)
 	return (ParamDefault.intLiteral(value), offset + 8)
 end 'readParamDefaultIntLiteral'
 
-export function readParamDefault(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+function readParamDefaultFloatLiteralBits(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+	let bits = readQword(buf, offset: offset)
+	return (ParamDefault.floatLiteralBits(bits), offset + 8)
+end 'readParamDefaultFloatLiteralBits'
+
+function readParamDefaultBoolLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+	let raw = readDword(buf, offset: offset)
+	return (ParamDefault.boolLiteral(raw != 0), offset + 4)
+end 'readParamDefaultBoolLiteral'
+
+function readParamDefaultByteLiteral(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset)
+	let value = readQword(buf, offset: offset)
+	return (ParamDefault.byteLiteral(value), offset + 8)
+end 'readParamDefaultByteLiteral'
+
+function readParamDefaultEnumCase(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let (typeName, after1) = try readString(buf, offset: offset)
+	let (caseName, after2) = try readString(buf, offset: after1)
+	return (ParamDefault.enumCase(typeName, caseName: caseName), after2)
+end 'readParamDefaultEnumCase'
+
+function readParamDefaultHelper(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
+	let (helperName, after) = try readString(buf, offset: offset)
+	return (ParamDefault.helper(helperName), after)
+end 'readParamDefaultHelper'
+
+export function readParamDefault(buf ByteArray, offset ByteOffset) returns (ParamDefault, ByteOffset) throws CacheCorruption
 	let raw = readDword(buf, offset: offset)
 	let pos = offset + 4
 	let kase = try ParamDefault.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown ParamDefault tag {raw}")
 	match kase 'tag'
 		none then return (ParamDefault.none, pos)
 		intLiteral then return readParamDefaultIntLiteral(buf, offset: pos)
+		floatLiteralBits then return readParamDefaultFloatLiteralBits(buf, offset: pos)
+		boolLiteral then return readParamDefaultBoolLiteral(buf, offset: pos)
+		byteLiteral then return readParamDefaultByteLiteral(buf, offset: pos)
+		enumCase then return try readParamDefaultEnumCase(buf, offset: pos)
+		helper then return try readParamDefaultHelper(buf, offset: pos)
 	end 'tag'
 end 'readParamDefault'
 
@@ -2409,6 +2514,10 @@ export typealias TopLevelVarMap = Map with (String, TopLevelVarInfo)
 // parser computed at parse time but cannot stash on the structAlloc op itself
 // (the op's only payload is the bare struct name).
 export typealias TupleAllocGidMap = Map with (ByteArray, GenericInstanceId)
+
+// Phase 15a: keys for `project.discardedBareCallResults` / `discardedLetCallResults`.
+// String shape: `"{func.name}::{call.result}"`.
+export typealias DiscardedCallResultSet = Set with String
 
 export type TypealiasRange
 	export var lower RangeBound

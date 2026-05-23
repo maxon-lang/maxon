@@ -37,11 +37,24 @@ export union ErrorCode
 	// the match.
 	parserMatchBlockStatementNotAllowed = 2049
 	parserReservedIdentifier = 2051
+	// E2052: a call site labeled its first argument (`f(name: value, ...)`).
+	// The first argument is positional-only; only the second and subsequent
+	// arguments may be labeled.
+	parserFirstArgCannotBeNamed = 2052
 	semanticNoMain = 3001
 	semanticMainWrongReturnType = 3002
 	semanticUndefinedVariable = 3003
 	semanticEqualsRequiresEquatable = 3004
 	semanticTypeMismatch = 3005
+	// E3006: a duplicate definition or a local-vs-self-field shadow. Two
+	// shapes share the code: (a) two function definitions with the same
+	// name and signature — fires from `reportDuplicateFunction` in the
+	// parser for same-file duplicates and from the project-level main
+	// registration for cross-file `main` collisions; (b) a local
+	// declaration inside an instance method whose name collides with a
+	// `self.field` (matches the C# bootstrap's broader interpretation of
+	// "duplicate definition" — the local would silently shadow the field).
+	semanticDuplicateDefinition = 3006
 	// E3007: call site cannot pick a unique overload because multiple
 	// variants have indistinguishable signatures at this call. Emitted when
 	// two overloads share the same parameter types and the caller doesn't
@@ -116,6 +129,15 @@ export union ErrorCode
 	// write the directory-qualified form (`dir.Name`) to disambiguate.
 	// Mirrors E3095 (functions) but operates on the typealias registry.
 	semanticAmbiguousTypeAlias = 3063
+	// E3064: a pure-function call's result was discarded. Pure callees must
+	// have their result used — neither bare `foo()` nor `_ = foo()` is
+	// permitted. Fires from `checkDiscardedResults`.
+	semanticDiscardedPureResult = 3064
+	// E3065: an impure-function call's result was discarded without the
+	// explicit `_ =` opt-in. The impure-call result still has to flow into
+	// either a binding (`let r = foo()`) or an explicit discard
+	// (`_ = foo()`). Fires from `checkDiscardedResults`.
+	semanticDiscardedImpureResult = 3065
 	// E3092: an `export` (global) decl is never referenced from any file
 	// outside its declaring file. The decl could be file-private (drop the
 	// modifier) or `module`-visible. Applies to functions, types, enums,

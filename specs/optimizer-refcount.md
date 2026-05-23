@@ -82,7 +82,7 @@ function sum_point(p Point) returns Integer
 end 'sum_point'
 
 function make_point(x Integer, y Integer) returns Point
-	return Point.create(x: x, y: y)
+	return Point.create(x, y: y)
 end 'make_point'
 
 function describe(s Shape) returns Integer
@@ -112,7 +112,7 @@ end 'row_total'
 function matrix_total(m Matrix) returns Integer
 	var sum = 0
 	for row in m 'iter'
-		sum = sum + row_total(arr: row)
+		sum = sum + row_total(row)
 	end 'iter'
 	return sum
 end 'matrix_total'
@@ -129,22 +129,22 @@ function main() returns ExitCode
 	var total = 0
 
 	// --- section 1: struct literal + alias ---
-	var a = Point.create(x: 1, y: 2)
+	var a = Point.create(1, y: 2)
 	var b = a
 	b.x = 99
 	a = b
 	total = total + a.x
 
 	// --- section 2: short-lived temp passed to function ---
-	total = total + sum_point(Point.create(x: 3, y: 4))
-	total = total + sum_point(Point.create(x: 5, y: 6))
+	total = total + sum_point(Point.create(3, y: 4))
+	total = total + sum_point(Point.create(5, y: 6))
 
 	// --- section 3: loop-carried container pushes ---
 	var names = StringArray.create()
 	for i in 0 upto 5 'names_loop'
 		names.push("name_{i}")
 	end 'names_loop'
-	total = total + names_total(arr: names)
+	total = total + names_total(names)
 
 	// --- section 4: nested container ---
 	var row1 = IntArray.create()
@@ -156,19 +156,19 @@ function main() returns ExitCode
 	var matrix = Matrix.create()
 	matrix.push(row1)
 	matrix.push(row2)
-	total = total + matrix_total(m: matrix)
+	total = total + matrix_total(matrix)
 
 	// --- section 5: function parameter passing ---
-	var origin = Point.create(x: 0, y: 0)
+	var origin = Point.create(0, y: 0)
 	total = total + sum_point(origin)
 	total = total + sum_point(origin)
 
 	// --- section 6: return-ownership transfer (factory) ---
-	let made = make_point(x: 10, y: 20)
+	let made = make_point(10, y: 20)
 	total = total + made.x
 
 	// --- section 7: struct field reassignment ---
-	var person = Person.create(name: "alice", age: 30)
+	var person = Person.create("alice", age: 30)
 	person.name = "bob"
 	person.name = "carol"
 	total = total + person.age
@@ -184,16 +184,16 @@ function main() returns ExitCode
 	// --- section 9: closure capturing a managed value ---
 	let prefix = "pfx_"
 	let builder = function(n Integer) gives "{prefix}{n}".count()
-	total = total + apply(f: builder, x: 7)
-	total = total + apply(f: builder, x: 8)
+	total = total + apply(builder, x: 7)
+	total = total + apply(builder, x: 8)
 
 	// --- section 10: for-in over managed elements, primitive body ---
 	// exercises the for-in lowering pattern (__forin_result + user var alias)
 	var points = PointArray.create()
-	points.push(Point.create(x: 1, y: 2))
-	points.push(Point.create(x: 3, y: 4))
-	points.push(Point.create(x: 5, y: 6))
-	total = total + points_x_sum(pts: points)
+	points.push(Point.create(1, y: 2))
+	points.push(Point.create(3, y: 4))
+	points.push(Point.create(5, y: 6))
+	total = total + points_x_sum(points)
 
 	// --- section 11: in-loop try-alias + borrow-call bracket ---
 	// Inside each iteration, a try-binding creates an implicit alias between
@@ -203,9 +203,9 @@ function main() returns ExitCode
 	// transferred reference and the direct call is borrow-only, so the
 	// extra +1/-1 is pure overhead.
 	var triplet = PointArray.create()
-	triplet.push(Point.create(x: 7, y: 8))
-	triplet.push(Point.create(x: 9, y: 10))
-	triplet.push(Point.create(x: 11, y: 12))
+	triplet.push(Point.create(7, y: 8))
+	triplet.push(Point.create(9, y: 10))
+	triplet.push(Point.create(11, y: 12))
 	for i in 0 upto 3 'alias_loop'
 		let p = try triplet.get(i) otherwise 'missErr'
 			panic("alias_loop: triplet.get({i}) invariant violated")
@@ -4836,8 +4836,8 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	@heap let a = Box.create(value: 7)
-	@heap let c = Box.create(value: 11)
+	@heap let a = Box.create(7)
+	@heap let c = Box.create(11)
 	var total = 0
 	if true 'outer'
 		let b = a
@@ -4905,7 +4905,7 @@ union Tag
 end 'Tag'
 
 function main() returns ExitCode
-	@heap let a = Box.create(value: 42)
+	@heap let a = Box.create(42)
 	let tag = Tag.first
 	var total = 0
 	if true 'inner'
@@ -4960,7 +4960,7 @@ union Tag
 end 'Tag'
 
 function main() returns ExitCode
-	@heap let x = Box.create(value: 7)
+	@heap let x = Box.create(7)
 	let tag = Tag.b
 	var total = 0
 	if true 'inner'
@@ -5033,7 +5033,7 @@ function inspect(b Box) returns Integer throws BoxError
 end 'inspect'
 
 function main() returns ExitCode
-	@heap let a = Box.create(value: 42)
+	@heap let a = Box.create(42)
 	var total = 0
 	if true 'inner'
 		let b = a
@@ -5094,9 +5094,9 @@ end 'stash'
 
 function main() returns ExitCode
 	var arr = BoxArray.create()
-	@heap let a = Box.create(value: 42)
+	@heap let a = Box.create(42)
 	let b = a
-	let n = try stash(arr: arr, b: b) otherwise 0
+	let n = try stash(arr, b: b) otherwise 0
 	return n
 end 'main'
 ```
@@ -5171,7 +5171,7 @@ function peek(b Box) returns Integer throws BoxError
 end 'peek'
 
 function pair() returns Box
-	return Box.create(value: 42)
+	return Box.create(42)
 end 'pair'
 
 function main() returns ExitCode
@@ -5235,7 +5235,7 @@ function peek(b Box) returns Integer throws BoxError
 end 'peek'
 
 function main() returns ExitCode
-	@heap let boxed = Box.create(value: 7)
+	@heap let boxed = Box.create(7)
 	var total = 0
 	for _ in 0 upto 3 'loop'
 		let alias = boxed

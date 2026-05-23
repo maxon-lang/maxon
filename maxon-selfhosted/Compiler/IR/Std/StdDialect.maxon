@@ -230,7 +230,7 @@ end 'maxonTypeToStdType'
 export function maxonReturnTypeToStdReturnType(project Project, ref MaxonReturnType) returns StdReturnType
 	return match ref 'convert'
 		void gives StdReturnType.void
-		value(inner) gives StdReturnType.value(inner: maxonTypeToStdType(project, ref: inner))
+		value(inner) gives StdReturnType.value(maxonTypeToStdType(project, ref: inner))
 	end 'convert'
 end 'maxonReturnTypeToStdReturnType'
 
@@ -486,6 +486,36 @@ export union StdSystemOp
 	// original size; on Windows the size is ignored (VirtualFree with MEM_RELEASE
 	// uses 0 for dwSize).
 	osFreePages(ptrId ValueId, sizeId ValueId)
+	// Phase 15c Stream 4.1: file-I/O ops. Each lowers to a Linux syscall on
+	// x64-linux / arm64-linux backends; Windows and Wasm backends don't emit
+	// these ops (the per-target runtime filter swaps in the IAT/WASI variants
+	// of mrt_file_* / mrt_directory_* instead). `cStringPtrId` for path
+	// arguments points to an mm_alloc'd buffer already NUL-terminated by the
+	// runtime helper — backend lowerings can hand the pointer to the syscall
+	// verbatim. `flags` and `fileMode` for osFileOpen are the POSIX open(2)
+	// values: the runtime helper passes O_RDONLY (0) or O_WRONLY|O_CREAT|O_TRUNC
+	// (577) for flags, and 0/0o644 (420)/0o755 (493) for fileMode.
+	osFileOpen(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId)
+	// read(fd, buf, count). Returns bytes read, or -errno.
+	osFileRead(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
+	// write(fd, buf, count). Returns bytes written, or -errno.
+	osFileWrite(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
+	// close(fd). Returns 0 or -errno.
+	osFileClose(resultId ValueId, fdId ValueId)
+	// lseek(fd, offset, whence). whence: 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END.
+	osFileLseek(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId)
+	// stat(path, statbuf). statbuf must be at least 144 bytes (Linux x86_64).
+	osFileStat(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId)
+	// access(path, mode). mode: 0=F_OK (existence check).
+	osFileAccess(resultId ValueId, cStringPtrId ValueId, modeId ValueId)
+	// unlink(path). Returns 0 or -errno.
+	osFileUnlink(resultId ValueId, cStringPtrId ValueId)
+	// getdents64(fd, buf, count). Returns bytes filled or -errno.
+	osDirGetdents64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+	// getcwd(buf, size). Returns buf or -errno.
+	osDirGetcwd(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
+	// mkdir(path, mode). Returns 0 or -errno.
+	osDirMkdir(resultId ValueId, cStringPtrId ValueId, modeId ValueId)
 	// Atomic 64-bit increment at [addrId]. LOCK INC qword on x86, LDAXR/ADD/STLXR
 	// loop on ARM64. Used by mm_incref and the alloc-count counters.
 	atomicInc(addrId ValueId)
@@ -700,6 +730,17 @@ export function sysOpToString(op StdSystemOp) returns String
 		osAllocPages(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages %{sizeId}"
 		osAllocPagesLarge(resultId, sizeId) gives "%{resultId} = sys.os_alloc_pages_large %{sizeId}"
 		osFreePages(ptrId, sizeId) gives "sys.os_free_pages %{ptrId}, %{sizeId}"
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives "%{resultId} = sys.os_file_open %{cStringPtrId}, %{flagsId}, %{fileModeId}"
+		osFileRead(resultId, fdId, bufPtrId, countId) gives "%{resultId} = sys.os_file_read %{fdId}, %{bufPtrId}, %{countId}"
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives "%{resultId} = sys.os_file_write %{fdId}, %{bufPtrId}, %{countId}"
+		osFileClose(resultId, fdId) gives "%{resultId} = sys.os_file_close %{fdId}"
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives "%{resultId} = sys.os_file_lseek %{fdId}, %{offsetId}, %{whenceId}"
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives "%{resultId} = sys.os_file_stat %{cStringPtrId}, %{statBufPtrId}"
+		osFileAccess(resultId, cStringPtrId, modeId) gives "%{resultId} = sys.os_file_access %{cStringPtrId}, %{modeId}"
+		osFileUnlink(resultId, cStringPtrId) gives "%{resultId} = sys.os_file_unlink %{cStringPtrId}"
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_dir_getdents64 %{fdId}, %{bufPtrId}, %{bufSizeId}"
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives "%{resultId} = sys.os_dir_getcwd %{bufPtrId}, %{bufSizeId}"
+		osDirMkdir(resultId, cStringPtrId, modeId) gives "%{resultId} = sys.os_dir_mkdir %{cStringPtrId}, %{modeId}"
 		atomicInc(addrId) gives "sys.atomic_inc %{addrId}"
 		atomicDec(addrId) gives "sys.atomic_dec %{addrId}"
 		atomicXadd(resultId, addrId, valId) gives "%{resultId} = sys.atomic_xadd %{addrId}, %{valId}"

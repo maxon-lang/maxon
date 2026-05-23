@@ -60,7 +60,7 @@ end 'detectHasCalls'
 // those stale epilogue ops and re-emits prologue/epilogue based on the
 // running stack-size tally and the backend's frame-necessity rules.
 export function insertPrologueEpilogueShared(module TargetModule, func IrFunction, backend TargetBackend, opQuery TargetOpQuery)
-	backend.detectCalleeSavedRegs(func: func)
+	backend.detectCalleeSavedRegs(func)
 
 	let hasCalls = detectHasCalls(module, func: func, backend: backend)
 	// Any function with calls needs a frame so the unwinder can walk rbp/x29.
@@ -75,7 +75,7 @@ export function insertPrologueEpilogueShared(module TargetModule, func IrFunctio
 	let varArea = func.varSlotCount * 8
 	let preSaveTotal = varArea + func.spillSize
 	logTrace(LogCategory.ir, message: function() gives "  frame: var={varArea} spill={func.spillSize} total={preSaveTotal} aligned={alignTo16(preSaveTotal)}")
-	let needsPrologue = backend.needsPrologue(adjustedStackSize: adjustedStackSize, hasCalls: hasCalls)
+	let needsPrologue = backend.needsPrologue(adjustedStackSize, hasCalls: hasCalls)
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
@@ -84,12 +84,12 @@ export function insertPrologueEpilogueShared(module TargetModule, func IrFunctio
 		stripTrailingEpilogue(module, block: block, opQuery: opQuery)
 
 		if isFirstBlock and needsPrologue 'emitProlog'
-			backend.insertPrologueAtEntry(block: block, stackSize: adjustedStackSize)
+			backend.insertPrologueAtEntry(block, stackSize: adjustedStackSize)
 		end 'emitProlog'
 		isFirstBlock = false
 
 		if needsPrologue and isReturnBlock(module, block: block, opQuery: opQuery) 'emitEpi'
-			backend.insertEpilogueAtReturnBlock(block: block)
+			backend.insertEpilogueAtReturnBlock(block)
 		end 'emitEpi'
 	end 'eachBlock'
 end 'insertPrologueEpilogueShared'
@@ -104,7 +104,7 @@ function stripTrailingEpilogue(module TargetModule, block IrBlock, opQuery Targe
 	let lastIdx = count - 1
 	let lastPacked = try block.opRefs.get(lastIdx) otherwise panic("stripTrailingEpilogue: last op index {lastIdx} missing from opRefs of size {count}")
 	if opQuery.isEpilogueOp(module, packed: lastPacked) 'strip'
-		try block.opRefs.remove(at: lastIdx) otherwise panic("stripTrailingEpilogue: remove of last index {lastIdx} failed")
+		try block.opRefs.remove(lastIdx) otherwise panic("stripTrailingEpilogue: remove of last index {lastIdx} failed")
 	end 'strip'
 end 'stripTrailingEpilogue'
 

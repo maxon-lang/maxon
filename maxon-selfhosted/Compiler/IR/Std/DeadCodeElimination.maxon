@@ -255,7 +255,7 @@ end 'tryGetBypassTarget'
 
 function bypassFromControl(op StdControlOp) returns BypassTarget
 	return match op 'check'
-		br(target, argIds) gives BypassTarget.some(target: target, argIds: argIds)
+		br(target, argIds) gives BypassTarget.some(target, argIds: argIds)
 		condBr gives BypassTarget.none
 	end 'check'
 end 'bypassFromControl'
@@ -303,7 +303,7 @@ end 'rewriteTerminator'
 function rewriteControl(op StdControlOp, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
 	return match op 'inner'
 		br(target, _) gives rewriteBr(target, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives rewriteCondBr(condId: condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives rewriteCondBr(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, fromBlockId: fromBlockId, toBlockId: toBlockId, fwdArgIds: fwdArgIds)
 	end 'inner'
 end 'rewriteControl'
 
@@ -312,7 +312,7 @@ function rewriteBr(target BlockId, fromBlockId BlockId, toBlockId BlockId, fwdAr
 		return RewrittenTerminator.none
 	end 'noMatch'
 	logTrace(LogCategory.ir, message: function() gives "dce: skip-through br block_{fromBlockId} -> block_{toBlockId}")
-	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(toBlockId, argIds: fwdArgIds)))
+	return RewrittenTerminator.some(StdOp.control(StdControlOp.br(toBlockId, argIds: fwdArgIds)))
 end 'rewriteBr'
 
 function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, fromBlockId BlockId, toBlockId BlockId, fwdArgIds ValueIdArray) returns RewrittenTerminator
@@ -338,10 +338,10 @@ function rewriteCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArr
 			return RewrittenTerminator.none
 		end 'argMismatch'
 		logTrace(LogCategory.ir, message: function() gives "dce: skip-through condBr collapsed both arms -> br block_{newThen}")
-		return RewrittenTerminator.some(op: StdOp.control(StdControlOp.br(newThen, argIds: newThenArgs)))
+		return RewrittenTerminator.some(StdOp.control(StdControlOp.br(newThen, argIds: newThenArgs)))
 	end 'collapsed'
 	logTrace(LogCategory.ir, message: function() gives "dce: skip-through condBr -> block_{newThen}/block_{newElse}")
-	return RewrittenTerminator.some(op: StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
+	return RewrittenTerminator.some(StdOp.control(StdControlOp.condBr(condId, thenTarget: newThen, thenArgIds: newThenArgs, elseTarget: newElse, elseArgIds: newElseArgs)))
 end 'rewriteCondBr'
 
 function valueIdArraysEqual(a ValueIdArray, b ValueIdArray) returns bool
@@ -532,6 +532,17 @@ function countSysUses(op StdSystemOp, useCount ValueIdArray)
 		osAllocPages(_, sizeId) then incrementUse(useCount, valueId: sizeId)
 		osAllocPagesLarge(_, sizeId) then incrementUse(useCount, valueId: sizeId)
 		osFreePages(ptrId, sizeId) then countTwoUses(ptrId, b: sizeId, useCount: useCount)
+		osFileOpen(_, cStringPtrId, flagsId, fileModeId) then countThreeUses(cStringPtrId, b: flagsId, c: fileModeId, useCount: useCount)
+		osFileRead(_, fdId, bufPtrId, countId) then countThreeUses(fdId, b: bufPtrId, c: countId, useCount: useCount)
+		osFileWrite(_, fdId, bufPtrId, countId) then countThreeUses(fdId, b: bufPtrId, c: countId, useCount: useCount)
+		osFileClose(_, fdId) then incrementUse(useCount, valueId: fdId)
+		osFileLseek(_, fdId, offsetId, whenceId) then countThreeUses(fdId, b: offsetId, c: whenceId, useCount: useCount)
+		osFileStat(_, cStringPtrId, statBufPtrId) then countTwoUses(cStringPtrId, b: statBufPtrId, useCount: useCount)
+		osFileAccess(_, cStringPtrId, modeId) then countTwoUses(cStringPtrId, b: modeId, useCount: useCount)
+		osFileUnlink(_, cStringPtrId) then incrementUse(useCount, valueId: cStringPtrId)
+		osDirGetdents64(_, fdId, bufPtrId, bufSizeId) then countThreeUses(fdId, b: bufPtrId, c: bufSizeId, useCount: useCount)
+		osDirGetcwd(_, bufPtrId, bufSizeId) then countTwoUses(bufPtrId, b: bufSizeId, useCount: useCount)
+		osDirMkdir(_, cStringPtrId, modeId) then countTwoUses(cStringPtrId, b: modeId, useCount: useCount)
 		atomicInc(addrId) then incrementUse(useCount, valueId: addrId)
 		atomicDec(addrId) then incrementUse(useCount, valueId: addrId)
 		atomicXadd(_, addrId, valId) then countTwoUses(addrId, b: valId, useCount: useCount)

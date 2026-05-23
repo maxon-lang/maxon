@@ -582,7 +582,7 @@ export function registerBuiltinsIntrinsicSignatures(project Project)
 	// plan for the runtime-side argument-layout contract.
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessResolveOnPath", paramNames: mmParamNames1("name"), paramTypes: mmParamTypes1(mmType), returnType: mmReturn)
 	let spawnNames = subprocessSpawnParamNames()
-	let spawnTypes = subprocessSpawnParamTypes(mmType: mmType)
+	let spawnTypes = subprocessSpawnParamTypes(mmType)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessSpawn", paramNames: spawnNames, paramTypes: spawnTypes, returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessDetach", paramNames: spawnNames, paramTypes: spawnTypes, returnType: intReturn)
 	registerBuiltinsIntrinsicSignature(project, qualifiedName: "__Builtins.subprocessLastErrorMessage", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
@@ -922,8 +922,12 @@ end 'registerManagedMemoryErrorEnum'
 // the type-resolution pass and the call-site arity check only consult
 // FuncSignature/funcReturnTypes, so the throws info is bookkept by 6b.4
 // when it implements the `try ... otherwise` lowering for these calls.
-function registerManagedMemoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
-	let qualifiedName = "__ManagedMemory.{methodName}"
+// Shared helper for registering a builtin method on a `__ManagedX` builtin
+// type. Populates `funcReturnTypes`/`funcSignatures`/`methodNameIndex` with
+// a synthesized signature carrying no defaults; throws metadata is captured
+// by the future lowering pass rather than the signature itself.
+function registerManagedBuiltinMethod(project Project, receiverName String, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	let qualifiedName = "{receiverName}.{methodName}"
 	var paramDefaults = ParamDefaultArray.create()
 	for _ in 0 upto paramNames.count() 'fillDefaults'
 		paramDefaults.push(ParamDefault.none)
@@ -931,6 +935,10 @@ function registerManagedMemoryMethod(project Project, methodName String, paramNa
 	try project.funcReturnTypes.insert(qualifiedName, value: returnType) otherwise ignore
 	try project.funcSignatures.insert(qualifiedName, value: FuncSignature.create(paramNames, paramTypes: paramTypes, paramDefaults: paramDefaults)) otherwise ignore
 	project.methodNameIndex.record(qualifiedName)
+end 'registerManagedBuiltinMethod'
+
+function registerManagedMemoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedMemory", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
 end 'registerManagedMemoryMethod'
 
 function registerManagedMemoryMethods(project Project)
@@ -988,6 +996,195 @@ function registerManagedMemoryMethods(project Project)
 	// toCString(self) returns i64
 	registerManagedMemoryMethod(project, methodName: "toCString", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
 end 'registerManagedMemoryMethods'
+
+// Phase 15c: register the `__ManagedFile` builtin struct, the
+// `__ManagedFileError` enum, and the 12 `__ManagedFile.*` method
+// signatures so user Maxon code in `stdlib/File.maxon` parses and
+// type-resolves expressions like `__ManagedFile.openRead(path.managed)`
+// and `file.size()`. Bodies are intentionally absent — Stream 2.3 will
+// add the lowering dispatch that intercepts these calls before the
+// generic callee resolver runs.
+//
+// Field layout matches the C# bootstrap exactly (maxon-sharp Compiler/2-Parser.cs:1035-1042):
+//   offset 0  _handle  i64 (HANDLE on Win32, fd on Linux/WASI)
+// Total byteSize = 8.
+//
+// Enum case ordinals mirror maxon-sharp Compiler/2-Parser.cs:1076-1090
+// so a stdlib value observed at runtime matches whatever the bootstrap
+// would have emitted.
+//
+// All inserts are idempotent — duplicate-key collisions silently win-on-
+// first to match `registerManagedMemoryType`. Idempotency is required
+// because `getStdlibModule` may run multiple times per process (cache
+// hit vs cache miss vs cross-target).
+export function registerManagedFileType(project Project)
+	registerManagedFileStruct(project)
+	registerManagedFileErrorEnum(project)
+	registerManagedFileMethods(project)
+end 'registerManagedFileType'
+
+// Register an 8-byte single-i64-field builtin struct with the given type
+// name and single field name. Used by the `__ManagedFile` / `__ManagedDirectory`
+// registrations (their layouts are identical: one private i64 handle word).
+function registerManagedHandleStruct(project Project, typeName String, fieldName String)
+	if project.structTypes.contains(typeName) 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var fields = StructFieldArray.create()
+	fields.push(StructField.create(fieldName, fieldType: MaxonType.integer, offset: 0, isMutable: true, offsetResolved: true))
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedHandleStruct: stdlib bootstrap path rejected")
+	let st = StructType.create(typeName, fields: fields, byteSize: 8, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create(), innerAliases: ResolvedInnerAliasMap.create())
+	try project.structTypes.insert(typeName, value: st) otherwise ignore
+	_ = project.typeNames.intern(typeName)
+end 'registerManagedHandleStruct'
+
+function registerManagedFileStruct(project Project)
+	// `_handle` matches the bootstrap field name so destructor lowering
+	// (when Stream 3.1 lands the real `mrt_file_close` runtime body) can
+	// pull the raw handle out by name.
+	registerManagedHandleStruct(project, typeName: "__ManagedFile", fieldName: "_handle")
+end 'registerManagedFileStruct'
+
+// Register a builtin error-enum with the given name and ordered case names.
+// Each case gets `ordinal == rawValue == its position in `caseNames`. Used by
+// the `__ManagedFileError` / `__ManagedDirectoryError` registrations and any
+// future `__ManagedX` error enums.
+function registerManagedErrorEnum(project Project, typeName String, caseNames StringArray)
+	if project.enumTypes.contains(typeName) 'alreadyDone'
+		return
+	end 'alreadyDone'
+	var cases = EnumCaseArray.create()
+	for i in 0 upto caseNames.count() 'eachCase'
+		let name = try caseNames.get(i) otherwise panic("registerManagedErrorEnum: caseNames.get OOB")
+		cases.push(EnumCase.create(name, ordinal: i, rawValue: i, line: 0, column: 0))
+	end 'eachCase'
+	let bootstrapPath = try FilePath.from("stdlib-bootstrap.maxon") otherwise panic("registerManagedErrorEnum: stdlib bootstrap path rejected")
+	let et = EnumType.create(typeName, cases: cases, isFloatBacked: false, visibility: Visibility.global, sourceFilePath: bootstrapPath, nameLine: 0, nameColumn: 0, expectedMethods: InterfaceMethodSigArray.create())
+	try project.enumTypes.insert(typeName, value: et) otherwise ignore
+	_ = project.typeNames.intern(typeName)
+end 'registerManagedErrorEnum'
+
+function registerManagedFileErrorEnum(project Project)
+	var names = StringArray.create()
+	names.push("notFound")
+	names.push("accessDenied")
+	names.push("openFailed")
+	names.push("readFailed")
+	names.push("writeFailed")
+	names.push("sizeFailed")
+	names.push("deleteFailed")
+	names.push("statFailed")
+	names.push("invalidStatBuffer")
+	names.push("invalidStatIndex")
+	names.push("closed")
+	registerManagedErrorEnum(project, typeName: "__ManagedFileError", caseNames: names)
+end 'registerManagedFileErrorEnum'
+
+function registerManagedFileMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedFile", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+end 'registerManagedFileMethod'
+
+function registerManagedFileMethods(project Project)
+	let mfType = MaxonType.named(project.typeNames.intern("__ManagedFile"))
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	let intType = MaxonType.integer
+	let intReturn = MaxonReturnType.value(intType)
+	let mfReturn = MaxonReturnType.value(mfType)
+
+	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1152-1159).
+	// size(self) returns i64 throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "size", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mfType), returnType: intReturn)
+	// read(self, managed, size) returns i64 throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "read", paramNames: mmParamNames3("self", second: "managed", third: "size"), paramTypes: mmParamTypes3(mfType, second: mmType, third: intType), returnType: intReturn)
+	// write(self, managed) returns i64 throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "write", paramNames: mmParamNames2("self", second: "managed"), paramTypes: mmParamTypes2(mfType, second: mmType), returnType: intReturn)
+	// close(self) returns void
+	registerManagedFileMethod(project, methodName: "close", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mfType), returnType: MaxonReturnType.void)
+
+	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1161-1176).
+	// static openRead(path) returns __ManagedFile throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "openRead", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	// static openWrite(path) returns __ManagedFile throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "openWrite", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	// static openWriteExecutable(path) returns __ManagedFile throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "openWriteExecutable", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mfReturn)
+	// static exists(path) returns i64
+	registerManagedFileMethod(project, methodName: "exists", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// static delete(path) returns void throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "delete", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void)
+	// static stat(path) returns i64 (buffer ptr) throws __ManagedFileError
+	registerManagedFileMethod(project, methodName: "stat", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// static statField(buffer, index) returns i64
+	registerManagedFileMethod(project, methodName: "statField", paramNames: mmParamNames2("buffer", second: "index"), paramTypes: mmParamTypes2(intType, second: intType), returnType: intReturn)
+	// static statFree(buffer) returns void
+	registerManagedFileMethod(project, methodName: "statFree", paramNames: mmParamNames1("buffer"), paramTypes: mmParamTypes1(intType), returnType: MaxonReturnType.void)
+end 'registerManagedFileMethods'
+
+// Phase 15c: register the `__ManagedDirectory` builtin struct, the
+// `__ManagedDirectoryError` enum, and the 7 `__ManagedDirectory.*` method
+// signatures so user Maxon code in `stdlib/Directory.maxon` parses and
+// type-resolves. Bodies are absent for the same reason as
+// `registerManagedFileType` above.
+//
+// Field layout matches the C# bootstrap (maxon-sharp Compiler/2-Parser.cs:1043-1050):
+//   offset 0  _block  i64 (HANDLE+WIN32_FIND_DATAA block ptr on Win32,
+//                          DIR* on POSIX, fd on WASI)
+// Total byteSize = 8. WASM may eventually need a larger layout to carry
+// readdir cursor/cookie state, but the current bootstrap uses 8 bytes
+// across all targets — matching that keeps the cache-format consistent.
+export function registerManagedDirectoryType(project Project)
+	registerManagedDirectoryStruct(project)
+	registerManagedDirectoryErrorEnum(project)
+	registerManagedDirectoryMethods(project)
+end 'registerManagedDirectoryType'
+
+function registerManagedDirectoryStruct(project Project)
+	registerManagedHandleStruct(project, typeName: "__ManagedDirectory", fieldName: "_block")
+end 'registerManagedDirectoryStruct'
+
+function registerManagedDirectoryErrorEnum(project Project)
+	var names = StringArray.create()
+	names.push("notFound")
+	names.push("accessDenied")
+	names.push("openSearchFailed")
+	names.push("nextFailed")
+	names.push("iteratorInvalid")
+	names.push("createFailed")
+	names.push("currentPathFailed")
+	names.push("closed")
+	registerManagedErrorEnum(project, typeName: "__ManagedDirectoryError", caseNames: names)
+end 'registerManagedDirectoryErrorEnum'
+
+function registerManagedDirectoryMethod(project Project, methodName String, paramNames StringArray, paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	registerManagedBuiltinMethod(project, receiverName: "__ManagedDirectory", methodName: methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: returnType)
+end 'registerManagedDirectoryMethod'
+
+function registerManagedDirectoryMethods(project Project)
+	let mdType = MaxonType.named(project.typeNames.intern("__ManagedDirectory"))
+	let mmType = MaxonType.named(project.typeNames.intern("__ManagedMemory"))
+	let intType = MaxonType.integer
+	let intReturn = MaxonReturnType.value(intType)
+	let mdReturn = MaxonReturnType.value(mdType)
+	let mmReturn = MaxonReturnType.value(mmType)
+
+	// Instance methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1185-1190).
+	// filename(self) returns __ManagedMemory
+	registerManagedDirectoryMethod(project, methodName: "filename", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: mmReturn)
+	// next(self) returns i64 throws __ManagedDirectoryError
+	registerManagedDirectoryMethod(project, methodName: "next", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: intReturn)
+	// close(self) returns void
+	registerManagedDirectoryMethod(project, methodName: "close", paramNames: mmParamNames1("self"), paramTypes: mmParamTypes1(mdType), returnType: MaxonReturnType.void)
+
+	// Static methods (signatures mirror maxon-sharp Compiler/2-Parser.cs:1192-1199).
+	// static openSearch(path) returns __ManagedDirectory throws __ManagedDirectoryError
+	registerManagedDirectoryMethod(project, methodName: "openSearch", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: mdReturn)
+	// static exists(path) returns i64
+	registerManagedDirectoryMethod(project, methodName: "exists", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: intReturn)
+	// static create(path) returns void throws __ManagedDirectoryError
+	registerManagedDirectoryMethod(project, methodName: "create", paramNames: mmParamNames1("path"), paramTypes: mmParamTypes1(mmType), returnType: MaxonReturnType.void)
+	// static currentPath() returns __ManagedMemory throws __ManagedDirectoryError
+	registerManagedDirectoryMethod(project, methodName: "currentPath", paramNames: StringArray.create(), paramTypes: MaxonTypeArray.create(), returnType: mmReturn)
+end 'registerManagedDirectoryMethods'
 
 function mmParamNames1(first String) returns StringArray
 	var names = StringArray.create()
@@ -1539,7 +1736,7 @@ type MaxonToStdLowering
 			result.push(leadingReceiverId)
 			let leadingParamType = try signature.paramTypes.get(0) otherwise MaxonType.unresolved
 			if interfaceTypeIsFat(leadingParamType) 'leadingFat'
-				let leadingWitness = self.witnessForInterfaceArg(valueId: leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
+				let leadingWitness = self.witnessForInterfaceArg(leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
 				result.push(leadingWitness)
 			end 'leadingFat'
 		end 'pushLead'
@@ -1838,9 +2035,9 @@ type MaxonToStdLowering
 			charLiteral(result, stringId, _) then self.lowerCharLiteral(result, stringId: stringId, dstBlock: dstBlock)
 			byteStringLiteral(result, stringId, _) then self.lowerByteStringLiteral(result, stringId: stringId, dstBlock: dstBlock)
 			stringInterp(result, parts, _) then self.lowerStringInterp(result, parts: parts, dstBlock: dstBlock)
-			varDecl(slotId, value, slotType, _) then self.lowerVarDeclOrStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
+			varDecl(slotId, value, slotType, _) then self.lowerVarDeclOrStore(slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			varLoad(result, slotId, slotType, _) then self.lowerVarLoad(result, slotId: slotId, slotType: slotType, dstBlock: dstBlock)
-			varStore(slotId, value, _) then self.lowerVarStore(slotId: slotId, value: value, dstBlock: dstBlock)
+			varStore(slotId, value, _) then self.lowerVarStore(slotId, value: value, dstBlock: dstBlock)
 			globalLoad(result, name, slotType, _) then self.lowerGlobalLoad(result, name: name, slotType: slotType, dstBlock: dstBlock)
 			globalStore(name, value, slotType, _) then self.lowerGlobalStore(name, value: value, slotType: slotType, dstBlock: dstBlock)
 			binop(result, left, right, opKind, operandType, _) then self.lowerBinop(result, left: left, right: right, opKind: opKind, operandType: operandType, dstBlock: dstBlock)
@@ -1852,13 +2049,13 @@ type MaxonToStdLowering
 			br(target, _) then self.stdModule.appendOp(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
 			call(result, callee, _, args, argLabels, argTypes, argRanges, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
 			methodCall(result, receiver, methodName, args, argLabels, argTypes, argRanges, _) then self.lowerMethodCall(result, receiver: receiver, methodName: methodName, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock)
-			ret(retVal, _) then self.lowerRetAsBodyOp(retVal: retVal, dstBlock: dstBlock)
+			ret(retVal, _) then self.lowerRetAsBodyOp(retVal, dstBlock: dstBlock)
 			panic(stringId, _) then self.lowerPanicToSys(stringId, dstBlock: dstBlock)
 			structAlloc(result, structName, _) then self.lowerStructAlloc(result, structName: structName, dstBlock: dstBlock)
 			fieldLoad(result, receiver, fieldName, _) then self.lowerFieldLoad(result, receiver: receiver, fieldName: fieldName, dstBlock: dstBlock)
-			fieldStore(receiver, fieldName, value, isInit, range) then self.lowerFieldStore(receiver: receiver, fieldName: fieldName, value: value, isInit: isInit, range: range, dstBlock: dstBlock)
+			fieldStore(receiver, fieldName, value, isInit, range) then self.lowerFieldStore(receiver, fieldName: fieldName, value: value, isInit: isInit, range: range, dstBlock: dstBlock)
 			selfFieldLoad(result, fieldName, _) then self.lowerSelfFieldLoad(result, fieldName: fieldName, dstBlock: dstBlock)
-			selfFieldStore(fieldName, value, _) then self.lowerSelfFieldStore(fieldName: fieldName, value: value, dstBlock: dstBlock)
+			selfFieldStore(fieldName, value, _) then self.lowerSelfFieldStore(fieldName, value: value, dstBlock: dstBlock)
 			// `unresolvedRead`/`unresolvedAssign` are parser-emitted placeholders
 			// that the TypeResolution pass rewrites to globalLoad / globalStore /
 			// constant-substitute / unknownName diagnostic before lowering runs.
@@ -1878,7 +2075,7 @@ type MaxonToStdLowering
 			enumConstruct(result, enumName, caseName, payloadValues, _) then self.lowerEnumConstruct(result, enumName: enumName, caseName: caseName, payloadValues: payloadValues, dstBlock: dstBlock)
 			enumTag(result, enumValName, _) then self.lowerEnumTag(result, enumValName: enumValName, dstBlock: dstBlock)
 			enumPayloadRead(result, enumValName, _, fieldIndex, fieldType, _) then self.lowerEnumPayloadRead(result, enumValName: enumValName, fieldIndex: fieldIndex, fieldType: fieldType, dstBlock: dstBlock)
-			enumPayloadStore(enumValName, _, fieldIndex, fieldType, newValueName, _) then self.lowerEnumPayloadStore(enumValName: enumValName, fieldIndex: fieldIndex, fieldType: fieldType, newValueName: newValueName, dstBlock: dstBlock)
+			enumPayloadStore(enumValName, _, fieldIndex, fieldType, newValueName, _) then self.lowerEnumPayloadStore(enumValName, fieldIndex: fieldIndex, fieldType: fieldType, newValueName: newValueName, dstBlock: dstBlock)
 			// Error anchor: the parser already reported a diagnostic at this span,
 			// so we emit no Std op. `hasErrors(project)` will short-circuit the
 			// batch compile before codegen; the LSP consumes the op directly
@@ -1976,10 +2173,10 @@ type MaxonToStdLowering
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer String (16 bytes).
 		let strSizeId = allocValueId(self.funcIdRef)
@@ -1993,7 +2190,7 @@ type MaxonToStdLowering
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: resultId, offset: 8, value: isAsciiFlag, dstBlock: dstBlock)
+		self.storeI64Const(resultId, offset: 8, value: isAsciiFlag, dstBlock: dstBlock)
 	end 'lowerStringConst'
 
 	// Phase 7 step 6: lower a maxon.charLiteral op to a heap-allocated
@@ -2025,10 +2222,10 @@ type MaxonToStdLowering
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer Character (8 bytes — only the `managed` pointer field).
 		let chSizeId = allocValueId(self.funcIdRef)
@@ -2076,10 +2273,10 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(mmId, callee: "mrt_alloc", argIds: mmArgIds)))
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 8, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 16, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 8, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer Character (8 bytes — only the `managed` pointer field).
 		let chSizeId = allocValueId(self.funcIdRef)
@@ -2124,10 +2321,10 @@ type MaxonToStdLowering
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufferPtrId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 8, value: dataLen, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer Array (8 bytes): managed at offset 0.
 		let arrSizeId = allocValueId(self.funcIdRef)
@@ -2219,7 +2416,7 @@ type MaxonToStdLowering
 		for i in 0 upto partBufIds.count() 'copyParts'
 			let pb = try partBufIds.get(i) otherwise panic("lowerStringInterp: partBufIds.get OOB at {i}")
 			let pl = try partLenIds.get(i) otherwise panic("lowerStringInterp: partLenIds.get OOB at {i}")
-			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.memcpy(dstId: cursorId, srcId: pb, lenId: pl)))
+			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.memcpy(cursorId, srcId: pb, lenId: pl)))
 			let nextCursorId = allocValueId(self.funcIdRef)
 			self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.binary(StdArithBinaryOp.create(StdArithBinaryOpcode.addI64, resultId: nextCursorId, leftId: cursorId, rightId: pl))))
 			self.setValueType(nextCursorId, t: MaxonType.integer)
@@ -2240,8 +2437,8 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 8, valueId: totalLenId, width: StoreWidth.qword, isFloat: false)))
 		// capacity = totalLen (real heap-backed; NOT the rdata -2 sentinel).
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 16, valueId: totalLenId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// 6. Allocate outer String (16 bytes); bind result name to it.
 		let strSizeId = allocValueId(self.funcIdRef)
@@ -2255,7 +2452,7 @@ type MaxonToStdLowering
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(resultId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 		// isAsciiFlag = 0 (conservative — matches C# bootstrap).
-		self.storeI64Const(addrId: resultId, offset: 8, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(resultId, offset: 8, value: 0, dstBlock: dstBlock)
 	end 'lowerStringInterp'
 
 	// Phase 7 step 5 helper: emit per-part (buffer, length) materialization
@@ -2298,7 +2495,7 @@ type MaxonToStdLowering
 		// resolution still tags the value as `integer`, so we sidestep
 		// the kind-based dispatch entirely when the provenance set has
 		// the name.
-		if self.project.charByteLiterals.contains(charByteLiteralKey(funcName: self.currentFuncName, valueName: valueName)) 'isCharByte'
+		if self.project.charByteLiterals.contains(charByteLiteralKey(self.currentFuncName, valueName: valueName)) 'isCharByte'
 			return self.materializeCharByteInterp(valueId, dstBlock: dstBlock)
 		end 'isCharByte'
 		return match kind 'k'
@@ -2328,7 +2525,7 @@ type MaxonToStdLowering
 	// the value's recorded MaxonType.
 	function materializeStringableInterp(structValueId ValueId, dstBlock IrBlock) returns (ValueId, ValueId)
 		let concreteType = self.getValueType(structValueId)
-		let witnessAddrId = self.materializeInterfaceWitness(concreteType: concreteType, interfaceName: "Stringable", dstBlock: dstBlock)
+		let witnessAddrId = self.materializeInterfaceWitness(concreteType, interfaceName: "Stringable", dstBlock: dstBlock)
 		let methodIdx = methodIndexInInterface(self.project, interfaceName: "Stringable", methodName: "toString")
 		var argIds = ValueIdArray.create()
 		argIds.push(structValueId)
@@ -2359,7 +2556,7 @@ type MaxonToStdLowering
 		if concreteTypeName.isEmpty() or not self.project.conformances.contains(concreteTypeName, interfaceName: "FormattedStringable") 'noFmtIface'
 			return self.materializeStringableInterp(structValueId, dstBlock: dstBlock)
 		end 'noFmtIface'
-		let witnessAddrId = self.materializeInterfaceWitness(concreteType: concreteType, interfaceName: "FormattedStringable", dstBlock: dstBlock)
+		let witnessAddrId = self.materializeInterfaceWitness(concreteType, interfaceName: "FormattedStringable", dstBlock: dstBlock)
 		let methodIdx = methodIndexInInterface(self.project, interfaceName: "FormattedStringable", methodName: "toString")
 		let fmtStringId = self.materializeFormatSpecAsString(formatSpecId, dstBlock: dstBlock)
 		var argIds = ValueIdArray.create()
@@ -2398,9 +2595,9 @@ type MaxonToStdLowering
 		self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 0, valueId: bufPtrId, width: StoreWidth.qword, isFloat: false)))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmId, offset: 8, valueId: lenConstId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: 1, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: 1, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 
 		// Outer String(16): _managed@0 = mmId, isAsciiFlag@8 = 0.
 		let strSizeId = self.emitConstI64(16, dstBlock: dstBlock)
@@ -2410,7 +2607,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(strId, callee: "mrt_alloc", argIds: strArgs)))
 		self.setValueType(strId, t: MaxonType.named(self.project.typeNames.intern("String")))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(strId, offset: 0, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: strId, offset: 8, value: 0, dstBlock: dstBlock)
+		self.storeI64Const(strId, offset: 8, value: 0, dstBlock: dstBlock)
 		return strId
 	end 'materializeFormatSpecAsString'
 
@@ -2507,8 +2704,8 @@ type MaxonToStdLowering
 			// enums store at runtime.
 			let caseConstId = self.emitConstI64(theCase.ordinal as ParsedInt, dstBlock: dstBlock)
 			let cmpId = self.emitBinaryI64(StdArithBinaryOpcode.cmpI64Eq, leftId: enumValueId, rightId: caseConstId, dstBlock: dstBlock)
-			currentBufId = self.emitArithmeticSelect(cond: cmpId, trueVal: caseBufId, falseVal: currentBufId, dstBlock: dstBlock)
-			currentLenId = self.emitArithmeticSelect(cond: cmpId, trueVal: caseLenId, falseVal: currentLenId, dstBlock: dstBlock)
+			currentBufId = self.emitArithmeticSelect(cmpId, trueVal: caseBufId, falseVal: currentBufId, dstBlock: dstBlock)
+			currentLenId = self.emitArithmeticSelect(cmpId, trueVal: caseLenId, falseVal: currentLenId, dstBlock: dstBlock)
 		end 'eachCase'
 		return (currentBufId, currentLenId)
 	end 'materializeEnumNameInterp'
@@ -2612,7 +2809,7 @@ type MaxonToStdLowering
 	// fmt_len) → length`. The helper itself parses the spec at runtime —
 	// the compiler-side only plumbs the spec through.
 	function materializeIntToStringFmt(valueId ValueId, formatSpecId StringId, dstBlock IrBlock) returns (ValueId, ValueId)
-		let bufId = self.allocFmtBuffer(dstBlock: dstBlock)
+		let bufId = self.allocFmtBuffer(dstBlock)
 		let (fmtPtrId, fmtLenId) = self.materializeFormatSpecBuffer(formatSpecId, dstBlock: dstBlock)
 		var convArgs = ValueIdArray.create()
 		convArgs.push(valueId)
@@ -2634,7 +2831,7 @@ type MaxonToStdLowering
 	end 'materializeFloatToStringMaybeFmt'
 
 	function materializeFloatToStringFmt(valueId ValueId, formatSpecId StringId, dstBlock IrBlock) returns (ValueId, ValueId)
-		let bufId = self.allocFmtBuffer(dstBlock: dstBlock)
+		let bufId = self.allocFmtBuffer(dstBlock)
 		let (fmtPtrId, fmtLenId) = self.materializeFormatSpecBuffer(formatSpecId, dstBlock: dstBlock)
 		var convArgs = ValueIdArray.create()
 		convArgs.push(valueId)
@@ -2705,7 +2902,7 @@ type MaxonToStdLowering
 	// previous code path emitted.
 	function lowerVarDeclOrStore(slotId VarSlot, value ByteArray, slotType MaxonType, dstBlock IrBlock)
 		if interfaceTypeIsFat(slotType) 'fat'
-			self.lowerInterfaceSlotStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
+			self.lowerInterfaceSlotStore(slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			return
 		end 'fat'
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: self.resolveName(value))))
@@ -2721,7 +2918,7 @@ type MaxonToStdLowering
 	function lowerVarStore(slotId VarSlot, value ByteArray, dstBlock IrBlock)
 		let slotType = self.lookupSlotMaxonType(slotId)
 		if interfaceTypeIsFat(slotType) 'fat'
-			self.lowerInterfaceSlotStore(slotId: slotId, value: value, slotType: slotType, dstBlock: dstBlock)
+			self.lowerInterfaceSlotStore(slotId, value: value, slotType: slotType, dstBlock: dstBlock)
 			return
 		end 'fat'
 		// Phase A widening: when this varStore feeds a slot whose declared
@@ -2781,9 +2978,9 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(companionSlot, valueId: forwardedWitness)))
 			return
 		end 'forwardFat'
-		let payloadId = self.materializeInterfacePayload(valueId: valueId, concreteType: concreteType, dstBlock: dstBlock)
+		let payloadId = self.materializeInterfacePayload(valueId, concreteType: concreteType, dstBlock: dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(slotId, valueId: payloadId)))
-		let witnessId = self.materializeInterfaceWitness(concreteType: concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
+		let witnessId = self.materializeInterfaceWitness(concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.memory(StdMemoryOp.storeSlot(companionSlot, valueId: witnessId)))
 	end 'lowerInterfaceSlotStore'
 
@@ -2804,7 +3001,7 @@ type MaxonToStdLowering
 		if interfaceTypeIsFat(argType) 'isFatForward'
 			return try self.interfaceWitnessValueIds.get(valueId) otherwise panic("witnessForInterfaceArg: arg valueId={valueId} typed as interface but no witness paired in interfaceWitnessValueIds")
 		end 'isFatForward'
-		return self.materializeInterfaceWitness(concreteType: argType, interfaceName: interfaceName, dstBlock: dstBlock)
+		return self.materializeInterfaceWitness(argType, interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'witnessForInterfaceArg'
 
 	// C1.c: produce the value half of a fat pointer. For payloads that
@@ -3073,7 +3270,7 @@ type MaxonToStdLowering
 			default panic("tryLowerTypeParamEquality: operandType not typeParameter despite the dispatch guard")
 		end 'extractPid'
 		let paramName = self.project.typeParameters.getName(pid)
-		if let matched = try self.findConstraintForMethod(paramName: paramName, methodName: "equals") 'hit'
+		if let matched = try self.findConstraintForMethod(paramName, methodName: "equals") 'hit'
 			let witnessAddrId = try self.implicitWitnessValueIds.get(matched.constraintIndex) otherwise panic("tryLowerTypeParamEquality: implicitWitnessValueIds desync at idx {matched.constraintIndex}")
 			var argIds = ValueIdArray.create()
 			argIds.push(self.resolveName(left))
@@ -3192,6 +3389,23 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmStatic'
+		// Phase 15c Stream 2.3: dispatch `__ManagedFile.*` static calls to
+		// the `mrt_file_*` runtime helpers. Mirrors the `__ManagedMemory.`
+		// static dispatch a few lines up.
+		if bareCallee.startsWith("__ManagedFile.") 'didLowerMfStatic'
+			let methodName = try stripPrefix(bareCallee, prefix: "__ManagedFile.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerManagedFileBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMfStatic'
+		// Phase 15c Stream 2.3: dispatch `__ManagedDirectory.*` static calls
+		// to the `mrt_directory_*` runtime helpers.
+		if bareCallee.startsWith("__ManagedDirectory.") 'didLowerMdStatic'
+			let methodName = try stripPrefix(bareCallee, prefix: "__ManagedDirectory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerManagedDirectoryBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMdStatic'
 		// Phase 7: `__Builtins.writeStdout(managed)` and friends — Phase 7
 		// stdlib intrinsics. Expand to a load of buffer (off 0) + length
 		// (off 8) from the MM, then a single call into `mrt_write_stdout`
@@ -3231,6 +3445,21 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'reRouteMm'
+		// Phase 15c Stream 2.3: re-route `__ManagedFile.*` /
+		// `__ManagedDirectory.*` to their dispatchers after typealias
+		// resolution, matching the `__ManagedMemory` re-route just above.
+		if qualifiedCallee.startsWith("__ManagedFile.") 'reRouteMf'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "__ManagedFile.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerManagedFileBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'reRouteMf'
+		if qualifiedCallee.startsWith("__ManagedDirectory.") 'reRouteMd'
+			let methodName = try stripPrefix(qualifiedCallee, prefix: "__ManagedDirectory.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
+			if self.lowerManagedDirectoryBuiltin(result, methodName: methodName, receiverId: 0, hasReceiver: false, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'reRouteMd'
 		if qualifiedCallee.startsWith("__Builtins.") 'reRouteBuiltins'
 			let methodName = try stripPrefix(qualifiedCallee, prefix: "__Builtins.") otherwise panic("invariant: startsWith just checked but stripPrefix threw")
 			if self.lowerBuiltinsIntrinsic(result, methodName: methodName, args: args, dstBlock: dstBlock) 'handled'
@@ -3340,8 +3569,8 @@ type MaxonToStdLowering
 		let mmPtrId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.loadIndirect(mmPtrId, addrId: resultId, offset: 0, width: StoreWidth.qword, signed: false, isFloat: false)))
 		self.setValueType(mmPtrId, t: MaxonType.integer)
-		self.storeI64Const(addrId: mmPtrId, offset: 16, value: n, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmPtrId, offset: 24, value: elementSize, dstBlock: dstBlock)
+		self.storeI64Const(mmPtrId, offset: 16, value: n, dstBlock: dstBlock)
+		self.storeI64Const(mmPtrId, offset: 24, value: elementSize, dstBlock: dstBlock)
 		let totalBytes = n * (elementSize as ParsedInt)
 		let totalBytesId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: totalBytesId, value: totalBytes))))
@@ -3352,7 +3581,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(bufId, callee: "mrt_alloc", argIds: rawAllocArgs)))
 		self.setValueType(bufId, t: MaxonType.integer)
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(mmPtrId, offset: 0, valueId: bufId, width: StoreWidth.qword, isFloat: false)))
-		self.storeI64Const(addrId: mmPtrId, offset: 8, value: n, dstBlock: dstBlock)
+		self.storeI64Const(mmPtrId, offset: 8, value: n, dstBlock: dstBlock)
 	end 'maybePopulateSizedManagedMemory'
 
 	// Build the genericInstance receiverContext for the enclosing type
@@ -3495,7 +3724,7 @@ type MaxonToStdLowering
 				if primName == "int" 'maybeCharFallback'
 					let characterCallee = "Character.{String.from(methodName)}"
 					if let charSig = try self.project.funcSignatures.get(characterCallee) 'haveCharSig'
-						let charValueId = self.materializeCharacterFromByte(byteId: receiverId, dstBlock: dstBlock)
+						let charValueId = self.materializeCharacterFromByte(receiverId, dstBlock: dstBlock)
 						let charAllArgIds = self.slotArgsForCall(charSig, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: 1, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: charValueId, hasLeadingReceiver: true)
 						self.emitCallWithArgs(result, qualifiedCallee: characterCallee, argIds: charAllArgIds, dstBlock: dstBlock, errorBoundName: errorBoundName)
 						return
@@ -3528,6 +3757,22 @@ type MaxonToStdLowering
 				return
 			end 'handled'
 		end 'didLowerMmMethod'
+		// Phase 15c Stream 2.3: dispatch `__ManagedFile.*` / `__ManagedDirectory.*`
+		// instance methods (`file.size()`, `file.read(...)`, `dir.next()`, etc.)
+		// to their `mrt_file_*` / `mrt_directory_*` runtime helpers. Mirrors
+		// the `__ManagedMemory` instance dispatch above.
+		if receiverStructName == "__ManagedFile" 'didLowerMfMethod'
+			let bareMethodName = String.from(methodName)
+			if self.lowerManagedFileBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMfMethod'
+		if receiverStructName == "__ManagedDirectory" 'didLowerMdMethod'
+			let bareMethodName = String.from(methodName)
+			if self.lowerManagedDirectoryBuiltin(result, methodName: bareMethodName, receiverId: receiverId, hasReceiver: true, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, opIdx: opIdx, dstBlock: dstBlock, errorBoundName: errorBoundName) 'handled'
+				return
+			end 'handled'
+		end 'didLowerMdMethod'
 		// Phase 11.4: __ManagedMemoryCursor methods (current/advance/index/etc.)
 		// lower inline to a sequence of loadIndirect/storeIndirect/arith ops
 		// against the 40-byte cursor heap struct allocated by createCursor.
@@ -3744,14 +3989,14 @@ type MaxonToStdLowering
 	// — the layout slot the caller received.
 	function appendLayoutArg(argIds ValueIdArray, receiverContext MaxonType, qualifiedCallee String, dstBlock IrBlock) returns ValueIdArray
 		var out = argIds
-		let layoutId = self.materializeLayoutArg(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
+		let layoutId = self.materializeLayoutArg(receiverContext, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 		out.push(layoutId)
 		return out
 	end 'appendLayoutArg'
 
 	function appendWitnessArg(argIds ValueIdArray, receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueIdArray
 		var out = argIds
-		let witnessId = self.materializeWitnessArg(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, constraint: constraint, dstBlock: dstBlock)
+		let witnessId = self.materializeWitnessArg(receiverContext, qualifiedCallee: qualifiedCallee, constraint: constraint, dstBlock: dstBlock)
 		out.push(witnessId)
 		return out
 	end 'appendWitnessArg'
@@ -3759,9 +4004,9 @@ type MaxonToStdLowering
 	function materializeLayoutArg(receiverContext MaxonType, qualifiedCallee String, dstBlock IrBlock) returns ValueId
 		match receiverContext 'pick'
 			genericInstance(gid) then return self.materializeLayoutForGid(gid, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
-			typeParameter then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
-			interface then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
-			unresolved then return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+			typeParameter then return self.forwardCallerLayout(qualifiedCallee)
+			interface then return self.forwardCallerLayout(qualifiedCallee)
+			unresolved then return self.forwardCallerLayout(qualifiedCallee)
 			named(id) then return self.materializeLayoutForNamed(id, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock)
 			boolean to string then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a primitive type ({receiverContext.toString(self.project)}); generic methods cannot be called on primitives")
 			function then panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a function type ({receiverContext.toString(self.project)}); function values cannot satisfy a generic-method receiver")
@@ -3790,7 +4035,7 @@ type MaxonToStdLowering
 			// gid (`Interface with [confArgs]`) is the layout descriptor
 			// `seedConformanceLayouts` in BuildLayoutDescriptors pre-interns
 			// for every `with`-arg-bearing conformance.
-			if let layoutId = try self.tryMaterializeLayoutFromConformance(receiverTypeName: baseName, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock) 'gotConf'
+			if let layoutId = try self.tryMaterializeLayoutFromConformance(baseName, qualifiedCallee: qualifiedCallee, dstBlock: dstBlock) 'gotConf'
 				return layoutId
 			end 'gotConf'
 			panic("materializeLayoutArg: callee '{qualifiedCallee}' takes an implicit layout descriptor but the call site's receiverContext is a bare named type ({baseName}); the receiver's declaring type is non-generic so no layout is available")
@@ -3849,7 +4094,7 @@ type MaxonToStdLowering
 	function materializeLayoutForGid(gid GenericInstanceId, qualifiedCallee String, dstBlock IrBlock) returns ValueId
 		let (_, gidArgs) = self.project.genericInstances.get(gid)
 		if anyMaxonTypeIsConditional(gidArgs) 'conditional'
-			return self.forwardCallerLayout(qualifiedCallee: qualifiedCallee)
+			return self.forwardCallerLayout(qualifiedCallee)
 		end 'conditional'
 		return self.emitLoadLayoutDescriptorForGid(gid, dstBlock: dstBlock)
 	end 'materializeLayoutForGid'
@@ -3908,11 +4153,11 @@ type MaxonToStdLowering
 	function materializeWitnessArg(receiverContext MaxonType, qualifiedCallee String, constraint WhereClause, dstBlock IrBlock) returns ValueId
 		// Try to resolve `constraint.paramName` to a concrete type via
 		// the receiverContext's substitution.
-		let bound = self.resolveCalleeParamToConcreteType(receiverContext: receiverContext, qualifiedCallee: qualifiedCallee, paramName: constraint.paramName)
+		let bound = self.resolveCalleeParamToConcreteType(receiverContext, qualifiedCallee: qualifiedCallee, paramName: constraint.paramName)
 		match bound 'pick'
 			concrete(typeName) then return self.emitLoadWitnessTable(typeName, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
 			concreteGid(_, gid) then return self.emitLoadWitnessTableForGid(gid, interfaceName: constraint.requiredTraitName, dstBlock: dstBlock)
-			forwardFromCaller(callerParamName) then return self.forwardCallerWitness(qualifiedCallee: qualifiedCallee, constraint: constraint, callerParamName: callerParamName)
+			forwardFromCaller(callerParamName) then return self.forwardCallerWitness(qualifiedCallee, constraint: constraint, callerParamName: callerParamName)
 		end 'pick'
 	end 'materializeWitnessArg'
 
@@ -3976,7 +4221,7 @@ type MaxonToStdLowering
 				continue
 			end 'noIface'
 			let thunkNames = self.project.witnessTables.gidMethodImplNamesFor(gid, interfaceName: interfaceName)
-			self.synthesizeWitnessThunksForEntry(gid: gid, iface: iface, thunkNames: thunkNames)
+			self.synthesizeWitnessThunksForEntry(gid, iface: iface, thunkNames: thunkNames)
 		end 'eachPending'
 	end 'synthesizeWitnessThunks'
 
@@ -3993,7 +4238,7 @@ type MaxonToStdLowering
 		for mi in 0 upto methodCount 'eachMethod'
 			let method = try iface.methods.get(mi) otherwise panic("synthesizeWitnessThunksForEntry: iface.methods.get OOB at {mi}")
 			let thunkName = try thunkNames.get(mi) otherwise panic("synthesizeWitnessThunksForEntry: thunkNames.get OOB at {mi}")
-			self.synthesizeOneWitnessThunk(gid: gid, baseName: baseName, method: method, thunkName: thunkName)
+			self.synthesizeOneWitnessThunk(gid, baseName: baseName, method: method, thunkName: thunkName)
 		end 'eachMethod'
 	end 'synthesizeWitnessThunksForEntry'
 
@@ -4010,7 +4255,7 @@ type MaxonToStdLowering
 		end 'fillParams'
 		let returnType = match method.returnType 'mapRet'
 			void gives StdReturnType.void
-			value gives StdReturnType.value(inner: StdType.i64)
+			value gives StdReturnType.value(StdType.i64)
 		end 'mapRet'
 		var func = IrFunction.createFromStd(thunkName, returnType: returnType, paramCount: userParamCount, paramTypes: paramTypes, returnLine: 0)
 		// `funcIdRef` reserves ValueIds 0..userParamCount-1 for the
@@ -4039,7 +4284,7 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(entryBlock, op: StdOp.system(StdSystemOp.loadLayoutDescriptor(layoutId, label: layoutLabel)))
 			implicitArgIds.push(layoutId)
 			for wc in implicits.witnessConstraints 'eachConstraint'
-				let witnessId = self.materializeThunkWitnessArg(gid: gid, baseName: baseName, constraint: wc, dstBlock: entryBlock, idRef: idRef)
+				let witnessId = self.materializeThunkWitnessArg(gid, baseName: baseName, constraint: wc, dstBlock: entryBlock, idRef: idRef)
 				implicitArgIds.push(witnessId)
 			end 'eachConstraint'
 		end 'addLayout'
@@ -4202,7 +4447,7 @@ type MaxonToStdLowering
 	// trip that loses precision for ints outside f64's mantissa range).
 	// Returns true if the call was lowered as an intrinsic.
 	function lowerMathIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		let hit = try mathIntrinsicTarget(bare: bareCallee) otherwise return self.lowerMathBinaryIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock)
+		let hit = try mathIntrinsicTarget(bareCallee) otherwise return self.lowerMathBinaryIntrinsic(result, bareCallee: bareCallee, args: args, dstBlock: dstBlock)
 		// Math intrinsics take exactly one arg. If the arity is wrong, fall
 		// through to normal call resolution which will surface the error.
 		if args.count() != 1 'badArity'
@@ -4229,7 +4474,7 @@ type MaxonToStdLowering
 	// caller can fall through) if the callee isn't a binary intrinsic or
 	// has the wrong arity.
 	function lowerMathBinaryIntrinsic(result ByteArray, bareCallee String, args ByteArrayArray, dstBlock IrBlock) returns bool
-		let hit = try mathBinaryIntrinsicTarget(bare: bareCallee) otherwise return false
+		let hit = try mathBinaryIntrinsicTarget(bareCallee) otherwise return false
 		if args.count() != 2 'badArity'
 			return false
 		end 'badArity'
@@ -4334,77 +4579,77 @@ type MaxonToStdLowering
 		end 'gateRejected'
 		// Atomic ops
 		if methodName == "atomicInc" 'isAtomicInc'
-			return self.lowerInternalsAtomicUnary(methodName: methodName, result: result, args: args, dstBlock: dstBlock, isInc: true)
+			return self.lowerInternalsAtomicUnary(methodName, result: result, args: args, dstBlock: dstBlock, isInc: true)
 		end 'isAtomicInc'
 		if methodName == "atomicDec" 'isAtomicDec'
-			return self.lowerInternalsAtomicUnary(methodName: methodName, result: result, args: args, dstBlock: dstBlock, isInc: false)
+			return self.lowerInternalsAtomicUnary(methodName, result: result, args: args, dstBlock: dstBlock, isInc: false)
 		end 'isAtomicDec'
 		if methodName == "atomicXadd" 'isAtomicXadd'
-			return self.lowerInternalsAtomicXadd(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsAtomicXadd(result, args: args, dstBlock: dstBlock)
 		end 'isAtomicXadd'
 		// Memory load/store
 		if methodName == "loadIndirect" 'isLoadIndirect'
-			return self.lowerInternalsLoadIndirect(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsLoadIndirect(result, args: args, dstBlock: dstBlock)
 		end 'isLoadIndirect'
 		if methodName == "storeIndirect" 'isStoreIndirect'
-			return self.lowerInternalsStoreIndirect(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsStoreIndirect(result, args: args, dstBlock: dstBlock)
 		end 'isStoreIndirect'
 		if methodName == "loadByte" 'isLoadByte'
-			return self.lowerInternalsLoadByte(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsLoadByte(result, args: args, dstBlock: dstBlock)
 		end 'isLoadByte'
 		if methodName == "storeByte" 'isStoreByte'
-			return self.lowerInternalsStoreByte(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsStoreByte(result, args: args, dstBlock: dstBlock)
 		end 'isStoreByte'
 		if methodName == "loadHalfword" 'isLoadHalfword'
-			return self.lowerInternalsLoadSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
+			return self.lowerInternalsLoadSized(result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
 		end 'isLoadHalfword'
 		if methodName == "storeHalfword" 'isStoreHalfword'
-			return self.lowerInternalsStoreSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
+			return self.lowerInternalsStoreSized(result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.halfword)
 		end 'isStoreHalfword'
 		if methodName == "loadWord" 'isLoadWord'
-			return self.lowerInternalsLoadSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
+			return self.lowerInternalsLoadSized(result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
 		end 'isLoadWord'
 		if methodName == "storeWord" 'isStoreWord'
-			return self.lowerInternalsStoreSized(result: result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
+			return self.lowerInternalsStoreSized(result, args: args, dstBlock: dstBlock, methodName: methodName, width: StoreWidth.word)
 		end 'isStoreWord'
 		if methodName == "memcpy" 'isMemcpy'
-			return self.lowerInternalsMemcpy(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsMemcpy(result, args: args, dstBlock: dstBlock)
 		end 'isMemcpy'
 		// Address-of-named-global / address-of-named-function bridges
 		if let globalName = try lookupInternalsGlobalAddrTarget(methodName) 'isGlobalAddr'
-			return self.lowerInternalsNamedGlobalAddr(result: result, args: args, dstBlock: dstBlock, globalName: globalName)
+			return self.lowerInternalsNamedGlobalAddr(result, args: args, dstBlock: dstBlock, globalName: globalName)
 		end 'isGlobalAddr'
 		if let funcName = try lookupInternalsFuncAddrTarget(methodName) 'isFuncAddr'
-			return self.lowerInternalsNamedFuncAddr(result: result, args: args, dstBlock: dstBlock, funcName: funcName)
+			return self.lowerInternalsNamedFuncAddr(result, args: args, dstBlock: dstBlock, funcName: funcName)
 		end 'isFuncAddr'
 		if methodName == "loadFramePtr" 'isLoadFramePtr'
-			return self.lowerInternalsLoadFramePtr(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsLoadFramePtr(result, args: args, dstBlock: dstBlock)
 		end 'isLoadFramePtr'
 		if methodName == "indirectCall1" 'isIndirectCall1'
-			return self.lowerInternalsIndirectCall1(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsIndirectCall1(result, args: args, dstBlock: dstBlock)
 		end 'isIndirectCall1'
 		// Runtime-call bridges (each maps to a fixed runtime callee name)
 		if let runtimeHit = try lookupInternalsRuntimeCallTarget(methodName) 'isRuntimeBridge'
-			return self.lowerInternalsRuntimeCallN(result: result, args: args, dstBlock: dstBlock, callee: runtimeHit.callee, arity: runtimeHit.arity)
+			return self.lowerInternalsRuntimeCallN(result, args: args, dstBlock: dstBlock, callee: runtimeHit.callee, arity: runtimeHit.arity)
 		end 'isRuntimeBridge'
 		// OS ops
 		if methodName == "osAllocPages" 'isOsAllocPages'
-			return self.lowerInternalsOsAllocPages(result: result, args: args, dstBlock: dstBlock, large: false)
+			return self.lowerInternalsOsAllocPages(result, args: args, dstBlock: dstBlock, large: false)
 		end 'isOsAllocPages'
 		if methodName == "osAllocPagesLarge" 'isOsAllocPagesLarge'
-			return self.lowerInternalsOsAllocPages(result: result, args: args, dstBlock: dstBlock, large: true)
+			return self.lowerInternalsOsAllocPages(result, args: args, dstBlock: dstBlock, large: true)
 		end 'isOsAllocPagesLarge'
 		if methodName == "osFreePages" 'isOsFreePages'
-			return self.lowerInternalsOsFreePages(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsOsFreePages(result, args: args, dstBlock: dstBlock)
 		end 'isOsFreePages'
 		if methodName == "osWrite" 'isOsWrite'
-			return self.lowerInternalsOsWriteAny(result: result, args: args, dstBlock: dstBlock, toStderr: false)
+			return self.lowerInternalsOsWriteAny(result, args: args, dstBlock: dstBlock, toStderr: false)
 		end 'isOsWrite'
 		if methodName == "osWriteErr" 'isOsWriteErr'
-			return self.lowerInternalsOsWriteAny(result: result, args: args, dstBlock: dstBlock, toStderr: true)
+			return self.lowerInternalsOsWriteAny(result, args: args, dstBlock: dstBlock, toStderr: true)
 		end 'isOsWriteErr'
 		if methodName == "osExit" 'isOsExit'
-			return self.lowerInternalsOsExit(result: result, args: args, dstBlock: dstBlock)
+			return self.lowerInternalsOsExit(result, args: args, dstBlock: dstBlock)
 		end 'isOsExit'
 		self.reportLowerError(ErrorCode.semanticTypeMismatch, message: "__Internals.{methodName}: unrecognized internals intrinsic")
 		return true
@@ -5227,6 +5472,94 @@ type MaxonToStdLowering
 		return true
 	end 'lowerManagedMemBuiltin'
 
+	// Phase 15c Stream 2.3: dispatch `__ManagedFile.METHOD(...)` to the
+	// corresponding `mrt_file_*` runtime helper. Modeled exactly on
+	// `lowerManagedMemBuiltin` above — see its header comment for the shared
+	// machinery (signature lookup, argument slotting, throwing-vs-non-throwing
+	// emit, result-type re-stamping). The only file-specific bits are the
+	// helper-name map (`managedFileHelperFor`) and the throws-set
+	// (`managedFileHelperThrows`).
+	//
+	// The runtime helpers themselves live in `runtime.std`. Stream 2.3 ships
+	// sentinel-erroring stubs (return -1 with error flag set for throwing
+	// helpers; return 0 / sentinel for non-throwing); Streams 3.1/3.2/3.3
+	// replace each stub body with the real Win32 / Linux-syscall / WASI
+	// implementation.
+	//
+	// No inline fast paths exist for file methods — every method flows
+	// through a runtime helper.
+	function lowerManagedFileBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
+		let qualifiedName = "__ManagedFile.{methodName}"
+		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
+			return false
+		end 'noSig'
+		var paramStartIndex = 0
+		if hasReceiver 'instance'
+			paramStartIndex = 1
+		end 'instance'
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
+
+		let helperName = try managedFileHelperFor(methodName) otherwise 'noHelper'
+			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
+			return true
+		end 'noHelper'
+
+		let isThrowingHelper = managedFileHelperThrows(methodName)
+		let helperBoundName = errorBoundName if isThrowingHelper else ByteArray.create()
+		let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock, errorBoundName: helperBoundName)
+		if not isThrowingHelper 'bindZeroForNonThrowing'
+			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+		end 'bindZeroForNonThrowing'
+		if lowered 'refineType'
+			self.refineBuiltinCallResultType(result, receiverName: "__ManagedFile", methodName: methodName)
+		end 'refineType'
+		return lowered
+	end 'lowerManagedFileBuiltin'
+
+	// Phase 15c Stream 2.3: dispatch `__ManagedDirectory.METHOD(...)` to the
+	// corresponding `mrt_directory_*` runtime helper. See
+	// `lowerManagedFileBuiltin`'s header comment for the shared rationale
+	// and the stream's stub-body strategy.
+	function lowerManagedDirectoryBuiltin(result ByteArray, methodName String, receiverId ValueId, hasReceiver bool, args ByteArrayArray, argLabels StringArray, argTypes MaxonTypeArray, argRanges SourceRangeArray, opIdx OpIndex, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create()) returns bool
+		let qualifiedName = "__ManagedDirectory.{methodName}"
+		let sigLookup = try self.project.funcSignatures.get(qualifiedName) otherwise 'noSig'
+			return false
+		end 'noSig'
+		var paramStartIndex = 0
+		if hasReceiver 'instance'
+			paramStartIndex = 1
+		end 'instance'
+		let allArgIds = self.slotArgsForCall(sigLookup, args: args, argLabels: argLabels, argTypes: argTypes, argRanges: argRanges, paramStartIndex: paramStartIndex, opIdx: opIdx, dstBlock: dstBlock, leadingReceiverId: receiverId, hasLeadingReceiver: hasReceiver)
+
+		let helperName = try managedDirectoryHelperFor(methodName) otherwise 'noHelper'
+			self.reportUnknownManagedHandleMethod(result, qualifiedName: qualifiedName, dstBlock: dstBlock)
+			return true
+		end 'noHelper'
+
+		let isThrowingHelper = managedDirectoryHelperThrows(methodName)
+		let helperBoundName = errorBoundName if isThrowingHelper else ByteArray.create()
+		let lowered = self.lowerManagedMemRuntimeCall(result, helperName: helperName, argIds: allArgIds, dstBlock: dstBlock, errorBoundName: helperBoundName)
+		if not isThrowingHelper 'bindZeroForNonThrowing'
+			self.bindErrorFlagToZero(errorBoundName, dstBlock: dstBlock)
+		end 'bindZeroForNonThrowing'
+		if lowered 'refineType'
+			self.refineBuiltinCallResultType(result, receiverName: "__ManagedDirectory", methodName: methodName)
+		end 'refineType'
+		return lowered
+	end 'lowerManagedDirectoryBuiltin'
+
+	// Shared "unknown method" reporter for the `__ManagedFile.*` /
+	// `__ManagedDirectory.*` dispatch tail. Mirrors the equivalent fallback
+	// in `lowerManagedMemBuiltin`: emit a compile-error breadcrumb and stamp
+	// a zero placeholder so the build stops with a clear message rather than
+	// emitting a call to a non-existent runtime helper.
+	function reportUnknownManagedHandleMethod(result ByteArray, qualifiedName String, dstBlock IrBlock)
+		self.reportLowerError(ErrorCode.semanticUndefinedVariable, message: "lowerManagedHandleBuiltin: unknown method '{qualifiedName}'")
+		let placeholder = self.defineName(result)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: placeholder, value: 0))))
+		self.setValueType(placeholder, t: MaxonType.integer)
+	end 'reportUnknownManagedHandleMethod'
+
 	// Phase 11.4: lower a `__ManagedMemoryCursor.method` call inline. The
 	// cursor is a real 40-byte heap struct (see `lowerCreateCursor` above);
 	// each method here reads/writes fields by offset and emits the right
@@ -5294,6 +5627,105 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: id, value: value))))
 		return id
 	end 'emitConstI64'
+
+	// Materialize a `ParamDefault` as a Std value at a call-site default-fill
+	// slot. Simple literal arms produce an i64-typed constant that's then
+	// coerced to the declared param type via `coerceValueToParam` (matches
+	// the int-literal path that pre-dated multi-arm defaults). For
+	// `enumCase`, the enum's case ordinal is looked up against
+	// `project.enumTypes`. For `helper`, a zero-arg call is emitted to the
+	// parser-synthesized helper function that wraps the default expression
+	// — its return type already matches the param type, so the result
+	// flows directly without a type-coercion bridge.
+	function materializeParamDefault(pd ParamDefault, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		// Variant dispatch. Each arm picks the source-level MaxonType the
+		// constant carries so `coerceValueToParam`'s category check
+		// stays inside its supported pairs:
+		//   * intLiteral  → integer category (int↔float bridge applies).
+		//   * boolLiteral → bool category (matches a `bool` param without
+		//                   an int→bool implicit, which doesn't exist).
+		//   * byteLiteral → integer (byte and char-byte both lower to i64
+		//                   on the int channel).
+		//   * enumCase    → integer (the case's ordinal flows as an i64).
+		//   * floatLiteralBits → float (constF64 op; IEEE-754 bits land
+		//                   directly without a numeric conversion).
+		//   * helper      → zero-arg call to the parser-synthesized
+		//                   helper, whose return type already matches.
+		match pd 'pickValue'
+			intLiteral(value) then return self.emitParamDefaultConstI64(value, fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+			boolLiteral(value) then return self.emitParamDefaultConstI64(1 if value else 0, fromType: MaxonType.boolean, paramType: paramType, dstBlock: dstBlock)
+			byteLiteral(value) then return self.emitParamDefaultConstI64(value, fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+			enumCase(typeName, caseName) then return self.emitParamDefaultConstI64(self.lookupEnumCaseOrdinal(typeName, caseName: caseName), fromType: MaxonType.integer, paramType: paramType, dstBlock: dstBlock)
+			floatLiteralBits(bits) then return self.emitParamDefaultConstF64(bits, paramType: paramType, dstBlock: dstBlock)
+			helper(helperName) then return self.emitParamDefaultHelperCall(helperName, paramType: paramType, dstBlock: dstBlock)
+			none then panic("materializeParamDefault: invariant — caller must check paramDefaultHasValue first")
+		end 'pickValue'
+	end 'materializeParamDefault'
+
+	// Emit a `constI64` op for an integer-shaped parameter default.
+	// `fromType` tags the SSA value with its source-level type so a
+	// `bool` default lands at category bool (not int), avoiding a spurious
+	// `coerceValueToParam` int→bool panic. The value still routes through
+	// `coerceValueToParam` so an int default to a float-typed parameter
+	// goes through the int↔float widening bridge.
+	function emitParamDefaultConstI64(rawValue ParsedInt, fromType MaxonType, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		let constId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: rawValue))))
+		self.setValueType(constId, t: fromType)
+		// Char-byte → Character: the parser stores a char-literal default
+		// (`= 'A'`) as a `byteLiteral` whose value is the raw codepoint.
+		// When the declared parameter type is the `Character` struct,
+		// wrap the byte into a managed-memory-backed Character at the
+		// call site — same materialization the arg-coercion path uses
+		// for `f('a')` against a `Character` param, but the constant
+		// arrives via the signature default-fill loop instead of
+		// `coerceArgToParam`.
+		if paramType.nameOrEmpty(self.project) == "Character" 'charWrap'
+			return self.materializeCharacterFromByte(constId, dstBlock: dstBlock)
+		end 'charWrap'
+		return self.coerceValueToParam(constId, fromType: fromType, toType: paramType, dstBlock: dstBlock)
+	end 'emitParamDefaultConstI64'
+
+	// Emit a `constF64` op for a float-literal default. The `bits` payload
+	// is the IEEE-754 representation parsed by the lexer/parser, so the
+	// resulting SSA value is typed f64. `coerceValueToParam` handles the
+	// (rare) target-type narrowing if the declared parameter type is a
+	// ranged float typealias whose representation differs from f64.
+	function emitParamDefaultConstF64(bits ParsedInt, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		let constId = allocValueId(self.funcIdRef)
+		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constF64, resultId: constId, value: bits))))
+		self.setValueType(constId, t: MaxonType.float)
+		return self.coerceValueToParam(constId, fromType: MaxonType.float, toType: paramType, dstBlock: dstBlock)
+	end 'emitParamDefaultConstF64'
+
+	// Emit a zero-arg call to a parser-synthesized default-value helper.
+	// The helper's return type is `paramType` by construction, so the
+	// result lands typed-correctly without an additional coercion.
+	function emitParamDefaultHelperCall(helperName String, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		let resultId = allocValueId(self.funcIdRef)
+		let argIds = ValueIdArray.create()
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
+		self.setValueType(resultId, t: paramType)
+		return resultId
+	end 'emitParamDefaultHelperCall'
+
+	// Resolve `EnumName.caseName` to the case's ordinal (the index of the
+	// case in its declaring enum's `cases` list). For ordinal-backed enums
+	// the ordinal equals the runtime value; for raw-value enums the parser
+	// records explicit values on each case which the lowering uses
+	// elsewhere — but `paramDefault.enumCase` always materializes the
+	// case's ORDINAL (matching how `EnumName.caseName` is constructed at
+	// runtime in other lowering paths).
+	function lookupEnumCaseOrdinal(typeName String, caseName String) returns ParsedInt
+		let enumType = try self.project.enumTypes.get(typeName) otherwise panic("paramDefault.enumCase: enum '{typeName}' not found in project.enumTypes — parser accepted a default referencing an undeclared enum")
+		for i in 0 upto enumType.cases.count() 'eachCase'
+			let c = try enumType.cases.get(i) otherwise panic("lookupEnumCaseOrdinal: cases.get OOB at {i}")
+			if c.name == caseName 'hit'
+				return i as ParsedInt
+			end 'hit'
+		end 'eachCase'
+		panic("paramDefault.enumCase: enum '{typeName}' has no case '{caseName}'")
+	end 'lookupEnumCaseOrdinal'
 
 	// Emit `result = loadIndirect(addrId + offset)` typed i64 and return resultId.
 	// Used for pointer-shaped header words (managed-memory metadata, union tags,
@@ -5446,10 +5878,10 @@ type MaxonToStdLowering
 		self.setValueType(bufferPtrId, t: MaxonType.integer)
 		self.emitStoreFieldI64(mmId, offset: 0, valueId: bufferPtrId, dstBlock: dstBlock)
 		// Stamp length / capacity / element_size / parent.
-		self.storeI64Const(addrId: mmId, offset: 8, value: info.count, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 16, value: -2, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 24, value: info.elementSize, dstBlock: dstBlock)
-		self.storeI64Const(addrId: mmId, offset: 32, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 8, value: info.count, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 16, value: -2, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 24, value: info.elementSize, dstBlock: dstBlock)
+		self.storeI64Const(mmId, offset: 32, value: -2, dstBlock: dstBlock)
 	end 'lowerManagedMemCreateFromRdata'
 
 	function lowerCreateCursor(result ByteArray, sourceId ValueId, dstBlock IrBlock, errorBoundName ByteArray = ByteArray.create())
@@ -5681,7 +6113,17 @@ type MaxonToStdLowering
 	// a typed `var` first — without this, lowerMethodCall sees integer and
 	// can't pick the `__ManagedMemory` method-table arm.
 	function refineMmCallResultType(result ByteArray, methodName String)
-		let qualifiedName = "__ManagedMemory.{methodName}"
+		self.refineBuiltinCallResultType(result, receiverName: "__ManagedMemory", methodName: methodName)
+	end 'refineMmCallResultType'
+
+	// Generalized form of refineMmCallResultType used by every `__ManagedX.method`
+	// dispatch (currently __ManagedMemory, __ManagedFile, __ManagedDirectory).
+	// See refineMmCallResultType's original header comment for the rationale:
+	// the generic helper-call stamp uses integer, but methods that return a
+	// non-integer (managed handles, managed memory) need re-stamping so
+	// downstream method dispatch picks the correct method-table arm.
+	function refineBuiltinCallResultType(result ByteArray, receiverName String, methodName String)
+		let qualifiedName = "{receiverName}.{methodName}"
 		let returnType = try self.project.funcReturnTypes.get(qualifiedName) otherwise return
 		let resultType = match returnType 'unwrap'
 			void gives MaxonType.integer
@@ -5699,7 +6141,7 @@ type MaxonToStdLowering
 		end 'skipReStamp'
 		let resultId = self.resolveName(result)
 		self.setValueType(resultId, t: resultType)
-	end 'refineMmCallResultType'
+	end 'refineBuiltinCallResultType'
 
 	// C1.d: dispatch a method call on a fat-pointer interface receiver.
 	// The receiver's value half is `receiverId` and its witness pointer
@@ -5727,7 +6169,7 @@ type MaxonToStdLowering
 		end 'iface'
 		let witnessAddrId = try self.interfaceWitnessValueIds.get(receiverId) otherwise panic("lowerInterfaceMethodCall: no witness ValueId paired with receiverId={receiverId} (interface={interfaceName}, method={String.from(methodName)}); the receiver's varLoad did not pair its witness companion")
 		let methodNameStr = String.from(methodName)
-		let argIds = self.buildDispatchArgIds(receiverId: receiverId, args: args)
+		let argIds = self.buildDispatchArgIds(receiverId, args: args)
 		let resultId = self.defineName(result)
 		self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
 	end 'lowerInterfaceMethodCall'
@@ -5751,9 +6193,9 @@ type MaxonToStdLowering
 		end 'extractPid'
 		let receiverParamName = self.project.typeParameters.getName(pid)
 		let methodNameStr = String.from(methodName)
-		if let matched = try self.findConstraintForMethod(paramName: receiverParamName, methodName: methodNameStr) 'hit'
+		if let matched = try self.findConstraintForMethod(receiverParamName, methodName: methodNameStr) 'hit'
 			let witnessAddrId = try self.implicitWitnessValueIds.get(matched.constraintIndex) otherwise panic("tryLowerConstrainedTypeParamDispatch: implicitWitnessValueIds desync at idx {matched.constraintIndex}")
-			let argIds = self.buildDispatchArgIds(receiverId: receiverId, args: args)
+			let argIds = self.buildDispatchArgIds(receiverId, args: args)
 			let resultId = self.defineName(result)
 			self.emitWitnessDispatch(resultId, witnessAddrId: witnessAddrId, interfaceName: matched.interfaceName, methodName: methodNameStr, argIds: argIds, dstBlock: dstBlock)
 			return true
@@ -5939,7 +6381,7 @@ type MaxonToStdLowering
 			end 'overflow'
 			let paramType = try resolvedParamTypes.get(slot + paramStartIndex) otherwise MaxonType.integer
 			let paramName = try signature.paramNames.get(slot + paramStartIndex) otherwise ""
-			let coercedId = self.coerceArgToParam(argName: arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
+			let coercedId = self.coerceArgToParam(arg, argType: argType, paramType: paramType, paramName: paramName, range: argRange, dstBlock: dstBlock)
 			// Hybrid-generics ABI bridge (write side). The callee's signature
 			// (`signature.paramTypes`) keeps the raw `typeParameter(Element)`
 			// for generic params; substitution only refines the type at the
@@ -5962,15 +6404,12 @@ type MaxonToStdLowering
 			end 'already'
 			let paramIdx = userIdx + paramStartIndex
 			let pd = try signature.paramDefaults.get(paramIdx) otherwise ParamDefault.none
-			let defaultValue = paramDefaultAsIntLiteral(pd)
-			if defaultValue.hasValue 'hasDefault'
-				let constId = allocValueId(self.funcIdRef)
-				self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: constId, value: defaultValue.value))))
-				self.setValueType(constId, t: MaxonType.integer)
-				let paramType = try resolvedParamTypes.get(paramIdx) otherwise MaxonType.integer
-				let coercedId = self.coerceValueToParam(valueId: constId, fromType: MaxonType.integer, toType: paramType, dstBlock: dstBlock)
-				try self.slotIdsScratch.set(userIdx, value: coercedId) otherwise panic("invariant: slotIds.set OOB")
-			end 'hasDefault'
+			if not paramDefaultHasValue(pd) 'noDefault'
+				continue
+			end 'noDefault'
+			let paramType = try resolvedParamTypes.get(paramIdx) otherwise MaxonType.integer
+			let materializedId = self.materializeParamDefault(pd, paramType: paramType, dstBlock: dstBlock)
+			try self.slotIdsScratch.set(userIdx, value: materializedId) otherwise panic("invariant: slotIds.set OOB")
 		end 'fillDefaults'
 		// Materialize result. Callers retain it on the StdOp, so it must not
 		// alias the scratch buffer. When hasLeadingReceiver is set, the
@@ -6001,7 +6440,7 @@ type MaxonToStdLowering
 			// would read uninitialised state from its second param register.
 			let leadingParamType = try signature.paramTypes.get(0) otherwise MaxonType.unresolved
 			if interfaceTypeIsFat(leadingParamType) 'leadingFat'
-				let leadingWitness = self.witnessForInterfaceArg(valueId: leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
+				let leadingWitness = self.witnessForInterfaceArg(leadingReceiverId, paramType: leadingParamType, dstBlock: dstBlock)
 				result.push(leadingWitness)
 			end 'leadingFat'
 		end 'pushLead'
@@ -6027,7 +6466,7 @@ type MaxonToStdLowering
 			// the arg is concrete, materialize the witness via the
 			// (concreteType, interfaceName) registry lookup.
 			if interfaceTypeIsFat(paramType) 'expandWitness'
-				let witnessForArg = self.witnessForInterfaceArg(valueId: v, paramType: paramType, dstBlock: dstBlock)
+				let witnessForArg = self.witnessForInterfaceArg(v, paramType: paramType, dstBlock: dstBlock)
 				result.push(witnessForArg)
 			end 'expandWitness'
 		end 'copyOut'
@@ -6062,7 +6501,7 @@ type MaxonToStdLowering
 		// to integer-typed args whose value name is in `charByteLiterals`,
 		// targeting a named-Character param.
 		if isCharByteToCharacterCoercion(self.project, argType: argType, paramType: paramType) 'charByteCoerce'
-			if self.project.charByteLiterals.contains(charByteLiteralKey(funcName: self.currentFuncName, valueName: argName)) 'isCharByteArg'
+			if self.project.charByteLiterals.contains(charByteLiteralKey(self.currentFuncName, valueName: argName)) 'isCharByteArg'
 				let byteId = self.resolveName(argName)
 				return self.materializeCharacterFromByte(byteId, dstBlock: dstBlock)
 			end 'isCharByteArg'
@@ -6337,7 +6776,7 @@ type MaxonToStdLowering
 			end 'isEnum'
 		end 'maybeEnum'
 		let resultId = self.defineName(result)
-		let hit = try self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr) otherwise 'notFound'
+		let hit = try self.lookupFieldByReceiver(receiverType, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
@@ -6436,7 +6875,7 @@ type MaxonToStdLowering
 	// this; out-of-band raw values are undefined behavior).
 	function synthesizeOneEnumNameHelper(enumType EnumType)
 		let helperName = enumNameHelperSymbol(enumType.name)
-		let returnType = StdReturnType.value(inner: StdType.i64)
+		let returnType = StdReturnType.value(StdType.i64)
 		var paramTypes = StdTypeArray.create()
 		paramTypes.push(StdType.i64)
 		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
@@ -6512,7 +6951,7 @@ type MaxonToStdLowering
 	function synthesizeFnRefThunks()
 		for i in 0 upto self.pendingFnRefThunkTargets.count() 'eachThunk'
 			let targetName = try self.pendingFnRefThunkTargets.get(i) otherwise panic("synthesizeFnRefThunks: target lookup OOB at {i}")
-			self.synthesizeOneFnRefThunk(targetName: targetName)
+			self.synthesizeOneFnRefThunk(targetName)
 		end 'eachThunk'
 	end 'synthesizeFnRefThunks'
 
@@ -6600,7 +7039,7 @@ type MaxonToStdLowering
 	// silently discard the returned value.
 	function synthesizeOneUnionDestructor(unionType EnumType)
 		let helperName = unionDestructorSymbol(unionType.name)
-		let returnType = StdReturnType.value(inner: StdType.i64)
+		let returnType = StdReturnType.value(StdType.i64)
 		var paramTypes = StdTypeArray.create()
 		paramTypes.push(StdType.i64)
 		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
@@ -6720,7 +7159,7 @@ type MaxonToStdLowering
 		let resultId = self.defineName(result)
 		self.setValueType(resultId, t: MaxonType.named(self.project.typeNames.intern("String")))
 		let helperName = enumNameHelperSymbol(enumType.name)
-		self.pendingEnumNameHelpers.insert(element: enumType.name)
+		self.pendingEnumNameHelpers.insert(enumType.name)
 		var argIds = ValueIdArray.create()
 		argIds.push(receiverId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
@@ -6767,7 +7206,7 @@ type MaxonToStdLowering
 	function lowerFunctionBackedEnumRawValue(result ByteArray, receiverId ValueId, enumType EnumType, dstBlock IrBlock)
 		let resultId = self.defineName(result)
 		let helperName = enumFnRawHelperSymbol(enumType.name)
-		self.pendingEnumFnRawHelpers.insert(element: enumType.name)
+		self.pendingEnumFnRawHelpers.insert(enumType.name)
 		var argIds = ValueIdArray.create()
 		argIds.push(receiverId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.call(resultId, callee: helperName, argIds: argIds)))
@@ -6793,7 +7232,7 @@ type MaxonToStdLowering
 
 	function synthesizeOneEnumFnRawHelper(enumType EnumType)
 		let helperName = enumFnRawHelperSymbol(enumType.name)
-		let returnType = StdReturnType.value(inner: StdType.i64)
+		let returnType = StdReturnType.value(StdType.i64)
 		var paramTypes = StdTypeArray.create()
 		paramTypes.push(StdType.i64)
 		var func = IrFunction.createFromStd(helperName, returnType: returnType, paramCount: 1, paramTypes: paramTypes, returnLine: 0)
@@ -6838,7 +7277,7 @@ type MaxonToStdLowering
 		let receiverId = self.resolveName(receiver)
 		let receiverType = self.getValueType(receiverId)
 		let fieldNameStr = String.from(fieldName)
-		let hit = try self.lookupFieldByReceiver(receiverType: receiverType, fieldName: fieldNameStr) otherwise 'notFound'
+		let hit = try self.lookupFieldByReceiver(receiverType, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown field '{fieldNameStr}' on type '{receiverType.toString(self.project)}'")
 			return
 		end 'notFound'
@@ -6863,7 +7302,7 @@ type MaxonToStdLowering
 		// `offset + 8`. layoutAllStructs reserved the trailing 8 bytes so
 		// the witness store doesn't trample the next field.
 		if interfaceTypeIsFat(resolvedFieldType) 'fat'
-			self.lowerInterfaceFieldStore(receiverId: receiverId, offset: hit.offset, value: value, fieldType: resolvedFieldType, dstBlock: dstBlock)
+			self.lowerInterfaceFieldStore(receiverId, offset: hit.offset, value: value, fieldType: resolvedFieldType, dstBlock: dstBlock)
 			return
 		end 'fat'
 		let fieldStdType = maxonTypeToStdType(self.project, ref: resolvedFieldType)
@@ -6901,8 +7340,8 @@ type MaxonToStdLowering
 		if interfaceTypeIsFat(concreteType) 'forward'
 			witnessId = try self.interfaceWitnessValueIds.get(valueId) otherwise panic("lowerInterfaceFieldStore: source valueId={valueId} typed as interface but no witness paired in interfaceWitnessValueIds")
 		end 'forward' else 'concrete'
-			payloadId = self.materializeInterfacePayload(valueId: valueId, concreteType: concreteType, dstBlock: dstBlock)
-			witnessId = self.materializeInterfaceWitness(concreteType: concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
+			payloadId = self.materializeInterfacePayload(valueId, concreteType: concreteType, dstBlock: dstBlock)
+			witnessId = self.materializeInterfaceWitness(concreteType, interfaceName: interfaceName, dstBlock: dstBlock)
 		end 'concrete'
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: offset, valueId: payloadId, width: StoreWidth.qword, isFloat: false)))
 		self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(receiverId, offset: (offset + 8) as FieldOffset, valueId: witnessId, width: StoreWidth.qword, isFloat: false)))
@@ -6921,7 +7360,7 @@ type MaxonToStdLowering
 			return
 		end 'notInType'
 		let fieldNameStr = String.from(fieldName)
-		let hit = try self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
+		let hit = try self.lookupFieldByStructName(self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
 			self.setValueType(resultId, t: MaxonType.integer)
 			return
@@ -6941,7 +7380,7 @@ type MaxonToStdLowering
 			return
 		end 'notInType'
 		let fieldNameStr = String.from(fieldName)
-		let hit = try self.lookupFieldByStructName(structName: self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
+		let hit = try self.lookupFieldByStructName(self.currentTypeName, fieldName: fieldNameStr) otherwise 'notFound'
 			self.reportLowerError(ErrorCode.parserExpectedExpression, message: "lowerMaxonToStd: unknown self-field '{fieldNameStr}' on type '{self.currentTypeName}'")
 			return
 		end 'notFound'
@@ -6974,7 +7413,7 @@ type MaxonToStdLowering
 	// catch the throw and emit a clean diagnostic.
 	function lookupFieldByReceiver(receiverType MaxonType, fieldName String) returns FieldHit throws FieldLookupError
 		let structName = try maxonTypeStructName(self.project, t: receiverType) otherwise throw FieldLookupError.notFound
-		return try self.lookupFieldByStructName(structName: structName, fieldName: fieldName)
+		return try self.lookupFieldByStructName(structName, fieldName: fieldName)
 	end 'lookupFieldByReceiver'
 
 	function lookupFieldByStructName(structName String, fieldName String) returns FieldHit throws FieldLookupError
@@ -6999,7 +7438,7 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			condBr(cond, thenTarget, elseTarget, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.condBr(self.resolveName(cond), thenTarget: thenTarget, thenArgIds: ValueIdArray.create(), elseTarget: elseTarget, elseArgIds: ValueIdArray.create())))
 			br(target, _) then self.stdModule.setTerminator(dstBlock, op: StdOp.control(StdControlOp.br(target, argIds: ValueIdArray.create())))
-			ret(retVal, _) then self.lowerRet(retVal: retVal, dstBlock: dstBlock)
+			ret(retVal, _) then self.lowerRet(retVal, dstBlock: dstBlock)
 			enumMatchArm(scrutineeName, caseName, scrutineeType, rawValue, isFloat, resolved, thenTarget, elseTarget, _, _) then self.lowerEnumMatchArm(scrutineeName, caseName: caseName, scrutineeType: scrutineeType, rawValue: rawValue, isFloat: isFloat, resolved: resolved, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			rangeMatchArm(scrutineeName, loValue, hiValue, isUpto, hasMinSentinel, hasMaxSentinel, enumOwnerName, thenTarget, elseTarget, _) then self.lowerRangeMatchArm(scrutineeName, loValue: loValue, hiValue: hiValue, isUpto: isUpto, hasMinSentinel: hasMinSentinel, hasMaxSentinel: hasMaxSentinel, enumOwnerName: enumOwnerName, thenTarget: thenTarget, elseTarget: elseTarget, dstBlock: dstBlock)
 			// An error op as a block terminator shouldn't come from the parser —
@@ -7012,8 +7451,8 @@ type MaxonToStdLowering
 			// in R8/X0 and the error flag (`ordinal+1`, 0 reserved for "no
 			// error") in RDX/X1. The caller's `try` reads the flag from the
 			// post-call mov.
-			throw (enumName, variantName, payloadValueName, _) then self.lowerThrow(enumName: enumName, variantName: variantName, payloadValueName: payloadValueName, dstBlock: dstBlock)
-			rethrow(flagName, _) then self.lowerRethrow(flagName: flagName, dstBlock: dstBlock)
+			throw (enumName, variantName, payloadValueName, _) then self.lowerThrow(enumName, variantName: variantName, payloadValueName: payloadValueName, dstBlock: dstBlock)
+			rethrow(flagName, _) then self.lowerRethrow(flagName, dstBlock: dstBlock)
 			default panic("lowerMaxonTerminatorToStd: non-terminator op kind '{hlOp.name}' as terminator of block '{dstBlock.label}' (parser bug)")
 		end 'lower'
 	end 'lowerTerminator'
@@ -7039,7 +7478,7 @@ type MaxonToStdLowering
 		// dedicated `enumPayloadRead` ops the parser now emits at the head
 		// of the arm body — see `emitUnionArmBindings`. The field is kept
 		// for forward compatibility (Stage 4 write-back may consult it).
-		let unionType = self.unionTypeForScrutinee(scrutineeType: scrutineeType)
+		let unionType = self.unionTypeForScrutinee(scrutineeType)
 		var caseLiteralType = MaxonType.integer
 		var constOpcode = StdArithConstOpcode.constI64
 		if isFloat 'asFloat'
@@ -7385,7 +7824,7 @@ type MaxonToStdLowering
 		let resultId = self.defineName(result)
 		var refTarget = funcName
 		if not funcName.startsWith("_$closure_") 'isFreeFunc'
-			refTarget = self.scheduleFnRefThunk(targetFunc: funcName)
+			refTarget = self.scheduleFnRefThunk(funcName)
 		end 'isFreeFunc'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(StdCallOp.funcRef(resultId, funcName: refTarget)))
 		// Free-function refs carry env=0. Materialize a real `const 0` op
@@ -7406,7 +7845,7 @@ type MaxonToStdLowering
 		if self.pendingFnRefThunks.contains(thunkName) 'alreadyScheduled'
 			return thunkName
 		end 'alreadyScheduled'
-		self.pendingFnRefThunks.insert(element: thunkName)
+		self.pendingFnRefThunks.insert(thunkName)
 		self.pendingFnRefThunkTargets.push(targetFunc)
 		return thunkName
 	end 'scheduleFnRefThunk'
@@ -7596,7 +8035,7 @@ type MaxonToStdLowering
 		// Subsequent explicit `fieldStore` ops in user code (e.g.
 		// `Self{managed: someManaged}`) overwrite the synthesized
 		// pointer, so this is safe to do unconditionally.
-		self.synthesizeManagedFieldInits(parentId: resultId, structType: structType, dstBlock: dstBlock)
+		self.synthesizeManagedFieldInits(resultId, structType: structType, dstBlock: dstBlock)
 	end 'lowerStructAlloc'
 
 	// For each field on `structType` whose declared type resolves to the
@@ -7642,11 +8081,11 @@ type MaxonToStdLowering
 			self.setValueType(mmId, t: MaxonType.named(self.project.typeNames.intern("__ManagedMemory")))
 			// Initialize fields: buffer=0, length=0, capacity=0,
 			// element_size=8, parent_ptr=0.
-			self.storeI64Const(addrId: mmId, offset: 0, value: 0, dstBlock: dstBlock)
-			self.storeI64Const(addrId: mmId, offset: 8, value: 0, dstBlock: dstBlock)
-			self.storeI64Const(addrId: mmId, offset: 16, value: 0, dstBlock: dstBlock)
-			self.storeI64Const(addrId: mmId, offset: 24, value: 8, dstBlock: dstBlock)
-			self.storeI64Const(addrId: mmId, offset: 32, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(mmId, offset: 0, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(mmId, offset: 8, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(mmId, offset: 16, value: 0, dstBlock: dstBlock)
+			self.storeI64Const(mmId, offset: 24, value: 8, dstBlock: dstBlock)
+			self.storeI64Const(mmId, offset: 32, value: 0, dstBlock: dstBlock)
 			// Store mmId pointer at field's offset in the parent.
 			self.stdModule.appendOp(dstBlock, op: StdOp.system(StdSystemOp.storeIndirect(parentId, offset: field.offset, valueId: mmId, width: StoreWidth.qword, isFloat: false)))
 		end 'eachField'
@@ -7667,7 +8106,7 @@ type MaxonToStdLowering
 	// `errorReturn(retVal, 0)`. The zero flag tells the caller's tryCall site
 	// "no error in flight."
 	function lowerRet(retVal ByteArray, dstBlock IrBlock)
-		self.emitRetOrErrorReturn(retVal: retVal, dstBlock: dstBlock, asTerminator: true)
+		self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
 	end 'lowerRet'
 
 	// Same shape as `lowerRet` but appends as a body op. Hit only on the rare
@@ -7676,7 +8115,7 @@ type MaxonToStdLowering
 	// vs non-throwing distinction so the multi-value-return ABI invariant
 	// holds at every textual exit.
 	function lowerRetAsBodyOp(retVal ByteArray, dstBlock IrBlock)
-		self.emitRetOrErrorReturn(retVal: retVal, dstBlock: dstBlock, asTerminator: false)
+		self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
 	end 'lowerRetAsBodyOp'
 
 	// Shared body for the two lowerRet shapes. `asTerminator` toggles between
@@ -7734,7 +8173,7 @@ type MaxonToStdLowering
 		if interfaceTypeIsFat(retValueType) 'forwardFat'
 			return try self.interfaceWitnessValueIds.get(retValId) otherwise panic("materializeReturnWitness: retValId={retValId} typed as interface but no witness paired in interfaceWitnessValueIds")
 		end 'forwardFat'
-		return self.materializeInterfaceWitness(concreteType: retValueType, interfaceName: interfaceName, dstBlock: dstBlock)
+		return self.materializeInterfaceWitness(retValueType, interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'materializeReturnWitness'
 
 	// Phase 4: lower MaxonOp.throw(enumName, variantName) to a single
@@ -7776,7 +8215,7 @@ type MaxonToStdLowering
 			self.stdModule.setTerminator(dstBlock, op: StdOp.call(StdCallOp.errorReturn(zeroId, errorFlagId: unionPtrId)))
 			return
 		end 'unionThrow'
-		let flag = self.lookupVariantOrdinalPlusOne(enumName: enumName, variantName: variantName)
+		let flag = self.lookupVariantOrdinalPlusOne(enumName, variantName: variantName)
 		// const flag
 		let flagId = allocValueId(self.funcIdRef)
 		self.stdModule.appendOp(dstBlock, op: StdOp.arith(StdArithOp.const(StdArithConst.create(StdArithConstOpcode.constI64, resultId: flagId, value: flag))))
@@ -8021,8 +8460,8 @@ export function mathBinaryIntrinsicTarget(bare String) returns MathBinaryIntrins
 end 'mathBinaryIntrinsicTarget'
 
 export function isMathIntrinsic(bare String) returns bool
-	try mathIntrinsicTarget(bare: bare) otherwise 'unaryMiss'
-		try mathBinaryIntrinsicTarget(bare: bare) otherwise return false
+	try mathIntrinsicTarget(bare) otherwise 'unaryMiss'
+		try mathBinaryIntrinsicTarget(bare) otherwise return false
 		return true
 	end 'unaryMiss'
 	return true
@@ -8926,6 +9365,133 @@ function managedMemHelperThrows(methodName String) returns bool
 	end 'mCreate'
 	return true
 end 'managedMemHelperThrows'
+
+// Phase 15c Stream 2.3: helper-name map for `__ManagedFile.*` methods. Maps
+// the camelCase Maxon method name on `__ManagedFile` to the snake_case
+// `mrt_file_*` runtime helper that implements it (Streams 3.1/3.2/3.3 ship
+// the real per-target bodies; Stream 2.3 ships sentinel-erroring stubs in
+// runtime.std). The names are NOT `stdlib.`-prefixed — these helpers live
+// in runtime.std, not in stdlib/Internals.maxon. Throws
+// `ManagedFileHelperError.noHelper` when the method isn't one the lowering
+// dispatch knows how to route (no inline fast paths exist for file methods,
+// so `noHelper` here is a real "unknown method" error).
+function managedFileHelperFor(methodName String) returns String throws ManagedFileHelperError
+	if methodName == "openRead" 'mOpenRead'
+		return "mrt_file_open_read"
+	end 'mOpenRead'
+	if methodName == "openWrite" 'mOpenWrite'
+		return "mrt_file_open_write"
+	end 'mOpenWrite'
+	if methodName == "openWriteExecutable" 'mOpenWriteExe'
+		return "mrt_file_open_write_executable"
+	end 'mOpenWriteExe'
+	if methodName == "read" 'mRead'
+		return "mrt_file_read"
+	end 'mRead'
+	if methodName == "write" 'mWrite'
+		return "mrt_file_write"
+	end 'mWrite'
+	if methodName == "close" 'mClose'
+		return "mrt_file_close"
+	end 'mClose'
+	if methodName == "exists" 'mExists'
+		return "mrt_file_exists"
+	end 'mExists'
+	if methodName == "delete" 'mDelete'
+		return "mrt_file_delete"
+	end 'mDelete'
+	if methodName == "stat" 'mStat'
+		return "mrt_file_stat"
+	end 'mStat'
+	if methodName == "statField" 'mStatField'
+		return "mrt_file_stat_field"
+	end 'mStatField'
+	if methodName == "statFree" 'mStatFree'
+		return "mrt_file_stat_free"
+	end 'mStatFree'
+	if methodName == "size" 'mSize'
+		return "mrt_file_size"
+	end 'mSize'
+	throw ManagedFileHelperError.noHelper
+end 'managedFileHelperFor'
+
+enum ManagedFileHelperError implements Error
+	noHelper
+end 'ManagedFileHelperError'
+
+// Which `__ManagedFile.*` methods invoke a runtime helper that writes the
+// multi-value-return error flag. Throwing helpers must be invoked via
+// `StdCallOp.tryCall`; non-throwing helpers via plain `StdCallOp.call`.
+// The throws/non-throws split is determined by reading the user-facing
+// call sites in `stdlib/File.maxon` — every `try X.method() otherwise ...`
+// site marks the helper as throwing.
+function managedFileHelperThrows(methodName String) returns bool
+	// Non-throwing: close (cleanup, can't fail meaningfully), exists (returns
+	// 0/1 directly), statField (pure field read from a stat buffer pointer),
+	// statFree (frees the buffer — caller never sees a failure).
+	if methodName == "close" 'mClose'
+		return false
+	end 'mClose'
+	if methodName == "exists" 'mExists'
+		return false
+	end 'mExists'
+	if methodName == "statField" 'mStatField'
+		return false
+	end 'mStatField'
+	if methodName == "statFree" 'mStatFree'
+		return false
+	end 'mStatFree'
+	return true
+end 'managedFileHelperThrows'
+
+// Phase 15c Stream 2.3: helper-name map for `__ManagedDirectory.*` methods.
+// Mirrors `managedFileHelperFor` — see that function's header comment for
+// the naming convention and runtime-vs-stdlib distinction.
+function managedDirectoryHelperFor(methodName String) returns String throws ManagedDirectoryHelperError
+	if methodName == "openSearch" 'mOpenSearch'
+		return "mrt_directory_open_search"
+	end 'mOpenSearch'
+	if methodName == "create" 'mCreate'
+		return "mrt_directory_create"
+	end 'mCreate'
+	if methodName == "currentPath" 'mCurPath'
+		return "mrt_directory_current_path"
+	end 'mCurPath'
+	if methodName == "next" 'mNext'
+		return "mrt_directory_next"
+	end 'mNext'
+	if methodName == "filename" 'mFilename'
+		return "mrt_directory_filename"
+	end 'mFilename'
+	if methodName == "close" 'mClose'
+		return "mrt_directory_close"
+	end 'mClose'
+	if methodName == "exists" 'mExists'
+		return "mrt_directory_exists"
+	end 'mExists'
+	throw ManagedDirectoryHelperError.noHelper
+end 'managedDirectoryHelperFor'
+
+enum ManagedDirectoryHelperError implements Error
+	noHelper
+end 'ManagedDirectoryHelperError'
+
+// Which `__ManagedDirectory.*` methods invoke a runtime helper that writes
+// the multi-value-return error flag. Mirrors `managedFileHelperThrows`.
+function managedDirectoryHelperThrows(methodName String) returns bool
+	// Non-throwing: filename (pure field read on the iterator block),
+	// close (cleanup), exists (returns 0/1 directly).
+	if methodName == "filename" 'mFilename'
+		return false
+	end 'mFilename'
+	if methodName == "close" 'mClose'
+		return false
+	end 'mClose'
+	if methodName == "exists" 'mExists'
+		return false
+	end 'mExists'
+	return true
+end 'managedDirectoryHelperThrows'
 
 // Strip a leading `prefix` from `s` and return the remainder. Throws
 // `StripPrefixError.noMatch` when the string doesn't begin with prefix.

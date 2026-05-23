@@ -29,7 +29,7 @@ type Result
 end 'Result'
 
 function compute(a Integer, b Integer) returns Result
-	return Result.create(sum: a + b, product: a * b)
+	return Result.create(a + b, product: a * b)
 end 'compute'
 
 function main() returns ExitCode
@@ -55,11 +55,11 @@ type Counter
 end 'Counter'
 
 function increment(c Counter) returns Counter
-	return Counter.create(value: c.value + 1)
+	return Counter.create(c.value + 1)
 end 'increment'
 
 function main() returns ExitCode
-	let c1 = Counter.create(value: 10)
+	let c1 = Counter.create(10)
 	let c2 = increment(c1)
 	return c2.value
 end 'main'
@@ -82,15 +82,15 @@ type Value
 end 'Value'
 
 function step1() returns Value
-	return Value.create(n: 1)
+	return Value.create(1)
 end 'step1'
 
 function step2(v Value) returns Value
-	return Value.create(n: v.n + 10)
+	return Value.create(v.n + 10)
 end 'step2'
 
 function step3(v Value) returns Value
-	return Value.create(n: v.n + 100)
+	return Value.create(v.n + 100)
 end 'step3'
 
 function main() returns ExitCode

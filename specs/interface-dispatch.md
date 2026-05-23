@@ -73,7 +73,7 @@ function callGreet(g Greeter) returns Integer
 end 'callGreet'
 
 function main() returns ExitCode
-	let h = Hello.create(value: 41)
+	let h = Hello.create(41)
 	return callGreet(h)
 end 'main'
 ```
@@ -120,8 +120,8 @@ function getScore(s Scorer) returns Integer
 end 'getScore'
 
 function main() returns ExitCode
-	let a = Alpha.create(n: 10)
-	let b = Beta.create(n: 10)
+	let a = Alpha.create(10)
+	let b = Beta.create(10)
 	return getScore(a) + getScore(b)
 end 'main'
 ```
@@ -156,7 +156,7 @@ function display(p Printer)
 end 'display'
 
 function main() returns ExitCode
-	let t = Thing.create(label: 99)
+	let t = Thing.create(99)
 	display(t)
 	return 0
 end 'main'
@@ -195,7 +195,7 @@ function addVia(a Adder, n Integer) returns Integer
 end 'addVia'
 
 function main() returns ExitCode
-	let acc = Accumulator.create(total: 30)
+	let acc = Accumulator.create(30)
 	return addVia(acc, n: 12)
 end 'main'
 ```
@@ -236,7 +236,7 @@ function measure(s Shape) returns Integer
 end 'measure'
 
 function main() returns ExitCode
-	let r = Rect.create(w: 3, h: 4)
+	let r = Rect.create(3, h: 4)
 	return measure(r)
 end 'main'
 ```
@@ -283,8 +283,8 @@ function showDescription(d Describable)
 end 'showDescription'
 
 function main() returns ExitCode
-	let w = Widget.create(id: 5)
-	let g = Gadget.create(id: 3)
+	let w = Widget.create(5)
+	let g = Gadget.create(3)
 	showDescription(w)
 	showDescription(g)
 	return 0
@@ -321,7 +321,7 @@ function execute(r Runnable) returns Integer
 end 'execute'
 
 function main() returns ExitCode
-	let n = NotRunnable.create(x: 1)
+	let n = NotRunnable.create(1)
 	return execute(n)
 end 'main'
 ```
@@ -368,7 +368,7 @@ function callDerived(d Derived) returns Integer
 end 'callDerived'
 
 function main() returns ExitCode
-	let i = Impl.create(n: 10)
+	let i = Impl.create(10)
 	return callBase(i) + callDerived(i)
 end 'main'
 ```
@@ -403,8 +403,8 @@ function getCount(c Counter) returns Integer
 end 'getCount'
 
 function main() returns ExitCode
-	let c1 = SimpleCounter.create(n: 17)
-	let c2 = SimpleCounter.create(n: 25)
+	let c1 = SimpleCounter.create(17)
+	let c2 = SimpleCounter.create(25)
 	return getCount(c1) + getCount(c2)
 end 'main'
 ```
@@ -493,7 +493,7 @@ type Factory
 	let seed Integer
 
 	function make() returns Producer
-		return Widget.create(value: seed)
+		return Widget.create(seed)
 	end 'make'
 
 	static function create(seed Integer) returns Self
@@ -506,7 +506,7 @@ function consume(p Producer) returns Integer
 end 'consume'
 
 function main() returns ExitCode
-	let f = Factory.create(seed: 42)
+	let f = Factory.create(42)
 	let p = f.make()
 	return consume(p)
 end 'main'
@@ -627,8 +627,8 @@ function callTag(t Tagged) returns Integer
 end 'callTag'
 
 function main() returns ExitCode
-	let m = Marker.create(n: 42)
-	let h = Holder.create(t: m)
+	let m = Marker.create(42)
+	let h = Holder.create(m)
 	return callTag(h.t)
 end 'main'
 ```

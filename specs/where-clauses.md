@@ -97,7 +97,7 @@ typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
 		var m = MyKeyMap.create()
-		try m.insert(key: MyKey.create(value: 1), value: 42) otherwise ignore
+		try m.insert(MyKey.create(1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
 ```
@@ -164,8 +164,8 @@ end 'Holder'
 typealias WrapperHolder = Holder with Wrapper
 
 function main() returns ExitCode
-		let w = Wrapper.create(n: 10)
-		let h = WrapperHolder.create(item: w)
+		let w = Wrapper.create(10)
+		let h = WrapperHolder.create(w)
 		return h.item.value()
 end 'main'
 ```
@@ -217,8 +217,8 @@ end 'Registry'
 typealias PersonRegistry = Registry with Person
 
 function main() returns ExitCode
-		let p = Person.create(age: 30)
-		let r = PersonRegistry.create(item: p)
+		let p = Person.create(30)
+		let r = PersonRegistry.create(p)
 		return r.item.age()
 end 'main'
 ```
@@ -305,8 +305,8 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-		let b = IntBox.create(item: 42)
-		if b.eq(other: 42) 'yes'
+		let b = IntBox.create(42)
+		if b.eq(42) 'yes'
 				return 1
 		end 'yes'
 		return 0

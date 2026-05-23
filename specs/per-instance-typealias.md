@@ -132,8 +132,8 @@ typealias WrapperA = Wrapper with Integer
 typealias WrapperB = Wrapper with Integer
 
 function main() returns ExitCode
-	let a = WrapperA.create(value: 1, tag: 5)
-	let b = WrapperB.create(value: 2, tag: 0)
+	let a = WrapperA.create(1, tag: 5)
+	let b = WrapperB.create(2, tag: 0)
 	let aTag = a.getTag()
 	b.setTag(aTag)
 	return 0
@@ -167,7 +167,7 @@ end 'Wrapper'
 typealias IntWrapper = Wrapper with Integer
 
 function main() returns ExitCode
-	let w = IntWrapper.create(value: 42, tag: 5)
+	let w = IntWrapper.create(42, tag: 5)
 	let t = w.getTag()
 	if t == 5 'check'
 		return 0
@@ -204,7 +204,7 @@ function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
 end 'takeStrTag'
 
 function main() returns ExitCode
-	let iw = IntWrapper.create(value: 1, tag: 7)
+	let iw = IntWrapper.create(1, tag: 7)
 	let intTag = iw.tag
 	let strTag = intTag as StrWrapper.Idx
 	let result = takeStrTag(strTag)
@@ -242,7 +242,7 @@ end 'Wrapper'
 typealias IntWrapper = Wrapper with Integer
 
 function main() returns ExitCode
-	let w = IntWrapper.create(value: 99, tag: 42)
+	let w = IntWrapper.create(99, tag: 42)
 	let t = w.getTag()
 	if t == 42 'check'
 		return 0

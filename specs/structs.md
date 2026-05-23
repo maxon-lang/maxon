@@ -37,8 +37,8 @@ end 'Config'
 
 Create type instances with literal syntax:
 ```maxon
-var p = Point.create(x: 10, y: 20)
-let config = Config.create(version: 1, count: 0)
+var p = Point.create(10, y: 20)
+let config = Config.create(1, count: 0)
 ```
 
 ### Instance Mutability
@@ -47,13 +47,13 @@ The mutability of a type instance is determined by `let` vs `var`:
 
 **var type** - Can modify `var` fields:
 ```maxon
-var p = Point.create(x: 10, y: 20)
+var p = Point.create(10, y: 20)
 p.x = 30   // OK: type is mutable, field is var
 ```
 
 **let type** - Cannot modify any fields:
 ```maxon
-let p = Point.create(x: 10, y: 20)
+let p = Point.create(10, y: 20)
 // p.x = 30   // ERROR: type instance is immutable
 ```
 
@@ -61,7 +61,7 @@ let p = Point.create(x: 10, y: 20)
 
 Even on a `var` type, `let` fields cannot be modified:
 ```maxon
-var c = Config.create(version: 1, count: 0)
+var c = Config.create(1, count: 0)
 c.count = 5     // OK: field is var
 // c.version = 2   // ERROR: field is let
 ```
@@ -83,7 +83,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(x: 10, y: 20)
+	var p = Point.create(10, y: 20)
 	p.x = 30
 	return p.x
 end 'main'
@@ -107,7 +107,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.create(version: 1, count: 0)
+	var c = Config.create(1, count: 0)
 	c.count = 5
 	return c.count
 end 'main'
@@ -131,7 +131,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point.create(x: 10, y: 20)
+	let p = Point.create(10, y: 20)
 	p.x = 30
 	return p.x
 end 'main'
@@ -155,7 +155,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.create(version: 1, count: 0)
+	var c = Config.create(1, count: 0)
 	c.version = 2
 	return c.version
 end 'main'
@@ -253,7 +253,7 @@ type Pair
 end 'Pair'
 
 function makePair(a Integer, b Integer) returns Pair
-	return Pair.create(first: a, second: b)
+	return Pair.create(a, second: b)
 end 'makePair'
 
 function main() returns ExitCode
@@ -284,7 +284,7 @@ function acceptPoint(p Point) returns Integer
 end 'acceptPoint'
 
 function main() returns ExitCode
-	return acceptPoint(Point.create(x: 3, y: 4))
+	return acceptPoint(Point.create(3, y: 4))
 end 'main'
 ```
 ```exitcode

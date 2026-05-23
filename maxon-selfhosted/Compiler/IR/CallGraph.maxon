@@ -130,7 +130,7 @@ end 'computeSccs'
 // any completed SCC.
 function runTarjan(cg CallGraph, root String, state SccState)
 	var work = TarjanWorkArray.create()
-	pushTarjanFrame(state: state, work: work, node: root)
+	pushTarjanFrame(state, work: work, node: root)
 	while work.count() > 0 'dfs'
 		let topIdx = work.count() - 1
 		let topSnapshot = try work.get(topIdx) otherwise panic("runTarjan: work.get top failed at idx {topIdx}")
@@ -138,17 +138,17 @@ function runTarjan(cg CallGraph, root String, state SccState)
 		let topNextChild = topSnapshot.nextChild
 		let callees = try cg.edges.get(topNode) otherwise StringArray.create()
 		if topNextChild >= callees.count() 'done'
-			finalizeTarjanFrame(state: state, frame: topSnapshot)
+			finalizeTarjanFrame(state, frame: topSnapshot)
 			let topLow = try state.lowlink.get(topNode) otherwise panic("runTarjan: lowlink missing for finished node {topNode}")
 			try work.pop() otherwise panic("runTarjan: pop from non-empty work stack failed")
-			propagateLowlinkToParent(work: work, state: state, topLow: topLow)
+			propagateLowlinkToParent(work, state: state, topLow: topLow)
 			continue
 		end 'done'
 		let child = try callees.get(topNextChild) otherwise panic("runTarjan: callees.get failed at {topNextChild}")
-		try work.set(topIdx, value: TarjanWork.create(node: topNode, nextChild: topNextChild + 1)) otherwise panic("runTarjan: work.set top failed")
+		try work.set(topIdx, value: TarjanWork.create(topNode, nextChild: topNextChild + 1)) otherwise panic("runTarjan: work.set top failed")
 		let childIdx = try state.index.get(child) otherwise -1
 		if childIdx < 0 'descend'
-			pushTarjanFrame(state: state, work: work, node: child)
+			pushTarjanFrame(state, work: work, node: child)
 			continue
 		end 'descend'
 		let childOnStack = try state.onStack.get(child) otherwise false
@@ -189,7 +189,7 @@ function pushTarjanFrame(state SccState, work TarjanWorkArray, node String)
 	state.lowlink.upsert(node, value: idx)
 	state.onStack.upsert(node, value: true)
 	state.stack.push(node)
-	work.push(TarjanWork.create(node: node))
+	work.push(TarjanWork.create(node))
 end 'pushTarjanFrame'
 
 // Pop one SCC's worth of nodes off the stack when `frame.node` is the
@@ -237,12 +237,12 @@ export function collectRecursive(sccs StringArrayArray, cg CallGraph) returns Ca
 	for scc in sccs 'eachScc'
 		if scc.count() >= 2 'multiNode'
 			for name in scc 'mark'
-				recursive.insert(element: name)
+				recursive.insert(name)
 			end 'mark'
 		end 'multiNode' else 'singleton'
 			let only = try scc.get(0) otherwise panic("collectRecursive: empty SCC")
 			if hasSelfEdge(cg, name: only) 'selfLoop'
-				recursive.insert(element: only)
+				recursive.insert(only)
 			end 'selfLoop'
 		end 'singleton'
 	end 'eachScc'

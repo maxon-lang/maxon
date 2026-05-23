@@ -332,7 +332,7 @@ end 'Container'
 function main() returns ExitCode
 	var m = StrMap.create()
 	try m.insert("key", value: "val") otherwise ignore
-	let c = Container.create(data: m)
+	let c = Container.create(m)
 	let result = try c.data.get("key") otherwise ""
 	if result == "val" 'check'
 		return 42
@@ -571,8 +571,8 @@ end 'triple'
 
 function main() returns ExitCode
 	var m = HandlerMap.create()
-	m.upsert(key: "d", value: double)
-	m.upsert(key: "t", value: triple)
+	m.upsert("d", value: double)
+	m.upsert("t", value: triple)
 	let f = try m.get("d") otherwise panic("missing 'd'")
 	let g = try m.get("t") otherwise panic("missing 't'")
 	return f(7) + g(7)

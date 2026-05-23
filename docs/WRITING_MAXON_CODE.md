@@ -113,9 +113,14 @@ var name = "hi"
 
 ### 6. First argument is positional, all others MUST be named
 
+The first argument NEVER carries a label — labeling it is rejected as **E2052 "first arg cannot be named"**. Every argument after the first MUST use `name: value`.
+
 ```maxon
-// WRONG
+// WRONG — second arg missing label
 connect("localhost", 8080, 5000)
+
+// WRONG — first arg cannot be named (E2052)
+connect(host: "localhost", port: 8080, timeout: 5000)
 
 // CORRECT
 connect("localhost", port: 8080, timeout: 5000)

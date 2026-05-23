@@ -56,9 +56,9 @@ type OpMeta
 end 'OpMeta'
 
 union TestOp
-	add(dest ID, src ID) = OpMeta.create(latency: 1)
-	mul(dest ID, src ID) = OpMeta.create(latency: 3)
-	nop = OpMeta.create(latency: 0)
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -90,9 +90,9 @@ type OpMeta
 end 'OpMeta'
 
 union TestOp
-	add(dest ID, src ID) = OpMeta.create(latency: 1)
-	mul(dest ID, src ID) = OpMeta.create(latency: 3)
-	nop = OpMeta.create(latency: 0)
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -119,9 +119,9 @@ type CostMeta
 end 'CostMeta'
 
 union Action
-	load(dest ID) = CostMeta.create(cost: 4)
-	store(src ID) = CostMeta.create(cost: 3)
-	nop = CostMeta.create(cost: 0)
+	load(dest ID) = CostMeta.create(4)
+	store(src ID) = CostMeta.create(3)
+	nop = CostMeta.create(0)
 end 'Action'
 
 function main() returns ExitCode
@@ -155,9 +155,9 @@ type DetailMeta
 end 'DetailMeta'
 
 union MemOp
-	load(dest ID, offset ID) = DetailMeta.create(latency: 4, isMemory: 1)
-	store(src ID, offset ID) = DetailMeta.create(latency: 3, isMemory: 1)
-	add(dest ID, src ID) = DetailMeta.create(latency: 1, isMemory: 0)
+	load(dest ID, offset ID) = DetailMeta.create(4, isMemory: 1)
+	store(src ID, offset ID) = DetailMeta.create(3, isMemory: 1)
+	add(dest ID, src ID) = DetailMeta.create(1, isMemory: 0)
 end 'MemOp'
 
 function main() returns ExitCode

@@ -450,13 +450,13 @@ function runPerFunctionRebuildScenario(sourcePath FilePath, exePath FilePath) re
 	// under a minute. The 30-function shape was timing-noisy because most
 	// samples clustered on the granularity tick.
 	let funcCount = 100 as FuncBodyCount
-	let originalSource = buildSyntheticSource(funcCount: funcCount, magicReturn: 1 as MagicReturn)
+	let originalSource = buildSyntheticSource(funcCount, magicReturn: 1 as MagicReturn)
 	// Edit ONE function's body — the realistic single-function-edit shape.
 	// With the parser snapshot/restore now in place (ParseDelta.beginFileParse
 	// wired into queryParseOps), same-Project recompile is possible. The
 	// in-memory parse and pass caches survive across the cold→incremental
 	// transition; the only invalidation is the changed file's content hash.
-	let editedSource = buildSyntheticSourceWithOneEdit(funcCount: funcCount, editIndex: 50, originalReturn: 1, editedReturn: 2)
+	let editedSource = buildSyntheticSourceWithOneEdit(funcCount, editIndex: 50, originalReturn: 1, editedReturn: 2)
 
 	let editedReturn = 2 as MagicReturn
 
@@ -568,7 +568,7 @@ function runChunkDrivenColdBuildScenario(sourcePath FilePath, exePath FilePath) 
 	// scenario fast. Smaller programs would only stamp a handful of chunks,
 	// leaving more room for an off-by-one stamp bug to hide.
 	let funcCount = 50 as FuncBodyCount
-	let source = buildSyntheticSource(funcCount: funcCount, magicReturn: 1 as MagicReturn)
+	let source = buildSyntheticSource(funcCount, magicReturn: 1 as MagicReturn)
 	try File.writeText(sourcePath, content: source) otherwise 'writeSrc'
 		print("  Scenario H: failed to write source\n")
 		return false
@@ -702,7 +702,7 @@ function measureRebuild(label String, cycles CycleCount, sourcePath FilePath, or
 		try compileProject(sharedProject) otherwise 'compColdF'
 			return RebuildMeasurement.failed("cold compile failed at cycle {cycle} ({label})")
 		end 'compColdF'
-		let coldElapsed = Clock.elapsedMs(since: coldStart)
+		let coldElapsed = Clock.elapsedMs(coldStart)
 		coldSamples.push(coldElapsed)
 		lastColdMisses = sharedProject.db.codePerFuncMisses
 
@@ -725,7 +725,7 @@ function measureRebuild(label String, cycles CycleCount, sourcePath FilePath, or
 		let incrOutputPath = try compileProject(sharedProject) otherwise 'compIncrF'
 			return RebuildMeasurement.failed("incremental compile failed at cycle {cycle} ({label})")
 		end 'compIncrF'
-		let incrElapsed = Clock.elapsedMs(since: incrStart)
+		let incrElapsed = Clock.elapsedMs(incrStart)
 		incrementalSamples.push(incrElapsed)
 		lastIncrHits = sharedProject.db.codePerFuncHits
 		lastIncrMisses = sharedProject.db.codePerFuncMisses

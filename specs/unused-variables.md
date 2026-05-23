@@ -289,12 +289,12 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let result = apply(f: function(n Integer) gives 42, x: 10)
+	let result = apply(function(n Integer) gives 42, x: 10)
 	return result
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-closure-param.test:11:33: unused variable: 'n'
+error E3012: specs/fragments/unused-variables/unused-closure-param.test:11:30: unused variable: 'n'
 ```
 
 <!-- test: used-closure-param -->
@@ -308,7 +308,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let result = apply(f: function(n Integer) gives n + 1, x: 10)
+	let result = apply(function(n Integer) gives n + 1, x: 10)
 	return result
 end 'main'
 ```
@@ -327,7 +327,7 @@ function apply(f FnTypeAlias1, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let result = apply(f: function(_ Integer) gives 42, x: 10)
+	let result = apply(function(_ Integer) gives 42, x: 10)
 	return result
 end 'main'
 ```

@@ -9,11 +9,11 @@ category: core
 
 ## Documentation
 
-All function and method calls require named arguments using colon syntax. This improves code clarity at call sites by explicitly naming parameter values.
+In function and method calls, the first argument is positional and every subsequent argument must be named using `name: value` syntax. The first argument carries no label; labels on the remaining arguments improve clarity at the call site by making each parameter's role explicit.
 
-### Named Arguments (Required)
+### First Argument Positional, Rest Named
 
-All arguments must be named using `name: value` syntax:
+The first argument is passed positionally. Every argument after the first must be named:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -23,7 +23,7 @@ function add(a Score, b Score) returns Score
 end 'add'
 
 function main() returns ExitCode
-	return add(a: 3, b: 4)
+	return add(3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -33,7 +33,7 @@ end 'main'
 
 ### Named Arguments in Any Order
 
-Named arguments can appear in any order:
+After the first (positional) argument, named arguments can appear in any order:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -43,7 +43,7 @@ function subtract(a Score, b Score) returns Score
 end 'subtract'
 
 function main() returns ExitCode
-	return subtract(b: 3, a: 10)
+	return subtract(10, b: 3)
 end 'main'
 ```
 ```exitcode
@@ -53,7 +53,7 @@ end 'main'
 
 ### Default Parameter Values
 
-Parameters with default values can be omitted:
+Parameters with default values can be omitted. The first parameter is still passed positionally:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -63,7 +63,7 @@ function repeat(value Score, times Score = 1) returns Score
 end 'repeat'
 
 function main() returns ExitCode
-	return repeat(value: 7, times: 6)
+	return repeat(7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -83,7 +83,7 @@ function add(a Integer, b Integer) returns Integer
 end 'add'
 
 function main() returns ExitCode
-	return add(a: 3, b: 4)
+	return add(3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -100,28 +100,11 @@ function multiply(x Integer, y Integer) returns Integer
 end 'multiply'
 
 function main() returns ExitCode
-	return multiply(x: 6, y: 7)
+	return multiply(6, y: 7)
 end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: named-args-any-order -->
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function subtract(a Integer, b Integer) returns Integer
-	return a - b
-end 'subtract'
-
-function main() returns ExitCode
-	return subtract(b: 3, a: 10)
-end 'main'
-```
-```exitcode
-7
 ```
 
 <!-- test: default-param-named -->
@@ -134,7 +117,7 @@ function repeat(value Integer, times Integer = 1) returns Integer
 end 'repeat'
 
 function main() returns ExitCode
-	return repeat(value: 7, times: 6)
+	return repeat(7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -151,7 +134,7 @@ function repeat(value Integer, times Integer = 2) returns Integer
 end 'repeat'
 
 function main() returns ExitCode
-	return repeat(value: 21)
+	return repeat(21)
 end 'main'
 ```
 ```exitcode
@@ -180,15 +163,32 @@ error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:9
 
 typealias Integer = int(i64.min to i64.max)
 
-function greet(name Integer) returns Integer
-	return name
+function greet(name Integer, suffix Integer) returns Integer
+	return name + suffix
 end 'greet'
 
 function main() returns ExitCode
-	return greet(person: 42)
+	return greet(42, person: 1)
 end 'main'
 ```
 ```maxoncstderr
-error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:10:15: unknown parameter name: 'person'
+error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:10:19: unknown parameter name: 'person'
+```
+
+<!-- test: error-first-arg-named -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function main() returns ExitCode
+	return add(a: 3, b: 4)
+end 'main'
+```
+```maxoncstderr
+error E2052: specs/fragments/parameter-labels/error-first-arg-named.test:10:13: first arg cannot be named
 ```
 

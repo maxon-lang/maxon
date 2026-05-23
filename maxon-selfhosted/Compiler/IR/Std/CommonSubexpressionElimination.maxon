@@ -154,7 +154,7 @@ function hoistDuplicateConstantsToEntry(module StdModule, func IrFunction, remap
 	if freshConstIndices.count() > 0 'havefresh'
 		var insertPos = countLeadingParamOps(module, opRefs: entryBlock.opRefs)
 		for newOpIdx in freshConstIndices 'eachFresh'
-			try entryBlock.opRefs.insert(at: insertPos, value: newOpIdx) otherwise panic("hoistDuplicateConstantsToEntry: insertPos in [0, opRefs.count()] but insert failed")
+			try entryBlock.opRefs.insert(insertPos, value: newOpIdx) otherwise panic("hoistDuplicateConstantsToEntry: insertPos in [0, opRefs.count()] but insert failed")
 			insertPos = insertPos + 1
 		end 'eachFresh'
 		try module.blocks.set(entryBlockRef, value: entryBlock) otherwise panic("hoistDuplicateConstantsToEntry: blocks.set OOB writing entry block")
@@ -462,6 +462,17 @@ function cseSubstSys(op StdSystemOp, remap ValueIdArray) returns StdSystemOp
 		osAllocPages(resultId, sizeId) gives StdSystemOp.osAllocPages(resultId, sizeId: cseRemapValue(sizeId, remap: remap))
 		osAllocPagesLarge(resultId, sizeId) gives StdSystemOp.osAllocPagesLarge(resultId, sizeId: cseRemapValue(sizeId, remap: remap))
 		osFreePages(ptrId, sizeId) gives StdSystemOp.osFreePages(cseRemapValue(ptrId, remap: remap), sizeId: cseRemapValue(sizeId, remap: remap))
+		osFileOpen(resultId, cStringPtrId, flagsId, fileModeId) gives StdSystemOp.osFileOpen(resultId, cStringPtrId: cseRemapValue(cStringPtrId, remap: remap), flagsId: cseRemapValue(flagsId, remap: remap), fileModeId: cseRemapValue(fileModeId, remap: remap))
+		osFileRead(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileRead(resultId, fdId: cseRemapValue(fdId, remap: remap), bufPtrId: cseRemapValue(bufPtrId, remap: remap), countId: cseRemapValue(countId, remap: remap))
+		osFileWrite(resultId, fdId, bufPtrId, countId) gives StdSystemOp.osFileWrite(resultId, fdId: cseRemapValue(fdId, remap: remap), bufPtrId: cseRemapValue(bufPtrId, remap: remap), countId: cseRemapValue(countId, remap: remap))
+		osFileClose(resultId, fdId) gives StdSystemOp.osFileClose(resultId, fdId: cseRemapValue(fdId, remap: remap))
+		osFileLseek(resultId, fdId, offsetId, whenceId) gives StdSystemOp.osFileLseek(resultId, fdId: cseRemapValue(fdId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap), whenceId: cseRemapValue(whenceId, remap: remap))
+		osFileStat(resultId, cStringPtrId, statBufPtrId) gives StdSystemOp.osFileStat(resultId, cStringPtrId: cseRemapValue(cStringPtrId, remap: remap), statBufPtrId: cseRemapValue(statBufPtrId, remap: remap))
+		osFileAccess(resultId, cStringPtrId, modeId) gives StdSystemOp.osFileAccess(resultId, cStringPtrId: cseRemapValue(cStringPtrId, remap: remap), modeId: cseRemapValue(modeId, remap: remap))
+		osFileUnlink(resultId, cStringPtrId) gives StdSystemOp.osFileUnlink(resultId, cStringPtrId: cseRemapValue(cStringPtrId, remap: remap))
+		osDirGetdents64(resultId, fdId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetdents64(resultId, fdId: cseRemapValue(fdId, remap: remap), bufPtrId: cseRemapValue(bufPtrId, remap: remap), bufSizeId: cseRemapValue(bufSizeId, remap: remap))
+		osDirGetcwd(resultId, bufPtrId, bufSizeId) gives StdSystemOp.osDirGetcwd(resultId, bufPtrId: cseRemapValue(bufPtrId, remap: remap), bufSizeId: cseRemapValue(bufSizeId, remap: remap))
+		osDirMkdir(resultId, cStringPtrId, modeId) gives StdSystemOp.osDirMkdir(resultId, cStringPtrId: cseRemapValue(cStringPtrId, remap: remap), modeId: cseRemapValue(modeId, remap: remap))
 		atomicInc(addrId) gives StdSystemOp.atomicInc(cseRemapValue(addrId, remap: remap))
 		atomicDec(addrId) gives StdSystemOp.atomicDec(cseRemapValue(addrId, remap: remap))
 		atomicXadd(resultId, addrId, valId) gives StdSystemOp.atomicXadd(resultId, addrId: cseRemapValue(addrId, remap: remap), valId: cseRemapValue(valId, remap: remap))

@@ -307,7 +307,7 @@ function seedRuntimeReachName(name String, runtimeMap RuntimeFuncByName, seen Ru
 	if not runtimeMap.contains(name) 'notInRuntime'
 		return
 	end 'notInRuntime'
-	seen.insert(element: name)
+	seen.insert(name)
 	worklist.push(name)
 end 'seedRuntimeReachName'
 
@@ -698,7 +698,7 @@ end 'isCoverageRuntimeFunction'
 // name): mrt_command_line_count[_stub], mrt_command_line_arg[_stub],
 // mrt_executable_path[_stub]. Either way the symbol resolution at link
 // time sees exactly one definition per public name.
-function filterRuntimeForOs(module StdModule, os Os) returns StdModule
+export function filterRuntimeForOs(module StdModule, os Os) returns StdModule
 	var filtered = cloneRuntimeShellSharingBodies(module)
 	let isWindows = match os 'check'
 		windows gives true
@@ -732,11 +732,36 @@ function filterRuntimeForOs(module StdModule, os Os) returns StdModule
 end 'filterRuntimeForOs'
 
 function isPerOsStubName(name String) returns bool
-	return name == "mrt_command_line_count_stub" or name == "mrt_command_line_arg_stub" or name == "mrt_executable_path_stub"
+	// Phase 15b/15f: command-line + executable-path pairs. (Phase 15c
+	// Stream 4.1b unified file/directory I/O onto a single platform-
+	// agnostic body per helper — no per-OS stub split remains for those.)
+	if name == "mrt_command_line_count_stub" 'mClc'
+		return true
+	end 'mClc'
+	if name == "mrt_command_line_arg_stub" 'mCla'
+		return true
+	end 'mCla'
+	if name == "mrt_executable_path_stub" 'mEp'
+		return true
+	end 'mEp'
+	return false
 end 'isPerOsStubName'
 
 function isPerOsPublicWindowsBodyName(name String) returns bool
-	return name == "mrt_command_line_count" or name == "mrt_command_line_arg" or name == "mrt_executable_path"
+	// Phase 15b/15f: command-line + executable-path public names. (Phase 15c
+	// Stream 4.1b unified file/directory I/O; the platform-agnostic body is
+	// always kept on Windows now, and its `osFileX` ops lower to direct
+	// calls into `mrt_win32_*` helpers in the X64 / ARM64 backends.)
+	if name == "mrt_command_line_count" 'mClc'
+		return true
+	end 'mClc'
+	if name == "mrt_command_line_arg" 'mCla'
+		return true
+	end 'mCla'
+	if name == "mrt_executable_path" 'mEp'
+		return true
+	end 'mEp'
+	return false
 end 'isPerOsPublicWindowsBodyName'
 
 // Strip a trailing `_stub` suffix when present; otherwise return the name
@@ -1107,6 +1132,21 @@ function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
 		osAllocPages gives 50
 		osAllocPagesLarge gives 50
 		osFreePages gives 50
+		// Linux file-I/O syscalls. Model them with the same syscall-class
+		// latency budget the other os* ops use (50 cycles each) — the
+		// scheduler doesn't try to model real I/O wait, but treating each
+		// op as a heavy barrier reflects the actual instruction cost.
+		osFileOpen gives 50
+		osFileRead gives 50
+		osFileWrite gives 50
+		osFileClose gives 50
+		osFileLseek gives 50
+		osFileStat gives 50
+		osFileAccess gives 50
+		osFileUnlink gives 50
+		osDirGetdents64 gives 50
+		osDirGetcwd gives 50
+		osDirMkdir gives 50
 		atomicInc gives 8
 		atomicDec gives 8
 		atomicXadd gives 8

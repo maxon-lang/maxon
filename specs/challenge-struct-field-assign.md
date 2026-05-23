@@ -28,7 +28,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(value: 10)
+	var c = Counter.create(10)
 	c.value = 42
 	return c.value
 end 'main'
@@ -54,7 +54,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.create(id: 1, count: 0)
+	var c = Config.create(1, count: 0)
 	c.id = 2
 	return c.id
 end 'main'
@@ -85,8 +85,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	let i = Inner.create(x: 10)
-	var o = Outer.create(inner: i)
+	let i = Inner.create(10)
+	var o = Outer.create(i)
 	o.inner.x = 42
 	return o.inner.x
 end 'main'

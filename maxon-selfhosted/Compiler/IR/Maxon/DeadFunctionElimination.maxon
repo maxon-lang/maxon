@@ -32,7 +32,7 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 	var seen = StringSet from ["main"]
 	for root in project.livenessRoots 'seedRoots'
 		if not seen.contains(root) 'fresh'
-			seen.insert(element: root)
+			seen.insert(root)
 			worklist.push(root)
 		end 'fresh'
 	end 'seedRoots'
@@ -47,7 +47,7 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 	for (_, bucket) in project.witnessConditionalRoots 'seedCondRoots'
 		for funcName in bucket 'eachCondImpl'
 			if not seen.contains(funcName) 'freshCond'
-				seen.insert(element: funcName)
+				seen.insert(funcName)
 				worklist.push(funcName)
 			end 'freshCond'
 		end 'eachCondImpl'
@@ -73,7 +73,7 @@ export function eliminateDeadFunctions(project Project, module MaxonModule) retu
 	// cache.
 	for func in module.functions 'seedStdlib'
 		if isStdlibNamespace(func.namespace) and not seen.contains(func.name) 'fresh'
-			seen.insert(element: func.name)
+			seen.insert(func.name)
 			worklist.push(func.name)
 		end 'fresh'
 	end 'seedStdlib'
@@ -191,7 +191,7 @@ function markCallee(callee String, worklist StringArray, seen StringSet)
 		return
 	end 'noName'
 	if not seen.contains(callee) 'new'
-		seen.insert(element: callee)
+		seen.insert(callee)
 		worklist.push(callee)
 	end 'new'
 end 'markCallee'

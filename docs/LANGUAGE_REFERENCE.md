@@ -2092,8 +2092,8 @@ end 'onClick'
 ### Named Arguments
 
 Maxon uses a **first-positional, rest-named** rule for function and method calls:
-- **First argument**: Always positional (no name)
-- **Subsequent arguments**: Must use `name: value` syntax
+- **First argument**: Always positional. Labelling the first argument is rejected as **E2052 "first arg cannot be named"**.
+- **Subsequent arguments**: Must use `name: value` syntax (omitting the label triggers **E3005**)
 - Named arguments (after the first) can appear in any order
 - Parameters with default values can be omitted
 

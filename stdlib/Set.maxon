@@ -48,7 +48,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'
-			result.insert(element: elem)
+			result.insert(elem)
 		end 'insert_loop'
 
 		return result
@@ -244,7 +244,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	/// Create a fresh iterator positioned at the first occupied slot.
 	/// Throws IterationError.exhausted if the set is empty.
 	export function createIterator() returns SetIter throws IterationError
-		return try SetIter.create(elements: elements, states: states, capacity: capacity)
+		return try SetIter.create(elements, states: states, capacity: capacity)
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
@@ -329,7 +329,7 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	var iterIndex SlotIndex
 
 	export static function create(elements IterElementArray, states IterStateArray, capacity BucketCapacity) returns Self throws IterationError
-		let first = try findNextOccupiedSet(states: states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+		let first = try findNextOccupiedSet(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
@@ -338,7 +338,7 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	end 'current'
 
 	export function advance() throws IterationError
-		iterIndex = try findNextOccupiedSet(states: states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+		iterIndex = try findNextOccupiedSet(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'SetIterator'
 

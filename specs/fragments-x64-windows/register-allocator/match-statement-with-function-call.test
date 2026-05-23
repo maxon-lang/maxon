@@ -18,178 +18,35 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 40
-RequiredIR: ```
-=== maxon
+---
+// CompiledIR
 module {
-  func @double(n: i64) -> i64 {
-  entry:
-    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
-    %1 = maxon.literal {value = 2 : i64}
-    %2 = maxon.binop %0, %1 {op = mul} {optimalType = i64}
-    maxon.scope_end [n]
-    maxon.return %2
-  }
-  func @main() -> i64 {
-  entry:
-    %3 = maxon.literal {value = 2 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1}
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.assign %4 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %3 {var = __match_process_0} {kind = i64} {decl = 1 : i1}
-    maxon.br process_0.cmp0
-  process_0.cmp0:
-    %5 = maxon.var_ref {var = __match_process_0} {type = i64}
-    %6 = maxon.literal {value = 1 : i64}
-    %7 = maxon.binop %5, %6 {op = eq}
-    maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
-  process_0.case0:
-    %8 = maxon.literal {value = 10 : i64}
-    %9 = maxon.call @double %8
-    maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br process_0.merge
-  process_0.cmp1:
-    %10 = maxon.var_ref {var = __match_process_0} {type = i64}
-    %11 = maxon.literal {value = 2 : i64}
-    %12 = maxon.binop %10, %11 {op = eq}
-    maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
-  process_0.case1:
-    %13 = maxon.literal {value = 20 : i64}
-    %14 = maxon.call @double %13
-    maxon.assign %14 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br process_0.merge
-  process_0.case2:
-    %15 = maxon.literal {value = 0 : i64}
-    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_end []
-    maxon.br process_0.merge
-  process_0.merge:
-    %16 = maxon.var_ref {var = result} {type = i64}
-    %17 = maxon.literal {value = 0 : i64}
-    %18 = maxon.binop %16, %17 {op = lt}
-    %19 = maxon.literal {value = 4294967295 : i64}
-    %20 = maxon.binop %16, %19 {op = gt}
-    %21 = maxon.binop %18, %20 {op = or}
-    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at match-statement-with-function-call.test:17: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
-    maxon.scope_end [x, result, __match_process_0]
-    maxon.return %16
-  }
-}
-=== standard
-module {
-  func @double(n: i64) -> i64 {
-  entry:
-    %0 = func.param n : StdI64
-    %1 = arith.constant {value = 2 : i64}
-    %2 = arith.muli %0, %1
-    func.return %2
-  }
-  func @main() -> u32 {
-  entry:
-    %3 = arith.constant {value = 2 : i64}
-    memref.store %3, __match_process_0
-    cf.br process_0.cmp0
-  process_0.cmp0:
-    %5 = memref.load __match_process_0 : i64
-    %6 = arith.constant {value = 1 : i64}
-    %7 = arith.cmpi eq %5, %6
-    cf.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
-  process_0.case0:
-    %8 = arith.constant {value = 10 : i64}
-    %9 = func.call @double %8
-    memref.store %9, result
-    cf.br process_0.merge
-  process_0.cmp1:
-    %10 = memref.load __match_process_0 : i64
-    %11 = arith.constant {value = 2 : i64}
-    %12 = arith.cmpi eq %10, %11
-    cf.cond_br %12 [then: process_0.case1, else: process_0.case2]
-  process_0.case1:
-    %13 = arith.constant {value = 20 : i64}
-    %14 = func.call @double %13
-    memref.store %14, result
-    cf.br process_0.merge
-  process_0.case2:
-    %15 = arith.constant {value = 0 : i64}
-    memref.store %15, result
-    cf.br process_0.merge
-  process_0.merge:
-    %16 = memref.load result : i64
-    %17 = arith.constant {value = 0 : i64}
-    %18 = arith.cmpi lt %16, %17
-    %19 = arith.constant {value = 4294967295 : i64}
-    %20 = arith.cmpi gt %16, %19
-    %21 = arith.ori1 %18, %20
-    cf.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %22 = memref.lea_symdata __panic_msg_0
-    %23 = std.ptr_to_i64 %22
-    std.call_runtime @mrt_panic %23
-  __range_ok_0:
-    func.return %16
-  }
-}
-=== x86
-module {
-  func @double(n: i64) -> i64 {
-  entry:
-    x64.mov rax, 2
-    x64.imul rcx, rax
-    x64.mov rax, rcx
-    x64.ret
-  }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rax, 2
-    x64.mov [rbp-8], rax
-    x64.jmp main.process_0.cmp0
-  process_0.cmp0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.process_0.cmp1
-  process_0.case0:
-    x64.mov rcx, 10
-    x64.call double
-    x64.mov [rbp-16], rax
-    x64.jmp main.process_0.merge
-  process_0.cmp1:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne main.process_0.case2
-  process_0.case1:
-    x64.mov rcx, 20
-    x64.call double
-    x64.mov [rbp-16], rax
-    x64.jmp main.process_0.merge
-  process_0.case2:
-    x64.xor eax, eax
-    x64.mov [rbp-16], rax
-    x64.jmp main.process_0.merge
+    x64.mov r8d, 2
+    x64.jmp process_0.next0
   process_0.merge:
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.mov r9d, 4294967295
+    x64.cmp r8, r9
+    x64.jbe __range_ok_0
+    x64.jmp __range_panic_0
+  process_0.next0:
+    x64.cmp r8, 2
+    x64.jne process_0.case2
+  process_0.case1:
+    x64.mov r8d, 40
+    x64.jmp process_0.merge
+  process_0.case2:
+    x64.xor r8d, r8d
+    x64.jmp process_0.merge
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue
     x64.ret
   }
 }
-```
----
 ---

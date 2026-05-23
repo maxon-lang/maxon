@@ -312,8 +312,8 @@ export type Configuration
 			workingDirectory: try FilePath.from("") otherwise panic("Configuration.create: empty path is the sentinel for 'inherit cwd'"),
 			environment: Environment.inherit,
 			standardInput: InputSource.none,
-			standardOutput: OutputDestination.collect(limitBytes: defaultCaptureLimit),
-			standardError: OutputDestination.collect(limitBytes: defaultCaptureLimit),
+			standardOutput: OutputDestination.collect(defaultCaptureLimit),
+			standardError: OutputDestination.collect(defaultCaptureLimit),
 			timeoutMs: 0,
 			platformOptions: PlatformOptions.defaults()
 		}
@@ -368,7 +368,7 @@ export type Subprocess
 	/// payloads, spawn, wait-collect, decode the result struct, release.
 	export static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
 		let exePath = try resolveExecutablePath(config.executable)
-		let argvBlob = buildArgvBlob(executablePath: exePath, args: config.arguments)
+		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
 		let cwd = config.workingDirectory.path
 		let emptyMm = subprocessEmptyManaged()
@@ -413,7 +413,7 @@ export type Subprocess
 	/// child doesn't inherit pipe ends the caller would have to drain.
 	export static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
 		let exePath = try resolveExecutablePath(config.executable)
-		let argvBlob = buildArgvBlob(executablePath: exePath, args: config.arguments)
+		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
 		let cwd = config.workingDirectory.path
 		let emptyMm = subprocessEmptyManaged()
@@ -552,19 +552,19 @@ end 'terminationStatusFromKind'
 
 function stdinTripleFromSource(src InputSource, emptyManaged __ManagedMemory) returns StdioRuntimeTriple
 	return match src 's'
-		none gives StdioRuntimeTriple.create(kind: StdinKind.none.rawValue, dataManaged: emptyManaged, limit: 0)
-		inherit gives StdioRuntimeTriple.create(kind: StdinKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
-		bytes(data) gives StdioRuntimeTriple.create(kind: StdinKind.bytes.rawValue, dataManaged: data.managed, limit: 0)
-		file(path) gives StdioRuntimeTriple.create(kind: StdinKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
+		none gives StdioRuntimeTriple.create(StdinKind.none.rawValue, dataManaged: emptyManaged, limit: 0)
+		inherit gives StdioRuntimeTriple.create(StdinKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
+		bytes(data) gives StdioRuntimeTriple.create(StdinKind.bytes.rawValue, dataManaged: data.managed, limit: 0)
+		file(path) gives StdioRuntimeTriple.create(StdinKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
 	end 's'
 end 'stdinTripleFromSource'
 
 function outputTripleFromDestination(dst OutputDestination, emptyManaged __ManagedMemory) returns StdioRuntimeTriple
 	return match dst 'o'
-		discard gives StdioRuntimeTriple.create(kind: OutputKind.discard.rawValue, dataManaged: emptyManaged, limit: 0)
-		inherit gives StdioRuntimeTriple.create(kind: OutputKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
-		collect(limitBytes) gives StdioRuntimeTriple.create(kind: OutputKind.collect.rawValue, dataManaged: emptyManaged, limit: limitBytes)
-		file(path) gives StdioRuntimeTriple.create(kind: OutputKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
+		discard gives StdioRuntimeTriple.create(OutputKind.discard.rawValue, dataManaged: emptyManaged, limit: 0)
+		inherit gives StdioRuntimeTriple.create(OutputKind.inherit.rawValue, dataManaged: emptyManaged, limit: 0)
+		collect(limitBytes) gives StdioRuntimeTriple.create(OutputKind.collect.rawValue, dataManaged: emptyManaged, limit: limitBytes)
+		file(path) gives StdioRuntimeTriple.create(OutputKind.file.rawValue, dataManaged: path.path.managed, limit: 0)
 	end 'o'
 end 'outputTripleFromDestination'
 

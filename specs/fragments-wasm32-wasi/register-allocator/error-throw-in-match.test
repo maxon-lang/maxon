@@ -1,0 +1,103 @@
+// Test: error-throw-in-match
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	invalidInput
+	notFound
+end 'MyError'
+
+function lookup(key Integer) returns Integer throws MyError
+	match key 'dispatch'
+		1 then return 100
+		2 then return 200
+		default then throw MyError.notFound
+	end 'dispatch'
+end 'lookup'
+
+function main() returns ExitCode
+	let a = try lookup(2) otherwise 0
+	let b = try lookup(99) otherwise 42
+	return a + b mod 256
+end 'main'
+---
+ExitCode: 242
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    mir.br inlined_lookup_0()
+  inlined_lookup_0:
+    %23 = mir.mov_imm 1 : i64
+    %24 = mir.cmp eq, %0, %23
+    mir.cond_br %24 [then: inlined_lookup_1(), else: inlined_lookup_2()]
+  inlined_lookup_1:
+    %25 = mir.mov_imm 100 : i64
+    %26 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%25, %26)
+  inlined_lookup_2:
+    %27 = mir.mov_imm 2 : i64
+    %28 = mir.cmp eq, %0, %27
+    mir.cond_br %28 [then: inlined_lookup_3(), else: inlined_lookup_4()]
+  inlined_lookup_3:
+    %29 = mir.mov_imm 200 : i64
+    %30 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_0(%29, %30)
+  inlined_lookup_4:
+    %31 = mir.mov_imm 0 : i64
+    %32 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_0(%31, %32)
+  inline_cont_main_0:
+    %3 = mir.mov_imm 0 : i64
+    %4 = mir.cmp ne, %34, %3
+    mir.cond_br %4 [then: try_0.otherwise(), else: try_0.merge(%33)]
+  try_0.otherwise:
+    %6 = mir.mov_imm 0 : i64
+    mir.br try_0.merge(%6)
+  try_0.merge:
+    %8 = mir.mov_imm 99 : i64
+    mir.br inlined_lookup_0()
+  inlined_lookup_0:
+    %35 = mir.mov_imm 1 : i64
+    %36 = mir.cmp eq, %8, %35
+    mir.cond_br %36 [then: inlined_lookup_1(), else: inlined_lookup_2()]
+  inlined_lookup_1:
+    %37 = mir.mov_imm 100 : i64
+    %38 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%37, %38)
+  inlined_lookup_2:
+    %39 = mir.mov_imm 2 : i64
+    %40 = mir.cmp eq, %8, %39
+    mir.cond_br %40 [then: inlined_lookup_3(), else: inlined_lookup_4()]
+  inlined_lookup_3:
+    %41 = mir.mov_imm 200 : i64
+    %42 = mir.mov_imm 0 : i64
+    mir.br inline_cont_main_1(%41, %42)
+  inlined_lookup_4:
+    %43 = mir.mov_imm 0 : i64
+    %44 = mir.mov_imm 2 : i64
+    mir.br inline_cont_main_1(%43, %44)
+  inline_cont_main_1:
+    %11 = mir.mov_imm 0 : i64
+    %12 = mir.cmp ne, %46, %11
+    mir.cond_br %12 [then: try_1.otherwise(), else: try_1.merge(%45)]
+  try_1.otherwise:
+    %14 = mir.mov_imm 42 : i64
+    mir.br try_1.merge(%14)
+  try_1.merge:
+    %18 = mir.mov_imm 256 : i64
+    %19 = mir.rem.i64 %22, %18
+    %20 = mir.add.i64 %21, %19
+    %47 = mir.mov_imm 255 : i64
+    %48 = mir.cmp ugt, %20, %47
+    mir.cond_br %48 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %49 = mir.global_addr @__panic_msg_0
+    %50 = mir.call @mrt_panic(%49)
+  __range_ok_0:
+    mir.ret %20
+  }
+}
+---

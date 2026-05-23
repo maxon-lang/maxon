@@ -35,7 +35,7 @@ export type OsDescriptor
 end 'OsDescriptor'
 
 export function makeOsDescriptor(target Target) returns OsDescriptor
-	var result = OsDescriptor.create(os: target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), startShadowSpace: 0)
+	var result = OsDescriptor.create(target.os, exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), read: ReadStrategy.syscall(0, fd: 0), startShadowSpace: 0)
 
 	match target.os 'pickOs'
 		windows then result = makeWindowsDescriptor()
@@ -51,12 +51,12 @@ function makeWindowsDescriptor() returns OsDescriptor
 	// Windows IAT slot layout (see PeWriter.maxon):
 	//   slot 0: ExitProcess, slot 1: GetStdHandle, slot 2: WriteFile, slot 3: ReadFile, slot 4: CreateFileA
 	// Handle constants: STD_OUTPUT_HANDLE = -11 (0xFFFFFFF5), STD_ERROR_HANDLE = -12 (0xFFFFFFF4), STD_INPUT_HANDLE = -10 (0xFFFFFFF6)
-	return OsDescriptor.create(os: Os.windows, exit: ExitStrategy.iatCall(0), write: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF5, writeFileSlot: 2), writeErr: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF4, writeFileSlot: 2), read: ReadStrategy.winApi(1, handleConstant: 0xFFFFFFF6, readFileSlot: 3), startShadowSpace: 0x28)
+	return OsDescriptor.create(Os.windows, exit: ExitStrategy.iatCall(0), write: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF5, writeFileSlot: 2), writeErr: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF4, writeFileSlot: 2), read: ReadStrategy.winApi(1, handleConstant: 0xFFFFFFF6, readFileSlot: 3), startShadowSpace: 0x28)
 end 'makeWindowsDescriptor'
 
 function makeMacOsDescriptor() returns OsDescriptor
 	// macOS dyld slot layout: slot 0 = exit, slot 1 = write, slot 2 = read
-	return OsDescriptor.create(os: Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), startShadowSpace: 0)
+	return OsDescriptor.create(Os.macos, exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), read: ReadStrategy.libcall(2, fd: 0), startShadowSpace: 0)
 end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
@@ -76,5 +76,5 @@ function makeLinuxDescriptor(target Target) returns OsDescriptor
 		default panic("Linux descriptor not used for WASM targets")
 	end 'cpuRead'
 
-	return OsDescriptor.create(os: Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), startShadowSpace: 0)
+	return OsDescriptor.create(Os.linux, exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), read: ReadStrategy.syscall(readNum, fd: 0), startShadowSpace: 0)
 end 'makeLinuxDescriptor'

@@ -80,7 +80,7 @@ function checkConvertForUnneededCast(project Project, fromType MaxonType, toType
 	let targetRange = try project.typealiasRanges.get(targetAlias) otherwise return
 	let sourceIsFloat = aliasIsFloatType(project, name: sourceAlias)
 	let targetIsFloat = aliasIsFloatType(project, name: targetAlias)
-	if not rangeCoversOther(targetRange: targetRange, sourceRange: sourceRange, targetIsFloat: targetIsFloat, sourceIsFloat: sourceIsFloat) 'narrowing'
+	if not rangeCoversOther(targetRange, sourceRange: sourceRange, targetIsFloat: targetIsFloat, sourceIsFloat: sourceIsFloat) 'narrowing'
 		return
 	end 'narrowing'
 	reportCompileError(project, code: ErrorCode.semanticUnneededCast, message: "unneeded cast: '{sourceAlias}' already fits in '{targetAlias}'", line: range.line, column: range.column, filePath: sourcePath)
@@ -186,7 +186,7 @@ end 'readBlockOpIdx'
 // so leaving it in would trip the "castCheck reached lowering" panic.
 function eraseOpAt(module MaxonModule, blockRef BlockRef, pos OpCount)
 	let block = try module.blocks.get(blockRef) otherwise panic("eraseOpAt: blockRef OOB")
-	_ = try block.opRefs.remove(at: pos) otherwise panic("eraseOpAt: pos OOB")
+	_ = try block.opRefs.remove(pos) otherwise panic("eraseOpAt: pos OOB")
 end 'eraseOpAt'
 
 type CastCheckInfo

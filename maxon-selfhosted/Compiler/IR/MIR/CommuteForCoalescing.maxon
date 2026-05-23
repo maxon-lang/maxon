@@ -141,7 +141,7 @@ function commuteIfBeneficial(module MirModule, opIdx OpIndex, resultId ValueId, 
 	let leftCat = classifyOperand(module, valueId: leftId, defMap: defMap)
 	let rightCat = classifyOperand(module, valueId: rightId, defMap: defMap)
 
-	if shouldCommute(leftCat: leftCat, rightCat: rightCat) 'doSwap'
+	if shouldCommute(leftCat, rightCat: rightCat) 'doSwap'
 		try module.ops.set(opIdx, value: MirOp.binOp(resultId, leftId: rightId, rightId: leftId, opcode: opcode)) otherwise panic("invariant: module.ops.set OOB")
 	end 'doSwap'
 end 'commuteIfBeneficial'
@@ -307,6 +307,17 @@ function mirDefValueId(op MirOp) returns DefMapIndex
 		osAllocPages(resultId, _) gives resultId
 		osAllocPagesLarge(resultId, _) gives resultId
 		osFreePages gives DEF_NONE
+		osFileOpen(resultId, _, _, _) gives resultId
+		osFileRead(resultId, _, _, _) gives resultId
+		osFileWrite(resultId, _, _, _) gives resultId
+		osFileClose(resultId, _) gives resultId
+		osFileLseek(resultId, _, _, _) gives resultId
+		osFileStat(resultId, _, _) gives resultId
+		osFileAccess(resultId, _, _) gives resultId
+		osFileUnlink(resultId, _) gives resultId
+		osDirGetdents64(resultId, _, _, _) gives resultId
+		osDirGetcwd(resultId, _, _) gives resultId
+		osDirMkdir(resultId, _, _) gives resultId
 		atomicInc gives DEF_NONE
 		atomicDec gives DEF_NONE
 		atomicXadd(resultId, _, _) gives resultId

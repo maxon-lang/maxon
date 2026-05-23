@@ -21,77 +21,37 @@ ExitCode: 0
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
-    x64.mov rax, 42
-    x64.mov rcx, 16
+    x64.prologue stack_size=16
+    x64.mov r12d, 1
     x64.xor edx, edx
-    x64.mov r8, 4
-    x64.call mm_alloc
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 1
-    x64.mov [rax+0], rcx
-    x64.mov rdx, 42
-    x64.mov [rax+8], rdx
-    x64.mov rbx, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
-    x64.mov rsi, [rbp-8]
-    x64.mov rdi, [rsi+0]
-    x64.mov r8, [rbp-8]
-    x64.mov [rbp-16], r8
-    x64.mov r9, [rbp-16]
-    x64.mov [rbp-32], rdi
-    x64.mov rcx, [rbp-16]
-    x64.call mm_incref
-    x64.mov rax, [rbp-32]
-    x64.mov [rbp-24], rax
-    x64.jmp main.check_0.cmp0
-  check_0.cmp0:
-    x64.mov rax, [rbp-24]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.check_0.cmp1
+    x64.mov ecx, 16
+    x64.mov rax, r12
+    x64.call stdlib.__mm_alloc
+    x64.mov r9, r8
+    x64.mov [r9+0], r12 (8b)
+    x64.mov r8d, 42
+    x64.mov [r9+8], r8 (8b)
+    x64.mov r8, [r9+0] (8b)
+    x64.test r8, r8
+    x64.jne check_0.next0
   check_0.case0:
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_1
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rax, 1
+    x64.mov r8d, 1
     x64.epilogue
     x64.ret
-  check_0.cmp1:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.check_0.merge
+  check_0.next0:
+    x64.mov r8, [r9+0] (8b)
+    x64.cmp r8, 1
+    x64.jne check_0.next1
   check_0.case1:
-    x64.mov rax, [rbp-16]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-16]
-    x64.call mm_decref
-    x64.label __nonnull_skip_2
-    x64.mov rcx, [rbp-8]
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_3
-    x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.xor eax, eax
+    x64.xor r8d, r8d
     x64.epilogue
     x64.ret
-  check_0.merge:
-  }
-  func @__destruct_Container(ptr: i64) {
-  entry:
-    x64.jmp __destruct_Container.done
-  done:
+  check_0.next1:
+    x64.lea r12, [rip+__panic_msg_0]
+    x64.mov rcx, r12
+    x64.call mrt_panic
+    x64.xor r8d, r8d
+    x64.epilogue
     x64.ret
   }
 }
