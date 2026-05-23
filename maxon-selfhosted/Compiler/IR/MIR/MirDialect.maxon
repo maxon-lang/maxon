@@ -52,29 +52,60 @@ export union MirCmpPredicate
 	fge
 end 'MirCmpPredicate'
 
+export type MirOpMeta
+	// True for ops that access memory or have observable side effects that
+	// the scheduler must treat as a memory barrier. Covers loads, stores,
+	// calls, syscalls, atomics, and locks. See isStore notes for the
+	// policy on file-I/O ops (osFileOpen .. osDirMkdir): they read/write
+	// caller buffers and have external syscall side effects, so they
+	// participate in both the memory and store bands.
+	export let isMemory bool
+	// True for ops that write memory or have externally-observable side
+	// effects (must order with subsequent loads). Distinct from isMemory:
+	// pure loads are memory but not stores.
+	export let isStore bool
+	// True for ops with full call-barrier semantics (clobber caller-saved
+	// regs, may observe/modify arbitrary memory). Also true for `param`
+	// since param ops read physical CC registers and must be ordered.
+	export let isCall bool
+	// True if the op may clobber x64 EFLAGS / ARM64 NZCV when lowered.
+	// Used to pin the cmp feeding a cond_br adjacent to its consumer in
+	// the schedule. Conservative: anything that isn't a pure register-
+	// to-register or memory-to-register move clobbers flags. movImm is
+	// covered because the zero case lowers to `xor reg, reg` which sets
+	// flags. Calls/OS ops are not flagged here because they already
+	// participate in the call-barrier chain.
+	export let clobbersFlags bool
+	// Single-variant flags used as one-shot tag checks. Kept as metadata
+	// for uniformity; reading `.rawValue.isParam` matches the pattern the
+	// X64/Arm64 backends already use for similar single-variant queries.
+	export let isParam bool
+	export let isCmp bool
+end 'MirOpMeta'
+
 export union MirOp
 	// Constants & moves
-	movImm(resultId ValueId, value ParsedInt, isFloat bool)
-	movReg(resultId ValueId, srcId ValueId)
+	movImm(resultId ValueId, value ParsedInt, isFloat bool) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	movReg(resultId ValueId, srcId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 	// ALU
-	binOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode)
-	unaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode)
+	binOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	unaryOp(resultId ValueId, operandId ValueId, opcode MirUnaryOpcode) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
 	// Compare & branch
-	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate)
-	condBranch(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray)
-	branch(targetBlock BlockId, args ValueIdArray)
+	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isParam: false, isCmp: true}
+	condBranch(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	branch(targetBlock BlockId, args ValueIdArray) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 	// Functions
-	call(resultId ValueId, callee String, argIds ValueIdArray)
-	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	call(resultId ValueId, callee String, argIds ValueIdArray) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Fused witness-table dispatch: load function pointer from
 	// witnessAddr at WITNESS_OFFSET_METHODS + 8*methodIndex, then call
 	// it with argIds. Backends lower this to a memory-indirect call
 	// (`call qword ptr [witnessAddr + offset]` on x64) so the loaded
 	// pointer never occupies a virtual GPR. Reduces register pressure
 	// at hot witness call sites — see StdCallOp.witnessCall.
-	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
-	ret(retValId ValueId)
-	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	ret(retValId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	param(resultId ValueId, paramIndex VarSlot, paramType StdType) = MirOpMeta{isMemory: false, isStore: false, isCall: true, clobbersFlags: false, isParam: true, isCmp: false}
 	// Memory. `isFloat` on `load`/`store` selects between a GP `mov reg,
 	// [base+off]` and a `movsd xmm, [base+off]` at the X64 backend; ARM64
 	// picks ldr/x vs ldr/d the same way. Plumbed in by lowerStdToMir from
@@ -82,72 +113,84 @@ export union MirOp
 	// into XMM directly instead of staging through a GP register. `signed`
 	// on `load` chooses sign- vs zero-extension at narrower widths; for
 	// `qword` and `isFloat` the bit is unused.
-	load(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool)
-	store(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool)
-	loadSlot(resultId ValueId, slotId VarSlot)
-	storeSlot(slotId VarSlot, valueId ValueId)
-	stackSlotAddr(resultId ValueId, slotId VarSlot)
-	globalAddr(resultId ValueId, name String)
-	funcAddr(resultId ValueId, name String)
-	loadFramePtr(resultId ValueId)
+	load(resultId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, signed bool, isFloat bool) = MirOpMeta{isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	store(valueId ValueId, baseId ValueId, offset MachineWord, width StoreWidth, isFloat bool) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	loadSlot(resultId ValueId, slotId VarSlot) = MirOpMeta{isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	storeSlot(slotId VarSlot, valueId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	stackSlotAddr(resultId ValueId, slotId VarSlot) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	globalAddr(resultId ValueId, name String) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	funcAddr(resultId ValueId, name String) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	loadFramePtr(resultId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 	// System
-	osExit(codeId ValueId)
+	osExit(codeId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// OS-neutral green-thread sleep. See StdSystemOp.osSleep for semantics.
-	osSleep(msId ValueId)
-	osWrite(ptrId ValueId, lenId ValueId)
-	osWriteErr(ptrId ValueId, lenId ValueId)
-	osRead(resultId ValueId, ptrId ValueId, lenId ValueId)
-	osOpenWrite(resultId ValueId, pathPtrId ValueId, pathLenId ValueId)
-	osWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId)
-	osClose(fdId ValueId)
-	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId)
+	osSleep(msId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osWrite(ptrId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osWriteErr(ptrId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osRead(resultId ValueId, ptrId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osOpenWrite(resultId ValueId, pathPtrId ValueId, pathLenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osWriteFd(fdId ValueId, ptrId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osClose(fdId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osGetEnv(resultId ValueId, namePtrId ValueId, nameLenId ValueId, outBufPtrId ValueId, outBufLenId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Intent-level argv / executable-path ops. Each backend chooses the
 	// underlying mechanism per-OS. Mirror the placement of `osGetEnv` so
 	// the system-ops band stays contiguous for `to`-range matches.
-	osGetArgc(resultId ValueId)
-	osGetArgv(resultId ValueId, indexId ValueId)
-	osGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
-	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
-	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
-	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
+	// osGetArgc is a pure read (returns a process-state integer);
+	// osGetArgv returns a pointer without touching caller memory;
+	// osGetExecutablePath writes into the caller-supplied buffer, so it
+	// participates in the store band.
+	osGetArgc(resultId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osGetArgv(resultId ValueId, indexId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osGetExecutablePath(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	memcpy(dstId ValueId, srcId ValueId, lenId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
+	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 	// Page allocation: VirtualAlloc on Windows / mmap on Linux.
-	osAllocPages(resultId ValueId, sizeId ValueId)
-	osAllocPagesLarge(resultId ValueId, sizeId ValueId)
-	osFreePages(ptrId ValueId, sizeId ValueId)
+	// alloc returns a pointer to fresh pages — no aliased caller memory
+	// is written from the caller's perspective, so isStore stays false.
+	// osFreePages releases pages and is treated as a store barrier.
+	osAllocPages(resultId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osAllocPagesLarge(resultId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFreePages(ptrId ValueId, sizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Phase 15c Stream 4.1: Linux file-I/O ops. Each lowers to a raw syscall
 	// on x64-linux / arm64-linux backends. Path arguments are mm_alloc'd
 	// NUL-terminated buffers; the helper bodies that emit these ops own
-	// the alloc/free of the temp C-string.
-	osFileOpen(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId)
-	osFileRead(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
-	osFileWrite(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId)
-	osFileClose(resultId ValueId, fdId ValueId)
-	osFileLseek(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId)
-	osFileStat(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId)
-	osFileAccess(resultId ValueId, cStringPtrId ValueId, modeId ValueId)
-	osFileUnlink(resultId ValueId, cStringPtrId ValueId)
-	osDirGetdents64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId)
-	osDirGetcwd(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId)
-	osDirMkdir(resultId ValueId, cStringPtrId ValueId, modeId ValueId)
+	// the alloc/free of the temp C-string. Conservative isStore: true —
+	// every op has external syscall side effects observable from other
+	// threads/files, so the scheduler must treat them as stores.
+	osFileOpen(resultId ValueId, cStringPtrId ValueId, flagsId ValueId, fileModeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileRead(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileWrite(resultId ValueId, fdId ValueId, bufPtrId ValueId, countId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileClose(resultId ValueId, fdId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileLseek(resultId ValueId, fdId ValueId, offsetId ValueId, whenceId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileStat(resultId ValueId, cStringPtrId ValueId, statBufPtrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileAccess(resultId ValueId, cStringPtrId ValueId, modeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osFileUnlink(resultId ValueId, cStringPtrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osDirGetdents64(resultId ValueId, fdId ValueId, bufPtrId ValueId, bufSizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osDirGetcwd(resultId ValueId, bufPtrId ValueId, bufSizeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osDirMkdir(resultId ValueId, cStringPtrId ValueId, modeId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Atomic 64-bit memory ops. atomicDec sets ZF when the result is 0.
-	// atomicXadd returns the prior value.
-	atomicInc(addrId ValueId)
-	atomicDec(addrId ValueId)
-	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId)
+	// atomicXadd returns the prior value. All three clobber flags via the
+	// LOCK INC/DEC/XADD lowering.
+	atomicInc(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	atomicDec(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
+	atomicXadd(resultId ValueId, addrId ValueId, valId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isParam: false, isCmp: false}
 	// Platform locks. Init is a no-op on Linux; spinlock acquire/release on Linux,
 	// CRITICAL_SECTION calls on Windows.
-	osLockInit(addrId ValueId)
-	osLockAcquire(addrId ValueId)
-	osLockRelease(addrId ValueId)
+	osLockInit(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osLockAcquire(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	osLockRelease(addrId ValueId) = MirOpMeta{isMemory: true, isStore: true, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
 	// Multi-value-return error ABI. `tryCall` defines BOTH `resultId` (primary
 	// return register: R8 / X0) AND `errorFlagId` (error flag register: RDX /
 	// X1) at the same op-position. `errorReturn` USES both `retValId` and
 	// `errorFlagId` and is a terminator that emits the dual-register epilogue.
 	// Appended at the END of MirOp so existing `to`-range patterns in match
 	// expressions (e.g. `osAllocPages to osLockRelease`) keep covering the
-	// system-ops band without reshuffling.
-	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
-	errorReturn(retValId ValueId, errorFlagId ValueId)
+	// system-ops band without reshuffling. errorReturn is a terminator with
+	// no body-side effect on subsequent ops in this block (control falls
+	// off the function), so it doesn't need barrier treatment.
+	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId) = MirOpMeta{isMemory: true, isStore: false, isCall: true, clobbersFlags: false, isParam: false, isCmp: false}
+	errorReturn(retValId ValueId, errorFlagId ValueId) = MirOpMeta{isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isParam: false, isCmp: false}
 end 'MirOp'
 
 export typealias MirOpArray = Array with MirOp

@@ -338,11 +338,34 @@ export typealias StdControlOpArray = Array with StdControlOp
 
 // --- StdCallOp (was FuncDialect.StdCallOp) ---
 
+export type StdCallOpMeta
+	// Single-variant tag checks. Kept as metadata so callers can read
+	// `op.rawValue.isRet` instead of writing a 9-arm match expression
+	// that has to be updated every time a new StdCallOp variant lands.
+	export let isRet bool
+	export let isErrorReturn bool
+	export let isParam bool
+	// Inliner policy: this op may be folded away during a splice. Only
+	// `param` (becomes the call site's pre-computed arg) and `ret`
+	// (becomes the spliced body's result binding) qualify — every other
+	// shape (real call, indirect, witness, tryCall, tailCall, funcRef,
+	// errorReturn) introduces an opaque value or side effect that
+	// breaks the fold cascade.
+	export let isPureForInlining bool
+	// Inliner policy: this op cannot appear inside a callee body that
+	// the multi-block splice is asked to inline. `indirectCall` /
+	// `witnessCall` escape the static-callee model; `tailCall` changes
+	// the frame disposition; `errorReturn` is a terminator and must
+	// not show up as a body op (the arm exists defensively for future
+	// passes that might mis-emit it).
+	export let isUnsupportedInInlineBody bool
+end 'StdCallOpMeta'
+
 export union StdCallOp
-	ret(retValId ValueId)
-	call(resultId ValueId, callee String, argIds ValueIdArray)
-	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId)
-	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+	ret(retValId ValueId) = StdCallOpMeta{isRet: true, isErrorReturn: false, isParam: false, isPureForInlining: true, isUnsupportedInInlineBody: false}
+	call(resultId ValueId, callee String, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
+	tryCall(resultId ValueId, callee String, argIds ValueIdArray, errorFlagId ValueId) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
+	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
 	// Fused witness-table dispatch: equivalent to
 	//   %fnPtr = sys.witnessMethod %witnessAddrId, [methodIndex]
 	//   %resultId = func.indirectCall %fnPtr(args...)
@@ -354,16 +377,16 @@ export union StdCallOp
 	// `isVoid` lets backends with strict typed calls (wasm `call_indirect`)
 	// emit a no-result signature; native backends (x64/arm64) ignore it
 	// since RAX/X0 is always a return slot.
-	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray)
-	funcRef(resultId ValueId, funcName String)
-	tailCall(callee String, argIds ValueIdArray)
-	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
+	witnessCall(resultId ValueId, witnessAddrId ValueId, methodIndex MachineWord, isVoid bool, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
+	funcRef(resultId ValueId, funcName String) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: false}
+	tailCall(callee String, argIds ValueIdArray) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
+	param(resultId ValueId, paramIndex VarSlot, paramType StdType) = StdCallOpMeta{isRet: false, isErrorReturn: false, isParam: true, isPureForInlining: true, isUnsupportedInInlineBody: false}
 	// Multi-value-return error ABI terminator. Mirrors `MirOp.errorReturn`:
 	// USES both `retValId` and `errorFlagId` and emits the dual-register
 	// epilogue at the target backend. No producer in Phase 1 — the arm is
 	// plumbed through every consumer so Phase 4 can flip the lowerThrow
 	// site without breaking exhaustive matches.
-	errorReturn(retValId ValueId, errorFlagId ValueId)
+	errorReturn(retValId ValueId, errorFlagId ValueId) = StdCallOpMeta{isRet: false, isErrorReturn: true, isParam: false, isPureForInlining: false, isUnsupportedInInlineBody: true}
 end 'StdCallOp'
 
 export typealias StdCallOpArray = Array with StdCallOp

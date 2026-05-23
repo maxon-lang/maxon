@@ -497,30 +497,11 @@ function isPureOp(op StdOp) returns bool
 	return match op 'shape'
 		arith gives true
 		control gives true
-		call(c) gives isPureCallOp(c)
+		call(c) gives c.rawValue.isPureForInlining
 		memory gives false
 		system gives false
 	end 'shape'
 end 'isPureOp'
-
-// Only `param` and `ret` count as foldable in the call-family — param values
-// become the call site's const args (folded at the splice), ret threads the
-// folded body result back. Every other shape (real call, indirect, witness,
-// tryCall, tailCall, funcRef, errorReturn) introduces an opaque value or
-// side-effect that breaks the fold cascade.
-function isPureCallOp(op StdCallOp) returns bool
-	return match op 'shape'
-		param gives true
-		ret gives true
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		tailCall gives false
-		funcRef gives false
-		errorReturn gives false
-	end 'shape'
-end 'isPureCallOp'
 
 // Stack-trace preservation gate. The Maxon runtime stack trace lists
 // every function frame on the way down to the panic site; inlining a
@@ -631,27 +612,13 @@ function isSingleBlockSpliceable(module StdModule, callee IrFunction) returns bo
 	// through during splice; everything else needs special continuation
 	// wiring or is outright unsupported.
 	return match term 'shape'
-		call(inner) gives isStdRetOrErrorReturn(inner)
+		call(inner) gives inner.rawValue.isRet or inner.rawValue.isErrorReturn
 		arith gives false
 		control gives false
 		memory gives false
 		system gives false
 	end 'shape'
 end 'isSingleBlockSpliceable'
-
-function isStdRetOrErrorReturn(op StdCallOp) returns bool
-	return match op 'shape'
-		ret gives true
-		errorReturn gives true
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		param gives false
-	end 'shape'
-end 'isStdRetOrErrorReturn'
 
 // Multi-block splice precondition. Every block must:
 //   - have a real terminator op (no fallthrough/unset/dead)
@@ -687,7 +654,11 @@ function isAllowedTerminator(op StdOp) returns bool
 	return match op 'outer'
 		arith gives false
 		control(c) gives isAllowedControlTerm(c)
-		call(c) gives isAllowedCallTerm(c)
+		// `ret` and `errorReturn` both end a block by returning a value to
+		// the caller — the splice path handles both: ret threads the body
+		// result back, errorReturn additionally binds the tryCall site's
+		// errorFlagId. Every other call shape is rejected as a terminator.
+		call(c) gives c.rawValue.isRet or c.rawValue.isErrorReturn
 		memory gives false
 		system gives false
 	end 'outer'
@@ -699,25 +670,6 @@ function isAllowedControlTerm(op StdControlOp) returns bool
 		condBr gives true
 	end 'shape'
 end 'isAllowedControlTerm'
-
-function isAllowedCallTerm(op StdCallOp) returns bool
-	return match op 'shape'
-		ret gives true
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		param gives false
-		// errorReturn is the throw-site terminator. The splice path treats
-		// it analogously to `ret`: the caller's tryCall has TWO defines
-		// (resultId + errorFlagId) and `errorReturn` carries TWO uses
-		// (retValId + errorFlagId), so the rewriter binds both pairs across
-		// the inline boundary.
-		errorReturn gives true
-	end 'shape'
-end 'isAllowedCallTerm'
 
 // Body ops that the multi-block splice can't carry across cleanly.
 // `indirectCall` escapes the inliner's static-callee model; `tailCall`
@@ -731,43 +683,11 @@ function isUnsupportedBodyShape(op StdOp) returns bool
 	return match op 'outer'
 		arith gives false
 		control gives false
-		call(c) gives isUnsupportedCallBody(c)
+		call(c) gives c.rawValue.isUnsupportedInInlineBody
 		memory gives false
 		system gives false
 	end 'outer'
 end 'isUnsupportedBodyShape'
-
-function isUnsupportedCallBody(op StdCallOp) returns bool
-	return match op 'shape'
-		ret gives false
-		call gives false
-		tryCall gives false
-		indirectCall gives true
-		// witnessCall is the fused witness-table-load + indirect call;
-		// inlining can't statically resolve the callee, same as indirectCall.
-		witnessCall gives true
-		funcRef gives false
-		tailCall gives true
-		param gives false
-		// errorReturn is a terminator and never appears as a body op, but
-		// keep the arm exhaustive in case future passes mis-emit it.
-		errorReturn gives true
-	end 'shape'
-end 'isUnsupportedCallBody'
-
-function isStdRet(op StdCallOp) returns bool
-	return match op 'shape'
-		ret gives true
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		param gives false
-		errorReturn gives false
-	end 'shape'
-end 'isStdRet'
 
 function countCalleeOps(module StdModule, callee IrFunction) returns ParsedInt
 	var total = 0
@@ -1438,27 +1358,13 @@ end 'errorFlagIdFromCallOp'
 
 function isErrorReturnOpStd(op StdOp) returns bool
 	return match op 'outer'
-		call(inner) gives isErrorReturnCallOp(inner)
+		call(inner) gives inner.rawValue.isErrorReturn
 		arith gives false
 		control gives false
 		memory gives false
 		system gives false
 	end 'outer'
 end 'isErrorReturnOpStd'
-
-function isErrorReturnCallOp(op StdCallOp) returns bool
-	return match op 'inner'
-		errorReturn gives true
-		ret gives false
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		param gives false
-	end 'inner'
-end 'isErrorReturnCallOp'
 
 // Reject any callee body that touches a per-function slot. Slot ids live
 // in the callee's frame; remapping them into the caller's frame would
@@ -1613,7 +1519,7 @@ end 'bindBodyRemap'
 
 function isParamOpStd(op StdOp) returns bool
 	return match op 'outer'
-		call(inner) gives isParamCallOpStd(inner)
+		call(inner) gives inner.rawValue.isParam
 		arith gives false
 		control gives false
 		memory gives false
@@ -1621,46 +1527,19 @@ function isParamOpStd(op StdOp) returns bool
 	end 'outer'
 end 'isParamOpStd'
 
-function isParamCallOpStd(op StdCallOp) returns bool
-	return match op 'inner'
-		param gives true
-		ret gives false
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		errorReturn gives false
-	end 'inner'
-end 'isParamCallOpStd'
-
+// True when `op` ends a block by returning to the caller. `errorReturn`
+// is treated like `ret` for splice purposes: it sits at a block's
+// terminator slot, defines no fresh values, and feeds the caller's
+// tryCall result+errorFlag pair via the splice rewriter.
 function isRetOpStd(op StdOp) returns bool
 	return match op 'outer'
-		call(inner) gives isRetCallOp(inner)
+		call(inner) gives inner.rawValue.isRet or inner.rawValue.isErrorReturn
 		arith gives false
 		control gives false
 		memory gives false
 		system gives false
 	end 'outer'
 end 'isRetOpStd'
-
-function isRetCallOp(op StdCallOp) returns bool
-	return match op 'inner'
-		ret gives true
-		call gives false
-		tryCall gives false
-		indirectCall gives false
-		witnessCall gives false
-		funcRef gives false
-		tailCall gives false
-		param gives false
-		// `errorReturn` is treated like `ret` for splice purposes: it sits
-		// at a block's terminator slot, defines no fresh values, and feeds
-		// the caller's tryCall result+errorFlag pair via the splice rewriter.
-		errorReturn gives true
-	end 'inner'
-end 'isRetCallOp'
 
 function bindOpDefinesIntoRemap(op StdOp, remap ValueIdArray, nextId ValueId) returns ValueId
 	return match op 'outer'

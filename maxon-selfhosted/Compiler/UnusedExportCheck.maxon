@@ -102,17 +102,11 @@ end 'isStdlibBootstrapPath'
 // this filter the pass would emit E3092 against every stdlib typealias the
 // user happens not to mention.
 function isStdlibSourcePath(p FilePath) returns bool
-	let pathStr = p.toString()
 	let stdlibRoot = findStdlibPath()
 	if stdlibRoot.isEmpty() 'noRoot'
 		return false
 	end 'noRoot'
-	let rootStr = stdlibRoot.toString()
-	if pathStr == rootStr 'exact'
-		return true
-	end 'exact'
-	let prefix = "{rootStr}{FilePath.separator()}"
-	return pathStr.startsWith(prefix)
+	return p.isInside(stdlibRoot)
 end 'isStdlibSourcePath'
 
 // Combined check: skip stdlib bootstrap symbols AND real stdlib source-file

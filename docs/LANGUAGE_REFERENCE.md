@@ -1460,9 +1460,11 @@ end 'HttpError'
 
 ## Unions
 
-Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values.
+Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values.
 
 Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values; use `.unionCases` to access the discriminant as a first-class enum (see [Union Cases](#union-cases-discriminant-as-an-enum) below).
+
+Unions can additionally have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
 
 ### Simple Unions
 
@@ -1628,6 +1630,37 @@ end 'FileError'
 
 **Notes:**
 - The `Error` interface can be implemented by enums or unions (not types/structs)
+
+### Struct-Backed Unions
+
+Each union variant can be tagged with a compile-time struct value, the same shape as struct-backed enums. Use `.rawValue` on a union value to read the variant's backing struct. The variant's associated values are independent of the backing struct — they coexist, with the payload accessed by `match` and the metadata accessed by `.rawValue`.
+
+```maxon
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+	export let isMemory bool
+end 'OpMeta'
+
+union MirOp
+	movImm(dest VarSlot, value MachineWord) = OpMeta{latency: 1, isMemory: false}
+	load(dest VarSlot, addr VarSlot)        = OpMeta{latency: 4, isMemory: true}
+	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
+end 'MirOp'
+
+let op = MirOp.load(dest: d, addr: a)
+let lat = op.rawValue.latency     // 4
+let mem = op.rawValue.isMemory    // true
+```
+
+This is the union analogue of [Struct-Backed Enums](#struct-backed-enums). Use it to carry per-variant compile-time metadata (memory/store/call flags, instruction latency, scheduling hints, inliner policy bits) without writing exhaustive match expressions in every consumer — readers query the backing struct directly via `.rawValue.field`.
+
+**Notes:**
+- All variants must use the same backing struct type
+- Every variant must provide a backing value (no bare-tagged variants in a backed union)
+- Backing struct field values must be compile-time constants (integers, floats, booleans, enum member references like `OpPattern.passThrough`, or top-level constants)
+- At runtime, the union discriminant is stored as an ordinal; `.rawValue` constructs the backing struct on demand
 
 ### Union Cases (Discriminant as an Enum)
 

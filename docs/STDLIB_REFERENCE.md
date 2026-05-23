@@ -140,6 +140,8 @@ p.normalize()                   // Returns self (normalized on construction)
 p.isEmpty()          // true if path is empty string
 p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
 p.isRelative()       // opposite of isAbsolute
+p.isInside(dir)      // true if p == dir or dir is a proper ancestor (component-aware,
+                     // case-insensitive on Windows, exact on POSIX — matches equals())
 ```
 
 **Resolution:**
@@ -152,7 +154,7 @@ p.resolve(base)      // resolve relative path against base; absolute paths retur
 FilePath.separator()   // Platform-native separator ("\" on Windows, "/" on Linux)
 ```
 
-`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`.
+`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`. Equality and hashing follow host filesystem semantics: case-insensitive on Windows (NTFS treats `C:\Foo` and `c:\foo` as the same path), exact byte match on POSIX.
 
 All `File` and `Directory` methods accept `FilePath` parameters:
 ```maxon

@@ -121,8 +121,14 @@ end 'buildSpecTestArgv'
 // Human-readable rendering of `binary argv...` for the JSON response. Args
 // here never contain shell metacharacters (they're flag names + values from
 // the MCP request), so a plain space-join is faithful.
+// CRITICAL: clone `binary.path` before appending. `String.append` mutates
+// the underlying managed buffer in place, and `var s = binary.path` shares
+// the buffer with the FilePath. Without the clone, the subsequent
+// `Subprocess.run(Executable.path(binary), ...)` would receive a binary
+// path corrupted with the appended argv and fail with "system cannot find
+// file specified".
 function displayCommandFor(binary FilePath, argv StringArray) returns String
-	var s = binary.path
+	var s = binary.path.clone()
 	let n = argv.count()
 	for i in 0 upto n 'each'
 		let a = try argv.get(i) otherwise panic("displayCommandFor: argv.get({i}) OOB (count={n})")

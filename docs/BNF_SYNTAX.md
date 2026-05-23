@@ -285,7 +285,7 @@ raw_field_init
 
 ### 3.5 Union Declaration
 
-Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly, but expose a synthesized `.unionCases` companion enum — `U.unionCases` is an int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization.
+Unions define named cases with optional associated values. They do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly, but expose a synthesized `.unionCases` companion enum — `U.unionCases` is an int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization. Unions can also tag each variant with a compile-time struct backing (read via `.rawValue`, identical shape to struct-backed enums).
 
 ```
 union_decl    = visibility_prefix 'union' IDENTIFIER
@@ -294,12 +294,16 @@ union_decl    = visibility_prefix 'union' IDENTIFIER
                 { method_decl }
                 'end' LABEL
 
-union_case    = IDENTIFIER                                          (* simple case *)
-              | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
+union_case    = IDENTIFIER                                                 (* simple case *)
+              | IDENTIFIER '(' assoc_fields ')'                            (* associated-value case *)
+              | IDENTIFIER '=' struct_raw_literal                           (* struct-backed simple variant *)
+              | IDENTIFIER '(' assoc_fields ')' '=' struct_raw_literal      (* struct-backed associated-value variant *)
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref
 ```
+
+When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type (see `struct_raw_literal` in §3.4). The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`.
 
 ### 3.6 Interface Declaration
 

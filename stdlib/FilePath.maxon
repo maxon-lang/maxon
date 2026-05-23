@@ -160,15 +160,59 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return path
 	end 'toString'
 
+	/// Returns a copy of `s` suitable for case-insensitive comparison
+	/// on the host filesystem. Windows: lower-cased clone (NTFS treats
+	/// `C:\Foo` and `c:\foo` as the same path). POSIX: returned as-is.
+	/// 
+	/// `String.toLower` mutates its receiver's managed buffer in place,
+	/// so the clone is mandatory — otherwise this would silently lower-
+	/// case the caller's string (typically the FilePath's own `path`
+	/// field), and every later read of `.path` (subprocess spawn, file
+	/// I/O, error reporting) would see the lower-cased copy.
+	static function canonicalForCompare(s String) returns String
+		#if os(Windows)
+			return s.clone().toLower()
+		#else
+			return s
+		#endif
+	end 'canonicalForCompare'
+
 	// --- Equatable ---
+
+	/// Path equality matching the host filesystem's semantics:
+	/// case-insensitive on Windows, exact byte match on POSIX.
 	export function equals(other FilePath) returns bool
-		return path == other.path
+		return canonicalForCompare(path) == canonicalForCompare(other.path)
 	end 'equals'
 
 	// --- Hashable ---
+
+	/// Hash that agrees with `equals`: case-insensitive on Windows
+	/// so map lookups find an entry inserted with `C:\foo` when
+	/// queried with `c:\Foo`.
 	export function hash() returns HashValue
-		return path.hash()
+		return canonicalForCompare(path).hash()
 	end 'hash'
+
+	// --- Containment test ---
+
+	/// True when this path lies inside `dir` (i.e. `dir` is a proper
+	/// ancestor directory of `self`, or `self == dir`). Component-
+	/// aware: appends the platform separator before testing the
+	/// prefix so `/foo/bar` is NOT considered to be inside `/foo/ba`.
+	/// Case semantics match `equals` (case-insensitive on Windows,
+	/// exact on POSIX).
+	export function isInside(dir FilePath) returns bool
+		if equals(dir) 'same'
+			return true
+		end 'same'
+		let dirStr = dir.path
+		if dirStr.isEmpty() 'emptyDir'
+			return false
+		end 'emptyDir'
+		let needle = "{dirStr}{pathSeparator}"
+		return canonicalForCompare(path).startsWith(canonicalForCompare(needle))
+	end 'isInside'
 
 	// --- Query ---
 

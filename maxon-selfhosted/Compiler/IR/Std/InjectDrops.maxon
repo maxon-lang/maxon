@@ -298,21 +298,13 @@ end 'injectDropsBeforeTerminator'
 function isReturnTerminator(opIdx OpIndex, module StdModule) returns bool
 	let stdOp = try module.ops.get(opIdx) otherwise panic("invariant: opIdx not in module.ops")
 	return match stdOp 'dispatch'
-		call(op) gives isReturnFuncOp(op)
+		call(op) gives op.rawValue.isRet
 		arith gives false
 		control gives false
 		memory gives false
 		system gives false
 	end 'dispatch'
 end 'isReturnTerminator'
-
-function isReturnFuncOp(op StdCallOp) returns bool
-	return match op 'check'
-		ret gives true
-		call to param gives false
-		errorReturn gives false
-	end 'check'
-end 'isReturnFuncOp'
 
 // Check if a value is the one being returned by the terminator.
 function isReturnedValue(opIdx OpIndex, module StdModule, valueId ValueId) returns bool

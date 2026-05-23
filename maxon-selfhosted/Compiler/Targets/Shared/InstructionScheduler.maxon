@@ -246,9 +246,10 @@ type ScheduleState
 				try defMap.set(defId, value: i) otherwise panic("invariant: defMap.set OOB")
 			end 'hasDef'
 
-			let isMem = isMemoryOpPacked(module, packed: packed)
-			let isStore = isStoreOpPacked(module, packed: packed)
-			let isCall = isCallOpPacked(module, packed: packed)
+			let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
+			let isMem = op.rawValue.isMemory
+			let isStore = op.rawValue.isStore
+			let isCall = op.rawValue.isCall
 
 			// A load must come after the most recent store or call.
 			if isMem and not isStore and not isCall 'loadAfterStore'
@@ -300,7 +301,7 @@ type ScheduleState
 				lastCallIdx = i
 			end 'callOrdering'
 
-			if isMirParamOpPacked(module, packed: packed) 'trackParam'
+			if op.rawValue.isParam 'trackParam'
 				lastParamIdx = i
 			end 'trackParam'
 			i = i + 1
@@ -325,7 +326,8 @@ type ScheduleState
 		if lastParamIdx != SCHED_NONE 'addParamBarrier'
 			var j = 0
 			for barrierPacked in opRefs 'barrierScan'
-				if j > lastParamIdx and not isMirParamOpPacked(module, packed: barrierPacked) 'addBarrier'
+				let barrierOp = try module.ops.get(barrierPacked) otherwise panic("invariant: barrierPacked opIdx not in module.ops")
+				if j > lastParamIdx and not barrierOp.rawValue.isParam 'addBarrier'
 					self.addDepEdge(lastParamIdx, toIdx: j)
 				end 'addBarrier'
 				j = j + 1
@@ -353,15 +355,20 @@ type ScheduleState
 		let condId = terminatorCondId(module, terminator: terminator)
 		if condId != SCHED_NONE 'hasCondBr'
 			let cmpIdx = schedLookup(defMap, index: condId as ValueId)
-			if cmpIdx != SCHED_NONE and isMirCmpPacked(module, packed: try opRefs.get(cmpIdx) otherwise panic("flag barrier: cmpIdx from defMap is a valid op index but opRefs.get failed")) 'foundCmp'
-				var k = 0
-				for flagPacked in opRefs 'flagBarrier'
-					if k != cmpIdx and isFlagClobberingPacked(module, packed: flagPacked) 'addFlagDep'
-						self.addDepEdge(k, toIdx: cmpIdx)
-					end 'addFlagDep'
-					k = k + 1
-				end 'flagBarrier'
-			end 'foundCmp'
+			if cmpIdx != SCHED_NONE 'maybeCmp'
+				let cmpPacked = try opRefs.get(cmpIdx) otherwise panic("flag barrier: cmpIdx from defMap is a valid op index but opRefs.get failed")
+				let cmpOp = try module.ops.get(cmpPacked) otherwise panic("flag barrier: cmpPacked is a valid op index but module.ops.get failed")
+				if cmpOp.rawValue.isCmp 'foundCmp'
+					var k = 0
+					for flagPacked in opRefs 'flagBarrier'
+						let flagOp = try module.ops.get(flagPacked) otherwise panic("invariant: flagPacked opIdx not in module.ops")
+						if k != cmpIdx and flagOp.rawValue.clobbersFlags 'addFlagDep'
+							self.addDepEdge(k, toIdx: cmpIdx)
+						end 'addFlagDep'
+						k = k + 1
+					end 'flagBarrier'
+				end 'foundCmp'
+			end 'maybeCmp'
 		end 'hasCondBr'
 	end 'buildDependencies'
 
@@ -733,258 +740,6 @@ function extractMirIndirectCallUses(result ValueIdArray, calleeId ValueId, argId
 	result.push(calleeId)
 	appendAll(result, from: argIds)
 end 'extractMirIndirectCallUses'
-
-// ============================================================
-// Memory/store/call classification
-// ============================================================
-
-// Returns true if the MIR op accesses memory (loads, stores, calls, syscalls).
-function isMemoryOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return isMirMemoryOp(op)
-end 'isMemoryOpPacked'
-
-function isMirMemoryOp(op MirOp) returns bool
-	return match op 'check'
-		load gives true
-		store gives true
-		loadSlot gives true
-		storeSlot gives true
-		call gives true
-		indirectCall gives true
-		witnessCall gives true
-		osExit gives true
-		osSleep gives true
-		osWrite gives true
-		osWriteErr gives true
-		osRead gives true
-		osOpenWrite gives true
-		osWriteFd gives true
-		osClose gives true
-		osGetEnv gives true
-		osGetArgc gives true
-		osGetArgv gives true
-		osGetExecutablePath gives true
-		memcpy gives true
-		storeByte gives true
-		loadByte gives true
-		osAllocPages gives true
-		osAllocPagesLarge gives true
-		osFreePages gives true
-		osFileOpen to osDirMkdir gives true
-		atomicInc gives true
-		atomicDec gives true
-		atomicXadd gives true
-		osLockInit gives true
-		osLockAcquire gives true
-		osLockRelease gives true
-		movImm to cmp gives false
-		condBranch to branch gives false
-		ret gives false
-		param gives false
-		stackSlotAddr to funcAddr gives false
-		loadFramePtr gives false
-		tryCall gives true
-		errorReturn gives false
-	end 'check'
-end 'isMirMemoryOp'
-
-// Returns true if the MIR op is a store (writes memory).
-function isStoreOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return isMirStoreOp(op)
-end 'isStoreOpPacked'
-
-function isMirStoreOp(op MirOp) returns bool
-	return match op 'check'
-		store gives true
-		storeSlot gives true
-		storeByte gives true
-		memcpy gives true
-		atomicInc gives true
-		atomicDec gives true
-		atomicXadd gives true
-		osLockInit gives true
-		osLockAcquire gives true
-		osLockRelease gives true
-		osFreePages gives true
-		// Phase 15c file-I/O ops potentially write memory (osFileRead populates
-		// the user buffer, osFileStat fills statbuf, osDirGetdents64/Getcwd
-		// write the destination, mkdir/unlink/access read-only) — but every
-		// one of them has external syscall side effects observable from other
-		// threads/files, so the scheduler must treat them as stores.
-		osFileOpen to osDirMkdir gives true
-		movImm to cmp gives false
-		condBranch to ret gives false
-		param to load gives false
-		loadSlot gives false
-		stackSlotAddr to funcAddr gives false
-		loadFramePtr gives false
-		osExit to osWrite gives false
-		osWriteErr to osGetEnv gives false
-		// osGetArgc is a pure read (returns a process-state integer);
-		// osGetArgv returns a pointer without touching caller memory.
-		// osGetExecutablePath writes into the caller-supplied buffer, so
-		// treat it as a store for scheduling barriers.
-		osGetArgc gives false
-		osGetArgv gives false
-		osGetExecutablePath gives true
-		loadByte gives false
-		osAllocPages gives false
-		osAllocPagesLarge gives false
-		tryCall gives false
-		errorReturn gives false
-	end 'check'
-end 'isMirStoreOp'
-
-// Returns true if the MIR op is a call (may have arbitrary side effects).
-function isCallOpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return isMirCallOp(op)
-end 'isCallOpPacked'
-
-// Returns true if the MIR op is a param op (reads from a CC register at function entry).
-function isMirParamOpPacked(module MirModule, packed OpIndex) returns bool
-	let mirOp = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return match mirOp 'checkMir'
-		param gives true
-		movImm to ret gives false
-		load to loadByte gives false
-		osAllocPages to osLockRelease gives false
-		tryCall to errorReturn gives false
-	end 'checkMir'
-end 'isMirParamOpPacked'
-
-function isMirCallOp(op MirOp) returns bool
-	return match op 'check'
-		call gives true
-		indirectCall gives true
-		witnessCall gives true
-		osExit gives true
-		osSleep gives true
-		osWrite gives true
-		osWriteErr gives true
-		osRead gives true
-		osOpenWrite gives true
-		osWriteFd gives true
-		osClose gives true
-		osGetEnv gives true
-		osGetArgc gives true
-		osGetArgv gives true
-		osGetExecutablePath gives true
-		osAllocPages gives true
-		osAllocPagesLarge gives true
-		osFreePages gives true
-		osFileOpen to osDirMkdir gives true
-		osLockInit gives true
-		osLockAcquire gives true
-		osLockRelease gives true
-		// param ops read from physical calling-convention registers and must
-		// be ordered with each other to avoid clobbering.
-		param gives true
-		movImm to cmp gives false
-		condBranch to branch gives false
-		ret gives false
-		load to funcAddr gives false
-		loadFramePtr gives false
-		memcpy to loadByte gives false
-		atomicInc to atomicXadd gives false
-		// tryCall has full call-barrier semantics like `call`. errorReturn is
-		// a terminator with no body-side effect on subsequent ops in this block
-		// (control falls off the function), so it doesn't need barrier
-		// treatment from the scheduler's perspective.
-		tryCall gives true
-		errorReturn gives false
-	end 'check'
-end 'isMirCallOp'
-
-// Returns true if the MIR op may clobber the x64 condition flags (or
-// equivalently, ARM64's NZCV) when lowered. Used to keep the cmp that
-// feeds a cond_br adjacent to its consumer in the schedule — both
-// backends rely on the cmp's flags surviving until the conditional
-// jump (see `determineJumpKindForCond` in MirToX64Conversion).
-//
-// Conservative: anything that ISN'T a pure register-to-register or
-// memory-to-register move clobbers flags. The exempt ops are those
-// that lower to instructions known not to touch flags on either
-// backend: `mov reg, reg`, `mov reg, [mem]`, `mov reg, imm`,
-// `lea reg, [mem]`. `movImm` with value zero is the one tricky case —
-// x64 typically lowers it to `xor reg, reg` which DOES clobber flags,
-// so movImm is treated as flag-clobbering even though large constants
-// would lower to plain `mov`. Treating it conservatively avoids a
-// per-instruction value-aware classification, at the cost of a few
-// extra scheduling constraints when the constant happens to be non-
-// zero. Calls and OS ops aren't covered here because they already
-// participate in the call-barrier chain.
-function isFlagClobberingMirOp(op MirOp) returns bool
-	return match op 'check'
-		movImm gives true
-		binOp gives true
-		unaryOp gives true
-		cmp gives true
-		movReg gives false
-		condBranch gives false
-		branch gives false
-		call gives false
-		indirectCall gives false
-		witnessCall gives false
-		ret gives false
-		param gives false
-		load gives false
-		store gives false
-		loadSlot gives false
-		storeSlot gives false
-		stackSlotAddr gives false
-		globalAddr gives false
-		funcAddr gives false
-		loadFramePtr gives false
-		osExit gives false
-		osSleep gives false
-		osWrite gives false
-		osWriteErr gives false
-		osRead gives false
-		osOpenWrite gives false
-		osWriteFd gives false
-		osClose gives false
-		osGetEnv gives false
-		osGetArgc gives false
-		osGetArgv gives false
-		osGetExecutablePath gives false
-		memcpy gives false
-		storeByte gives false
-		loadByte gives false
-		osAllocPages gives false
-		osAllocPagesLarge gives false
-		osFreePages gives false
-		osFileOpen to osDirMkdir gives false
-		atomicInc gives true
-		atomicDec gives true
-		atomicXadd gives true
-		osLockInit gives false
-		osLockAcquire gives false
-		osLockRelease gives false
-		tryCall gives false
-		errorReturn gives false
-	end 'check'
-end 'isFlagClobberingMirOp'
-
-function isFlagClobberingPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return isFlagClobberingMirOp(op)
-end 'isFlagClobberingPacked'
-
-// Returns true if the MIR op is a `cmp`. Used by the scheduler to find
-// the cmp that produces a cond_br's condition value.
-function isMirCmpPacked(module MirModule, packed OpIndex) returns bool
-	let op = try module.ops.get(packed) otherwise panic("invariant: packed opIdx not in module.ops")
-	return match op 'check'
-		cmp gives true
-		movImm to unaryOp gives false
-		condBranch to loadByte gives false
-		osAllocPages to osLockRelease gives false
-		tryCall to errorReturn gives false
-	end 'check'
-end 'isMirCmpPacked'
 
 // Extract the cond_br's condition valueId from a terminator, or
 // SCHED_NONE if the terminator isn't a cond_br.

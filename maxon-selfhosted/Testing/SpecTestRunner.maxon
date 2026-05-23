@@ -667,6 +667,12 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
 
+	// Tests run with cwd = projectRoot/temp (see runSpecBatch / runTestFromFragment).
+	// Matches TestRunner.cs:93 in the bootstrap C# runner.
+	if not Directory.exists(tempDir) 'noTempDir'
+		_ = Directory.create(tempDir)
+	end 'noTempDir'
+
 	// Reap any leftover capture files from a prior crashed run.
 	cleanupLeftoverCaptureFiles(fragmentDir)
 
@@ -3610,6 +3616,14 @@ export function runAllSpecTestsParallel(filter String, target Target, workerCoun
 	if not Directory.exists(fragmentDir) 'noFragDir'
 		_ = Directory.create(fragmentDir)
 	end 'noFragDir'
+
+	// Tests run with cwd = projectRoot/temp (see runSpecBatch / runTestFromFragment).
+	// The bootstrap C# runner creates this in TestRunner.cs:93 before dispatching
+	// any work; without it, Subprocess.run fails with "directory name is invalid"
+	// on a fresh checkout that has never run the bootstrap runner first.
+	if not Directory.exists(tempDir) 'noTempDir'
+		_ = Directory.create(tempDir)
+	end 'noTempDir'
 
 	// Reap any leftover capture files from a prior crashed run that used the
 	// old Process.captureStart code path. The current Subprocess.run path

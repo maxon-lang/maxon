@@ -634,7 +634,9 @@ All cases must share the same function signature, which becomes the enum's backi
 
 ## Unions
 
-Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison, and do not have raw values. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly (cases may carry associated values), but every union exposes a synthesized `.unionCases` companion enum — `U.unionCases` is a simple int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization.
+Unions define a fixed set of named cases with optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values. Unions support `.name`, `.ordinal`, and the static `.allCaseNames` property (an `Array with String` of case names). They do not support `.allCases` directly (cases may carry associated values), but every union exposes a synthesized `.unionCases` companion enum — `U.unionCases` is a simple int-backed enum with one bare case per variant, providing `.allCases`, `.fromRawValue`, etc. for symmetric (de)serialization.
+
+Unions can also have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
 
 ```maxon
 // Associated values
@@ -678,6 +680,27 @@ end 'Direction'
 ```
 
 Union values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect them. This prevents bugs when new cases are added.
+
+### Struct-Backed Unions
+
+Like enums, each union variant can be tagged with a compile-time struct. Associated values and backing struct coexist: payload via `match`, metadata via `.rawValue`.
+
+```maxon
+type OpMeta
+	export let latency Cycles
+	export let isMemory bool
+end 'OpMeta'
+
+union MirOp
+	movImm(dest VarSlot, value MachineWord) = OpMeta{latency: 1, isMemory: false}
+	load(dest VarSlot, addr VarSlot)        = OpMeta{latency: 4, isMemory: true}
+	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
+end 'MirOp'
+
+let lat = MirOp.load(dest: d, addr: a).rawValue.latency   // 4
+```
+
+Same rules as struct-backed enums: every variant must provide a backing value of the same struct type, all field values are compile-time constants.
 
 ## Error Handling
 

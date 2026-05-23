@@ -338,24 +338,10 @@ export type StdParser
 		let op = try module.ops.get(idx) otherwise return false
 		return match op 'check'
 			arith to control gives false
-			call(callOp) gives isErrorReturnCallOp(callOp)
+			call(callOp) gives callOp.rawValue.isErrorReturn
 			memory to system gives false
 		end 'check'
 	end 'blockTerminatorIsErrorReturn'
-
-	function isErrorReturnCallOp(callOp StdCallOp) returns bool
-		return match callOp 'check'
-			ret gives false
-			call gives false
-			tryCall gives false
-			indirectCall gives false
-			witnessCall gives false
-			funcRef gives false
-			tailCall gives false
-			param gives false
-			errorReturn gives true
-		end 'check'
-	end 'isErrorReturnCallOp'
 
 	// Populate func.paramTypes from the param ops in the entry block. Needed
 	// so downstream passes (x64 lowering, register allocation) know the ABI
